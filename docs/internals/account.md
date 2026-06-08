@@ -74,7 +74,7 @@ Per panel:
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../reference/configuration.md#provider-dashboard).
 - **Balance windows** — the per-duration set chosen by `stable_windows` (below). A kind that declares no window surface but runs on a metered sibling subscription (Pi on OAuth, above) borrows the sibling kind's stable windows instead — same account, same bars, so the Pi block and the sibling's block read identically when both show.
 
-Today's JSONL spend decides which discovered panels survive the `[sidebar] max_provider_blocks` cap (default 3), and a token-only provider ranks on the same transcript-derived footing — the retained set then orders stably by kind: the panels are the dashboard's tabs ([sidebar.md → Provider dashboard](./sidebar.md#provider-dashboard)), so the row never reorders as spend shifts. The account cache and the probe are single-flighted on the elder like the diff stats — the producer publishes `accounts.json`; consumers read it and never fork.
+Today's JSONL spend decides which discovered panels survive the `[sidebar] max_provider_blocks` cap (default 3), and a token-only provider ranks on the same transcript-derived footing — the retained set then orders stably by kind: the panels are the dashboard's tabs ([sidebar.md → Provider dashboard](./sidebar.md#provider-dashboard)), so the row never reorders as spend shifts. The account cache and the probe are user-scoped and single-flighted across rooms — the elected producer publishes shared `accounts.json`; consumers read it and never fork.
 
 ### Per-provider spend
 
@@ -96,7 +96,7 @@ These budgets are **sliding** windows: the clock starts on your first token, so 
 
 ### Persistence across idle sessions
 
-A session ending or going idle would otherwise empty the dashboard, so the producer mirrors each resolved window into an account-scoped `rate_limits.json` cache (atomic write, single-flighted, reaped with the workspace runtime dir like the other caches) and reads it back when no live session reports one:
+A session ending or going idle would otherwise empty the dashboard, so the producer mirrors each resolved window into a user-scoped `rate_limits.json` cache (atomic write under a shared read-modify-write lock) and reads it back when no live session reports one:
 
 - Before a window's reset, the last-known (most-drained) reading stands.
 - Once a shorter window's reset passes while the longest cached window is still in the future, that shorter window has refilled — it shows full with the reset rolled one window-length forward, until a live reading overwrites it.

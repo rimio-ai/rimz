@@ -175,7 +175,7 @@ fn spending_walk_skips_entirely_within_ttl() {
         cold["value_tally"].is_object(),
         "the cold produce walks the fixture and counts its spend:\n{cold:#}"
     );
-    let cache_path = env.runtime_paths().root.join("provider-spending.json");
+    let cache_path = env.runtime_paths().shared_provider_spending_path();
     let published = std::fs::read(&cache_path).expect("published provider-spending cache");
 
     // Remove the transcripts: from here, only the published cache can supply

@@ -22,7 +22,7 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 ## The refresh
 
-`rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `{runtime_root}/pricing-cache.json` rather than held in memory: the producer reads the embedded snapshot plus the cache instantly, and re-fetches only when the cache is older than a day. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips the fetch entirely.
+`rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_RUNTIME_DIR/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared spending lock, and re-fetches only when the cache is older than a day. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips the fetch entirely.
 
 `build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches upstream and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
 

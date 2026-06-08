@@ -158,7 +158,8 @@ fn idle_room_produce_runs_no_enrichment_io() {
         String::from_utf8_lossy(&cold.stderr),
     );
 
-    let runtime_root = fixture.env.runtime_paths().root;
+    let runtime = fixture.env.runtime_paths();
+    let runtime_root = runtime.root.clone();
     let now_ms = unix_now_ms();
 
     // Backdate the per-worktree git stamps into the tier gap: stale under
@@ -179,7 +180,7 @@ fn idle_room_produce_runs_no_enrichment_io() {
     .expect("backdate diff stats");
 
     // The cold produce stamped the (empty-fleet) spending publish; hold it.
-    let spending_path = runtime_root.join("provider-spending.json");
+    let spending_path = runtime.shared_provider_spending_path();
     let spending_bytes = std::fs::read(&spending_path)
         .expect("the cold produce publishes a stamped provider-spending cache");
 

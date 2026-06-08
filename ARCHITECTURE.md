@@ -36,13 +36,18 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   heartbeat/sidebar.<instance_id>.json
   heartbeat/resolver.<resolver_id>.json
   snapshot.json  pane-topology.json  presence.stamp    runtime caches
-  diff-stats.json  accounts.json   (inventory in docs/internals/state.md)
-  provider-spending.json  pricing-cache.json
-  metrics-sample.json  rate_limits.json  binding.log.jsonl
+  diff-stats.json  metrics-sample.json  live-spend-baselines.json
+  binding.log.jsonl
   agent_context/  subagent_context/  agent-activity/   per-session sidecars
+
+shared runtime directory ($XDG_RUNTIME_DIR/rimz/shared/)
+  accounts.json  accounts.lock
+  rate_limits.json  rate_limits.lock
+  provider-spending.json  spending.json  spending.lock
+  pricing-cache.json  rate-limit-probe.codex*
 ```
 
-The CLI and hook subprocesses are the only durable-state writers. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes the shared runtime caches through `sidebar::produce` and refreshes the disposable context sidecars from its producer-side triggers (the produce backstop and the transcript watcher — [state.md](./docs/internals/state.md#push-channels)), and `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
+The CLI and hook subprocesses are the only durable-state writers. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes producer runtime caches through `sidebar::produce`, refreshes its room's `live-spend-baselines.json` display sidecar when the shared spending walk advances, and refreshes the disposable context sidecars from its producer-side triggers (the produce backstop and the transcript watcher — [state.md](./docs/internals/state.md#push-channels)). `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
 
 ## State ownership
 

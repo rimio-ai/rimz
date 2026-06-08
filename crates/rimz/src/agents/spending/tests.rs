@@ -748,15 +748,13 @@ fn provider_cache_round_trips_with_stamp() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
-    let baselines = BTreeMap::from([("claude-1".to_owned(), 1.05)]);
 
-    write_provider_spending_cache(&path, 12_345, &spending, baselines.clone());
+    write_provider_spending_cache(&path, 12_345, &spending);
     let cache = read_provider_spending_cache(&path);
 
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_345);
     assert_eq!(cache.spending, spending);
-    assert_eq!(cache.live_cost_baselines, baselines);
     assert!(cache.is_fresh(12_345));
 }
 
@@ -772,12 +770,9 @@ fn pre_stamp_provider_cache_reads_values_as_stale() {
 
     // Flatten tolerance: the values survive the upgrade; the missing stamp
     // defaults to 0, which any real wall clock reads as stale, so the gate
-    // refreshes once instead of serving the old shape forever. The missing
-    // baselines read empty, so the live overlay degrades to the exact walked
-    // figure rather than a double count.
+    // refreshes once instead of serving the old shape forever.
     assert_eq!(cache.refreshed_at_ms, 0);
     assert_eq!(cache.spending, spending);
-    assert!(cache.live_cost_baselines.is_empty());
     assert!(!cache.is_fresh(NOW_SECS * 1_000));
 }
 
@@ -791,7 +786,6 @@ fn provider_cache_version_mismatch_reads_as_stale() {
         version: 0,
         refreshed_at_ms: now_ms,
         spending: spending.clone(),
-        ..ProviderSpendingCache::default()
     };
     std::fs::write(&path, serde_json::to_vec(&stale_shape).unwrap()).unwrap();
 
@@ -831,6 +825,20 @@ fn provider_cache_expires_after_spending_ttl() {
     assert!(!cache.is_fresh(1_001 + ttl_ms));
     // A clock that ran backwards reads fresh (saturating), never a walk storm.
     assert!(cache.is_fresh(500));
+}
+
+#[test]
+fn live_spend_baselines_round_trip_separately_from_provider_cache() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("live-spend-baselines.json");
+    let baselines = LiveSpendBaselines {
+        observed_walk_ms: 12_345,
+        baselines: BTreeMap::from([("claude-1".to_owned(), 1.05)]),
+    };
+
+    write_live_spend_baselines(&path, &baselines);
+
+    assert_eq!(read_live_spend_baselines(&path), baselines);
 }
 
 // ── The cockpit's live today-spend overlay ──────────────────────────────────────

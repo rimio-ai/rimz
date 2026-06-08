@@ -60,10 +60,9 @@ impl Harness {
         )
         .expect("publish pane frame");
         rimz::agents::spending::write_provider_spending_cache(
-            &self.runtime_paths.root.join("provider-spending.json"),
+            &self.runtime_paths.shared_provider_spending_path(),
             now_ms,
             &rimz::agents::spending::Spending::default(),
-            Default::default(),
         );
         let accounts = rimz::sidebar::snapshot::AccountsCache {
             refreshed_at_ms: now_ms,
@@ -71,7 +70,7 @@ impl Harness {
             ok: true,
         };
         std::fs::write(
-            self.runtime_paths.root.join("accounts.json"),
+            self.runtime_paths.shared_accounts_path(),
             serde_json::to_vec(&accounts).expect("serialize accounts"),
         )
         .expect("publish accounts");

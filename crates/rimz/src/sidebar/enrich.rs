@@ -8,13 +8,15 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use fs4::FileExt;
 use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::agents::codex;
 use crate::agents::spending::{
-    ProviderSpendingCache, read_provider_spending_cache, today_spend_live_usd,
+    LiveSpendBaselines, ProviderSpendingCache, read_live_spend_baselines,
+    read_provider_spending_cache, today_spend_live_usd, write_live_spend_baselines,
 };
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::AgentStatus;
@@ -230,8 +232,9 @@ pub enum EnrichMode<'a> {
         /// The room's freshly enumerated group roots; `None` when the
         /// snapshot carries no project root.
         roots: Option<Vec<PathBuf>>,
-        /// The fleet spending walk at the point where live row costs are
-        /// available for the publish-time baselines.
+        /// The fleet spending walk. The shared publish is account-global;
+        /// per-workspace live-cost baselines are refreshed by the fold after
+        /// the walk cache is available and rows hold their latest context.
         compute_spending: &'a dyn Fn(&SidebarSnapshot) -> ProviderSpendingCache,
         /// The per-machine config, loaded once by the caller — the config
         /// fold consumes it here and the git refresh closure has already
@@ -367,6 +370,7 @@ pub fn enrich(
     // per-tick fork or a ledger lock. Git rides the same split: the producer
     // refreshes the per-worktree facts (single-flighted), a consumer projects
     // the cached ones.
+    let is_producer = matches!(&mode, EnrichMode::Producing { .. });
     let spending_cache = match mode {
         EnrichMode::Cached => {
             let cache;
@@ -401,7 +405,13 @@ pub fn enrich(
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the
     // walk's TTL.
-    apply_live_today_spend(&mut snapshot, &spending_cache);
+    let baselines = refresh_live_spend_baselines(
+        runtime,
+        &snapshot,
+        spending_cache.refreshed_at_ms,
+        is_producer,
+    );
+    apply_live_today_spend(&mut snapshot, &spending_cache, &baselines.baselines);
     snapshot
 }
 
@@ -612,7 +622,7 @@ pub(crate) fn codex_rate_limit_probe_marker(
     refresh: &CodexRateLimitRefresh,
 ) -> PathBuf {
     match refresh {
-        CodexRateLimitRefresh::Account => runtime.root.join("rate-limit-probe.codex"),
+        CodexRateLimitRefresh::Account => runtime.shared_root.join("rate-limit-probe.codex"),
         CodexRateLimitRefresh::Session { session_id, .. } => {
             let mut hasher = Sha256::new();
             hasher.update(b"codex-session");
@@ -620,7 +630,7 @@ pub(crate) fn codex_rate_limit_probe_marker(
             hasher.update(session_id.as_bytes());
             let digest = hex::encode(hasher.finalize());
             runtime
-                .root
+                .shared_root
                 .join(format!("rate-limit-probe.codex.{}", &digest[..32]))
         }
     }
@@ -699,7 +709,7 @@ fn produce_accounts(
     snapshot: &SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> BTreeMap<String, crate::agents::AgentAccount> {
-    let path = runtime.root.join("accounts.json");
+    let path = runtime.shared_accounts_path();
 
     // Fast path: a young publish needs no lock and no fork.
     let cache = read_accounts_cache(&path);
@@ -707,10 +717,10 @@ fn produce_accounts(
         return cache.accounts;
     }
 
-    // Slow path: elect one prober for this workspace's refresh window. The
+    // Slow path: elect one prober for this user's refresh window. The
     // freshness closure also serves coalesce's post-win re-check, so a peer that
     // published between our miss and the lock is honoured rather than re-forked.
-    let lock_path = runtime.root.join("accounts.lock");
+    let lock_path = runtime.shared_accounts_lock();
     let fresh = || {
         let cache = read_accounts_cache(&path);
         cache.is_fresh(unix_now_ms()).then_some(cache.accounts)
@@ -747,17 +757,16 @@ fn produce_accounts(
 /// zero subprocesses (the single-flight contract); a cold cache (no producer
 /// publish yet) carries no blocks until the elder's first publish. The cheap
 /// config read stays local so each tab honours its own display preferences.
-/// Returns the published spending cache whole — tally, baselines, and stamp —
-/// so the caller folds the value tally and the live today-spend overlay from
-/// one read.
+/// Returns the published spending cache whole — tally and stamp — so the caller
+/// folds the value tally and the live today-spend overlay from one read.
 fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
 ) -> (SidebarSnapshot, ProviderSpendingCache) {
-    let accounts = read_accounts_cache(&runtime.root.join("accounts.json")).accounts;
+    let accounts = read_accounts_cache(&runtime.shared_accounts_path()).accounts;
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
-    let cache = read_provider_spending_cache(&runtime.root.join("provider-spending.json"));
+    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let mut snapshot = fold_machine_config_with(
         snapshot,
         crate::config::MachineConfig::load().unwrap_or_default(),
@@ -774,17 +783,43 @@ fn fold_machine_config_cached(
 /// walk's exact figure plus each live row's overshoot over its publish-time
 /// baseline ([`today_spend_live_usd`]), so the headline tracks every
 /// context sidecar push instead of waiting out the walk's TTL. Shared by the
-/// producing CLI and the consumer fold, so every tab paints the same figure;
-/// zero — an empty room on an unspent day — stays `None` and the cockpit
-/// keeps its bare `¤` line.
-pub fn apply_live_today_spend(snapshot: &mut SidebarSnapshot, cache: &ProviderSpendingCache) {
+/// producing CLI and the consumer fold, so every tab in a room paints the same
+/// figure; zero — an empty room on an unspent day — stays `None` and the
+/// cockpit keeps its bare `¤` line.
+pub fn apply_live_today_spend(
+    snapshot: &mut SidebarSnapshot,
+    cache: &ProviderSpendingCache,
+    baselines: &BTreeMap<String, f64>,
+) {
     let live = today_spend_live_usd(
         cache.spending.total.today.usd,
         live_row_costs(snapshot),
-        &cache.live_cost_baselines,
+        baselines,
         cache.refreshed_at_ms,
     );
     snapshot.today_spend_live_usd = (live > 0.0).then_some(live);
+}
+
+fn refresh_live_spend_baselines(
+    runtime: &RuntimePaths,
+    snapshot: &SidebarSnapshot,
+    observed_walk_ms: u64,
+    persist: bool,
+) -> LiveSpendBaselines {
+    let path = runtime.live_spend_baselines_path();
+    let mut baselines = read_live_spend_baselines(&path);
+    // Producer-only: the elected elder captures the per-room baselines at each
+    // new walk; consumer tabs read what it wrote.
+    if persist && observed_walk_ms > 0 && observed_walk_ms > baselines.observed_walk_ms {
+        baselines = LiveSpendBaselines {
+            observed_walk_ms,
+            baselines: live_row_costs(snapshot)
+                .map(|(id, usd, _)| (id.to_owned(), usd))
+                .collect(),
+        };
+        write_live_spend_baselines(&path, &baselines);
+    }
+    baselines
 }
 
 /// Every agent row's live statusline cost: `(row id, total_cost_usd,
@@ -923,8 +958,8 @@ fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 /// The producer's published per-provider rate-limit windows, account-scoped so
 /// the budgets outlive a session ending or going idle: the first frame
 /// after inactivity paints the last-known bars rather than an empty dashboard.
-/// Single-flighted like the other runtime caches — the producer writes, every
-/// tab reads — and reaped with the workspace runtime dir by `ledger::gc`.
+/// User-scoped like the account cache: producers and detached helpers update it
+/// under a shared read-modify-write lock, and every room reads it.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct RateLimitsCache {
     /// When the producer last refreshed this map. Observability only: the
@@ -966,7 +1001,10 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 /// throttled — so a lost write is simply retried. Used by the detached
 /// `rimz codex refresh-rate-limits` helper, never on the per-tick path.
 pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: AgentRateLimits) {
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
+    let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+        return;
+    };
     let mut cache = read_rate_limits_cache(&path);
     cache.refreshed_at_ms = unix_now_ms();
     cache.windows.insert(kind.to_owned(), windows);
@@ -1045,8 +1083,44 @@ pub(crate) fn apply_rate_limit_cache(
         return;
     }
 
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
+    if persist {
+        let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {
+            let cached = read_rate_limits_cache(&path);
+            apply_rate_limit_cache_with(snapshot, &cached, false);
+            return;
+        };
+        let cached = read_rate_limits_cache(&path);
+        if let Some(next) = apply_rate_limit_cache_with(snapshot, &cached, true) {
+            write_rate_limits_cache(&path, &next);
+        }
+        return;
+    }
+
     let cached = read_rate_limits_cache(&path);
+    apply_rate_limit_cache_with(snapshot, &cached, false);
+}
+
+fn try_rate_limits_cache_lock(path: &Path) -> Option<std::fs::File> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok()?;
+    }
+    let file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(path)
+        .ok()?;
+    FileExt::try_lock(&file).ok()?;
+    Some(file)
+}
+
+fn apply_rate_limit_cache_with(
+    snapshot: &mut SidebarSnapshot,
+    cached: &RateLimitsCache,
+    persist: bool,
+) -> Option<RateLimitsCache> {
     // The snapshot's single projection clock, so the idle-window reset
     // projection agrees with the dashboard windows resolved on the same frame.
     let now = snapshot.now;
@@ -1106,7 +1180,5 @@ pub(crate) fn apply_rate_limit_cache(
         panel.windows = display;
     }
 
-    if persist {
-        write_rate_limits_cache(&path, &next);
-    }
+    persist.then_some(next)
 }

@@ -655,7 +655,7 @@ fn producer_persists_live_windows_for_idle_fallback() {
         vec![provider_panel("claude", vec![rl_window(60, Some(future))])],
     );
     apply_rate_limit_cache(&mut producing, &runtime, true);
-    let cache = read_rate_limits_cache(&runtime.root.join("rate_limits.json"));
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
     assert_eq!(
         cache
             .windows
@@ -696,7 +696,7 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
     // Seed a drained 5h reading whose reset has long since passed, plus a 7d
     // reading whose reset is still ahead. The short window refills, but the
     // long window keeps the cache inside a known provider budget shape.
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
     write_rate_limits_cache(
         &path,
         &RateLimitsCache {
@@ -751,7 +751,7 @@ fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let passed = Timestamp::from_second(1_000_000_000).unwrap();
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
     write_rate_limits_cache(
         &path,
         &RateLimitsCache {
@@ -806,7 +806,7 @@ fn producer_drops_windows_for_a_logged_out_provider() {
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
     let future = Timestamp::from_second(4_000_000_000).unwrap();
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
     let windows = |used| vec![rl_window(used, Some(future))];
 
     // Seed windows for both providers through a live frame.
@@ -848,7 +848,7 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let path = runtime.root.join("rate_limits.json");
+    let path = runtime.shared_rate_limits_path();
 
     // Claude already has cached windows from a live session this run.
     write_rate_limits_cache(
@@ -886,6 +886,58 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
         cache.windows.contains_key("claude"),
         "an existing kind's windows are preserved"
     );
+}
+
+#[test]
+fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let path = runtime.shared_rate_limits_path();
+    write_rate_limits_cache(
+        &path,
+        &RateLimitsCache {
+            refreshed_at_ms: 1,
+            windows: BTreeMap::from([(
+                "claude".to_owned(),
+                AgentRateLimits {
+                    windows: vec![rl_window(20, None)],
+                },
+            )]),
+        },
+    );
+
+    let lock_file = std::fs::OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(runtime.shared_rate_limits_lock())
+        .unwrap();
+    <std::fs::File as fs4::FileExt>::try_lock(&lock_file).unwrap();
+
+    let mut contending = snapshot_with_panels(
+        workspace,
+        vec![provider_panel("codex", vec![rl_window(55, None)])],
+    );
+    apply_rate_limit_cache(&mut contending, &runtime, true);
+
+    let cache = read_rate_limits_cache(&path);
+    assert_eq!(
+        cache
+            .windows
+            .get("claude")
+            .and_then(|limits| limits.windows.first())
+            .and_then(|window| window.used_percentage),
+        Some(20),
+        "a producer that cannot get the RMW lock leaves existing kinds intact"
+    );
+    assert!(
+        !cache.windows.contains_key("codex"),
+        "the contending producer does not publish its partial provider set"
+    );
+    <std::fs::File as fs4::FileExt>::unlock(&lock_file).unwrap();
 }
 
 #[test]
@@ -1548,6 +1600,89 @@ fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> cra
     row
 }
 
+#[test]
+fn live_spend_baselines_are_written_only_by_producer_enrich() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    atomic::write_temp_then_rename_cache(
+        &runtime.shared_accounts_path(),
+        &AccountsCache {
+            refreshed_at_ms: unix_now_ms(),
+            accounts: BTreeMap::new(),
+            ok: true,
+        },
+    )
+    .unwrap();
+
+    let published = Timestamp::from_second(1_750_000_000).unwrap();
+    let walk_ms = published.as_millisecond() as u64;
+    let before = published - SignedDuration::from_secs(60);
+    let wt = dir.path().join("wt");
+    let build_snapshot = || {
+        let mut snapshot =
+            SidebarSnapshot::build(workspace.clone(), Vec::new(), Vec::new(), published);
+        snapshot.worktree_groups = vec![worktree_group(
+            &wt,
+            vec![cost_row("baselined", Some(2.00), Some(before))],
+        )];
+        snapshot
+    };
+
+    let spending = crate::agents::spending::Spending::default();
+    crate::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        walk_ms,
+        &spending,
+    );
+    let baseline_path = runtime.live_spend_baselines_path();
+
+    let _ = enrich(build_snapshot(), None, &runtime, None, EnrichMode::Cached);
+    assert!(
+        !baseline_path.exists(),
+        "consumer folds read baselines but never create the sidecar"
+    );
+
+    let stale = crate::agents::spending::LiveSpendBaselines {
+        observed_walk_ms: 10,
+        baselines: BTreeMap::from([("old".to_owned(), 0.50)]),
+    };
+    crate::agents::spending::write_live_spend_baselines(&baseline_path, &stale);
+    let _ = enrich(build_snapshot(), None, &runtime, None, EnrichMode::Cached);
+    assert_eq!(
+        crate::agents::spending::read_live_spend_baselines(&baseline_path),
+        stale,
+        "consumer folds do not advance an existing baseline sidecar"
+    );
+
+    let compute_spending = |_: &SidebarSnapshot| ProviderSpendingCache {
+        refreshed_at_ms: walk_ms,
+        ..ProviderSpendingCache::default()
+    };
+    let refresh_git = |_: &mut SidebarSnapshot| {};
+    let _ = enrich(
+        build_snapshot(),
+        None,
+        &runtime,
+        None,
+        EnrichMode::Producing {
+            roots: None,
+            compute_spending: &compute_spending,
+            config: Box::new(crate::config::MachineConfig::default()),
+            refresh_git: &refresh_git,
+        },
+    );
+    let advanced = crate::agents::spending::read_live_spend_baselines(&baseline_path);
+    assert_eq!(advanced.observed_walk_ms, walk_ms);
+    assert_eq!(advanced.baselines.get("baselined"), Some(&2.00));
+    assert!(
+        !advanced.baselines.contains_key("old"),
+        "a producer walk replaces the prior baseline set for the new stamp"
+    );
+}
+
 /// The consumer overlay glue end-to-end over a built snapshot:
 /// [`live_row_costs`] projects each agent row's `(id, statusline cost,
 /// registered-at)` triple and [`apply_live_today_spend`] stamps the walked
@@ -1584,12 +1719,12 @@ fn apply_live_today_spend_stamps_overshoot_over_the_walked_floor() {
 
     let mut cache = ProviderSpendingCache {
         refreshed_at_ms: published_ms,
-        live_cost_baselines: BTreeMap::from([("baselined".to_owned(), 5.00)]),
         ..ProviderSpendingCache::default()
     };
     cache.spending.total.today.usd = 10.0;
+    let baselines = BTreeMap::from([("baselined".to_owned(), 5.00)]);
 
-    apply_live_today_spend(&mut snapshot, &cache);
+    apply_live_today_spend(&mut snapshot, &cache, &baselines);
     let live = snapshot.today_spend_live_usd.expect("a spent day stamps");
     assert!((live - 10.80).abs() < 1e-9, "walked 10.00 + 0.50 + 0.30");
 
@@ -1601,6 +1736,10 @@ fn apply_live_today_spend_stamps_overshoot_over_the_walked_floor() {
         Vec::new(),
         published,
     );
-    apply_live_today_spend(&mut empty, &ProviderSpendingCache::default());
+    apply_live_today_spend(
+        &mut empty,
+        &ProviderSpendingCache::default(),
+        &BTreeMap::new(),
+    );
     assert_eq!(empty.today_spend_live_usd, None);
 }

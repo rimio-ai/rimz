@@ -115,7 +115,7 @@ impl PriceBook {
 /// once per TTL. Best-effort: a failed or skipped fetch falls back to the cache,
 /// then to the embedded snapshot — the returned book is always usable.
 ///
-/// `cache_path` is the producer's `{runtime_root}/pricing-cache.json`.
+/// `cache_path` is the producer's shared runtime `pricing-cache.json`.
 pub fn load_for_spending(cache_path: &Path) -> PriceBook {
     let mut cache = read_cache(cache_path);
     let now = unix_secs_now();
@@ -146,7 +146,7 @@ pub fn load_for_spending(cache_path: &Path) -> PriceBook {
 const REFRESH_TTL_SECS: u64 = 24 * 60 * 60;
 const RETRY_BACKOFF_SECS: u64 = 60 * 60;
 
-/// On-disk pricing cache at `{runtime_root}/pricing-cache.json`. Sorted maps keep
+/// On-disk pricing cache at the shared runtime `pricing-cache.json`. Sorted maps keep
 /// the file diff-stable.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct PricingCache {

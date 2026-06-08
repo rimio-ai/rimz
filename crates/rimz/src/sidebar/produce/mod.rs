@@ -12,7 +12,7 @@
 //! The module is read-only on ledger truth: the rollup arrives through the
 //! cursor fold, and every write is a cache-class runtime file
 //! (`snapshot.json`, `diff-stats.json`, `metrics-sample.json`,
-//! `provider-spending.json`, `spending.json`, `accounts.json`) via
+//! shared provider/account/spending caches) via
 //! `write_temp_then_rename_cache` — rebuilt from truth on the next read, never
 //! truth itself. `cargo xtask invariants` pins the boundary: no ledger-writer,
 //! feed-store, bridge, or broker imports under `crates/rimz/src/sidebar/`.
@@ -29,7 +29,7 @@ use std::path::PathBuf;
 use crate::ids::{MuxName, PaneId};
 use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::consumer::{RollupCursor, rollup_snapshot};
-use crate::sidebar::enrich::{EnrichMode, enrich, live_row_costs};
+use crate::sidebar::enrich::{EnrichMode, enrich};
 use crate::sidebar::frame::{PaneFrame, assemble_frame};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
@@ -177,13 +177,7 @@ fn enrich_producing(
     });
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
-    let compute_spending = |snapshot: &SidebarSnapshot| {
-        spending::compute_fleet_spending(runtime, || {
-            live_row_costs(snapshot)
-                .map(|(id, usd, _)| (id.to_owned(), usd))
-                .collect()
-        })
-    };
+    let compute_spending = |_snapshot: &SidebarSnapshot| spending::compute_fleet_spending(runtime);
     let refresh_git = |snapshot: &mut SidebarSnapshot| {
         git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());
     };

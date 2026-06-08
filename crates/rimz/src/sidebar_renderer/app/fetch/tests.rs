@@ -52,10 +52,9 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     )
     .unwrap();
     crate::agents::spending::write_provider_spending_cache(
-        &runtime.root.join("provider-spending.json"),
+        &runtime.shared_provider_spending_path(),
         now_ms,
         &crate::agents::spending::Spending::default(),
-        Default::default(),
     );
     let accounts = crate::sidebar::snapshot::AccountsCache {
         refreshed_at_ms: now_ms,
@@ -63,7 +62,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
         ok: true,
     };
     std::fs::write(
-        runtime.root.join("accounts.json"),
+        runtime.shared_accounts_path(),
         serde_json::to_vec(&accounts).unwrap(),
     )
     .unwrap();

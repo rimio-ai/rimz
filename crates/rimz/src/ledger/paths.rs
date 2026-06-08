@@ -95,6 +95,7 @@ pub fn workspaces_dir_under(state_root: &Path) -> PathBuf {
 pub struct RuntimePaths {
     pub workspace_id: WorkspaceId,
     pub root: PathBuf,
+    pub shared_root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
     /// Holds one latest-wins agent-context sidecar per session. Written by CLI
@@ -121,6 +122,7 @@ impl RuntimePaths {
     /// don't need to set `XDG_RUNTIME_DIR`.
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
         let root = runtime_root.join("rimz").join(workspace_id.as_str());
+        let shared_root = runtime_root.join("rimz").join("shared");
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
         let agent_context_dir = root.join("agent_context");
@@ -129,6 +131,7 @@ impl RuntimePaths {
         Ok(Self {
             workspace_id,
             root,
+            shared_root,
             sock_dir,
             heartbeat_dir,
             agent_context_dir,
@@ -180,26 +183,65 @@ impl RuntimePaths {
         self.sock_dir.join("codex-app-server.sock")
     }
 
+    pub fn shared_accounts_path(&self) -> PathBuf {
+        self.shared_root.join("accounts.json")
+    }
+
+    pub fn shared_accounts_lock(&self) -> PathBuf {
+        self.shared_root.join("accounts.lock")
+    }
+
+    pub fn shared_rate_limits_path(&self) -> PathBuf {
+        self.shared_root.join("rate_limits.json")
+    }
+
+    pub fn shared_rate_limits_lock(&self) -> PathBuf {
+        self.shared_root.join("rate_limits.lock")
+    }
+
+    pub fn shared_provider_spending_path(&self) -> PathBuf {
+        self.shared_root.join("provider-spending.json")
+    }
+
+    pub fn shared_spending_lock(&self) -> PathBuf {
+        self.shared_root.join("spending.lock")
+    }
+
+    pub fn shared_spending_cursor_path(&self) -> PathBuf {
+        self.shared_root.join("spending.json")
+    }
+
+    pub fn shared_pricing_cache_path(&self) -> PathBuf {
+        self.shared_root.join("pricing-cache.json")
+    }
+
+    pub fn live_spend_baselines_path(&self) -> PathBuf {
+        self.root.join("live-spend-baselines.json")
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.agent_context_dir)?;
         mkdir_p(&self.subagent_context_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
+        mkdir_p(&self.shared_root)?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&self.root)
-                .map_err(|e| PathErr::Io {
-                    path: self.root.clone(),
+            for path in [&self.root, &self.shared_root] {
+                let mut perms = fs::metadata(path)
+                    .map_err(|e| PathErr::Io {
+                        path: path.to_path_buf(),
+                        source: e,
+                    })?
+                    .permissions();
+                perms.set_mode(0o700);
+                fs::set_permissions(path, perms).map_err(|e| PathErr::Io {
+                    path: path.to_path_buf(),
                     source: e,
-                })?
-                .permissions();
-            perms.set_mode(0o700);
-            fs::set_permissions(&self.root, perms).map_err(|e| PathErr::Io {
-                path: self.root.clone(),
-                source: e,
-            })?;
+                })?;
+            }
         }
         Ok(())
     }
@@ -306,5 +348,41 @@ mod tests {
             "workspace.json"
         );
         assert_eq!(paths.workspace_lock.file_name().unwrap(), "workspace.lock");
+    }
+
+    #[test]
+    fn runtime_paths_share_user_scoped_cache_files() {
+        let root = Path::new("/tmp/rimz-runtime-test");
+        let first = WorkspaceId::from_project_root(Path::new("/tmp/project-a"));
+        let second = WorkspaceId::from_project_root(Path::new("/tmp/project-b"));
+        let first_paths = RuntimePaths::under(first, root).unwrap();
+        let second_paths = RuntimePaths::under(second, root).unwrap();
+
+        assert_ne!(first_paths.root, second_paths.root);
+        assert_ne!(
+            first_paths.live_spend_baselines_path(),
+            second_paths.live_spend_baselines_path()
+        );
+        assert_eq!(first_paths.shared_root, second_paths.shared_root);
+        assert_eq!(
+            first_paths.shared_accounts_path(),
+            second_paths.shared_accounts_path()
+        );
+        assert_eq!(
+            first_paths.shared_rate_limits_path(),
+            second_paths.shared_rate_limits_path()
+        );
+        assert_eq!(
+            first_paths.shared_provider_spending_path(),
+            second_paths.shared_provider_spending_path()
+        );
+        assert_eq!(
+            first_paths.shared_spending_cursor_path(),
+            second_paths.shared_spending_cursor_path()
+        );
+        assert_eq!(
+            first_paths.shared_pricing_cache_path(),
+            second_paths.shared_pricing_cache_path()
+        );
     }
 }

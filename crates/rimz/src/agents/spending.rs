@@ -125,10 +125,11 @@ const SPENDING_CACHE_VERSION: u32 = 5;
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
 /// the producer recomputes once from the still-current entry cache. `0` is the
-/// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 1;
+/// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`. v2:
+/// live-session baselines moved to a per-workspace sidecar.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 2;
 
-/// On-disk cache persisted at `{runtime_root}/spending.json`.
+/// On-disk cache persisted at the shared runtime `spending.json`.
 ///
 /// Keyed by canonical file path string.  `dirty` is excluded from
 /// serialization — callers set it and flush when true. `version` gates the
@@ -482,13 +483,7 @@ pub fn read_spending_cache(path: &Path) -> SpendingDiskCache {
 /// Atomic write: temp file + rename, matching the project's ledger durability
 /// contract.
 pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
-    let Ok(bytes) = serde_json::to_vec(cache) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, &bytes).is_ok() {
-        let _ = fs::rename(&tmp, path);
-    }
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, cache);
 }
 
 // ── Provider-spending cache ───────────────────────────────────────────────────
@@ -508,14 +503,6 @@ pub struct ProviderSpendingCache {
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
-    /// Each live session's statusline cost (`total_cost_usd`, keyed by agent
-    /// id == sidebar row id) captured at the instant the walk published — the
-    /// baseline the cockpit's live overlay measures per-session overshoot
-    /// against until the next walk re-stamps it ([`today_spend_live_usd`]). A
-    /// pre-baseline file reads an empty map, so the overlay degrades to the
-    /// exact walked figure, never a double count.
-    #[serde(default)]
-    pub live_cost_baselines: BTreeMap<String, f64>,
     #[serde(flatten)]
     pub spending: Spending,
 }
@@ -530,31 +517,18 @@ impl ProviderSpendingCache {
     }
 }
 
-/// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms` and
-/// carrying the live-session cost baselines captured at this publish, so
+/// Atomic write of the aggregated `Spending`, stamped `refreshed_at_ms`, so
 /// consumer sidebar tabs read the fleet and per-provider totals — and the
 /// producer its own [`SPENDING_TTL`] gate — without re-walking the JSONL
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
-pub fn write_provider_spending_cache(
-    path: &Path,
-    refreshed_at_ms: u64,
-    spending: &Spending,
-    live_cost_baselines: BTreeMap<String, f64>,
-) {
+pub fn write_provider_spending_cache(path: &Path, refreshed_at_ms: u64, spending: &Spending) {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms,
-        live_cost_baselines,
         spending: spending.clone(),
     };
-    let Ok(bytes) = serde_json::to_vec(&cache) else {
-        return;
-    };
-    let tmp = path.with_extension("json.tmp");
-    if fs::write(&tmp, &bytes).is_ok() {
-        let _ = fs::rename(&tmp, path);
-    }
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &cache);
 }
 
 /// Read the provider-spending cache written by [`write_provider_spending_cache`].
@@ -566,6 +540,29 @@ pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
         .unwrap_or_default()
+}
+
+/// Per-workspace live-cost baselines for the cockpit's between-walk count-up.
+/// The shared provider-spending cache is account-global; these baselines are
+/// room-local because row ids and live statusline costs belong to one rendered
+/// workspace.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct LiveSpendBaselines {
+    #[serde(default)]
+    pub observed_walk_ms: u64,
+    #[serde(default)]
+    pub baselines: BTreeMap<String, f64>,
+}
+
+pub fn read_live_spend_baselines(path: &Path) -> LiveSpendBaselines {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<LiveSpendBaselines>(&bytes).ok())
+        .unwrap_or_default()
+}
+
+pub fn write_live_spend_baselines(path: &Path, baselines: &LiveSpendBaselines) {
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, baselines);
 }
 
 /// Today's spend as the cockpit paints it: the walked tally's exact figure

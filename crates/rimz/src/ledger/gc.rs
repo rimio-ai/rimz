@@ -82,6 +82,7 @@ pub fn collect_runtime_under(runtime_root: &Path, older_than: Duration) -> Resul
             continue;
         };
         if WorkspaceId::parse(name).is_err() {
+            // `shared/` holds bounded user-scoped singleton caches, so runtime GC intentionally skips it.
             continue;
         }
         report.runtime_roots_scanned += 1;
