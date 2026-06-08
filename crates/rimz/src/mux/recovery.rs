@@ -106,6 +106,7 @@ fn remove_path(path: &Path) -> bool {
 /// corpse and sweeping it is safe; `rimz reload` infers "dead" from a best-effort
 /// probe, so it never sweeps a server (a probe that wrongly read a live session
 /// as dead would otherwise destroy it) and reaps only respawnable daemons.
+#[cfg(any(target_os = "linux", test))]
 fn is_sweep_target(
     cmdline: &str,
     session_name: &str,
@@ -126,6 +127,7 @@ fn is_sweep_target(
 /// ancestors). `include_mux_server` flows through to [`is_sweep_target`]. Pure
 /// over its inputs so the scoping rules are unit-tested without touching real
 /// processes.
+#[cfg(any(target_os = "linux", test))]
 pub(crate) fn select_sweep_targets(
     procs: &[ProcInfo],
     my_uid: u32,

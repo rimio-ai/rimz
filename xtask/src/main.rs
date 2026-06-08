@@ -7,6 +7,7 @@ use std::collections::BTreeMap;
 use std::env;
 use std::ffi::OsStr;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::process::{Command, ExitStatus};
@@ -15,8 +16,10 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
+use sha2::{Digest, Sha256};
 
 const PRESENCE_PLUGIN_TARGET: &str = "wasm32-wasip1";
+const DARWIN_TARGETS: [&str; 2] = ["aarch64-apple-darwin", "x86_64-apple-darwin"];
 
 struct TaskInfo {
     name: &'static str,
@@ -37,13 +40,18 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "install",
-        summary: "Build and install the rimz binary.",
-        runs: "cargo xtask stage-install, then atomically installs rimz",
+        summary: "Build and install the host rimz binary.",
+        runs: "cargo xtask stage-install, then atomically installs host rimz",
     },
     TaskInfo {
         name: "stage-install",
-        summary: "Build release artifacts into target/xtask/install/bin.",
-        runs: "build-plugin, then cargo build -p rimz --bin rimz --release --locked",
+        summary: "Build host install artifacts.",
+        runs: "build-plugin, host rimz release",
+    },
+    TaskInfo {
+        name: "dist",
+        summary: "Build packaged macOS release archives into target/dist.",
+        runs: "build-plugin, cargo zigbuild for both apple-darwin targets, tar.gz + SHA256SUMS",
     },
     TaskInfo {
         name: "fmt",
@@ -172,6 +180,7 @@ fn run_task(task: &str, root: &Path) -> Result<()> {
         "build-plugin" => build_plugin(root),
         "install" => install(root),
         "stage-install" => stage_install(root).map(|_| ()),
+        "dist" => dist(root),
         "fmt" => fmt(root),
         "lint" => lint(root),
         "test" => test(root),
@@ -293,6 +302,12 @@ fn build(root: &Path) -> Result<()> {
         ["build", "--workspace", "--all-features", "--locked"],
         &envs,
     )
+}
+
+fn dist(root: &Path) -> Result<()> {
+    build_plugin(root)?;
+    build_darwin_artifacts(root)?;
+    package_darwin_artifacts(root)
 }
 
 /// Build the Zellij presence plugin for its real target. The host-target
@@ -422,8 +437,16 @@ fn release_artifact(root: &Path, bin: &str) -> PathBuf {
     artifact
 }
 
+fn target_release_artifact(root: &Path, target: &str, bin: &str) -> PathBuf {
+    target_dir(root).join(target).join("release").join(bin)
+}
+
 fn stage_bin_dir(root: &Path) -> PathBuf {
     target_dir(root).join("xtask").join("install").join("bin")
+}
+
+fn dist_dir(root: &Path) -> PathBuf {
+    target_dir(root).join("dist")
 }
 
 /// Where a user install lands binaries — the same ladder `cargo install` walks.
@@ -480,6 +503,74 @@ fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
     vec![("RIMZ_EMBED_PRESENCE_PLUGIN", plugin_artifact(root))]
 }
 
+fn build_darwin_artifacts(root: &Path) -> Result<()> {
+    let envs = presence_plugin_embed_env(root);
+    for target in DARWIN_TARGETS {
+        ensure_rust_target(root, target)?;
+        run_with_env(
+            root,
+            "cargo",
+            [
+                "zigbuild",
+                "-p",
+                "rimz",
+                "--bin",
+                "rimz",
+                "--target",
+                target,
+                "--release",
+                "--locked",
+            ],
+            &envs,
+        )
+        .with_context(|| {
+            format!(
+                "building macOS artifact for {target}; install cargo-zigbuild and zig if this fails before compilation"
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn package_darwin_artifacts(root: &Path) -> Result<()> {
+    let dist = dist_dir(root);
+    fs::create_dir_all(&dist).with_context(|| format!("creating {}", dist.display()))?;
+    let mut checksums = String::new();
+    for target in DARWIN_TARGETS {
+        let package = format!("rimz-{target}");
+        let package_dir = dist.join(&package);
+        fs::create_dir_all(&package_dir)
+            .with_context(|| format!("creating {}", package_dir.display()))?;
+        copy_atomically(
+            &target_release_artifact(root, target, "rimz"),
+            &package_dir.join("rimz"),
+        )?;
+
+        let archive = format!("{package}.tar.gz");
+        let archive_path = dist.join(&archive);
+        create_archive_atomically(&dist, &package, &archive_path)?;
+        let digest = sha256_file(&archive_path)?;
+        checksums.push_str(&format!("{digest}  {archive}\n"));
+    }
+    write_atomically(&dist.join("SHA256SUMS"), checksums.as_bytes())
+}
+
+fn create_archive_atomically(work_dir: &Path, package: &str, dest: &Path) -> Result<()> {
+    let file_name = dest
+        .file_name()
+        .with_context(|| format!("{} has no file name", dest.display()))?
+        .to_string_lossy();
+    let staged = work_dir.join(format!(".{file_name}.tmp.{}", process::id()));
+    remove_stale_file(&staged)?;
+    run(
+        work_dir,
+        "tar",
+        [OsStr::new("-czf"), staged.as_os_str(), OsStr::new(package)],
+    )?;
+    fs::rename(&staged, dest).with_context(|| format!("installing {}", dest.display()))?;
+    Ok(())
+}
+
 fn copy_atomically(source: &Path, dest: &Path) -> Result<()> {
     let parent = dest
         .parent()
@@ -490,17 +581,51 @@ fn copy_atomically(source: &Path, dest: &Path) -> Result<()> {
         .with_context(|| format!("{} has no file name", dest.display()))?
         .to_string_lossy();
     let staged = parent.join(format!(".{file_name}.tmp.{}", process::id()));
-    match fs::remove_file(&staged) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
-        Err(err) => {
-            return Err(err).with_context(|| format!("removing {}", staged.display()));
-        }
-    }
+    remove_stale_file(&staged)?;
     fs::copy(source, &staged)
         .with_context(|| format!("staging {} to {}", source.display(), staged.display()))?;
     fs::rename(&staged, dest).with_context(|| format!("installing {}", dest.display()))?;
     Ok(())
+}
+
+fn write_atomically(dest: &Path, bytes: &[u8]) -> Result<()> {
+    let parent = dest
+        .parent()
+        .with_context(|| format!("{} has no parent directory", dest.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let file_name = dest
+        .file_name()
+        .with_context(|| format!("{} has no file name", dest.display()))?
+        .to_string_lossy();
+    let staged = parent.join(format!(".{file_name}.tmp.{}", process::id()));
+    remove_stale_file(&staged)?;
+    fs::write(&staged, bytes).with_context(|| format!("writing {}", staged.display()))?;
+    fs::rename(&staged, dest).with_context(|| format!("installing {}", dest.display()))?;
+    Ok(())
+}
+
+fn remove_stale_file(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err).with_context(|| format!("removing {}", path.display())),
+    }
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file
+            .read(&mut buffer)
+            .with_context(|| format!("reading {}", path.display()))?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
 }
 
 // Gate ordering is performance, not taste:

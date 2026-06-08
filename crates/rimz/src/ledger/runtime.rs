@@ -4,8 +4,6 @@
 //! recorded owner process is still the same live process. Audit views bypass
 //! this filter and read durable history as written.
 
-use std::fs;
-
 use crate::feed::{AgentState, FeedItem, RuntimeOwner, RuntimeOwnerKind, Surface};
 use crate::schema::event::EventEnvelope;
 
@@ -89,7 +87,7 @@ pub fn owner_is_live(owner: &RuntimeOwner) -> bool {
 
 #[cfg(target_os = "linux")]
 pub fn process_start_token(pid: u32) -> Option<String> {
-    let stat = fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     linux_process_start_from_stat(&stat).map(ToOwned::to_owned)
 }
 
@@ -100,7 +98,7 @@ pub fn process_start_token(_pid: u32) -> Option<String> {
 
 #[cfg(target_os = "linux")]
 fn process_is_live(pid: u32, expected_start: Option<&str>) -> bool {
-    let stat = match fs::read_to_string(format!("/proc/{pid}/stat")) {
+    let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
         Ok(stat) => stat,
         Err(_) => return false,
     };
