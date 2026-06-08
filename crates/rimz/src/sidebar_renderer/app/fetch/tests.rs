@@ -110,13 +110,15 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
-        &config,
-        &runtime,
-        &state,
+        FetchCycle {
+            config: &config,
+            runtime: &runtime,
+            state: &state,
+            notification_prefs: &NotificationsPrefs::default(),
+            notifications: &mut notifications,
+        },
         request,
         &mut cursor,
-        &NotificationsPrefs::default(),
-        &mut notifications,
         &mut |o| outcomes.push(o),
     );
 
@@ -274,13 +276,15 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
-        &config,
-        &runtime,
-        &state,
+        FetchCycle {
+            config: &config,
+            runtime: &runtime,
+            state: &state,
+            notification_prefs: &NotificationsPrefs::default(),
+            notifications: &mut notifications,
+        },
         FetchRequest::default(),
         &mut cursor,
-        &NotificationsPrefs::default(),
-        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 
@@ -340,13 +344,15 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
-        &config,
-        &runtime,
-        &state,
+        FetchCycle {
+            config: &config,
+            runtime: &runtime,
+            state: &state,
+            notification_prefs: &NotificationsPrefs::default(),
+            notifications: &mut notifications,
+        },
         FetchRequest::default(),
         &mut cursor,
-        &NotificationsPrefs::default(),
-        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 
@@ -463,13 +469,15 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
     run_fetch_cycle(
-        &config,
-        &runtime,
-        &state,
+        FetchCycle {
+            config: &config,
+            runtime: &runtime,
+            state: &state,
+            notification_prefs: &NotificationsPrefs::default(),
+            notifications: &mut notifications,
+        },
         FetchRequest::pane_frame_published(),
         &mut cursor,
-        &NotificationsPrefs::default(),
-        &mut notifications,
         &mut |outcome| outcomes.push(outcome),
     );
 

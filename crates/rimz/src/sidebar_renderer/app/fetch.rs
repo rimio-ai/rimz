@@ -94,16 +94,27 @@ pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut Sideba
 /// single-flight loser wait was shorter than a `list-panes`, so every loser
 /// timed out into its own uncached produce). A lone renderer is its own
 /// next-eldest, so it still self-heals through the producer branch.
+struct FetchCycle<'a> {
+    config: &'a ServeConfig,
+    runtime: &'a RuntimePaths,
+    state: &'a StatePaths,
+    notification_prefs: &'a NotificationsPrefs,
+    notifications: &'a mut NotificationState,
+}
+
 fn run_fetch_cycle(
-    config: &ServeConfig,
-    runtime: &RuntimePaths,
-    state: &StatePaths,
+    ctx: FetchCycle<'_>,
     request: FetchRequest,
     cursor: &mut RollupCursor,
-    notification_prefs: &NotificationsPrefs,
-    notifications: &mut NotificationState,
     post: &mut dyn FnMut(FetchOutcome),
 ) {
+    let FetchCycle {
+        config,
+        runtime,
+        state,
+        notification_prefs,
+        notifications,
+    } = ctx;
     let is_producer = !crate::sidebar::elder_sidebar_present(runtime, &config.instance_id);
     let exclude = config.own_pane.clone();
     let now_ms = crate::sidebar::cache::unix_now_ms();
@@ -376,13 +387,15 @@ pub(super) fn spawn_fetch_worker(
             match StatePaths::for_workspace(config.workspace_id.clone()) {
                 Ok(state) => {
                     run_fetch_cycle(
-                        &config,
-                        &runtime,
-                        &state,
+                        FetchCycle {
+                            config: &config,
+                            runtime: &runtime,
+                            state: &state,
+                            notification_prefs: &notification_prefs,
+                            notifications: &mut notifications,
+                        },
                         request,
                         &mut cursor,
-                        &notification_prefs,
-                        &mut notifications,
                         &mut post,
                     );
                 }
