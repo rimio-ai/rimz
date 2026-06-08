@@ -6,9 +6,11 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::WorkspaceId;
+use rimz::agents::AgentLifecycleObservation;
+use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::feed::{FeedItem, FeedKind, Surface};
+use rimz::ids::AgentSessionId;
 use rimz::schema::event::EventEnvelope;
-use serde_json::json;
 
 use crate::common::{Env, canonical};
 
@@ -79,21 +81,20 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 
     // Append two lifecycle events for the same agent so the rollup carries a
     // worktree branch we can assert on after rotation. Older first; newer wins.
-    for (signal, branch) in [
-        ("registered", "main"),
-        ("turn_started", "feature-migration"),
+    for (event_name, signal, branch) in [
+        ("SessionStart", LifecycleSignal::Registered, "main"),
+        (
+            "SessionStart",
+            LifecycleSignal::Registered,
+            "feature-migration",
+        ),
     ] {
-        let event = EventEnvelope::new(
+        let event = EventEnvelope::agent_lifecycle(
             workspace_id.clone(),
             "session",
             "claude",
-            "agent-hook",
-            "agent.lifecycle",
-            json!({
-                "agent_id": "claude-1",
-                "signal": { "signal": signal },
-                "worktree_branch": branch,
-            }),
+            event_name,
+            &lifecycle_observation(signal, branch),
         );
         ledger.append_event(&event).expect("append lifecycle");
     }
@@ -154,6 +155,33 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
         .assert()
         .success()
         .stdout(contains("event-log rotation skipped"));
+}
+
+fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycleObservation {
+    AgentLifecycleObservation {
+        agent_id: Some(AgentSessionId::from("claude-1")),
+        signal,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: None,
+        worktree_branch: Some(branch.to_owned()),
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+        parent_agent_id: None,
+    }
 }
 
 // --- session-pinned identity ---

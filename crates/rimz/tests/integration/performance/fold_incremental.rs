@@ -9,6 +9,9 @@
 //! transcript walk.
 
 use rimz::EventEnvelope;
+use rimz::agents::AgentLifecycleObservation;
+use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::ids::AgentSessionId;
 use rimz::ledger::event_log::{self, testkit::bytes_read};
 use rimz::ledger::snapshot::RollupCursor;
 
@@ -25,19 +28,40 @@ const FLEET: usize = 30;
 /// git cost is owned by the diff-stats cadence guards, not these fold guards.
 fn lifecycle(h: &Harness, i: usize) -> EventEnvelope {
     let slot = i % FLEET;
-    EventEnvelope::new(
+    EventEnvelope::agent_lifecycle(
         h.workspace_id.clone(),
         format!("sess-{slot}"),
         "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": format!("agent-{slot}"),
-            "signal": { "signal": "registered" },
-            "worktree_branch": format!("wt-{slot}"),
-        }),
+        "SessionStart",
+        &registered_observation(slot),
     )
+}
+
+fn registered_observation(slot: usize) -> AgentLifecycleObservation {
+    AgentLifecycleObservation {
+        agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
+        signal: LifecycleSignal::Registered,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: None,
+        worktree_branch: Some(format!("wt-{slot}")),
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+        parent_agent_id: None,
+    }
 }
 
 #[test]

@@ -10,14 +10,14 @@ use serde::{Deserialize, Serialize};
 
 use super::project::{reduce_agent_states, reduce_agent_states_seeded};
 use super::{Result, SnapshotErr};
-use crate::agents::lifecycle;
+use crate::agents::lifecycle::LifecycleSignal;
 use crate::feed::AgentState;
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename};
 use crate::ledger::event_log::{self};
 use crate::ledger::parse_cache::ParseCache;
 use crate::ledger::paths::StatePaths;
-use crate::schema::event::EventEnvelope;
+use crate::schema::event::{EventEnvelope, EventKind};
 
 /// Carryover state preserved across event-log rotation. Today this is the
 /// agent rollup; other reductions can join when they appear.
@@ -55,7 +55,10 @@ pub(crate) fn agent_rollup_with_carryover(
     // boundary anywhere in `events` postdates every carryover stamp — clear
     // them here, mirroring the in-order clear the seeded reducer applies to
     // within-log stamps (`reduce_agent_states_seeded`).
-    if events.iter().any(|event| event.method == "session.rebirth") {
+    if events
+        .iter()
+        .any(|event| matches!(event.kind(), EventKind::SessionRebirth))
+    {
         for agent in &mut carryover_agents {
             agent.pane = None;
         }
@@ -98,24 +101,16 @@ pub fn agent_tombstones_for_events(
 ) -> BTreeSet<(AgentKind, AgentSessionId)> {
     let mut tombstones = BTreeSet::new();
     for event in events {
-        if event.method != "agent.lifecycle" {
-            continue;
+        if let EventKind::AgentLifecycle(payload) = event.kind() {
+            let payload = *payload;
+            if !matches!(payload.observation.signal, LifecycleSignal::Ended) {
+                continue;
+            }
+            let Some(agent_id) = payload.observation.agent_id else {
+                continue;
+            };
+            tombstones.insert((AgentKind::new_unchecked(event.source.clone()), agent_id));
         }
-        if !matches!(
-            lifecycle::signal_from_event_params(&event.params),
-            Some(lifecycle::LifecycleSignal::Ended)
-        ) {
-            continue;
-        }
-        let Some(agent_id) = event
-            .params
-            .get("agent_id")
-            .and_then(|v| v.as_str())
-            .map(AgentSessionId::from)
-        else {
-            continue;
-        };
-        tombstones.insert((AgentKind::new_unchecked(event.source.clone()), agent_id));
     }
     tombstones
 }

@@ -7,6 +7,9 @@ use std::time::{Duration, Instant};
 
 use jiff::Timestamp;
 use rimz::EventEnvelope;
+use rimz::agents::AgentLifecycleObservation;
+use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::ids::AgentSessionId;
 use rimz::schema::heartbeat::ResolverHeartbeat;
 use serde_json::json;
 
@@ -23,18 +26,40 @@ pub fn lifecycle_event(
     event_name: &str,
     agent_id: &str,
 ) -> EventEnvelope {
-    EventEnvelope::new(
+    EventEnvelope::agent_lifecycle(
         h.workspace_id.clone(),
         session,
         "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        json!({
-            "event_name": event_name,
-            "agent_id": agent_id,
-            "signal": { "signal": "registered" },
-        }),
+        event_name,
+        &registered_observation(agent_id),
     )
+}
+
+fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
+    AgentLifecycleObservation {
+        agent_id: Some(AgentSessionId::from(agent_id)),
+        signal: LifecycleSignal::Registered,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: None,
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+        parent_agent_id: None,
+    }
 }
 
 /// Claude-shaped `PermissionRequest` hook payload for `tool_name`.

@@ -183,8 +183,9 @@ mod tests {
 
     use super::*;
 
-    use crate::ids::WorkspaceId;
-
+    use crate::agents::AgentLifecycleObservation;
+    use crate::agents::lifecycle::LifecycleSignal;
+    use crate::ids::{AgentSessionId, WorkspaceId};
     use crate::schema::event::EventEnvelope;
 
     #[cfg(target_os = "linux")]
@@ -200,30 +201,11 @@ mod tests {
         let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
         paths.ensure_dirs().unwrap();
 
-        let lifecycle = |params: serde_json::Value| {
-            EventEnvelope::new(
-                workspace.clone(),
-                "session",
-                "claude",
-                "agent-hook",
-                "agent.lifecycle",
-                params,
-            )
-        };
         // No captured pid: the owner is unknown, so the agent abstains and stays.
-        let alive = lifecycle(serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": "sess-live",
-            "signal": { "signal": "registered" },
-        }));
+        let alive = lifecycle(&workspace, "sess-live", None);
         // A pid that cannot be live (u32::MAX): the rollup derives a dead owner,
         // which the runtime expel must suppress.
-        let dead = lifecycle(serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": "sess-dead",
-            "signal": { "signal": "registered" },
-            "agent_pid": u32::MAX,
-        }));
+        let dead = lifecycle(&workspace, "sess-dead", Some(u32::MAX));
         event_log::append(&paths.events_log, &alive).unwrap();
         event_log::append(&paths.events_log, &dead).unwrap();
 
@@ -254,21 +236,7 @@ mod tests {
         assert!(read_fresh_latest(&paths).is_none());
 
         // Seed an event log and a rebuilt `latest.json`.
-        let lifecycle = |agent_id: &str| {
-            EventEnvelope::new(
-                workspace.clone(),
-                "session",
-                "claude",
-                "agent-hook",
-                "agent.lifecycle",
-                serde_json::json!({
-                    "event_name": "SessionStart",
-                    "agent_id": agent_id,
-                    "signal": { "signal": "registered" },
-                }),
-            )
-        };
-        event_log::append(&paths.events_log, &lifecycle("a")).unwrap();
+        event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
         rebuild(&paths).unwrap();
 
         // The published stamp claims exactly the live log's length → served O(1).
@@ -280,7 +248,7 @@ mod tests {
         // A write raced the read: the log moved past the stamp → stale, so the
         // guard declines and the caller folds the delta itself. Backdating the
         // log's mtime proves mtime carries no authority — only the stamp does.
-        event_log::append(&paths.events_log, &lifecycle("b")).unwrap();
+        event_log::append(&paths.events_log, &lifecycle(&workspace, "b", None)).unwrap();
         std::fs::File::open(&paths.events_log)
             .unwrap()
             .set_modified(SystemTime::now() - std::time::Duration::from_secs(60))
@@ -296,5 +264,39 @@ mod tests {
             read_fresh_latest(&paths).is_some(),
             "republish reflects the appended event → served again"
         );
+    }
+
+    fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) -> EventEnvelope {
+        let observation = AgentLifecycleObservation {
+            agent_id: Some(AgentSessionId::from(agent_id)),
+            signal: LifecycleSignal::Registered,
+            agent_pid,
+            agent_process_start: None,
+            runtime_owner: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            pane_id: None,
+            parent_agent_id: None,
+        };
+        EventEnvelope::agent_lifecycle(
+            workspace.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        )
     }
 }

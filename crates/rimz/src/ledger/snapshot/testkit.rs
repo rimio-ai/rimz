@@ -14,7 +14,8 @@ use super::row::SidebarRow;
 use super::view::SidebarSnapshot;
 use crate::agents::lifecycle::{self, TurnPhase};
 use crate::agents::{
-    AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentContext, AgentLifecycleObservation, AgentRateLimits, AgentTurnError, RateLimitWindow,
+    TurnErrorClass,
 };
 use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
@@ -293,17 +294,13 @@ pub(super) fn lifecycle_at(
     agent_id: &str,
     signal: lifecycle::LifecycleSignal,
 ) -> EventEnvelope {
-    EventEnvelope::new(
+    let observation = AgentLifecycleObservation::new(Some(agent_id.into()), signal);
+    EventEnvelope::agent_lifecycle(
         workspace.clone(),
         "session",
         source,
-        "agent-hook",
-        "agent.lifecycle",
-        serde_json::json!({
-            "event_name": event_name,
-            "agent_id": agent_id,
-            "signal": signal,
-        }),
+        event_name,
+        &observation,
     )
 }
 

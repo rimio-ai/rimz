@@ -8,8 +8,8 @@ use tracing::debug;
 
 use crate::agents::lifecycle::{self, Transition};
 use crate::feed::{AgentState, PaneRef, RuntimeOwner, RuntimeOwnerKind};
-use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::schema::event::EventEnvelope;
+use crate::ids::{AgentKind, AgentSessionId};
+use crate::schema::event::{EventEnvelope, EventKind};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
 /// newest last). The events are durable, so the cap bounds only the projected
@@ -64,42 +64,42 @@ pub(super) fn reduce_agent_states_seeded(
         // block recovery of) a reused pane id; a stamp recorded by a later
         // event is the new incarnation's and stays. Sessions themselves are
         // kept — the boundary unstamps, it never tombstones.
-        if event.method == "session.rebirth" {
-            for state in map.values_mut() {
-                state.pane = None;
+        let payload = match event.kind() {
+            EventKind::SessionRebirth => {
+                for state in map.values_mut() {
+                    state.pane = None;
+                }
+                continue;
             }
-            continue;
-        }
-        if event.method != "agent.lifecycle" {
-            continue;
-        }
+            EventKind::AgentLifecycle(payload) => *payload,
+            EventKind::Other {
+                method: "agent.lifecycle",
+                ..
+            } => {
+                debug!(
+                    target: "rimz::agent::lifecycle",
+                    event_id = %event.event_id,
+                    "non-conforming agent.lifecycle event ignored",
+                );
+                continue;
+            }
+            EventKind::Other { .. } => continue,
+        };
         let kind = AgentKind::new_unchecked(event.source.clone());
         // The agent-agnostic lifecycle intent this event carries. The status
         // and the phase/compacting heads are all derived from it through the
         // one shared `lifecycle::step` table — never taken verbatim — so an
         // illegal jump can't slip through unvalidated. Replay is silent here;
-        // the ingestion path logs anomalies once per fresh event. A payload
-        // without the (required) explicit signal folds to nothing.
-        let Some(signal) = lifecycle::signal_from_event_params(&event.params) else {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                event_id = %event.event_id,
-                "signal-less agent.lifecycle event ignored",
-            );
-            continue;
-        };
+        // the ingestion path logs anomalies once per fresh event.
+        let observation = payload.observation;
+        let signal = observation.signal;
         // Identity is required: a session-less event is quarantined (folded
         // to nothing), mirroring the malformed-subagent-identity rule —
         // never silently merged into a shared per-kind bucket where two
         // distinct instances would collapse into one row. The ingestion path
         // warns once with the event in hand; here a `debug!` keeps every
         // cold rebuild's re-fold quiet.
-        let Some(agent_id) = event
-            .params
-            .get("agent_id")
-            .and_then(|v| v.as_str())
-            .map(AgentSessionId::from)
-        else {
+        let Some(agent_id) = observation.agent_id.clone() else {
             debug!(
                 target: "rimz::agent::lifecycle",
                 event_id = %event.event_id,
@@ -109,19 +109,16 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         };
-        let event_name = event.params.get("event_name").and_then(|v| v.as_str());
-        let param_non_empty_string = |key: &str| {
-            event
-                .params
-                .get(key)
-                .and_then(|v| v.as_str())
+        let event_name = payload.event_name.as_deref();
+        let non_empty_string = |value: Option<&str>| {
+            value
                 .map(str::trim)
-                .filter(|v| !v.is_empty())
+                .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned)
         };
         let event_parent_agent_id =
-            param_non_empty_string("parent_agent_id").map(AgentSessionId::from);
-        let event_task = param_non_empty_string("task");
+            non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
+        let event_task = non_empty_string(observation.task.as_deref());
         if matches!(signal, lifecycle::LifecycleSignal::Ended) {
             map.remove(&(kind, agent_id));
             continue;
@@ -171,33 +168,30 @@ pub(super) fn reduce_agent_states_seeded(
                 signal,
                 lifecycle::LifecycleSignal::CompactionEnded { .. }
             ));
-        let param_string = |key: &str| {
-            event
-                .params
-                .get(key)
-                .and_then(|v| v.as_str())
-                .map(ToOwned::to_owned)
-        };
-        let param_number = |key: &str| event.params.get(key).and_then(|v| v.as_u64());
         // Enrichment fields carry forward when an event omits them.
-        let context_pct = param_number("context_pct")
-            .map(|v| v.min(100) as u8)
+        let context_pct = observation
+            .context_pct
             .or_else(|| prior.and_then(|p| p.context_pct));
-        let context_window =
-            param_number("context_window").or_else(|| prior.and_then(|p| p.context_window));
-        let total_tokens =
-            param_number("total_tokens").or_else(|| prior.and_then(|p| p.total_tokens));
-        let cache_read_input_tokens = param_number("cache_read_input_tokens")
+        let context_window = observation
+            .context_window
+            .or_else(|| prior.and_then(|p| p.context_window));
+        let total_tokens = observation
+            .total_tokens
+            .or_else(|| prior.and_then(|p| p.total_tokens));
+        let cache_read_input_tokens = observation
+            .cache_read_input_tokens
             .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
-        let fresh_input_tokens =
-            param_number("fresh_input_tokens").or_else(|| prior.and_then(|p| p.fresh_input_tokens));
-        let output_tokens =
-            param_number("output_tokens").or_else(|| prior.and_then(|p| p.output_tokens));
-        let todo_done = param_number("todo_done")
-            .map(|v| v.min(u32::MAX as u64) as u32)
+        let fresh_input_tokens = observation
+            .fresh_input_tokens
+            .or_else(|| prior.and_then(|p| p.fresh_input_tokens));
+        let output_tokens = observation
+            .output_tokens
+            .or_else(|| prior.and_then(|p| p.output_tokens));
+        let todo_done = observation
+            .todo_done
             .or_else(|| prior.and_then(|p| p.todo_done));
-        let todo_total = param_number("todo_total")
-            .map(|v| v.min(u32::MAX as u64) as u32)
+        let todo_total = observation
+            .todo_total
             .or_else(|| prior.and_then(|p| p.todo_total));
         let establishes_identity = matches!(
             signal,
@@ -231,8 +225,8 @@ pub(super) fn reduce_agent_states_seeded(
         } else {
             prior.and_then(|p| p.turn_started_at)
         };
-        let event_worktree_path = param_string("worktree_path");
-        let event_worktree_branch = param_string("worktree_branch");
+        let event_worktree_path = observation.worktree_path.clone();
+        let event_worktree_branch = observation.worktree_branch.clone();
         let prior_worktree_path = prior.and_then(|p| p.worktree_path.clone());
         let prior_worktree_branch = prior.and_then(|p| p.worktree_branch.clone());
         let worktree_path = if establishes_identity || event_name.is_none() {
@@ -245,17 +239,16 @@ pub(super) fn reduce_agent_states_seeded(
         } else {
             prior_worktree_branch.or(event_worktree_branch)
         };
-        let agent_pid = event
-            .params
-            .get("agent_pid")
-            .and_then(|v| serde_json::from_value(v.clone()).ok())
+        let agent_pid = observation
+            .agent_pid
             .or_else(|| prior.and_then(|p| p.agent_pid));
-        let agent_process_start = param_string("agent_process_start")
+        let agent_process_start = observation
+            .agent_process_start
+            .clone()
             .or_else(|| prior.and_then(|p| p.agent_process_start.clone()));
-        let runtime_owner = event
-            .params
-            .get("runtime_owner")
-            .and_then(|v| serde_json::from_value::<RuntimeOwner>(v.clone()).ok())
+        let runtime_owner = observation
+            .runtime_owner
+            .clone()
             .or_else(|| {
                 agent_pid.map(|pid| {
                     RuntimeOwner::new(
@@ -277,13 +270,13 @@ pub(super) fn reduce_agent_states_seeded(
         let task = if parent_agent_id.is_some() {
             event_task.or_else(|| prior.and_then(|p| p.task.clone()))
         } else {
-            param_non_empty_string("task")
+            non_empty_string(observation.task.as_deref())
         };
         // The latest prompt, unlike `task`, persists: only the prompt-bearing
         // event sets it, so carry the prior one forward to label an unnamed
         // session past idle until it earns a real name. The same event appends
         // to the bounded prompt history (newest last, oldest dropped).
-        let event_prompt = param_string("prompt");
+        let event_prompt = observation.prompt.clone();
         let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
         if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
             recent_prompts.push(prompt.to_owned());
@@ -293,7 +286,9 @@ pub(super) fn reduce_agent_states_seeded(
             }
         }
         let prompt = event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone()));
-        let transcript_path = param_string("transcript_path")
+        let transcript_path = observation
+            .transcript_path
+            .clone()
             .or_else(|| prior.and_then(|p| p.transcript_path.clone()));
         // Always store the canonical model id. The agent reports a suffixed id
         // (`claude-opus-4-8[1m]`) only on a fresh-launch SessionStart; every
@@ -301,16 +296,22 @@ pub(super) fn reduce_agent_states_seeded(
         // `.or(prior)` carry-forward would otherwise flip the label the first
         // time a suffix-less event arrived. Canonicalizing at reduce time pins
         // the label and keeps the event log faithful to the raw payload.
-        let model = param_string("model")
+        let model = observation
+            .model
+            .clone()
             .map(|raw| canonical_model(&raw))
             .or_else(|| prior.and_then(|p| p.model.clone()));
-        let effort = param_string("effort").or_else(|| prior.and_then(|p| p.effort.clone()));
+        let effort = observation
+            .effort
+            .clone()
+            .or_else(|| prior.and_then(|p| p.effort.clone()));
         // The hook stamps the mux pane id it ran inside on every lifecycle
         // event; carry it forward when an event omits it so a `Stop` doesn't
         // unbind the agent from its pane. Only the pane id is reduced — the
         // rest of `PaneRef` is filled by the live `pane list` overlay.
-        let pane = param_string("pane_id")
-            .and_then(|raw| PaneId::parse(&raw).ok())
+        let pane = observation
+            .pane_id
+            .clone()
             .map(PaneRef::from_id)
             .or_else(|| prior.and_then(|p| p.pane.clone()));
         // Identity, never activity: the first event's instant, carried forward

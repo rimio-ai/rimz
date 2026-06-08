@@ -10,7 +10,7 @@ pub mod sidebar_event;
 
 // v2: `agent.lifecycle` params carry a `signal` (the agent-agnostic lifecycle
 // intent folded through `agents::lifecycle::step`) in place of the legacy bare
-// `status` + `compacting`. The reducer tolerantly decodes either form.
+// `status` + `compacting`; signal-less lifecycle frames fold to nothing.
 pub const EVENT_SCHEMA_VERSION: &str = "rimz.event.v2";
 // v4: the snapshot view-model carries `root_class`, and the worktree-group
 // kind vocabulary is `worktree`/`root`/`external` (the catch-all renamed from

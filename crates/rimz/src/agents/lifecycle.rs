@@ -17,7 +17,6 @@
 //! silently absorbing it.
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::feed::AgentStatus;
 
@@ -301,17 +300,6 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         },
         kind,
     }
-}
-
-/// Decode the explicit lifecycle signal an `agent.lifecycle` event carries.
-/// The event-log schema requires the `signal` object on every lifecycle
-/// params payload (every writer stamps it via
-/// [`EventEnvelope::agent_lifecycle`](crate::schema::event::EventEnvelope::agent_lifecycle));
-/// `None` marks a non-conforming payload the reducer folds nothing from.
-pub(crate) fn signal_from_event_params(params: &Value) -> Option<LifecycleSignal> {
-    params
-        .get("signal")
-        .and_then(|value| LifecycleSignal::deserialize(value).ok())
 }
 
 #[cfg(test)]
@@ -756,33 +744,5 @@ mod tests {
         assert_eq!(signal, LifecycleSignal::CompactionEnded { auto: None });
         let encoded = serde_json::to_value(signal).unwrap();
         assert_eq!(encoded, serde_json::json!({ "signal": "compaction_ended" }));
-    }
-
-    #[test]
-    fn decodes_an_explicit_signal_from_params() {
-        let params = serde_json::json!({
-            "signal": { "signal": "turn_ended", "errored": true, "parked_on_background": false },
-        });
-        assert_eq!(
-            signal_from_event_params(&params),
-            Some(LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-            }),
-        );
-    }
-
-    #[test]
-    fn signal_less_params_decode_to_none() {
-        // The post-v2 contract: an `agent.lifecycle` event without an explicit
-        // `signal` is non-conforming and folds to nothing — never reconstructed
-        // from a bare status.
-        for params in [
-            serde_json::json!({ "status": "running", "event_name": "UserPromptSubmit" }),
-            serde_json::json!({ "signal": "not-an-object" }),
-            serde_json::json!({}),
-        ] {
-            assert_eq!(signal_from_event_params(&params), None, "{params}");
-        }
     }
 }

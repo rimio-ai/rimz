@@ -7,6 +7,7 @@
 //! payload-overrides-transcript pattern for the context gauge — so the
 //! per-adapter code carries only its provider-specific mapping.
 
+use serde::Serialize;
 use serde_json::Value;
 
 use crate::feed::RuntimeOwner;
@@ -21,7 +22,7 @@ use super::optional_payload_string;
 /// so the CLI layer can record an `agent.lifecycle` event without each adapter
 /// touching the ledger. The status is *derived* from the signal through
 /// [`step`](super::lifecycle::step), never decided by the adapter.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct AgentLifecycleObservation {
     /// Agent-supplied session/process identifier (e.g. Claude `session_id`,
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses

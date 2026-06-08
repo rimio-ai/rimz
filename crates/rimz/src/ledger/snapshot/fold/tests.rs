@@ -2,6 +2,7 @@ use std::path::Path;
 
 use super::*;
 
+use crate::agents::lifecycle;
 use crate::feed::AgentStatus;
 use crate::ids::WorkspaceId;
 use crate::ledger::snapshot::testkit::*;
@@ -39,17 +40,12 @@ fn merge_carryover_preserves_orphaned_entries() {
 fn carryover_session_end_tombstones_older_agent_state() {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
     let carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
-    let ended = EventEnvelope::new(
-        workspace,
-        "session",
+    let ended = lifecycle_at(
+        &workspace,
         "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        serde_json::json!({
-            "event_name": "SessionEnd",
-            "agent_id": "agent-1",
-            "signal": { "signal": "ended" },
-        }),
+        "SessionEnd",
+        "agent-1",
+        lifecycle::LifecycleSignal::Ended,
     );
 
     let merged = agent_rollup_with_carryover(&[ended], vec![carried]);

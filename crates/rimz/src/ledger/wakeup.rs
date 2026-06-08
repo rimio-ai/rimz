@@ -30,7 +30,7 @@ use crate::bridge::{WakeupFrame, feed_socket_path};
 use crate::feed::FeedItem;
 use crate::ledger::RuntimePaths;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
-use crate::schema::event::EventEnvelope;
+use crate::schema::event::{EventEnvelope, EventKind};
 use crate::schema::heartbeat::SidebarHeartbeat;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
@@ -99,21 +99,20 @@ pub fn wake_sidebars_for_event(rt: &RuntimePaths, event: &EventEnvelope) -> Resu
         None,
         SidebarEvent::LedgerDelta {
             event_method: Some(event.method.clone()),
-            agent_event_name: agent_event_name(event).map(str::to_owned),
+            agent_event_name: agent_event_name(event),
         },
     )?;
     Ok(())
 }
 
-fn agent_event_name(event: &EventEnvelope) -> Option<&str> {
-    (event.method == "agent.lifecycle")
-        .then(|| {
-            event
-                .params
-                .get("event_name")
-                .and_then(serde_json::Value::as_str)
-        })
-        .flatten()
+fn agent_event_name(event: &EventEnvelope) -> Option<String> {
+    match event.kind() {
+        EventKind::AgentLifecycle(payload) => {
+            let payload = *payload;
+            payload.event_name
+        }
+        EventKind::SessionRebirth | EventKind::Other { .. } => None,
+    }
 }
 
 /// Tell every fresh sidebar of this workspace to re-exec its own binary, so it

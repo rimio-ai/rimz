@@ -12,6 +12,9 @@
 use std::time::{Duration, Instant};
 
 use rimz::EventEnvelope;
+use rimz::agents::AgentLifecycleObservation;
+use rimz::agents::lifecycle::LifecycleSignal;
+use rimz::ids::AgentSessionId;
 use rimz::ledger::event_log;
 use rimz::sidebar::snapshot::RollupCursor;
 
@@ -27,19 +30,40 @@ const ROUNDS: u32 = 20;
 /// produce's git refresh has nothing to fork — the per-worktree git cost is
 /// owned by the diff-stats cadence guards, not this budget.
 fn lifecycle(h: &Harness, slot: usize) -> EventEnvelope {
-    EventEnvelope::new(
+    EventEnvelope::agent_lifecycle(
         h.workspace_id.clone(),
         format!("sess-{slot}"),
         "claude",
-        "agent-hook",
-        "agent.lifecycle",
-        serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": format!("agent-{slot}"),
-            "signal": { "signal": "registered" },
-            "worktree_branch": format!("wt-{slot}"),
-        }),
+        "SessionStart",
+        &registered_observation(slot),
     )
+}
+
+fn registered_observation(slot: usize) -> AgentLifecycleObservation {
+    AgentLifecycleObservation {
+        agent_id: Some(AgentSessionId::from(format!("agent-{slot}"))),
+        signal: LifecycleSignal::Registered,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        worktree_path: None,
+        worktree_branch: Some(format!("wt-{slot}")),
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+        parent_agent_id: None,
+    }
 }
 
 /// A live session pane, as `list-panes` would report it — no cwd, so the
