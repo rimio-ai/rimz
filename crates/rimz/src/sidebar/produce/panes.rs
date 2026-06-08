@@ -144,10 +144,6 @@ fn stamp_pane_process_starts(
         if let Some(start) = pane.current.pid.and_then(|pid| root_start(kind, pid)) {
             pane.current.started_at = Some(start);
             root_stamped.insert(pane.pane_id.clone());
-            continue;
-        }
-        if pane.current.started_at.is_some() {
-            continue;
         }
     }
 
@@ -228,12 +224,7 @@ fn clear_duplicate_carried_starts(
         let Some(start) = pane.current.started_at else {
             continue;
         };
-        let Some(kind) = pane
-            .current
-            .command
-            .as_deref()
-            .and_then(crate::ledger::snapshot::command_agent_kind)
-        else {
+        let Some(kind) = pane_process_agent_kind(&pane.current) else {
             continue;
         };
         let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
