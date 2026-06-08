@@ -1061,12 +1061,12 @@ fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("focus    l or ↵     1-9 direct", faint),
         Line::styled("triage   ␣ next ?!  ←/→ accounts", faint),
         Line::styled("filter   q waiting   !/e attention", faint),
-        Line::styled("         o idle      p paused", faint),
-        Line::styled("         w working   d done   a all", faint),
+        Line::styled("         p paused   d done", faint),
+        Line::styled("         w working  o idle   a all", faint),
         Line::styled("system   r reload   x dismiss", faint),
         Line::styled("help     ? close", faint),
-        Line::styled("? waiting   ! attention   ⏸ paused", faint),
-        Line::styled("⢿ working  ✻ thinking   ○ idle   ✓ done", faint),
+        Line::styled("? waiting  ! attention  ⏸ paused", faint),
+        Line::styled("✓ done    ⢿ working  ✻ think  ○ idle", faint),
     ]
 }
 

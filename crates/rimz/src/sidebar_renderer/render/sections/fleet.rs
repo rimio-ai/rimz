@@ -34,17 +34,16 @@ pub(crate) struct MakeUpHit {
 /// so the body below never shifts vertically as agents change *state*:
 ///
 /// ```text
-/// ? 2   ! 1   ○ 2   ⏸ 0                        ⢿ 3   ✓ 4   make-up: left · right
+/// ? 2   ! 1   ⏸ 0   ✓ 4                        ⢿ 3   ○ 2   make-up: left · right
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?` and `failed` `!` (each wearing its
-/// oldest row's age heat over a yellow floor), a free `idle` `○` (calm
-/// green, but grouped left because a free agent wants work), then a parked
-/// `rate-limited` `⏸` (held amber, never heating) closing the cluster. The right
-/// cluster is the busy/done tail — working `⢿` (every running agent; the
-/// thinking sparkle is a per-row animation head, not a bucket), then `success`
-/// `✓`. Every bucket renders — the glyph always in its semantic color, a zero
+/// oldest row's age heat over a yellow floor), parked `rate-limited` `⏸`
+/// (held amber, never heating), then `success` `✓`. The right cluster is the
+/// live-capacity tail — working `⢿` (every running agent; the thinking sparkle
+/// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
+/// bucket renders — the glyph always in its semantic color, a zero
 /// count at the soft gray beside it. Counts span the capped agents
 /// (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
@@ -79,10 +78,9 @@ pub(in crate::sidebar_renderer::render) fn fleet_header_lines(
 
     // Top line — the make-up split by who might want you. The left cluster gathers
     // the rows worth a glance: `waiting` `?` and `failed` `!` (the oldest row's
-    // heat over a yellow floor), a free `idle` `○` — calm green, but grouped
-    // left because a free agent wants work — then a parked `rate-limited` `⏸`
-    // closing the cluster. The right cluster is the busy/done tail: working,
-    // then success. Every bucket shows its count.
+    // heat over a yellow floor), parked `rate-limited` `⏸`, then success. The
+    // right cluster is the live-capacity tail: working, then idle. Every bucket
+    // shows its count.
     let mut left = Cluster::new(theme, filter);
     left.push_count(
         AgentStatus::Waiting,
@@ -96,14 +94,8 @@ pub(in crate::sidebar_renderer::render) fn fleet_header_lines(
         failed,
         attention_bucket_style(theme, groups, AgentStatus::Failed),
     );
-    left.push_count(
-        AgentStatus::Idle,
-        Color::Green,
-        idle,
-        status_style(theme, AgentStatus::Idle),
-    );
-    // Rate-limited closes the left cluster, after the free `○` idle agent:
-    // attention-class but parked. It renders like every other bucket — the
+    // Rate-limited stays with the attention-class cluster, after `?` / `!`:
+    // parked, but still a row worth spotting. It renders like every other bucket — the
     // amber glyph with a faint `0` when empty — so the make-up stays a fixed
     // dashboard, scannable by position. It takes the held-amber resting tone
     // (`status_style`), never the heating `attention_bucket_style`, since there
@@ -114,6 +106,12 @@ pub(in crate::sidebar_renderer::render) fn fleet_header_lines(
         rate_limited,
         status_style(theme, AgentStatus::RateLimited),
     );
+    left.push_count(
+        AgentStatus::Success,
+        Color::Green,
+        success,
+        status_style(theme, AgentStatus::Success),
+    );
     let mut right = Cluster::new(theme, filter);
     right.push_count(
         AgentStatus::Running,
@@ -122,15 +120,15 @@ pub(in crate::sidebar_renderer::render) fn fleet_header_lines(
         agent_style(theme, AgentStatus::Running),
     );
     right.push_count(
-        AgentStatus::Success,
+        AgentStatus::Idle,
         Color::Green,
-        success,
-        status_style(theme, AgentStatus::Success),
+        idle,
+        status_style(theme, AgentStatus::Idle),
     );
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
     // cluster alone can outrun the width) fall back to one left-packed line so the
-    // attention buckets stay intact and the busy tail clips, rather than crushing
+    // attention buckets stay intact and the live-capacity tail clips, rather than crushing
     // `? 0  ! 0` down to a stub. The left hits are already content-absolute (the
     // cluster starts at column 0); the right hits shift to wherever the layout
     // lands their cluster — `pin_right` packs it against the right edge, the

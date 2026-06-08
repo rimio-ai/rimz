@@ -3366,9 +3366,9 @@ fn home_abbreviation_collapses_only_a_home_prefix() {
 
 /// The cockpit summary leads with today's sessions (`◎ N`, under the name)
 /// over the live-agent count (`¤ N`); the cockpit below it splits the
-/// make-up at a fixed height — the left cluster (`? ! ○ ⏸`, each glyph
-/// spaced from its count, a zero reading `? 0`) and the busy/done tail
-/// (`✻ ⢿ ✓`) — so the body never shifts as agents change state.
+/// make-up at a fixed height — the left cluster (`? ! ⏸ ✓`, each glyph
+/// spaced from its count, a zero reading `? 0`) and the live-capacity tail
+/// (`⢿ ○`) — so the body never shifts as agents change state.
 #[test]
 fn fleet_header_is_fixed_and_splits_the_make_up() {
     // Borderless layout: row 0 is the name, row 1 a blank line, row 2 the `◎`
@@ -3410,15 +3410,16 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // make-up (row 1 is the blank line, row 4 the hairline rule).
     assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");
     let buckets = screen.lines().nth(5).unwrap();
-    // Left cluster: waiting/failed/idle and the parked rate-limited each show
-    // their count (a zero reads `? 0`); both running agents tally into the
-    // one working (⢿) bucket.
+    // The make-up shows the attention and parked/done buckets first, then the
+    // live-capacity tail; both running agents tally into the one working (⢿)
+    // bucket.
     assert!(buckets.contains("? 0"), "{buckets}");
     assert!(buckets.contains("! 0"), "{buckets}");
-    assert!(buckets.contains("○ 0"), "{buckets}");
     // The rate-limited glyph carries the U+FE0E text-presentation selector.
     assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
+    assert!(buckets.contains("✓ 0"), "{buckets}");
     assert!(buckets.contains("⢿ 2"), "{buckets}");
+    assert!(buckets.contains("○ 0"), "{buckets}");
     assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.
@@ -3689,7 +3690,7 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
 fn make_up_clipped_bucket_drops_its_hit() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
-    // 18 columns forces the left-packed fallback and clips the busy tail, so
+    // 18 columns forces the left-packed fallback and clips the live-capacity tail, so
     // the right-cluster `⢿ 1` bucket falls past the edge.
     let (_, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 18);
     assert!(

@@ -18,7 +18,7 @@ A real room: one Claude agent working in `main`, its card selected, with the per
  ◎ 12                         ◇ 96k ↘ 32k ↗ 64k ◌ 68k    ← sessions today · today's tokens (right)
  ¤ 1                                             $4.20    ← live agents · today's fleet spend
  ────────────────────────────────────────────────────
- ? 0   ! 0   ○ 0   ⏸ 0                      ⢿ 1   ✓ 0    ← make-up: who needs you | who's busy
+ ? 0   ! 0   ⏸ 0   ✓ 0                      ⢿ 1   ○ 0    ← make-up: attention/parked/done | working/free
 
 ▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in (lane spine ▏)
 ▌⣾ claude · Opus 4.8 · high · 1m                $1.27    ← line 1: identity · capability · $cost
@@ -124,14 +124,14 @@ The top block. Fixed height, so the rows below it never jump as agents change st
  ◎ 12                             ◇ 88k ↘ 24k ↗ 64k ◌ 68k
  ¤ 5                                                  $4.20
  ──────────────────────────────────────────────────────────
- ? 2   ! 1   ○ 1   ⏸ 0                            ⢿ 2   ✓ 0
+ ? 2   ! 1   ⏸ 0   ✓ 0                            ⢿ 2   ○ 1
 ```
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
 - **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once today records spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then a free `○` idle agent — calm, but a free agent wants work — and a `⏸` rate-limited count closing the cluster (held amber, parked). The **right cluster** is the busy tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then `✓` done. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
-- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `o` idle, `p` paused/rate-limited, `w` working, `d` done, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` rate-limited (held amber, parked) and `✓` done. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
+- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused/rate-limited, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
