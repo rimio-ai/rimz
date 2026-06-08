@@ -41,7 +41,6 @@ Rimz applies a small set of room defaults when it creates or reattaches a sessio
 
 ```toml
 [zellij]
-default_mode = "locked"                 # "locked" keeps Zellij keys inert until you enter a mode; set "normal" for Zellij's default
 mouse_mode = true
 mouse_click_through = true
 advanced_mouse_actions = false
@@ -73,7 +72,7 @@ pane_border_status = "off"             # "off" | "top" | "bottom"
 pane_border_lines = "simple"           # "simple" | "single" | "double" | "heavy"
 ```
 
-Zellij receives these as `zellij attach … options …` on session birth and attach, so they never touch `~/.config/zellij/config.kdl`. tmux applies them across the right scopes — session, window, and the few that are server-global (clipboard and rich-key handling have no per-session equivalent). The backend-by-backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
+Zellij receives these as `zellij attach … options …` on session birth and attach, so they never touch `~/.config/zellij/config.kdl`. Rimz always adds `--default-mode locked` for Zellij rooms so ordinary typing reaches the focused pane; enter a Zellij mode deliberately when you need multiplexer commands. tmux applies its options across the right scopes — session, window, and the few that are server-global (clipboard and rich-key handling have no per-session equivalent). The backend-by-backend mapping is in [internals/multiplexers.md](../internals/multiplexers.md).
 
 ### Resume on rebirth
 

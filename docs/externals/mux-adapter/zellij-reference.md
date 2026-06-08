@@ -313,7 +313,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 
 | Option | Values (default first) | Note |
 | --- | --- | --- |
-| `default_mode` | `normal` \| `locked` | Rimz sets `locked` so typing reaches the agent pane |
+| `default_mode` | `normal` \| `locked` | Rimz always sets `locked` so typing reaches the agent pane |
 | `default_shell` | `$SHELL` | |
 | `default_cwd` | path | |
 | `default_layout` | `default` | name in the layout dir |

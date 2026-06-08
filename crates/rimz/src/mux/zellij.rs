@@ -293,7 +293,7 @@ fn zellij_options_args(
 ) -> Vec<String> {
     let mut args = vec![
         "--default-mode".to_owned(),
-        config.default_mode.as_str().to_owned(),
+        "locked".to_owned(),
         "--focus-follows-mouse".to_owned(),
         bool_value(config.focus_follows_mouse),
         "--pane-frames".to_owned(),
