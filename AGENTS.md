@@ -10,7 +10,7 @@ If a child `AGENTS.md` appears under a subtree, it extends this file with local-
 
 Declarative, present tense. State the contract; don't narrate history. Prefer imperatives (`Use Result.`, `Resolvers own pane I/O.`) over prohibitions where the meaning carries.
 
-Say what it is. Describe Rimz by what it does, builds, and offers — lead with the capability. Reader-facing docs especially: open on the value, not the guardrail. Avoid "X is a Y, not a Z" framing and defensive "we don't…" / "it never…" constructions; state a real safety boundary as a positive commitment (`Resolvers own pane I/O.`) rather than a prohibition. Reserve negation for genuine disambiguation a reader would otherwise get wrong.
+Say what it is. Describe Rimz by what it does, builds, and offers — lead with the capability. Reader-facing docs especially: open on the value, not the guardrail. Introduce a concept by what it does before you lean on it, so a feature is never explained by negating a term the reader has not met yet (`the default loop answers nothing on your behalf` fails this — it leans on *resolver* before the reader has one; say what the loop *does* — get you to the question fast — instead). Avoid "X is a Y, not a Z" framing and defensive "we don't…" / "it never…" constructions; state a real safety boundary as a positive commitment (`Resolvers own pane I/O.`) rather than a prohibition. Reserve negation for genuine disambiguation a reader would otherwise get wrong.
 
 Markdown prose uses one logical line per paragraph, list item, and blockquote paragraph. Do not hard-wrap prose.
 

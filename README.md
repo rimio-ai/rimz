@@ -2,14 +2,15 @@
 
 Run one coding agent and you flip tabs. Run four and you lose them.
 
-Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share the same feed through one CLI.
+Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share one feed through one CLI.
 
 ```
  ⌘ query-engine            ~/code/query-engine
- ✦ 6   ✧ 2                              $4.20
+
+ ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
+ ¤ 6                                    $4.20
  ──────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0            ⢿ 2   ○ 1
- ◕ 41m · ◇ 486.0k · ◆ 4
+ ? 2   ! 1   ○ 1   ⏸ 0            ⢿ 2   ✓ 0
 
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌? claude · Opus · xhigh
@@ -44,7 +45,7 @@ Rimz pins every repo to one durable room — a Zellij or tmux session with a sid
             ␣ next ?!   ? for help
 ```
 
-> Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: Rimz shows you which agent needs you and takes you to its pane, where you answer in the agent's own UI. Enrol a resolver when you want routine answers handled ahead of you — the chain still ends with you.
+> Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: Rimz shows you which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. Enrol a resolver — a small process you trust on this machine — when you want routine answers handled ahead of you; the chain still ends with you.
 
 Every glyph, meter, and frame above is broken down in the [interface reference](./docs/interface/sidebar.md).
 
@@ -72,9 +73,9 @@ That's the whole loop. Everything else is variations on those five commands.
 
 ## How it works
 
-One repo maps to one Rimz workspace and one multiplexer session. Git worktrees of that repo group inside it. Every event — agent hooks, script announcements, build results, blocking questions — writes through one CLI to a durable file-backed ledger. The sidebar is a renderer over that ledger; the ledger doesn't care whether anyone is watching.
+One repo maps to one Rimz workspace and one multiplexer session, and the repo's git worktrees group inside it. Every event — agent hooks, script announcements, build results, blocking questions — writes through one CLI to a durable file-backed ledger. The sidebar renders that ledger, and the room keeps its state whether or not anyone is attached.
 
-Design commitments and the three operating paths (`native_ui`, `bridge`, `script`) live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
+The design commitments and the three operating paths (`native_ui`, `bridge`, `script`) live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
 
 ## Development
 
@@ -101,12 +102,13 @@ Contributor rules, gate details, and task names live in [docs/contributing/rust-
 
 ## Status
 
-Documentation-first. Implementation lands in milestones — M0 spikes the ledger and bridge across Zellij and tmux; agent adapters follow at M2 (Codex) and M3 (Claude Code). See [docs/roadmap.md](./docs/contributing/roadmap.md).
+Documentation-first. Implementation lands in milestones — M0 spikes the ledger and bridge across Zellij and tmux; agent adapters follow at M2 (Codex) and M3 (Claude Code). See [docs/contributing/roadmap.md](./docs/contributing/roadmap.md).
 
 ## Read next
 
-- **Use it.** [docs/product.md](./docs/guide/product.md) — five-minute tour of the sidebar, the feed, and the three audiences.
+- **Use it.** [docs/guide/product.md](./docs/guide/product.md) — five-minute tour of the sidebar, the feed, and the three audiences.
 - **See it.** [docs/interface/sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen, zone by zone, with the frames it draws.
-- **CLI surface.** [docs/cli.md](./docs/reference/cli.md) — every command, grouped by intent.
-- **Understand the design.** [DESIGN.md](./DESIGN.md) — commitments and the three operating paths.
+- **CLI surface.** [docs/reference/cli.md](./docs/reference/cli.md) — every command, grouped by intent.
+- **Understand the design.** [DESIGN.md](./DESIGN.md) — the attention problem and the design choices that answer it.
 - **Contribute.** [AGENTS.md](./AGENTS.md) — engineering rules and the docs map. Contributor commands and the gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+```
