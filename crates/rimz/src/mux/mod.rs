@@ -416,6 +416,14 @@ pub trait MuxBackend: Send + Sync {
     /// global sidebar is included by backend convention: tmux relies on the
     /// session's `after-new-window` hook; Zellij renders it into the tab layout.
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
+    /// Close any floating panes sharing `anchor`'s view, returning the closed
+    /// pane ids. A self-closing sidebar uses this to tear down Zellij overlays
+    /// that would otherwise keep an empty tab alive; tmux has no floating panes,
+    /// so the default is empty.
+    fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
+        let _ = (session, anchor);
+        Ok(Vec::new())
+    }
     /// Best-effort wakeup; sockets are the channel of record per the docs.
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     /// Load the session's presence plugin — the push channel that nudges the

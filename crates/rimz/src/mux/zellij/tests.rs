@@ -123,6 +123,7 @@ fn raw_pane_deserializes_minimal_shape() {
     assert_eq!(parsed.len(), 2);
     assert!(!parsed[0].is_plugin);
     assert!(parsed[0].is_focused);
+    assert!(!parsed[0].is_floating);
     assert!(parsed[1].is_plugin);
     assert!(!parsed[1].is_focused);
 }
@@ -339,7 +340,8 @@ fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
           {"id": 1, "is_plugin": true,  "is_suppressed": false, "tab_id": 0},
           {"id": 2, "is_plugin": false, "is_suppressed": true,  "tab_id": 0},
           {"id": 3, "is_plugin": false, "is_suppressed": false, "is_held": true, "tab_id": 0},
-          {"id": 4, "is_plugin": false, "is_suppressed": false, "exited": true, "tab_id": 0}
+          {"id": 4, "is_plugin": false, "is_suppressed": false, "exited": true, "tab_id": 0},
+          {"id": 5, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 0}
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let live: Vec<u64> = parsed
@@ -348,8 +350,27 @@ fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
         .map(|p| p.id)
         .collect();
     // Only the plain live terminal pane survives; plugin, suppressed, held,
-    // and exited panes are all dropped.
+    // exited, and floating panes are all dropped.
     assert_eq!(live, vec![0]);
+}
+
+#[test]
+fn floating_pane_teardown_targets_only_the_anchor_tab() {
+    let json = r#"[
+          {"id": 3, "is_plugin": true,  "is_suppressed": false, "tab_id": 9},
+          {"id": 30, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 9},
+          {"id": 3, "is_plugin": false, "is_suppressed": false, "tab_id": 1},
+          {"id": 26, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 1},
+          {"id": 27, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 2},
+          {"id": 28, "is_plugin": true,  "is_suppressed": false, "is_floating": true, "tab_id": 1}
+        ]"#;
+    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+
+    assert_eq!(
+        floating_panes_in_anchor_view(&parsed, &anchor),
+        vec![PaneId::from_parts(MuxName::Zellij, "terminal_26")]
+    );
 }
 
 #[test]
@@ -452,6 +473,7 @@ fn topology_cache_panes_feed_the_existing_classifier() {
                 is_held: false,
                 exited: false,
                 is_suppressed: false,
+                is_floating: false,
                 is_focused: false,
                 tab_position: 0,
                 tab_name: Some("main".to_owned()),
@@ -467,6 +489,7 @@ fn topology_cache_panes_feed_the_existing_classifier() {
                 is_held: true,
                 exited: false,
                 is_suppressed: false,
+                is_floating: false,
                 is_focused: true,
                 tab_position: 0,
                 tab_name: Some("main".to_owned()),

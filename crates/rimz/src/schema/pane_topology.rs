@@ -30,6 +30,8 @@ pub struct PaneTopologyPane {
     #[serde(default)]
     pub is_suppressed: bool,
     #[serde(default)]
+    pub is_floating: bool,
+    #[serde(default)]
     pub is_focused: bool,
     #[serde(alias = "tab_id")]
     pub tab_position: u64,

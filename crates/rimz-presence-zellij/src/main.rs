@@ -575,6 +575,7 @@ mod shell {
                         is_plugin: pane.is_plugin,
                         is_focused: pane.is_focused,
                         is_suppressed: pane.is_suppressed,
+                        is_floating: pane.is_floating,
                         exited: pane.exited,
                         is_held: pane.is_held,
                         tab_position: *tab as u64,

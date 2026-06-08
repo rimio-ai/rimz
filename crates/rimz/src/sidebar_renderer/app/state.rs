@@ -87,11 +87,13 @@ pub struct RenderState {
     pub last_snapshot: Option<SidebarSnapshot>,
 }
 
-/// What [`apply_fetch_outcome`] reports back to the loop: whether to exit, and
-/// whether this fetch was held as a transient regression (the loop fires one
-/// self-heal refetch so the cache reaches the next good frame).
+/// What [`apply_fetch_outcome`] reports back to the loop: whether to exit,
+/// whether that exit is the tab-empty self-close path, and whether this fetch
+/// was held as a transient regression (the loop fires one self-heal refetch so
+/// the cache reaches the next good frame).
 pub(super) struct ApplyOutcome {
     pub(super) should_exit: bool,
+    pub(super) tab_emptied: bool,
     pub(super) rejected: bool,
 }
 
@@ -211,6 +213,7 @@ pub(super) fn apply_fetch_outcome(
         );
         return Ok(ApplyOutcome {
             should_exit: true,
+            tab_emptied: false,
             rejected,
         });
     }
@@ -229,11 +232,13 @@ pub(super) fn apply_fetch_outcome(
         );
         return Ok(ApplyOutcome {
             should_exit: true,
+            tab_emptied: true,
             rejected,
         });
     }
     Ok(ApplyOutcome {
         should_exit: false,
+        tab_emptied: false,
         rejected,
     })
 }

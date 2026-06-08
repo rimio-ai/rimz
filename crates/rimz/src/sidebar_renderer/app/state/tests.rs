@@ -12,6 +12,31 @@ fn degraded_health(reason: &str) -> Health {
     }
 }
 
+fn serve_config(ws: &WorkspaceId) -> ServeConfig {
+    ServeConfig {
+        workspace_id: ws.clone(),
+        mux: crate::MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id: crate::SidebarInstanceId::new(),
+        tick_seconds: 1,
+        refresh_ms_override: None,
+        notification_prefs: crate::config::NotificationsPrefs::default(),
+        own_pane: None,
+    }
+}
+
+fn snapshot_with_sibling_count(ws: &WorkspaceId, sibling_count: usize) -> SidebarSnapshot {
+    let mut snapshot = snapshot(ws);
+    snapshot.own_view = Some(crate::SidebarOwnView {
+        sibling_count,
+        own_is_active: false,
+        active_pane_id: None,
+        working_pane_ids: Vec::new(),
+        own_view_is_daemon: false,
+    });
+    snapshot
+}
+
 #[test]
 fn first_ok_fetch_clears_status_and_records_snapshot() {
     let ws = workspace();
@@ -139,16 +164,7 @@ fn recovery_marks_alert_recovered_and_keeps_it_sticky() {
 #[test]
 fn non_final_fast_success_does_not_recover_refresh_health() {
     let ws = workspace();
-    let config = ServeConfig {
-        workspace_id: ws.clone(),
-        mux: crate::MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: crate::SidebarInstanceId::new(),
-        tick_seconds: 1,
-        refresh_ms_override: None,
-        notification_prefs: crate::config::NotificationsPrefs::default(),
-        own_pane: None,
-    };
+    let config = serve_config(&ws);
     let mut last_snapshot = Some(snapshot(&ws));
     let mut current = snapshot(&ws);
     let mut health = degraded_health("snapshot failed: produce");
@@ -174,10 +190,65 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
     .expect("apply non-final fast frame");
 
     assert!(!applied.should_exit);
+    assert!(!applied.tab_emptied);
     assert!(!applied.rejected);
     assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
     assert!(
         health.alert.as_ref().is_some_and(|alert| alert.is_active()),
         "only a final success may mark the refresh loop recovered"
     );
+}
+
+#[test]
+fn self_close_outcome_marks_tab_emptied() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let mut last_snapshot = Some(snapshot(&ws));
+    let mut current = snapshot(&ws);
+    let mut health = Health::default();
+    let mut gate = GateState::default();
+    let mut self_close = SelfCloseState::default();
+    let mut ui = UiState::default();
+    let anim_start = std::time::Instant::now();
+
+    let first = apply_fetch_outcome(
+        &config,
+        FetchOutcome {
+            snapshot: Ok(snapshot_with_sibling_count(&ws, 1)),
+            final_for_request: true,
+            fresh_pane_frame: true,
+        },
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        &mut ui,
+        anim_start,
+    )
+    .expect("apply sibling frame");
+
+    assert!(!first.should_exit);
+    assert!(!first.tab_emptied);
+
+    let second = apply_fetch_outcome(
+        &config,
+        FetchOutcome {
+            snapshot: Ok(snapshot_with_sibling_count(&ws, 0)),
+            final_for_request: true,
+            fresh_pane_frame: true,
+        },
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        &mut ui,
+        anim_start,
+    )
+    .expect("apply empty-tab frame");
+
+    assert!(second.should_exit);
+    assert!(second.tab_emptied);
+    assert!(!second.rejected);
 }

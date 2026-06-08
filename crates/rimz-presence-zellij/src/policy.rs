@@ -47,6 +47,7 @@ pub struct PaneFields {
     pub is_plugin: bool,
     pub is_focused: bool,
     pub is_suppressed: bool,
+    pub is_floating: bool,
     pub exited: bool,
     pub is_held: bool,
     pub tab_position: u64,
@@ -116,7 +117,7 @@ pub fn published_topology_payload(
 
 impl PaneFields {
     fn is_live_terminal(&self) -> bool {
-        !self.is_plugin && !self.is_suppressed && !self.exited && !self.is_held
+        !self.is_plugin && !self.is_suppressed && !self.is_floating && !self.exited && !self.is_held
     }
 
     fn is_sidebar(&self) -> bool {
@@ -144,6 +145,7 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Optio
             pane.is_plugin.hash(&mut hasher);
             pane.is_focused.hash(&mut hasher);
             pane.is_suppressed.hash(&mut hasher);
+            pane.is_floating.hash(&mut hasher);
             pane.exited.hash(&mut hasher);
             pane.is_held.hash(&mut hasher);
             pane.tab_position.hash(&mut hasher);
@@ -181,6 +183,7 @@ pub fn focus_shortcut_if_only_focus_changed(
             if previous.id != next.id
                 || previous.is_plugin != next.is_plugin
                 || previous.is_suppressed != next.is_suppressed
+                || previous.is_floating != next.is_floating
                 || previous.exited != next.exited
                 || previous.is_held != next.is_held
                 || previous.tab_position != next.tab_position

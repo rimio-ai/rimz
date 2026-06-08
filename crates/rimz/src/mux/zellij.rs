@@ -1486,6 +1486,24 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
+    fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
+        ensure_pane_backend(anchor, MuxName::Zellij)?;
+        let panes = self.list_panes_bounded(Some(session), super::COMMAND_TIMEOUT)?;
+        let mut closed = Vec::new();
+        for pane_id in floating_panes_in_anchor_view(&panes, anchor) {
+            match self.close_pane(session, &pane_id) {
+                Ok(()) => closed.push(pane_id),
+                Err(err) => tracing::warn!(
+                    session,
+                    pane = %pane_id,
+                    error = %err,
+                    "could not close floating pane during sidebar self-close",
+                ),
+            }
+        }
+        Ok(closed)
+    }
+
     fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
         // Per-instance socket fanout is the channel of record. The broadcast
         // `zellij pipe` here is a latency optimization on top. Program (and any
@@ -1979,6 +1997,28 @@ fn parse_terminal_id(pane_id: &str) -> Option<u64> {
     pane_id.strip_prefix("terminal_")?.parse().ok()
 }
 
+fn zellij_pane_id(raw: u64) -> PaneId {
+    PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw}"))
+}
+
+fn floating_panes_in_anchor_view(panes: &[RawPane], anchor: &PaneId) -> Vec<PaneId> {
+    let Some(anchor_raw) = parse_terminal_id(anchor.raw()) else {
+        return Vec::new();
+    };
+    let Some(anchor_tab) = panes
+        .iter()
+        .find(|pane| !pane.is_plugin && pane.id == anchor_raw)
+        .map(|pane| pane.tab_id)
+    else {
+        return Vec::new();
+    };
+    panes
+        .iter()
+        .filter(|pane| pane.tab_id == anchor_tab && pane.is_floating && !pane.is_plugin)
+        .map(|pane| zellij_pane_id(pane.id))
+        .collect()
+}
+
 /// Strict parse of `new-pane` stdout into a pane-id hint: exactly
 /// `terminal_<digits>` after trimming, else `None`. Concurrent `zellij action`
 /// clients can receive each other's responses, so anything looser would take
@@ -2065,6 +2105,8 @@ struct RawPane {
     #[serde(default)]
     is_suppressed: bool,
     #[serde(default)]
+    is_floating: bool,
+    #[serde(default)]
     is_focused: bool,
     /// Zellij's internal tab id, used by `...-by-id` action verbs. The
     /// presence-plugin cache cannot observe it, so cache-derived raw panes set
@@ -2110,11 +2152,12 @@ struct RawPane {
 }
 
 impl RawPane {
-    /// A real terminal pane: not a plugin and not suppressed (floating/hidden).
+    /// A real tiled terminal pane: not plugin chrome, not suppressed, and not a
+    /// floating overlay.
     /// The single definition of "counts as a pane" shared by the pane listing,
     /// sidebar recovery, and column math.
     fn is_terminal(&self) -> bool {
-        !self.is_plugin && !self.is_suppressed
+        !self.is_plugin && !self.is_suppressed && !self.is_floating
     }
 
     /// A terminal pane hosting a live command. Excludes held/exited corpses so a
@@ -2188,6 +2231,7 @@ impl From<PaneTopologyPane> for RawPane {
             is_held: pane.is_held,
             exited: pane.exited,
             is_suppressed: pane.is_suppressed,
+            is_floating: pane.is_floating,
             is_focused: pane.is_focused,
             tab_id: pane.tab_position,
             tab_position: Some(pane.tab_position),

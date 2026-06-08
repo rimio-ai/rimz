@@ -195,6 +195,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // The placeholder snapshot renders while the first real result is in flight.
     let mut fetched_at = Instant::now();
     let mut should_exit = false;
+    let mut tab_emptied = false;
     request_fetch(
         &request_tx,
         &mut in_flight,
@@ -287,6 +288,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         anim_start,
                     )?;
                     should_exit = applied.should_exit;
+                    tab_emptied |= applied.tab_emptied;
                     rejected = applied.rejected;
                     if snapshot_ok {
                         last_self_close_check = Instant::now();
@@ -413,6 +415,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                             anim_start,
                         )?;
                         should_exit = applied.should_exit;
+                        tab_emptied |= applied.tab_emptied;
                         dirty = true;
                         // Snap the frame deadline so this turn's frame phase
                         // paints the fused frame now — the same instant
@@ -623,6 +626,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             next_frame = now + animation_frame(&current);
         }
     }
+    if tab_emptied {
+        close_self_closing_view_floating_panes(&config);
+    }
     if let Some(target) = reexec_to {
         // Restore the terminal and release this instance's runtime files before
         // replacing the process image — `exec` never returns, so their RAII
@@ -633,6 +639,28 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         return Err(reexec_self(&target));
     }
     Ok(())
+}
+
+fn close_self_closing_view_floating_panes(config: &ServeConfig) {
+    let Some(anchor) = config.own_pane.as_ref() else {
+        return;
+    };
+    match crate::mux::backend_for(config.mux)
+        .close_view_floating_panes(&config.session_name, anchor)
+    {
+        Ok(closed) if closed.is_empty() => {}
+        Ok(closed) => debug!(
+            session = %config.session_name,
+            panes = ?closed,
+            "closed floating panes left in the self-closing sidebar tab",
+        ),
+        Err(err) => warn!(
+            session = %config.session_name,
+            pane = %anchor,
+            error = %err,
+            "could not close floating panes left in the self-closing sidebar tab",
+        ),
+    }
 }
 
 fn set_terminal_title() -> io::Result<()> {

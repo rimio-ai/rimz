@@ -6,6 +6,7 @@ fn pane(id: u32) -> PaneFields {
         is_plugin: false,
         is_focused: false,
         is_suppressed: false,
+        is_floating: false,
         exited: false,
         is_held: false,
         tab_position: 0,
@@ -141,6 +142,16 @@ fn focus_patch_rejects_non_focus_changes() {
         None,
         "foreground changes are not focus-only patches"
     );
+
+    let floating = PaneFields {
+        is_floating: true,
+        ..pane(1)
+    };
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![floating])),
+        None,
+        "floating/tiled changes are topology changes, not focus-only patches"
+    );
 }
 
 #[test]
@@ -190,6 +201,23 @@ fn live_state_flags_change_the_hash() {
         manifest_hash(&tabs(vec![plugin]), Some(0)),
         "plugin panes are chrome, not work rows"
     );
+
+    let mut floating = pane(1);
+    floating.is_floating = true;
+    assert_ne!(
+        live,
+        manifest_hash(&tabs(vec![floating]), Some(0)),
+        "floating panes are overlays, not tiled work rows"
+    );
+}
+
+#[test]
+fn floating_pane_is_not_a_live_card_pane() {
+    let mut floating = pane(1);
+    floating.is_floating = true;
+
+    assert!(!floating.is_live_terminal());
+    assert!(!floating.is_card_pane());
 }
 
 #[test]
