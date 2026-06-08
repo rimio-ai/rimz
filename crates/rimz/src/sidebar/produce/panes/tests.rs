@@ -229,7 +229,7 @@ fn stamp_pane_process_starts_classifies_from_spawn_command() {
     stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|kind, cwd| {
         assert_eq!(kind, "codex");
         assert_eq!(cwd, "/repo");
-        Some(start)
+        vec![start]
     });
 
     assert_eq!(first(&frame).current.started_at, Some(start));

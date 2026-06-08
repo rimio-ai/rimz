@@ -82,6 +82,19 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
         .collect()
 }
 
+fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Option<&'static str> {
+    process
+        .spawn_command
+        .as_deref()
+        .and_then(crate::ledger::snapshot::command_agent_kind)
+        .or_else(|| {
+            process
+                .command
+                .as_deref()
+                .and_then(crate::ledger::snapshot::command_agent_kind)
+        })
+}
+
 /// Stamp the in-pane agent CLI's `/proc` start onto agent panes the backend
 /// left without one — every pane today: tmux has no per-pane process-start
 /// format variable, and Zellij 0.44 emits no process fields (`RawPane` keeps
@@ -125,18 +138,7 @@ fn stamp_pane_process_starts(
         if !unstamped.contains(&pane.pane_id) {
             continue;
         }
-        let Some(kind) = pane
-            .current
-            .spawn_command
-            .as_deref()
-            .and_then(crate::ledger::snapshot::command_agent_kind)
-            .or_else(|| {
-                pane.current
-                    .command
-                    .as_deref()
-                    .and_then(crate::ledger::snapshot::command_agent_kind)
-            })
-        else {
+        let Some(kind) = pane_process_agent_kind(&pane.current) else {
             continue;
         };
         if let Some(start) = pane.current.pid.and_then(|pid| root_start(kind, pid)) {
@@ -154,12 +156,7 @@ fn stamp_pane_process_starts(
     let mut unresolved_by_cwd: HashMap<(String, String), Vec<PaneId>> = HashMap::new();
     let mut accounted_by_cwd: HashMap<(String, String), Vec<jiff::Timestamp>> = HashMap::new();
     for pane in frame.pane_states() {
-        let Some(kind) = pane
-            .current
-            .command
-            .as_deref()
-            .and_then(crate::ledger::snapshot::command_agent_kind)
-        else {
+        let Some(kind) = pane_process_agent_kind(&pane.current) else {
             continue;
         };
         let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
@@ -213,12 +210,7 @@ fn clear_duplicate_carried_starts(
         let Some(start) = pane.current.started_at else {
             continue;
         };
-        let Some(kind) = pane
-            .current
-            .command
-            .as_deref()
-            .and_then(crate::ledger::snapshot::command_agent_kind)
-        else {
+        let Some(kind) = pane_process_agent_kind(&pane.current) else {
             continue;
         };
         let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
