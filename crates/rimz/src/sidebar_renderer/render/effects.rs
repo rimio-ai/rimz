@@ -5,7 +5,7 @@
 //! glyph, name, and gutter spine, phase-locked to the modifier breath in
 //! [`super::labels::attention_breath`]) and brief one-shot flashes on state
 //! transitions — a card entering `waiting`/`failed`, an ask resolving, a
-//! rate-limit lifting, a new card appearing, the spine lighting under a fresh
+//! paused row lifting, a new card appearing, the spine lighting under a fresh
 //! selection. Color only, never a glyph: the composed text is untouched, so
 //! the golden frames and the `NO_COLOR` grammar cannot drift (locked by the
 //! `effects_pass_never_changes_the_composed_text` golden guard).
@@ -65,7 +65,7 @@ pub(crate) enum TransitionKind {
     EnteredWaiting,
     EnteredFailed,
     AskResolved,
-    RateLimitLifted,
+    PausedLifted,
     SelectionLanded,
     Materialized,
 }
@@ -278,8 +278,8 @@ fn step_ms(last: Option<u64>, phase: u64, frame_ms: u64) -> u64 {
 }
 
 /// The transition cue a status change earns, if any. Entering an actionable
-/// state outranks everything (a `rate_limited → waiting` flap reads as the new
-/// ask, not the lift); leaving the rate-limit park and settling an ask each
+/// state outranks everything (a `paused → waiting` flap reads as the new
+/// ask, not the lift); leaving the paused park and settling an ask each
 /// carry their own cue; everything else is status churn the row's own glyph
 /// already tells.
 fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> {
@@ -292,8 +292,8 @@ fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> 
     if status == AgentStatus::Failed {
         return Some(TransitionKind::EnteredFailed);
     }
-    if seen == AgentStatus::RateLimited {
-        return Some(TransitionKind::RateLimitLifted);
+    if seen == AgentStatus::Paused {
+        return Some(TransitionKind::PausedLifted);
     }
     if seen.is_actionable() {
         return Some(TransitionKind::AskResolved);
@@ -311,7 +311,7 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
         TransitionKind::EnteredWaiting => (Target::Card, Color::Yellow, FLASH_ENTERED_MS),
         TransitionKind::EnteredFailed => (Target::Card, Color::Red, FLASH_ENTERED_MS),
         TransitionKind::AskResolved => (Target::Card, Color::Green, FLASH_RESOLVED_MS),
-        TransitionKind::RateLimitLifted => (Target::Card, Color::Green, FLASH_LIFTED_MS),
+        TransitionKind::PausedLifted => (Target::Card, Color::Green, FLASH_LIFTED_MS),
         TransitionKind::SelectionLanded => (Target::Spine, Color::Cyan, FLASH_SELECTED_MS),
         TransitionKind::Materialized => (Target::Card, Color::DarkGray, FLASH_MATERIALIZE_MS),
     };
@@ -581,9 +581,9 @@ mod tests {
         assert_eq!(transition(Running, Failed), Some(EnteredFailed));
         assert_eq!(transition(Waiting, Running), Some(AskResolved));
         assert_eq!(transition(Failed, Idle), Some(AskResolved));
-        assert_eq!(transition(RateLimited, Running), Some(RateLimitLifted));
+        assert_eq!(transition(Paused, Running), Some(PausedLifted));
         // Entering an actionable state outranks the lift.
-        assert_eq!(transition(RateLimited, Waiting), Some(EnteredWaiting));
+        assert_eq!(transition(Paused, Waiting), Some(EnteredWaiting));
         // Plain work churn carries no cue.
         assert_eq!(transition(Idle, Running), None);
         assert_eq!(transition(Running, Success), None);

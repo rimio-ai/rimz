@@ -644,34 +644,34 @@ fn context_breakdown_markers_wear_their_segment_colors() {
     assert_eq!(seam.style, theme.dim(), "the seam stays dim chrome");
 }
 
-/// The rate-limited glyph is the media `pause` mark carrying the
+/// The paused glyph is the media `pause` mark carrying the
 /// text-presentation selector (`U+FE0E`), so it renders single-cell
 /// monochrome and the cockpit columns never drift when it appears.
 #[test]
-fn rate_limited_glyph_carries_the_text_presentation_selector() {
-    assert_eq!(status_glyph(AgentStatus::RateLimited), RATE_LIMITED_GLYPH);
-    let mut chars = RATE_LIMITED_GLYPH.chars();
+fn paused_glyph_carries_the_text_presentation_selector() {
+    assert_eq!(status_glyph(AgentStatus::Paused), PAUSED_GLYPH);
+    let mut chars = PAUSED_GLYPH.chars();
     assert_eq!(chars.next(), Some('⏸'));
     assert_eq!(chars.next(), Some('\u{FE0E}'));
     assert_eq!(chars.next(), None);
     // Measured by ratatui's own layout width (the selector is zero-width),
     // it occupies exactly one cell like every other status glyph — so the
     // cockpit columns never drift when the `⏸` bucket appears.
-    assert_eq!(Span::raw(RATE_LIMITED_GLYPH).width(), 1);
+    assert_eq!(Span::raw(PAUSED_GLYPH).width(), 1);
     assert_eq!(Span::raw(status_glyph(AgentStatus::Waiting)).width(), 1);
 }
 
-/// Rate-limited rests in held amber — the attention family, but *not* the
+/// Paused rests in held amber — the attention family, but *not* the
 /// bold, heating weight of `?`/`!`. It is attention-class yet parked, so
 /// neglect never escalates it: even hours parked it stays amber, since
-/// there is nothing to do but wait for the reset.
+/// there is nothing to do until the provider recovers or the window resets.
 #[test]
-fn rate_limited_rests_in_held_amber_and_never_reddens() {
+fn paused_rests_in_held_amber_and_never_reddens() {
     let theme = Theme::fixed(false);
-    let style = status_style(&theme, AgentStatus::RateLimited);
+    let style = status_style(&theme, AgentStatus::Paused);
     assert_eq!(style.fg, Some(Color::Indexed(179)));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
-    let long_parked = attention_glyph_style(&theme, AgentStatus::RateLimited, 2 * 60 * 60, 0);
+    let long_parked = attention_glyph_style(&theme, AgentStatus::Paused, 2 * 60 * 60, 0);
     assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
 }

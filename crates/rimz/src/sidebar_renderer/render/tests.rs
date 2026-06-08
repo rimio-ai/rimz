@@ -1,6 +1,6 @@
 use crate::agents::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
-    RateLimitWindow,
+    RateLimitWindow, TurnErrorClass,
 };
 use crate::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
 use crate::ids::{MuxName, PaneId, ViewKind};
@@ -928,8 +928,9 @@ fn render_api_error_dead_turn_card() {
     claude.last_activity = fixed_now() - Duration::from_secs(60);
     let mut context = claude_context(fixed_now());
     context.turn_error = Some(AgentTurnError {
+        class: TurnErrorClass::Failed,
         at: fixed_now() - Duration::from_secs(10),
-        label: Some("API Error: Overloaded".to_owned()),
+        label: Some("API Error: Server Error".to_owned()),
     });
     claude.context = Some(context);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
@@ -941,7 +942,7 @@ fn render_api_error_dead_turn_card() {
         "the dead turn escalates to the attention glyph:\n{rendered}"
     );
     assert!(
-        rendered.contains("API Error: Overloaded"),
+        rendered.contains("API Error: Server Error"),
         "line 2 quotes the upstream error text:\n{rendered}"
     );
     assert!(
@@ -2101,27 +2102,26 @@ fn render_card_cost_ticks_toward_the_target() {
     );
 }
 
-/// An idle agent on a spent account projects to rate-limited: the row leads
-/// with the `⏸` pause and the cockpit gains an `⏸` bucket. It is static —
-/// parked, with nothing to do but wait for the reset.
+/// A running agent paused mid-turn on a provider limit leads with the `⏸`
+/// pause and the cockpit gains an `⏸` bucket. It is static — parked, with
+/// nothing to do until the provider recovers or the window resets.
 #[test]
-fn rate_limited_agent_reads_as_a_static_pause() {
+fn paused_agent_reads_as_a_static_pause() {
     let now = fixed_now();
     let mut claude = agent(
         "claude-1",
         "claude",
-        AgentStatus::Idle,
+        AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
         None,
     );
+    claude.last_activity = now - Duration::from_secs(60);
     claude.context = Some(AgentContext {
-        rate_limits: Some(AgentRateLimits {
-            windows: vec![RateLimitWindow {
-                used_percentage: Some(100),
-                resets_at: Some(now + Duration::from_secs(2 * 3_600)),
-                duration_mins: Some(5 * 60),
-            }],
+        turn_error: Some(AgentTurnError {
+            class: TurnErrorClass::PausedOverloaded,
+            at: now - Duration::from_secs(10),
+            label: Some("API Error: Overloaded".to_owned()),
         }),
         ..claude_context(now)
     });
@@ -2131,7 +2131,7 @@ fn rate_limited_agent_reads_as_a_static_pause() {
     assert_eq!(first, second, "a parked agent's head must not animate");
     assert!(
         first.contains('⏸'),
-        "the rate-limited row and cockpit show the pause:\n{first}"
+        "the paused row and cockpit show the pause:\n{first}"
     );
 }
 
@@ -3410,16 +3410,16 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     // make-up (row 1 is the blank line, row 4 the hairline rule).
     assert!(screen.lines().nth(3).unwrap().contains("¤ 2"), "{screen}");
     let buckets = screen.lines().nth(5).unwrap();
-    // The make-up shows the attention and parked/done buckets first, then the
-    // live-capacity tail; both running agents tally into the one working (⢿)
-    // bucket.
+    // Left cluster: waiting/failed/idle and paused each show
+    // their count (a zero reads `? 0`); both running agents tally into the
+    // one working (⢿) bucket.
     assert!(buckets.contains("? 0"), "{buckets}");
     assert!(buckets.contains("! 0"), "{buckets}");
-    // The rate-limited glyph carries the U+FE0E text-presentation selector.
+    assert!(buckets.contains("○ 0"), "{buckets}");
+    // The paused glyph carries the U+FE0E text-presentation selector.
     assert!(buckets.contains("⏸\u{FE0E} 0"), "{buckets}");
     assert!(buckets.contains("✓ 0"), "{buckets}");
     assert!(buckets.contains("⢿ 2"), "{buckets}");
-    assert!(buckets.contains("○ 0"), "{buckets}");
     assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.

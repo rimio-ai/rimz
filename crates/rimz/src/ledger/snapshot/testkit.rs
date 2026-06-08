@@ -13,7 +13,9 @@ use jiff::Timestamp;
 use super::row::SidebarRow;
 use super::view::SidebarSnapshot;
 use crate::agents::lifecycle::{self, TurnPhase};
-use crate::agents::{AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow};
+use crate::agents::{
+    AgentContext, AgentRateLimits, AgentTurnError, RateLimitWindow, TurnErrorClass,
+};
 use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef};
 use crate::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use crate::schema::event::EventEnvelope;
@@ -149,6 +151,9 @@ pub(super) trait AgentStateFx: Sized {
     /// Attach a transcript turn-death marker stamped `secs_ago` before the
     /// [`epoch`] (merged into any context already attached).
     fn turn_error(self, secs_ago: i64, label: &str) -> Self;
+    fn turn_error_class(self, secs_ago: i64, label: &str, class: TurnErrorClass) -> Self;
+    fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self;
+    fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self;
     /// Stamp the compaction head `secs` before the [`epoch`].
     fn compacting_ago(self, secs: i64) -> Self;
 }
@@ -184,10 +189,28 @@ impl AgentStateFx for AgentState {
 
     fn turn_error(mut self, secs_ago: i64, label: &str) -> Self {
         self.context.get_or_insert_with(bare_context).turn_error = Some(AgentTurnError {
+            class: TurnErrorClass::Failed,
             at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
             label: Some(label.to_owned()),
         });
         self
+    }
+
+    fn turn_error_class(mut self, secs_ago: i64, label: &str, class: TurnErrorClass) -> Self {
+        self.context.get_or_insert_with(bare_context).turn_error = Some(AgentTurnError {
+            class,
+            at: epoch() - std::time::Duration::from_secs(secs_ago as u64),
+            label: Some(label.to_owned()),
+        });
+        self
+    }
+
+    fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self {
+        self.turn_error_class(secs_ago, label, TurnErrorClass::PausedRateLimit)
+    }
+
+    fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self {
+        self.turn_error_class(secs_ago, label, TurnErrorClass::PausedOverloaded)
     }
 
     fn compacting_ago(mut self, secs: i64) -> Self {

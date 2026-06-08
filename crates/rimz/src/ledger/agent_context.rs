@@ -27,7 +27,7 @@ use std::time::SystemTime;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::context::AgentContext;
+use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{AgentTokenUsage, LocalContextRefresh, TranscriptStat};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::ledger::atomic::{self, write_temp_then_rename_cache};
@@ -165,6 +165,25 @@ pub fn merge_local_context(
     record.context.observed_at = observed_at;
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
+    write_record(runtime, &record)
+}
+
+/// Merge a provider-native turn-error marker into the latest sidecar record.
+/// The marker is display-only enrichment and shares the same self-clear rule as
+/// transcript-detected turn errors: any newer lifecycle heartbeat moves
+/// `last_activity` past `marker.at`.
+pub fn merge_turn_error(
+    runtime: &RuntimePaths,
+    kind: &str,
+    agent_id: &str,
+    marker: AgentTurnError,
+) -> Result<(), atomic::AtomicErr> {
+    let observed_at = Timestamp::now();
+    let mut record = read_one(runtime, kind, agent_id)
+        .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    record.context.source = kind.to_owned();
+    record.context.turn_error = Some(marker);
+    record.context.observed_at = observed_at;
     write_record(runtime, &record)
 }
 

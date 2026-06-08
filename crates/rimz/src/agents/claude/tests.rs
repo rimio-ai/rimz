@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::AgentHookClass;
+use crate::agents::{AgentHookClass, TurnErrorClass};
 use crate::feed::ResolutionMethod;
 use serde_json::json;
 use std::path::Path;
@@ -593,6 +593,19 @@ fn install_into_empty_dir_creates_managed_entries() {
               }
             ],
             "Stop": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "StopFailure": [
               {
                 "_rimz_managed": true,
                 "_rimz_sync": false,
@@ -1516,6 +1529,7 @@ fn observe_turn_error_reads_the_tail_from_the_payload_path() {
             "transcript_path": transcript.to_str().unwrap(),
         }))
         .expect("the dead turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
     assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
 
     assert!(
@@ -1532,6 +1546,57 @@ fn observe_turn_error_reads_the_tail_from_the_payload_path() {
             }))
             .is_none(),
         "an unreadable transcript degrades to no marker"
+    );
+}
+
+#[test]
+fn stop_failure_hook_maps_to_turn_error_marker() {
+    let marker = |error: &str| {
+        ClaudeAdapter
+            .observe_turn_error_from_hook(
+                "StopFailure",
+                &json!({
+                    "session_id": "sess-1",
+                    "error": error,
+                    "last_assistant_message": "You've hit your usage limit"
+                }),
+            )
+            .expect("marker")
+    };
+
+    assert_eq!(marker("rate_limit").class, TurnErrorClass::PausedRateLimit);
+    assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
+
+    let failed = ClaudeAdapter
+        .observe_turn_error_from_hook(
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": "api_error",
+                "last_assistant_message": "API Error: Server Error"
+            }),
+        )
+        .expect("marker");
+    assert_eq!(failed.class, TurnErrorClass::Failed);
+    assert_eq!(failed.label.as_deref(), Some("API Error: Server Error"));
+
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error_from_hook("StopFailure", &json!({ "session_id": "sess-1" }))
+            .is_none(),
+        "missing error has no marker"
+    );
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error_from_hook(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "error": "rate_limit"
+                }),
+            )
+            .is_none(),
+        "only StopFailure carries this marker"
     );
 }
 

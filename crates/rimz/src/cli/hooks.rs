@@ -347,6 +347,23 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 );
             }
             if let Some(context_agent_id) = payload_context_agent_id(&payload) {
+                if let Some(marker) = agent.observe_turn_error_from_hook(&event_name, &payload) {
+                    if let Err(err) = rimz::ledger::agent_context::merge_turn_error(
+                        ledger.runtime_paths(),
+                        agent.descriptor().kind,
+                        context_agent_id,
+                        marker,
+                    ) {
+                        warn!(
+                            agent = agent.descriptor().kind,
+                            event = %event_name,
+                            error = %err,
+                            "lifecycle: failed to merge turn-error marker",
+                        );
+                    } else {
+                        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+                    }
+                }
                 let prior = rimz::ledger::agent_context::read_one(
                     ledger.runtime_paths(),
                     agent.descriptor().kind,

@@ -84,9 +84,9 @@ Balance is account-scoped, but the *freshest* session is not the truest reading:
 [`stable_windows`](../../crates/rimz/src/ledger/snapshot/view.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
 Same inputs, same bars, regardless of which session reported last.
 
-### Spent-window verdict → the rate-limited head
+### Spent windows and paused rows
 
-A window is **spent** at `used_percentage == 100` with its reset still ahead ([`RateLimitWindow::is_spent`](../../crates/rimz/src/agents/context.rs)). When any window of a kind is spent, the sidebar parks every `idle`, `success`, and `running` agent of that kind to the derived `rate_limited` status — account-scoped, so a session that just launched into a spent account is parked too, and a `running` session whose turn died on the limit parks rather than reading as wedged. This is display, not correctness: the rollup keeps each agent's true lifecycle status, and the projection and its glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
+A window is **spent** at `used_percentage == 100`; it is currently limiting while its reset still sits ahead. The spent window paints the provider dashboard's budget bars; it does not park every agent of that kind. A row becomes `paused` only when that agent actually stopped mid-turn on a limit: a native turn-error certificate (`rate_limit` or `overloaded`) parks the affected running agent, and a stalled running agent uses a spent, unreset kind window as the fallback pause predicate. A `rate_limit` pause lifts to `failed` only after at least one spent window has reset and no known spent window for that kind remains unreset. Calm agents (`idle`/`success`) and actively progressing turns stay in their lifecycle status even when a budget bar reads empty. The rollup keeps each agent's true lifecycle status, and the projection and glyph live in [agent.md → The state machine](./agent.md#the-state-machine) and [the interface legend](../interface/sidebar.md#reading-the-glyphs).
 
 ### Not-started windows
 

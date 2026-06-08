@@ -42,6 +42,7 @@ use crate::ids::AgentSessionId;
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
+    TurnErrorClass,
 };
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
@@ -309,6 +310,20 @@ pub trait AgentAdapter: Send + Sync {
     /// sidecar and refines the displayed row; it never becomes a lifecycle
     /// event or a ledger fact.
     fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
+        None
+    }
+
+    /// Detect a turn-error marker directly from a hook payload that carries the
+    /// provider's native failure certificate. This is the precise sibling of
+    /// [`observe_turn_error`](Self::observe_turn_error), which recovers the same
+    /// shape from local transcripts when the hook was absent or installed late.
+    /// The adapter returns the display-only marker; the CLI owns merging it
+    /// into the context sidecar.
+    fn observe_turn_error_from_hook(
+        &self,
+        _event_name: &str,
+        _payload: &Value,
+    ) -> Option<AgentTurnError> {
         None
     }
 

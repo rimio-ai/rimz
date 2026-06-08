@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow,
+    AgentTurnError, RateLimitWindow, TurnErrorClass,
 };
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
@@ -175,7 +175,29 @@ fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> 
 
 /// Cap on the surfaced error text. The upstream message is one short line
 /// ("API Error: Overloaded"); the cap only guards a pathological entry.
-const TURN_ERROR_LABEL_MAX: usize = 80;
+pub(crate) const TURN_ERROR_LABEL_MAX: usize = 80;
+
+pub(crate) fn cap_turn_error_label(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
+}
+
+pub(crate) fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
+    let Some(label) = label else {
+        return TurnErrorClass::Failed;
+    };
+    let lower = label.to_ascii_lowercase();
+    if lower.contains("usage limit") || lower.contains("rate limit") {
+        TurnErrorClass::PausedRateLimit
+    } else if lower.contains("overloaded") {
+        TurnErrorClass::PausedOverloaded
+    } else {
+        TurnErrorClass::Failed
+    }
+}
 
 /// Detect a turn that died on a provider API error with no `Stop` hook to
 /// record it. Claude aborts such a turn by writing an `assistant` transcript
@@ -220,9 +242,11 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
         if entry_type == Some("assistant")
             && value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
         {
+            let label = turn_error_label(&value);
             return Some(AgentTurnError {
+                class: classify_turn_error_label(label.as_deref()),
                 at,
-                label: turn_error_label(&value),
+                label,
             });
         }
         return None;
@@ -242,11 +266,7 @@ fn turn_error_label(entry: &Value) -> Option<String> {
             .find_map(|block| block.get("text").and_then(Value::as_str))?,
         _ => return None,
     };
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
+    cap_turn_error_label(text)
 }
 
 impl StatuslinePayload {
@@ -507,7 +527,36 @@ mod tests {
             "2026-06-04T02:56:32.919Z".parse::<Timestamp>().unwrap(),
             "the marker carries the error entry's own wall-clock instant"
         );
+        assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
         assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
+    }
+
+    #[test]
+    fn turn_error_label_classifies_paused_and_failed_errors() {
+        let entry = |text: &str| {
+            format!(
+                r#"{{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{{"content":[{{"type":"text","text":"{text}"}}]}}}}"#
+            )
+        };
+
+        assert_eq!(
+            detect_turn_error(&entry("You've hit your usage limit"))
+                .unwrap()
+                .class,
+            TurnErrorClass::PausedRateLimit
+        );
+        assert_eq!(
+            detect_turn_error(&entry("API Error: rate limit exceeded"))
+                .unwrap()
+                .class,
+            TurnErrorClass::PausedRateLimit
+        );
+        assert_eq!(
+            detect_turn_error(&entry("API Error: Server Error"))
+                .unwrap()
+                .class,
+            TurnErrorClass::Failed
+        );
     }
 
     #[test]

@@ -133,7 +133,7 @@ The complete upstream set. ✓ marks what Rimz wires today; the rest is availabl
 | `TaskCreated` | a task is created via `TaskCreate` | |
 | `TaskCompleted` | a task is marked completed | |
 | `Stop` | Claude finishes responding | ✓ |
-| `StopFailure` | the turn ends on an API error | |
+| `StopFailure` | the turn ends on an API error | ✓ |
 | `TeammateIdle` | an agent-team teammate is about to idle | |
 | `InstructionsLoaded` | a `CLAUDE.md` / rules file is loaded | |
 | `ConfigChange` | a config file changes mid-session | |
@@ -293,11 +293,13 @@ Anthropic publishes **no official schema** for the conversation transcript at `t
 
 ### Transcript death certificate
 
-A turn Claude aborts on a provider API error fires **no `Stop` hook** (observed live, 2026-06-04; upstream's `StopFailure` event covers this case natively but is unwired today — see the [catalog](#full-event-catalog-index)). The transcript records the death twice, milliseconds apart:
+A turn Claude aborts on a provider API error fires `StopFailure`, whose payload carries `error`, `error_details`, and `last_assistant_message` alongside the common hook fields. Rimz maps `error: "rate_limit"` to a rate-limit paused marker, `error: "overloaded"` to an overloaded paused marker, and every other error to a failed marker with the capped assistant message as the card label. The event writes only `AgentContext.turn_error`: no lifecycle envelope is appended, so the rollup stays `running` and display projection owns the pause/failure.
+
+Older Claude sessions, or sessions whose hooks were installed after the failure, still leave a transcript death certificate. The transcript records the death twice, milliseconds apart:
 
 ```jsonc
 {"type": "assistant", "isApiErrorMessage": true, "timestamp": "2026-06-04T02:56:32.919Z", "message": {"content": [{"type": "text", "text": "API Error: Overloaded"}]}}
 {"type": "system", "subtype": "turn_duration", "timestamp": "2026-06-04T02:56:32.923Z"}
 ```
 
-[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push; the decision rule and the internal mapping are [transcript.md → Turn-death marker](../../internals/transcript.md#appendix--claude-code). Reverse-engineered like the rest of this section; no source URL to pin.
+[`detect_turn_error`](../../../crates/rimz/src/agents/claude/statusline.rs) reads the flagged assistant entry off the bounded tail on each statusline push as the backstop. It classifies labels containing "usage limit" or "rate limit" as rate-limit paused, labels containing "overloaded" as overloaded paused, and other API-error labels as failed; the decision rule and the internal mapping are [transcript.md → Turn-death marker](../../internals/transcript.md#appendix--claude-code). Reverse-engineered like the rest of this section; no source URL to pin.

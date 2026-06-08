@@ -237,23 +237,29 @@ pub struct RateLimitWindow {
 
 impl RateLimitWindow {
     /// Whether this window's budget is spent — the provider reports the cap as
-    /// `used_percentage == 100` once it starts refusing requests, so any agent
-    /// on the account can only wait for [`resets_at`](Self::resets_at). The
-    /// sidebar parks every agent of the kind outside `waiting`/`failed` to
-    /// [`AgentStatus::RateLimited`](crate::feed::AgentStatus::RateLimited) when
-    /// this is true.
+    /// `used_percentage == 100` once the window is exhausted. Display code
+    /// combines this with a per-agent pause certificate or a stalled running
+    /// turn; the spent window alone does not change an agent's row.
     pub fn is_spent(&self) -> bool {
         self.used_percentage.is_some_and(|pct| pct >= 100)
     }
 }
 
-impl AgentRateLimits {
-    /// Whether any reported window is [`spent`](RateLimitWindow::is_spent) — the
-    /// account-level "nothing to do but wait" verdict the sidebar projects onto
-    /// every agent of the kind outside `waiting`/`failed`.
-    pub fn any_spent(&self) -> bool {
-        self.windows.iter().any(RateLimitWindow::is_spent)
-    }
+/// What kind of provider API error ended a turn.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnErrorClass {
+    /// The turn stopped on a spent rate-limit window. It projects to paused
+    /// while any known spent window remains unreset, then to failed once all
+    /// known spent windows have reset if no newer hook event self-clears it.
+    PausedRateLimit,
+    /// The provider was overloaded. There is no local reset window to wait for,
+    /// so the row stays paused until a newer hook event self-clears it.
+    PausedOverloaded,
+    /// Any other provider API error: actionable failure with the upstream text
+    /// on the card.
+    #[default]
+    Failed,
 }
 
 /// A turn that ended on a provider API error without a `Stop` hook — the
@@ -264,6 +270,11 @@ impl AgentRateLimits {
 /// sidebar escalates it; any later hook event self-clears it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTurnError {
+    /// The display class for the dead turn. Older sidecars omitted this field;
+    /// deserialize them as [`TurnErrorClass::Failed`] so stale markers remain
+    /// conservative.
+    #[serde(default)]
+    pub class: TurnErrorClass,
     /// The transcript wall-clock timestamp of the dead turn's error entry — the
     /// guard the projection compares against `last_activity`. A clock skew
     /// fails safe: a suppressed real death still hits the stall window, and a
@@ -310,27 +321,22 @@ mod tests {
     }
 
     #[test]
-    fn any_spent_reads_any_window() {
-        let spent = window(Some(100));
-        let fresh = window(Some(10));
-        assert!(
-            AgentRateLimits {
-                windows: vec![spent.clone(), fresh.clone()]
-            }
-            .any_spent()
-        );
-        assert!(
-            AgentRateLimits {
-                windows: vec![fresh.clone(), spent]
-            }
-            .any_spent()
-        );
-        assert!(
-            !AgentRateLimits {
-                windows: vec![fresh.clone(), fresh]
-            }
-            .any_spent()
-        );
-        assert!(!AgentRateLimits::default().any_spent());
+    fn turn_error_class_round_trips_and_defaults_to_failed() {
+        let error = AgentTurnError {
+            class: TurnErrorClass::PausedRateLimit,
+            at: Timestamp::from_second(1_700_000_000).unwrap(),
+            label: Some("You've hit your usage limit".to_owned()),
+        };
+        let value = serde_json::to_value(&error).unwrap();
+        assert_eq!(value["class"], "paused_rate_limit");
+        let back: AgentTurnError = serde_json::from_value(value).unwrap();
+        assert_eq!(back, error);
+
+        let legacy: AgentTurnError = serde_json::from_value(serde_json::json!({
+            "at": "2023-11-14T22:13:20Z",
+            "label": "API Error: Server Error"
+        }))
+        .unwrap();
+        assert_eq!(legacy.class, TurnErrorClass::Failed);
     }
 }

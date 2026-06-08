@@ -544,13 +544,12 @@ impl FeedItem {
 }
 
 /// Agent status as the sidebar reads it. The first five are the lifecycle
-/// rollup the agent owns and Rimz observes; [`RateLimited`](AgentStatus::RateLimited)
-/// is the one Rimz-*derived* projection — never emitted by a hook, only
-/// projected at snapshot time when an agent's account budget is spent
-/// (see [`is_rate_limited`]), the same way a stalled `Running` agent is
-/// projected to `Failed`. It lives in the one status enum so it shares the
-/// cockpit tally, ranking, and glyph machinery the lifecycle states flow
-/// through.
+/// rollup the agent owns and Rimz observes; [`Paused`](AgentStatus::Paused) is
+/// the one Rimz-*derived* projection — never emitted by a hook, only projected
+/// at snapshot time when a live running turn is known to have stopped on a
+/// provider limit, the same way a stalled `Running` agent is projected to
+/// `Failed`. It lives in the one status enum so it shares the cockpit tally,
+/// ranking, and glyph machinery the lifecycle states flow through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentStatus {
@@ -559,29 +558,28 @@ pub enum AgentStatus {
     Idle,
     Success,
     Failed,
-    /// Parked while the account's rate-limit window is spent — until the
-    /// window resets, auto-resumable with a single `continue`. Attention-class
-    /// but non-actionable: there is nothing to do but wait. Projected from an
-    /// `Idle`, `Success`, or `Running` status by [`is_rate_limited`], never
-    /// reported by the agent.
-    RateLimited,
+    /// Parked because this agent stopped mid-turn on a provider limit.
+    /// Attention-class but non-actionable: there is nothing to do until the
+    /// provider recovers or its window resets. Projected from a `Running`
+    /// status, never reported by the agent.
+    Paused,
 }
 
 impl AgentStatus {
     /// Attention-class: a human (or a resolver) may want this row. `Waiting`
-    /// and `Failed` are actionable; `RateLimited` is attention-class but
-    /// parked. The producer's ranking buckets use the full set; the renderer's
+    /// and `Failed` are actionable; `Paused` is attention-class but parked. The
+    /// producer's ranking buckets use the full set; the renderer's
     /// triage key and heat-breath use the actionable subset
     /// ([`Self::is_actionable`]). The one authority behind both predicates —
     /// every dispatch site delegates here rather than re-matching the enum.
     pub fn is_attention(self) -> bool {
-        matches!(self, Self::Waiting | Self::Failed | Self::RateLimited)
+        matches!(self, Self::Waiting | Self::Failed | Self::Paused)
     }
 
     /// The actionable subset of [`Self::is_attention`] — a `?`/`!` the `␣`
     /// triage key jumps to, the heat-breath escalates, and the per-worktree
-    /// cap never hides. Excludes the parked `RateLimited`, which wants nothing
-    /// but its window reset.
+    /// cap never hides. Excludes the parked `Paused`, which wants the provider
+    /// or rate-limit window to recover.
     pub fn is_actionable(self) -> bool {
         matches!(self, Self::Waiting | Self::Failed)
     }
@@ -703,24 +701,6 @@ pub fn is_turn_dead(
         && context
             .and_then(|context| context.turn_error.as_ref())
             .is_some_and(|error| error.at > last_activity)
-}
-
-/// Whether an agent should project to [`AgentStatus::RateLimited`]: its
-/// account's rate-limit budget is spent (`account_limited`) while it is in a
-/// calm or rate-limit-retry state — `Idle`, `Success`, or `Running`. A
-/// `Running` agent that hit the API rate limit dies or retries without a
-/// `Stop` hook, so it stays `Running` indefinitely; the projection checks this
-/// first so the park surfaces the real cause rather than letting
-/// [`is_turn_dead`] or [`is_stalled`] escalate it to `Failed`. `Waiting`
-/// (human-blocked) and `Failed` (explicit error) are never overridden. Like
-/// [`is_stalled`], this is a Rimz-derived projection over enrichment, never a
-/// status the agent reports.
-pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
-    account_limited
-        && matches!(
-            status,
-            AgentStatus::Idle | AgentStatus::Success | AgentStatus::Running
-        )
 }
 
 /// How long after its last compaction hook an agent still reads as
@@ -1033,14 +1013,14 @@ mod tests {
 
     #[test]
     fn attention_predicates_split_actionable_from_parked() {
-        // The two intentional flavors: ranking spans the parked RateLimited,
+        // The two intentional flavors: ranking spans the parked Paused,
         // the triage/heat subset does not. Calm states are in neither.
         for status in [AgentStatus::Waiting, AgentStatus::Failed] {
             assert!(status.is_attention());
             assert!(status.is_actionable());
         }
-        assert!(AgentStatus::RateLimited.is_attention());
-        assert!(!AgentStatus::RateLimited.is_actionable());
+        assert!(AgentStatus::Paused.is_attention());
+        assert!(!AgentStatus::Paused.is_actionable());
         for status in [
             AgentStatus::Running,
             AgentStatus::Idle,
@@ -1052,14 +1032,14 @@ mod tests {
     }
 
     #[test]
-    fn agent_status_round_trips_including_rate_limited() {
+    fn agent_status_round_trips_including_paused() {
         for status in [
             AgentStatus::Running,
             AgentStatus::Waiting,
             AgentStatus::Idle,
             AgentStatus::Success,
             AgentStatus::Failed,
-            AgentStatus::RateLimited,
+            AgentStatus::Paused,
         ] {
             let wire = serde_json::to_string(&status).unwrap();
             let back: AgentStatus = serde_json::from_str(&wire).unwrap();
@@ -1067,26 +1047,8 @@ mod tests {
         }
         // The derived state has a stable snake_case wire form like the rest.
         assert_eq!(
-            serde_json::to_string(&AgentStatus::RateLimited).unwrap(),
-            "\"rate_limited\""
+            serde_json::to_string(&AgentStatus::Paused).unwrap(),
+            "\"paused\""
         );
-    }
-
-    #[test]
-    fn rate_limited_overrides_all_but_waiting_and_failed() {
-        // A spent account parks a calm or rate-limit-retry agent.
-        assert!(is_rate_limited(AgentStatus::Idle, true));
-        assert!(is_rate_limited(AgentStatus::Success, true));
-        // Running is included: a Claude agent that hits a rate-limit API error
-        // dies or retries without a Stop hook, staying Running indefinitely.
-        // Parking it here surfaces the real cause rather than letting the
-        // turn-death or stall checks escalate it to Failed.
-        assert!(is_rate_limited(AgentStatus::Running, true));
-        // Blocked on a human or already failed: neither is overridden.
-        assert!(!is_rate_limited(AgentStatus::Waiting, true));
-        assert!(!is_rate_limited(AgentStatus::Failed, true));
-        // No spent budget, no projection.
-        assert!(!is_rate_limited(AgentStatus::Idle, false));
-        assert!(!is_rate_limited(AgentStatus::Success, false));
     }
 }

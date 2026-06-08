@@ -82,7 +82,7 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Char('!') => "key:filter:failed",
         KeyCode::Char('e') => "key:filter:failed",
         KeyCode::Char('o') => "key:filter:idle",
-        KeyCode::Char('p') => "key:filter:rate_limited",
+        KeyCode::Char('p') => "key:filter:paused",
         KeyCode::Char('w') => "key:filter:running",
         KeyCode::Char('d') => "key:filter:success",
         KeyCode::Char('x') => "key:dismiss",
@@ -150,9 +150,9 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:filter:idle" => {
             Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle)))
         }
-        "key:filter:rate_limited" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
-            AgentStatus::RateLimited,
-        ))),
+        "key:filter:paused" => {
+            Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Paused)))
+        }
         "key:filter:running" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
             AgentStatus::Running,
         ))),
@@ -345,7 +345,7 @@ mod tests {
             ),
             (
                 KeyCode::Char('p'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::RateLimited)),
+                KeyAction::Filter(FilterAction::Status(AgentStatus::Paused)),
             ),
             (
                 KeyCode::Char('w'),

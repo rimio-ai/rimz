@@ -656,7 +656,7 @@ mod tests {
             AgentStatus::Idle,
             AgentStatus::Success,
             AgentStatus::Failed,
-            AgentStatus::RateLimited,
+            AgentStatus::Paused,
         ];
         let phases = [
             TurnPhase::Idle,

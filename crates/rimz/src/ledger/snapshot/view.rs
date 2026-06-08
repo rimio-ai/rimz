@@ -18,8 +18,9 @@ use super::panes::{
 use super::process::{pane_command_is_known, row_from_process};
 use super::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow, SidebarSubAgent};
 use crate::agent_activity::AgentActivity;
+use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentAccount, RateLimitWindow, SpendTally};
+use crate::agents::{AgentAccount, AgentContext, AgentTurnError, RateLimitWindow, SpendTally};
 use crate::feed::{
     AgentState, AgentStatus, FeedItem, FeedKind, FeedStatus, PaneRef, ResolverStepState, Surface,
 };
@@ -1683,32 +1684,27 @@ fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 }
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
-/// its liveness, its live subagents, and its account's rate-limit budget. This
-/// is the one place display state diverges from the rollup truth kept in
+/// liveness, live subagents, turn-error marker, and provider budget windows.
+/// This is the one place display state diverges from the rollup truth kept in
 /// `snapshot.agents`; a pending ask already folded `waiting` onto the row
 /// upstream and always wins.
 ///
-/// - An agent on an account whose rate-limit budget is spent is projected to
-///   `rate_limited` — parked until the window resets, auto-resumable. The park
-///   leads the derived states because the spent account explains them all: a
-///   rate-limited turn dies on the same transcript marker the turn-death check
-///   reads, its retry loop is silent enough to stall, and its delegated
-///   children share the spent budget. Once the window resets, the kind leaves
-///   the limited set and the checks below escalate an agent that failed to
-///   resume.
+/// Rows reaching this projection have already been admitted through a live mux
+/// pane by `rows_from_panes`/`with_live_panes`, so no second liveness check is
+/// needed here.
+///
+/// - A paused-class turn-error marker means the agent actually stopped
+///   mid-turn on a provider limit. It projects to `paused`; a rate-limit marker
+///   whose spent windows have provably reset escalates to `failed` so the row
+///   asks for a resume nudge.
 /// - A `running` agent with a live subagent is *waiting on its children*, not
-///   wedged — its own heartbeat is silent because the work is theirs — so it
-///   keeps `running` (the renderer paints the delegated-wait head) and is exempt
-///   from the stall escalation.
-/// - A `running` agent whose latest turn died on a provider API error with no
-///   `Stop` hook (the transcript-tail marker postdates its activity) is
-///   projected to `failed` at once — the explicit death certificate beats the
-///   stall window — and the row carries the upstream error text as
-///   `turn_error_label`.
-/// - A `running` agent silent past the stall window is projected to `failed`, so
-///   a wedge becomes actionable instead of a frozen spinner.
+///   wedged — unless a paused marker above says the provider stopped the turn.
+/// - A failed-class turn-error marker projects to `failed` at once and carries
+///   the upstream error text as `turn_error_label`.
+/// - A stalled `running` agent whose kind still has a spent, unreset window
+///   projects to `paused`; any other stall projects to `failed`.
 fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
-    let limited_kinds = rate_limited_kinds(agents, now);
+    let rate_limit_kinds = rate_limit_window_kinds(agents, now);
     for row in rows.iter_mut() {
         let row_name = row.name.clone();
         let last_activity = row.last_activity;
@@ -1726,58 +1722,78 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
             .sub_agents
             .iter()
             .any(|child| child.status == AgentStatus::Running);
-        // `row.name` is the agent kind for an agent row (see `row_from_agent`),
-        // and the rate-limit verdict is account- (kind-) scoped.
-        let projected =
-            if crate::feed::is_rate_limited(status, limited_kinds.contains(row_name.as_str())) {
-                // The spent-account park leads the chain: a rate-limited turn dies
-                // with the same `isApiErrorMessage` marker the turn-death check
-                // reads (which would mislabel the park as a failure), its retry
-                // loop is silent by design (the stall window would escalate it),
-                // and a delegated child shares the spent account (the delegated
-                // wait would spin forever). Self-healing: once the window resets,
-                // the kind leaves the limited set and the checks below escalate an
-                // agent that failed to resume.
-                AgentStatus::RateLimited
-            } else if status == AgentStatus::Running && has_live_child {
-                AgentStatus::Running
-            } else if crate::feed::is_turn_dead(status, agent.context.as_ref(), last_activity) {
-                // The turn died on a provider API error with no `Stop` hook — the
-                // transcript marker is explicit, so escalate now rather than
-                // waiting out the stall window, and surface the upstream text.
-                agent.turn_error_label = agent
-                    .context
-                    .as_ref()
-                    .and_then(|context| context.turn_error.as_ref())
-                    .and_then(|error| error.label.clone());
+        let active_error = active_turn_error(status, agent.context.as_ref(), last_activity);
+        let projected = if let Some(error) = active_error.filter(|error| {
+            matches!(
+                error.class,
+                TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedOverloaded
+            )
+        }) {
+            if error.class == TurnErrorClass::PausedRateLimit
+                && rate_limit_kinds.reset.contains(row_name.as_str())
+                && !rate_limit_kinds.spent.contains(row_name.as_str())
+            {
+                agent.turn_error_label = error.label.clone();
                 AgentStatus::Failed
-            } else if crate::feed::is_stalled(status, last_activity, now) {
+            } else {
+                AgentStatus::Paused
+            }
+        } else if status == AgentStatus::Running && has_live_child {
+            AgentStatus::Running
+        } else if let Some(error) =
+            active_error.filter(|error| error.class == TurnErrorClass::Failed)
+        {
+            agent.turn_error_label = error.label.clone();
+            AgentStatus::Failed
+        } else {
+            let stalled = crate::feed::is_stalled(status, last_activity, now);
+            if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {
+                AgentStatus::Paused
+            } else if stalled {
                 AgentStatus::Failed
             } else {
                 status
-            };
+            }
+        };
         agent.status = Some(projected);
         if projected != AgentStatus::Running {
             // Phase is a head on Running — the reduced state's invariant —
-            // so a Failed/RateLimited override drops it rather than carrying
+            // so a Failed/Paused override drops it rather than carrying
             // a stale Reasoning/Acting onto a resting row.
             agent.phase = TurnPhase::Idle;
         }
     }
 }
 
-/// The set of provider kinds whose account rate-limit budget is spent: a live
-/// session of the kind reports any window used to the cap whose reset has not yet
-/// passed. Account-scoped — every session of a kind shares the
-/// budget — so the verdict parks *every* agent of the kind (idle, success, or
-/// still `running`), including one that launched straight into a spent account.
-/// Reads the same window source as the provider dashboard
-/// (`agent.context.rate_limits`), so the cockpit tally and the dashboard bars
-/// never disagree.
-fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<AgentKind> {
-    let mut limited = BTreeSet::new();
+fn active_turn_error<'a>(
+    status: AgentStatus,
+    context: Option<&'a AgentContext>,
+    last_activity: Timestamp,
+) -> Option<&'a AgentTurnError> {
+    if status != AgentStatus::Running {
+        return None;
+    }
+    context
+        .and_then(|context| context.turn_error.as_ref())
+        .filter(|error| error.at > last_activity)
+}
+
+#[derive(Default)]
+struct RateLimitKindSummary {
+    /// Provider kinds with a currently-spent budget window. This is not a
+    /// parking verdict by itself; it only powers the stalled-running fallback.
+    spent: BTreeSet<AgentKind>,
+    /// Provider kinds whose known spent windows have passed their reset
+    /// instant. A rate-limit pause marker uses this as proof that at least one
+    /// wait ended; projection still requires no unreset spent window before
+    /// lifting the pause.
+    reset: BTreeSet<AgentKind>,
+}
+
+fn rate_limit_window_kinds(agents: &[AgentState], now: Timestamp) -> RateLimitKindSummary {
+    let mut summary = RateLimitKindSummary::default();
     for agent in agents {
-        if agent.parent_agent_id.is_some() || limited.contains(&agent.kind) {
+        if agent.parent_agent_id.is_some() {
             continue;
         }
         let Some(limits) = agent
@@ -1787,15 +1803,26 @@ fn rate_limited_kinds(agents: &[AgentState], now: Timestamp) -> BTreeSet<AgentKi
         else {
             continue;
         };
-        if limits
-            .windows
-            .iter()
-            .any(|window| window_spent_unreset(window, now))
-        {
-            limited.insert(agent.kind.clone());
+        let mut has_spent = false;
+        let mut has_reset = false;
+        for window in &limits.windows {
+            if !window.is_spent() {
+                continue;
+            }
+            if window_spent_unreset(window, now) {
+                has_spent = true;
+            } else {
+                has_reset = true;
+            }
+        }
+        if has_spent {
+            summary.spent.insert(agent.kind.clone());
+        }
+        if has_reset {
+            summary.reset.insert(agent.kind.clone());
         }
     }
-    limited
+    summary
 }
 
 /// Whether a window is spent and has not yet reset — the budget is gone *now*. A
@@ -1868,7 +1895,7 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
     // `SidebarRow.status` is the *displayed* status. It starts as the raw rollup
     // value and is projected in `project_display_status` once the row knows its
     // subagents and its account's rate-limit budget (stall → `failed`,
-    // spent-budget → `rate_limited`); a pending ask folds `waiting` on upstream.
+    // spent-budget → `paused`); a pending ask folds `waiting` on upstream.
     // The rollup in `snapshot.agents` always keeps the true status.
     SidebarRow {
         id: agent.agent_id.to_string(),
@@ -2133,7 +2160,7 @@ fn status_counts(rows: &[SidebarRow]) -> Vec<SidebarStatusCount> {
     [
         AgentStatus::Waiting,
         AgentStatus::Failed,
-        AgentStatus::RateLimited,
+        AgentStatus::Paused,
         AgentStatus::Running,
         AgentStatus::Idle,
         AgentStatus::Success,
@@ -2188,7 +2215,7 @@ fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
 
 /// Tiebreak two rows that share a status bucket (their ranks already tied).
 ///
-/// Attention rows (`waiting`/`failed`/`rate_limited`) sort longest-overdue-first:
+/// Attention rows (`waiting`/`failed`/`paused`) sort longest-overdue-first:
 /// a blocked or failed agent's `last_activity` is frozen, so this is both stable
 /// and the triage order the `␣` "next attention" key promises. Calm rows
 /// (`success`, `running`, `idle`) and bare process rows hold a stable spawn
@@ -2256,7 +2283,7 @@ fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
     match group.rows.first().map(SidebarRow::status) {
         Some(Some(AgentStatus::Waiting)) => 0,
         Some(Some(AgentStatus::Failed)) => 1,
-        Some(Some(AgentStatus::RateLimited)) => 2,
+        Some(Some(AgentStatus::Paused)) => 2,
         // success / running / idle — one calm tier.
         Some(Some(_)) => 3,
         // Process-only group.
@@ -2284,7 +2311,7 @@ fn row_rank(row: &SidebarRow) -> u8 {
 }
 
 fn status_rank(status: AgentStatus) -> u8 {
-    // Actionable attention (`waiting`/`failed`) leads; `rate_limited` sits just
+    // Actionable attention (`waiting`/`failed`) leads; `paused` sits just
     // under it — attention-class, but parked with nothing to do but wait, so it
     // ranks below a real failure and above calm. Among the calm states `idle`
     // ranks *last*: a fresh agent registers idle, so idle-at-the-bottom makes a
@@ -2295,7 +2322,7 @@ fn status_rank(status: AgentStatus) -> u8 {
     match status {
         AgentStatus::Waiting => 0,
         AgentStatus::Failed => 1,
-        AgentStatus::RateLimited => 2,
+        AgentStatus::Paused => 2,
         AgentStatus::Success => 3,
         AgentStatus::Running => 4,
         AgentStatus::Idle => 5,

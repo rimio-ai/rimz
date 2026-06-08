@@ -26,23 +26,23 @@ use super::theme::{ORANGE, Theme};
 pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
     match status {
         // `?` needs your answer; `!` needs a look (a failed turn or a wedged
-        // agent); `⏸` is parked on a spent account. The three attention-class
+        // agent); `⏸` is paused mid-turn on a provider limit. The three attention-class
         // states — the first two actionable, the last a non-actionable wait.
         AgentStatus::Waiting => "?",
         AgentStatus::Failed => "!",
         AgentStatus::Running => WORKING_FRAMES[3],
         AgentStatus::Idle => "○",
         AgentStatus::Success => "✓",
-        AgentStatus::RateLimited => RATE_LIMITED_GLYPH,
+        AgentStatus::Paused => PAUSED_GLYPH,
     }
 }
 
-/// Rate-limited: a media `pause` mark carrying the text-presentation selector
+/// Paused: a media `pause` mark carrying the text-presentation selector
 /// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a
 /// double-width color emoji that would shift the cockpit columns after it. The
-/// account's budget is spent, so the agent is parked until the window resets —
-/// auto-resumable with a `continue`, nothing to do but wait.
-const RATE_LIMITED_GLYPH: &str = "⏸\u{FE0E}";
+/// agent stopped mid-turn on a provider limit, so it waits at rest until the
+/// provider recovers or the window resets.
+const PAUSED_GLYPH: &str = "⏸\u{FE0E}";
 
 /// Working: a braille spinner cycling its dots. Spans the most time of any
 /// state, so it is the steady motion the eye learns to ignore until something
@@ -218,11 +218,11 @@ pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
         // keeps them below the live attention states.
         AgentStatus::Idle => theme.style(Color::Green, Modifier::empty()),
         AgentStatus::Success => theme.style(Color::Green, Modifier::empty()),
-        // Rate-limited stays in the amber attention family but at rest weight
+        // Paused stays in the amber attention family but at rest weight
         // (not bold, and `attention_glyph_style` never heats it): it is
-        // attention-class, but parked with nothing to do but wait — the held
+        // attention-class, but parked with nothing to do right now — the held
         // tone sets it apart from the loud, actionable `?`/`!`.
-        AgentStatus::RateLimited => theme.style(Color::Yellow, Modifier::empty()),
+        AgentStatus::Paused => theme.style(Color::Yellow, Modifier::empty()),
     }
 }
 

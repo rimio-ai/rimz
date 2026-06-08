@@ -32,8 +32,8 @@ use serde_json::{Map, Value};
 use self::payloads::{
     ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
     ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_post_compact,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
@@ -50,6 +50,7 @@ use super::{
     read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
     stop_payload_errored,
 };
+use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ledger::atomic;
 
@@ -129,6 +130,7 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SessionEnd", None),
     ("UserPromptSubmit", None),
     ("Stop", None),
+    ("StopFailure", None),
     ("Notification", None),
     ("PermissionRequest", None),
     ("PreToolUse", None),
@@ -254,6 +256,7 @@ impl AgentAdapter for ClaudeAdapter {
                 "SessionStart",
                 "SessionEnd",
                 "Stop",
+                "StopFailure",
                 "Notification",
                 "UserPromptSubmit",
                 "PreToolUse",
@@ -531,6 +534,34 @@ impl AgentAdapter for ClaudeAdapter {
         let path = optional_payload_string(payload, &["transcript_path"])?;
         let tail = read_transcript_tail(Path::new(&path))?;
         statusline::detect_turn_error(&tail)
+    }
+
+    fn observe_turn_error_from_hook(
+        &self,
+        event_name: &str,
+        payload: &Value,
+    ) -> Option<AgentTurnError> {
+        if event_name != "StopFailure" {
+            return None;
+        }
+        let parsed = parse_stop_failure(payload);
+        let error = parsed.error.as_deref()?.trim();
+        if error.is_empty() {
+            return None;
+        }
+        let class = match error {
+            "rate_limit" => TurnErrorClass::PausedRateLimit,
+            "overloaded" => TurnErrorClass::PausedOverloaded,
+            _ => TurnErrorClass::Failed,
+        };
+        Some(AgentTurnError {
+            class,
+            at: Timestamp::now(),
+            label: parsed
+                .last_assistant_message
+                .as_deref()
+                .and_then(statusline::cap_turn_error_label),
+        })
     }
 
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {

@@ -114,6 +114,16 @@ pub struct ClaudeStop {
     pub background_tasks: Vec<BackgroundTask>,
 }
 
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(default)]
+pub struct ClaudeStopFailure {
+    #[serde(flatten)]
+    pub common: ClaudeCommon,
+    pub error: Option<String>,
+    pub error_details: Option<Value>,
+    pub last_assistant_message: Option<String>,
+}
+
 /// Silent lifecycle event. `message` is the notification text.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
@@ -191,6 +201,7 @@ parse_fn!(parse_user_prompt_submit, ClaudeUserPromptSubmit);
 parse_fn!(parse_pre_tool_use, ClaudePreToolUse);
 parse_fn!(parse_post_tool_use, ClaudePostToolUse);
 parse_fn!(parse_stop, ClaudeStop);
+parse_fn!(parse_stop_failure, ClaudeStopFailure);
 parse_fn!(parse_notification, ClaudeNotification);
 parse_fn!(parse_subagent_start, ClaudeSubagentStart);
 parse_fn!(parse_subagent_stop, ClaudeSubagentStop);

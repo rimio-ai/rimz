@@ -2815,12 +2815,10 @@ fn stalled_running_agent_escalates_to_attention() {
 }
 
 #[test]
-fn spent_account_parks_every_resting_agent_of_the_kind() {
-    // Account-scoped: one claude session reports a spent 5-hour window, so
-    // the whole kind is rate-limited — including a *fresh* idle session that
-    // carries no context of its own yet (the "launched into a spent account"
-    // case). A running session with a spent account also parks: the budget is
-    // gone regardless of whether a turn is nominally in progress.
+fn idle_agent_in_spent_account_is_not_paused() {
+    // A spent account reading is budget display, not a row-wide park. Calm
+    // agents stay calm, and a running agent that is still inside the stall
+    // window keeps working.
     let reporter = agent("claude", "sess-spent", AgentStatus::Success, 1_000)
         .worktree("/repo/main")
         .limits(vec![window(100, 3_600)]);
@@ -2830,27 +2828,17 @@ fn spent_account_parks_every_resting_agent_of_the_kind() {
     let snapshot = room_with_agent_panes(Vec::new(), vec![reporter, fresh, working]);
     assert_eq!(
         row(&snapshot, "sess-spent").status(),
-        Some(AgentStatus::RateLimited)
+        Some(AgentStatus::Success)
     );
     assert_eq!(
         row(&snapshot, "sess-fresh").status(),
-        Some(AgentStatus::RateLimited),
-        "a fresh idle session inherits the account verdict"
+        Some(AgentStatus::Idle),
+        "a fresh idle session does not inherit an account-wide park"
     );
     assert_eq!(
         row(&snapshot, "sess-busy").status(),
-        Some(AgentStatus::RateLimited),
-        "a running session in a spent account parks — the budget is gone regardless"
-    );
-    // The rollup keeps the true lifecycle status; only the display projects.
-    assert_eq!(
-        snapshot
-            .agents
-            .iter()
-            .find(|a| a.agent_id == "sess-fresh")
-            .unwrap()
-            .status,
-        AgentStatus::Idle
+        Some(AgentStatus::Running),
+        "a live running session is not paused until it stalls or carries a marker"
     );
 }
 
@@ -2866,7 +2854,7 @@ fn a_window_spent_but_already_reset_does_not_park() {
     assert_eq!(
         snapshot.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::Idle),
-        "a passed reset means the budget refilled — not rate-limited"
+        "a passed reset means the budget refilled — not paused"
     );
 }
 
@@ -2912,7 +2900,7 @@ fn api_error_turn_escalates_running_to_attention() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .turn_error(10, "API Error: Overloaded");
+        .turn_error(10, "API Error: Server Error");
 
     let snapshot = room(Vec::new(), vec![session])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -2925,7 +2913,7 @@ fn api_error_turn_escalates_running_to_attention() {
     );
     assert_eq!(
         row.turn_error_label(),
-        Some("API Error: Overloaded"),
+        Some("API Error: Server Error"),
         "the row carries the upstream error text for the card's line 2"
     );
     assert!(
@@ -2956,7 +2944,7 @@ fn api_error_self_clears_when_activity_resumes() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(30)
-        .turn_error(120, "API Error: Overloaded");
+        .overloaded_turn_error(120, "API Error: Overloaded");
 
     let snapshot = room(Vec::new(), vec![session])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -2981,7 +2969,7 @@ fn api_error_does_not_override_waiting() {
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .turn_error(10, "API Error: Overloaded");
+        .paused_turn_error(10, "You've hit your usage limit");
 
     let snapshot = room(Vec::new(), vec![session])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -2994,13 +2982,13 @@ fn api_error_does_not_override_waiting() {
 #[test]
 fn dead_parent_with_live_child_keeps_running() {
     // The delegated-wait exemption wins: a live child's heartbeats are the
-    // parent's work, so a stale parent marker never escalates over it. If
+    // parent's work, so a failed parent marker never escalates over it. If
     // the children also die, the stall window remains the backstop.
     let parent = agent("claude", "root", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1")
         .active_ago(60)
-        .turn_error(10, "API Error: Overloaded");
+        .turn_error(10, "API Error: Server Error");
     let child = child_state("root", "child-1", AgentStatus::Running, 5);
 
     let snapshot = room(Vec::new(), vec![parent, child])
@@ -3014,12 +3002,11 @@ fn dead_parent_with_live_child_keeps_running() {
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
 // docs/internals/agent.md commits to a strict order among the derived display
-// states: the spent-account park decides first, then the live-subagent
-// exemption, then the turn-death marker, then the stall backstop — and a
-// human-blocked `waiting` outranks them all. The single-cause cases above
-// each prove one rung; this grid pins the *order* by stacking causes and
-// asserting which one wins, so a refactor that reorders the chain fails here
-// even if every single-cause test still passes.
+// states: a human-blocked `waiting` outranks them all, then a paused-class
+// marker, then the live-subagent exemption, then a failed marker, then the
+// stalled-running fallback (paused when the kind's window is spent, failed
+// otherwise). The single-cause cases above each prove one rung; this grid pins
+// the order by stacking causes.
 
 #[test]
 fn displayed_status_precedence_ladder_holds() {
@@ -3039,73 +3026,87 @@ fn displayed_status_precedence_ladder_holds() {
         // wedged turn, so no projection may repaint the row out from under
         // the pending decision.
         Rung {
-            name: "waiting outranks park + child exemption + marker + stall",
+            name: "waiting outranks paused marker + child exemption + stall",
             agent: agent("claude", "root", AgentStatus::Waiting, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .limits(spent())
-                .turn_error(10, "You've hit your usage limit"),
+                .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: true,
             expect: AgentStatus::Waiting,
             expect_error_label: false,
         },
-        // Every derived cause at once: park wins over exemption, marker, and stall.
+        // Every derived cause at once: the per-agent pause marker wins over
+        // child exemption and stall.
         Rung {
-            name: "park beats child exemption + marker + stall",
+            name: "paused marker beats child exemption + stall",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
                 .limits(spent())
-                .turn_error(10, "You've hit your usage limit"),
+                .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: true,
-            expect: AgentStatus::RateLimited,
+            expect: AgentStatus::Paused,
             expect_error_label: false,
         },
-        // Park beats the marker alone (the limit's own corpse carries no label).
+        // Provider overload has no reset window; the marker parks until the next
+        // hook event self-clears it.
         Rung {
-            name: "park beats turn-death marker",
+            name: "overloaded marker parks without budget data",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(60)
-                .limits(spent())
-                .turn_error(10, "You've hit your usage limit"),
+                .overloaded_turn_error(10, "API Error: Overloaded"),
             with_live_child: false,
-            expect: AgentStatus::RateLimited,
+            expect: AgentStatus::Paused,
             expect_error_label: false,
         },
-        // Park beats the stall backstop alone.
+        // The rate-limit wait has passed: a still-dead paused row becomes an
+        // actionable failure so the user can resume it.
         Rung {
-            name: "park beats stall",
+            name: "rate-limit marker fails after reset",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
-                .limits(spent()),
+                .limits(vec![window(100, -60)])
+                .paused_turn_error(10, "You've hit your usage limit"),
             with_live_child: false,
-            expect: AgentStatus::RateLimited,
-            expect_error_label: false,
+            expect: AgentStatus::Failed,
+            expect_error_label: true,
         },
-        // With the budget back, the exemption decides next: a live child
+        // Without a pause marker, the exemption decides next: a live child
         // holds the row at running over both the marker and the stall.
         Rung {
             name: "child exemption beats marker + stall",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
-                .turn_error(10, "API Error: Overloaded"),
+                .turn_error(10, "API Error: Server Error"),
             with_live_child: true,
             expect: AgentStatus::Running,
             expect_error_label: false,
         },
-        // No park, no child: the explicit marker beats the stall window.
+        // No pause, no child: the explicit failed marker beats the stall window.
         Rung {
-            name: "turn-death marker beats stall",
+            name: "failed marker beats stall",
             agent: agent("claude", "root", AgentStatus::Running, 0)
                 .worktree("/repo/main")
                 .active_ago(stalled_secs)
-                .turn_error(10, "API Error: Overloaded"),
+                .turn_error(10, "API Error: Server Error"),
             with_live_child: false,
             expect: AgentStatus::Failed,
             expect_error_label: true,
+        },
+        // A stalled running turn with a spent account is the fallback pause.
+        Rung {
+            name: "stalled spent fallback pauses",
+            agent: agent("claude", "root", AgentStatus::Running, 0)
+                .worktree("/repo/main")
+                .active_ago(stalled_secs)
+                .limits(spent()),
+            with_live_child: false,
+            expect: AgentStatus::Paused,
+            expect_error_label: false,
         },
         // Nothing above holds: the stall backstop escalates on its own.
         Rung {
@@ -3143,66 +3144,115 @@ fn displayed_status_precedence_ladder_holds() {
 }
 
 #[test]
-fn running_agent_in_spent_account_parks_not_fails() {
-    // A running agent that went silent past the stall window AND whose account
-    // is spent should surface as RateLimited, not Failed. The rate-limit check
-    // takes priority over the stall check so the user sees the real cause.
-    let stalled = agent("claude", "stalled-spent", AgentStatus::Running, 0)
+fn fallback_paused_predicate() {
+    let stalled_spent = agent("claude", "stalled-spent", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .limits(vec![window(100, 3_600)])
         .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+    let stalled_fresh = agent("codex", "stalled-fresh", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .limits(vec![window(80, 3_600)])
+        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+    let active_spent = agent("claude", "active-spent", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .limits(vec![window(100, 3_600)])
+        .active_ago(60);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![stalled]);
+    let snapshot =
+        room_with_agent_panes(Vec::new(), vec![stalled_spent, stalled_fresh, active_spent]);
     assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status(),
-        Some(AgentStatus::RateLimited),
-        "rate-limit outranks stall: agent is paused by the account, not wedged"
+        row(&snapshot, "stalled-spent").status(),
+        Some(AgentStatus::Paused),
+        "stalled running plus a spent window pauses"
+    );
+    assert_eq!(
+        row(&snapshot, "stalled-fresh").status(),
+        Some(AgentStatus::Failed),
+        "stalled running with budget data below the cap fails"
+    );
+    assert_eq!(
+        row(&snapshot, "active-spent").status(),
+        Some(AgentStatus::Running),
+        "spent budget alone does not pause an active turn"
     );
 }
 
 #[test]
-fn rate_limit_outranks_the_turn_death_marker() {
-    // A rate-limited turn dies on a provider API error (`isApiErrorMessage`)
-    // with no `Stop` hook, so the next statusline push delivers the
-    // turn-death marker and the spent window *together*. The park wins
-    // while the window is spent — the agent is paused by the account, not
-    // dead — and the row carries no failure label. Once the window resets,
-    // the still-standing marker escalates an agent that failed to resume.
+fn paused_rate_limit_marker_lifts_to_failed_after_reset() {
     let session = agent("claude", "limited-dead", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .active_ago(60)
         .limits(vec![window(100, 3_600)])
-        .turn_error(10, "You've hit your usage limit");
+        .paused_turn_error(10, "You've hit your usage limit");
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
     let row = &snapshot.worktree_groups[0].rows[0];
     assert_eq!(
         row.status(),
-        Some(AgentStatus::RateLimited),
-        "rate-limit outranks turn-death: the marker is the limit's own corpse"
+        Some(AgentStatus::Paused),
+        "the explicit marker parks the affected agent while the window is spent"
     );
     assert!(
         row.turn_error_label().is_none(),
-        "a parked row carries no failure label"
+        "a paused row carries no failure label"
+    );
+
+    let reset = agent("claude", "limited-dead", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .limits(vec![window(100, -60)])
+        .paused_turn_error(10, "You've hit your usage limit");
+    let snapshot = room_with_agent_panes(Vec::new(), vec![reset]);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Failed),
+        "after reset the still-dead turn becomes a resumable failure"
+    );
+    assert_eq!(
+        row.turn_error_label(),
+        Some("You've hit your usage limit"),
+        "the failure card names the paused turn's reason after reset"
+    );
+}
+
+#[test]
+fn paused_rate_limit_marker_stays_paused_until_every_spent_window_resets() {
+    let session = agent("claude", "limited-dead", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .active_ago(60)
+        .limits(vec![window(100, -60), window(100, 86_400)])
+        .paused_turn_error(10, "You've hit your usage limit");
+
+    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Paused),
+        "a reset short window does not lift the row while a longer window is still spent"
+    );
+    assert!(
+        row.turn_error_label().is_none(),
+        "a partially recovered paused row carries no failure label"
     );
 }
 
 #[test]
 fn running_parent_with_live_child_in_spent_account_parks() {
-    // Children share the parent's spent account: a window that tips
-    // mid-delegation freezes the child with no `SubagentStop` to come, so
-    // the delegated-wait exemption must not hold the parent at `running`
-    // forever. The park outranks the exemption.
+    // Children share the parent's provider turn. A spent account alone does not
+    // park the parent, but an explicit paused marker says the provider stopped
+    // the turn and outranks the delegated-wait exemption.
     let parent = agent("claude", "root", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
-        .limits(vec![window(100, 3_600)]);
+        .limits(vec![window(100, 3_600)])
+        .paused_turn_error(10, "You've hit your usage limit");
     let child = child_state("root", "child-1", AgentStatus::Running, 5);
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
     assert_eq!(
         snapshot.worktree_groups[0].rows[0].status(),
-        Some(AgentStatus::RateLimited),
-        "a spent account parks the delegating parent — its children share the budget"
+        Some(AgentStatus::Paused),
+        "the pause marker parks the delegating parent"
     );
 }
 
@@ -3385,8 +3435,8 @@ fn compaction_end_stays_orthogonal_to_display_status() {
     let snapshot = room_with_agent_panes(Vec::new(), vec![auto]);
     assert_eq!(
         row(&snapshot, "auto").status(),
-        Some(AgentStatus::RateLimited),
-        "spent-account projection still parks an auto-resumed row"
+        Some(AgentStatus::Running),
+        "spent-account projection does not park an auto-resumed row without a pause marker"
     );
     let snapshot = room_with_agent_panes(Vec::new(), vec![manual]);
     assert_eq!(

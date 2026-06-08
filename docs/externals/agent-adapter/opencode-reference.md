@@ -268,7 +268,7 @@ No verdict has landed — this section is the adapter's starting brief, the [hoo
 
 **What OpenCode cannot support:**
 
-- **No balance surface.** No rate-limit windows and no plan tier, anywhere — so no mana bars, no spent-window `rate_limited` park, and `rate_limit_windows` declares off ([account.md](../../internals/account.md#per-provider-mapping)). The `session.status` `retry` state is the one throttling glimpse, and it is uncontracted.
+- **No balance surface.** No rate-limit windows and no plan tier, anywhere — so no mana bars, no spent-window fallback for `paused`, and `rate_limit_windows` declares off ([account.md](../../internals/account.md#per-provider-mapping)). The `session.status` `retry` state is the one throttling glimpse, and it is uncontracted.
 - **No rich-context transport.** The per-launch server sits on a random port with no discovery surface, so there is no statusline or app-server analogue to read out of band; the events and the SQLite store cover the gauge, so the gap costs little. A future increment: the Rimz plugin publishes its `serverUrl` to a runtime sidecar, the way the Codex broker holds a warm connection.
 - **Few native asks by default.** Permission defaults are permissive, so the blocking channel engages only as far as the user's `permission` config asks — and the [#19927](https://github.com/anomalyco/opencode/issues/19927) hook bypass needs re-verification before `blocking_feed` is declared on.
 - **No per-session end event.** `dispose` fires per server, not per session; a session that ends inside a still-running instance leaves by pane liveness and the reaper alone, the Codex posture.
