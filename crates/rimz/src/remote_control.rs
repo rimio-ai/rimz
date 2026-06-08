@@ -245,25 +245,31 @@ fn is_codex_daemon_cmdline(cmdline: &str) -> bool {
 }
 
 /// Start time of the in-pane agent CLI process backing a live pane, found by
-/// working directory — the signal a backend that reports no per-pane process
-/// start (Zellij) needs so the cwd fallback can refuse a stale session. Codex is
-/// the only lazy-registering agent today, so this resolves the bare `codex` TUI
-/// ([`is_codex_cli_cmdline`]) whose `/proc` cwd equals `pane_cwd` and returns the
-/// *earliest* such start: with that floor the sidebar's `pane_start_allows_bind`
-/// guard only rejects a session predating every candidate, so a cwd hosting more
-/// than one `codex` never hides a live one. `None` for a non-Codex kind, no
-/// match, or an unreadable `/proc` (another user's process).
+/// working directory. This is the exact single-process case only: a cwd with no
+/// match or multiple same-kind agent CLIs abstains so callers keep pane starts
+/// unknown rather than duplicate one cwd-level timestamp across several panes.
 pub fn in_pane_agent_start(kind: &str, pane_cwd: &str) -> Option<jiff::Timestamp> {
+    let starts = in_pane_agent_starts(kind, pane_cwd);
+    (starts.len() == 1).then_some(starts[0])
+}
+
+/// Start times for in-pane agent CLI processes whose `/proc` cwd equals
+/// `pane_cwd`. Callers that know other panes' exact starts subtract those before
+/// deciding whether one unaccounted process remains.
+pub fn in_pane_agent_starts(kind: &str, pane_cwd: &str) -> Vec<jiff::Timestamp> {
     if kind != "codex" {
-        return None;
+        return Vec::new();
     }
     let pane_cwd = Path::new(pane_cwd);
-    crate::proc::list_processes()
+    let mut starts = crate::proc::list_processes()
         .into_iter()
         .filter(|process| is_codex_cli_cmdline(&process.cmdline))
         .filter(|process| crate::proc::cwd(process.pid).as_deref() == Some(pane_cwd))
         .filter_map(|process| crate::proc::process_start(process.pid))
-        .min()
+        .collect::<Vec<_>>();
+    starts.sort();
+    starts.dedup();
+    starts
 }
 
 /// Start time of the in-pane agent CLI behind a pane's bound root process —
@@ -288,6 +294,62 @@ pub fn in_pane_agent_start_for_root(kind: &str, root_pid: u32) -> Option<jiff::T
         && crate::proc::cmdline(child).is_some_and(|cmdline| is_codex_cli_cmdline(&cmdline))
     {
         return crate::proc::process_start(child);
+    }
+    None
+}
+
+/// Session id from the in-pane Codex CLI behind a pane's bound root process.
+/// The root is the CLI itself when the pane runs it directly; a shell-hosted CLI
+/// is the root's single foreground child. Multiple children abstain so a shell
+/// doing other work cannot donate the wrong resumed session id.
+pub fn codex_resumed_session_id_for_root(root_pid: u32) -> Option<crate::ids::AgentSessionId> {
+    codex_resumed_session_id_for_root_with(root_pid, &crate::proc::cmdline, &crate::proc::children)
+}
+
+fn codex_resumed_session_id_for_root_with(
+    root_pid: u32,
+    cmdline: &dyn Fn(u32) -> Option<String>,
+    children: &dyn Fn(u32) -> Vec<u32>,
+) -> Option<crate::ids::AgentSessionId> {
+    if let Some(resumed) = cmdline(root_pid)
+        .as_deref()
+        .and_then(codex_resumed_session_id_from_cmdline)
+    {
+        return Some(resumed);
+    }
+    if let &[child] = children(root_pid).as_slice() {
+        return cmdline(child)
+            .as_deref()
+            .and_then(codex_resumed_session_id_from_cmdline);
+    }
+    None
+}
+
+/// Session id from a resumed Codex CLI command (`codex resume <session-id>`).
+/// Exact rebirth binding reads this instead of guessing by cwd. The parser is
+/// deliberately narrow: daemon/app-server surfaces are excluded by
+/// [`is_codex_cli_cmdline`], and the session id is accepted only when it is the
+/// token immediately after `resume`.
+pub fn codex_resumed_session_id_from_cmdline(cmdline: &str) -> Option<crate::ids::AgentSessionId> {
+    if !is_codex_cli_cmdline(cmdline) {
+        return None;
+    }
+    let mut tokens = cmdline.split_whitespace().peekable();
+    while let Some(token) = tokens.next() {
+        let is_codex = Path::new(token)
+            .file_name()
+            .is_some_and(|file| file == "codex");
+        if !is_codex {
+            continue;
+        }
+        if tokens.next() != Some("resume") {
+            return None;
+        }
+        return tokens
+            .next()
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(crate::ids::AgentSessionId::from);
     }
     None
 }
@@ -319,6 +381,7 @@ mod tests {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 
@@ -472,5 +535,63 @@ mod tests {
         ));
         // A non-codex process is never the codex CLI.
         assert!(!is_codex_cli_cmdline("zsh"));
+    }
+
+    #[test]
+    fn codex_resume_cmdline_yields_session_id() {
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("codex resume 019ea276").as_deref(),
+            Some("019ea276")
+        );
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("node /usr/bin/codex resume sess-2").as_deref(),
+            Some("sess-2")
+        );
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("codex --model gpt-5 resume sess"),
+            None
+        );
+        assert_eq!(
+            codex_resumed_session_id_from_cmdline("codex app-server resume sess"),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_resume_root_yields_session_id_from_root_or_single_child() {
+        assert_eq!(
+            codex_resumed_session_id_for_root_with(
+                200,
+                &|pid| (pid == 200).then_some("codex resume root-sess".to_owned()),
+                &|_| Vec::new(),
+            )
+            .as_deref(),
+            Some("root-sess")
+        );
+        assert_eq!(
+            codex_resumed_session_id_for_root_with(
+                200,
+                &|pid| match pid {
+                    200 => Some("zsh".to_owned()),
+                    300 => Some("codex resume child-sess".to_owned()),
+                    _ => None,
+                },
+                &|pid| (pid == 200).then_some(vec![300]).unwrap_or_default(),
+            )
+            .as_deref(),
+            Some("child-sess")
+        );
+        assert_eq!(
+            codex_resumed_session_id_for_root_with(
+                200,
+                &|pid| match pid {
+                    300 => Some("codex resume child-a".to_owned()),
+                    301 => Some("codex resume child-b".to_owned()),
+                    _ => Some("zsh".to_owned()),
+                },
+                &|pid| (pid == 200).then_some(vec![300, 301]).unwrap_or_default(),
+            ),
+            None
+        );
     }
 }

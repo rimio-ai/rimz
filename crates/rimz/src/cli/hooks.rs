@@ -18,6 +18,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use clap::{Args, Subcommand};
+use serde::Serialize;
 use serde_json::Value;
 use tracing::{debug, warn};
 
@@ -35,7 +36,7 @@ use rimz::ids::{MuxName, PaneId};
 use rimz::ledger::AskExpiry;
 use rimz::ledger::runtime::process_owner;
 use rimz::ledger::snapshot::pane_start_allows_bind;
-use rimz::mux::{ClientFocusOptions, PaneListOptions};
+use rimz::mux::ClientFocusOptions;
 use rimz::resolver::{Allowlist, AllowlistEntry, fresh_enrolled, is_resolver_fresh, restat};
 use rimz::workspace::{self, ResolvedWorkspace, WorkspaceResolver};
 
@@ -506,19 +507,47 @@ fn recover_focused_pane_binding(
         return;
     }
 
-    let Some((mut panes, client_focus)) =
-        live_binding_inputs(mux_hint, &workspace.session_name, kind, agent_id)
-    else {
+    let Some(inputs) = live_binding_inputs(
+        mux_hint,
+        &workspace.session_name,
+        ledger.runtime_paths(),
+        kind,
+        agent_id,
+    ) else {
+        log_binding_recovery(
+            ledger,
+            BindingRecoveryLog::new(
+                kind,
+                agent_id,
+                observation,
+                worktree_path,
+                BindingRecoveryOutcome::NoInputs,
+            ),
+        );
         return;
     };
-    backfill_candidate_pane_starts(kind, worktree_path, &mut panes);
     let selection = select_focused_pane_binding(
         kind,
         agent_id,
         worktree_path,
         &prior,
-        &panes,
-        client_focus.as_deref(),
+        &inputs.panes,
+        inputs.client_focus.as_deref(),
+    );
+    let outcome = match &selection.pane_id {
+        Some(pane_id) => BindingRecoveryOutcome::Selected {
+            pane_id: pane_id.clone(),
+            method: selection.method,
+        },
+        None => BindingRecoveryOutcome::Unbound {
+            candidate_count: selection.candidate_count,
+        },
+    };
+    log_binding_recovery(
+        ledger,
+        BindingRecoveryLog::new(kind, agent_id, observation, worktree_path, outcome)
+            .with_probes(inputs.probes)
+            .with_candidates(selection.candidates.clone()),
     );
     if let Some(pane_id) = selection.pane_id {
         debug!(
@@ -538,6 +567,68 @@ fn recover_focused_pane_binding(
             "daemon-routed lifecycle event exhausted focused pane binding candidates",
         );
     }
+}
+
+fn log_binding_recovery(ledger: &Ledger, record: BindingRecoveryLog) {
+    rimz::binding_log::append(ledger.runtime_paths(), &record);
+}
+
+#[derive(Debug, Serialize)]
+struct BindingRecoveryLog {
+    event: &'static str,
+    at: jiff::Timestamp,
+    kind: String,
+    agent_id: String,
+    signal: String,
+    cwd: String,
+    probes: Vec<BindingProbeRecord>,
+    candidates: Vec<BindingCandidateRecord>,
+    outcome: BindingRecoveryOutcome,
+}
+
+impl BindingRecoveryLog {
+    fn new(
+        kind: &str,
+        agent_id: &str,
+        observation: &AgentLifecycleObservation,
+        cwd: &str,
+        outcome: BindingRecoveryOutcome,
+    ) -> Self {
+        Self {
+            event: "hook_focused_pane_recovery",
+            at: jiff::Timestamp::now(),
+            kind: kind.to_owned(),
+            agent_id: agent_id.to_owned(),
+            signal: format!("{:?}", observation.signal),
+            cwd: cwd.to_owned(),
+            probes: Vec::new(),
+            candidates: Vec::new(),
+            outcome,
+        }
+    }
+
+    fn with_probes(mut self, probes: Vec<BindingProbeRecord>) -> Self {
+        self.probes = probes;
+        self
+    }
+
+    fn with_candidates(mut self, candidates: Vec<BindingCandidateRecord>) -> Self {
+        self.candidates = candidates;
+        self
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "snake_case", tag = "outcome")]
+enum BindingRecoveryOutcome {
+    NoInputs,
+    Selected {
+        pane_id: PaneId,
+        method: BindingSelectionMethod,
+    },
+    Unbound {
+        candidate_count: usize,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -562,29 +653,58 @@ fn prior_agent_panes(agents: &[AgentState]) -> Vec<PriorAgentPane<'_>> {
         .collect()
 }
 
+struct BindingInputs {
+    panes: Vec<PaneRef>,
+    client_focus: Option<Vec<PaneId>>,
+    probes: Vec<BindingProbeRecord>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct BindingProbeRecord {
+    mux: MuxName,
+    pane_count: Option<usize>,
+    pane_error: Option<String>,
+    client_focus: Option<Vec<PaneId>>,
+    focus_error: Option<String>,
+}
+
 fn live_binding_inputs(
     mux_hint: Option<MuxName>,
     session_name: &str,
+    runtime: &rimz::RuntimePaths,
     kind: &str,
     agent_id: &str,
-) -> Option<(Vec<PaneRef>, Option<Vec<PaneId>>)> {
+) -> Option<BindingInputs> {
     let muxes: Vec<MuxName> = mux_hint
         .map(|mux| vec![mux])
         .unwrap_or_else(|| vec![MuxName::Zellij, MuxName::Tmux]);
     let mut panes = Vec::new();
     let mut focused = Vec::new();
     let mut focus_probe_succeeded = false;
+    let mut probes = Vec::new();
 
     for mux in muxes {
         let backend = rimz::mux::backend_for(mux);
-        match backend.list_panes(PaneListOptions {
-            session_name: Some(session_name.to_owned()),
-            workspace_id: None,
-            min_topology_produced_at_ms: None,
-            command_timeout: Some(FOCUSED_PANE_BIND_TIMEOUT),
-        }) {
-            Ok(mut listed) => panes.append(&mut listed),
+        let mut probe = BindingProbeRecord {
+            mux,
+            pane_count: None,
+            pane_error: None,
+            client_focus: None,
+            focus_error: None,
+        };
+        match rimz::sidebar::produce::repaired_pane_frame_for_binding(
+            runtime,
+            mux,
+            session_name,
+            FOCUSED_PANE_BIND_TIMEOUT,
+        ) {
+            Ok(frame) => {
+                let mut listed = frame.to_pane_refs();
+                probe.pane_count = Some(listed.len());
+                panes.append(&mut listed);
+            }
             Err(err) => {
+                probe.pane_error = Some(err.to_string());
                 debug!(
                     agent = kind,
                     agent_id,
@@ -592,6 +712,7 @@ fn live_binding_inputs(
                     error = %err,
                     "lifecycle: focused pane recovery could not list panes",
                 );
+                probes.push(probe);
                 continue;
             }
         }
@@ -602,8 +723,10 @@ fn live_binding_inputs(
             Ok(listed) => {
                 focus_probe_succeeded = true;
                 append_unique_panes(&mut focused, listed);
+                probe.client_focus = Some(focused.clone());
             }
             Err(err) => {
+                probe.focus_error = Some(err.to_string());
                 debug!(
                     agent = kind,
                     agent_id,
@@ -613,36 +736,17 @@ fn live_binding_inputs(
                 );
             }
         }
+        probes.push(probe);
     }
 
     if panes.is_empty() {
         return None;
     }
-    Some((panes, focus_probe_succeeded.then_some(focused)))
-}
-
-/// Zellij's `list-panes` reports no per-pane process start, so without a start a
-/// prior tenant's stamp on a reused pane id would block focus recovery forever
-/// (`pane_stamped_to_other_agent` could never prove it stale). Stamp the
-/// producer's `/proc` cwd floor ([`rimz::remote_control::in_pane_agent_start`])
-/// onto the kind-matching candidates that lack one — at most one scan per
-/// recovery, and recovery runs once per session, so the hook path stays cheap.
-/// tmux reports starts natively and skips the scan.
-fn backfill_candidate_pane_starts(kind: &str, worktree_path: &str, panes: &mut [PaneRef]) {
-    let needs_start = |pane: &PaneRef| {
-        pane.pane_process_start.is_none() && pane_matches_lazy_agent(kind, worktree_path, pane)
-    };
-    if !panes.iter().any(&needs_start) {
-        return;
-    }
-    let Some(start) = rimz::remote_control::in_pane_agent_start(kind, worktree_path) else {
-        return;
-    };
-    for pane in panes.iter_mut() {
-        if needs_start(pane) {
-            pane.pane_process_start = Some(start);
-        }
-    }
+    Some(BindingInputs {
+        panes,
+        client_focus: focus_probe_succeeded.then_some(focused),
+        probes,
+    })
 }
 
 fn append_unique_panes(target: &mut Vec<PaneId>, panes: Vec<PaneId>) {
@@ -661,35 +765,74 @@ fn select_focused_pane_binding(
     panes: &[PaneRef],
     client_focus: Option<&[PaneId]>,
 ) -> FocusedPaneBindingSelection {
+    let mut candidate_records = panes
+        .iter()
+        .map(|pane| binding_candidate_record(kind, agent_id, worktree_path, prior_agents, pane))
+        .collect::<Vec<_>>();
     let candidates: Vec<&PaneRef> = panes
         .iter()
-        .filter(|pane| pane_matches_lazy_agent(kind, worktree_path, pane))
-        .filter(|pane| !pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane))
+        .zip(candidate_records.iter())
+        .filter_map(|(pane, record)| record.reject_reasons.is_empty().then_some(pane))
         .collect();
     let candidate_count = candidates.len();
     if candidates.is_empty() {
         return FocusedPaneBindingSelection {
             pane_id: None,
             candidate_count,
+            method: BindingSelectionMethod::None,
+            candidates: candidate_records,
         };
     }
 
-    let pane_id = if let Some(client_focus) = client_focus {
-        if client_focus.is_empty() {
-            None
-        } else {
-            unique_pane_id(
-                candidates
-                    .into_iter()
-                    .filter(|pane| client_focus.iter().any(|focused| focused == &pane.pane_id)),
-            )
+    if candidates.len() == 1 {
+        return FocusedPaneBindingSelection {
+            pane_id: Some(candidates[0].pane_id.clone()),
+            candidate_count,
+            method: BindingSelectionMethod::SingleCandidate,
+            candidates: candidate_records,
+        };
+    }
+
+    let (pane_id, method) = if let Some(client_focus) = client_focus {
+        let focused_panes: Vec<&PaneRef> = candidates
+            .iter()
+            .copied()
+            .filter(|pane| client_focus.iter().any(|focused| focused == &pane.pane_id))
+            .collect();
+        annotate_focus_rejections(
+            &mut candidate_records,
+            &candidates,
+            &focused_panes,
+            BindingRejectReason::NotInClientFocus,
+        );
+        let selected = unique_pane_id(focused_panes.iter().copied());
+        if selected.is_none() && focused_panes.len() > 1 {
+            annotate_ambiguous(&mut candidate_records, &focused_panes);
         }
+        (selected, BindingSelectionMethod::ClientFocus)
     } else {
-        unique_pane_id(candidates.into_iter().filter(|pane| pane.is_focused))
+        let focused_panes: Vec<&PaneRef> = candidates
+            .iter()
+            .copied()
+            .filter(|pane| pane.is_focused)
+            .collect();
+        annotate_focus_rejections(
+            &mut candidate_records,
+            &candidates,
+            &focused_panes,
+            BindingRejectReason::NotTabFocused,
+        );
+        let selected = unique_pane_id(focused_panes.iter().copied());
+        if selected.is_none() && focused_panes.len() > 1 {
+            annotate_ambiguous(&mut candidate_records, &focused_panes);
+        }
+        (selected, BindingSelectionMethod::TabFocus)
     };
     FocusedPaneBindingSelection {
         pane_id,
         candidate_count,
+        method,
+        candidates: candidate_records,
     }
 }
 
@@ -697,11 +840,111 @@ fn select_focused_pane_binding(
 struct FocusedPaneBindingSelection {
     pane_id: Option<PaneId>,
     candidate_count: usize,
+    method: BindingSelectionMethod,
+    candidates: Vec<BindingCandidateRecord>,
 }
 
-fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> bool {
-    pane.cwd.as_deref() == Some(worktree_path)
-        && rimz::ledger::snapshot::pane_agent_kind(pane) == Some(kind)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum BindingSelectionMethod {
+    None,
+    SingleCandidate,
+    ClientFocus,
+    TabFocus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+struct BindingCandidateRecord {
+    pane_id: PaneId,
+    cwd: Option<String>,
+    command: Option<String>,
+    is_focused: bool,
+    pane_process_start: Option<jiff::Timestamp>,
+    reject_reasons: Vec<BindingRejectReason>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "reason")]
+enum BindingRejectReason {
+    CwdMismatch { got: Option<String> },
+    CommandMismatch { got: Option<String> },
+    StampedToOther { agent_id: String },
+    NotInClientFocus,
+    NotTabFocused,
+    Ambiguous { n: usize },
+}
+
+fn binding_candidate_record(
+    kind: &str,
+    agent_id: &str,
+    worktree_path: &str,
+    prior_agents: &[PriorAgentPane<'_>],
+    pane: &PaneRef,
+) -> BindingCandidateRecord {
+    let mut reject_reasons = Vec::new();
+    if pane.cwd.as_deref() != Some(worktree_path) {
+        reject_reasons.push(BindingRejectReason::CwdMismatch {
+            got: pane.cwd.clone(),
+        });
+    }
+    if pane
+        .command
+        .as_deref()
+        .and_then(rimz::ledger::snapshot::command_agent_kind)
+        != Some(kind)
+    {
+        reject_reasons.push(BindingRejectReason::CommandMismatch {
+            got: pane.command.clone(),
+        });
+    }
+    if let Some(stamped) = pane_stamped_to_other_agent(kind, agent_id, prior_agents, pane) {
+        reject_reasons.push(BindingRejectReason::StampedToOther {
+            agent_id: stamped.to_owned(),
+        });
+    }
+    BindingCandidateRecord {
+        pane_id: pane.pane_id.clone(),
+        cwd: pane.cwd.clone(),
+        command: pane.command.clone(),
+        is_focused: pane.is_focused,
+        pane_process_start: pane.pane_process_start,
+        reject_reasons,
+    }
+}
+
+fn annotate_focus_rejections(
+    records: &mut [BindingCandidateRecord],
+    candidates: &[&PaneRef],
+    focused_panes: &[&PaneRef],
+    reason: BindingRejectReason,
+) {
+    for pane in candidates {
+        if focused_panes
+            .iter()
+            .any(|focused| focused.pane_id == pane.pane_id)
+        {
+            continue;
+        }
+        if let Some(record) = records
+            .iter_mut()
+            .find(|record| record.pane_id == pane.pane_id)
+        {
+            record.reject_reasons.push(reason.clone());
+        }
+    }
+}
+
+fn annotate_ambiguous(records: &mut [BindingCandidateRecord], focused_panes: &[&PaneRef]) {
+    for pane in focused_panes {
+        if let Some(record) = records
+            .iter_mut()
+            .find(|record| record.pane_id == pane.pane_id)
+        {
+            record.reject_reasons.push(BindingRejectReason::Ambiguous {
+                n: focused_panes.len(),
+            });
+        }
+    }
 }
 
 /// Whether another session's durable stamp still plausibly owns this pane. A
@@ -711,12 +954,12 @@ fn pane_matches_lazy_agent(kind: &str, worktree_path: &str, pane: &PaneRef) -> b
 /// and it must not block recovery either — or a reborn pane id could never be
 /// stamped again. A pane with no readable process start keeps the conservative
 /// block: an unprovable stamp is treated as live.
-fn pane_stamped_to_other_agent(
+fn pane_stamped_to_other_agent<'a>(
     kind: &str,
     agent_id: &str,
-    prior_agents: &[PriorAgentPane<'_>],
+    prior_agents: &'a [PriorAgentPane<'_>],
     pane: &PaneRef,
-) -> bool {
+) -> Option<&'a str> {
     if let Some(agent) = prior_agents.iter().find(|agent| {
         agent.kind == kind
             && agent.agent_id != agent_id
@@ -734,9 +977,9 @@ fn pane_stamped_to_other_agent(
             pane = %pane.pane_id,
             "pane stamp belongs to another live agent; skipping focused binding candidate",
         );
-        true
+        Some(agent.agent_id)
     } else {
-        false
+        None
     }
 }
 
@@ -1277,7 +1520,8 @@ fn emit_neutral(agent: &dyn AgentAdapter, event_name: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::{
-        PriorAgentPane, matches_agent_kind, select_focused_pane_binding, session_already_stamped,
+        BindingRejectReason, PriorAgentPane, matches_agent_kind, select_focused_pane_binding,
+        session_already_stamped,
     };
     use rimz::feed::PaneRef;
     use rimz::ids::{MuxName, PaneId};
@@ -1295,6 +1539,7 @@ mod tests {
             cwd: Some(cwd.to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 
@@ -1325,6 +1570,19 @@ mod tests {
 
         assert_eq!(selected.pane_id.as_ref().unwrap().raw(), "terminal_30");
         assert_eq!(selected.candidate_count, 2);
+    }
+
+    #[test]
+    fn focused_pane_recovery_selects_single_candidate_without_focus() {
+        let panes = vec![
+            pane("terminal_4", "codex", "/repo/main", false),
+            pane("terminal_30", "codex", "/repo/other", true),
+        ];
+
+        let selected = select_focused_pane_binding("codex", "new", "/repo/main", &[], &panes, None);
+
+        assert_eq!(selected.pane_id.as_ref().unwrap().raw(), "terminal_4");
+        assert_eq!(selected.candidate_count, 1);
     }
 
     #[test]
@@ -1372,6 +1630,42 @@ mod tests {
                 .pane_id,
             None
         );
+    }
+
+    #[test]
+    fn focused_pane_recovery_records_reject_reasons() {
+        let occupied_id = PaneId::from_parts(MuxName::Zellij, "terminal_42");
+        let prior = vec![PriorAgentPane {
+            kind: "codex",
+            agent_id: "old",
+            pane_id: Some(&occupied_id),
+            last_activity: jiff::Timestamp::UNIX_EPOCH,
+        }];
+        let panes = vec![
+            pane("terminal_4", "claude", "/repo/main", false),
+            pane("terminal_30", "codex", "/repo/other", false),
+            pane("terminal_42", "codex", "/repo/main", false),
+        ];
+
+        let selected =
+            select_focused_pane_binding("codex", "new", "/repo/main", &prior, &panes, None);
+
+        assert_eq!(selected.pane_id, None);
+        assert!(selected.candidates[0].reject_reasons.contains(
+            &BindingRejectReason::CommandMismatch {
+                got: Some("claude".to_owned())
+            }
+        ));
+        assert!(selected.candidates[1].reject_reasons.contains(
+            &BindingRejectReason::CwdMismatch {
+                got: Some("/repo/other".to_owned())
+            }
+        ));
+        assert!(selected.candidates[2].reject_reasons.contains(
+            &BindingRejectReason::StampedToOther {
+                agent_id: "old".to_owned()
+            }
+        ));
     }
 
     #[test]

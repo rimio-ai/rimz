@@ -213,7 +213,7 @@ fn stamp_pane_process_starts_stamps_a_codex_pane_lacking_a_native_start() {
     stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|kind, cwd| {
         assert_eq!(kind, "codex");
         assert_eq!(cwd, "/repo");
-        Some(start)
+        vec![start]
     });
     assert_eq!(first(&frame).current.started_at, Some(start));
 }
@@ -281,6 +281,125 @@ fn stamp_pane_process_starts_rederives_from_the_bound_root_pid() {
 }
 
 #[test]
+fn stamp_pane_resumed_session_ids_derives_from_the_bound_root_pid() {
+    let mut frame = frame(vec![pane("terminal_30", Some("codex"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(200);
+
+    stamp_pane_resumed_session_ids(&mut frame, &|pid| {
+        assert_eq!(pid, 200);
+        Some("sess-resumed".into())
+    });
+
+    assert_eq!(
+        first(&frame)
+            .current
+            .resumed_session_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("sess-resumed")
+    );
+}
+
+#[test]
+fn stamp_pane_process_starts_assigns_the_unique_unaccounted_cwd_start() {
+    let accounted: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
+    let remaining: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
+    let mut frame = frame(vec![
+        pane("terminal_4", Some("codex"), Some("/repo")),
+        pane("terminal_58", Some("codex"), Some("/repo")),
+    ]);
+    let unstamped = natively_unstamped(&frame);
+    frame.tabs[0].panes[0].current.pid = Some(200);
+    stamp_pane_process_starts(
+        &mut frame,
+        &unstamped,
+        &|_, pid| (pid == 200).then_some(accounted),
+        &|_, _| vec![accounted, remaining],
+    );
+
+    let starts = frame
+        .pane_states()
+        .map(|pane| pane.current.started_at)
+        .collect::<Vec<_>>();
+    assert_eq!(starts, vec![Some(accounted), Some(remaining)]);
+}
+
+#[test]
+fn stamp_pane_process_starts_replaces_a_duplicate_carried_floor_with_the_unique_remainder() {
+    let accounted: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
+    let remaining: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
+    let mut frame = frame(vec![
+        pane("terminal_4", Some("codex"), Some("/repo")),
+        pane("terminal_58", Some("codex"), Some("/repo")),
+    ]);
+    let unstamped = natively_unstamped(&frame);
+    {
+        let mut panes = frame.pane_states_mut();
+        panes.next().unwrap().current.pid = Some(200);
+        panes.next().unwrap().current.started_at = Some(accounted);
+    }
+
+    stamp_pane_process_starts(
+        &mut frame,
+        &unstamped,
+        &|_, pid| (pid == 200).then_some(accounted),
+        &|_, _| vec![accounted, remaining],
+    );
+
+    let starts = frame
+        .pane_states()
+        .map(|pane| pane.current.started_at)
+        .collect::<Vec<_>>();
+    assert_eq!(starts, vec![Some(accounted), Some(remaining)]);
+}
+
+#[test]
+fn stamp_pane_process_starts_clears_ambiguous_duplicate_carried_floors() {
+    let floor: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
+    let later: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
+    let mut frame = frame(vec![
+        pane("terminal_4", Some("codex"), Some("/repo")),
+        pane("terminal_58", Some("codex"), Some("/repo")),
+    ]);
+    let unstamped = natively_unstamped(&frame);
+    for pane in frame.pane_states_mut() {
+        pane.current.started_at = Some(floor);
+    }
+
+    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|_, _| {
+        vec![floor, later]
+    });
+
+    assert!(
+        frame
+            .pane_states()
+            .all(|pane| pane.current.started_at.is_none()),
+        "duplicated carried cwd floors are cleared instead of republished"
+    );
+}
+
+#[test]
+fn stamp_pane_process_starts_abstains_for_ambiguous_cwd_remainders() {
+    let first: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
+    let second: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
+    let mut frame = frame(vec![
+        pane("terminal_4", Some("codex"), Some("/repo")),
+        pane("terminal_58", Some("codex"), Some("/repo")),
+    ]);
+    let unstamped = natively_unstamped(&frame);
+    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|_, _| {
+        vec![first, second]
+    });
+
+    assert!(
+        frame
+            .pane_states()
+            .all(|pane| pane.current.started_at.is_none()),
+        "ambiguous cwd starts are never duplicated across panes"
+    );
+}
+
+#[test]
 fn stamp_pane_process_starts_keeps_the_carried_stamp_when_the_pid_is_gone() {
     // The binding's process is gone (a fresh-window re-tenancy, an exited
     // pane): the carried stamp bridges the gap rather than rescanning — a cwd
@@ -312,7 +431,7 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
     frame.pane_states_mut().next().unwrap().current.pid = Some(100);
     let unstamped = natively_unstamped(&frame);
     stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| Some(start), &|_, _| {
-        Some(start)
+        vec![start]
     });
     assert!(
         frame

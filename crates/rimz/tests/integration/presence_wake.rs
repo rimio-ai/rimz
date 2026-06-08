@@ -178,6 +178,7 @@ impl WakeEnv {
                 cwd: Some(self.project_root.to_string_lossy().into_owned()),
                 pane_pid: None,
                 pane_process_start: None,
+                resumed_session_id: None,
             }],
             produced_at_ms,
             SESSION_NAME,
@@ -202,6 +203,7 @@ impl WakeEnv {
             cwd: Some(self.project_root.to_string_lossy().into_owned()),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         };
         let cache = assemble_frame(
             vec![

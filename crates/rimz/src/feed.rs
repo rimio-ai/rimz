@@ -338,6 +338,11 @@ pub struct PaneRef {
     /// Used to detect reused pane IDs across mux restarts.
     #[serde(default)]
     pub pane_process_start: Option<Timestamp>,
+    /// Session id parsed from a resumed agent command such as
+    /// `codex resume <session-id>`. Exact rebirth binding reads this before any
+    /// cwd or process-start heuristic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_session_id: Option<AgentSessionId>,
 }
 
 impl PaneRef {
@@ -357,6 +362,7 @@ impl PaneRef {
             cwd: None,
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 }

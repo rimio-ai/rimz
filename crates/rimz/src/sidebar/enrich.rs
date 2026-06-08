@@ -18,7 +18,8 @@ use crate::agents::spending::{
 };
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 use crate::feed::AgentStatus;
-use crate::ids::PaneId;
+use crate::ids::{PaneId, WorkspaceId};
+use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
     RuntimePaths, SidebarOwnView, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
 };
@@ -242,6 +243,15 @@ pub enum EnrichMode<'a> {
     },
 }
 
+#[derive(Debug, Serialize)]
+struct ProducerBindingFallbackLog<'a> {
+    event: &'static str,
+    at: Timestamp,
+    workspace_id: &'a WorkspaceId,
+    #[serde(flatten)]
+    pairing: &'a LazyAgentPairingDiagnostic,
+}
+
 /// Fold the enrichments onto a base snapshot — one ordered spine for the
 /// producer and every consumer, so the two paths can never drift. `frame` is
 /// the live pane frame (panes plus the `produced_at_ms` read stamp): the
@@ -261,6 +271,7 @@ pub fn enrich(
     exclude: Option<&PaneId>,
     mut mode: EnrichMode<'_>,
 ) -> SidebarSnapshot {
+    let producing = matches!(mode, EnrichMode::Producing { .. });
     // The room's group roots — a repo room's worktree checkouts (so one parked
     // outside the project root still earns its own pod instead of folding into
     // `external`), a directory room's depth-1 child repos. The producer passes
@@ -312,7 +323,7 @@ pub fn enrich(
     // daemon process or an untrusted loaded list keeps every session — and run
     // before the pane fold so a ghost can neither render nor bind its stale
     // stats to a live pane.
-    if matches!(mode, EnrichMode::Producing { .. })
+    if producing
         && snapshot.agents.iter().any(|agent| {
             agent.kind == "codex" && agent.pane.is_none() && agent.parent_agent_id.is_none()
         })
@@ -331,6 +342,12 @@ pub fn enrich(
         }
         let metrics = frame.pane_metrics().collect::<Vec<_>>();
         let panes = frame.to_pane_refs();
+        let admitted_panes = SidebarSnapshot::card_admitted_live_panes(panes.clone(), exclude);
+        let lazy_pairings =
+            crate::ledger::snapshot::compute_lazy_agent_pairings(&admitted_panes, &snapshot.agents);
+        if producing {
+            log_lazy_pairing_ambiguities(&snapshot, runtime, &lazy_pairings);
+        }
         // Recomputed from the full pane list (pre-exclusion), before
         // `with_live_panes` consumes `panes` — never trusted from the base,
         // for producer/consumer symmetry. The panes arrive with their
@@ -338,7 +355,7 @@ pub fn enrich(
         // (`produce` stamps before the publish), so the cwd-fallback guard
         // fires identically on every path.
         snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
-        snapshot = snapshot.with_live_panes(panes, exclude);
+        snapshot = snapshot.with_admitted_live_panes(admitted_panes, &lazy_pairings);
         apply_pane_metrics(&mut snapshot, metrics);
     }
     snapshot.agent_hooks_ready = agent_hooks_ready();
@@ -386,6 +403,24 @@ pub fn enrich(
     // walk's TTL.
     apply_live_today_spend(&mut snapshot, &spending_cache);
     snapshot
+}
+
+fn log_lazy_pairing_ambiguities(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    lazy_pairings: &LazyAgentPairingResult,
+) {
+    for pairing in lazy_pairings.diagnostics() {
+        crate::binding_log::append(
+            runtime,
+            &ProducerBindingFallbackLog {
+                event: "producer_lazy_agent_pairing",
+                at: Timestamp::now(),
+                workspace_id: &snapshot.workspace_id,
+                pairing,
+            },
+        );
+    }
 }
 
 fn apply_pane_metrics(snapshot: &mut SidebarSnapshot, metrics: Vec<(PaneId, PaneMetrics)>) {

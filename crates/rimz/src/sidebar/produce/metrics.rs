@@ -152,18 +152,7 @@ pub(super) fn enrich_pane_metrics(
     // a walk-free tick reads each shell's direct children file instead.
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     if needs_walk {
-        let all_procs = crate::proc::list_processes();
-        for p in &all_procs {
-            children.entry(p.ppid).or_default().push(p.pid);
-        }
-        backfill_zellij_pane_pids(
-            frame,
-            &all_procs,
-            &children,
-            session_name,
-            crate::proc::own_uid(),
-            &|pid| crate::proc::cwd(pid),
-        );
+        children = backfill_zellij_pane_pids_from_proc(frame, session_name);
     }
 
     let clk_tck = crate::proc::clk_tck() as f64;
@@ -368,6 +357,26 @@ fn apply_cached_entry(pane: &mut PaneState, entry: &MetricsSampleEntry) {
     pane.metrics.process_state = entry.process_state;
 }
 
+pub(super) fn backfill_zellij_pane_pids_from_proc(
+    frame: &mut PaneFrame,
+    session_name: &str,
+) -> HashMap<u32, Vec<u32>> {
+    let all_procs = crate::proc::list_processes();
+    let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+    for p in &all_procs {
+        children.entry(p.ppid).or_default().push(p.pid);
+    }
+    backfill_zellij_pane_pids(
+        frame,
+        &all_procs,
+        &children,
+        session_name,
+        crate::proc::own_uid(),
+        &|pid| crate::proc::cwd(pid),
+    );
+    children
+}
+
 fn process_state_from_stat(current: Option<char>, prior: Option<char>) -> Option<ProcessState> {
     match current {
         Some('Z') => Some(ProcessState::Stuck),
@@ -464,6 +473,10 @@ fn backfill_zellij_pane_pids(
     };
     let forest = descendants(children, server_pid);
     let parent_of: HashMap<u32, u32> = procs.iter().map(|p| (p.pid, p.ppid)).collect();
+    let mut claimed_roots: HashSet<u32> = frame
+        .pane_states()
+        .filter_map(|pane| pane.current.pid)
+        .collect();
     for pane in frame.pane_states_mut() {
         if pane.current.pid.is_some() {
             continue;
@@ -474,32 +487,51 @@ fn backfill_zellij_pane_pids(
         if command == crate::mux::zellij::SIDEBAR_PANE_NAME {
             continue;
         }
-        let candidates: Vec<u32> = procs
+        let candidates: Vec<(u32, u32)> = procs
             .iter()
             .filter(|p| forest.contains(&p.pid) && p.cmdline == command)
-            .map(|p| p.pid)
+            .filter_map(|p| {
+                walk_to_server_child(&parent_of, server_pid, p.pid)
+                    .filter(|root| !claimed_roots.contains(root))
+                    .map(|root| (p.pid, root))
+            })
             .collect();
-        let matched = match candidates.as_slice() {
-            &[only] => Some(only),
-            &[] => None,
-            many => {
-                let narrowed: Vec<u32> = match pane.current.cwd.as_deref() {
-                    Some(cwd) => many
-                        .iter()
-                        .copied()
-                        .filter(|&pid| proc_cwd(pid).as_deref() == Some(Path::new(cwd)))
-                        .collect(),
-                    None => Vec::new(),
-                };
-                match narrowed.as_slice() {
-                    &[only] => Some(only),
-                    _ => None,
-                }
+        let roots = unique_candidate_roots(&candidates);
+        let matched = if roots.len() == 1 {
+            Some(roots[0])
+        } else if roots.is_empty() {
+            None
+        } else {
+            let narrowed: Vec<(u32, u32)> = match pane.current.cwd.as_deref() {
+                Some(cwd) => candidates
+                    .iter()
+                    .copied()
+                    .filter(|&(pid, _)| proc_cwd(pid).as_deref() == Some(Path::new(cwd)))
+                    .collect(),
+                None => Vec::new(),
+            };
+            let narrowed_roots = unique_candidate_roots(&narrowed);
+            if narrowed_roots.len() == 1 {
+                Some(narrowed_roots[0])
+            } else {
+                None
             }
         };
-        pane.current.pid =
-            matched.and_then(|pid| walk_to_server_child(&parent_of, server_pid, pid));
+        if let Some(root) = matched {
+            pane.current.pid = Some(root);
+            claimed_roots.insert(root);
+        }
     }
+}
+
+fn unique_candidate_roots(candidates: &[(u32, u32)]) -> Vec<u32> {
+    let mut roots = Vec::new();
+    for (_, root) in candidates {
+        if !roots.iter().any(|known| known == root) {
+            roots.push(*root);
+        }
+    }
+    roots
 }
 
 /// The pid of the session's Zellij server: the same-uid process whose cmdline

@@ -40,6 +40,7 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
         cwd: Some(cwd.display().to_string()),
         pane_pid: None,
         pane_process_start: None,
+        resumed_session_id: None,
     }
 }
 
@@ -465,12 +466,7 @@ impl Env {
     }
 
     pub fn snapshot_json_with_panes(&self, panes: &[PaneRef]) -> Value {
-        std::fs::create_dir_all(&self.runtime_root).expect("mkdir runtime root");
-        let path = self.runtime_root.join("snapshot-panes.json");
-        let tmp = self.runtime_root.join("snapshot-panes.json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec_pretty(panes).expect("pane json"))
-            .expect("write pane fixture temp");
-        std::fs::rename(&tmp, &path).expect("publish pane fixture");
+        let path = self.write_pane_fixture(panes);
         let out = self
             .rimz()
             .args([
@@ -493,6 +489,16 @@ impl Env {
             String::from_utf8_lossy(&out.stderr)
         );
         serde_json::from_slice(&out.stdout).expect("snapshot json")
+    }
+
+    pub fn write_pane_fixture(&self, panes: &[PaneRef]) -> PathBuf {
+        std::fs::create_dir_all(&self.runtime_root).expect("mkdir runtime root");
+        let path = self.runtime_root.join("snapshot-panes.json");
+        let tmp = self.runtime_root.join("snapshot-panes.json.tmp");
+        std::fs::write(&tmp, serde_json::to_vec_pretty(panes).expect("pane json"))
+            .expect("write pane fixture temp");
+        std::fs::rename(&tmp, &path).expect("publish pane fixture");
+        path
     }
 
     // --- polling ---

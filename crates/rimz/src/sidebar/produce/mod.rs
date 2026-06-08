@@ -121,6 +121,15 @@ pub fn pane_fixture_active() -> bool {
     std::env::var_os("RIMZ_TEST_PANE_LIST").is_some_and(|value| !value.is_empty())
 }
 
+pub fn repaired_pane_frame_for_binding(
+    runtime: &RuntimePaths,
+    mux: MuxName,
+    session: &str,
+    command_timeout: std::time::Duration,
+) -> Result<PaneFrame> {
+    panes::repaired_pane_frame_for_binding(runtime, mux, session, command_timeout)
+}
+
 /// The `RIMZ_TEST_PANE_LIST` fixture: a JSON pane list standing in for the
 /// mux. Resolved here, inside the produce entry, so the CLI and the in-process
 /// fetch worker honor it identically — one deterministic seam for the journey
@@ -210,6 +219,7 @@ pub(crate) mod test_support {
             cwd: cwd.map(ToOwned::to_owned),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 }

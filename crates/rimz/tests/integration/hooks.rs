@@ -307,6 +307,110 @@ fn codex_session_start_writes_agent_lifecycle_event() {
 }
 
 #[test]
+fn codex_daemon_routed_lifecycle_hooks_recover_distinct_pane_stamps() {
+    let env = Env::new();
+    let mut left = tmux_pane("%10", "codex", &env.project_root);
+    left.pane_process_start = Some(Timestamp::UNIX_EPOCH);
+    let mut right = tmux_pane("%11", "codex", &env.project_root);
+    right.pane_process_start = Some(Timestamp::UNIX_EPOCH);
+
+    left.is_focused = true;
+    right.is_focused = false;
+    let out = run_codex_daemon_lifecycle_with_panes(
+        &env,
+        "sess-codex-left",
+        &[left.clone(), right.clone()],
+    );
+    assert!(
+        out.status.success(),
+        "first daemon hook stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    left.is_focused = false;
+    right.is_focused = true;
+    let out = run_codex_daemon_lifecycle_with_panes(
+        &env,
+        "sess-codex-right",
+        &[left.clone(), right.clone()],
+    );
+    assert!(
+        out.status.success(),
+        "second daemon hook stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let first_snapshot = env.snapshot_json_with_panes(&[right.clone(), left.clone()]);
+    assert_agent_pane(&first_snapshot, "sess-codex-left", "tmux:%10");
+    assert_agent_pane(&first_snapshot, "sess-codex-right", "tmux:%11");
+
+    left.is_focused = true;
+    right.is_focused = false;
+    let second_snapshot = env.snapshot_json_with_panes(&[left.clone(), right.clone()]);
+    assert_agent_pane(&second_snapshot, "sess-codex-left", "tmux:%10");
+    assert_agent_pane(&second_snapshot, "sess-codex-right", "tmux:%11");
+
+    let log_path = rimz::binding_log::path(&env.runtime_paths());
+    let log = std::fs::read_to_string(&log_path).expect("binding log");
+    let records = log
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).expect("binding log record"))
+        .collect::<Vec<_>>();
+    assert!(
+        records.iter().any(|record| {
+            record["event"] == "hook_focused_pane_recovery"
+                && record["agent_id"] == "sess-codex-left"
+                && record["outcome"]["outcome"] == "selected"
+                && record["outcome"]["pane_id"] == "tmux:%10"
+        }),
+        "left hook recovery record missing:\n{log}"
+    );
+    assert!(
+        records.iter().any(|record| {
+            record["event"] == "hook_focused_pane_recovery"
+                && record["agent_id"] == "sess-codex-right"
+                && record["outcome"]["outcome"] == "selected"
+                && record["outcome"]["pane_id"] == "tmux:%11"
+        }),
+        "right hook recovery record missing:\n{log}"
+    );
+}
+
+fn run_codex_daemon_lifecycle_with_panes(
+    env: &Env,
+    session_id: &str,
+    panes: &[rimz::feed::PaneRef],
+) -> Output {
+    let pane_fixture = env.write_pane_fixture(panes);
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": session_id,
+        "approval_policy": "ask",
+    }))
+    .expect("payload");
+    let mut cmd = env.rimz();
+    cmd.args(["--mux", "tmux", "hooks", "feed", "--source", "codex"])
+        .env("RIMZ_AGENT_PID", std::process::id().to_string())
+        .env("RIMZ_TEST_PANE_LIST", pane_fixture)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    env.spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait daemon hook")
+}
+
+fn assert_agent_pane(snapshot: &Value, agent_id: &str, pane_id: &str) {
+    let agent = snapshot["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .find(|agent| agent["agent_id"] == agent_id)
+        .unwrap_or_else(|| panic!("agent {agent_id} missing from snapshot: {snapshot:#}"));
+    assert_eq!(agent["pane"]["pane_id"], pane_id);
+}
+
+#[test]
 fn codex_install_uninstall_cli_round_trips_into_codex_config() {
     let env = Env::new();
     let codex_config = env.home_root.join(".codex").join("config.toml");

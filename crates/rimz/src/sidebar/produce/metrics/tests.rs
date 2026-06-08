@@ -144,6 +144,26 @@ fn cwd_narrows_same_command_candidates() {
 }
 
 #[test]
+fn claimed_roots_are_eliminated_from_other_pane_candidates() {
+    // One pane's root pid restored from cache leaves the same-cmdline same-cwd
+    // sibling with the remaining root instead of forcing both to abstain.
+    let procs = vec![
+        server(100, SESSION),
+        proc_info(200, 100, "zsh"),
+        proc_info(300, 200, "codex"),
+        proc_info(210, 100, "zsh"),
+        proc_info(310, 210, "codex"),
+    ];
+    let mut known = pane("terminal_1", Some("codex"), Some("/repo"));
+    known.pane_pid = Some(200);
+    let mut panes = vec![known, pane("terminal_2", Some("codex"), Some("/repo"))];
+    backfill(&mut panes, &procs, &[(300, "/repo"), (310, "/repo")]);
+
+    assert_eq!(panes[0].pane_pid, Some(200));
+    assert_eq!(panes[1].pane_pid, Some(210));
+}
+
+#[test]
 fn ambiguous_candidates_abstain() {
     // Two idle `zsh` panes in one cwd are indistinguishable — by cmdline
     // and by cwd — so both stay pidless: no stats beats a stranger's stats.

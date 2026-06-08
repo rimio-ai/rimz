@@ -2222,6 +2222,98 @@ fn paneless_codex_active_after_pane_start_binds() {
 }
 
 #[test]
+fn resumed_codex_pane_binds_the_matching_session_exactly() {
+    let mut old = paneless_codex("sess-old", "/repo/main", 1_000);
+    old.registered_at = Some(ago(1_000));
+    old.last_activity = ago(1_000);
+    let newer = paneless_codex("sess-new", "/repo/main", 2_000).active_ago(-1);
+    let resumed_pane = PaneRef {
+        command: Some("codex resume sess-old".to_owned()),
+        pane_process_start: Some(epoch()),
+        resumed_session_id: Some("sess-old".into()),
+        ..pane("term1", "codex", "/repo/main")
+    };
+
+    let snapshot = room(Vec::new(), vec![newer, old]).with_live_panes(vec![resumed_pane], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "sess-old");
+}
+
+#[test]
+fn resumed_codex_pane_heals_a_stale_existing_stamp() {
+    let mut stale_stamp = pane("term1", "codex", "/repo/main");
+    stale_stamp.pane_process_start = Some(ago(1_000));
+    let mut old = paneless_codex("sess-old", "/repo/main", 1_000);
+    old.registered_at = Some(ago(1_000));
+    old.last_activity = ago(900);
+    old.pane = Some(stale_stamp);
+    let resumed_pane = PaneRef {
+        command: Some("codex".to_owned()),
+        pane_process_start: Some(ago(1)),
+        resumed_session_id: Some("sess-old".into()),
+        ..pane("term1", "codex", "/repo/main")
+    };
+
+    let snapshot = room(Vec::new(), vec![old]).with_live_panes(vec![resumed_pane], None);
+
+    let rows = &snapshot.worktree_groups[0].rows;
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].id, "sess-old");
+    assert_eq!(
+        rows[0].pane.as_ref().unwrap().pane_process_start,
+        Some(ago(1))
+    );
+}
+
+#[test]
+fn paneless_codex_sessions_pair_by_latest_process_start_before_first_event() {
+    let mut older = paneless_codex("sess-old", "/repo/main", 1_000);
+    older.registered_at = Some(ago(3_000));
+    older.last_activity = ago(2_000);
+    let mut newer = paneless_codex("sess-new", "/repo/main", 2_000);
+    newer.registered_at = Some(ago(8));
+    newer.last_activity = ago(1);
+    let old_pane = PaneRef {
+        pane_process_start: Some(ago(3_600)),
+        ..pane("terminal_4", "codex", "/repo/main")
+    };
+    let new_pane = PaneRef {
+        pane_process_start: Some(ago(9)),
+        ..pane("terminal_58", "codex", "/repo/main")
+    };
+
+    for (agents, panes) in [
+        (
+            vec![older.clone(), newer.clone()],
+            vec![old_pane.clone(), new_pane.clone()],
+        ),
+        (vec![newer, older], vec![new_pane, old_pane]),
+    ] {
+        let snapshot = room(Vec::new(), agents).with_live_panes(panes, None);
+        assert_eq!(
+            row(&snapshot, "sess-old")
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .raw(),
+            "terminal_4"
+        );
+        assert_eq!(
+            row(&snapshot, "sess-new")
+                .pane
+                .as_ref()
+                .unwrap()
+                .pane_id
+                .raw(),
+            "terminal_58"
+        );
+    }
+}
+
+#[test]
 fn fresh_codex_pane_with_proc_start_shows_idle_not_ghost() {
     // The ghost-stats regression. A completed daemon-mode Codex session lingers
     // in the rollup — its owner is the shared, still-alive app-server daemon, so

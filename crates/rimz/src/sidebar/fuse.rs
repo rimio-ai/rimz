@@ -78,6 +78,7 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 

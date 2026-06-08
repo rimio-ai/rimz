@@ -13,7 +13,7 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::feed::PaneRef;
-use crate::ids::{MuxName, PaneId, ViewId, ViewKind};
+use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::SidebarOwnView;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -58,6 +58,8 @@ pub struct PaneProcess {
     pub cwd: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resumed_session_id: Option<AgentSessionId>,
 }
 
 /// Producer-sampled resource figures for one pane's foreground process —
@@ -136,6 +138,7 @@ impl PaneFrame {
             cwd: pane.current.cwd.clone(),
             pane_pid: pane.current.pid,
             pane_process_start: pane.current.started_at,
+            resumed_session_id: pane.current.resumed_session_id.clone(),
         }
     }
 }
@@ -185,6 +188,9 @@ impl PaneState {
         }
         if self.current.started_at.is_none() {
             self.current.started_at = prior.current.started_at;
+        }
+        if self.current.resumed_session_id.is_none() {
+            self.current.resumed_session_id = prior.current.resumed_session_id.clone();
         }
     }
 }
@@ -269,6 +275,11 @@ pub fn assemble_frame(
                 );
             }
         }
+        let resumed_session_id = pane.resumed_session_id.or_else(|| {
+            pane.command
+                .as_deref()
+                .and_then(crate::remote_control::codex_resumed_session_id_from_cmdline)
+        });
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,
             current: PaneProcess {
@@ -277,6 +288,7 @@ pub fn assemble_frame(
                 spawn_command: pane.spawn_command,
                 cwd: pane.cwd,
                 started_at: pane.pane_process_start,
+                resumed_session_id,
             },
             previous: None,
             children: Vec::new(),
@@ -322,6 +334,7 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 
@@ -404,6 +417,7 @@ mod tests {
             spawn_command: None,
             cwd: Some("/repo/main".to_owned()),
             started_at: None,
+            resumed_session_id: None,
         });
         let mut fresh = assemble_frame(
             vec![PaneRef {

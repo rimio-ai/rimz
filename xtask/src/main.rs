@@ -1057,7 +1057,10 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
     let path = root.join("crates/rimz/src/sidebar/enrich.rs");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-    let Some(live_fold) = text.find("with_live_panes(") else {
+    let Some(live_fold) = text
+        .find("with_admitted_live_panes(")
+        .or_else(|| text.find("with_live_panes("))
+    else {
         bail!("sidebar enrich spine must fold a live pane frame through with_live_panes");
     };
     let after_live = &text[live_fold..];

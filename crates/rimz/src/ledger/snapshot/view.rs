@@ -11,8 +11,9 @@ use tracing::{debug, warn};
 
 use super::fold::agent_rollup_with_carryover;
 use super::panes::{
-    LazyAgentRow, SidebarOwnView, agent_for_pane, is_daemon_mode_codex, lazy_agent_for_pane,
-    pane_admits_card, pane_start_matches, row_from_frame_pane,
+    LazyAgentPairingResult, LazyAgentRow, SidebarOwnView, agent_for_pane,
+    compute_lazy_agent_pairings, is_daemon_mode_codex, lazy_agent_for_pane, pane_admits_card,
+    pane_start_matches, row_from_frame_pane,
 };
 use super::process::{pane_command_is_known, row_from_process};
 use super::row::{AgentCard, RowCard, SidebarResolverState, SidebarRow, SidebarSubAgent};
@@ -655,18 +656,46 @@ impl SidebarSnapshot {
     /// pure: callers own pane discovery and pass the result in, so snapshot
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
-        let panes = panes
+        let panes = Self::card_admitted_live_panes(panes, exclude);
+        self.fold_admitted_live_panes(&panes, None);
+        self
+    }
+
+    pub(crate) fn card_admitted_live_panes(
+        panes: Vec<PaneRef>,
+        exclude: Option<&PaneId>,
+    ) -> Vec<PaneRef> {
+        panes
             .into_iter()
             .filter(|pane| pane_admits_card(pane, exclude).admits())
-            .collect::<Vec<_>>();
+            .collect()
+    }
+
+    pub(crate) fn with_admitted_live_panes(
+        mut self,
+        panes: Vec<PaneRef>,
+        lazy_pairings: &LazyAgentPairingResult,
+    ) -> Self {
+        self.fold_admitted_live_panes(&panes, Some(lazy_pairings));
+        self
+    }
+
+    fn fold_admitted_live_panes(
+        &mut self,
+        panes: &[PaneRef],
+        lazy_pairings: Option<&LazyAgentPairingResult>,
+    ) {
         self.worktree_groups = build_worktree_groups_from_rows(
             rows_from_panes(
                 &self.agents,
                 &self.needs_attention,
                 &self.resolver_working,
-                &panes,
-                &self.wired_lazy_kinds,
-                &self.lazy_agent_default_models,
+                panes,
+                LazyAgentPaneProjection {
+                    wired_kinds: &self.wired_lazy_kinds,
+                    default_models: &self.lazy_agent_default_models,
+                    pairings: lazy_pairings,
+                },
                 self.now,
             ),
             &self.agents,
@@ -675,7 +704,6 @@ impl SidebarSnapshot {
             self.root_class,
             self.now,
         );
-        self
     }
 
     pub(crate) fn remove_pane_rows(&mut self, pane_id: &PaneId) -> bool {
@@ -1184,18 +1212,30 @@ fn agent_hook_session_stale(item: &FeedItem, agents: &[AgentState]) -> bool {
 /// folds onto that row, and only an agent-less pane renders the bare ask card.
 /// `wired_lazy_kinds` gates the idle-instance synthesis (see
 /// `lazy_agent_for_pane`).
+struct LazyAgentPaneProjection<'a> {
+    wired_kinds: &'a [String],
+    default_models: &'a BTreeMap<String, String>,
+    pairings: Option<&'a LazyAgentPairingResult>,
+}
+
 fn rows_from_panes(
     agents: &[AgentState],
     needs_attention: &[FeedItem],
     resolver_working: &[FeedItem],
     panes: &[PaneRef],
-    wired_lazy_kinds: &[String],
-    lazy_agent_default_models: &BTreeMap<String, String>,
+    lazy_agents: LazyAgentPaneProjection<'_>,
     now: Timestamp,
 ) -> Vec<SidebarRow> {
     let mut rows = Vec::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
     let standalone_items = standalone_items_by_pane(needs_attention, resolver_working, panes);
+    let computed_pairings;
+    let lazy_pairings = if let Some(pairings) = lazy_agents.pairings {
+        pairings
+    } else {
+        computed_pairings = compute_lazy_agent_pairings(panes, agents);
+        &computed_pairings
+    };
 
     for pane in panes {
         let standalone_ask = standalone_items.get(&pane.pane_id).copied();
@@ -1211,9 +1251,10 @@ fn rows_from_panes(
         } else if let Some(bind) = lazy_agent_for_pane(
             pane,
             agents,
+            lazy_pairings,
             &bound_agents,
-            wired_lazy_kinds,
-            lazy_agent_default_models,
+            lazy_agents.wired_kinds,
+            lazy_agents.default_models,
             now,
         ) {
             // The lazy-agent relaxation of stamped-id binding. A lazy-registering

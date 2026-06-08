@@ -38,7 +38,7 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   snapshot.json  pane-topology.json  presence.stamp    runtime caches
   diff-stats.json  accounts.json   (inventory in docs/internals/state.md)
   provider-spending.json  pricing-cache.json
-  metrics-sample.json  rate_limits.json
+  metrics-sample.json  rate_limits.json  binding.log.jsonl
   agent_context/  subagent_context/  agent-activity/   per-session sidecars
 ```
 

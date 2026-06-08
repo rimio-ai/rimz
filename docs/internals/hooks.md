@@ -38,7 +38,7 @@ Blocking decision hooks must be **sync**. Installing one as async is a hard erro
 
 This is the canonical statement of the rule the rest of the docs link to. A hook's stdout carries exactly one thing: the agent-native decision JSON, printed only when a resolver answers on the bridge. The neutral path prints nothing and exits 0 — the agent's own UI takes over. It follows that:
 
-- **Logs never go to stdout.** They go to stderr or Rimz state logs (the `print_stdout` lint gates this — see [rust-conventions.md](../contributing/rust-conventions.md)).
+- **Logs never go to stdout.** They go to stderr or Rimz runtime state logs such as `binding.log.jsonl` (the `print_stdout` lint gates this — see [rust-conventions.md](../contributing/rust-conventions.md)).
 - **Hook helper children get fresh, fully-piped stdio — never inherited.** A wrapped statusline command's stderr, a notification helper's chatter, must never leak onto the decision channel. A CI grep rejects `Stdio::inherit` in hook paths.
 - **Every neutral and decision shape is golden-tested**, including the neutral no-op (see [Adding an agent](#adding-an-agent)).
 
@@ -48,7 +48,7 @@ A hook resolves its workspace as a **participant** ([`WorkspaceResolver::resolve
 
 A **daemon-routed** hook (Codex's, fired from the shared per-user app-server — see [Appendix Codex](#appendix--codex)) inherits its daemon's environment, not the pane's, so the env pin never reaches it. `rimz hooks feed` recovers the pin from the sibling agent process instead ([`WorkspaceResolver::resolve_participant_with_pin_recovery`](../../crates/rimz/src/workspace.rs)): the daemon spawns hooks with the session cwd, so the in-pane agent process sharing that cwd carries the pane's pin in `/proc/<pid>/environ`. Each candidate is verified like the env pin and adopted only when every candidate names one root; an empty or split scan — and any non-Linux host — degrades to the static ladder. The full order: `--root`, env pin, recovered sibling pin, static ladder.
 
-Session-to-pane binding diagnostics use the `rimz::agent::binding` tracing target: exhausted daemon focus recovery and non-start events creating unseen sessions warn to the state log (per-candidate stamp filtering traces at debug), while hook stdout stays reserved for the decision channel.
+Session-to-pane binding diagnostics use the `rimz::agent::binding` tracing target and the workspace runtime `binding.log.jsonl`: exhausted daemon focus recovery and non-start events creating unseen sessions warn to the log stream, while each recovery attempt appends its probes, candidates, reject reasons, and outcome to the JSONL file. Hook stdout stays reserved for the decision channel.
 
 ## From native event to internals
 

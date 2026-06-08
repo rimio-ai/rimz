@@ -47,7 +47,7 @@ Detail in [resolvers.md](../internals/resolvers.md).
 The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [hooks.md](../internals/hooks.md#hook-stdout-is-the-decision-channel).
 
 - Hook stdout is reserved for the agent's decision channel.
-- Logs go to stderr or Rimz state logs.
+- Logs go to stderr or Rimz runtime state logs such as `binding.log.jsonl`.
 - Notification helpers do not run inside the blocking hook process.
 - Hook child processes must not inherit stdout. CI grep enforces this.
 - Every neutral and decision payload is golden-tested.

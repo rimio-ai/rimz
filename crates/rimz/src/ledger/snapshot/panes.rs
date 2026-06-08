@@ -1,7 +1,8 @@
 //! Pane binding: which ledger agent owns which live pane, the own-view
 //! projection, and the daemon-view predicates.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -144,7 +145,7 @@ pub(super) fn agent_for_pane<'a>(
 }
 
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {
-    if stamped.pane_id != pane.pane_id || !pane_start_matches(stamped, pane) {
+    if stamped.pane_id != pane.pane_id || !pane_start_matches_agent_stamp(stamped, pane) {
         return false;
     }
     let Some(descriptor) = crate::agents::descriptor_by_kind(agent.kind.as_str()) else {
@@ -202,19 +203,22 @@ pub(super) enum LazyAgentRow<'a> {
 pub(super) fn lazy_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
+    pairings: &LazyAgentPairingResult,
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
     wired_lazy_kinds: &[String],
     lazy_agent_default_models: &BTreeMap<String, String>,
     now: Timestamp,
 ) -> Option<LazyAgentRow<'a>> {
     let (kind, descriptor, cwd) = lazy_agent_pane_identity(pane)?;
-    if let Some(agent) = agents
-        .iter()
-        .filter(|agent| agent.pane.is_none() && agent.kind == kind)
-        .filter(|agent| agent.worktree_path.as_deref() == Some(cwd))
-        .filter(|agent| pane_start_allows_bind(agent.last_activity, pane))
-        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
-        .max_by_key(|agent| agent.last_activity)
+    if let Some(agent) = pairings
+        .pairings
+        .get(&pane.pane_id)
+        .and_then(|agent_index| agents.get(*agent_index))
+        .filter(|agent| {
+            !bound.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                && agent.kind == kind
+                && agent.worktree_path.as_deref() == Some(cwd)
+        })
     {
         return Some(LazyAgentRow::Agent(agent));
     }
@@ -230,6 +234,206 @@ pub(super) fn lazy_agent_for_pane<'a>(
             now,
         )))
     })
+}
+
+#[cfg(test)]
+fn lazy_agent_pairing_diagnostics(
+    panes: &[PaneRef],
+    agents: &[AgentState],
+) -> Vec<LazyAgentPairingDiagnostic> {
+    compute_lazy_agent_pairings(panes, agents).diagnostics
+}
+
+pub(crate) struct LazyAgentPairingResult {
+    pairings: HashMap<PaneId, usize>,
+    diagnostics: Vec<LazyAgentPairingDiagnostic>,
+}
+
+impl LazyAgentPairingResult {
+    pub(crate) fn diagnostics(&self) -> &[LazyAgentPairingDiagnostic] {
+        &self.diagnostics
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LazyAgentPairingDiagnostic {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub worktree_path: String,
+    pub session_registered_at: Option<Timestamp>,
+    pub session_last_activity: Timestamp,
+    pub selected_pane: PaneId,
+    pub selected_pane_process_start: Option<Timestamp>,
+    pub method: LazyAgentPairingMethod,
+    pub candidates: Vec<LazyAgentPairingCandidateDiagnostic>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct LazyAgentPairingCandidateDiagnostic {
+    pub pane_id: PaneId,
+    pub pane_process_start: Option<Timestamp>,
+    pub resumed_session_id: Option<AgentSessionId>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LazyAgentPairingMethod {
+    StartProximity,
+    DeterministicFallback,
+}
+
+pub(crate) fn compute_lazy_agent_pairings(
+    panes: &[PaneRef],
+    agents: &[AgentState],
+) -> LazyAgentPairingResult {
+    let stamped_bound = BTreeSet::new();
+    let mut live_stamped_agents = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for pane in panes {
+        if let Some(agent) = agent_for_pane(pane, agents, &stamped_bound) {
+            live_stamped_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+            continue;
+        }
+        let Some((kind, _, cwd)) = lazy_agent_pane_identity(pane) else {
+            continue;
+        };
+        candidates.push(LazyPaneCandidate { pane, kind, cwd });
+    }
+    candidates.sort_by(|left, right| {
+        left.pane
+            .pane_process_start
+            .cmp(&right.pane.pane_process_start)
+            .then_with(|| {
+                left.pane
+                    .pane_id
+                    .to_string()
+                    .cmp(&right.pane.pane_id.to_string())
+            })
+    });
+
+    let mut pairings: HashMap<PaneId, usize> = HashMap::new();
+    let mut diagnostics = Vec::new();
+    let mut used_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
+    let mut used_panes: HashSet<PaneId> = HashSet::new();
+
+    for candidate in &candidates {
+        let Some(resumed) = candidate.pane.resumed_session_id.as_ref() else {
+            continue;
+        };
+        let Some((agent_index, agent)) = agents.iter().enumerate().find(|(_, agent)| {
+            agent.parent_agent_id.is_none()
+                && agent.kind == candidate.kind
+                && agent.agent_id == *resumed
+                && agent.worktree_path.as_deref() == Some(candidate.cwd)
+                && !live_stamped_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+                && !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+        }) else {
+            continue;
+        };
+        pairings.insert(candidate.pane.pane_id.clone(), agent_index);
+        used_panes.insert(candidate.pane.pane_id.clone());
+        used_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+    }
+
+    let mut sessions = agents
+        .iter()
+        .enumerate()
+        .filter(|(_, agent)| agent.pane.is_none())
+        .filter(|(_, agent)| agent.parent_agent_id.is_none())
+        .filter(|(_, agent)| !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+        .filter(|(_, agent)| {
+            candidates.iter().any(|candidate| {
+                agent.kind == candidate.kind
+                    && agent.worktree_path.as_deref() == Some(candidate.cwd)
+            })
+        })
+        .collect::<Vec<_>>();
+    sessions.sort_by(|left, right| {
+        right
+            .1
+            .last_activity
+            .cmp(&left.1.last_activity)
+            .then(left.1.agent_id.cmp(&right.1.agent_id))
+    });
+
+    for (agent_index, agent) in sessions {
+        let first_event = agent.registered_at.unwrap_or(agent.last_activity);
+        let viable = candidates
+            .iter()
+            .filter(|candidate| !used_panes.contains(&candidate.pane.pane_id))
+            .filter(|candidate| agent.kind == candidate.kind)
+            .filter(|candidate| agent.worktree_path.as_deref() == Some(candidate.cwd))
+            .collect::<Vec<_>>();
+        let selected = viable
+            .iter()
+            .copied()
+            .filter(|candidate| {
+                candidate
+                    .pane
+                    .pane_process_start
+                    .is_some_and(|start| start <= first_event)
+            })
+            .max_by_key(|candidate| {
+                (
+                    candidate.pane.pane_process_start,
+                    Reverse(candidate.pane.pane_id.to_string()),
+                )
+            })
+            .map(|candidate| (candidate, LazyAgentPairingMethod::StartProximity))
+            .or_else(|| {
+                viable
+                    .first()
+                    .copied()
+                    .filter(|candidate| pane_start_allows_bind(agent.last_activity, candidate.pane))
+                    .map(|candidate| (candidate, LazyAgentPairingMethod::DeterministicFallback))
+            });
+        if let Some((candidate, method)) = selected {
+            if viable.len() > 1 {
+                diagnostics.push(lazy_pairing_diagnostic(agent, candidate, method, &viable));
+            }
+            pairings.insert(candidate.pane.pane_id.clone(), agent_index);
+            used_panes.insert(candidate.pane.pane_id.clone());
+            used_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+        }
+    }
+
+    LazyAgentPairingResult {
+        pairings,
+        diagnostics,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct LazyPaneCandidate<'a> {
+    pane: &'a PaneRef,
+    kind: &'static str,
+    cwd: &'a str,
+}
+
+fn lazy_pairing_diagnostic(
+    agent: &AgentState,
+    selected: &LazyPaneCandidate<'_>,
+    method: LazyAgentPairingMethod,
+    viable: &[&LazyPaneCandidate<'_>],
+) -> LazyAgentPairingDiagnostic {
+    LazyAgentPairingDiagnostic {
+        kind: agent.kind.clone(),
+        agent_id: agent.agent_id.clone(),
+        worktree_path: agent.worktree_path.clone().unwrap_or_default(),
+        session_registered_at: agent.registered_at,
+        session_last_activity: agent.last_activity,
+        selected_pane: selected.pane.pane_id.clone(),
+        selected_pane_process_start: selected.pane.pane_process_start,
+        method,
+        candidates: viable
+            .iter()
+            .map(|candidate| LazyAgentPairingCandidateDiagnostic {
+                pane_id: candidate.pane.pane_id.clone(),
+                pane_process_start: candidate.pane.pane_process_start,
+                resumed_session_id: candidate.pane.resumed_session_id.clone(),
+            })
+            .collect(),
+    }
 }
 
 /// The common live-pane identity for lazy-registering agents: foreground command
@@ -258,8 +462,8 @@ fn lazy_agent_pane_identity(
 /// producer supplies the start from `/proc` for backends that report none
 /// natively (Zellij; see [`crate::remote_control::in_pane_agent_start`]), so the
 /// guard fires on both backends. Only a pane with no readable in-pane agent start
-/// — another user's, or an unrecoverable raced read — still falls back to the
-/// stamped pane id or most-recently-active cwd match. Hook ingestion shares this
+/// — another user's, or an unrecoverable raced read — still reaches the resume
+/// and deterministic same-cwd pairing rungs. Hook ingestion shares this
 /// predicate to decide when a prior session's stamp still plausibly owns a pane
 /// (`cli::hooks` focus recovery), so the bind and recovery verdicts can't drift.
 pub fn pane_start_allows_bind(last_activity: Timestamp, pane: &PaneRef) -> bool {
@@ -353,14 +557,23 @@ pub(super) fn pane_start_matches(expected: &PaneRef, actual: &PaneRef) -> bool {
     }
 }
 
+fn pane_start_matches_agent_stamp(expected: &PaneRef, actual: &PaneRef) -> bool {
+    match (expected.pane_process_start, actual.pane_process_start) {
+        (Some(expected), Some(actual)) => expected <= actual,
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
     use super::*;
 
+    use crate::feed::AgentStatus;
     use crate::ids::{MuxName, PaneId};
 
     use crate::ledger::snapshot::SidebarSnapshot;
+    use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago};
 
     /// A pane fixture with an explicit command and optional window name, so a
     /// test can build daemon hosts, sidebars, and working shells across views.
@@ -377,6 +590,7 @@ mod tests {
             cwd: Some("/repo/main".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }
     }
 
@@ -466,6 +680,55 @@ mod tests {
             ..pane_cmd("terminal_1", "tab_0", "zsh", None)
         };
         assert_eq!(pane_admits_card(&unreadable, None), CardAdmission::Admitted);
+    }
+
+    #[test]
+    fn agent_stamp_tolerates_floor_to_exact_start_drift_but_items_do_not() {
+        let floor: Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
+        let exact: Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
+        let stamped = PaneRef {
+            pane_process_start: Some(floor),
+            ..pane_cmd("terminal_1", "tab_0", "codex", None)
+        };
+        let live = PaneRef {
+            pane_process_start: Some(exact),
+            ..pane_cmd("terminal_1", "tab_0", "codex", None)
+        };
+
+        assert!(
+            pane_start_matches_agent_stamp(&stamped, &live),
+            "old floor-era agent stamps still attach to the now-exact live process"
+        );
+        assert!(
+            !pane_start_matches(&stamped, &live),
+            "standalone item pane refs still require exact start identity"
+        );
+    }
+
+    #[test]
+    fn lazy_pairing_diagnostics_record_ambiguous_start_proximity_choice() {
+        let mut newer = agent("codex", "sess-new", AgentStatus::Running, 2_000)
+            .worktree("/repo/main")
+            .active_ago(1);
+        newer.registered_at = Some(ago(8));
+        let old_pane = PaneRef {
+            pane_process_start: Some(ago(3_600)),
+            ..pane_cmd("terminal_4", "tab_0", "codex", None)
+        };
+        let new_pane = PaneRef {
+            pane_process_start: Some(ago(9)),
+            ..pane_cmd("terminal_58", "tab_0", "codex", None)
+        };
+
+        let diagnostics = lazy_agent_pairing_diagnostics(&[old_pane, new_pane], &[newer]);
+
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].method,
+            LazyAgentPairingMethod::StartProximity
+        );
+        assert_eq!(diagnostics[0].selected_pane.raw(), "terminal_58");
+        assert_eq!(diagnostics[0].candidates.len(), 2);
     }
 
     #[test]

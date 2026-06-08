@@ -52,6 +52,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
             cwd: Some(format!("/repo/wt{group}")),
             pane_pid: None,
             pane_process_start: None,
+            resumed_session_id: None,
         }),
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),

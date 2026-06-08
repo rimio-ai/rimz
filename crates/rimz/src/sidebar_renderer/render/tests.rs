@@ -218,6 +218,7 @@ fn pane(raw: &str, command: &str, cwd: &str) -> PaneRef {
         cwd: Some(cwd.to_owned()),
         pane_pid: None,
         pane_process_start: None,
+        resumed_session_id: None,
     }
 }
 

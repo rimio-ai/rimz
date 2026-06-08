@@ -2,12 +2,12 @@
 //! process rotation, and the `/proc` process-start stamp — everything the
 //! producer publishes to `snapshot.json` for consumers to fold in process.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use super::Result;
-use crate::ids::{MuxName, PaneId};
+use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::PaneListOptions;
@@ -50,12 +50,13 @@ fn list_session_panes(
     session: &str,
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
+    command_timeout: Option<Duration>,
 ) -> Result<Vec<crate::feed::PaneRef>> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
         workspace_id: Some(workspace_id),
         min_topology_produced_at_ms,
-        ..Default::default()
+        command_timeout,
     })?)
 }
 
@@ -104,18 +105,22 @@ fn natively_unstamped(frame: &PaneFrame) -> HashSet<PaneId> {
 /// 2. the stamp the frame rotation restored from the prior frame — bridges the
 ///    windows where the binding is missing or its process is gone
 ///    (a fresh-window re-tenancy, an exited pane) without rescanning;
-/// 3. the earliest in-pane agent CLI in the pane's cwd — the warmup path for a
-///    pane no prior frame has stamped and no binding has reached yet.
+/// 3. the only unaccounted in-pane agent CLI in the pane's cwd — the warmup
+///    path for a pane no prior frame has stamped and no binding has reached
+///    yet. Multiple unaccounted starts abstain; duplicating one cwd-level
+///    timestamp onto several panes would erase the ordering signal the bind
+///    guard needs.
 ///
 /// The derivers are injected for tests; production passes
 /// [`crate::remote_control::in_pane_agent_start_for_root`] and
-/// [`crate::remote_control::in_pane_agent_start`].
+/// [`crate::remote_control::in_pane_agent_starts`].
 fn stamp_pane_process_starts(
     frame: &mut PaneFrame,
     unstamped: &HashSet<PaneId>,
     root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
-    cwd_start: &dyn Fn(&str, &str) -> Option<jiff::Timestamp>,
+    cwd_starts: &dyn Fn(&str, &str) -> Vec<jiff::Timestamp>,
 ) {
+    let mut root_stamped = HashSet::new();
     for pane in frame.pane_states_mut() {
         if !unstamped.contains(&pane.pane_id) {
             continue;
@@ -136,15 +141,193 @@ fn stamp_pane_process_starts(
         };
         if let Some(start) = pane.current.pid.and_then(|pid| root_start(kind, pid)) {
             pane.current.started_at = Some(start);
+            root_stamped.insert(pane.pane_id.clone());
             continue;
         }
         if pane.current.started_at.is_some() {
             continue;
         }
-        if let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) {
-            pane.current.started_at = cwd_start(kind, cwd);
+    }
+
+    clear_duplicate_carried_starts(frame, unstamped, &root_stamped);
+
+    let mut unresolved_by_cwd: HashMap<(String, String), Vec<PaneId>> = HashMap::new();
+    let mut accounted_by_cwd: HashMap<(String, String), Vec<jiff::Timestamp>> = HashMap::new();
+    for pane in frame.pane_states() {
+        let Some(kind) = pane
+            .current
+            .command
+            .as_deref()
+            .and_then(crate::ledger::snapshot::command_agent_kind)
+        else {
+            continue;
+        };
+        let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            continue;
+        };
+        let key = (kind.to_owned(), cwd.to_owned());
+        if let Some(start) = pane.current.started_at {
+            accounted_by_cwd.entry(key).or_default().push(start);
+        } else if unstamped.contains(&pane.pane_id) {
+            unresolved_by_cwd
+                .entry(key)
+                .or_default()
+                .push(pane.pane_id.clone());
         }
     }
+
+    let mut exact_assignments: HashMap<PaneId, jiff::Timestamp> = HashMap::new();
+    for ((kind, cwd), pane_ids) in unresolved_by_cwd {
+        if pane_ids.len() != 1 {
+            continue;
+        }
+        let mut unaccounted = cwd_starts(&kind, &cwd)
+            .into_iter()
+            .filter(|start| {
+                !accounted_by_cwd
+                    .get(&(kind.clone(), cwd.clone()))
+                    .is_some_and(|accounted| accounted.iter().any(|known| known == start))
+            })
+            .collect::<Vec<_>>();
+        unaccounted.sort();
+        unaccounted.dedup();
+        if let [start] = unaccounted.as_slice() {
+            exact_assignments.insert(pane_ids[0].clone(), *start);
+        }
+    }
+
+    for pane in frame.pane_states_mut() {
+        if let Some(start) = exact_assignments.get(&pane.pane_id) {
+            pane.current.started_at = Some(*start);
+        }
+    }
+}
+
+fn clear_duplicate_carried_starts(
+    frame: &mut PaneFrame,
+    unstamped: &HashSet<PaneId>,
+    root_stamped: &HashSet<PaneId>,
+) {
+    let mut counts: HashMap<(String, String, jiff::Timestamp), usize> = HashMap::new();
+    for pane in frame.pane_states() {
+        let Some(start) = pane.current.started_at else {
+            continue;
+        };
+        let Some(kind) = pane
+            .current
+            .command
+            .as_deref()
+            .and_then(crate::ledger::snapshot::command_agent_kind)
+        else {
+            continue;
+        };
+        let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            continue;
+        };
+        *counts
+            .entry((kind.to_owned(), cwd.to_owned(), start))
+            .or_default() += 1;
+    }
+
+    for pane in frame.pane_states_mut() {
+        if !unstamped.contains(&pane.pane_id) || root_stamped.contains(&pane.pane_id) {
+            continue;
+        }
+        let Some(start) = pane.current.started_at else {
+            continue;
+        };
+        let Some(kind) = pane
+            .current
+            .command
+            .as_deref()
+            .and_then(crate::ledger::snapshot::command_agent_kind)
+        else {
+            continue;
+        };
+        let Some(cwd) = pane.current.cwd.as_deref().filter(|cwd| !cwd.is_empty()) else {
+            continue;
+        };
+        if counts
+            .get(&(kind.to_owned(), cwd.to_owned(), start))
+            .copied()
+            .unwrap_or_default()
+            > 1
+        {
+            pane.current.started_at = None;
+        }
+    }
+}
+
+fn stamp_pane_resumed_session_ids(
+    frame: &mut PaneFrame,
+    root_resume: &dyn Fn(u32) -> Option<AgentSessionId>,
+) {
+    for pane in frame.pane_states_mut() {
+        if pane.current.resumed_session_id.is_some() {
+            continue;
+        }
+        if pane
+            .current
+            .command
+            .as_deref()
+            .and_then(crate::ledger::snapshot::command_agent_kind)
+            != Some("codex")
+        {
+            continue;
+        }
+        if let Some(resumed) = pane.current.pid.and_then(root_resume) {
+            pane.current.resumed_session_id = Some(resumed);
+        }
+    }
+}
+
+fn repair_pane_frame(
+    frame: &mut PaneFrame,
+    runtime: &crate::RuntimePaths,
+    cache_path: &Path,
+    session: &str,
+    enrich_metrics: bool,
+) {
+    let unstamped = natively_unstamped(frame);
+    rotate_from_cache(frame, cache_path, session);
+    if enrich_metrics {
+        super::metrics::enrich_pane_metrics(frame, session, runtime);
+    } else {
+        super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
+    }
+    backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
+    stamp_pane_resumed_session_ids(
+        frame,
+        &crate::remote_control::codex_resumed_session_id_for_root,
+    );
+    stamp_pane_process_starts(
+        frame,
+        &unstamped,
+        &crate::remote_control::in_pane_agent_start_for_root,
+        &crate::remote_control::in_pane_agent_starts,
+    );
+}
+
+pub fn repaired_pane_frame_for_binding(
+    runtime: &crate::RuntimePaths,
+    mux: MuxName,
+    session: &str,
+    command_timeout: Duration,
+) -> Result<PaneFrame> {
+    let cache_path = runtime.root.join("snapshot.json");
+    let panes = match super::pane_list_fixture()? {
+        Some(fixture) => fixture,
+        None => list_session_panes(
+            mux,
+            session,
+            runtime.workspace_id.clone(),
+            None,
+            Some(command_timeout),
+        )?,
+    };
+    let mut frame = assemble_frame(panes, unix_now_ms(), session.to_owned());
+    repair_pane_frame(&mut frame, runtime, &cache_path, session, false);
+    Ok(frame)
 }
 
 /// Fill a pane's raced-empty cwd from `/proc/<pane_pid>/cwd` once the root pid
@@ -233,6 +416,7 @@ pub(super) fn cached_panes_or_produce(
                 session,
                 runtime.workspace_id.clone(),
                 min_pane_cache_ms,
+                None,
             )?,
             unix_now_ms(),
             session.to_owned(),
@@ -250,49 +434,18 @@ pub(super) fn cached_panes_or_produce(
         // on this one path folds the anonymous row the winner path guards against.
         Coalesced::ProduceLocal => {
             let mut frame = produce_local()?;
-            let unstamped = natively_unstamped(&frame);
-            rotate_from_cache(&mut frame, &cache_path, session);
-            // Repair a raced-empty cwd from the pane root before this local
-            // frame folds, covering tmux's native pane pid path.
-            backfill_pane_cwds(&mut frame, &|pid| crate::proc::cwd(pid));
-            // This unpublished fallback frame feeds its own fold directly, so it
-            // needs the stamp the cwd-fallback guard reads just like a published one.
-            stamp_pane_process_starts(
-                &mut frame,
-                &unstamped,
-                &crate::remote_control::in_pane_agent_start_for_root,
-                &crate::remote_control::in_pane_agent_start,
-            );
+            repair_pane_frame(&mut frame, runtime, &cache_path, session, false);
             Ok(frame)
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let mut frame = produce_local()?;
-            let unstamped = natively_unstamped(&frame);
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
-            // row that blinks out next tick, backfill the missing fields from
-            // the last good read of the same pane id.
-            rotate_from_cache(&mut frame, &cache_path, session);
-            // Enrich each pane with per-process resource metrics (best-effort,
-            // Linux-only). Runs inside the produce lock so only one producer
-            // reads `/proc` per tick; the result is in the published pane cache,
-            // so consumer tabs never fork their own reads.
-            super::metrics::enrich_pane_metrics(&mut frame, session, runtime);
-            // Metrics may bind a Zellij pane to its root pid; use that live
-            // pid to repair a raced-empty cwd before publishing the frame.
-            backfill_pane_cwds(&mut frame, &|pid| crate::proc::cwd(pid));
-            // Stamp the in-pane agent process starts before the publish — after
-            // the enrich, whose pane→root-pid bindings the stamp's first rung
-            // rides — so the cache carries them to every reader: the in-process
-            // produce and the consumer in-process fold alike.
-            stamp_pane_process_starts(
-                &mut frame,
-                &unstamped,
-                &crate::remote_control::in_pane_agent_start_for_root,
-                &crate::remote_control::in_pane_agent_start,
-            );
+            // row that blinks out next tick, run the shared repaired-frame
+            // ladder before publishing.
+            repair_pane_frame(&mut frame, runtime, &cache_path, session, true);
             publish_frame(runtime, &cache_path, &frame);
             Ok(frame)
         }
