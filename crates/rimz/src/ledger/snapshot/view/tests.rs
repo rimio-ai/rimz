@@ -3192,9 +3192,116 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
     let after_stop = reduce_agent_states(&[prompt, compact, stop]);
     assert!(
         after_stop[0].compacting_since.is_none(),
-        "the next lifecycle event clears the marker"
+        "a later lifecycle event clears a missed terminator"
     );
     assert_eq!(after_stop[0].status, AgentStatus::Success);
+}
+
+#[test]
+fn compacting_head_clears_on_post_compact() {
+    let ws = workspace();
+    let prompt = lifecycle_at(
+        &ws,
+        "codex",
+        "UserPromptSubmit",
+        "sess-1",
+        LifecycleSignal::TurnStarted,
+    );
+    let compact = lifecycle_at(
+        &ws,
+        "codex",
+        "PreCompact",
+        "sess-1",
+        LifecycleSignal::Compacting,
+    );
+    let post = lifecycle_at(
+        &ws,
+        "codex",
+        "PostCompact",
+        "sess-1",
+        LifecycleSignal::CompactionEnded { auto: Some(true) },
+    );
+
+    let after_post = reduce_agent_states(&[prompt, compact, post]);
+    assert!(
+        after_post[0].compacting_since.is_none(),
+        "the explicit trailing hook clears the marker"
+    );
+    let snapshot = room_with_agent_panes(Vec::new(), after_post);
+    assert!(
+        !row(&snapshot, "sess-1").compacting(),
+        "projection has no head left to paint"
+    );
+}
+
+#[test]
+fn compaction_end_stays_orthogonal_to_display_status() {
+    let ws = workspace();
+    let auto = reduce_agent_states(&[
+        lifecycle_at(
+            &ws,
+            "codex",
+            "UserPromptSubmit",
+            "auto",
+            LifecycleSignal::TurnStarted,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PreCompact",
+            "auto",
+            LifecycleSignal::Compacting,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PostCompact",
+            "auto",
+            LifecycleSignal::CompactionEnded { auto: Some(true) },
+        ),
+    ])
+    .remove(0)
+    .worktree("/repo/main")
+    .limits(vec![window(100, 3_600)]);
+    let manual = reduce_agent_states(&[
+        lifecycle_at(
+            &ws,
+            "codex",
+            "UserPromptSubmit",
+            "manual",
+            LifecycleSignal::TurnStarted,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PreCompact",
+            "manual",
+            LifecycleSignal::Compacting,
+        ),
+        lifecycle_at(
+            &ws,
+            "codex",
+            "PostCompact",
+            "manual",
+            LifecycleSignal::CompactionEnded { auto: Some(false) },
+        ),
+    ])
+    .remove(0)
+    .worktree("/repo/main")
+    .active_ago(crate::feed::STALL_WINDOW_SECS + 10);
+
+    let snapshot = room_with_agent_panes(Vec::new(), vec![auto]);
+    assert_eq!(
+        row(&snapshot, "auto").status(),
+        Some(AgentStatus::RateLimited),
+        "spent-account projection still parks an auto-resumed row"
+    );
+    let snapshot = room_with_agent_panes(Vec::new(), vec![manual]);
+    assert_eq!(
+        row(&snapshot, "manual").status(),
+        Some(AgentStatus::Idle),
+        "manual compaction rests the row, so it is stall-exempt"
+    );
 }
 
 // ── The daemon-session reap (Codex app-server loaded-thread set) ─────────────

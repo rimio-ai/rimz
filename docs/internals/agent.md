@@ -36,7 +36,7 @@ So the binding test is one question: does a live local pane bind the session? A 
 
 [`AgentLifecycleObservation`](../../crates/rimz/src/agents/mod.rs) and [`AgentState`](../../crates/rimz/src/feed.rs) are the field catalog; the lifetimes above are the rule those types do not state.
 
-A compaction hook (`compacting: true`) is a fifth, transient lifetime: it stamps `compacting_since` and keeps the prior status (compaction is a head the sidebar paints, not a transition), and the next lifecycle event clears it. The projection also expires the marker past a short window, so a crash mid-compact can never pulse the head forever.
+A compaction bracket is a fifth, transient lifetime: the leading hook (`PreCompact`, Pi `session_before_compact`) stamps `compacting_since` and keeps the prior status (compaction is a head the sidebar paints, not a transition), then the trailing hook (`PostCompact`, Pi `session_compact`) clears it. A trailing hook with a known automatic trigger returns to `running` and carries the interrupted turn phase, because automatic compaction happens mid-turn; a known manual trigger returns to `idle`, because `/compact` runs between turns. A provider that emits no trigger bit clears the head and preserves the prior status and phase. The projection also expires the marker past a short window, so a crash mid-compact or a missed trailing hook can never pulse the head forever.
 
 The **thinking head** is the second transient: a turn (or subagent) start sets `thinking`, the turn's first *file-editing* tool (`ToolUsed { edits: true }`) or any turn boundary clears it, and compaction carries it forward like it carries the status. While `running` with the head set, the sidebar paints the thinking sparkle instead of the working spinner — the turn is reasoning and reading, not yet writing. A shell command is work (it keeps the row live) but writes no file, so it leaves the head in place. No expiry window is needed: a turn that goes silent escalates through the stall projection regardless of its phase.
 
@@ -67,7 +67,10 @@ The glyph, animation, and color for each are the canonical table in [the interfa
                           │   subagent stopped errored ──► failed     │
                           │   tool used (mutating) ──► running        │
                           └──────────────────────────────────────────┘
-   compacting : prior status held, compacting head stamped (cleared by next signal)
+   compacting started : prior status held, compacting head stamped
+   compaction ended (auto) : running, prior phase carried, compacting head cleared
+   compaction ended (manual) : idle, compacting head cleared
+   compaction ended (trigger unknown) : prior status held, prior phase carried, compacting head cleared
    blocking ask pending while running ──► waiting (feed channel, not lifecycle)
    session ended / pid dead / pane reverted to shell ──► removed (no row)
 ```
@@ -76,7 +79,7 @@ A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bi
 
 `waiting` is **not** a lifecycle transition — it is a pending blocking feed item joined to the agent (the feed channel; see [hooks.md → Two hook channels](./hooks.md#two-hook-channels)). The lifecycle channel drives the other four.
 
-**Extending the signal vocabulary.** A new [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs) variant requires both: (a) a concrete native event on a shipping provider that no existing variant plus enrichment expresses, and (b) a distinct `(status, phase)` edge in `step` — landed with its edge test and the totality test extended. Anything short of both is enrichment on an existing signal, not a new one: Pi's `stopReason: "aborted"` rides `TurnEnded { errored: true }`, queued prompts and external waits have no observable native event, and a `Verifying` phase has no provider that emits one.
+**Extending the signal vocabulary.** A new [`LifecycleSignal`](../../crates/rimz/src/agents/lifecycle.rs) variant requires both: (a) a concrete native event on a shipping provider that no existing variant plus enrichment expresses, and (b) a distinct `(status, phase)` edge in `step` — landed with its edge test and the totality test extended. `CompactionEnded` is the worked example: Claude and Codex emit a concrete `PostCompact` with a manual/auto trigger split, and Pi emits `session_compact` with no trigger bit, so the same signal owns all three edges (`running` with phase carried, `idle`, or prior state carried). Anything short of both is enrichment on an existing signal: Pi's `stopReason: "aborted"` rides `TurnEnded { errored: true }`, queued prompts and external waits have no observable native event, and a `Verifying` phase has no provider that emits one.
 
 **Fail-soft, never silent.** `step` is total: an unexpected `(state, signal)` pair never panics and never freezes. It takes the signal's natural edge — the agent is authoritative about its own activity — and tags the result [`TransitionKind::Reconciled`](../../crates/rimz/src/agents/lifecycle.rs) with the state it overrode and why. The reducer discards the tag (it only wants the next state); the ingestion path ([`cli/hooks.rs`](../../crates/rimz/src/cli/hooks.rs)) logs it once per fresh event under the `rimz::agent::lifecycle` tracing target (`warn!` on a reconciled edge, `debug!` on an ignored no-op, `error!` on a quarantined identity), to stderr — never the hook stdout. So a drift between the model and reality leaves a structured, traceable breadcrumb instead of a wrong-but-quiet row. The headline reconciliation: a **tool observed on a resting row** proves the rollup is stale — the agent is working — so `step` moves it to `running` and logs the edge.
 

@@ -221,6 +221,8 @@ fn trust_codex_hooks(env: &Env) {
         "permission_request",
         "pre_tool_use",
         "post_tool_use",
+        "pre_compact",
+        "post_compact",
     ] {
         text.push_str(&format!(
             "\n[hooks.state.\"{}:{token}:0:0\"]\ntrusted_hash = \"sha256:deadbeef\"\n",

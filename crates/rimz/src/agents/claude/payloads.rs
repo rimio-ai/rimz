@@ -150,10 +150,8 @@ pub struct ClaudePreCompact {
     pub trigger: CompactTrigger,
 }
 
-/// Fires after context compaction completes. Not installed today (Rimz wires
-/// only `PreCompact` to stamp the compacting head), kept parse-ready so the
-/// start/end compaction pair is complete for future wiring. The `trigger` shape
-/// mirrors `PreCompact` and the Codex `PostCompact`, pending upstream field docs.
+/// Fires after context compaction completes. The `trigger` shape mirrors
+/// `PreCompact` and decides whether the row resumes running or rests idle.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct ClaudePostCompact {

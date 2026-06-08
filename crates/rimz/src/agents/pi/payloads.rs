@@ -1,8 +1,8 @@
 //! Typed Pi hook wire structs.
 //!
 //! One tolerant struct covers every event the Rimz extension forwards — the
-//! fields are sparse per event, so a single optional-field shape beats six
-//! near-empty ones. The wire is Rimz-authored ([`extension.ts`](./extension.ts)
+//! fields are sparse per event, so a single optional-field shape beats a set
+//! of near-empty ones. The wire is Rimz-authored ([`extension.ts`](./extension.ts)
 //! flattens pi's in-process payloads to snake_case), so drift is a Rimz bug,
 //! not an upstream one; the upstream shapes are mirrored in
 //! `docs/internals/adapter/pi-reference.md`.

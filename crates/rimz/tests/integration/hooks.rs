@@ -116,6 +116,13 @@ fn assert_permission_allow_decision(source: &str, decision: &Value) {
     }
 }
 
+fn lifecycle_event_count(env: &Env) -> usize {
+    env.read_events()
+        .iter()
+        .filter(|event| event.method == "agent.lifecycle")
+        .count()
+}
+
 fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -549,6 +556,47 @@ fn pi_turn_opens_thinking_until_the_first_file_edit() {
 }
 
 #[test]
+fn pi_compaction_pair_clears_without_forcing_a_trigger_edge() {
+    let env = Env::new();
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("pi", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+    };
+
+    run(&json!({
+        "hook_event_name": "before_agent_start",
+        "session_id": "sess-pi-compact",
+        "prompt": "keep working through compaction",
+    }));
+    run(&json!({
+        "hook_event_name": "tool_execution_end",
+        "session_id": "sess-pi-compact",
+        "tool_name": "edit",
+    }));
+    run(&json!({
+        "hook_event_name": "session_before_compact",
+        "session_id": "sess-pi-compact",
+    }));
+    run(&json!({
+        "hook_event_name": "session_compact",
+        "session_id": "sess-pi-compact",
+    }));
+
+    let parsed = env.snapshot_json();
+    assert_eq!(parsed["agents"][0]["status"], "running");
+    assert_eq!(
+        parsed["agents"][0]["phase"], "acting",
+        "Pi's extension hook does not report manual/auto, so it only clears the head"
+    );
+}
+
+#[test]
 fn pi_install_uninstall_cli_round_trips_into_extension_file() {
     let env = Env::new();
     let extension = env.agent_config_path("pi");
@@ -569,6 +617,7 @@ fn pi_install_uninstall_cli_round_trips_into_extension_file() {
     let events = report["installed_events"].as_array().expect("events");
     let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
     assert!(names.contains(&"session_start"));
+    assert!(names.contains(&"session_compact"));
     assert!(names.contains(&"tool_call"));
 
     let written = std::fs::read_to_string(&extension).expect("read pi extension");
@@ -892,6 +941,91 @@ fn codex_turn_opens_reasoning_until_the_first_file_edit() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
     assert_eq!(parsed["agents"][0]["phase"], "acting");
+}
+
+#[test]
+fn manual_compact_then_pre_tool_use_resumes_running() {
+    let env = Env::new();
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("codex", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+    };
+
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-codex-compact",
+        "prompt": "continue after compact",
+    }));
+    run(&json!({
+        "hook_event_name": "PostCompact",
+        "session_id": "sess-codex-compact",
+        "trigger": "manual",
+    }));
+    let after_manual = env.snapshot_json();
+    assert_eq!(after_manual["agents"][0]["status"], "idle");
+    let before = lifecycle_event_count(&env);
+
+    run(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-codex-compact",
+        "tool_name": "shell",
+    }));
+
+    assert_eq!(
+        lifecycle_event_count(&env),
+        before + 1,
+        "a resting-row PreToolUse reconciliation is persisted"
+    );
+    let resumed = env.snapshot_json();
+    assert_eq!(resumed["agents"][0]["status"], "running");
+}
+
+#[test]
+fn pre_tool_use_on_running_row_appends_nothing() {
+    let env = Env::new();
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("codex", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    };
+
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-codex-pretool-noop",
+        "prompt": "inspect files",
+    }));
+    let before_pre = lifecycle_event_count(&env);
+    run(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-codex-pretool-noop",
+        "tool_name": "shell",
+    }));
+    assert_eq!(
+        lifecycle_event_count(&env),
+        before_pre,
+        "PreToolUse while already running stays out of the event log"
+    );
+
+    run(&json!({
+        "hook_event_name": "PostToolUse",
+        "session_id": "sess-codex-pretool-noop",
+        "tool_name": "read",
+    }));
+    assert_eq!(
+        lifecycle_event_count(&env),
+        before_pre,
+        "a non-mutating PostToolUse never reaches the lifecycle channel"
+    );
 }
 
 // --- Claude PreToolUse blocking events ---

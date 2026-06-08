@@ -1866,8 +1866,9 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
 }
 
 /// Whether the agent is mid-compaction: it stamped `compacting_since` and the
-/// marker is still fresh. The next lifecycle event clears the stamp; this window
-/// is the crash backstop so a missed terminator can't pulse the head forever.
+/// marker is still fresh. The trailing compaction hook clears the stamp; this
+/// window is the crash backstop so a missed terminator can't pulse the head
+/// forever.
 fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
     agent.compacting_since.is_some_and(|since| {
         now.duration_since(since).as_secs() < crate::feed::COMPACTING_WINDOW_SECS

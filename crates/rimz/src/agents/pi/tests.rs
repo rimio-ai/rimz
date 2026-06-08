@@ -228,6 +228,14 @@ fn compaction_and_shutdown_signals() {
         .observe_lifecycle("session_before_compact", &json!({ "session_id": "sess-1" }))
         .expect("observation");
     assert_eq!(compacting.signal, LifecycleSignal::Compacting);
+    let compacted = PiAdapter
+        .observe_lifecycle("session_compact", &json!({ "session_id": "sess-1" }))
+        .expect("observation");
+    assert_eq!(
+        compacted.signal,
+        LifecycleSignal::CompactionEnded { auto: None },
+        "the Pi extension event has no manual/auto bit"
+    );
     let ended = PiAdapter
         .observe_lifecycle("session_shutdown", &json!({ "session_id": "sess-1" }))
         .expect("observation");
@@ -268,6 +276,7 @@ fn progress_events_touch_the_activity_heartbeat() {
     assert!(!descriptor.records_activity("tool_call"));
     assert!(!descriptor.records_activity("session_shutdown"));
     assert!(!descriptor.records_activity("session_before_compact"));
+    assert!(!descriptor.records_activity("session_compact"));
 }
 
 #[test]

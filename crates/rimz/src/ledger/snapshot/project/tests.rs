@@ -80,6 +80,128 @@ fn thinking_phase_follows_the_turn_through_the_reducer() {
 }
 
 #[test]
+fn compaction_ended_clears_compacting_since() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let lifecycle = |params: serde_json::Value| {
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let prompt = lifecycle(serde_json::json!({
+        "event_name": "UserPromptSubmit",
+        "agent_id": "sess-1",
+        "signal": { "signal": "turn_started" },
+    }));
+    let compact = lifecycle(serde_json::json!({
+        "event_name": "PreCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compacting" },
+    }));
+    let post = lifecycle(serde_json::json!({
+        "event_name": "PostCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compaction_ended", "auto": false },
+    }));
+
+    let agents = reduce_agent_states(&[prompt, compact, post]);
+    assert_eq!(agents[0].status, AgentStatus::Idle);
+    assert_eq!(agents[0].phase, TurnPhase::Idle);
+    assert!(
+        agents[0].compacting_since.is_none(),
+        "PostCompact clears the transient marker"
+    );
+}
+
+#[test]
+fn auto_compaction_ended_resumes_running_and_clears_marker() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let lifecycle = |params: serde_json::Value| {
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "codex",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let prompt = lifecycle(serde_json::json!({
+        "event_name": "UserPromptSubmit",
+        "agent_id": "sess-1",
+        "signal": { "signal": "turn_started" },
+    }));
+    let edit = lifecycle(serde_json::json!({
+        "event_name": "PostToolUse",
+        "agent_id": "sess-1",
+        "signal": { "signal": "tool_used", "mutates": true, "edits": true },
+    }));
+    let compact = lifecycle(serde_json::json!({
+        "event_name": "PreCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compacting" },
+    }));
+    let post = lifecycle(serde_json::json!({
+        "event_name": "PostCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compaction_ended", "auto": true },
+    }));
+
+    let agents = reduce_agent_states(&[prompt, edit, compact, post]);
+    assert_eq!(agents[0].status, AgentStatus::Running);
+    assert_eq!(
+        agents[0].phase,
+        TurnPhase::Acting,
+        "auto compaction carries the interrupted turn phase"
+    );
+    assert!(agents[0].compacting_since.is_none());
+}
+
+#[test]
+fn unknown_compaction_end_only_clears_marker() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let lifecycle = |params: serde_json::Value| {
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "pi",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let prompt = lifecycle(serde_json::json!({
+        "event_name": "before_agent_start",
+        "agent_id": "sess-1",
+        "signal": { "signal": "turn_started" },
+    }));
+    let edit = lifecycle(serde_json::json!({
+        "event_name": "tool_execution_end",
+        "agent_id": "sess-1",
+        "signal": { "signal": "tool_used", "mutates": true, "edits": true },
+    }));
+    let compact = lifecycle(serde_json::json!({
+        "event_name": "session_before_compact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compacting" },
+    }));
+    let post = lifecycle(serde_json::json!({
+        "event_name": "session_compact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compaction_ended" },
+    }));
+
+    let agents = reduce_agent_states(&[prompt, edit, compact, post]);
+    assert_eq!(agents[0].status, AgentStatus::Running);
+    assert_eq!(agents[0].phase, TurnPhase::Acting);
+    assert!(agents[0].compacting_since.is_none());
+}
+
+#[test]
 fn subagent_activity_does_not_change_parent_phase() {
     let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
     let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);

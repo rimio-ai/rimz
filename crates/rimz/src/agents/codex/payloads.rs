@@ -3,9 +3,8 @@
 //! **Input** (Deserialize): one struct per event in the installed and catalog
 //! sets. All use `#[serde(default)]` so sparse payloads always deserialize
 //! cleanly. `parse_*` free functions are the entry points called by the adapter.
-//! Silent events (PreToolUse, PostToolUse, PermissionRequest in observe_lifecycle)
-//! and forwarded-compat events (PreCompact, PostCompact) are parsed to keep the
-//! wire surface typed and auditable even when they produce no observation.
+//! Silent events (read-only PostToolUse, PermissionRequest in observe_lifecycle)
+//! and compaction events are parsed to keep the wire surface typed and auditable.
 //!
 //! **Output** (Serialize): the Codex `PermissionRequest` decision shape. Unlike
 //! Claude, Codex's `PermissionRequest` decision carries an optional `message`
@@ -14,10 +13,9 @@
 //!
 //! Like the Claude catalog, this module is the **complete, parse-ready wire
 //! catalog**: every installed and near-term-catalog event (including the
-//! forward-compat compaction pair) has a struct and a `parse_*` entry point,
-//! even where the adapter doesn't consume it yet — an upcoming agent state
-//! machine will wire more events. `#![allow(dead_code)]` keeps that
-//! forward-ready surface from tripping the warnings-as-errors gate.
+//! compaction pair) has a struct and a `parse_*` entry point. `#![allow(dead_code)]`
+//! keeps the full catalog from tripping the warnings-as-errors gate when a typed
+//! payload is present only for audit or future enrichment.
 #![allow(dead_code)]
 
 use serde::{Deserialize, Serialize};
@@ -128,9 +126,8 @@ pub struct CodexStop {
     pub last_assistant_message: Option<String>,
 }
 
-/// Not currently installed (Codex uses `SessionStart(source=compact)` instead
-/// of a dedicated `PreCompact` hook). Struct kept for forward-compat should
-/// Codex add the event.
+/// Fires before conversation compaction. `trigger` distinguishes manual from
+/// automatic compaction.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexPreCompact {
@@ -139,7 +136,7 @@ pub struct CodexPreCompact {
     pub trigger: CompactTrigger,
 }
 
-/// Not currently installed. Struct kept for forward-compat.
+/// Fires after conversation compaction completes.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct CodexPostCompact {

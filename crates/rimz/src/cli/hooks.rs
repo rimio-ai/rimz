@@ -92,7 +92,11 @@ pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
 /// reducer re-derives the same state on replay, silently — this call exists only
 /// to surface a reconciled or ignored transition while we still have the event
 /// in hand to attribute it.
-fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLifecycleObservation) {
+fn log_lifecycle_transition(
+    ledger: &Ledger,
+    kind: &str,
+    observation: &AgentLifecycleObservation,
+) -> Option<lifecycle::Transition> {
     let Some(agent_id) = observation.agent_id.as_deref() else {
         // The reducer quarantines a session-less event (no rollup entry) and
         // stays quiet on replay — this is the once-per-fresh-event warning.
@@ -102,19 +106,28 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
             signal = ?observation.signal,
             "session-less agent.lifecycle event — the reducer will quarantine it",
         );
-        return;
+        return None;
     };
     // The prior state for this one agent, from the lock-free cached snapshot —
     // the projection of every event before this one, exactly the `prev` the
     // reducer folds this event onto.
-    let prev = ledger
-        .snapshot_cached()
-        .ok()
-        .and_then(|snap| {
-            snap.agents
-                .into_iter()
-                .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
-        })
+    let snapshot = match ledger.snapshot_cached() {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind,
+                agent_id,
+                error = %err,
+                "skipped lifecycle transition check because the prior rollup was unreadable",
+            );
+            return None;
+        }
+    };
+    let prev = snapshot
+        .agents
+        .into_iter()
+        .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
         .map(|agent| agent.lifecycle());
     if prev.is_none()
         && !matches!(
@@ -153,6 +166,17 @@ fn log_lifecycle_transition(ledger: &Ledger, kind: &str, observation: &AgentLife
         ),
         TransitionKind::Normal => {}
     }
+    Some(transition)
+}
+
+fn proof_of_work_pre_tool(signal: &LifecycleSignal) -> bool {
+    matches!(
+        signal,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false
+        }
+    )
 }
 
 fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Result<()> {
@@ -238,7 +262,8 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
             // Validate the transition this event drives against the prior rollup
             // and log any anomaly once, here at ingestion — the reducer
             // re-derives the same state silently on every replay.
-            log_lifecycle_transition(&ledger, agent.descriptor().kind, &observation);
+            let transition =
+                log_lifecycle_transition(&ledger, agent.descriptor().kind, &observation);
             let envelope = EventEnvelope::agent_lifecycle(
                 workspace.workspace_id.clone(),
                 &workspace.session_name,
@@ -246,7 +271,17 @@ fn run_feed(source: String, event: Option<String>, globals: &GlobalFlags) -> Res
                 &event_name,
                 &observation,
             );
-            if let Err(err) = ledger.append_event_and_expire(&envelope, expiry) {
+            // `ToolUsed { false, false }` is reserved for non-blocking
+            // PreToolUse proof-of-work. PostToolUse observations are emitted
+            // only from the `tool_mutates` arm, so they always carry
+            // `mutates: true`; this gate keeps PreToolUse out of the durable log
+            // unless it actually reconciles a resting row to running.
+            let append_lifecycle = !proof_of_work_pre_tool(&observation.signal)
+                || transition.is_some_and(|transition| {
+                    matches!(transition.kind, TransitionKind::Reconciled { .. })
+                });
+            if append_lifecycle && let Err(err) = ledger.append_event_and_expire(&envelope, expiry)
+            {
                 warn!(
                     agent = agent.descriptor().kind,
                     event = %event_name,

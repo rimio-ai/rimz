@@ -177,6 +177,39 @@ fn pre_compact_is_a_lifecycle_compaction_marker() {
 }
 
 #[test]
+fn post_compact_maps_trigger_to_compaction_end() {
+    let c = ClaudeAdapter.classify_hook("PostCompact", &json!({ "session_id": "sess-1" }));
+    assert_eq!(c.class, AgentHookClass::Lifecycle);
+    assert_eq!(c.feed_kind, None);
+
+    let auto = ClaudeAdapter
+        .observe_lifecycle(
+            "PostCompact",
+            &json!({ "session_id": "sess-1", "trigger": "auto" }),
+        )
+        .unwrap();
+    assert_eq!(
+        auto.signal,
+        LifecycleSignal::CompactionEnded { auto: Some(true) }
+    );
+
+    for payload in [
+        json!({ "session_id": "sess-1", "trigger": "manual" }),
+        json!({ "session_id": "sess-1", "trigger": "future" }),
+        json!({ "session_id": "sess-1" }),
+    ] {
+        let obs = ClaudeAdapter
+            .observe_lifecycle("PostCompact", &payload)
+            .unwrap();
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            "{payload}"
+        );
+    }
+}
+
+#[test]
 fn subagent_start_observes_running_child_keyed_by_agent_id() {
     let obs = ClaudeAdapter
         .observe_lifecycle(
@@ -300,6 +333,38 @@ fn foreign_child_pre_compact_is_dropped() {
 }
 
 #[test]
+fn foreign_child_post_compact_is_dropped() {
+    let obs = ClaudeAdapter.observe_lifecycle(
+        "PostCompact",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-1",
+            "trigger": "auto",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a child's compaction end never marks the parent"
+    );
+}
+
+#[test]
+fn foreign_child_pre_tool_use_is_dropped() {
+    let obs = ClaudeAdapter.observe_lifecycle(
+        "PreToolUse",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-1",
+            "tool_name": "Read",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a child's pre-tool event never marks the parent"
+    );
+}
+
+#[test]
 fn root_event_with_agent_id_equal_to_session_id_is_root() {
     // A session-equal `agent_id` is the main thread, not a child — a normal
     // root observation, never dropped.
@@ -374,6 +439,23 @@ fn post_tool_use_rides_lifecycle_only_for_mutating_tools() {
 }
 
 #[test]
+fn pre_tool_use_observes_proof_of_work() {
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "PreToolUse",
+            &json!({ "session_id": "sess-1", "tool_name": "Read" }),
+        )
+        .unwrap();
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        }
+    );
+}
+
+#[test]
 fn hook_cap_is_120_seconds() {
     assert_eq!(
         ClaudeAdapter.descriptor().hook_cap,
@@ -423,6 +505,19 @@ fn install_into_empty_dir_creates_managed_entries() {
               {
                 "_rimz_managed": true,
                 "_rimz_sync": true,
+                "hooks": [
+                  {
+                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
+                    "timeout": 120,
+                    "type": "command"
+                  }
+                ]
+              }
+            ],
+            "PostCompact": [
+              {
+                "_rimz_managed": true,
+                "_rimz_sync": false,
                 "hooks": [
                   {
                     "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",

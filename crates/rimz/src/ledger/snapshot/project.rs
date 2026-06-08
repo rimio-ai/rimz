@@ -152,9 +152,10 @@ pub(super) fn reduce_agent_states_seeded(
         let status = next.status;
         let phase = next.phase;
         // Compaction stamps the moment it began and preserves it across the
-        // multi-event head; any other signal clears the marker. A crashed
-        // mid-compact can't stick — the projection also expires it past
-        // `COMPACTING_WINDOW_SECS`.
+        // multi-event head. The trailing compaction hook is the modeled
+        // terminator; any other later lifecycle signal also clears the marker
+        // because it proves the bracket has ended. A crashed mid-compact can't
+        // stick — the projection also expires it past `COMPACTING_WINDOW_SECS`.
         let compacting_since = if next.compacting {
             prior
                 .and_then(|p| p.compacting_since)

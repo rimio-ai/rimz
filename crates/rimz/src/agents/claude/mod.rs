@@ -31,14 +31,14 @@ use serde_json::{Map, Value};
 
 use self::payloads::{
     ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
-    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_pre_tool_use,
-    parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
+    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_post_compact,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
-use super::hook_types::BackgroundTask;
+use super::hook_types::{BackgroundTask, CompactTrigger};
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
@@ -140,8 +140,9 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("SubagentStop", None),
     // Fires before the agent compacts its context window (manual `/compact` or
     // auto): the sidebar shows a transient "compacting" head while it condenses.
-    // The next lifecycle event clears it.
+    // `PostCompact` clears it explicitly.
     ("PreCompact", None),
+    ("PostCompact", None),
 ];
 
 /// Events that hold the agent open while the bridge waits for an answer.
@@ -260,6 +261,7 @@ impl AgentAdapter for ClaudeAdapter {
                 "SubagentStart",
                 "SubagentStop",
                 "PreCompact",
+                "PostCompact",
             ],
         )
     }
@@ -353,6 +355,7 @@ impl AgentAdapter for ClaudeAdapter {
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
         let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
         let pending_background = stop
             .as_ref()
             .map(|p| pending_background_tasks(&p.background_tasks))
@@ -387,9 +390,22 @@ impl AgentAdapter for ClaudeAdapter {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
             },
+            // A non-blocking PreToolUse is proof-of-work only: the ingestion
+            // path persists it only when it reconciles a resting row to running.
+            "PreToolUse" => LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            },
             // Compaction is a transient head, not a transition: `step` keeps the
             // prior status and only stamps the compacting marker.
             "PreCompact" => LifecycleSignal::Compacting,
+            "PostCompact" => LifecycleSignal::CompactionEnded {
+                auto: Some(
+                    post_compact
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
+                ),
+            },
             // SessionEnd drops the row; `ends_session` then expires its pending asks.
             "SessionEnd" => LifecycleSignal::Ended,
             _ => return None,

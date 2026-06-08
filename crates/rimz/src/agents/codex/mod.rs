@@ -37,13 +37,14 @@ use jiff::Timestamp;
 use self::app_server::CodexAppServer;
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    parse_session_start, parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
+    parse_post_compact, parse_session_start, parse_subagent_start, parse_subagent_stop,
+    parse_user_prompt_submit,
 };
 use super::context::{AgentContext, AgentCost, AgentCurrentUsage, AgentTokenUsage};
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
-use super::hook_types::SessionSource;
+use super::hook_types::{CompactTrigger, SessionSource};
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
@@ -147,6 +148,8 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("PermissionRequest", Some(".*")),
     ("PreToolUse", Some(".*")),
     ("PostToolUse", Some(".*")),
+    ("PreCompact", Some(".*")),
+    ("PostCompact", Some(".*")),
 ];
 
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
@@ -210,6 +213,8 @@ impl AgentAdapter for CodexAdapter {
                 "UserPromptSubmit",
                 "PreToolUse",
                 "PostToolUse",
+                "PreCompact",
+                "PostCompact",
             ],
         )
     }
@@ -264,24 +269,22 @@ impl AgentAdapter for CodexAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         // Each event that yields an observation parses through its own typed
-        // struct; silent events (PreToolUse, PostToolUse, PermissionRequest) and
-        // the not-installed compaction pair return `None`. The per-event status
-        // mapping is the Codex column of docs/internals/hooks.md.
+        // struct; silent events (PermissionRequest, read-only PostToolUse) return
+        // `None`. The per-event status mapping is the Codex column of
+        // docs/internals/hooks.md.
         let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
         let user_prompt =
             (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
         let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
         let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
+        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
         // The status decision lives in the shared `lifecycle::step` table —
         // here the adapter only names the intent.
         let signal = match event_name {
             "SessionStart" => {
                 let p = session_start.as_ref().unwrap();
-                // Codex has no pre-compaction hook; it re-fires `SessionStart`
-                // with `source = "compact"` once condensed — the only source that
-                // flags the transient compacting head, the rest register fresh.
                 if p.source == SessionSource::Compact {
-                    LifecycleSignal::Compacting
+                    return None;
                 } else {
                     LifecycleSignal::Registered
                 }
@@ -304,6 +307,20 @@ impl AgentAdapter for CodexAdapter {
             "PostToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
                 mutates: true,
                 edits: self.descriptor().tool_edits_files(payload),
+            },
+            // A non-blocking PreToolUse is proof-of-work only: the ingestion
+            // path persists it only when it reconciles a resting row to running.
+            "PreToolUse" => LifecycleSignal::ToolUsed {
+                mutates: false,
+                edits: false,
+            },
+            "PreCompact" => LifecycleSignal::Compacting,
+            "PostCompact" => LifecycleSignal::CompactionEnded {
+                auto: Some(
+                    post_compact
+                        .as_ref()
+                        .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
+                ),
             },
             _ => return None,
         };

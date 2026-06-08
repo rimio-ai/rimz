@@ -135,17 +135,15 @@ fn session_start_observes_idle() {
 }
 
 #[test]
-fn session_start_compact_source_flags_compaction() {
-    // Codex re-fires `SessionStart` with `source = "compact"` once the
-    // context has been condensed; that is the one SessionStart that flags the
-    // compaction marker, the others (startup/resume/clear) do not.
-    let compact = CodexAdapter
-        .observe_lifecycle(
-            "SessionStart",
-            &json!({ "session_id": "sess-1", "source": "compact" }),
-        )
-        .unwrap();
-    assert_eq!(compact.signal, LifecycleSignal::Compacting);
+fn session_start_compact_source_is_ignored() {
+    // The dedicated PreCompact/PostCompact pair owns the head. Codex can still
+    // re-fire SessionStart(compact) alongside it; Rimz treats that legacy
+    // echo as a no-op so it cannot re-light the head after PostCompact.
+    let compact = CodexAdapter.observe_lifecycle(
+        "SessionStart",
+        &json!({ "session_id": "sess-1", "source": "compact" }),
+    );
+    assert!(compact.is_none());
     for source in ["startup", "resume", "clear"] {
         let obs = CodexAdapter
             .observe_lifecycle(
@@ -157,6 +155,49 @@ fn session_start_compact_source_flags_compaction() {
             obs.signal,
             LifecycleSignal::Registered,
             "{source} is not a compaction",
+        );
+    }
+}
+
+#[test]
+fn compaction_pair_maps_to_lifecycle_signals() {
+    for event in ["PreCompact", "PostCompact"] {
+        let c = CodexAdapter.classify_hook(event, &json!({ "session_id": "sess-1" }));
+        assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
+        assert_eq!(c.feed_kind, None, "{event}");
+    }
+
+    let pre = CodexAdapter
+        .observe_lifecycle(
+            "PreCompact",
+            &json!({ "session_id": "sess-1", "trigger": "manual" }),
+        )
+        .unwrap();
+    assert_eq!(pre.signal, LifecycleSignal::Compacting);
+
+    let auto = CodexAdapter
+        .observe_lifecycle(
+            "PostCompact",
+            &json!({ "session_id": "sess-1", "trigger": "auto" }),
+        )
+        .unwrap();
+    assert_eq!(
+        auto.signal,
+        LifecycleSignal::CompactionEnded { auto: Some(true) }
+    );
+
+    for payload in [
+        json!({ "session_id": "sess-1", "trigger": "manual" }),
+        json!({ "session_id": "sess-1", "trigger": "future" }),
+        json!({ "session_id": "sess-1" }),
+    ] {
+        let obs = CodexAdapter
+            .observe_lifecycle("PostCompact", &payload)
+            .unwrap();
+        assert_eq!(
+            obs.signal,
+            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            "{payload}"
         );
     }
 }
@@ -251,6 +292,67 @@ fn foreign_child_mutating_post_tool_use_is_dropped() {
 }
 
 #[test]
+fn foreign_child_pre_tool_use_is_dropped() {
+    let obs = CodexAdapter.observe_lifecycle(
+        "PreToolUse",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "tool_name": "shell",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a foreign-id pre-tool event never creates a root row"
+    );
+}
+
+#[test]
+fn foreign_child_post_compact_is_dropped() {
+    let obs = CodexAdapter.observe_lifecycle(
+        "PostCompact",
+        &json!({
+            "session_id": "sess-parent",
+            "agent_id": "child-thread-1",
+            "trigger": "auto",
+        }),
+    );
+    assert!(
+        obs.is_none(),
+        "a foreign-id compaction end never creates a root row"
+    );
+}
+
+#[test]
+fn pre_tool_use_observes_proof_of_work() {
+    let obs = CodexAdapter
+        .observe_lifecycle(
+            "PreToolUse",
+            &json!({ "session_id": "sess-1", "tool_name": "shell" }),
+        )
+        .unwrap();
+    assert_eq!(
+        obs.signal,
+        LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        }
+    );
+}
+
+#[test]
+fn non_mutating_post_tool_use_stays_out_of_lifecycle() {
+    let obs = CodexAdapter.observe_lifecycle(
+        "PostToolUse",
+        &json!({ "session_id": "sess-1", "tool_name": "read" }),
+    );
+    assert!(
+        obs.is_none(),
+        "PostToolUse only emits ToolUsed from the mutating arm"
+    );
+}
+
+#[test]
 fn clean_stop_observes_success() {
     let obs = CodexAdapter
         .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
@@ -332,12 +434,30 @@ fn install_into_empty_dir_creates_documented_inline_hooks() {
         timeout = 60
         type = "command"
 
+        [[hooks.PostCompact]]
+        matcher = ".*"
+
+        [[hooks.PostCompact.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
+        statusMessage = "Routing PostCompact through Rimz"
+        timeout = 60
+        type = "command"
+
         [[hooks.PostToolUse]]
         matcher = ".*"
 
         [[hooks.PostToolUse.hooks]]
         command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
         statusMessage = "Routing PostToolUse through Rimz"
+        timeout = 60
+        type = "command"
+
+        [[hooks.PreCompact]]
+        matcher = ".*"
+
+        [[hooks.PreCompact.hooks]]
+        command = "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source codex"
+        statusMessage = "Routing PreCompact through Rimz"
         timeout = 60
         type = "command"
 
@@ -1085,6 +1205,8 @@ fn untrusted_hooks_empty_when_rimz_hooks_are_not_installed() {
 #[test]
 fn snake_event_token_matches_codex_state_keys() {
     assert_eq!(snake_event_token("PermissionRequest"), "permission_request");
+    assert_eq!(snake_event_token("PostCompact"), "post_compact");
+    assert_eq!(snake_event_token("PreCompact"), "pre_compact");
     assert_eq!(snake_event_token("PreToolUse"), "pre_tool_use");
     assert_eq!(snake_event_token("SessionStart"), "session_start");
     assert_eq!(snake_event_token("Stop"), "stop");

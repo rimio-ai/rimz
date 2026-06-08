@@ -88,6 +88,7 @@ export default function rimz(pi) {
     }),
   );
   pi.on("session_before_compact", (_ev, ctx) => feed("session_before_compact", ctx, {}));
+  pi.on("session_compact", (_ev, ctx) => feed("session_compact", ctx, {}));
   pi.on("session_shutdown", (ev, ctx) => {
     // A /reload tears down and re-registers the SAME session id; both
     // children are fire-and-forget, so a tombstone racing the re-register

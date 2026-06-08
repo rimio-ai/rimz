@@ -81,12 +81,13 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claud
 | --- | --- | --- | --- |
 | `SessionStart` | session begins or resumes | `source` (`startup`\|`resume`\|`clear`\|`compact`), `model`, `session_title` | lifecycle |
 | `UserPromptSubmit` | prompt submitted, before processing | `prompt` | lifecycle |
-| `PreToolUse` | before a tool call (can block) | `tool_name`, `tool_input` | lifecycle, or blocking when `tool_name` is `ExitPlanMode` / `AskUserQuestion` |
+| `PreToolUse` | before a tool call (can block) | `tool_name`, `tool_input` | lifecycle proof-of-work, or blocking when `tool_name` is `ExitPlanMode` / `AskUserQuestion` |
 | `PostToolUse` | after a tool call succeeds | `tool_name`, `tool_input`, `tool_response` | lifecycle (silent; audit/enrichment) |
 | `Stop` | Claude finishes responding | `stop_hook_active`; `background_tasks[]` of `{status, description, command, id}` (v2.1.145+) | lifecycle |
 | `SubagentStart` | a subagent is spawned | `agent_type`, `agent_id` | lifecycle |
 | `SubagentStop` | a subagent finishes | `agent_type`, `agent_id`, `exit_code` | lifecycle |
-| `PreCompact` | before context compaction | `trigger` (`manual`\|`auto`) | lifecycle (sets `compacting`) |
+| `PreCompact` | before context compaction | `trigger` (`manual`\|`auto`) | lifecycle (`Compacting`) |
+| `PostCompact` | after compaction completes | `trigger` (`manual`\|`auto`) | lifecycle (`CompactionEnded`) |
 | `SessionEnd` | session terminates | `reason` | lifecycle (`ends_session`) |
 | `Notification` | Claude Code sends a notification | `message` | lifecycle (silent) |
 | `PermissionRequest` | a permission dialog appears | `tool_name`, `tool_input`, `permission_mode` | blocking-feed (sync) |
@@ -141,7 +142,7 @@ The complete upstream set. ✓ marks what Rimz wires today; the rest is availabl
 | `WorktreeCreate` | a worktree is being created | |
 | `WorktreeRemove` | a worktree is being removed | |
 | `PreCompact` | before context compaction | ✓ |
-| `PostCompact` | after compaction completes | |
+| `PostCompact` | after compaction completes | ✓ |
 | `Elicitation` | an MCP server requests user input | |
 | `ElicitationResult` | after a user responds to an elicitation | |
 | `SessionEnd` | session terminates | ✓ |

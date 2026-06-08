@@ -14,8 +14,8 @@
 //! Appendix Pi: `session_start` registers, `before_agent_start` starts the
 //! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
 //! `tool_execution_end` is the mutating-tool heartbeat, and
-//! `session_before_compact`/`session_shutdown` are the compaction and exit
-//! signals. Spend stays in [`spend`].
+//! `session_before_compact`/`session_compact`/`session_shutdown` are the
+//! compaction and exit signals. Spend stays in [`spend`].
 //!
 //! One wired event blocks: `tool_call`, pi's pre-tool gate, whose extension
 //! handler pi awaits. It classifies as a permission ask so a fresh enrolled
@@ -125,6 +125,7 @@ const LIFECYCLE_EVENTS: &[&str] = &[
     "agent_end",
     "tool_execution_end",
     "session_before_compact",
+    "session_compact",
     "session_shutdown",
 ];
 
@@ -136,6 +137,7 @@ const WIRED_EVENTS: &[&str] = &[
     "agent_end",
     "tool_execution_end",
     "session_before_compact",
+    "session_compact",
     "session_shutdown",
     "tool_call",
 ];
@@ -237,6 +239,9 @@ impl AgentAdapter for PiAdapter {
             }
             // A leading signal, like Claude's `PreCompact`.
             "session_before_compact" => LifecycleSignal::Compacting,
+            // Pi's extension hook reports no manual/auto trigger, so this
+            // only clears the transient head and preserves the prior state.
+            "session_compact" => LifecycleSignal::CompactionEnded { auto: None },
             // Fires on quit including Ctrl+C/SIGHUP/SIGTERM and on every
             // session replacement (`/new`, `/resume`) — a true session end.
             "session_shutdown" => LifecycleSignal::Ended,

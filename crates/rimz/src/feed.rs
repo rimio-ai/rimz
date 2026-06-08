@@ -718,10 +718,10 @@ pub fn is_rate_limited(status: AgentStatus, account_limited: bool) -> bool {
 }
 
 /// How long after its last compaction hook an agent still reads as
-/// "compacting". Compaction is bracketed — the next lifecycle event clears
-/// [`AgentState::compacting_since`] — but a crash mid-compact would otherwise
-/// leave the head pulsing forever, so the projection also expires it past this
-/// window. Generous: a large context can take a while to condense.
+/// "compacting". Compaction is bracketed — the provider's trailing compaction
+/// hook clears [`AgentState::compacting_since`] — but a crash mid-compact would
+/// otherwise leave the head pulsing forever, so the projection also expires it
+/// past this window. Generous: a large context can take a while to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -830,10 +830,10 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// When this agent last began compacting its context window — the timestamp
-    /// of its most-recent compaction hook (Claude `PreCompact`, Codex
-    /// `SessionStart:compact`). Set by the rollup, cleared by the next lifecycle
-    /// event (compaction done); the sidebar renders a transient "compacting"
-    /// head while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
+    /// of its most-recent compaction-start hook (`PreCompact` or Pi
+    /// `session_before_compact`). Set by the rollup, cleared by the trailing
+    /// compaction hook; the sidebar renders a transient "compacting" head while
+    /// it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     pub last_seen: Timestamp,

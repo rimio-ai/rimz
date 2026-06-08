@@ -66,8 +66,17 @@ pub enum LifecycleSignal {
         edits: bool,
     },
     /// The agent began compacting its context window (Claude `PreCompact`,
-    /// Codex `SessionStart:compact`). A transient head, not a status change.
+    /// Codex `PreCompact`). A transient head, not a status change.
     Compacting,
+    /// Context compaction finished (Claude/Codex `PostCompact`, Pi
+    /// `session_compact`). The transient compacting head lifts here. When the
+    /// provider reports the trigger, automatic compaction resumes the
+    /// interrupted turn and manual `/compact` rests to idle. A provider with no
+    /// trigger bit clears the head and preserves the prior state.
+    CompactionEnded {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        auto: Option<bool>,
+    },
     /// The session ended (Claude `SessionEnd`/`offline`). Handled as removal by
     /// the reducer's tombstone path, so it is never routed through [`step`];
     /// the variant exists only so an adapter can name the event.
@@ -217,6 +226,28 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         }
         // Status preserved; only the head is stamped.
         LifecycleSignal::Compacting => prior_status.unwrap_or(AgentStatus::Idle),
+        LifecycleSignal::CompactionEnded { auto: Some(true) } => match prior_status {
+            Some(AgentStatus::Running) => AgentStatus::Running,
+            Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
+                kind = TransitionKind::Reconciled {
+                    from: resting,
+                    reason: "auto-compaction resumed a turn",
+                };
+                AgentStatus::Running
+            }
+            Some(other) => other,
+            None => {
+                kind = TransitionKind::Reconciled {
+                    from: AgentStatus::Idle,
+                    reason: "auto-compaction resumed a turn",
+                };
+                AgentStatus::Running
+            }
+        },
+        LifecycleSignal::CompactionEnded { auto: Some(false) } => AgentStatus::Idle,
+        LifecycleSignal::CompactionEnded { auto: None } => {
+            prior_status.unwrap_or(AgentStatus::Idle)
+        }
         // Handled above.
         LifecycleSignal::Ended => unreachable!("Ended returns early"),
     };
@@ -244,6 +275,10 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
             parked_on_background: true,
         } => TurnPhase::Parked,
         LifecycleSignal::Compacting => prior_phase,
+        LifecycleSignal::CompactionEnded {
+            auto: Some(true) | None,
+        } => prior_phase,
+        LifecycleSignal::CompactionEnded { auto: Some(false) } => TurnPhase::Idle,
         LifecycleSignal::Registered
         | LifecycleSignal::TurnEnded { .. }
         | LifecycleSignal::SubagentStopped { .. } => TurnPhase::Idle,
@@ -481,6 +516,106 @@ mod tests {
     }
 
     #[test]
+    fn compaction_ended_auto_resumes_running_from_idle() {
+        let prev = state(AgentStatus::Idle, TurnPhase::Idle, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: Some(true) },
+        );
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
+        assert!(!t.next.compacting);
+        assert_eq!(
+            t.kind,
+            TransitionKind::Reconciled {
+                from: AgentStatus::Idle,
+                reason: "auto-compaction resumed a turn",
+            }
+        );
+    }
+
+    #[test]
+    fn compaction_ended_auto_keeps_running_and_carries_phase() {
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: Some(true) },
+        );
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Acting,
+            "an auto compact resumes the interrupted turn phase"
+        );
+        assert!(!t.next.compacting);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn compaction_ended_auto_carries_reasoning_phase() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: Some(true) },
+        );
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(t.next.phase, TurnPhase::Reasoning);
+        assert!(!t.next.compacting);
+    }
+
+    #[test]
+    fn compaction_ended_auto_leaves_attention_status() {
+        let prev = state(AgentStatus::Failed, TurnPhase::Idle, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: Some(true) },
+        );
+        assert_eq!(t.next.status, AgentStatus::Failed);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
+        assert!(!t.next.compacting);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn compaction_ended_manual_rests_to_idle() {
+        let prev = state(AgentStatus::Running, TurnPhase::Acting, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: Some(false) },
+        );
+        assert_eq!(t.next.status, AgentStatus::Idle);
+        assert_eq!(t.next.phase, TurnPhase::Idle);
+        assert!(!t.next.compacting);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn compaction_ended_unknown_preserves_state_and_phase() {
+        let prev = state(AgentStatus::Running, TurnPhase::Reasoning, true);
+        let t = step(
+            Some(&prev),
+            &LifecycleSignal::CompactionEnded { auto: None },
+        );
+        assert_eq!(t.next.status, AgentStatus::Running);
+        assert_eq!(
+            t.next.phase,
+            TurnPhase::Reasoning,
+            "a provider without the manual/auto bit only clears the head"
+        );
+        assert!(!t.next.compacting);
+        assert_eq!(t.kind, TransitionKind::Normal);
+    }
+
+    #[test]
+    fn compaction_ended_clears_compacting_head() {
+        for auto in [None, Some(false), Some(true)] {
+            let prev = state(AgentStatus::Running, TurnPhase::Reasoning, true);
+            let t = step(Some(&prev), &LifecycleSignal::CompactionEnded { auto });
+            assert!(!t.next.compacting, "{auto:?}");
+        }
+    }
+
+    #[test]
     fn any_signal_clears_compacting_head() {
         let prev = state(AgentStatus::Running, TurnPhase::Acting, true);
         let t = step(Some(&prev), &LifecycleSignal::TurnStarted);
@@ -612,6 +747,15 @@ mod tests {
         let wire = serde_json::json!({ "signal": "subagent_stopped" });
         let signal: LifecycleSignal = serde_json::from_value(wire).unwrap();
         assert_eq!(signal, LifecycleSignal::SubagentStopped { errored: false });
+    }
+
+    #[test]
+    fn compaction_ended_without_auto_bit_still_deserializes() {
+        let wire = serde_json::json!({ "signal": "compaction_ended" });
+        let signal: LifecycleSignal = serde_json::from_value(wire).unwrap();
+        assert_eq!(signal, LifecycleSignal::CompactionEnded { auto: None });
+        let encoded = serde_json::to_value(signal).unwrap();
+        assert_eq!(encoded, serde_json::json!({ "signal": "compaction_ended" }));
     }
 
     #[test]
