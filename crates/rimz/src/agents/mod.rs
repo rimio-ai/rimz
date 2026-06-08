@@ -394,6 +394,20 @@ pub trait AgentAdapter: Send + Sync {
         account::AccountProbe::LoggedOut
     }
 
+    /// Whether this adapter exposes a cheap out-of-band binary version probe.
+    /// The sidebar producer uses this to repair older account-cache entries
+    /// whose login facts are still fresh but whose version field is absent.
+    fn probes_version(&self) -> bool {
+        false
+    }
+
+    /// Probe the agent binary's version out-of-band. Producer-only and
+    /// display-only: a failure leaves the provider header without a version,
+    /// never affecting account truth or ledger correctness.
+    fn probe_version(&self) -> Option<String> {
+        None
+    }
+
     /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
     /// discovery walk for the full-history spending pass
     /// ([`spending::compute_spending`]). Distinct from the bounded tail read in

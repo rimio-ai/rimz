@@ -8,7 +8,7 @@ Coverage is **depth on what the adapter wires, breadth as an index**: the events
 
 ## Upstream sources
 
-Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` page renders `packages/coding-agent/docs/<page>.md` from the GitHub repo — the markdown is the higher-fidelity fetch. Docs publish only as `latest` (no version-pinned tree), so pair a refresh with `pi -v` and the repo commit; exact TypeScript types ship in `node_modules/@earendil-works/pi-coding-agent/dist/`.
+Re-fetch these pages to refresh this mirror. Each `pi.dev/docs/latest/<page>` page renders `packages/coding-agent/docs/<page>.md` from the GitHub repo — the markdown is the higher-fidelity fetch. Docs publish only as `latest` (no version-pinned tree), so pair a refresh with `pi --version` and the repo commit; exact TypeScript types ship in `node_modules/@earendil-works/pi-coding-agent/dist/`.
 
 | Surface | Source |
 | --- | --- |
@@ -183,7 +183,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 | Surface | Meaning |
 | --- | --- |
-| `pi -v` | version (`0.78.0` verified) |
+| `pi --version` | version (`0.78.1` verified) |
 | `pi -c` / `pi -r` | continue the most recent session / browse and pick |
 | `pi --session <path\|id>` | resume a specific session; accepts a partial UUID — the resume-on-rebirth seed |
 | `pi --fork <path\|id>`, `--no-session`, `--name <n>` | fork into a new file, ephemeral mode, display name |
@@ -198,7 +198,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 The landed verdict — the native-event → signal table, the blocking `tool_call` gate and its decision shape, the turn-death and identity properties, and the install shape — is [hooks.md → Appendix Pi](../../internals/hooks.md#appendix--pi). Upstream's own scope statement ([usage.md](https://pi.dev/docs/latest/usage)) frames the gaps: pi intentionally ships **no built-in MCP, sub-agents, permission popups, plan mode, to-dos, or background bash** — those are extension territory. The context gauge and model/effort enrichment now ride every hook envelope (`ctx.getContextUsage()`, `ctx.model.id`, the thinking level), so no transcript-tail gauge is needed.
 
-The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and attaches the `pi -v` version; mapping summary in [account.md](../../internals/account.md#per-provider-mapping).
+The account probe is wired: [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads `auth.json` (oauth → metered subscription, api_key → unmetered), labels the sub the fleet uses — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — and the separate adapter version probe attaches `pi --version`; mapping summary in [account.md](../../internals/account.md#per-provider-mapping).
 
 What remains unwired, for the adapter's next increments:
 

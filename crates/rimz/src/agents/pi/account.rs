@@ -1,5 +1,5 @@
 //! Pi's out-of-band account probe: the `auth.json` credential map under Pi's
-//! config root plus a `pi -v` version read.
+//! config root.
 //!
 //! Pi exposes no plan tier and no rate-limit windows (the balance gap in
 //! [docs/internals/adapter/pi-reference.md]); its one account fact is the
@@ -7,8 +7,9 @@
 //! `api_key` (unmetered). The probe labels the subscription the fleet actually
 //! uses: the provider of the freshest session, tail-read from the newest
 //! session JSONL, falling back to the first OAuth credential, else the first
-//! entry. The version is enrichment — a missing `pi` binary leaves the field
-//! empty and never downgrades the probe outcome. Best-effort and
+//! entry. The binary version is separate display enrichment exposed through
+//! [`crate::agents::AgentAdapter::probe_version`], so an active Pi session can
+//! show `pi --version` even when no account file exists. Best-effort and
 //! producer-only — see [`crate::agents::account`] for the probe contract.
 //!
 //! [docs/internals/adapter/pi-reference.md]: ../../../../../docs/internals/adapter/pi-reference.md
@@ -24,16 +25,16 @@ use crate::agents::account::AccountProbe;
 use crate::agents::context::AgentAccount;
 use crate::agents::read_transcript_tail;
 
-/// Probe Pi's account: parse the auth file, label the used subscription, and
-/// attach the `pi -v` version. The missing-file fast path skips the session
-/// walk and the version fork — the common Pi-less machine pays one `stat`;
-/// `probe_auth` re-handles a racing removal on its own read.
+/// Probe Pi's account: parse the auth file and label the used subscription.
+/// The missing-file fast path skips the session walk — the common Pi-less
+/// machine pays one `stat`; `probe_auth` re-handles a racing removal on its own
+/// read.
 pub(crate) fn probe() -> AccountProbe {
     let path = pi_config_dir().join("auth.json");
     if !path.exists() {
         return AccountProbe::LoggedOut;
     }
-    probe_auth(&path, used_provider(), version())
+    probe_auth(&path, used_provider())
 }
 
 /// One auth.json credential: `{ "type": "oauth" | "api_key", … }`. The token
@@ -51,7 +52,7 @@ struct PiCredential {
 /// provider picks the labeled credential when it holds one; otherwise the
 /// first OAuth entry leads (a subscription outranks a key for "the sub it
 /// used"), else the first entry by name.
-fn probe_auth(path: &Path, used: Option<String>, version: Option<String>) -> AccountProbe {
+fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return AccountProbe::LoggedOut,
@@ -80,7 +81,7 @@ fn probe_auth(path: &Path, used: Option<String>, version: Option<String>) -> Acc
             Some("api_key") => Some(false),
             _ => None,
         },
-        version,
+        version: None,
         // The raw credential key (`anthropic`, `openai`, …) — the dashboard
         // maps it to the agent kind metering that account and reuses its
         // budget windows.
@@ -152,12 +153,12 @@ fn provider_of_line(line: &str) -> Option<String> {
         .filter(|provider| !provider.is_empty())
 }
 
-/// `pi -v` — the one documented version surface (Pi ships no statusline or
-/// app-server to read it from). Captured stdio, never inherited; any failure
-/// is a `None` version, not a probe failure.
-fn version() -> Option<String> {
+/// `pi --version` — the binary version surface (Pi ships no statusline or
+/// app-server to read it from). Captured stdio, never inherited; any failure is
+/// a `None` version, not account truth.
+pub(crate) fn version() -> Option<String> {
     let output = Command::new("pi")
-        .arg("-v")
+        .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -195,7 +196,7 @@ mod tests {
             dir.path(),
             r#"{ "anthropic": { "type": "oauth", "access": "a", "refresh": "r", "expires": 1 } }"#,
         );
-        let account = found(probe_auth(&path, None, None), "oauth account");
+        let account = found(probe_auth(&path, None), "oauth account");
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
         assert_eq!(account.version, None);
@@ -211,13 +212,10 @@ mod tests {
             dir.path(),
             r#"{ "openai": { "type": "api_key", "key": "k" } }"#,
         );
-        let account = found(
-            probe_auth(&path, None, Some("0.78.0".to_owned())),
-            "api-key account",
-        );
+        let account = found(probe_auth(&path, None), "api-key account");
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
-        assert_eq!(account.version.as_deref(), Some("0.78.0"));
+        assert_eq!(account.version, None);
         assert_eq!(account.sub_provider.as_deref(), Some("openai"));
     }
 
@@ -234,7 +232,7 @@ mod tests {
             }"#,
         );
         let account = found(
-            probe_auth(&path, Some("openai".to_owned()), None),
+            probe_auth(&path, Some("openai".to_owned())),
             "used provider",
         );
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
@@ -251,7 +249,7 @@ mod tests {
                 "openai-codex": { "type": "oauth", "access": "a" }
             }"#,
         );
-        let account = found(probe_auth(&path, None, None), "oauth lead");
+        let account = found(probe_auth(&path, None), "oauth lead");
         assert_eq!(account.plan.as_deref(), Some("OpenAI OAuth"));
         assert_eq!(account.metered, Some(true));
     }
@@ -260,7 +258,7 @@ mod tests {
     fn missing_file_is_logged_out_not_a_failure() {
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(
-            probe_auth(&dir.path().join("auth.json"), None, None),
+            probe_auth(&dir.path().join("auth.json"), None),
             AccountProbe::LoggedOut
         ));
     }
@@ -269,20 +267,14 @@ mod tests {
     fn empty_credential_map_is_logged_out() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_auth(dir.path(), "{}");
-        assert!(matches!(
-            probe_auth(&path, None, None),
-            AccountProbe::LoggedOut
-        ));
+        assert!(matches!(probe_auth(&path, None), AccountProbe::LoggedOut));
     }
 
     #[test]
     fn garbage_auth_file_is_unavailable_so_it_retries_soon() {
         let dir = tempfile::tempdir().unwrap();
         let path = write_auth(dir.path(), "not json");
-        assert!(matches!(
-            probe_auth(&path, None, None),
-            AccountProbe::Unavailable
-        ));
+        assert!(matches!(probe_auth(&path, None), AccountProbe::Unavailable));
     }
 
     #[test]

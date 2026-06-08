@@ -339,6 +339,14 @@ impl AgentAdapter for PiAdapter {
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
     }
+
+    fn probes_version(&self) -> bool {
+        true
+    }
+
+    fn probe_version(&self) -> Option<String> {
+        account::version()
+    }
 }
 
 fn pi_extension_path() -> Result<PathBuf> {

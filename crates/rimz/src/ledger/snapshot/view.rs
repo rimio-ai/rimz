@@ -878,8 +878,8 @@ impl SidebarSnapshot {
         // A provider that is logged in but has no active session this run still
         // earns a block, so the dashboard shows your accounts and budgets between
         // turns — fold in every probed-account kind not already covered.
-        for kind in probed_accounts.keys() {
-            if !kinds.iter().any(|known| known == kind) {
+        for (kind, account) in probed_accounts {
+            if account_creates_provider_panel(account) && !kinds.iter().any(|known| known == kind) {
                 kinds.push(kind.clone());
             }
         }
@@ -893,7 +893,11 @@ impl SidebarSnapshot {
             // Nothing to show without a session or a logged-in account. Recorded
             // spend enriches an existing provider block but never creates the
             // provider section by itself.
-            if sessions.is_empty() && !probed_accounts.contains_key(&kind) {
+            if sessions.is_empty()
+                && !probed_accounts
+                    .get(&kind)
+                    .is_some_and(account_creates_provider_panel)
+            {
                 continue;
             }
 
@@ -904,7 +908,7 @@ impl SidebarSnapshot {
                 .filter_map(|agent| agent.context.as_ref())
                 .max_by_key(|context| context.observed_at);
             // A live session's rich-context version wins; the out-of-band
-            // probe's binary read (Pi's `pi -v`) covers a provider whose
+            // probe's binary read (Pi's `pi --version`) covers a provider whose
             // sessions never report one.
             let version = freshest
                 .and_then(|context| context.agent_version.clone())
@@ -1004,6 +1008,15 @@ impl SidebarSnapshot {
         );
         self
     }
+}
+
+fn account_creates_provider_panel(account: &AgentAccount) -> bool {
+    account.plan.as_deref().is_some_and(|plan| !plan.is_empty())
+        || account.metered.is_some()
+        || account
+            .sub_provider
+            .as_deref()
+            .is_some_and(|provider| !provider.is_empty())
 }
 
 fn resolve_provider_panels(

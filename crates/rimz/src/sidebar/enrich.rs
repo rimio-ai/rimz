@@ -721,7 +721,7 @@ fn produce_accounts(
 
     // Fast path: a young publish needs no lock and no fork.
     let cache = read_accounts_cache(&path);
-    if cache.is_fresh(unix_now_ms()) {
+    if cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot) {
         return cache.accounts;
     }
 
@@ -731,7 +731,8 @@ fn produce_accounts(
     let lock_path = runtime.shared_accounts_lock();
     let fresh = || {
         let cache = read_accounts_cache(&path);
-        cache.is_fresh(unix_now_ms()).then_some(cache.accounts)
+        (cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot))
+            .then_some(cache.accounts)
     };
     match crate::ledger::single_flight::coalesce(
         &lock_path,
@@ -919,6 +920,7 @@ fn probe_accounts(
     snapshot: &SidebarSnapshot,
 ) -> (BTreeMap<String, crate::agents::AgentAccount>, bool) {
     let mut kinds: Vec<String> = crate::agents::known_kinds().map(str::to_owned).collect();
+    let active_version_kinds = active_version_probe_kinds(snapshot);
     for agent in &snapshot.agents {
         if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| agent.kind == **known) {
             kinds.push(agent.kind.to_string());
@@ -932,14 +934,86 @@ fn probe_accounts(
             continue;
         };
         match adapter.probe_account() {
-            crate::agents::account::AccountProbe::Found(account) => {
+            crate::agents::account::AccountProbe::Found(mut account) => {
+                if adapter.probes_version() && account.version.is_none() {
+                    account.version = adapter.probe_version();
+                    if account.version.is_none() {
+                        ok = false;
+                    }
+                }
                 accounts.insert(kind, account);
             }
-            crate::agents::account::AccountProbe::LoggedOut => {}
-            crate::agents::account::AccountProbe::Unavailable => ok = false,
+            crate::agents::account::AccountProbe::LoggedOut => {
+                if active_version_kinds.contains(&kind) {
+                    if let Some(version) = adapter.probe_version() {
+                        accounts.insert(
+                            kind,
+                            crate::agents::AgentAccount {
+                                version: Some(version),
+                                ..Default::default()
+                            },
+                        );
+                    } else {
+                        ok = false;
+                    }
+                }
+            }
+            crate::agents::account::AccountProbe::Unavailable => {
+                ok = false;
+                if active_version_kinds.contains(&kind)
+                    && let Some(version) = adapter.probe_version()
+                {
+                    accounts.insert(
+                        kind,
+                        crate::agents::AgentAccount {
+                            version: Some(version),
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
         }
     }
     (accounts, ok)
+}
+
+fn active_version_probe_kinds(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter_map(|agent| {
+            crate::agents::find_adapter(agent.kind.as_str())
+                .filter(|adapter| adapter.probes_version())
+                .map(|_| agent.kind.to_string())
+        })
+        .collect()
+}
+
+pub(crate) fn accounts_cache_missing_versions(
+    cache: &AccountsCache,
+    snapshot: &SidebarSnapshot,
+) -> bool {
+    // A failed probe already rides the short retry TTL. Honor that freshness
+    // window instead of bypassing it every producer tick.
+    if !cache.ok {
+        return false;
+    }
+    if cache.accounts.iter().any(|(kind, account)| {
+        account.version.is_none()
+            && crate::agents::find_adapter(kind).is_some_and(|adapter| adapter.probes_version())
+    }) {
+        return true;
+    }
+    active_version_probe_kinds(snapshot)
+        .into_iter()
+        .any(|kind| {
+            cache
+                .accounts
+                .get(&kind)
+                .and_then(|account| account.version.as_ref())
+                .is_none()
+        })
 }
 
 /// Read the producer's published account cache, or an empty cache on a cold or
