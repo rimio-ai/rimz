@@ -706,6 +706,7 @@ impl SidebarSnapshot {
             &self.worktree_roots,
             self.root_class,
             self.now,
+            self.sidebar.attention.stalled_after_secs.get(),
         );
     }
 
@@ -1446,6 +1447,7 @@ fn build_worktree_groups_from_rows(
     worktree_roots: &[PathBuf],
     root_class: RootClass,
     now: Timestamp,
+    stalled_after_secs: u32,
 ) -> Vec<SidebarWorktreeGroup> {
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint every live (`rows_from_panes`) card flows through, so
@@ -1458,7 +1460,7 @@ fn build_worktree_groups_from_rows(
     // Project the displayed status now that each row knows its subagents (the
     // delegated-wait exemption) and the full agent set is in hand (the account
     // rate-limit verdict). The one place display state diverges from the rollup.
-    project_display_status(&mut rows, agents, now);
+    project_display_status(&mut rows, agents, now, stalled_after_secs);
     // A worktree dir holds one branch at a time, so rows under one path
     // normally share a branch and group together — the agent and its shell
     // panes alike. Only when two live-admitted rows carry distinct branches
@@ -1706,7 +1708,12 @@ fn fold_child_activity_onto_parents(rows: &mut [SidebarRow]) {
 ///   the upstream error text as `turn_error_label`.
 /// - A stalled `running` agent whose kind still has a spent, unreset window
 ///   projects to `paused`; any other stall projects to `failed`.
-fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: Timestamp) {
+fn project_display_status(
+    rows: &mut [SidebarRow],
+    agents: &[AgentState],
+    now: Timestamp,
+    stalled_after_secs: u32,
+) {
     let rate_limit_kinds = rate_limit_window_kinds(agents, now);
     for row in rows.iter_mut() {
         let row_name = row.name.clone();
@@ -1749,7 +1756,7 @@ fn project_display_status(rows: &mut [SidebarRow], agents: &[AgentState], now: T
             agent.turn_error_label = error.label.clone();
             AgentStatus::Failed
         } else {
-            let stalled = crate::feed::is_stalled(status, last_activity, now);
+            let stalled = crate::feed::is_stalled(status, last_activity, now, stalled_after_secs);
             if stalled && rate_limit_kinds.spent.contains(row_name.as_str()) {
                 AgentStatus::Paused
             } else if stalled {

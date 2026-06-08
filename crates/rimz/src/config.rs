@@ -10,7 +10,7 @@
 //! and unknown keys are ignored so an older binary tolerates a newer file.
 
 use std::collections::BTreeMap;
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU32};
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
@@ -435,6 +435,10 @@ pub struct SidebarConfig {
     /// budget shrinks. Display-only; it tunes the colour ramp, never the
     /// ledger.
     pub budget: BudgetZonesConfig,
+    /// Attention timing knobs. These decide when a silent running row becomes
+    /// an actionable `!`; the renderer's heat colours remain separate display
+    /// grammar.
+    pub attention: AttentionConfig,
     /// Preferred comparison target for the worktree header's git stats (the
     /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡`/`✓` landed markers).
     /// Tried
@@ -476,6 +480,7 @@ impl Default for SidebarConfig {
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
             budget: BudgetZonesConfig::default(),
+            attention: AttentionConfig::default(),
             trunk: None,
             theme: SidebarThemeConfig::default(),
             scrollbar: ScrollbarMode::default(),
@@ -539,6 +544,25 @@ impl SidebarThemeConfig {
     /// Whether every slot is unset — the serialized config omits the section.
     pub fn is_unset(&self) -> bool {
         *self == Self::default()
+    }
+}
+
+/// `[sidebar.attention]`: timing knobs for the attention projection. The
+/// values are per-machine display/routing preferences, never ledger truth.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct AttentionConfig {
+    /// Seconds a `running` agent may record no completed tool or turn activity
+    /// before the sidebar projects it to the actionable `!` attention bucket.
+    pub stalled_after_secs: NonZeroU32,
+}
+
+impl Default for AttentionConfig {
+    fn default() -> Self {
+        Self {
+            stalled_after_secs: NonZeroU32::new(crate::feed::DEFAULT_STALL_AFTER_SECS)
+                .expect("non-zero default stall window"),
+        }
     }
 }
 
@@ -868,6 +892,36 @@ mod tests {
         // field, rather than silently painting the default.
         assert!(
             MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"bogus\"\n")).is_err()
+        );
+    }
+
+    #[test]
+    fn attention_config_defaults_parses_and_rejects_zero() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+        assert_eq!(
+            config.sidebar.attention.stalled_after_secs.get(),
+            crate::feed::DEFAULT_STALL_AFTER_SECS,
+            "unset uses the shipped 30-minute stall window",
+        );
+
+        let tuned = MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.attention]\nstalled_after_secs = 2700\n",
+        ))
+        .expect("load");
+        assert_eq!(tuned.sidebar.attention.stalled_after_secs.get(), 2700);
+
+        let partial =
+            MachineConfig::load_from(&write(&dir, "[sidebar.attention]\n")).expect("load");
+        assert_eq!(partial.sidebar.attention, AttentionConfig::default());
+
+        assert!(
+            MachineConfig::load_from(&write(
+                &dir,
+                "[sidebar.attention]\nstalled_after_secs = 0\n",
+            ))
+            .is_err()
         );
     }
 

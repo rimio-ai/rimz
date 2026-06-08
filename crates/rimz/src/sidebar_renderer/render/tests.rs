@@ -2070,7 +2070,7 @@ fn render_stalled_agent_reads_as_static_attention() {
         Some("waiting on tools"),
     );
     claude.last_activity =
-        fixed_now() - Duration::from_secs(crate::feed::STALL_WINDOW_SECS as u64 + 60);
+        fixed_now() - Duration::from_secs(u64::from(crate::feed::DEFAULT_STALL_AFTER_SECS) + 60);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 40, 10);

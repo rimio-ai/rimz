@@ -275,6 +275,14 @@ pub fn enrich(
     mut mode: EnrichMode<'_>,
 ) -> SidebarSnapshot {
     let producing = matches!(mode, EnrichMode::Producing { .. });
+    let machine_config = match &mode {
+        EnrichMode::Cached => crate::config::MachineConfig::load().unwrap_or_default(),
+        EnrichMode::Producing { config, .. } => (**config).clone(),
+    };
+    // Attention timing is needed during pane projection, before the full config
+    // fold builds provider panels and stamps context severity.
+    snapshot.sidebar = machine_config.sidebar.clone();
+
     // The room's group roots — a repo room's worktree checkouts (so one parked
     // outside the project root still earns its own pod instead of folding into
     // `external`), a directory room's depth-1 child repos. The producer passes
@@ -374,7 +382,7 @@ pub fn enrich(
     let spending_cache = match mode {
         EnrichMode::Cached => {
             let cache;
-            (snapshot, cache) = fold_machine_config_cached(snapshot, runtime);
+            (snapshot, cache) = fold_machine_config_cached(snapshot, runtime, machine_config);
             let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
             project_diff_stats(&mut snapshot, &diff_cache);
             cache
@@ -762,17 +770,14 @@ fn produce_accounts(
 fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
+    config: crate::config::MachineConfig,
 ) -> (SidebarSnapshot, ProviderSpendingCache) {
     let accounts = read_accounts_cache(&runtime.shared_accounts_path()).accounts;
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
-    let mut snapshot = fold_machine_config_with(
-        snapshot,
-        crate::config::MachineConfig::load().unwrap_or_default(),
-        accounts,
-        &cache.spending.by_provider,
-    );
+    let mut snapshot =
+        fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
     apply_rate_limit_cache(&mut snapshot, runtime, false);

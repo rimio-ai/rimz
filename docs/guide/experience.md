@@ -152,7 +152,7 @@ The reader types `claude` in the shell pane and just looks at its input box — 
 
 ## Phase 4 — Prompted and working
 
-The reader gives Claude a task. The prompt then the first tool call move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the stall window, so it never spins forever.
+The reader gives Claude a task. The prompt then the first tool call move the row to `⢿ running`; the task slot fills with the agent's reported task (or the first ~20 chars of the prompt). A *wedged* `running` agent betrays itself by escalating to the static `!` attention state once it falls silent past the configurable stall window (30 minutes by default), so it never spins forever.
 
 ```
  ⌘ query-engine

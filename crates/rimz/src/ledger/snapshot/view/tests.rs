@@ -33,6 +33,10 @@ fn agent_ask(kind: FeedKind, source: &str, session_id: &str) -> FeedItem {
     item
 }
 
+fn default_stall_secs() -> i64 {
+    i64::from(crate::feed::DEFAULT_STALL_AFTER_SECS)
+}
+
 // ── Feed classification: which pending items become attention ───────────────
 
 #[test]
@@ -2833,7 +2837,7 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
         .worktree("/repo/main")
         .in_pane("%1")
         // Silent past the stall window.
-        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+        .active_ago(default_stall_secs() + 60);
 
     // A fresh heartbeat lands (the agent's next tool completed).
     let touch = AgentActivity {
@@ -2861,7 +2865,7 @@ fn stalled_running_agent_escalates_to_attention() {
     let session = agent("claude", "live-claude", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1")
-        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+        .active_ago(default_stall_secs() + 60);
 
     let snapshot = room(Vec::new(), vec![session])
         .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
@@ -2888,6 +2892,31 @@ fn stalled_running_agent_escalates_to_attention() {
         rolled_up.status,
         AgentStatus::Running,
         "the rollup keeps the true running status; only the display row escalates"
+    );
+}
+
+#[test]
+fn configured_stall_window_controls_running_attention_escalation() {
+    let project = |age_secs| {
+        let session = agent("claude", "live-claude", AgentStatus::Running, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .active_ago(age_secs);
+        let mut snapshot = room(Vec::new(), vec![session]);
+        snapshot.sidebar.attention.stalled_after_secs =
+            std::num::NonZeroU32::new(120).expect("non-zero test window");
+        snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
+    };
+
+    assert_eq!(
+        project(119).worktree_groups[0].rows[0].status(),
+        Some(AgentStatus::Running),
+        "a running agent below the configured window stays live"
+    );
+    assert_eq!(
+        project(120).worktree_groups[0].rows[0].status(),
+        Some(AgentStatus::Failed),
+        "a running agent at the configured window escalates to `!`"
     );
 }
 
@@ -2946,7 +2975,7 @@ fn running_parent_with_a_live_subagent_waits_instead_of_stalling() {
         .in_pane("%1")
         // Silent past the stall window — its heartbeat is quiet because the
         // work is the child's, not a wedge.
-        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+        .active_ago(default_stall_secs() + 60);
     let child = child_state("root", "child-1", AgentStatus::Running, 5);
 
     let snapshot = room(Vec::new(), vec![parent, child])
@@ -2972,7 +3001,7 @@ fn api_error_turn_escalates_running_to_attention() {
     // rollup keeps `running` — but the transcript marker postdates the
     // agent's own activity, and the projection escalates at once. The
     // headline: the agent is *inside* the stall window (silent only a
-    // minute), so this beats the 10-minute backstop.
+    // minute), so this beats the configured backstop.
     let session = agent("claude", "live-claude", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .in_pane("%1")
@@ -3088,7 +3117,7 @@ fn dead_parent_with_live_child_keeps_running() {
 #[test]
 fn displayed_status_precedence_ladder_holds() {
     let spent = || vec![window(100, 3_600)];
-    let stalled_secs = crate::feed::STALL_WINDOW_SECS + 60;
+    let stalled_secs = default_stall_secs() + 60;
 
     struct Rung {
         name: &'static str,
@@ -3225,11 +3254,11 @@ fn fallback_paused_predicate() {
     let stalled_spent = agent("claude", "stalled-spent", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .limits(vec![window(100, 3_600)])
-        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+        .active_ago(default_stall_secs() + 60);
     let stalled_fresh = agent("codex", "stalled-fresh", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .limits(vec![window(80, 3_600)])
-        .active_ago(crate::feed::STALL_WINDOW_SECS + 60);
+        .active_ago(default_stall_secs() + 60);
     let active_spent = agent("claude", "active-spent", AgentStatus::Running, 0)
         .worktree("/repo/main")
         .limits(vec![window(100, 3_600)])
@@ -3507,7 +3536,7 @@ fn compaction_end_stays_orthogonal_to_display_status() {
     ])
     .remove(0)
     .worktree("/repo/main")
-    .active_ago(crate::feed::STALL_WINDOW_SECS + 10);
+    .active_ago(default_stall_secs() + 10);
 
     let snapshot = room_with_agent_panes(Vec::new(), vec![auto]);
     assert_eq!(

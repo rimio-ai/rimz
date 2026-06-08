@@ -126,6 +126,15 @@ refresh_ms = 100   # base render grid in milliseconds (default 100)
 
 `refresh_ms` sets the sidebar's in-process animation and dirty-frame grid. It defaults to 100ms, clamps to the supported range internally, and resolves onto the snapshot like the rest of `[sidebar]`, so a change lands on the next fold. It does not change the data backstop or any producer pull cadence; those timing lanes live in [internals/state.md](../internals/state.md).
 
+#### Attention timing
+
+```toml
+[sidebar.attention]
+stalled_after_secs = 1800   # silent running agent -> ! after 30 minutes
+```
+
+`stalled_after_secs` controls when a `running` agent that records no completed tool or turn activity is projected to the actionable `!` bucket. The default is 1800 seconds. The next heartbeat self-clears the projection, and a running parent with a live subagent keeps its child-work exemption. This does not tune the `?`/`!` visual heat ramp; that renderer grammar remains the glyph legend's yellow/amber/red age clock.
+
 #### Context meter
 
 ```toml

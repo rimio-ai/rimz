@@ -668,31 +668,36 @@ pub enum AgentSignal {
     Attention { status: AgentStatus },
 }
 
-/// How long a `running` agent may record no activity before the sidebar treats
-/// it as stalled — likely wedged on a hung tool or awaiting an off-screen
-/// prompt — and escalates it to an attention `!`. Mirrors Claude Code's default
-/// 10-minute operation timeout. "Activity" is the per-tool heartbeat the
-/// snapshot folds into `last_activity` (see [`crate::agent_activity`]): it
-/// advances on every *completed* tool call, so a busy multi-tool turn stays
-/// live. An agent that completes no tool and crosses no turn boundary for the
-/// whole window — one long-running tool, or a genuine wedge — is surfaced as
-/// `!` so it becomes actionable. The escalation self-heals: the next heartbeat
-/// readvances `last_activity`, [`is_stalled`] goes false, and the row leaves
-/// attention on the following snapshot with no human action.
-pub const STALL_WINDOW_SECS: i64 = 10 * 60;
+/// Default window before a `running` agent with no activity is treated as
+/// stalled. The per-machine `[sidebar.attention] stalled_after_secs` setting
+/// overrides this for the live sidebar projection.
+pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
 
-/// Whether a `running` agent has gone silent past [`STALL_WINDOW_SECS`]. Only
+/// Whether a `running` agent has gone silent past `stalled_after_secs`. Only
 /// `running` can stall: every other status is terminal, idle, or already an
 /// attention state. The sidebar projects a stalled agent to the attention
 /// bucket so a wedged agent becomes actionable instead of a frozen spinner.
+/// "Activity" is the per-tool heartbeat the snapshot folds into
+/// `last_activity` (see [`crate::agent_activity`]): it advances on every
+/// *completed* tool call, so a busy multi-tool turn stays live. An agent that
+/// completes no tool and crosses no turn boundary for the whole window — one
+/// long-running tool, or a genuine wedge — is surfaced as `!` so it becomes
+/// actionable. The escalation self-heals: the next heartbeat readvances
+/// `last_activity`, [`is_stalled`] goes false, and the row leaves attention on
+/// the following snapshot with no human action.
 ///
 /// A `running` agent that has merely delegated to subagents is *not* stalled —
 /// its work is the children's heartbeats, not its own — so the projection
 /// caller suppresses this while the agent has a live child (see the sidebar's
 /// "waiting for subagents" derivation).
-pub fn is_stalled(status: AgentStatus, last_activity: Timestamp, now: Timestamp) -> bool {
+pub fn is_stalled(
+    status: AgentStatus,
+    last_activity: Timestamp,
+    now: Timestamp,
+    stalled_after_secs: u32,
+) -> bool {
     status == AgentStatus::Running
-        && now.duration_since(last_activity).as_secs() >= STALL_WINDOW_SECS
+        && now.duration_since(last_activity).as_secs() >= i64::from(stalled_after_secs)
 }
 
 /// Whether a `running` agent's latest turn died on a provider API error with no
