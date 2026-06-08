@@ -43,7 +43,7 @@ pub(super) const ORANGE: Color = Color::Indexed(173);
 pub(crate) struct Palette {
     /// sage — running tally / low gauge / additions / cache reads (`Color::Green`).
     good: Color,
-    /// gold — waiting / mid gauge / cache writes (`Color::Yellow`).
+    /// gold — waiting / mid gauge (`Color::Yellow`).
     warn: Color,
     /// balanced red — failed / high gauge / fresh input (`Color::Red`).
     alarm: Color,
@@ -51,7 +51,7 @@ pub(crate) struct Palette {
     accent: Color,
     /// sky — the cautious `plan` posture pill (`Color::Blue`).
     cool: Color,
-    /// soft purple — the provider `⇅ rc` flag and delegation family (`Color::Magenta`).
+    /// soft purple — cache writes, the provider `⇅ rc` flag, and delegation family (`Color::Magenta`).
     meta: Color,
     /// mid gray — the soft content tier: capability tokens, card figures,
     /// subagent lines. A step above `dim`, below the default-fg `value`.

@@ -153,11 +153,11 @@ The provider dashboard's budget bars — and the `5h`/`7d` labels that mirror th
 ```toml
 [sidebar.theme]
 good      = 108   # calm/positive — running tallies, low gauges, additions, cache reads
-warn      = 179   # caution — waiting glyphs at rest, mid gauges, cache writes
+warn      = 179   # caution — waiting glyphs at rest, mid gauges
 alarm     = 167   # alarm — failed glyphs, high gauges, removals, fresh input
 accent    = 73    # structure — worktree headers and the selected lane spine
 cool      = 75    # cool informational — the plan posture pill, window tags
-meta      = 141   # delegation/meta — the ⇅ rc flag, the subagent ⧉ marker
+meta      = 141   # delegation/meta — cache writes, the ⇅ rc flag, the subagent ⧉ marker
 soft      = 246   # soft content text — stat figures, capability tokens, subagent lines
 dim       = 242   # dim chrome — labels, ages, seams
 faint     = 238   # faintest chrome — bar tracks, · separators, dotted dividers

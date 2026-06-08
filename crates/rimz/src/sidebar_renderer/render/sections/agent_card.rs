@@ -755,7 +755,7 @@ fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 }
 
 /// The context bar's color segments, when the per-message breakdown is known,
-/// left to right: cache writes (yellow), cache reads (blue), fresh `input`
+/// left to right: cache writes (violet), cache reads (blue), fresh `input`
 /// (red) — the shared `SEGMENT_*` tones the context line's markers also wear,
 /// so the line legends the bar by construction. The rich statusline blob is
 /// preferred; the row-level [`SidebarRow::call_split`] (Codex's rollout

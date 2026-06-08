@@ -597,7 +597,7 @@ fn context_breakdown_shape_leads_with_the_filled_window() {
 
 /// With color on, the context line is the bar's legend: the `▤` head wears
 /// the caller's severity, each composition marker its bar-segment tone
-/// (`◌` blue, `◍` yellow, `↘` red, `↗` green), and every figure reads at the
+/// (`◌` blue, `◍` violet, `↘` red, `↗` green), and every figure reads at the
 /// dim chrome weight — a step under the name line's soft tokens.
 #[test]
 fn context_breakdown_markers_wear_their_segment_colors() {
@@ -624,7 +624,7 @@ fn context_breakdown_markers_wear_their_segment_colors() {
     assert_eq!(tone(TOKENS_CACHED), Some(Color::Indexed(75)), "cache read");
     assert_eq!(
         tone(TOKENS_CACHE_WRITE),
-        Some(Color::Indexed(179)),
+        Some(Color::Indexed(141)),
         "cache write"
     );
     assert_eq!(tone(TOKENS_IN), Some(Color::Indexed(167)), "fresh input");

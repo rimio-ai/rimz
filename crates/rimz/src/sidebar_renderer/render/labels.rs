@@ -296,11 +296,14 @@ pub(super) const CONTEXT_FILLED: &str = "▤";
 
 /// The context-window composition colors — one tone per segment, shared by the
 /// bar's colored runs and the context line's `◌`/`◍`/`↘` markers so the line
-/// reads as the bar's legend by construction. `↗` output is not in the window
-/// (it joins next turn), so it carries no bar segment; its green is free
-/// because the meter's calm tier reads blue.
+/// reads as the bar's legend by construction. Cache-write reads violet (the
+/// `meta` family) to stay clear of the severity ramp's yellow/amber/red; it
+/// shares the `◇` total's violet, but those markers never co-occur because `◇`
+/// is fleet vocabulary and `◍` belongs to the card context line. `↗` output is
+/// not in the window (it joins next turn), so it carries no bar segment; its
+/// green is free because the meter's calm tier reads blue.
 pub(super) const SEGMENT_CACHE_READ: Color = Color::Blue;
-pub(super) const SEGMENT_CACHE_WRITE: Color = Color::Yellow;
+pub(super) const SEGMENT_CACHE_WRITE: Color = Color::Magenta;
 pub(super) const SEGMENT_INPUT: Color = Color::Red;
 pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 
