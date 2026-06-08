@@ -11,10 +11,9 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # `-D warnings` is the deny-warnings gate. The link-arg picks mold: a
-  # `RUSTFLAGS` env overrides `[target.*].rustflags` from .cargo/config.toml
-  # (the `linker = "clang"` key there survives), so the link-arg is re-added
-  # here. mold + clang are installed per job below.
+  # `-D warnings` is the deny-warnings gate. CI opts into mold explicitly; repo
+  # Cargo config stays install-safe and does not force a custom linker locally.
+  # mold + clang are installed per job below.
   RUSTFLAGS: -D warnings -Clink-arg=-fuse-ld=mold
   RUST_BACKTRACE: 1
 

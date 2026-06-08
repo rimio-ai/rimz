@@ -211,7 +211,7 @@ Rules:
 
 The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `rust-version`. Required components: `rustfmt`, `clippy`, `llvm-tools-preview`. Required targets: `wasm32-wasip1` (the Zellij presence plugin; rustup and the CI toolchain action provision it from the same file).
 
-A fast linker is required and configured per target in `.cargo/config.toml`: `clang` + `mold` on Linux, `clang` + `lld` on macOS. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker. CI re-adds the mold link-arg to `RUSTFLAGS` because a `RUSTFLAGS` env overrides `[target.*].rustflags` while leaving the `linker` key intact.
+Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI uses `clang` + `mold` on Linux through job-local `RUSTFLAGS`; contributors may opt into the same setup in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
 
 ### Quality gates
 
