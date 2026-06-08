@@ -173,24 +173,24 @@ pub(crate) struct ProviderTabHit {
     pub(crate) kind: String,
 }
 
-/// The pinned per-provider dashboard. With one account it is that provider's
-/// block — a hairline rule, then a header line, then the brand emblem zipped
-/// against the aggregate stats and the account-scoped budget bars. With
-/// several it is **tabbed**: the top hairline becomes a [tab
-/// rail](provider_tab_rail) — each account set into the rule, the active one
-/// a brand-filled bold chip — over the active provider's block alone, so the
-/// budgets read one account at a time instead of stacking; the header then
-/// drops the name the rail carries and indents to the stats column, sitting
-/// directly over the `◎` line as the right-column grid's title row. A metered
-/// account drains one "mana" bar per budget window toward its reset; an
-/// unmetered (API-key) account shows the `∞` "infinite power" bar in the label
-/// slot with no countdown. The bars share one start and one end column across
-/// every block, so the dashboard reads as one aligned grid. Bottom chrome —
-/// the tabs are its only hit targets, never a jump.
+/// The pinned per-provider dashboard. In stacked mode every account paints its
+/// own block — a hairline rule, then a header line, then the brand emblem
+/// zipped against the aggregate stats and account-scoped budget bars. In
+/// tabbed mode the top hairline becomes a [tab rail](provider_tab_rail) — each
+/// account set into the rule, the active one a brand-filled bold chip — over
+/// the active provider's block alone, so the budgets read one account at a time;
+/// the header then drops the name the rail carries and indents to the stats
+/// column, sitting directly over the `◎` line as the right-column grid's title
+/// row. A metered account drains one "mana" bar per budget window toward its
+/// reset; an unmetered (API-key) account shows the `∞` "infinite power" bar in
+/// the label slot with no countdown. The bars share one start and one end
+/// column across every block, so the dashboard reads as one aligned grid.
+/// Bottom chrome — the tabs are its only hit targets, never a jump.
 pub(in crate::sidebar_renderer::render) fn provider_panel_lines(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     active_kind: Option<&str>,
+    tabbed: bool,
     width: usize,
     zones: &BudgetZonesConfig,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
@@ -198,31 +198,46 @@ pub(in crate::sidebar_renderer::render) fn provider_panel_lines(
     let Some(first) = providers.first() else {
         return (lines, Vec::new());
     };
+    if !tabbed {
+        return (
+            providers
+                .iter()
+                .flat_map(|panel| single_block_lines(theme, panel, width, zones))
+                .collect(),
+            Vec::new(),
+        );
+    }
+
     let active = active_kind
         .and_then(|kind| providers.iter().find(|panel| panel.kind == kind))
         .unwrap_or(first);
-    let tabbed = providers.len() > 1;
-    let mut hits = Vec::new();
-    if tabbed {
-        let (rail, tab_hits) = provider_tab_rail(theme, providers, &active.kind, width);
-        hits = tab_hits;
-        lines.push(rail);
-        // A blank line below the rail sets the tabs apart from the active
-        // account's block, matching the cockpit's breathing room; the header
-        // then sits directly over the stats line as the grid's title row.
-        lines.push(Line::from(""));
-        lines.push(provider_header_line(theme, active, width, true));
-    } else {
-        // One account: the dashboard's top hairline is a plain rule, and the
-        // header keeps the product name no rail carries.
-        lines.push(super::super::hairline_rule(theme, width));
-        lines.push(provider_header_line(theme, active, width, false));
-        // A blank line below the provider name sets the identity apart from
-        // the emblem + stats body, matching the cockpit's breathing room.
-        lines.push(Line::from(""));
-    }
+    let (rail, hits) = provider_tab_rail(theme, providers, &active.kind, width);
+    lines.push(rail);
+    // A blank line below the rail sets the tabs apart from the active
+    // account's block, matching the cockpit's breathing room; the header
+    // then sits directly over the stats line as the grid's title row.
+    lines.push(Line::from(""));
+    lines.push(provider_header_line(theme, active, width, true));
     lines.extend(provider_body_lines(theme, active, width, zones));
     (lines, hits)
+}
+
+fn single_block_lines(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    width: usize,
+    zones: &BudgetZonesConfig,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::new();
+    // The dashboard's top hairline is a plain rule, and the header keeps the
+    // product name no rail carries.
+    lines.push(super::super::hairline_rule(theme, width));
+    lines.push(provider_header_line(theme, panel, width, false));
+    // A blank line below the provider name sets the identity apart from
+    // the emblem + stats body, matching the cockpit's breathing room.
+    lines.push(Line::from(""));
+    lines.extend(provider_body_lines(theme, panel, width, zones));
+    lines
 }
 
 /// The dashboard's tab rail — the top hairline with every account set into it:

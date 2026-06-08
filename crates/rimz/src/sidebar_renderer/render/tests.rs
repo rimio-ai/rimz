@@ -2678,6 +2678,7 @@ fn provider_bars_share_one_front_and_end_column() {
                 &theme,
                 &panels,
                 Some(panel.kind.as_str()),
+                true,
                 30,
                 &crate::config::BudgetZonesConfig::default(),
             )
@@ -2725,6 +2726,7 @@ fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<L
         theme,
         std::slice::from_ref(panel),
         None,
+        false,
         30,
         &crate::config::BudgetZonesConfig::default(),
     )
@@ -2914,6 +2916,7 @@ fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
         theme,
         std::slice::from_ref(panel),
         None,
+        false,
         40,
         &crate::config::BudgetZonesConfig::default(),
     )
@@ -3043,6 +3046,7 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         &theme,
         &panels,
         Some("claude"),
+        true,
         28,
         &crate::config::BudgetZonesConfig::default(),
     );
@@ -3070,9 +3074,9 @@ fn tab_rail_keeps_every_glyph_still_across_picks() {
     let panels = two_provider_panels();
     let zones = crate::config::BudgetZonesConfig::default();
     let (claude_lines, claude_hits) =
-        provider_panel_lines(&theme, &panels, Some("claude"), 52, &zones);
+        provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones);
     let (codex_lines, codex_hits) =
-        provider_panel_lines(&theme, &panels, Some("codex"), 52, &zones);
+        provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones);
     assert_eq!(
         claude_hits, codex_hits,
         "the click targets hold still as the pick moves"
@@ -3096,8 +3100,8 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
     let theme = Theme::fixed(true);
     let panels = two_provider_panels();
     let zones = crate::config::BudgetZonesConfig::default();
-    let (claude_lines, _) = provider_panel_lines(&theme, &panels, Some("claude"), 52, &zones);
-    let (codex_lines, _) = provider_panel_lines(&theme, &panels, Some("codex"), 52, &zones);
+    let (claude_lines, _) = provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones);
+    let (codex_lines, _) = provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones);
     let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
     assert!(
         claude_rail.contains("┤ Claude ├") && !claude_rail.contains("┤ Codex ├"),
@@ -3146,6 +3150,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     // The tab rail names both accounts set into the line; the pick is the
@@ -3203,6 +3208,7 @@ fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
             kind: "codex".to_owned(),
@@ -3237,6 +3243,7 @@ fn render_provider_dashboard_tab_follows_the_selected_agent() {
     );
     let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
     snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
@@ -3250,6 +3257,7 @@ fn render_provider_dashboard_tab_follows_the_selected_agent() {
 fn render_scroll_keeps_gap_above_provider_dashboard() {
     let mut snapshot = overflowing_fleet();
     snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let frame = compose_lines(
         &snapshot,
         None,
@@ -3283,6 +3291,44 @@ fn render_scroll_keeps_gap_above_provider_dashboard() {
         "dashboard tab hits stay on the rail row after the separator ({} hits):\n{rendered}",
         frame.tab_hits.len()
     );
+}
+
+/// In `auto` mode, two providers stay stacked: both account blocks paint at
+/// once and there is no tab rail or tab hit surface.
+#[test]
+fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    snapshot.providers = two_provider_panels();
+    let rendered = snapshot_to_screen(&snapshot, 54, 40);
+
+    assert!(
+        !rendered.contains("─ Claude ─") && !rendered.contains("─ Codex ─"),
+        "stacked mode paints plain rules, not a rail:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Claude v2.1.158 · Claude Max"),
+        "{rendered}"
+    );
+    assert!(
+        rendered.contains("Codex v0.135.0 · ChatGPT Pro"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("5h"), "stacked 5h label:\n{rendered}");
+    assert!(rendered.contains("7d"), "stacked 7d label:\n{rendered}");
+    assert!(
+        rendered.contains('∞'),
+        "codex block paints too:\n{rendered}"
+    );
+    assert_snapshot("provider_dashboard_stacked", rendered);
 }
 
 /// A dashboard with a single account keeps its block bare — no tab rail, a

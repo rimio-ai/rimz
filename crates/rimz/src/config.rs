@@ -402,6 +402,21 @@ pub enum GlowMode {
     Never,
 }
 
+/// `[sidebar] provider_tabs`: how the bottom provider dashboard switches
+/// between stacked account blocks and a tab rail. Display-only.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ProviderTabsMode {
+    /// Stack one or two providers so both accounts stay visible; tab three or
+    /// more providers to keep the dashboard bounded.
+    #[default]
+    Auto,
+    /// Tab whenever more than one provider is present.
+    Always,
+    /// Always stack provider blocks; no tab rail is painted.
+    Never,
+}
+
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -420,6 +435,18 @@ pub struct SidebarConfig {
     /// elided. Providers are few, so the cap rarely bites; it bounds the panel
     /// height on a box that links many accounts.
     pub max_provider_blocks: usize,
+    /// How provider blocks lay out: `auto` stacks one or two providers and tabs
+    /// three or more; `always` tabs whenever more than one provider is present;
+    /// `never` always stacks. Resolved producer-side onto the snapshot like
+    /// the rest of `[sidebar]`.
+    pub provider_tabs: ProviderTabsMode,
+    /// Provider kinds to show in the dashboard and their order. Empty means all
+    /// discovered providers, still governed by `max_provider_blocks`; `"all"`
+    /// expands to every remaining discovered provider at that position; without
+    /// `"all"` this is a strict allowlist. An explicit list bypasses
+    /// `max_provider_blocks`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub provider_list: Vec<String>,
     /// Cap on the sidebar pane width in columns. Every sidebar pane targets the
     /// standard percentage of the view at this cap; on an ultra-wide terminal
     /// the percentage alone grows absurd, so a pane born above the cap is
@@ -477,6 +504,8 @@ impl Default for SidebarConfig {
             providers: BTreeMap::new(),
             refresh_ms: DEFAULT_REFRESH_MS,
             max_provider_blocks: default_max_provider_blocks(),
+            provider_tabs: ProviderTabsMode::default(),
+            provider_list: Vec::new(),
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
             budget: BudgetZonesConfig::default(),
@@ -1067,10 +1096,31 @@ mod tests {
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         assert_eq!(config.sidebar.max_provider_blocks, 3);
+        assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Auto);
+        assert!(config.sidebar.provider_list.is_empty());
         // Set just one sidebar field: the cap still falls back to its default.
         let partial =
             MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 60\n")).expect("load");
         assert_eq!(partial.sidebar.max_provider_blocks, 3);
+        assert_eq!(partial.sidebar.provider_tabs, ProviderTabsMode::Auto);
+        assert!(partial.sidebar.provider_list.is_empty());
+    }
+
+    #[test]
+    fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
+        let dir = tempdir().expect("tempdir");
+        let config = MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar]\nprovider_tabs = \"always\"\nprovider_list = [\"codex\", \"all\"]\n",
+        ))
+        .expect("load");
+        assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Always);
+        assert_eq!(config.sidebar.provider_list, vec!["codex", "all"]);
+
+        let encoded = toml::to_string(&config.sidebar).expect("serialize sidebar");
+        let round_tripped: SidebarConfig = toml::from_str(&encoded).expect("parse sidebar");
+        assert_eq!(round_tripped.provider_tabs, ProviderTabsMode::Always);
+        assert_eq!(round_tripped.provider_list, vec!["codex", "all"]);
     }
 
     #[test]

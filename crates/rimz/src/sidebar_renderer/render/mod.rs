@@ -26,7 +26,7 @@ pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 
-use crate::config::ScrollbarMode;
+use crate::config::{ProviderTabsMode, ScrollbarMode};
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot};
@@ -348,6 +348,17 @@ pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> 
     panels.first().map(|panel| panel.kind.clone())
 }
 
+/// Whether the provider dashboard paints a tab rail. A single provider always
+/// paints as a bare block; the configured mode only matters once multiple
+/// provider panels are present.
+pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
+    match snapshot.sidebar.provider_tabs {
+        ProviderTabsMode::Auto => snapshot.providers.len() >= 3,
+        ProviderTabsMode::Always => snapshot.providers.len() > 1,
+        ProviderTabsMode::Never => false,
+    }
+}
+
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
 /// summary, make-up line, and fixed separator), a scroll viewport over the
 /// agent cards, and the bottom chrome pinned to the bottom edge like a status
@@ -423,10 +434,12 @@ pub(crate) fn compose_lines(
         // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
         let active_kind = active_provider_kind(snapshot, ui);
+        let tabbed = dashboard_tabbed(snapshot);
         let (panel_lines, panel_hits) = provider_panel_lines(
             &theme,
             &snapshot.providers,
             active_kind.as_deref(),
+            tabbed,
             inner,
             &snapshot.sidebar.budget,
         );

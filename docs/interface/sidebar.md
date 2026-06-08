@@ -294,13 +294,13 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 - `1`–`9` jump by the row's visible position.
 - `␣` jump to the **next thing that needs you** — the oldest waiting/failed row, without selecting first. One key tames a fleet; press again for the next.
 - `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to waiting/attention/paused/done/working/idle; the active status key toggles back to all, and `a` clears to all directly.
-- `←/→` switch the provider dashboard's tab — a pick in place, never a jump.
+- `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
 
 ## Zone 3 — the provider dashboard
 
-The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. With several accounts the panel is **tabbed**. The panel's top hairline becomes a tab rail naming every provider: each label in its brand color at full strength, the active tab a brand-filled bold chip set into the line. The rail's glyphs are identical whichever tab is active, so a switch moves color and weight alone — and under `NO_COLOR`, where the fill drops, `┤ ├` caps notch the active tab instead, carrying the pick by shape. One account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.158`), indented to start over the `◎` stats column. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block — nothing to switch, no tab rail. Every account that is logged in but idle this run still earns its tab, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
+The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. `provider_tabs = "auto"` stacks one or two accounts as visible blocks and switches to a tab rail at three or more; `always` tabs whenever more than one provider is present; `never` stacks every provider block. `provider_list` picks which provider kinds show and their order, including the `"all"` token for "the rest here." In tabbed mode, the panel's top hairline becomes a tab rail naming every provider: each label in its brand color at full strength, the active tab a brand-filled bold chip set into the line. The rail's glyphs are identical whichever tab is active, so a switch moves color and weight alone — and under `NO_COLOR`, where the fill drops, `┤ ├` caps notch the active tab instead, carrying the pick by shape. One account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.158`), indented to start over the `◎` stats column. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block. Every account that is logged in but idle this run still earns its block, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
 Each block's stats line speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right.
 
@@ -317,6 +317,21 @@ When Rimz is reading only cached budgets and the longest cached window has alrea
   ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50    emblem + sessions · today's tokens · spend (right)
  ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
    ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
+```
+
+In the default `auto` mode, two accounts stack as full blocks with plain hairlines and no tab rail:
+
+```
+ ────────────────────────────────────────────────────
+ Claude v2.1.158 · Claude Max                  ⇅ rc
+  ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
+ ────────────────────────────────────────────────────
+ Codex v0.135.0 · ChatGPT Pro
+  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20
+ ▝▜█████▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
+   ▘▘ ▝▝
 ```
 
 Switching the tab (`→`, or a click on `Codex`) moves the chip's fill onto the picked tab and swaps the block in place — the rail's glyphs are identical in both states, so the pick is pure color and not a cell moves. This account is **unmetered** (an API key): no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
@@ -425,6 +440,7 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_renderer/render/`](../.
 | scrollbar removed (`never`) | `scrollbar_never_mode` |
 | provider dashboard, tabbed (derived tab) | `provider_dashboard` |
 | provider dashboard, manual tab pick | `provider_dashboard_codex_tab` |
+| provider dashboard, stacked auto layout | `provider_dashboard_stacked` |
 | fleet ledger (week/month) | `fleet_ledger` |
 | health alert | `degraded_banner` |
 

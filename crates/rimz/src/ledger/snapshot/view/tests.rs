@@ -17,6 +17,14 @@ use crate::feed::FeedKind;
 use crate::feed::{RuntimeOwner, RuntimeOwnerKind};
 use crate::ledger::snapshot::testkit::*;
 
+fn provider_kinds(snapshot: &SidebarSnapshot) -> Vec<&str> {
+    snapshot
+        .providers
+        .iter()
+        .map(|panel| panel.kind.as_str())
+        .collect()
+}
+
 /// A pending agent-hook ask naming `session_id`, homed at `/repo/main` like
 /// the agents it joins.
 fn agent_ask(kind: FeedKind, source: &str, session_id: &str) -> FeedItem {
@@ -250,12 +258,63 @@ fn provider_cap_keeps_top_spenders_then_orders_by_kind() {
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
-    let kinds: Vec<&str> = snapshot
-        .providers
-        .iter()
-        .map(|panel| panel.kind.as_str())
-        .collect();
-    assert_eq!(kinds, vec!["codex", "pi"]);
+    assert_eq!(provider_kinds(&snapshot), vec!["codex", "pi"]);
+}
+
+#[test]
+fn provider_list_strict_allowlist_orders_and_hides_unnamed_kinds() {
+    let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
+    let pi = agent("pi", "p1", AgentStatus::Idle, 30);
+    let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
+    snapshot.sidebar.max_provider_blocks = 1;
+    snapshot.sidebar.provider_list = vec!["pi".to_owned(), "claude".to_owned()];
+
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    assert_eq!(provider_kinds(&snapshot), vec!["pi", "claude"]);
+}
+
+#[test]
+fn provider_list_all_expands_remaining_kinds_at_that_position() {
+    let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
+    let pi = agent("pi", "p1", AgentStatus::Idle, 30);
+    let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
+    snapshot.sidebar.max_provider_blocks = 1;
+    snapshot.sidebar.provider_list = vec!["codex".to_owned(), "all".to_owned()];
+
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    assert_eq!(provider_kinds(&snapshot), vec!["codex", "claude", "pi"]);
+}
+
+#[test]
+fn provider_list_drops_named_kinds_absent_from_discovery() {
+    let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
+    let mut snapshot = room(Vec::new(), vec![claude, codex]);
+    snapshot.sidebar.provider_list = vec!["opencode".to_owned(), "codex".to_owned()];
+
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    assert_eq!(provider_kinds(&snapshot), vec!["codex"]);
+}
+
+#[test]
+fn provider_list_with_only_absent_kinds_resolves_to_no_dashboard() {
+    let claude = agent("claude", "c1", AgentStatus::Idle, 10);
+    let codex = agent("codex", "x1", AgentStatus::Idle, 20);
+    let mut snapshot = room(Vec::new(), vec![claude, codex]);
+    snapshot.sidebar.provider_list = vec!["opencode".to_owned()];
+
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    assert!(snapshot.providers.is_empty());
 }
 
 #[test]

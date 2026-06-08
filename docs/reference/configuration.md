@@ -223,7 +223,9 @@ When the agent cards overflow their viewport, a thin `▐`/`▕` scrollbar rides
 
 ```toml
 [sidebar]
-max_provider_blocks = 3        # cap the dashboard at N provider blocks (default 3)
+provider_tabs = "auto"         # provider dashboard layout: "auto" (default) | "always" | "never"
+provider_list = []             # ordered provider kinds; [] discovers all providers
+max_provider_blocks = 3        # cap discovered dashboard blocks when provider_list is empty (default 3)
 
 [sidebar.providers.claude]
 product_name = "Claude Code"   # header label (default per kind)
@@ -235,7 +237,11 @@ ascii_art = """
 """
 ```
 
-The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. `max_provider_blocks` caps how many providers earn a tab — today's spend decides which survive the cap, and the retained set orders stably by kind so the tab row never reorders as spend shifts. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
+The dashboard pinned at the bottom of the sidebar carries one block per agent kind. `provider_tabs = "auto"` stacks one or two providers so both accounts stay visible and switches to tabs at three or more providers; `always` tabs whenever more than one provider is present; `never` stacks every provider block. Resolved producer-side onto the snapshot like the rest of `[sidebar]`, so every renderer of the workspace agrees and a change lands with the next snapshot.
+
+`provider_list` picks which provider kinds show and their order. Empty or omitted discovers all providers, ranks them by today's spend, applies `max_provider_blocks`, and orders the retained set stably by kind. A non-empty list is explicit and bypasses `max_provider_blocks`: without `"all"` it is a strict allowlist (`["codex"]` shows only Codex); with `"all"` the named kinds pin to their positions and `"all"` expands to every remaining discovered provider there (`["codex", "all"]` shows Codex first, then the rest). Unknown names are skipped.
+
+`[sidebar.providers.<kind>]` overrides the built-in style — `<kind>` is `claude`, `codex`, `pi`, …; each field is optional and falls back to the shipped default, so you can recolour without restating the art. How each block's account, plan, and usage budgets are sourced is in [internals/account.md](../internals/account.md).
 
 ## Resolver allowlist — `~/.config/rimz/resolvers.toml`
 

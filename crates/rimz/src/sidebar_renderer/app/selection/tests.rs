@@ -1014,6 +1014,26 @@ fn tab_keys_noop_without_a_second_panel() {
 }
 
 #[test]
+fn tab_keys_noop_when_auto_mode_stacks_two_panels() {
+    let ws = workspace();
+    let mut snapshot = clickable_block_snapshot(&ws);
+    snapshot.providers = vec![provider("claude"), provider("codex")];
+    let mut ui = UiState::default();
+
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::default());
+    assert!(
+        ui.dashboard_tab.is_none(),
+        "two auto-mode panels are stacked"
+    );
+    assert_eq!(
+        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        Some("claude")
+    );
+}
+
+#[test]
 fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     let ws = workspace();
     let snapshot = tabbed_snapshot(&ws);

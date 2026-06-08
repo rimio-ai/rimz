@@ -7,8 +7,8 @@ use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 
 use crate::sidebar_renderer::render::{
-    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, row_passes_filter,
-    selected_agent_kind, status_total,
+    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, dashboard_tabbed,
+    row_passes_filter, selected_agent_kind, status_total,
 };
 
 use super::input::{FilterAction, KeyAction};
@@ -133,6 +133,9 @@ pub(super) fn handle_key(
 /// selection-derived default ([`active_provider_kind`]). A dashboard with
 /// fewer than two panels has nothing to cycle.
 fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize) -> InputOutcome {
+    if !dashboard_tabbed(snapshot) {
+        return InputOutcome::default();
+    }
     let panels = &snapshot.providers;
     if panels.len() < 2 {
         return InputOutcome::default();

@@ -853,10 +853,13 @@ impl SidebarSnapshot {
     /// whose only signal is such a login still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
-    /// the renderer gets a ready-to-paint block. Capped to `max_provider_blocks`
-    /// by today's spend, then ordered stably by kind — the panels are the
-    /// dashboard's tabs, so the row never reorders as spend shifts. Producer-only:
-    /// the pure reducer leaves `providers` empty.
+    /// the renderer gets a ready-to-paint block. With no explicit
+    /// `provider_list`, the set is capped to `max_provider_blocks` by today's
+    /// spend, then ordered stably by kind — the panels are the dashboard's tabs,
+    /// so the row never reorders as spend shifts. An explicit `provider_list`
+    /// supplies the shown set and order, with `all` expanding the remaining
+    /// discovered providers and bypassing the cap. Producer-only: the pure
+    /// reducer leaves `providers` empty.
     pub fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
@@ -994,6 +997,21 @@ impl SidebarSnapshot {
             });
         }
 
+        self.providers = resolve_provider_panels(
+            panels,
+            &self.sidebar.provider_list,
+            self.sidebar.max_provider_blocks,
+        );
+        self
+    }
+}
+
+fn resolve_provider_panels(
+    mut panels: Vec<SidebarProviderPanel>,
+    provider_list: &[String],
+    max_provider_blocks: usize,
+) -> Vec<SidebarProviderPanel> {
+    if provider_list.is_empty() {
         // Today's JSONL spend decides only *which* panels survive the cap — the
         // provider you are actively spending on always earns its block, and a
         // token-only provider (Codex) ranks on the same transcript-derived
@@ -1007,11 +1025,39 @@ impl SidebarSnapshot {
                 .unwrap_or(Ordering::Equal)
                 .then_with(|| left.kind.cmp(&right.kind))
         });
-        panels.truncate(self.sidebar.max_provider_blocks);
+        panels.truncate(max_provider_blocks);
         panels.sort_by(|left, right| left.kind.cmp(&right.kind));
-        self.providers = panels;
-        self
+        return panels;
     }
+
+    let explicitly_named: BTreeSet<&str> = provider_list
+        .iter()
+        .filter_map(|kind| (kind != "all").then_some(kind.as_str()))
+        .collect();
+    let by_kind: BTreeMap<String, SidebarProviderPanel> = panels
+        .into_iter()
+        .map(|panel| (panel.kind.clone(), panel))
+        .collect();
+    let mut resolved = Vec::new();
+    let mut emitted_named = BTreeSet::new();
+    let mut emitted_all = false;
+    for kind in provider_list {
+        if kind == "all" {
+            if !emitted_all {
+                resolved.extend(by_kind.iter().filter_map(|(kind, panel)| {
+                    (!explicitly_named.contains(kind.as_str())).then_some(panel.clone())
+                }));
+                emitted_all = true;
+            }
+            continue;
+        }
+        if emitted_named.insert(kind.as_str())
+            && let Some(panel) = by_kind.get(kind)
+        {
+            resolved.push(panel.clone());
+        }
+    }
+    resolved
 }
 
 /// The account-stable *set* of budget windows across every session of a
