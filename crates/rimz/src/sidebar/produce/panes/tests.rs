@@ -222,15 +222,23 @@ fn stamp_pane_process_starts_stamps_a_codex_pane_lacking_a_native_start() {
 fn stamp_pane_process_starts_classifies_from_spawn_command() {
     let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
     let mut pane = pane("terminal_30", None, Some("/repo"));
+    pane.pane_pid = Some(777);
     pane.spawn_command = Some("rimz agents exec codex --worktree-path /repo".to_owned());
     let mut frame = frame(vec![pane]);
     let unstamped = natively_unstamped(&frame);
 
-    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|kind, cwd| {
-        assert_eq!(kind, "codex");
-        assert_eq!(cwd, "/repo");
-        vec![start]
-    });
+    stamp_pane_process_starts(
+        &mut frame,
+        &unstamped,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 777);
+            Some(start)
+        },
+        &|_, _| -> Vec<jiff::Timestamp> {
+            panic!("root-pid derivation owns spawn_command-classified panes")
+        },
+    );
 
     assert_eq!(first(&frame).current.started_at, Some(start));
 }
