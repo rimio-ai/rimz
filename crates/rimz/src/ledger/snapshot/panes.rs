@@ -520,6 +520,7 @@ fn idle_agent_row(
             options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: false,
+            compaction_count: 0,
             turn_error_label: None,
         })),
     }

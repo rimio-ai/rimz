@@ -199,6 +199,7 @@ fn agent(
         subagent_started_at: None,
         turn_started_at: None,
         compacting_since: None,
+        compaction_count: 0,
         last_seen: now,
         last_activity: now,
         registered_at: Some(now),
@@ -487,6 +488,51 @@ fn render_enriched_selected_agent_card() {
         "window size left the token line:\n{rendered}"
     );
     assert_snapshot("enriched_selected_agent_card", rendered);
+}
+
+#[test]
+fn agent_context_line_renders_compaction_count_past_first() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    claude.compaction_count = 2;
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+    assert!(
+        rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · ↻ 2"),
+        "the compaction count trails the context composition:\n{rendered}"
+    );
+    assert_snapshot("agent_card_context_compactions", rendered);
+}
+
+#[test]
+fn agent_context_line_omits_single_compaction_count() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    claude.compaction_count = 1;
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+    assert!(
+        !rendered.contains('↻') && !rendered.contains("· ↻"),
+        "a single compaction stays quiet:\n{rendered}"
+    );
 }
 
 #[test]

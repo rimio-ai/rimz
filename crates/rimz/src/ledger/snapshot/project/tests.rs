@@ -115,6 +115,76 @@ fn compaction_ended_clears_compacting_since() {
         agents[0].compacting_since.is_none(),
         "PostCompact clears the transient marker"
     );
+    assert_eq!(agents[0].compaction_count, 1);
+}
+
+#[test]
+fn compaction_count_accumulates_completed_brackets() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let lifecycle = |params: serde_json::Value| {
+        EventEnvelope::new(
+            workspace.clone(),
+            "session",
+            "claude",
+            "agent-hook",
+            "agent.lifecycle",
+            params,
+        )
+    };
+    let prompt = lifecycle(serde_json::json!({
+        "event_name": "UserPromptSubmit",
+        "agent_id": "sess-1",
+        "signal": { "signal": "turn_started" },
+    }));
+    let compact = lifecycle(serde_json::json!({
+        "event_name": "PreCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compacting" },
+    }));
+    let post = lifecycle(serde_json::json!({
+        "event_name": "PostCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compaction_ended", "auto": false },
+    }));
+    let next_prompt = lifecycle(serde_json::json!({
+        "event_name": "UserPromptSubmit",
+        "agent_id": "sess-1",
+        "signal": { "signal": "turn_started" },
+    }));
+    let second_compact = lifecycle(serde_json::json!({
+        "event_name": "PreCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compacting" },
+    }));
+    let second_post = lifecycle(serde_json::json!({
+        "event_name": "PostCompact",
+        "agent_id": "sess-1",
+        "signal": { "signal": "compaction_ended", "auto": true },
+    }));
+
+    let once = reduce_agent_states(&[prompt.clone(), compact.clone(), post.clone()]);
+    assert_eq!(once[0].compaction_count, 1);
+
+    let carried = reduce_agent_states(&[
+        prompt.clone(),
+        compact.clone(),
+        post.clone(),
+        next_prompt.clone(),
+    ]);
+    assert_eq!(
+        carried[0].compaction_count, 1,
+        "non-compaction lifecycle events carry the count forward"
+    );
+
+    let twice = reduce_agent_states(&[
+        prompt,
+        compact,
+        post,
+        next_prompt,
+        second_compact,
+        second_post,
+    ]);
+    assert_eq!(twice[0].compaction_count, 2);
 }
 
 #[test]

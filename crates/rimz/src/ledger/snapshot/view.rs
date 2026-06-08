@@ -1931,6 +1931,7 @@ pub(super) fn row_from_agent(agent: &AgentState, now: Timestamp) -> SidebarRow {
             options: Vec::new(),
             sub_agents: Vec::new(),
             compacting: is_compacting(agent, now),
+            compaction_count: agent.compaction_count,
             turn_error_label: None,
         })),
     }
@@ -1996,6 +1997,7 @@ fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> SidebarRow {
             options: item.options.clone(),
             sub_agents: Vec::new(),
             compacting: false,
+            compaction_count: 0,
             turn_error_label: None,
         })),
     }

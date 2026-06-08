@@ -201,6 +201,10 @@ pub struct AgentCard {
     /// The agent is condensing its context window right now.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
+    /// Lifetime count of completed context compactions, copied from the rollup;
+    /// the context line renders `↻ N` only past the first.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub compaction_count: u32,
     /// Provider error label projected while a dead turn escalates to failed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error_label: Option<String>,
@@ -308,6 +312,10 @@ impl RowCallSplit {
 /// the wire.
 pub(crate) fn turn_phase_is_idle(phase: &TurnPhase) -> bool {
     *phase == TurnPhase::Idle
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A compact summary of a child agent, nested under its parent's row.

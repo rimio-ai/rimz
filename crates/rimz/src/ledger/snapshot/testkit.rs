@@ -128,6 +128,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         subagent_started_at: None,
         turn_started_at: None,
         compacting_since: None,
+        compaction_count: 0,
         last_seen: timestamp,
         last_activity: timestamp,
         registered_at: Some(timestamp),

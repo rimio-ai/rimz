@@ -838,6 +838,12 @@ pub struct AgentState {
     /// it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
+    /// How many times this session has condensed its context window — the count
+    /// of completed compaction brackets. Derived by the rollup from trailing
+    /// compaction hooks, carried forward unchanged on every other event, and
+    /// rendered by the card as `↻ N` past the first. Display-only.
+    #[serde(default, skip_serializing_if = "is_zero_u32")]
+    pub compaction_count: u32,
     pub last_seen: Timestamp,
     pub last_activity: Timestamp,
     /// When this session first entered the rollup — the timestamp of its
@@ -848,6 +854,10 @@ pub struct AgentState {
     /// a rollup persisted before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registered_at: Option<Timestamp>,
+}
+
+fn is_zero_u32(n: &u32) -> bool {
+    *n == 0
 }
 
 impl AgentState {

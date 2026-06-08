@@ -163,6 +163,14 @@ pub(super) fn reduce_agent_states_seeded(
         } else {
             None
         };
+        // Every completed compaction bracket bumps the lifetime counter. The
+        // trailing hook (`CompactionEnded`) is the modeled terminator, so the
+        // card's `↻ N` matches the number of windows condensed.
+        let compaction_count = prior.map_or(0, |p| p.compaction_count)
+            + u32::from(matches!(
+                signal,
+                lifecycle::LifecycleSignal::CompactionEnded { .. }
+            ));
         let param_string = |key: &str| {
             event
                 .params
@@ -345,6 +353,7 @@ pub(super) fn reduce_agent_states_seeded(
             subagent_started_at: None,
             turn_started_at,
             compacting_since,
+            compaction_count,
             last_seen: event.timestamp,
             last_activity: event.timestamp,
             registered_at,

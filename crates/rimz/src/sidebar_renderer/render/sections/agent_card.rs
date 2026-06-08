@@ -18,9 +18,9 @@ use crate::sidebar_renderer::render::fmt::{
 use crate::sidebar_renderer::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
     agent_glyph, agent_style, attention_glyph_style, compacting_glyph, compacting_style,
-    context_breakdown_spans, context_total_spans, elapsed_glyph, gauge_spans, loading_dots,
-    resolver_glyph, segmented_gauge_spans, severity_color, status_style, subagent_glyph,
-    subagent_style, todo_spans, window_style,
+    context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
+    gauge_spans, loading_dots, resolver_glyph, segmented_gauge_spans, severity_color, status_style,
+    subagent_glyph, subagent_style, todo_spans, window_style,
 };
 use crate::sidebar_renderer::render::theme::Theme;
 
@@ -831,6 +831,7 @@ fn context_tokens_line(
     // the absolute figure and the meter above it read at one urgency. A row
     // with no gauge percent folds to 0 and lets the token overlay alone speak.
     let severity = severity_color(row_severity(row, bands));
+    let mut left = vec![Span::raw("  ")];
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_usage.as_ref())
@@ -839,7 +840,6 @@ fn context_tokens_line(
         let output = usage.output_tokens.unwrap_or(0);
         let cache_write = usage.cache_creation_input_tokens.unwrap_or(0);
         let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
-        let mut left = vec![Span::raw("  ")];
         left.extend(context_breakdown_spans(
             theme,
             severity,
@@ -850,13 +850,11 @@ fn context_tokens_line(
             output,
             tokens_int,
         ));
-        return Some(pin_right(left, age, width));
-    }
-    // The row-level split — the lifecycle rail's per-call composition (Codex's
-    // rollout `last_token_usage`). Its protocol reports no per-call
-    // cache-write, so that column passes 0 and drops from the line.
-    if let Some(split) = row.call_split() {
-        let mut left = vec![Span::raw("  ")];
+    } else if let Some(split) = row.call_split() {
+        // The row-level split — the lifecycle rail's per-call composition
+        // (Codex's rollout `last_token_usage`). Its protocol reports no
+        // per-call cache-write, so that column passes 0 and drops from the
+        // line.
         left.extend(context_breakdown_spans(
             theme,
             severity,
@@ -867,10 +865,14 @@ fn context_tokens_line(
             split.output,
             tokens_int,
         ));
-        return Some(pin_right(left, age, width));
+    } else if let Some(total) = agent(row).and_then(|agent| agent.total_tokens) {
+        left.extend(context_total_spans(theme, severity, total, tokens_int));
+    } else {
+        return None;
     }
-    let total = agent(row).and_then(|agent| agent.total_tokens)?;
-    let mut left = vec![Span::raw("  ")];
-    left.extend(context_total_spans(theme, severity, total, tokens_int));
+    left.extend(context_compaction_spans(
+        theme,
+        agent(row).map_or(0, |agent| agent.compaction_count),
+    ));
     Some(pin_right(left, age, width))
 }

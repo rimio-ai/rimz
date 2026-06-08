@@ -248,6 +248,7 @@ mod tests {
             subagent_started_at: None,
             turn_started_at: None,
             compacting_since: None,
+            compaction_count: 0,
             last_seen: when,
             last_activity: when,
             registered_at: Some(when),

@@ -293,6 +293,9 @@ pub(super) const TOKENS_CACHED: &str = "◌";
 /// the context window, sibling to the `▣` meter glyph so the two context reads
 /// pair visually while staying distinct from the `◇` fleet totals.
 pub(super) const CONTEXT_FILLED: &str = "▤";
+/// The agent card's compaction marker: a recycle arrow for how many times the
+/// session has condensed its window. Violet — the compaction vocabulary's tone.
+pub(super) const CONTEXT_COMPACTIONS: &str = "↻";
 
 /// The context-window composition colors — one tone per segment, shared by the
 /// bar's colored runs and the context line's `◌`/`◍`/`↘` markers so the line
@@ -381,6 +384,23 @@ pub(super) fn context_breakdown_spans(
         seam = " ";
     }
     spans
+}
+
+/// The `· ↻ N` compaction tail for the context line, shown only past the first
+/// compaction so a single condense stays quiet. The `·` seam reads at the dim
+/// chrome like the composition seams; the marker wears the violet compaction
+/// tone.
+pub(super) fn context_compaction_spans(theme: &Theme, count: u32) -> Vec<Span<'static>> {
+    if count <= 1 {
+        return Vec::new();
+    }
+    vec![
+        Span::styled(" · ", theme.dim()),
+        Span::styled(
+            format!("{CONTEXT_COMPACTIONS} {count}"),
+            compacting_style(theme),
+        ),
+    ]
 }
 
 /// The `▤ {filled}` head of the card's context line: the filled-square marker +
