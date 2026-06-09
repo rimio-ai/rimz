@@ -533,11 +533,12 @@ pub(super) fn gauge_spans(
 }
 
 /// Like [`gauge_spans`], but the filled run is split into colored segments by
-/// token weight — showing *where* the context window went (fresh input vs cache
-/// writes vs cache reads). `total_pct` sizes the filled run exactly as the
-/// single-color gauge would; the segments apportion that run by their weights
-/// with largest-remainder rounding, so the colored cells always sum to the
-/// filled count and the bar never over- or under-fills. With no breakdown to
+/// token weight — showing *where* the context window went (cache reads, cache
+/// writes, and fresh input in the caller-provided order). `total_pct` sizes
+/// that filled run exactly as the single-color gauge would; the segments
+/// apportion that run by their weights with largest-remainder rounding, so the
+/// colored cells always sum to the filled count and the bar never over- or
+/// under-fills. With no breakdown to
 /// draw it falls back to the plain gauge. Under `NO_COLOR` the segments merge
 /// into one heavy run — the split is a color enrichment; the fill level still
 /// reads by shape.

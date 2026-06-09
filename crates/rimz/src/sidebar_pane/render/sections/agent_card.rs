@@ -676,7 +676,7 @@ fn bar_row(
 /// yellow → amber → red severity ([`row_severity`], bands from
 /// `[sidebar.context]`) come from the used percentage and the absolute tokens;
 /// when the statusline reports the per-message token breakdown a *calm* fill is
-/// split into colored segments (cache writes / cache reads / fresh input) that
+/// split into colored segments (cache reads / cache writes / fresh input) that
 /// add up to exactly that percentage, and a warmed bar goes one solid severity
 /// run. The `▣` glyph wears the same severity, so glyph, bar, and the `▤` line
 /// below speak one urgency. The value prefers a one-decimal precise fraction
@@ -755,7 +755,7 @@ fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 }
 
 /// The context bar's color segments, when the per-message breakdown is known,
-/// left to right: cache writes (violet), cache reads (blue), fresh `input`
+/// left to right: cache reads (blue), cache writes (violet), fresh `input`
 /// (red) — the shared `SEGMENT_*` tones the context line's markers also wear,
 /// so the line legends the bar by construction. The rich statusline blob is
 /// preferred; the row-level [`SidebarRow::call_split`] (Codex's rollout
@@ -773,15 +773,15 @@ fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
         let writes = usage.cache_creation_input_tokens.unwrap_or(0);
         let reads = usage.cache_read_input_tokens.unwrap_or(0);
         return (input + writes + reads > 0).then_some([
-            (writes, SEGMENT_CACHE_WRITE),
             (reads, SEGMENT_CACHE_READ),
+            (writes, SEGMENT_CACHE_WRITE),
             (input, SEGMENT_INPUT),
         ]);
     }
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
-        (0, SEGMENT_CACHE_WRITE),
         (split.cache_read, SEGMENT_CACHE_READ),
+        (0, SEGMENT_CACHE_WRITE),
         (split.fresh_input, SEGMENT_INPUT),
     ])
 }

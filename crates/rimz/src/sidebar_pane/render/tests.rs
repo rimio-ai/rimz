@@ -1435,6 +1435,75 @@ fn codex_calm_bar_splits_into_row_level_segments() {
     );
 }
 
+/// When all per-call input buckets are present, the calm context bar reads left
+/// to right like the context line: cache read, cache write, fresh input. This is
+/// style-level because the terminal text only shows one continuous `━` run.
+#[test]
+fn calm_context_bar_orders_cache_read_before_cache_write() {
+    let theme = Theme::fixed(false);
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("index docs"),
+    );
+    let mut context = claude_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(100_000),
+        used_percentage: Some(30),
+        remaining_percentage: Some(70),
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(10_000),
+            output_tokens: Some(0),
+            cache_creation_input_tokens: Some(10_000),
+            cache_read_input_tokens: Some(10_000),
+        }),
+    });
+    claude.context = Some(context);
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut row_index = 0;
+    worktree_group_lines(
+        &theme,
+        &snapshot.worktree_groups[0],
+        &snapshot.providers,
+        44,
+        &snapshot.sidebar.context,
+        None,
+        &mut row_index,
+        0,
+        0,
+        &CostRolls::default(),
+        &mut lines,
+        &mut map,
+    );
+
+    let bar_styles: Vec<_> = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .filter(|span| span.content.contains('━'))
+        .map(|span| span.style)
+        .collect();
+    let expected = [
+        theme.style(labels::SEGMENT_CACHE_READ, Modifier::empty()),
+        theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty()),
+        theme.style(labels::SEGMENT_INPUT, Modifier::empty()),
+    ];
+    assert!(
+        bar_styles.len() >= expected.len(),
+        "expected at least three filled context segments: {bar_styles:?}"
+    );
+    assert_eq!(
+        &bar_styles[..expected.len()],
+        expected.as_slice(),
+        "the filled context bar should render read, write, input"
+    );
+}
+
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
 /// idle span) with a tone stepping the same quarters: the dim resting
 /// weight while a resume would still hit cache, yellow from the second
