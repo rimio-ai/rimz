@@ -1,6 +1,6 @@
 # Integration suite
 
-Local contract for `crates/rimz/tests/integration/` — the crate's single integration-test binary. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. The required matrix and tier definitions live in [docs/contributing/testing.md](../../../../docs/contributing/testing.md).
+Local contract for `crates/rimz/tests/integration/` — the crate's single integration-test binary. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. Test tiers and runner rules live in [rust-conventions.md](../../../../docs/contributing/rust-conventions.md#tests).
 
 ## Harness
 

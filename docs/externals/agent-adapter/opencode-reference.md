@@ -1,6 +1,6 @@
 # OpenCode protocol reference
 
-> This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto Rimz's internal types lands beside it with the adapter ([roadmap M7](../../contributing/roadmap.md#m7--additional-agents)): [hooks.md](../../internals/hooks.md) the lifecycle mapping and install shape, [transcript.md](../../internals/transcript.md) the context read-path, [account.md](../../internals/account.md) the account/balance mapping. [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
+> This doc mirrors OpenCode ahead of its adapter, the path [pi-reference.md](./pi-reference.md) proved. The mapping onto Rimz's internal types lands beside it with the adapter: [hooks.md](../../internals/hooks.md) the lifecycle mapping and install shape, [transcript.md](../../internals/transcript.md) the context read-path, [account.md](../../internals/account.md) the account/balance mapping. [Mapping feasibility](#mapping-feasibility) below is that work's starting brief.
 
 This is the single home for the **OpenCode upstream protocol surface** a Rimz adapter binds to — the in-process plugin API (hooks, bus events, blocking returns, install surface), the SQLite session store, the server HTTP API, the auth file, and the CLI/env surface. It is a hand-maintained mirror of the opencode.ai docs and the published TypeScript wire types, pinned to the source URLs below; the storage, auth, event, and CLI shapes are additionally verified against a live `opencode` 1.15.13 install (2026-06-04).
 

@@ -1,5 +1,5 @@
 //! Shared harness for integration tests. Real tempdir, real ledger files —
-//! no in-memory stubs per `docs/contributing/testing.md`.
+//! no in-memory stubs.
 //!
 //! Two entry points, one module each:
 //! - [`Env`] (`env`) drives the `rimz` binary out of process (the CLI tier):

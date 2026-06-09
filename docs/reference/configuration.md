@@ -4,7 +4,7 @@
 
 Rimz runs with no configuration. Everything here is optional tuning.
 
-Configuration has two tiers. The per-machine tier under `~/.config/rimz/` drives your terminal, accounts, notification routes, sidecars, and room preferences; it stays personal, uncommitted, and outside the project trust hash. The project tier at `<root>/.rimz/config.toml` declares a shared workspace shape; Rimz trust-tracks it today, and applying that shape is on the roadmap.
+Configuration has two tiers. The per-machine tier under `~/.config/rimz/` drives your terminal, accounts, notification routes, sidecars, and room preferences; it stays personal, uncommitted, and outside the project trust hash. The project tier at `<root>/.rimz/config.toml` declares a shared workspace shape; Rimz trust-tracks it today, and applying that shape is planned project-config behaviour.
 
 ## Get Started
 
@@ -196,7 +196,7 @@ This is the designed model. Today the per-machine layer is live, CLI/env overrid
 
 ## Project Config
 
-The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz reads it today to compute the executable-surface trust hash; launch-time application of the declared layout, agents, hooks, and env remains on the [roadmap](../contributing/roadmap.md).
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz reads it today to compute the executable-surface trust hash; launch-time application of the declared layout, agents, hooks, and env is planned project-config behaviour.
 
 ```toml
 [[layout.initial_panes]]

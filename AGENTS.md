@@ -46,10 +46,8 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - Routine validation defaults to the fast relevant nextest subset plus lightweight gates; run journey, live-backend, performance, or full CI (`cargo xtask ci`) only when the change touches those surfaces, their fixtures, or shared infrastructure.
 - Keep test tiers separate: function/unit tests stay in-module and pure, integration tests own subprocess/filesystem behavior, journey tests own rendered user flows, live-backend tests own real tmux/Zellij behavior, and performance tests assert bounded resource use rather than product semantics.
 - A module's unit tests have one home: inline `#[cfg(test)] mod tests` by default; past the size gate the whole module moves to a sibling `tests.rs` (enforced by `cargo xtask invariants`). Doctests stay on public items as minimal usage examples. Shape and threshold in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
-- Do not land ignored tests for future product targets. Capture planned behaviour in docs/roadmap, then add the executable test when the implementation is ready to make it pass under nextest.
+- Do not land ignored tests for future product targets. Capture planned behaviour in the owning design or internals doc, then add the executable test when the implementation is ready to make it pass under nextest.
 - Grep-style CI invariants (`cargo xtask invariants`) guard the architectural boundaries — decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, and more.
-
-Full matrix and the invariant list in [docs/contributing/testing.md](./docs/contributing/testing.md).
 
 ## Documentation map
 
@@ -99,6 +97,4 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.
-- [testing.md](./docs/contributing/testing.md) — required test matrix and invariants.
 - [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor PNG capture workflow for live and synthetic sidebar frames.
-- [roadmap.md](./docs/contributing/roadmap.md) — build order and current milestone.

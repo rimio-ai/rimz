@@ -18,4 +18,4 @@ Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extend
 
 ## Tests
 
-Durability behaviour — CAS round trips, torn-record recovery, rotation, the write path — lives in [`tests/integration/ledger/`](../../tests/integration/ledger/); pure reducer and helper tests stay in-module. Time is fixed-epoch per [docs/contributing/testing.md](../../../../docs/contributing/testing.md).
+Durability behaviour — CAS round trips, torn-record recovery, rotation, the write path — lives in [`tests/integration/ledger/`](../../tests/integration/ledger/); pure reducer and helper tests stay in-module. Time is fixed-epoch in fixtures.

@@ -119,7 +119,7 @@ The work mirrors [transcript.md → Adding a provider](./transcript.md#adding-a-
 3. **Optionally** register `[sidebar.providers.<kind>]` defaults (emblem, color, name).
 4. **Stay best-effort** throughout: a missing fact is an omitted label or a blank bar, never an error.
 
-Per [testing.md](../contributing/testing.md), golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in each adapter's `account.rs` are the model).
+Golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in each adapter's `account.rs` are the model).
 
 ## What lives elsewhere
 

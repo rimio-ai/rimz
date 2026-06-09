@@ -73,7 +73,6 @@ The CLI and hook subprocesses are the only durable-state writers. The sidebar re
 |                          docs/externals/ holds the local mirrors of upstream
 |                          reference docs, pinned to source URLs for refresh
 |-- Cargo.toml
-|-- Makefile               thin aliases over cargo xtask
 |-- crates/
 |   |-- rimz/              CLI binary plus runtime/domain library
 |   `-- rimz-presence-zellij/  headless Zellij presence plugin (wasm32-wasip1)
@@ -82,7 +81,7 @@ The CLI and hook subprocesses are the only durable-state writers. The sidebar re
 `-- xtask/                 contributor task runner; entry point for every quality gate
 ```
 
-Add a crate only when ownership, target type, or dependency profile justifies it. `rimz` is the one host runtime artifact: the CLI, domain library, and native sidebar renderer ship in the same executable. `rimz-presence-zellij` clears the crate bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, with `zellij-tile` as a wasm-only dependency no host artifact links. Release builds embed the wasm into `rimz`, which materializes it under the user's data directory before loading it. It runs `rimz sidebar wake`, ships a compact pane-topology latency hint through the wake argv for `rimz` to write, and flags switched-to tabs whose focus restored to the sidebar so that tab's sidebar can refocus its working pane; it depends on no rimz crate, and its pure policy unit-tests on the host ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#zellij-presence-channel)). Every renderer projects the same `rimz sidebar snapshot` JSON view-model; a future renderer (the planned Zellij plugin rail, [roadmap](./docs/contributing/roadmap.md)) joins as its own crate projecting the same snapshot.
+Add a crate only when ownership, target type, or dependency profile justifies it. `rimz` is the one host runtime artifact: the CLI, domain library, and native sidebar renderer ship in the same executable. `rimz-presence-zellij` clears the crate bar because it is a wasm32-wasip1 plugin binary owned by the Zellij plugin-host boundary, with `zellij-tile` as a wasm-only dependency no host artifact links. Release builds embed the wasm into `rimz`, which materializes it under the user's data directory before loading it. It runs `rimz sidebar wake`, ships a compact pane-topology latency hint through the wake argv for `rimz` to write, and flags switched-to tabs whose focus restored to the sidebar so that tab's sidebar can refocus its working pane; it depends on no rimz crate, and its pure policy unit-tests on the host ([multiplexers.md → Zellij presence channel](./docs/internals/multiplexers.md#zellij-presence-channel)). Every renderer projects the same `rimz sidebar snapshot` JSON view-model; a planned Zellij plugin rail joins as its own crate projecting the same snapshot ([sidebar.md → Zellij plugin rail](./docs/internals/sidebar.md#zellij-plugin-rail-planned)).
 
 ## Module ownership
 
@@ -116,4 +115,4 @@ Reference resolver artifacts — stdlib-only Python 3, excluded from the workspa
 
 ### Tests
 
-Integration tests live under each crate's `tests/`; `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness and `tests/fixtures/` trace shims — layout and conventions in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The required matrix and the grep-style architectural invariants (`cargo xtask invariants`) live in [docs/contributing/testing.md](./docs/contributing/testing.md).
+Integration tests live under each crate's `tests/`; `crates/rimz` collects its suites into a single `tests/integration/` binary with a shared `common/` harness and `tests/fixtures/` trace shims — layout and conventions in the [suite contract](./crates/rimz/tests/integration/AGENTS.md). The test tiers live in [rust-conventions.md](./docs/contributing/rust-conventions.md#tests), and grep-style architectural invariants run through `cargo xtask invariants`.

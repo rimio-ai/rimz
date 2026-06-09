@@ -73,13 +73,13 @@ The design commitments and the three operating paths (`native_ui`, `bridge`, `sc
 The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Zellij or tmux is needed to try the room and pane flows.
 
 ```sh
-make build      # cargo xtask build
-make install    # install the single rimz binary
-make test       # cargo xtask test
-make ci         # full CI gate
+cargo xtask build      # build rimz and the Zellij presence plugin
+cargo xtask install    # install the single rimz binary
+cargo xtask test       # run the nextest suite
+cargo xtask ci         # full CI gate
 ```
 
-`make` is a thin wrapper around `cargo xtask <task>`; `xtask` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `make install` writes `rimz` to `${CARGO_HOME:-$HOME/.cargo}/bin`, so that directory must be on `PATH`. `sudo make install` builds as the invoking user and installs to `/usr/local/bin`; set `PREFIX=/opt/rimz` or `DESTDIR=...` to change the root-owned destination.
+`cargo xtask <task>` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `cargo xtask install` writes `rimz` to `${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin`, so that directory must be on `PATH`.
 
 After installing, smoke-test the CLI:
 
@@ -93,7 +93,7 @@ Contributor rules, gate details, and task names live in [docs/contributing/rust-
 
 ## Status
 
-Documentation-first. Implementation lands in milestones — M0 spikes the ledger and bridge across Zellij and tmux; agent adapters follow at M2 (Codex) and M3 (Claude Code). See [docs/contributing/roadmap.md](./docs/contributing/roadmap.md).
+Pre-release. The ledger, sidebar, multiplexer backends, and Claude/Codex/Pi adapters are implemented in-tree; upcoming adapter and renderer work is documented beside the owning internals pages.
 
 ## Read next
 

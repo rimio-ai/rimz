@@ -105,8 +105,8 @@ fn path_form_starts_the_remote_room() {
 #[test]
 fn auto_mode_without_a_tty_prints() {
     let env = Env::new();
-    // `bounded_output` pipes stdio, so Auto resolves to Print — the
-    // testing.md attach invariant, unchanged for remote targets.
+    // `bounded_output` pipes stdio, so Auto resolves to Print; remote targets
+    // share the local attach invariant.
     let out = env
         .rimz()
         .args(["remote", "connect", "dev-box:query-engine"])
