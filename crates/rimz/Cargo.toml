@@ -99,6 +99,7 @@ tracing-subscriber.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 nix.workspace = true
+signal-hook.workspace = true
 
 # build.rs compacts the checked-in LiteLLM pricing snapshot into `OUT_DIR` for
 # `include_str!` embedding (tier 1). Vendored-only and network-free, so builds

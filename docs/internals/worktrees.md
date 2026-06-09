@@ -6,15 +6,15 @@ Rimz launches agent fleets by separating three choices: **agents** choose which 
 
 ## Rimz-owned worktrees
 
-`rimz worktree new` creates a Git worktree under the per-machine `[worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref). Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`.
+`rimz worktree new` creates a Git worktree under the per-machine `[worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref). The marker stores the resolved base commit snapshot, so later cleanup compares against the commit the worktree was born from rather than a moving symbolic ref. Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`.
 
 The checkout stays clean of Rimz metadata. Ownership lives in `rimz-worktree.json` inside the worktree's Git admin directory (`git rev-parse --git-dir` for that worktree). Cleanup, `remove`, and `gc` only act when that marker is present.
 
-The marker records the name, branch, base ref, repo root, worktree path, and marker version. A missing marker reads as user-owned, even if the path matches the configured directory template.
+The marker records the name, branch, base commit, repo root, worktree path, and marker version. A missing marker reads as user-owned, even if the path matches the configured directory template.
 
 ## Cleanup
 
-The hidden `rimz agents exec` wrapper runs the agent command in the pane and inherits the pane's TTY. When the agent exits with `--worktree-path`, it re-reads the marker, checks `git status --porcelain`, checks commits ahead of the marker base with `git rev-list --count <base>..HEAD`, and asks the mux for live pane cwd values.
+The hidden `rimz agents exec` wrapper runs the agent command in the pane and inherits the pane's TTY. When the agent exits with `--worktree-path`, it re-reads the marker, checks `git status --porcelain`, checks commits ahead of the marker base commit with `git rev-list --count <base>..HEAD`, and asks the mux for live pane cwd values. If the ahead count cannot be computed, cleanup treats the worktree as not clean and keeps it.
 
 The cleanup decision is pure:
 

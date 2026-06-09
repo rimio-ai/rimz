@@ -2,7 +2,10 @@
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Child, Command, ExitStatus};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -11,6 +14,11 @@ use super::{GlobalFlags, RoomTarget};
 use rimz::mux::{TabOptions, own_pane_id};
 use rimz::tab_layout::{Cell, LayoutSpec};
 use rimz::workspace::WorkspaceResolver;
+
+const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
+const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
+const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
+static CLEANUP_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 #[derive(Debug, Args)]
 pub struct AgentsArgs {
@@ -107,6 +115,10 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
+    if args.worktree_path.is_some() {
+        reset_cleanup_signal_flag();
+        install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
+    }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let argv = adapter
@@ -115,46 +127,160 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
-    let status = Command::new(program)
+    let child = Command::new(program)
         .args(rest)
-        .status()
+        .spawn()
         .with_context(|| format!("running {program}"))?;
+    let outcome = supervise_child(child).context("supervising agent process")?;
 
     if let Some(path) = args.worktree_path.as_deref()
-        && let Err(err) = cleanup_worktree(path, globals)
+        && let Err(err) = cleanup_worktree(path, globals, !outcome.signaled)
     {
         let _ = writeln!(
             std::io::stderr().lock(),
-            "rimz: worktree cleanup skipped: {err}"
+            "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    std::process::exit(status.code().unwrap_or(1));
+    std::process::exit(outcome.status.code().unwrap_or(1));
 }
 
-fn cleanup_worktree(path: &Path, globals: &GlobalFlags) -> Result<()> {
+#[derive(Debug)]
+struct ExecOutcome {
+    status: ExitStatus,
+    signaled: bool,
+}
+
+fn supervise_child(mut child: Child) -> Result<ExecOutcome> {
+    let mut signal_seen_at = cleanup_signal_received().then(Instant::now);
+    let mut term_sent_at: Option<Instant> = None;
+    let mut kill_sent = false;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                return Ok(ExecOutcome {
+                    status,
+                    signaled: signal_seen_at.is_some() || cleanup_signal_received(),
+                });
+            }
+            Ok(None) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err) => return Err(err).context("waiting for agent process"),
+        }
+
+        if cleanup_signal_received() {
+            let now = Instant::now();
+            let first_seen = *signal_seen_at.get_or_insert(now);
+            if now.duration_since(first_seen) >= CHILD_SIGNAL_GRACE {
+                match term_sent_at {
+                    None => {
+                        signal_child(child.id(), ChildSignal::Term);
+                        term_sent_at = Some(now);
+                    }
+                    Some(sent_at)
+                        if !kill_sent && now.duration_since(sent_at) >= CHILD_SIGNAL_GRACE =>
+                    {
+                        signal_child(child.id(), ChildSignal::Kill);
+                        kill_sent = true;
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+
+        std::thread::sleep(CHILD_WAIT_POLL);
+    }
+}
+
+fn reset_cleanup_signal_flag() {
+    cleanup_signal_flag().store(false, Ordering::SeqCst);
+}
+
+fn cleanup_signal_received() -> bool {
+    cleanup_signal_flag().load(Ordering::SeqCst)
+}
+
+fn cleanup_signal_flag() -> &'static Arc<AtomicBool> {
+    CLEANUP_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+#[cfg(unix)]
+fn install_cleanup_signal_handlers() -> Result<()> {
+    use signal_hook::consts::signal::{SIGHUP, SIGTERM};
+
+    for signal in [SIGHUP, SIGTERM] {
+        signal_hook::flag::register(signal, cleanup_signal_flag().clone())?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_cleanup_signal_handlers() -> Result<()> {
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ChildSignal {
+    Term,
+    Kill,
+}
+
+#[cfg(unix)]
+fn signal_child(pid: u32, signal: ChildSignal) {
+    use nix::sys::signal::{Signal, kill};
+    use nix::unistd::Pid;
+
+    let signal = match signal {
+        ChildSignal::Term => Signal::SIGTERM,
+        ChildSignal::Kill => Signal::SIGKILL,
+    };
+    let _ = kill(Pid::from_raw(pid as i32), signal);
+}
+
+#[cfg(not(unix))]
+fn signal_child(_pid: u32, _signal: ChildSignal) {}
+
+fn cleanup_worktree(path: &Path, globals: &GlobalFlags, interactive: bool) -> Result<()> {
     let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
         return Ok(());
     };
     let status = rimz::worktree::status(path, &marker.base_ref)?;
+    if !interactive {
+        std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
+    }
     let other_pane_inside = other_live_pane_inside(path, globals);
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside) {
         rimz::worktree::CleanupDecision::RemoveClean => {
-            rimz::worktree::remove_marked_worktree(&marker.repo_root, path, &marker, false)?;
+            remove_after_leaving_worktree(path, &marker, false)?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
                 path.display()
             );
         }
-        rimz::worktree::CleanupDecision::PromptDirty => match dirty_choice(path)? {
-            DirtyChoice::Keep => {}
-            DirtyChoice::Remove => {
-                rimz::worktree::remove_marked_worktree(&marker.repo_root, path, &marker, true)?;
+        rimz::worktree::CleanupDecision::PromptDirty => {
+            if interactive {
+                match dirty_choice(path)? {
+                    DirtyChoice::Keep => {}
+                    DirtyChoice::Remove => {
+                        remove_after_leaving_worktree(path, &marker, true)?;
+                    }
+                    DirtyChoice::Shell => exec_shell(path)?,
+                }
             }
-            DirtyChoice::Shell => exec_shell(path)?,
-        },
+        }
         rimz::worktree::CleanupDecision::Skip => {}
     }
+    Ok(())
+}
+
+fn remove_after_leaving_worktree(
+    path: &Path,
+    marker: &rimz::worktree::WorktreeMarker,
+    force: bool,
+) -> Result<()> {
+    std::env::set_current_dir(&marker.repo_root)
+        .with_context(|| format!("leaving worktree before removing {}", path.display()))?;
+    rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
     Ok(())
 }
 

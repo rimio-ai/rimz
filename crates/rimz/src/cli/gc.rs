@@ -102,7 +102,7 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
             .iter()
             .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
             || entry.dirty
-            || entry.commits_ahead > 0
+            || entry.commits_ahead != Some(0)
         {
             continue;
         }

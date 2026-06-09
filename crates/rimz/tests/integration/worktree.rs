@@ -2,6 +2,10 @@
 
 use std::path::Path;
 use std::process::Command;
+#[cfg(unix)]
+use std::process::{Child, ExitStatus, Stdio};
+#[cfg(unix)]
+use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
@@ -35,6 +39,14 @@ fn worktree_new_list_and_remove_round_trip() {
             .is_file(),
         "marker lives in git admin dir"
     );
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        marker.base_ref,
+        git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
+        "marker stores the base commit snapshot"
+    );
 
     let out = env
         .rimz()
@@ -45,6 +57,7 @@ fn worktree_new_list_and_remove_round_trip() {
     let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(parsed.as_array().expect("array").len(), 1);
     assert_eq!(parsed[0]["name"], "demo");
+    assert_eq!(parsed[0]["commits_ahead"], 0);
 
     env.rimz()
         .args(["worktree", "remove", "demo"])
@@ -99,6 +112,169 @@ fn worktree_remove_refuses_dirty_without_force() {
     assert!(!path.exists(), "force removes dirty worktree");
 }
 
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_clean_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let mut child = spawn_agent_exec(&env, &path, "clean");
+
+    wait_for_file(&env.home_root.join("clean.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("clean.pid"));
+
+    assert!(!path.exists(), "clean worktree removed after SIGHUP");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "worktree branch deleted"
+    );
+    assert!(
+        !git_stdout(&env.project_root, &["worktree", "list", "--porcelain"])
+            .contains(&path.display().to_string()),
+        "git worktree list forgets the removed worktree"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_clean_worktree_when_agent_exits_on_hup() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let mut child = spawn_agent_exec_with_signals(&env, &path, "clean-fast", AgentSignals::Default);
+    let agent_pid_file = env.home_root.join("clean-fast.pid");
+
+    wait_for_file(&env.home_root.join("clean-fast.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    signal_pid(read_pid(&agent_pid_file), nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &agent_pid_file);
+
+    assert!(
+        !path.exists(),
+        "clean worktree removed after prompt HUP exit"
+    );
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "worktree branch deleted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_keeps_dirty_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
+    let mut child = spawn_agent_exec(&env, &path, "dirty");
+
+    wait_for_file(&env.home_root.join("dirty.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("dirty.pid"));
+
+    assert!(path.exists(), "dirty worktree is kept after SIGHUP");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "dirty worktree branch is kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_keeps_ahead_clean_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker.base_ref)
+            .expect("status")
+            .commits_ahead,
+        Some(1),
+        "resolved base snapshot counts the clean local commit"
+    );
+    assert_eq!(
+        rimz::worktree::status(&path, "HEAD")
+            .expect("legacy symbolic status")
+            .commits_ahead,
+        None,
+        "symbolic legacy bases are not treated as clean"
+    );
+    let mut child = spawn_agent_exec(&env, &path, "ahead");
+
+    wait_for_file(&env.home_root.join("ahead.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("ahead.pid"));
+
+    assert!(path.exists(), "ahead worktree is kept after SIGHUP");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "ahead worktree branch is kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_shared_clean_worktree_removes_once() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let mut first = spawn_agent_exec(&env, &path, "shared-a");
+    let mut second = spawn_agent_exec(&env, &path, "shared-b");
+
+    wait_for_file(&env.home_root.join("shared-a.ready"));
+    wait_for_file(&env.home_root.join("shared-b.ready"));
+    signal_child(&first, nix::sys::signal::Signal::SIGHUP);
+    signal_child(&second, nix::sys::signal::Signal::SIGHUP);
+    let _first_status = wait_for_exit(&mut first, &env.home_root.join("shared-a.pid"));
+    let _second_status = wait_for_exit(&mut second, &env.home_root.join("shared-b.pid"));
+
+    assert!(!path.exists(), "shared clean worktree removed after SIGHUP");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "shared worktree branch deleted once"
+    );
+}
+
 fn git_missing() -> bool {
     Command::new("git").arg("--version").output().is_err()
 }
@@ -107,9 +283,13 @@ fn init_repo(path: &Path) {
     git(path, &["init"]);
     git(path, &["config", "user.email", "rimz@example.com"]);
     git(path, &["config", "user.name", "Rimz Test"]);
-    std::fs::write(path.join("README.md"), "fixture\n").expect("readme");
-    git(path, &["add", "README.md"]);
-    git(path, &["commit", "-m", "initial"]);
+    commit_file(path, "README.md", "fixture\n", "initial");
+}
+
+fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
+    std::fs::write(repo.join(name), contents).expect("write committed file");
+    git(repo, &["add", name]);
+    git(repo, &["commit", "-m", message]);
 }
 
 fn git(cwd: &Path, args: &[&str]) {
@@ -140,4 +320,144 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr),
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+#[cfg(unix)]
+fn spawn_agent_exec(env: &Env, worktree: &Path, label: &str) -> Child {
+    spawn_agent_exec_with_signals(env, worktree, label, AgentSignals::Trap)
+}
+
+#[cfg(unix)]
+fn spawn_agent_exec_with_signals(
+    env: &Env,
+    worktree: &Path,
+    label: &str,
+    signals: AgentSignals,
+) -> Child {
+    let shim_dir = write_codex_shim(env);
+    let ready = env.home_root.join(format!("{label}.ready"));
+    let pid_file = env.home_root.join(format!("{label}.pid"));
+    let mut cmd = env.rimz();
+    cmd.args(["agents", "exec", "codex", "--worktree-path"])
+        .arg(worktree)
+        .current_dir(worktree)
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_READY", &ready)
+        .env("RIMZ_TEST_AGENT_PID", &pid_file)
+        .env(
+            "RIMZ_TEST_AGENT_TRAP_SIGNALS",
+            match signals {
+                AgentSignals::Trap => "1",
+                AgentSignals::Default => "0",
+            },
+        )
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    cmd.spawn().expect("spawn agents exec")
+}
+
+#[cfg(unix)]
+#[derive(Clone, Copy)]
+enum AgentSignals {
+    Trap,
+    Default,
+}
+
+#[cfg(unix)]
+fn write_codex_shim(env: &Env) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let shim = dir.join("codex");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\n\
+         printf '%s\\n' \"$$\" > \"$RIMZ_TEST_AGENT_PID\"\n\
+         : > \"$RIMZ_TEST_AGENT_READY\"\n\
+         if [ \"$RIMZ_TEST_AGENT_TRAP_SIGNALS\" = 1 ]; then\n\
+           trap ':' HUP TERM\n\
+         fi\n\
+         while :; do\n\
+           sleep 1\n\
+         done\n",
+    )
+    .expect("write codex shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod codex shim");
+    dir
+}
+
+#[cfg(unix)]
+fn path_with_front(dir: &Path) -> std::ffi::OsString {
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&original));
+    std::env::join_paths(paths).expect("join PATH")
+}
+
+#[cfg(unix)]
+fn wait_for_file(path: &Path) {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        if path.exists() {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    panic!("timed out waiting for {}", path.display());
+}
+
+#[cfg(unix)]
+fn signal_child(child: &Child, signal: nix::sys::signal::Signal) {
+    signal_pid(child.id() as i32, signal);
+}
+
+#[cfg(unix)]
+fn signal_pid(pid: i32, signal: nix::sys::signal::Signal) {
+    nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal).expect("signal pid");
+}
+
+#[cfg(unix)]
+fn read_pid(path: &Path) -> i32 {
+    std::fs::read_to_string(path)
+        .expect("read pid")
+        .trim()
+        .parse()
+        .expect("parse pid")
+}
+
+#[cfg(unix)]
+fn wait_for_exit(child: &mut Child, agent_pid_file: &Path) -> ExitStatus {
+    let start = Instant::now();
+    while start.elapsed() < Duration::from_secs(5) {
+        match child.try_wait() {
+            Ok(Some(status)) => return status,
+            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err) => panic!("wait failed: {err}"),
+        }
+    }
+    signal_child(child, nix::sys::signal::Signal::SIGKILL);
+    if let Ok(raw) = std::fs::read_to_string(agent_pid_file)
+        && let Ok(pid) = raw.trim().parse::<i32>()
+    {
+        let _ = nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+    let _ = child.wait();
+    panic!("timed out waiting for agents exec to exit");
+}
+
+#[cfg(unix)]
+fn branch_exists(repo: &Path, branch: &str) -> bool {
+    !git_stdout(repo, &["branch", "--list", branch])
+        .trim()
+        .is_empty()
 }

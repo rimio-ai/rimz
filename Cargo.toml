@@ -81,6 +81,7 @@ crc32fast = "1"
 
 # OS integration (cfg(unix))
 nix = { version = "0.31", features = ["feature", "fs", "signal", "socket", "user"] }
+signal-hook = "0.3"
 
 # Process detection
 which = "8"

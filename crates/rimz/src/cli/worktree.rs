@@ -76,6 +76,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             } else {
                 for entry in entries {
+                    let commits_ahead = entry
+                        .commits_ahead
+                        .map_or_else(|| "?".to_owned(), |count| count.to_string());
                     #[expect(clippy::print_stdout, reason = "human listing")]
                     {
                         println!(
@@ -83,7 +86,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                             entry.name,
                             entry.path.display(),
                             entry.branch.as_deref().unwrap_or("-"),
-                            entry.commits_ahead,
+                            commits_ahead,
                             if entry.dirty { " dirty" } else { "" }
                         );
                     }

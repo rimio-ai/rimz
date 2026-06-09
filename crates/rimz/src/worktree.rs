@@ -15,7 +15,7 @@ use uuid::Uuid;
 use crate::config::{WorktreeBase, WorktreeConfig};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
-const MARKER_VERSION: u32 = 1;
+const MARKER_VERSION: u32 = 2;
 const AUTO_ADJECTIVES: &[&str] = &[
     "brisk", "calm", "clear", "daring", "fleet", "fresh", "keen", "lively", "nimble", "quiet",
     "rapid", "ready", "sharp", "steady", "swift", "vivid",
@@ -82,7 +82,7 @@ pub struct WorktreeListEntry {
     pub branch: Option<String>,
     pub base_ref: String,
     pub dirty: bool,
-    pub commits_ahead: u32,
+    pub commits_ahead: Option<u32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,15 +91,31 @@ pub struct WorktreeRow {
     pub branch: Option<String>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorktreeStatus {
     pub dirty: bool,
-    pub commits_ahead: u32,
+    pub commits_ahead: Option<u32>,
+}
+
+impl Default for WorktreeStatus {
+    fn default() -> Self {
+        Self {
+            dirty: false,
+            commits_ahead: Some(0),
+        }
+    }
 }
 
 impl WorktreeStatus {
     pub const fn clean(self) -> bool {
-        !self.dirty && self.commits_ahead == 0
+        !self.dirty && matches!(self.commits_ahead, Some(0))
+    }
+
+    pub const fn unknown() -> Self {
+        Self {
+            dirty: false,
+            commits_ahead: None,
+        }
     }
 }
 
@@ -145,7 +161,8 @@ pub fn create(
     }
 
     let base = base.unwrap_or_else(|| config.base.clone());
-    let base_ref = base.as_refspec().to_owned();
+    let checkout_base_ref = base.as_refspec().to_owned();
+    let base_ref = resolve_base_commit(repo_root, &checkout_base_ref)?;
     let branch = branch
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| name.clone());
@@ -166,7 +183,7 @@ pub fn create(
             "-b",
             branch.as_str(),
             path_arg.as_str(),
-            base_ref.as_str(),
+            checkout_base_ref.as_str(),
         ],
     )?;
     let marker = WorktreeMarker {
@@ -239,7 +256,8 @@ pub fn list(repo_root: &Path) -> Result<Vec<WorktreeListEntry>> {
         let Some(marker) = read_marker_for_worktree(&row.path)? else {
             continue;
         };
-        let status = status(&row.path, &marker.base_ref).unwrap_or_default();
+        let status =
+            status(&row.path, &marker.base_ref).unwrap_or_else(|_| WorktreeStatus::unknown());
         entries.push(WorktreeListEntry {
             name: marker.name,
             path: row.path,
@@ -260,13 +278,7 @@ pub fn prune(repo_root: &Path) -> Result<()> {
 
 pub fn status(worktree: &Path, base_ref: &str) -> Result<WorktreeStatus> {
     let porcelain = git_stdout(worktree, ["status", "--porcelain"])?;
-    let ahead = git_stdout(
-        worktree,
-        ["rev-list", "--count", &format!("{base_ref}..HEAD")],
-    )
-    .ok()
-    .and_then(|raw| raw.trim().parse::<u32>().ok())
-    .unwrap_or(0);
+    let ahead = commits_ahead(worktree, base_ref);
     Ok(WorktreeStatus {
         dirty: !porcelain.trim().is_empty(),
         commits_ahead: ahead,
@@ -375,6 +387,33 @@ pub fn path_inside(path: &Path, parent: &Path) -> bool {
 
 fn write_marker(path: &Path, marker: &WorktreeMarker) -> Result<()> {
     crate::ledger::atomic::write_temp_then_rename(&marker_path(path)?, marker).map_err(Into::into)
+}
+
+fn resolve_base_commit(repo_root: &Path, base_ref: &str) -> Result<String> {
+    let commitish = format!("{base_ref}^{{commit}}");
+    git_stdout(repo_root, ["rev-parse", "--verify", commitish.as_str()])
+}
+
+fn commits_ahead(worktree: &Path, base_ref: &str) -> Option<u32> {
+    if !base_ref_is_snapshot_commit(worktree, base_ref) {
+        return None;
+    }
+    git_stdout(
+        worktree,
+        ["rev-list", "--count", &format!("{base_ref}..HEAD")],
+    )
+    .ok()
+    .and_then(|raw| raw.trim().parse::<u32>().ok())
+}
+
+fn base_ref_is_snapshot_commit(worktree: &Path, base_ref: &str) -> bool {
+    let Ok(resolved) = git_stdout(
+        worktree,
+        ["rev-parse", "--verify", &format!("{base_ref}^{{commit}}")],
+    ) else {
+        return false;
+    };
+    resolved == base_ref
 }
 
 fn available_auto_name(repo_root: &Path, config: &WorktreeConfig) -> Result<String> {
@@ -492,7 +531,7 @@ mod tests {
         let clean = WorktreeStatus::default();
         let dirty = WorktreeStatus {
             dirty: true,
-            commits_ahead: 0,
+            commits_ahead: Some(0),
         };
         assert_eq!(
             cleanup_decision(clean, true, false),
@@ -500,6 +539,10 @@ mod tests {
         );
         assert_eq!(
             cleanup_decision(dirty, true, false),
+            CleanupDecision::PromptDirty
+        );
+        assert_eq!(
+            cleanup_decision(WorktreeStatus::unknown(), true, false),
             CleanupDecision::PromptDirty
         );
         assert_eq!(cleanup_decision(clean, false, false), CleanupDecision::Skip);
@@ -555,7 +598,7 @@ branch refs/heads/swift-otter
                 b,
                 WorktreeStatus {
                     dirty: false,
-                    commits_ahead: 1,
+                    commits_ahead: Some(1),
                 },
             ),
         ]);
