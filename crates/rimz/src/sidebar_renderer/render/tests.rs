@@ -2455,6 +2455,138 @@ fn line_texts(lines: &[Line<'static>]) -> Vec<String> {
         .collect()
 }
 
+fn bottom_chrome_texts(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+) -> (Vec<String>, Vec<ProviderTabHit>) {
+    let theme = Theme::fixed(true);
+    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, &UiState::default());
+    (line_texts(&lines), hits)
+}
+
+fn bottom_tally() -> crate::SpendTally {
+    crate::SpendTally {
+        week: crate::SpendWindow {
+            usd: 12.34,
+            tokens: 120_000,
+            input: 90_000,
+            output: 30_000,
+            cache_read: 20_000,
+            sessions: 4,
+            ..Default::default()
+        },
+        month: crate::SpendWindow {
+            usd: 56.78,
+            tokens: 560_000,
+            input: 420_000,
+            output: 140_000,
+            cache_read: 80_000,
+            sessions: 19,
+            ..Default::default()
+        },
+        year: crate::SpendWindow {
+            usd: 56.78,
+            tokens: 560_000,
+            ..Default::default()
+        },
+        ..Default::default()
+    }
+}
+
+fn is_hairline(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|ch| ch == '─')
+}
+
+#[test]
+fn bottom_chrome_dashboard_starts_with_a_blank_separator() {
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    snapshot.providers = vec![provider_panel(
+        "claude",
+        "Claude",
+        173,
+        true,
+        true,
+        Some((25, 40)),
+    )];
+
+    let (lines, hits) = bottom_chrome_texts(&snapshot, None);
+
+    assert_eq!(lines.first().map(String::as_str), Some(""));
+    assert!(
+        is_hairline(&lines[1]),
+        "the panel's own hairline follows the fixed separator:\n{}",
+        lines.join("\n")
+    );
+    assert!(
+        hits.is_empty(),
+        "a single-provider dashboard has no tab hits"
+    );
+}
+
+#[test]
+fn bottom_chrome_active_alert_suppresses_dashboard_ledger_and_footer() {
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    snapshot.providers = vec![provider_panel(
+        "claude",
+        "Claude",
+        173,
+        true,
+        true,
+        Some((25, 40)),
+    )];
+    snapshot.value_tally = Some(bottom_tally());
+    let alert = Alert::active("snapshot failed");
+
+    let (lines, hits) = bottom_chrome_texts(&snapshot, Some(&alert));
+    let text = lines.join("\n");
+
+    assert_eq!(lines.len(), 1, "only the active alert remains:\n{text}");
+    assert!(text.contains("Sidebar degraded"), "{text}");
+    assert!(!text.contains("Claude"), "{text}");
+    assert!(!text.contains("W:"), "{text}");
+    assert!(!text.contains("? for help"), "{text}");
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn bottom_chrome_ledger_only_opens_with_a_hairline() {
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    snapshot.value_tally = Some(bottom_tally());
+
+    let (lines, hits) = bottom_chrome_texts(&snapshot, None);
+
+    assert!(
+        is_hairline(&lines[0]),
+        "a ledger without dashboard carries its own rule:\n{}",
+        lines.join("\n")
+    );
+    assert!(lines[1].contains("W:"), "week row:\n{}", lines.join("\n"));
+    assert!(lines[2].contains("M:"), "month row:\n{}", lines.join("\n"));
+    assert_eq!(lines[3], "", "footer breathes below the ledger");
+    assert!(
+        lines[4].contains("? for help"),
+        "footer follows the blank:\n{}",
+        lines.join("\n")
+    );
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn bottom_chrome_empty_room_is_footer_only() {
+    let snapshot = snapshot_with(Vec::new(), Vec::new());
+
+    let (lines, hits) = bottom_chrome_texts(&snapshot, None);
+
+    assert_eq!(lines.len(), 1);
+    assert!(lines[0].contains("? for help"), "{}", lines.join("\n"));
+    assert!(
+        !lines[0].trim().is_empty() && !is_hairline(&lines[0]),
+        "the empty-room footer does not float under a separator"
+    );
+    assert!(hits.is_empty());
+}
+
 /// A just-started idle agent — idle, on the `Some(0)` baseline gauge with no
 /// usage behind it — sheds the 0% context bar and the zeroed stats, resting at
 /// identity + description alone with nothing to append on selection. The same

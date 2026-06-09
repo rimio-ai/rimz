@@ -411,82 +411,10 @@ pub(crate) fn compose_lines(
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
     let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
 
-    // Bottom-pinned chrome, top to bottom: a fixed separator when the provider
-    // dashboard is present, the per-provider dashboard (account-scoped budgets
-    // + brand emblem, which opens with its own top hairline — the tab rail when
-    // several accounts register), the fleet ledger, the navigation footer
-    // (centered), then the sticky health alert. While an alert is active the
-    // body is a stale/empty fetch, so the panel and footer step aside and the
-    // alert speaks alone. Every chrome line is gutter-padded so it breathes in
-    // the same one-cell frame as the body.
-    let active = alert.is_some_and(Alert::is_active);
-    let mut bottom: Vec<Line<'static>> = Vec::new();
-    // The tab hits arrive from the panel relative to its own lines; they are
-    // translated to absolute screen coordinates once the bottom block's final
+    // The tab hits arrive from the bottom chrome relative to its own lines;
+    // they are translated to absolute screen coordinates once the block's final
     // position is known, below.
-    let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
-    let dashboard_present = !active && !snapshot.providers.is_empty();
-    if dashboard_present {
-        // The pinned separator lifts the dashboard off the cards. It is part
-        // of bottom chrome, so the viewport reserves it before windowing.
-        bottom.push(Line::from(""));
-        // The panel owns its top hairline (the tab rail when several accounts
-        // register), so its line 0 lands after the separator.
-        let panel_base = bottom.len();
-        let active_kind = active_provider_kind(snapshot, ui);
-        let tabbed = dashboard_tabbed(snapshot);
-        let (panel_lines, panel_hits) = provider_panel_lines(
-            &theme,
-            &snapshot.providers,
-            active_kind.as_deref(),
-            tabbed,
-            inner,
-            &snapshot.sidebar.budget,
-        );
-        tab_hits = panel_hits
-            .into_iter()
-            .map(|hit| ProviderTabHit {
-                // Position within the bottom block; the absolute base lands on
-                // top once the body's final height is known.
-                line: panel_base + hit.line,
-                // The chrome gutter `pad_chrome` opens every panel line with.
-                col_start: hit.col_start + 1,
-                col_end: hit.col_end + 1,
-                kind: hit.kind,
-            })
-            .collect();
-        bottom.extend(panel_lines.into_iter().map(pad_chrome));
-    }
-    // The fleet ledger — the static `W:`/`M:` week/month rows — seals the bottom
-    // of the dashboard. It rides under the dashboard's blank-line block separator
-    // when an account block is present, else carries its own hairline so it never
-    // floats unsealed against the body.
-    if !active {
-        let corner = fleet_ledger_lines(&theme, snapshot.value_tally.as_ref(), inner);
-        if !corner.is_empty() {
-            if dashboard_present {
-                bottom.push(Line::from(""));
-            } else {
-                bottom.push(pad_chrome(hairline_rule(&theme, inner)));
-            }
-            bottom.extend(corner.into_iter().map(pad_chrome));
-        }
-    }
-    if !active {
-        let footer = footer_lines(snapshot, &theme, inner);
-        if !footer.is_empty() {
-            // No rule above the footer — it sits quietly under the dashboard's own
-            // top rule, with one blank line of breathing room when a dashboard is
-            // present (skipped in an empty room so the footer doesn't float).
-            if !bottom.is_empty() {
-                bottom.push(Line::from(""));
-            }
-            bottom.extend(footer.into_iter().map(pad_chrome));
-        }
-    }
-    if let Some(alert) = alert {
-        bottom.extend(alert_lines(&theme, alert).into_iter().map(pad_chrome));
-    }
+    let (bottom, mut tab_hits) = build_bottom_chrome(snapshot, alert, &theme, inner, ui);
 
     let height = usize::from(height);
     let bottom_height = bottom
@@ -583,6 +511,90 @@ pub(crate) fn compose_lines(
         make_up_hits,
         scroll_offset: offset,
     }
+}
+
+/// Bottom-pinned chrome, top to bottom: a fixed separator when the provider
+/// dashboard is present, the per-provider dashboard (account-scoped budgets +
+/// brand emblem, which opens with its own top hairline — the tab rail when
+/// several accounts register), the fleet ledger, the navigation footer
+/// (centered), then the sticky health alert. While an alert is active the body
+/// is a stale/empty fetch, so the panel and footer step aside and the alert
+/// speaks alone. Every chrome line is gutter-padded so it breathes in the same
+/// one-cell frame as the body.
+fn build_bottom_chrome(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    theme: &Theme,
+    inner: usize,
+    ui: &UiState,
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+    let active = alert.is_some_and(Alert::is_active);
+    let mut bottom: Vec<Line<'static>> = Vec::new();
+    let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
+    let dashboard_present = !active && !snapshot.providers.is_empty();
+    if dashboard_present {
+        // The pinned separator lifts the dashboard off the cards. It is part
+        // of bottom chrome, so the viewport reserves it before windowing.
+        bottom.push(Line::from(""));
+        // The panel owns its top hairline (the tab rail when several accounts
+        // register), so its line 0 lands after the separator.
+        let panel_base = bottom.len();
+        let active_kind = active_provider_kind(snapshot, ui);
+        let tabbed = dashboard_tabbed(snapshot);
+        let (panel_lines, panel_hits) = provider_panel_lines(
+            theme,
+            &snapshot.providers,
+            active_kind.as_deref(),
+            tabbed,
+            inner,
+            &snapshot.sidebar.budget,
+        );
+        tab_hits = panel_hits
+            .into_iter()
+            .map(|hit| ProviderTabHit {
+                // Position within the bottom block; the absolute base lands on
+                // top once the body's final height is known.
+                line: panel_base + hit.line,
+                // The chrome gutter `pad_chrome` opens every panel line with.
+                col_start: hit.col_start + 1,
+                col_end: hit.col_end + 1,
+                kind: hit.kind,
+            })
+            .collect();
+        bottom.extend(panel_lines.into_iter().map(pad_chrome));
+    }
+    // The fleet ledger — the static `W:`/`M:` week/month rows — seals the bottom
+    // of the dashboard. It rides under the dashboard's blank-line block
+    // separator when an account block is present, else carries its own hairline
+    // so it never floats unsealed against the body.
+    if !active {
+        let corner = fleet_ledger_lines(theme, snapshot.value_tally.as_ref(), inner);
+        if !corner.is_empty() {
+            if dashboard_present {
+                bottom.push(Line::from(""));
+            } else {
+                bottom.push(pad_chrome(hairline_rule(theme, inner)));
+            }
+            bottom.extend(corner.into_iter().map(pad_chrome));
+        }
+    }
+    if !active {
+        let footer = footer_lines(snapshot, theme, inner);
+        if !footer.is_empty() {
+            // No rule above the footer — it sits quietly under the dashboard's
+            // own top rule, with one blank line of breathing room when a
+            // dashboard is present (skipped in an empty room so the footer
+            // doesn't float).
+            if !bottom.is_empty() {
+                bottom.push(Line::from(""));
+            }
+            bottom.extend(footer.into_iter().map(pad_chrome));
+        }
+    }
+    if let Some(alert) = alert {
+        bottom.extend(alert_lines(theme, alert).into_iter().map(pad_chrome));
+    }
+    (bottom, tab_hits)
 }
 
 /// One draw's composed output: the final line vector plus the byproducts the
