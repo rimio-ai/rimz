@@ -5,12 +5,12 @@
 
 use std::collections::BTreeMap;
 use std::env;
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -109,6 +109,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "fetch LiteLLM pricing JSON, compact it, and rewrite the vendored snapshot",
     },
     TaskInfo {
+        name: "screenshot",
+        summary: "Render sidebar ANSI captures to PNG with freeze.",
+        runs: "list, live, pane <id>, or state <empty|fleet|provider>",
+    },
+    TaskInfo {
         name: "ci",
         summary: "Run the full local CI gate stack.",
         runs: "fmt, invariants, audits, build-plugin, lint, coverage, doctest, semver",
@@ -117,16 +122,16 @@ const TASKS: &[TaskInfo] = &[
 
 #[derive(Debug, PartialEq, Eq)]
 enum Action<'a> {
-    Run(&'a str),
+    Run { task: &'a str, args: &'a [String] },
     Help(Option<&'a str>),
 }
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     match parse_args(&args)? {
-        Action::Run(task) => {
+        Action::Run { task, args } => {
             let root = workspace_root()?;
-            run_task(task, &root)
+            run_task(task, args, &root)
         }
         Action::Help(None) => {
             print_xtask_help();
@@ -138,7 +143,10 @@ fn main() -> Result<()> {
 
 fn parse_args(args: &[String]) -> Result<Action<'_>> {
     let Some(first) = args.first().map(String::as_str) else {
-        return Ok(Action::Run("ci"));
+        return Ok(Action::Run {
+            task: "ci",
+            args: &[],
+        });
     };
 
     if is_help_flag(first) {
@@ -160,21 +168,34 @@ fn parse_args(args: &[String]) -> Result<Action<'_>> {
         if args.len() == 2 {
             return Ok(Action::Help(Some(first)));
         }
+        if task_accepts_args(first) {
+            return Ok(Action::Run {
+                task: first,
+                args: &args[1..],
+            });
+        }
         bail!("xtask `{first}` help takes no other arguments");
     }
 
-    if args.len() > 1 {
+    if args.len() > 1 && !task_accepts_args(first) {
         bail!("xtask `{first}` takes no arguments; run `cargo xtask {first} --help`");
     }
 
-    Ok(Action::Run(first))
+    Ok(Action::Run {
+        task: first,
+        args: &args[1..],
+    })
 }
 
 fn is_help_flag(arg: &str) -> bool {
     matches!(arg, "-h" | "--help")
 }
 
-fn run_task(task: &str, root: &Path) -> Result<()> {
+fn task_accepts_args(task: &str) -> bool {
+    matches!(task, "screenshot")
+}
+
+fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
     match task {
         "build" => build(root),
         "build-plugin" => build_plugin(root),
@@ -192,6 +213,7 @@ fn run_task(task: &str, root: &Path) -> Result<()> {
         "semver" => semver(root),
         "invariants" => invariants(root),
         "pricing-refresh" => pricing_refresh(root),
+        "screenshot" => screenshot(root, args),
         "ci" => ci(root),
         other => bail!("unknown xtask `{other}`"),
     }
@@ -769,6 +791,568 @@ fn coverage(root: &Path) -> Result<()> {
     )
 }
 
+// ── Sidebar screenshots ─────────────────────────────────────────────────────
+
+const SCREENSHOT_CONFIG: &str = "xtask/assets/ghostty-tokyonight.json";
+const SCREENSHOT_DIR: &str = "target/screenshots";
+const FREEZE_VERSION: &str = "0.2.2";
+const NERD_FONTS_VERSION: &str = "3.4.0";
+
+#[derive(Debug, Default)]
+struct CaptureScreenshotOptions {
+    lines: Option<u16>,
+    output: Option<PathBuf>,
+}
+
+#[derive(Debug)]
+struct StateScreenshotOptions {
+    state: SidebarScreenshotState,
+    width: u16,
+    height: u16,
+    output: Option<PathBuf>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SidebarScreenshotState {
+    Empty,
+    Fleet,
+    Provider,
+}
+
+impl SidebarScreenshotState {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "empty" => Ok(Self::Empty),
+            "fleet" => Ok(Self::Fleet),
+            "provider" => Ok(Self::Provider),
+            other => {
+                bail!("unknown screenshot state `{other}`; expected empty, fleet, or provider")
+            }
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Empty => "empty",
+            Self::Fleet => "fleet",
+            Self::Provider => "provider",
+        }
+    }
+}
+
+fn screenshot(root: &Path, args: &[String]) -> Result<()> {
+    let Some(subcmd) = args.first().map(String::as_str) else {
+        print_screenshot_help();
+        return Ok(());
+    };
+    if is_help_flag(subcmd) {
+        print_screenshot_help();
+        return Ok(());
+    }
+    if args.iter().skip(1).any(|arg| is_help_flag(arg)) {
+        print_screenshot_subcommand_help(subcmd)?;
+        return Ok(());
+    }
+
+    match subcmd {
+        "list" => {
+            ensure_no_extra_args("screenshot list", &args[1..])?;
+            rimz_status(root, &os_args(["pane", "list", "--json"]))
+        }
+        "live" => {
+            let opts = parse_capture_screenshot_options(&args[1..])?;
+            ensure_screenshot_prerequisites()?;
+            let panes = rimz_output(root, &os_args(["pane", "list", "--json"]))?;
+            let pane = select_live_sidebar_pane(&panes)?;
+            let ansi = capture_pane_ansi(root, &pane, opts.lines)?;
+            let output = screenshot_output_path(root, opts.output, "live")?;
+            write_screenshot_png(root, &ansi, &output)?;
+            print_screenshot_path(&output);
+            Ok(())
+        }
+        "pane" => {
+            let Some(pane_id) = args.get(1) else {
+                bail!("screenshot pane requires a pane id");
+            };
+            let opts = parse_capture_screenshot_options(&args[2..])?;
+            ensure_screenshot_prerequisites()?;
+            let ansi = capture_pane_ansi(root, pane_id, opts.lines)?;
+            let output = screenshot_output_path(
+                root,
+                opts.output,
+                &format!("pane-{}", sanitize_file_stem(pane_id)),
+            )?;
+            write_screenshot_png(root, &ansi, &output)?;
+            print_screenshot_path(&output);
+            Ok(())
+        }
+        "state" => {
+            let opts = parse_state_screenshot_options(&args[1..])?;
+            ensure_screenshot_prerequisites()?;
+            let ansi = render_state_ansi(root, opts.state, opts.width, opts.height)?;
+            let output = screenshot_output_path(root, opts.output, opts.state.as_str())?;
+            write_screenshot_png(root, &ansi, &output)?;
+            print_screenshot_path(&output);
+            Ok(())
+        }
+        other => bail!("unknown screenshot subcommand `{other}`"),
+    }
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_help() {
+    println!("cargo xtask screenshot");
+    println!();
+    println!("Render sidebar ANSI captures to PNG with freeze.");
+    println!();
+    println!("Usage:");
+    println!("  cargo xtask screenshot list");
+    println!("  cargo xtask screenshot live [--lines N] [--output PATH]");
+    println!("  cargo xtask screenshot pane <id> [--lines N] [--output PATH]");
+    println!(
+        "  cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--output PATH]"
+    );
+}
+
+fn print_screenshot_subcommand_help(subcmd: &str) -> Result<()> {
+    match subcmd {
+        "list" => print_screenshot_list_help(),
+        "live" => print_screenshot_live_help(),
+        "pane" => print_screenshot_pane_help(),
+        "state" => print_screenshot_state_help(),
+        other => bail!("unknown screenshot subcommand `{other}`"),
+    }
+    Ok(())
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_list_help() {
+    println!("cargo xtask screenshot list");
+    println!();
+    println!("Print the current `rimz pane list --json` output.");
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_live_help() {
+    println!("cargo xtask screenshot live [--lines N] [--output PATH]");
+    println!();
+    println!("Capture the live rimz-sidebar pane without focusing it and render a PNG.");
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_pane_help() {
+    println!("cargo xtask screenshot pane <id> [--lines N] [--output PATH]");
+    println!();
+    println!("Capture any pane by normalized pane id and render a PNG.");
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "xtask screenshot help text is a command stdout contract"
+)]
+fn print_screenshot_state_help() {
+    println!(
+        "cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--output PATH]"
+    );
+    println!();
+    println!("Render a deterministic sidebar fixture frame and write a PNG.");
+}
+
+fn parse_capture_screenshot_options(args: &[String]) -> Result<CaptureScreenshotOptions> {
+    let mut opts = CaptureScreenshotOptions::default();
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--lines" => {
+                let value = required_option_value(args, index, "--lines")?;
+                opts.lines = Some(parse_u16_flag(value, "--lines")?);
+                index += 2;
+            }
+            "-o" | "--output" => {
+                let value = required_option_value(args, index, "--output")?;
+                opts.output = Some(PathBuf::from(value));
+                index += 2;
+            }
+            other => bail!("unknown screenshot option `{other}`"),
+        }
+    }
+    Ok(opts)
+}
+
+fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOptions> {
+    let Some(state) = args.first() else {
+        bail!("screenshot state requires empty, fleet, or provider");
+    };
+    let mut opts = StateScreenshotOptions {
+        state: SidebarScreenshotState::parse(state)?,
+        width: 54,
+        height: 34,
+        output: None,
+    };
+    let mut index = 1;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--width" => {
+                let value = required_option_value(args, index, "--width")?;
+                opts.width = parse_u16_flag(value, "--width")?;
+                index += 2;
+            }
+            "--height" => {
+                let value = required_option_value(args, index, "--height")?;
+                opts.height = parse_u16_flag(value, "--height")?;
+                index += 2;
+            }
+            "-o" | "--output" => {
+                let value = required_option_value(args, index, "--output")?;
+                opts.output = Some(PathBuf::from(value));
+                index += 2;
+            }
+            other => bail!("unknown screenshot option `{other}`"),
+        }
+    }
+    Ok(opts)
+}
+
+fn required_option_value<'a>(args: &'a [String], index: usize, flag: &str) -> Result<&'a str> {
+    args.get(index + 1)
+        .map(String::as_str)
+        .filter(|value| !value.starts_with('-'))
+        .with_context(|| format!("{flag} requires a value"))
+}
+
+fn parse_u16_flag(value: &str, flag: &str) -> Result<u16> {
+    value
+        .parse::<u16>()
+        .with_context(|| format!("parsing {flag} value `{value}`"))
+}
+
+fn ensure_no_extra_args(command: &str, args: &[String]) -> Result<()> {
+    if args.is_empty() {
+        return Ok(());
+    }
+    bail!("{command} takes no arguments")
+}
+
+fn capture_pane_ansi(root: &Path, pane_id: &str, lines: Option<u16>) -> Result<Vec<u8>> {
+    let mut args = os_args(["pane", "capture", pane_id, "--ansi"]);
+    if let Some(lines) = lines {
+        args.push(OsString::from("--lines"));
+        args.push(OsString::from(lines.to_string()));
+    }
+    rimz_output(root, &args)
+}
+
+fn render_state_ansi(
+    root: &Path,
+    state: SidebarScreenshotState,
+    width: u16,
+    height: u16,
+) -> Result<Vec<u8>> {
+    let args = [
+        OsString::from("sidebar"),
+        OsString::from("fixture"),
+        OsString::from(state.as_str()),
+        OsString::from("--width"),
+        OsString::from(width.to_string()),
+        OsString::from("--height"),
+        OsString::from(height.to_string()),
+    ];
+    rimz_output_with_env(root, &args, &[("COLORTERM", "truecolor")], &["NO_COLOR"])
+}
+
+fn select_live_sidebar_pane(panes_json: &[u8]) -> Result<String> {
+    let panes: Value = serde_json::from_slice(panes_json).context("parsing pane list JSON")?;
+    let Value::Array(panes) = panes else {
+        bail!("pane list JSON is not an array");
+    };
+    let sidebars: Vec<&Value> = panes.iter().filter(|pane| pane_is_sidebar(pane)).collect();
+    if sidebars.is_empty() {
+        bail!(
+            "no rimz-sidebar pane found; run `cargo xtask screenshot list` to inspect live panes"
+        );
+    }
+
+    let focused_sidebars: Vec<&Value> = sidebars
+        .iter()
+        .copied()
+        .filter(|pane| pane_bool(pane, "is_focused"))
+        .collect();
+    if let [pane] = focused_sidebars.as_slice() {
+        return pane_id(pane);
+    }
+
+    let focused_work_views: Vec<&str> = panes
+        .iter()
+        .filter(|pane| pane_bool(pane, "is_focused") && !pane_is_sidebar(pane))
+        .filter_map(|pane| pane_str(pane, "view_id"))
+        .collect();
+    for view in focused_work_views {
+        let in_view: Vec<&Value> = sidebars
+            .iter()
+            .copied()
+            .filter(|pane| pane_str(pane, "view_id") == Some(view))
+            .collect();
+        if let [pane] = in_view.as_slice() {
+            return pane_id(pane);
+        }
+    }
+
+    if let [pane] = sidebars.as_slice() {
+        return pane_id(pane);
+    }
+
+    bail!(
+        "multiple rimz-sidebar panes matched; run `cargo xtask screenshot list`, then `cargo xtask screenshot pane <id>`"
+    )
+}
+
+fn pane_is_sidebar(pane: &Value) -> bool {
+    pane_str(pane, "command") == Some("rimz-sidebar")
+        || pane_str(pane, "spawn_command").is_some_and(|command| {
+            command.contains("rimz sidebar serve") || command.contains("rimz-sidebar")
+        })
+}
+
+fn pane_id(pane: &Value) -> Result<String> {
+    pane_str(pane, "pane_id")
+        .map(ToOwned::to_owned)
+        .context("pane entry is missing pane_id")
+}
+
+fn pane_str<'a>(pane: &'a Value, key: &str) -> Option<&'a str> {
+    pane.get(key).and_then(Value::as_str)
+}
+
+fn pane_bool(pane: &Value, key: &str) -> bool {
+    pane.get(key).and_then(Value::as_bool).unwrap_or(false)
+}
+
+fn ensure_screenshot_prerequisites() -> Result<()> {
+    let freeze_status = Command::new("freeze")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match freeze_status {
+        Ok(status) if status.success() => {}
+        _ => bail!(
+            "{}",
+            screenshot_bootstrap_message("freeze is not installed")
+        ),
+    }
+
+    let rsvg_status = Command::new("rsvg-convert")
+        .arg("--version")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match rsvg_status {
+        Ok(status) if status.success() => {}
+        _ => bail!(
+            "{}",
+            screenshot_bootstrap_message("rsvg-convert is not installed")
+        ),
+    }
+
+    if !jetbrains_nerd_font_available()? {
+        bail!(
+            "{}",
+            screenshot_bootstrap_message("JetBrainsMono Nerd Font Mono is not installed")
+        );
+    }
+    Ok(())
+}
+
+fn jetbrains_nerd_font_available() -> Result<bool> {
+    let output = match Command::new("fc-match")
+        .args(["-f", "%{family}\n", "JetBrainsMono Nerd Font Mono"])
+        .output()
+    {
+        Ok(output) => output,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(err) => return Err(err).context("running fc-match"),
+    };
+    if !output.status.success() {
+        return Ok(false);
+    }
+    let family = String::from_utf8_lossy(&output.stdout);
+    let family = family.to_lowercase();
+    Ok(family.contains("jetbrains") && family.contains("nerd"))
+}
+
+fn screenshot_bootstrap_message(reason: &str) -> String {
+    format!(
+        "{reason}\n\nInstall screenshot prerequisites:\n  mkdir -p ~/.local/bin ~/.local/share/fonts\n  tmp=\"$(mktemp -d)\"\n  curl -fsSL https://github.com/charmbracelet/freeze/releases/download/v{FREEZE_VERSION}/freeze_{FREEZE_VERSION}_Linux_x86_64.tar.gz | tar -xz -C \"$tmp\"\n  install -m 0755 \"$tmp/freeze_{FREEZE_VERSION}_Linux_x86_64/freeze\" ~/.local/bin/freeze\n  curl -fsSL https://github.com/ryanoasis/nerd-fonts/releases/download/v{NERD_FONTS_VERSION}/JetBrainsMono.tar.xz | tar -xJ -C ~/.local/share/fonts\n  fc-cache -f\n  sudo apt-get install -y librsvg2-bin\n  freeze --version\n  rsvg-convert --version\n  fc-match \"JetBrainsMono Nerd Font Mono\""
+    )
+}
+
+fn screenshot_output_path(root: &Path, output: Option<PathBuf>, label: &str) -> Result<PathBuf> {
+    let path = match output {
+        Some(path) if path.is_absolute() => path,
+        Some(path) => root.join(path),
+        None => {
+            let stamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .context("system clock before Unix epoch")?
+                .as_secs();
+            root.join(SCREENSHOT_DIR).join(format!(
+                "rimz-sidebar-{}-{stamp}-{}.png",
+                sanitize_file_stem(label),
+                process::id()
+            ))
+        }
+    };
+    if path.extension().and_then(OsStr::to_str) != Some("png") {
+        bail!(
+            "screenshot output path must end in .png: {}",
+            path.display()
+        );
+    }
+    Ok(path)
+}
+
+fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
+    let parent = output
+        .parent()
+        .with_context(|| format!("{} has no parent directory", output.display()))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    let file_name = output
+        .file_name()
+        .with_context(|| format!("{} has no file name", output.display()))?
+        .to_string_lossy();
+    let staged_png = parent.join(format!(".{file_name}.tmp.{}.png", process::id()));
+    let staged_svg = parent.join(format!(".{file_name}.tmp.{}.svg", process::id()));
+    remove_stale_file(&staged_png)?;
+    remove_stale_file(&staged_svg)?;
+
+    let config = root.join(SCREENSHOT_CONFIG);
+    let args = vec![
+        OsString::from("--config"),
+        config.as_os_str().to_owned(),
+        OsString::from("--output"),
+        staged_svg.as_os_str().to_owned(),
+    ];
+    let mut child = Command::new("freeze")
+        .args(&args)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .context("running `freeze`")?;
+    {
+        let stdin = child.stdin.as_mut().context("freeze stdin was not piped")?;
+        stdin
+            .write_all(ansi)
+            .context("writing ANSI frame to freeze")?;
+    }
+    drop(child.stdin.take());
+    let status = child.wait().context("waiting for freeze")?;
+    ensure_success("freeze", &args, status)?;
+    if !staged_svg.is_file() {
+        bail!("freeze did not write {}", staged_svg.display());
+    }
+
+    let rsvg_args = vec![
+        OsString::from("-o"),
+        staged_png.as_os_str().to_owned(),
+        staged_svg.as_os_str().to_owned(),
+    ];
+    let status = Command::new("rsvg-convert")
+        .args(&rsvg_args)
+        .current_dir(root)
+        .status()
+        .context("running `rsvg-convert`")?;
+    ensure_success("rsvg-convert", &rsvg_args, status)?;
+    if !staged_png.is_file() {
+        bail!("rsvg-convert did not write {}", staged_png.display());
+    }
+    fs::rename(&staged_png, output).with_context(|| format!("installing {}", output.display()))?;
+    remove_stale_file(&staged_svg)
+}
+
+fn rimz_status(root: &Path, args: &[OsString]) -> Result<()> {
+    let status = rimz_command(root, args)
+        .status()
+        .context("running `rimz`")?;
+    ensure_success("rimz", args, status)
+}
+
+fn rimz_output(root: &Path, args: &[OsString]) -> Result<Vec<u8>> {
+    rimz_output_with_env(root, args, &[], &[])
+}
+
+fn rimz_output_with_env(
+    root: &Path,
+    args: &[OsString],
+    envs: &[(&str, &str)],
+    removed_envs: &[&str],
+) -> Result<Vec<u8>> {
+    let mut command = rimz_command(root, args);
+    command.envs(envs.iter().copied());
+    for key in removed_envs {
+        command.env_remove(key);
+    }
+    let output = command.output().context("running `rimz`")?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    let rendered_args = args
+        .iter()
+        .map(|arg| arg.to_string_lossy())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    bail!("command failed: rimz {rendered_args}\n{stderr}");
+}
+
+fn rimz_command(root: &Path, args: &[OsString]) -> Command {
+    let mut command = if let Some(bin) = env::var_os("RIMZ_BIN") {
+        Command::new(bin)
+    } else {
+        let mut command = Command::new("cargo");
+        command.args(["run", "--quiet", "-p", "rimz", "--bin", "rimz", "--"]);
+        command
+    };
+    command.args(args).current_dir(root);
+    command
+}
+
+fn os_args<const N: usize>(args: [&str; N]) -> Vec<OsString> {
+    args.into_iter().map(OsString::from).collect()
+}
+
+fn sanitize_file_stem(value: &str) -> String {
+    let mut out = String::new();
+    for ch in value.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            out.push(ch);
+        } else if !out.ends_with('-') {
+            out.push('-');
+        }
+    }
+    out.trim_matches('-').to_owned()
+}
+
+#[expect(
+    clippy::print_stdout,
+    reason = "screenshot command prints the produced image path"
+)]
+fn print_screenshot_path(path: &Path) {
+    println!("{}", path.display());
+}
+
 // ── Pricing snapshot refresh ────────────────────────────────────────────────
 
 const LITELLM_URL: &str =
@@ -1053,6 +1637,7 @@ fn invariants(root: &Path) -> Result<()> {
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
+    ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
 
     // Durability barriers live in one file: every fsync syscall goes through
     // `ledger/atomic.rs`, so the write-class contract is auditable in one
@@ -1177,6 +1762,48 @@ fn ensure_no_match(
         return Ok(());
     }
     bail!("{message}\n{}", violations.join("\n"));
+}
+
+fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let render_root = root.join("crates/rimz/src/sidebar_pane/render");
+    let mut violations = Vec::new();
+    for path in files {
+        if !path.starts_with(&render_root)
+            || path.extension().and_then(OsStr::to_str) != Some("rs")
+            || path
+                .file_name()
+                .and_then(OsStr::to_str)
+                .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+        {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        let mut in_tests = false;
+        for (idx, line) in text.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("mod tests") {
+                in_tests = true;
+            }
+            if in_tests {
+                continue;
+            }
+            if line.contains(concat!("Timestamp", "::", "now()"))
+                && !(path.ends_with("crates/rimz/src/sidebar_pane/render/mod.rs")
+                    && line.contains(concat!("since: Timestamp", "::", "now()")))
+            {
+                violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+            }
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "sidebar render runtime must use the snapshot clock; pass snapshot.now/current frame time instead of Timestamp::now()\n{}",
+        violations.join("\n")
+    );
 }
 
 fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
@@ -1448,14 +2075,25 @@ fn ensure_inline_tests_stay_small(files: &[PathBuf]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn args(items: &[&str]) -> Vec<String> {
         items.iter().map(|item| (*item).to_owned()).collect()
     }
 
+    fn pane_list(panes: Value) -> Vec<u8> {
+        serde_json::to_vec(&panes).unwrap()
+    }
+
     #[test]
     fn no_args_default_to_ci() {
-        assert_eq!(parse_args(&args(&[])).unwrap(), Action::Run("ci"));
+        assert_eq!(
+            parse_args(&args(&[])).unwrap(),
+            Action::Run {
+                task: "ci",
+                args: &[],
+            },
+        );
     }
 
     #[test]
@@ -1484,6 +2122,143 @@ mod tests {
             .to_string();
         assert!(
             err.contains("xtask `test` takes no arguments"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn screenshot_accepts_subcommands() {
+        let argv = args(&["screenshot", "state", "fleet"]);
+
+        assert_eq!(
+            parse_args(&argv).unwrap(),
+            Action::Run {
+                task: "screenshot",
+                args: &argv[1..],
+            },
+        );
+    }
+
+    #[test]
+    fn screenshot_subcommand_help_reaches_the_task_parser() {
+        let argv = args(&["screenshot", "state", "--help"]);
+
+        assert_eq!(
+            parse_args(&argv).unwrap(),
+            Action::Run {
+                task: "screenshot",
+                args: &argv[1..],
+            },
+        );
+    }
+
+    #[test]
+    fn live_sidebar_selection_prefers_the_single_focused_sidebar() {
+        let panes = pane_list(json!([
+            {
+                "pane_id": "zellij:terminal_1",
+                "view_id": "tab_1",
+                "command": "rimz-sidebar",
+                "is_focused": true
+            },
+            {
+                "pane_id": "zellij:terminal_2",
+                "view_id": "tab_2",
+                "command": "rimz-sidebar"
+            }
+        ]));
+
+        assert_eq!(
+            select_live_sidebar_pane(&panes).unwrap(),
+            "zellij:terminal_1"
+        );
+    }
+
+    #[test]
+    fn live_sidebar_selection_uses_the_focused_work_panes_view() {
+        let panes = pane_list(json!([
+            {
+                "pane_id": "zellij:terminal_1",
+                "view_id": "tab_1",
+                "command": "rimz-sidebar"
+            },
+            {
+                "pane_id": "zellij:terminal_2",
+                "view_id": "tab_2",
+                "spawn_command": "rimz sidebar serve --workspace-id ws_1"
+            },
+            {
+                "pane_id": "zellij:terminal_3",
+                "view_id": "tab_2",
+                "command": "zsh",
+                "is_focused": true
+            }
+        ]));
+
+        assert_eq!(
+            select_live_sidebar_pane(&panes).unwrap(),
+            "zellij:terminal_2"
+        );
+    }
+
+    #[test]
+    fn live_sidebar_selection_falls_back_to_the_only_sidebar() {
+        let panes = pane_list(json!([
+            {
+                "pane_id": "zellij:terminal_1",
+                "view_id": "tab_1",
+                "command": "rimz-sidebar"
+            },
+            {
+                "pane_id": "zellij:terminal_2",
+                "view_id": "tab_2",
+                "command": "zsh",
+                "is_focused": true
+            }
+        ]));
+
+        assert_eq!(
+            select_live_sidebar_pane(&panes).unwrap(),
+            "zellij:terminal_1"
+        );
+    }
+
+    #[test]
+    fn live_sidebar_selection_bails_when_ambiguous() {
+        let panes = pane_list(json!([
+            {
+                "pane_id": "zellij:terminal_1",
+                "view_id": "tab_1",
+                "command": "rimz-sidebar"
+            },
+            {
+                "pane_id": "zellij:terminal_2",
+                "view_id": "tab_2",
+                "command": "rimz-sidebar"
+            }
+        ]));
+
+        let err = select_live_sidebar_pane(&panes).unwrap_err().to_string();
+        assert!(
+            err.contains("multiple rimz-sidebar panes matched"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn live_sidebar_selection_bails_when_no_sidebar_exists() {
+        let panes = pane_list(json!([
+            {
+                "pane_id": "zellij:terminal_1",
+                "view_id": "tab_1",
+                "command": "zsh",
+                "is_focused": true
+            }
+        ]));
+
+        let err = select_live_sidebar_pane(&panes).unwrap_err().to_string();
+        assert!(
+            err.contains("no rimz-sidebar pane found"),
             "unexpected error: {err}"
         );
     }

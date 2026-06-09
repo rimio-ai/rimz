@@ -3,10 +3,10 @@
 use jiff::Timestamp;
 
 /// Seconds since `at`, clamped at zero — the shared input for [`age_short`] and
-/// the staleness color ramp, so a row reads the wall clock once and styles and
-/// labels its age from the same number.
-pub(super) fn age_secs(at: Timestamp) -> i64 {
-    Timestamp::now().duration_since(at).as_secs().max(0)
+/// the staleness color ramp, so a row reads the frame clock once and styles and
+/// labels its age from the same snapshot-derived number.
+pub(super) fn age_secs(at: Timestamp, now: Timestamp) -> i64 {
+    now.duration_since(at).as_secs().max(0)
 }
 
 /// A coarse age as its single highest unit (`8s`, `12m`, `3h`, `2d`) — the pure
@@ -26,8 +26,8 @@ pub(super) fn age_label(seconds: i64) -> String {
     }
 }
 
-pub(super) fn age_short(at: Timestamp) -> String {
-    age_label(age_secs(at))
+pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {
+    age_label(age_secs(at, now))
 }
 
 /// A row's last-activity age, floored to its highest whole unit: `{m}m` up to an
@@ -48,8 +48,8 @@ pub(super) fn activity_label(seconds: i64) -> String {
 /// The last-activity age once it crosses a full minute (floored), or `None` while
 /// it is still sub-minute — a just-active agent shows nothing rather than a
 /// misleading `1m`, so the age surfaces only once a real gap has opened.
-pub(super) fn activity_short(at: Timestamp) -> Option<String> {
-    let seconds = age_secs(at);
+pub(super) fn activity_short(at: Timestamp, now: Timestamp) -> Option<String> {
+    let seconds = age_secs(at, now);
     (seconds >= 60).then(|| activity_label(seconds))
 }
 
@@ -65,8 +65,8 @@ pub(super) fn elapsed_label(seconds: i64) -> String {
     }
 }
 
-pub(super) fn time_remaining(deadline: Timestamp) -> String {
-    let seconds = deadline.duration_since(Timestamp::now()).as_secs();
+pub(super) fn time_remaining(deadline: Timestamp, now: Timestamp) -> String {
+    let seconds = deadline.duration_since(now).as_secs();
     if seconds <= 0 {
         "0s".to_owned()
     } else if seconds < 60 {
@@ -93,8 +93,8 @@ pub(super) fn clip(value: &str, max_chars: usize) -> String {
 /// reset, so countdowns in one panel column-align. A passed reset reads `0h00m`
 /// (the stable-window selection drops expired readings upstream, so a rendered
 /// window is live).
-pub(super) fn reset_countdown(deadline: Timestamp) -> String {
-    reset_secs(deadline.duration_since(Timestamp::now()).as_secs())
+pub(super) fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
+    reset_secs(deadline.duration_since(now).as_secs())
 }
 
 fn reset_secs(seconds: i64) -> String {
@@ -560,15 +560,15 @@ mod tests {
     fn activity_short_withholds_sub_minute_ages() {
         let now = Timestamp::now();
         // A just-active agent shows nothing rather than a misleading `1m`.
-        assert_eq!(activity_short(now), None);
-        assert_eq!(activity_short(now - Duration::from_secs(59)), None);
+        assert_eq!(activity_short(now, now), None);
+        assert_eq!(activity_short(now - Duration::from_secs(59), now), None);
         // Once a full minute has passed the floored age surfaces.
         assert_eq!(
-            activity_short(now - Duration::from_secs(60)),
+            activity_short(now - Duration::from_secs(60), now),
             Some("1m".to_owned())
         );
         assert_eq!(
-            activity_short(now - Duration::from_secs(150)),
+            activity_short(now - Duration::from_secs(150), now),
             Some("2m".to_owned())
         );
     }

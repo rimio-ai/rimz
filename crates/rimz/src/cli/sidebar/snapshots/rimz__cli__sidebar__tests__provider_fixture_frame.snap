@@ -1,0 +1,38 @@
+---
+source: crates/rimz/src/cli/sidebar/tests.rs
+expression: strip_sgr(&ansi)
+---
+ ⌘ query-engine                /srv/code/query-engine
+
+ ◎ 8                       ◇ 712k ↘ 498k ↗ 142k ◌ 71k
+ ¤ 3                                           $10.08
+ ────────────────────────────────────────────────────
+ ? 1   ! 1   ⏸︎ 0   ✓ 0                     ⢿ 1   ○ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47
+▌_ claude · Opus 4.1 · 200k
+▌  port auth watcher                        ●●○○○ 4/7
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────────   67%
+▌  ▤ 68k · ◌ 42k ↘ 25k ↗ 16k
+▌  ⧉ subagents (2)
+▌    · review — audit auth watcher changes
+▌      ◇ 22k · Haiku                            ◔  3m
+▌    ✓ test — run focused nextest
+▌      ◇ 18k · Haiku                            ◔  4m
+▏? codex · GPT 5.1 Codex · 272k
+▏  approve pricing cache write              ●●○○○ 4/7
+▏  ▣ ━━━━━━━━━━━━━━━━━─────────────────────────   41%
+▏  ▤ 51k · ◌ 32k ↘ 19k ↗ 12k
+▏⣾ cargo nextest
+
+ ─── Claude ──── Codex ──────────────────────────────
+
+           Claude Max · v2.1.158                 ⇅ rc
+  ▐▛███▜▌  ◎ 4  ◇ 498k ↘ 348k ↗ 99k ◌ 49k       $6.84
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱  ↻ 2h00m
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱  ↻ 2d00h
+
+  W: ◎ 8  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k      $26.38
+  M: ◎ 8  ◇ 5.3M ↘ 3.7M ↗   1.1M ◌ 526.9k      $69.71
+
+                ␣ next ?!   ? for help

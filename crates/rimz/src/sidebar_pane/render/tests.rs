@@ -6,6 +6,7 @@ use crate::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
 use jiff::Timestamp;
+use ratatui::buffer::Buffer;
 use serde_json::json;
 use std::time::Duration;
 
@@ -82,6 +83,58 @@ fn assert_snapshot(name: &str, screen: String) {
     }, {
         insta::assert_snapshot!(name, screen);
     });
+}
+
+#[test]
+fn line_ansi_serializer_maps_color_and_row_reset_contract() {
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 2, 2));
+    buffer[(0, 0)]
+        .set_symbol("A")
+        .set_style(Style::default().fg(Color::Reset));
+    buffer[(1, 0)].set_symbol("B").set_style(
+        Style::default()
+            .fg(Color::Rgb(1, 2, 3))
+            .bg(Color::Indexed(4))
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+    );
+    buffer[(0, 1)]
+        .set_symbol("C")
+        .set_style(Style::default().fg(Color::Indexed(9)).bg(Color::Reset));
+    buffer[(1, 1)].set_symbol("D").set_style(
+        Style::default()
+            .fg(Color::Green)
+            .bg(Color::Blue)
+            .add_modifier(Modifier::DIM),
+    );
+
+    let mut ansi = Vec::new();
+    write_buffer_line_ansi(&mut ansi, &buffer).unwrap();
+    let ansi = String::from_utf8(ansi).unwrap();
+
+    assert_eq!(
+        ansi,
+        "\x1b[0;38;2;192;202;245mA\
+         \x1b[0;1;4;38;2;1;2;3;48;5;4mB\
+         \x1b[0m\n\
+         \x1b[0;38;5;9mC\
+         \x1b[0;2;32;44mD\
+         \x1b[0m\n"
+    );
+}
+
+#[test]
+fn fixed_line_ansi_renderer_emits_one_reset_terminated_line_per_frame_row() {
+    let snapshot = snapshot_with(Vec::new(), Vec::new());
+
+    let mut ansi = Vec::new();
+    render_fixed_line_ansi(&mut ansi, &snapshot, None, 16, 5).unwrap();
+
+    let lines = ansi.iter().filter(|byte| **byte == b'\n').count();
+    assert_eq!(lines, 5, "one serialized line per fixed terminal row");
+    assert!(
+        ansi.ends_with(b"\x1b[0m\n"),
+        "the last row reset prevents style bleed into downstream renderers"
+    );
 }
 
 #[test]
@@ -765,6 +818,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             &theme,
             &snapshot.worktree_groups[0],
             &snapshot.providers,
+            snapshot.now,
             44,
             &snapshot.sidebar.context,
             None,
@@ -1426,6 +1480,7 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         &theme,
         &snapshot.worktree_groups[0],
         &snapshot.providers,
+        snapshot.now,
         44,
         &snapshot.sidebar.context,
         None,
@@ -1493,6 +1548,7 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         &theme,
         &snapshot.worktree_groups[0],
         &snapshot.providers,
+        snapshot.now,
         44,
         &snapshot.sidebar.context,
         None,
@@ -2357,6 +2413,7 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         &theme,
         &snapshot.worktree_groups[0],
         &snapshot.providers,
+        snapshot.now,
         54,
         &snapshot.sidebar.context,
         None,
@@ -2458,6 +2515,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             &theme,
             &snapshot.worktree_groups[0],
             &snapshot.providers,
+            snapshot.now,
             54,
             &snapshot.sidebar.context,
             None,
@@ -2525,6 +2583,7 @@ fn group_lines(
         theme,
         &snapshot.worktree_groups[0],
         &snapshot.providers,
+        snapshot.now,
         54,
         &snapshot.sidebar.context,
         None,
@@ -2905,6 +2964,7 @@ fn provider_bars_share_one_front_and_end_column() {
                 true,
                 30,
                 &crate::config::BudgetZonesConfig::default(),
+                fixed_now(),
             )
             .0
         })
@@ -2953,6 +3013,7 @@ fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<L
         false,
         30,
         &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
     )
     .0
     .into_iter()
@@ -3143,6 +3204,7 @@ fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
         false,
         40,
         &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
     )
     .0
     .into_iter()
@@ -3273,6 +3335,7 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         true,
         28,
         &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
     );
     let tab_line: String = lines[0]
         .spans
@@ -3297,10 +3360,11 @@ fn tab_rail_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
     let zones = crate::config::BudgetZonesConfig::default();
+    let now = fixed_now();
     let (claude_lines, claude_hits) =
-        provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones);
+        provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones, now);
     let (codex_lines, codex_hits) =
-        provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones);
+        provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones, now);
     assert_eq!(
         claude_hits, codex_hits,
         "the click targets hold still as the pick moves"
@@ -3324,8 +3388,11 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
     let theme = Theme::fixed(true);
     let panels = two_provider_panels();
     let zones = crate::config::BudgetZonesConfig::default();
-    let (claude_lines, _) = provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones);
-    let (codex_lines, _) = provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones);
+    let now = fixed_now();
+    let (claude_lines, _) =
+        provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones, now);
+    let (codex_lines, _) =
+        provider_panel_lines(&theme, &panels, Some("codex"), true, 52, &zones, now);
     let (claude_rail, codex_rail) = (rail_text(&claude_lines), rail_text(&codex_lines));
     assert!(
         claude_rail.contains("┤ Claude ├") && !claude_rail.contains("┤ Codex ├"),
@@ -3826,7 +3893,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         );
         waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(Vec::new(), vec![waiting]);
-        fleet_header_lines(&theme, &snapshot.worktree_groups, None, 60)
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 60)
             .0
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -3865,7 +3932,7 @@ fn state_glyphs_never_dim() {
         Some("a"),
     );
     let snapshot = snapshot_with(Vec::new(), vec![working]);
-    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 60).0;
+    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 60).0;
     let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
     let glyph_style = |glyph: &str| {
         spans
@@ -3944,7 +4011,8 @@ fn make_up_text(lines: &[Line<'static>]) -> String {
 fn make_up_filter_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
-    let compose = |filter| fleet_header_lines(&theme, &snapshot.worktree_groups, filter, 38);
+    let compose =
+        |filter| fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, filter, 38);
     let (resting_lines, resting_hits) = compose(None);
     let (failed_lines, failed_hits) = compose(Some(AgentStatus::Failed));
     let (running_lines, running_hits) = compose(Some(AgentStatus::Running));
@@ -3992,10 +4060,11 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     let theme = Theme::fixed(true);
     let snapshot = make_up_snapshot();
     let (resting_lines, resting_hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, None, 38);
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 38);
     let (lines, hits) = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
+        snapshot.now,
         Some(AgentStatus::Failed),
         38,
     );
@@ -4039,7 +4108,8 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
 fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
-    let (lines, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 38);
+    let (lines, hits) =
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 38);
     let text = make_up_text(&lines);
     assert_eq!(
         hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
@@ -4068,7 +4138,7 @@ fn make_up_clipped_bucket_drops_its_hit() {
     let snapshot = make_up_snapshot();
     // 18 columns forces the left-packed fallback and clips the live-capacity tail, so
     // the right-cluster `⢿ 1` bucket falls past the edge.
-    let (_, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, None, 18);
+    let (_, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 18);
     assert!(
         hits.iter().all(|hit| usize::from(hit.col_end) <= 18),
         "no hit points past the visible edge: {hits:?}"

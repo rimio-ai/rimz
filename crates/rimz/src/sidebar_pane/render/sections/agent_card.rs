@@ -7,6 +7,7 @@ use crate::agents::{AgentContext, TurnPhase};
 use crate::config::ContextSeverityConfig;
 use crate::feed::{AgentStatus, ContextSeverity};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -65,6 +66,7 @@ pub(super) fn row_lines(
     theme: &Theme,
     row: &SidebarRow,
     providers: &[SidebarProviderPanel],
+    now: Timestamp,
     width: usize,
     tier: Tier,
     selected: bool,
@@ -83,6 +85,7 @@ pub(super) fn row_lines(
         theme,
         row,
         providers,
+        now,
         tier,
         cw,
         animation_phase,
@@ -107,7 +110,7 @@ pub(super) fn row_lines(
             if let Some(line) = gauge_line(theme, row, bands, cw) {
                 inner.push(line);
             }
-            if let Some(line) = context_tokens_line(theme, row, bands, cw) {
+            if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
                 inner.push(line);
             }
         }
@@ -317,6 +320,7 @@ fn identity_line(
     theme: &Theme,
     row: &SidebarRow,
     providers: &[SidebarProviderPanel],
+    now: Timestamp,
     tier: Tier,
     width: usize,
     animation_phase: u64,
@@ -333,7 +337,7 @@ fn identity_line(
             .unwrap_or_else(|| resolver.resolver_id.as_str());
         let remaining = resolver
             .budget_until
-            .map(time_remaining)
+            .map(|deadline| time_remaining(deadline, now))
             .unwrap_or_else(|| "?".to_owned());
         // A resolver mid-flight is the one "waiting for an answer" motion: a
         // braille spinner while the resolver composes the decision, bounded by
@@ -347,6 +351,7 @@ fn identity_line(
             &row.name,
             &format!("{resolver_name} {remaining}"),
             row.last_activity,
+            now,
             width,
         );
     }
@@ -356,6 +361,7 @@ fn identity_line(
         theme,
         row,
         providers,
+        now,
         status,
         tier,
         width,
@@ -375,6 +381,7 @@ fn agent_lead_cell(
     theme: &Theme,
     row: &SidebarRow,
     status: AgentStatus,
+    now: Timestamp,
     animation_phase: u64,
 ) -> Span<'static> {
     let actionable = status.is_actionable();
@@ -396,7 +403,12 @@ fn agent_lead_cell(
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
         agent_glyph(status, row.phase(), animation_phase),
-        attention_glyph_style(theme, status, age_secs(row.last_activity), animation_phase),
+        attention_glyph_style(
+            theme,
+            status,
+            age_secs(row.last_activity, now),
+            animation_phase,
+        ),
     )
 }
 
@@ -417,6 +429,7 @@ fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
     providers: &[SidebarProviderPanel],
+    now: Timestamp,
     status: AgentStatus,
     tier: Tier,
     width: usize,
@@ -450,7 +463,7 @@ fn agent_identity_line(
     // weight in the provider's brand color (or mid-gray chrome for unknown
     // kinds); the bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, animation_phase),
+        agent_lead_cell(theme, row, status, now, animation_phase),
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),
@@ -814,13 +827,14 @@ fn context_tokens_line(
     theme: &Theme,
     row: &SidebarRow,
     bands: &ContextSeverityConfig,
+    now: Timestamp,
     width: usize,
 ) -> Option<Line<'static>> {
     // The age clock is the line's one right pin — resource stats are
     // process-row vocabulary and never ride an agent card.
-    let age = activity_short(row.last_activity)
+    let age = activity_short(row.last_activity, now)
         .map(|label| {
-            let secs = age_secs(row.last_activity);
+            let secs = age_secs(row.last_activity, now);
             vec![Span::styled(
                 format!("{} {label}", elapsed_glyph(secs)),
                 activity_age_style(theme, secs),

@@ -3,6 +3,7 @@
 
 use crate::feed::AgentStatus;
 use crate::{ProcessState, SidebarRow};
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
@@ -139,10 +140,11 @@ pub(super) fn composed_row(
     lead: Span<'static>,
     name: &str,
     task: &str,
-    last_activity: jiff::Timestamp,
+    last_activity: Timestamp,
+    now: Timestamp,
     width: usize,
 ) -> Line<'static> {
-    let age = age_short(last_activity);
+    let age = age_short(last_activity, now);
     let lead_width = 2;
     let name_width = 7;
     let age_width = age.chars().count();

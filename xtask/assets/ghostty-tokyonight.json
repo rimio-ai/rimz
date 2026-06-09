@@ -1,0 +1,23 @@
+{
+  "window": false,
+  "theme": "tokyonight-night",
+  "border": {
+    "radius": 0,
+    "width": 0,
+    "color": "#1a1b26"
+  },
+  "shadow": {
+    "blur": 0,
+    "x": 0,
+    "y": 0
+  },
+  "background": "#1a1b26",
+  "padding": [8, 10, 8, 10],
+  "margin": "0",
+  "font": {
+    "family": "JetBrainsMono Nerd Font Mono",
+    "size": 14,
+    "ligatures": false
+  },
+  "line_height": 1.12
+}

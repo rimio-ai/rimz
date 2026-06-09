@@ -100,4 +100,5 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 **Contributing** — `docs/contributing/`
 - [rust-conventions.md](./docs/contributing/rust-conventions.md) — Rust shape: CLI, errors, stdout discipline, actor pattern, test taxonomy, dependency snapshot, toolchain, quality gates.
 - [testing.md](./docs/contributing/testing.md) — required test matrix and invariants.
+- [sidebar-screenshots.md](./docs/contributing/sidebar-screenshots.md) — contributor PNG capture workflow for live and synthetic sidebar frames.
 - [roadmap.md](./docs/contributing/roadmap.md) — build order and current milestone.

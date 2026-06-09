@@ -3,6 +3,7 @@
 
 use crate::SidebarWorktreeGroup;
 use crate::feed::AgentStatus;
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
@@ -58,6 +59,7 @@ pub(crate) struct MakeUpHit {
 pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
+    now: Timestamp,
     filter: Option<AgentStatus>,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
@@ -86,13 +88,13 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         Color::Yellow,
         waiting,
-        attention_bucket_style(theme, groups, AgentStatus::Waiting),
+        attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
     );
     left.push_count(
         AgentStatus::Failed,
         Color::Red,
         failed,
-        attention_bucket_style(theme, groups, AgentStatus::Failed),
+        attention_bucket_style(theme, groups, AgentStatus::Failed, now),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
     // but still a row worth spotting. It renders like every other bucket — the
@@ -269,12 +271,13 @@ fn attention_bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     status: AgentStatus,
+    now: Timestamp,
 ) -> Style {
     let oldest = groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.status() == Some(status))
-        .map(|row| age_secs(row.last_activity))
+        .map(|row| age_secs(row.last_activity, now))
         .max()
         .unwrap_or(0);
     theme.style(age_heat(oldest).unwrap_or(Color::Yellow), Modifier::BOLD)

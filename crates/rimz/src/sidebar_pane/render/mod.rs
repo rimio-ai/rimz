@@ -31,7 +31,7 @@ use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot};
 use jiff::Timestamp;
-use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span, Text};
@@ -45,6 +45,10 @@ use self::sections::{
     fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
 };
 use self::theme::Theme;
+
+/// Ghostty TokyoNight's default foreground, paired with the screenshot canvas
+/// background in `xtask/assets/ghostty-tokyonight.json`.
+const TOKYONIGHT_DEFAULT_FG: (u8, u8, u8) = (192, 202, 245);
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
@@ -548,6 +552,7 @@ fn build_bottom_chrome(
             tabbed,
             inner,
             &snapshot.sidebar.budget,
+            snapshot.now,
         );
         tab_hits = panel_hits
             .into_iter()
@@ -592,7 +597,11 @@ fn build_bottom_chrome(
         }
     }
     if let Some(alert) = alert {
-        bottom.extend(alert_lines(theme, alert).into_iter().map(pad_chrome));
+        bottom.extend(
+            alert_lines(theme, alert, snapshot.now)
+                .into_iter()
+                .map(pad_chrome),
+        );
     }
     (bottom, tab_hits)
 }
@@ -726,6 +735,141 @@ pub fn render_fixed<W: Write>(
     Ok(())
 }
 
+pub fn render_fixed_line_ansi<W: Write>(
+    mut writer: W,
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    width: u16,
+    height: u16,
+) -> io::Result<()> {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = infallible(Terminal::new(backend));
+    infallible(terminal.clear());
+    infallible(draw_to_terminal(&mut terminal, snapshot, alert));
+    write_buffer_line_ansi(&mut writer, terminal.backend().buffer())
+}
+
+fn infallible<T>(result: Result<T, std::convert::Infallible>) -> T {
+    match result {
+        Ok(value) => value,
+        Err(err) => match err {},
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LineAnsiStyle {
+    fg: Color,
+    bg: Color,
+    modifier: Modifier,
+}
+
+fn write_buffer_line_ansi<W: Write>(
+    writer: &mut W,
+    buffer: &ratatui::buffer::Buffer,
+) -> io::Result<()> {
+    let width = buffer.area.width as usize;
+    for row in buffer.content.chunks(width) {
+        let mut current: Option<LineAnsiStyle> = None;
+        for cell in row {
+            let next = LineAnsiStyle {
+                fg: cell.fg,
+                bg: cell.bg,
+                modifier: cell.modifier,
+            };
+            if current != Some(next) {
+                write_line_sgr(writer, next)?;
+                current = Some(next);
+            }
+            writer.write_all(cell.symbol().as_bytes())?;
+        }
+        writer.write_all(b"\x1b[0m\n")?;
+    }
+    Ok(())
+}
+
+fn write_line_sgr<W: Write>(writer: &mut W, style: LineAnsiStyle) -> io::Result<()> {
+    let mut codes: Vec<String> = vec!["0".to_owned()];
+    push_modifier_codes(style.modifier, &mut codes);
+    push_fg_code(style.fg, &mut codes);
+    push_bg_code(style.bg, &mut codes);
+    write!(writer, "\x1b[{}m", codes.join(";"))
+}
+
+fn push_modifier_codes(modifier: Modifier, codes: &mut Vec<String>) {
+    if modifier.contains(Modifier::BOLD) {
+        codes.push("1".to_owned());
+    }
+    if modifier.contains(Modifier::DIM) {
+        codes.push("2".to_owned());
+    }
+    if modifier.contains(Modifier::ITALIC) {
+        codes.push("3".to_owned());
+    }
+    if modifier.contains(Modifier::UNDERLINED) {
+        codes.push("4".to_owned());
+    }
+    if modifier.contains(Modifier::SLOW_BLINK) {
+        codes.push("5".to_owned());
+    }
+    if modifier.contains(Modifier::RAPID_BLINK) {
+        codes.push("6".to_owned());
+    }
+    if modifier.contains(Modifier::REVERSED) {
+        codes.push("7".to_owned());
+    }
+    if modifier.contains(Modifier::HIDDEN) {
+        codes.push("8".to_owned());
+    }
+    if modifier.contains(Modifier::CROSSED_OUT) {
+        codes.push("9".to_owned());
+    }
+}
+
+fn push_fg_code(color: Color, codes: &mut Vec<String>) {
+    push_color_code(color, 30, 90, 38, codes);
+}
+
+fn push_bg_code(color: Color, codes: &mut Vec<String>) {
+    if color != Color::Reset {
+        push_color_code(color, 40, 100, 48, codes);
+    }
+}
+
+fn push_color_code(color: Color, base: u8, bright_base: u8, extended: u8, codes: &mut Vec<String>) {
+    let code = match color {
+        Color::Reset => {
+            let (red, green, blue) = TOKYONIGHT_DEFAULT_FG;
+            codes.push(format!("{extended};2;{red};{green};{blue}"));
+            return;
+        }
+        Color::Black => base,
+        Color::Red => base + 1,
+        Color::Green => base + 2,
+        Color::Yellow => base + 3,
+        Color::Blue => base + 4,
+        Color::Magenta => base + 5,
+        Color::Cyan => base + 6,
+        Color::Gray => base + 7,
+        Color::DarkGray => bright_base,
+        Color::LightRed => bright_base + 1,
+        Color::LightGreen => bright_base + 2,
+        Color::LightYellow => bright_base + 3,
+        Color::LightBlue => bright_base + 4,
+        Color::LightMagenta => bright_base + 5,
+        Color::LightCyan => bright_base + 6,
+        Color::White => bright_base + 7,
+        Color::Rgb(red, green, blue) => {
+            codes.push(format!("{extended};2;{red};{green};{blue}"));
+            return;
+        }
+        Color::Indexed(index) => {
+            codes.push(format!("{extended};5;{index}"));
+            return;
+        }
+    };
+    codes.push(code.to_string());
+}
+
 /// Compose the top-pinned cockpit zone and, in lockstep, its hit-test maps.
 /// Populated rooms end this fixed zone with a separator blank, so scrolled
 /// cards never touch the cockpit make-up line.
@@ -791,8 +935,13 @@ fn top_lines(
     // status buckets carry their own hit map instead, translated here onto the
     // zone's line index and into the `pad_chrome` gutter's column space.
     let make_up_base = lines.len();
-    let (fleet_lines, mut make_up_hits) =
-        fleet_header_lines(theme, &snapshot.worktree_groups, ui.make_up_filter, inner);
+    let (fleet_lines, mut make_up_hits) = fleet_header_lines(
+        theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        ui.make_up_filter,
+        inner,
+    );
     for hit in &mut make_up_hits {
         hit.line += make_up_base;
         hit.col_start += 1;
@@ -861,6 +1010,7 @@ fn scroll_lines(
                 theme,
                 group,
                 &snapshot.providers,
+                snapshot.now,
                 width,
                 &snapshot.sidebar.context,
                 ui.make_up_filter,
@@ -1004,9 +1154,9 @@ fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
     Line::styled("─".repeat(width.max(1)), theme.soft())
 }
 
-fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
+fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<Line<'static>> {
     if alert.is_active() {
-        let elapsed = age_short(alert.since);
+        let elapsed = age_short(alert.since, now);
         vec![Line::styled(
             format!("! Sidebar degraded for {elapsed}: {}", alert.reason),
             theme.style(Color::Red, Modifier::BOLD),
@@ -1014,7 +1164,7 @@ fn alert_lines(theme: &Theme, alert: &Alert) -> Vec<Line<'static>> {
     } else {
         let elapsed = alert
             .recovered_at
-            .map(age_short)
+            .map(|recovered_at| age_short(recovered_at, now))
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
             format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),

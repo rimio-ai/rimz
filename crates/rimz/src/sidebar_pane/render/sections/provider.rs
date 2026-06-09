@@ -193,6 +193,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     tabbed: bool,
     width: usize,
     zones: &BudgetZonesConfig,
+    now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
     let Some(first) = providers.first() else {
@@ -206,7 +207,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
             } else {
                 blocks.push(Line::from(""));
             }
-            blocks.extend(single_block_lines(theme, panel, width, zones));
+            blocks.extend(single_block_lines(theme, panel, width, zones, now));
         }
         return (blocks, Vec::new());
     }
@@ -221,7 +222,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     // then sits directly over the stats line as the grid's title row.
     lines.push(Line::from(""));
     lines.push(provider_header_line(theme, active, width, true));
-    lines.extend(provider_body_lines(theme, active, width, zones));
+    lines.extend(provider_body_lines(theme, active, width, zones, now));
     (lines, hits)
 }
 
@@ -230,13 +231,14 @@ fn single_block_lines(
     panel: &SidebarProviderPanel,
     width: usize,
     zones: &BudgetZonesConfig,
+    now: Timestamp,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
     lines.push(provider_header_line(theme, panel, width, false));
     // A blank line below the provider name sets the identity apart from
     // the emblem + stats body, matching the cockpit's breathing room.
     lines.push(Line::from(""));
-    lines.extend(provider_body_lines(theme, panel, width, zones));
+    lines.extend(provider_body_lines(theme, panel, width, zones, now));
     lines
 }
 
@@ -407,6 +409,7 @@ fn provider_body_lines(
     panel: &SidebarProviderPanel,
     width: usize,
     zones: &BudgetZonesConfig,
+    now: Timestamp,
 ) -> Vec<Line<'static>> {
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
@@ -416,7 +419,7 @@ fn provider_body_lines(
     // packed directly so the three rows line up against the three-line emblem and
     // the bars sit right under the numbers (no separator row).
     let mut rights: Vec<Vec<Span<'static>>> = vec![provider_stats_spans(theme, panel, bar_region)];
-    rights.extend(provider_bar_rows(theme, panel, bar_region, zones));
+    rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
 
     let rows = panel.art.len().max(rights.len());
     let mut lines = Vec::with_capacity(rows);
@@ -491,6 +494,7 @@ fn provider_bar_rows(
     panel: &SidebarProviderPanel,
     region: usize,
     zones: &BudgetZonesConfig,
+    now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
         return vec![infinite_bar_row(theme, panel.color, region)];
@@ -505,6 +509,7 @@ fn provider_bar_rows(
                 region,
                 longer_window_spent(panel, window),
                 zones,
+                now,
             )
         })
         .collect()
@@ -533,7 +538,7 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
 /// real countdown — so >1% short-circuits to "started" regardless of the reset
 /// (this also covers a spent window at 100%). An absent reset or duration can't be
 /// judged, so it isn't flagged.
-fn window_not_started(window: &RateLimitWindow) -> bool {
+fn window_not_started(window: &RateLimitWindow, now: Timestamp) -> bool {
     if window.used_percentage > Some(1) {
         return false;
     }
@@ -541,7 +546,7 @@ fn window_not_started(window: &RateLimitWindow) -> bool {
         return false;
     };
     let full = SignedDuration::from_secs(i64::from(mins) * 60);
-    reset.duration_since(Timestamp::now()) >= full - NOT_STARTED_GRACE
+    reset.duration_since(now) >= full - NOT_STARTED_GRACE
 }
 
 /// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
@@ -567,6 +572,7 @@ fn metered_bar_row(
     region: usize,
     force_exhausted: bool,
     zones: &BudgetZonesConfig,
+    now: Timestamp,
 ) -> Option<Vec<Span<'static>>> {
     let label = window_label(window.duration_mins);
     let bar_width = provider_bar_width(region);
@@ -581,7 +587,7 @@ fn metered_bar_row(
         return Some(spans);
     }
 
-    let not_started = !force_exhausted && window_not_started(window);
+    let not_started = !force_exhausted && window_not_started(window, now);
     let remaining = if force_exhausted {
         0
     } else {
@@ -601,7 +607,7 @@ fn metered_bar_row(
     } else {
         window
             .resets_at
-            .map(|at| format!("↻ {}", reset_countdown(at)))
+            .map(|at| format!("↻ {}", reset_countdown(at, now)))
             .unwrap_or_default()
     };
     let mut spans = vec![

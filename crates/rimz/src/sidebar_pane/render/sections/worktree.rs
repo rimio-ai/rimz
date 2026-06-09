@@ -5,6 +5,7 @@
 use crate::config::ContextSeverityConfig;
 use crate::feed::AgentStatus;
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
+use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
@@ -34,6 +35,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     theme: &Theme,
     group: &SidebarWorktreeGroup,
     providers: &[SidebarProviderPanel],
+    now: Timestamp,
     width: usize,
     bands: &ContextSeverityConfig,
     filter: Option<AgentStatus>,
@@ -89,6 +91,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             theme,
             row,
             providers,
+            now,
             width,
             tier,
             selected,

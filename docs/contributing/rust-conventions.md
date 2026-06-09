@@ -231,7 +231,7 @@ Inside `ci` the gates are ordered for speed, not listed order: the instant text 
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `pricing-refresh`, `screenshot`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
 
 ## Reading order for new contributors
 

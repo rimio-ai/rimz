@@ -30,6 +30,7 @@ use std::time::Duration;
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot};
+use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
@@ -199,7 +200,7 @@ impl EffectState {
         });
 
         for (index, row) in visible.iter().enumerate() {
-            let Some(delta) = glow_delta(row, phase) else {
+            let Some(delta) = glow_delta(row, snapshot.now, phase) else {
                 continue;
             };
             let Some(run) = row_run(line_map, index) else {
@@ -327,14 +328,14 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
 /// The wave is the breath's own triangle (same cycle, same amber double-time,
 /// see [`super::labels::attention_breath`]), so color and modifier swell as
 /// one motion.
-fn glow_delta(row: &SidebarRow, phase: u64) -> Option<f32> {
+fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
     if !row.is_agent() || row.resolver().is_some() {
         return None;
     }
     if !row.status().is_some_and(AgentStatus::is_actionable) {
         return None;
     }
-    let heat = age_heat(age_secs(row.last_activity));
+    let heat = age_heat(age_secs(row.last_activity, now));
     if heat == Some(Color::Red) {
         return None;
     }
@@ -751,19 +752,20 @@ mod tests {
     #[test]
     fn glow_rides_only_an_unhandled_actionable_row_below_red() {
         let mid_breath = 6;
+        let now = Timestamp::now();
         let waiting = row("a", AgentStatus::Waiting);
         assert_eq!(
-            glow_delta(&waiting, mid_breath),
+            glow_delta(&waiting, now, mid_breath),
             Some(GLOW_MAX_LIGHTNESS / 2.0)
         );
         assert_eq!(
-            glow_delta(&waiting, 0),
+            glow_delta(&waiting, now, 0),
             None,
             "the swell's trough paints nothing"
         );
 
         let calm = row("a", AgentStatus::Running);
-        assert_eq!(glow_delta(&calm, mid_breath), None);
+        assert_eq!(glow_delta(&calm, now, mid_breath), None);
 
         let mut handled = row("a", AgentStatus::Waiting);
         handled.as_agent_mut().unwrap().resolver = Some(SidebarResolverState {
@@ -772,23 +774,23 @@ mod tests {
             budget_until: None,
         });
         assert_eq!(
-            glow_delta(&handled, mid_breath),
+            glow_delta(&handled, now, mid_breath),
             None,
             "a resolver owns the ask"
         );
 
         let mut red = row("a", AgentStatus::Waiting);
-        red.last_activity = Timestamp::now() - jiff::SignedDuration::from_secs(2 * 3_600);
+        red.last_activity = now - jiff::SignedDuration::from_secs(2 * 3_600);
         assert_eq!(
-            glow_delta(&red, mid_breath),
+            glow_delta(&red, now, mid_breath),
             None,
             "the red blink owns the cell"
         );
 
         let mut amber = row("a", AgentStatus::Waiting);
-        amber.last_activity = Timestamp::now() - jiff::SignedDuration::from_secs(2_000);
+        amber.last_activity = now - jiff::SignedDuration::from_secs(2_000);
         assert_eq!(
-            glow_delta(&amber, 3),
+            glow_delta(&amber, now, 3),
             Some(GLOW_MAX_LIGHTNESS / 2.0),
             "amber doubles the tempo, peaking at phase 6"
         );
