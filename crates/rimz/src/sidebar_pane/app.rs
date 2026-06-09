@@ -847,9 +847,10 @@ fn apply_input(
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(pane) = outcome.focus {
-        // A jump fires the one-way focus command at the resolved pane and
-        // mutates no UI state. The highlight moves only when the derived
-        // baseline catches up on a later fold — late, never wrong.
+        // A jump fires the one-way focus command at the resolved pane. The
+        // highlight moves only when the derived baseline catches up on a later
+        // fold — late, never wrong — and any make-up filter clears as focus
+        // leaves the tab (the redraw above repaints the reshaped body).
         spawn_pane_focus(pane);
     }
     Ok(outcome.redraw)

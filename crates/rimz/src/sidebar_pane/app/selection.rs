@@ -54,6 +54,18 @@ impl InputOutcome {
     }
 }
 
+/// Fire a jump at `pane` and end any make-up filter it leaves behind. A status
+/// filter is a transient lens on one tab's body; carrying it past a jump would
+/// leave that tab silently narrowed on return, out of step with the fleet every
+/// other tab shows. The caller resolves the target in the filtered body first,
+/// so the jump still lands where the user pointed; the clear follows. Clearing
+/// reshapes the body, so the outcome repaints when a filter was actually live.
+fn jump_to(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputOutcome {
+    let mut outcome = InputOutcome::focus(pane);
+    outcome.redraw = set_make_up_filter(ui, snapshot, None);
+    outcome
+}
+
 pub(super) fn handle_key(
     action: KeyAction,
     ui: &mut UiState,
@@ -81,10 +93,10 @@ pub(super) fn handle_key(
         KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
         KeyAction::Enter => {
             // Jump on the current row: fire the focus command at the selected
-            // pane without touching selection — the highlight follows once the
-            // derived baseline catches up, identical to a click.
+            // pane without moving the highlight — it follows once the derived
+            // baseline catches up, identical to a click.
             match ui.selected_pane.clone() {
-                Some(pane) => InputOutcome::focus(pane),
+                Some(pane) => jump_to(ui, snapshot, pane),
                 None => InputOutcome::default(),
             }
         }
@@ -93,7 +105,7 @@ pub(super) fn handle_key(
                 next_attention_index(snapshot, ui.make_up_filter, ui.selected_index)
                 && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
             {
-                return InputOutcome::focus(pane);
+                return jump_to(ui, snapshot, pane);
             }
             InputOutcome::default()
         }
@@ -119,7 +131,7 @@ pub(super) fn handle_key(
         KeyAction::Digit(digit) => {
             let index = usize::from(digit.saturating_sub(1));
             if let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index) {
-                return InputOutcome::focus(pane);
+                return jump_to(ui, snapshot, pane);
             }
             InputOutcome::default()
         }
@@ -188,7 +200,7 @@ pub(super) fn handle_mouse_click(
     if let Some(index) = row_index_at_screen_position(ui, row)
         && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
     {
-        return InputOutcome::focus(pane);
+        return jump_to(ui, snapshot, pane);
     }
     InputOutcome::default()
 }

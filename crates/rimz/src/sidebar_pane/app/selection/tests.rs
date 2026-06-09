@@ -1472,3 +1472,45 @@ fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     assert_eq!(ui.selected_pane, Some(running));
     assert_eq!(ui.selected_index, 0);
 }
+
+#[test]
+fn jumping_to_a_card_ends_the_make_up_filter() {
+    use crate::feed::AgentStatus;
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    let failed = PaneId::from_parts(MuxName::Zellij, "terminal_3");
+    let running = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+
+    // A digit jump resolves its target in the filtered body, then ends the
+    // filter — a status lens is one tab's transient view, never a mode that
+    // outlives the jump leaving the tab. The body reshapes, so it repaints too.
+    let mut ui = UiState {
+        make_up_filter: Some(AgentStatus::Failed),
+        ..Default::default()
+    };
+    let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
+    assert_eq!(outcome.focus, Some(failed.clone()));
+    assert!(outcome.redraw, "clearing the filter reshapes the body");
+    assert_eq!(ui.make_up_filter, None);
+
+    // Enter on the highlighted row clears it the same way, re-anchoring the
+    // surviving highlight at its show-all ordinal.
+    let mut ui = UiState {
+        make_up_filter: Some(AgentStatus::Failed),
+        selected_pane: Some(failed.clone()),
+        ..Default::default()
+    };
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+    assert_eq!(outcome.focus, Some(failed.clone()));
+    assert_eq!(ui.make_up_filter, None);
+    assert_eq!(
+        ui.selected_index, 2,
+        "the held highlight re-anchors under show-all"
+    );
+
+    // With no filter live a jump stays pure: nothing to clear, nothing to
+    // repaint.
+    let mut ui = UiState::default();
+    let outcome = handle_key(KeyAction::Digit(1), &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::focus(running));
+}
