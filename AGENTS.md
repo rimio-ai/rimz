@@ -59,8 +59,8 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
-- [product.md](./docs/guide/product.md) — five-minute tour, audiences, sidebar walk-through.
-- [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, phase by phase.
+- [product.md](./docs/guide/product.md) — five-minute tour, who it serves, sidebar walk-through.
+- [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, section by section.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.
 
 **Interface** — `docs/interface/`

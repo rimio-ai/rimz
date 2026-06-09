@@ -1,8 +1,8 @@
 # Design
 
-Rimz gives every project one room: a Zellij or tmux session with a sidebar where you see every coding agent at a glance. What is working, what is blocked, what errored, how much each has done. Humans, scripts, CI, and coding agents share one feed through one CLI, and the room's state survives detach, sidebar reload, and reattach from anywhere.
+Rimz gives every project one room: a Zellij or tmux session with a sidebar where you see every coding agent at a glance. What is working, what is blocked, what errored, how much each has done. One CLI carries every event into one feed, and the room's state survives detach, sidebar reload, and reattach from anywhere.
 
-Rimz stays small because it builds on what you already run: your multiplexer, a flat-file ledger, and one CLI that agents, scripts, and humans all speak.
+Rimz stays small because it builds on what you already run: your multiplexer, a flat-file ledger, and one CLI that every event flows through.
 
 > **Invariant.** Rimz routes your attention: it surfaces which agent needs you and takes you straight to its pane, where you answer in the agent's own UI.
 
@@ -40,9 +40,9 @@ Rimz adds a sidebar and a feed to the terminal you already run, and keeps its ow
 - Durable state is a directory of flat files written with atomic temp-file-plus-rename: no daemon to keep alive, no schema to migrate. It survives detach, reload, and reboot, travels over SSH, and reads with `cat`.
 - The ledger, the bridge, the CLI, and the sidebar model are identical on Zellij and tmux; core behaviour leans on no Zellij-only pipe or tmux-only feature.
 
-### One feed, many participants
+### One feed, one CLI
 
-Anything that wants to participate publishes or resolves through one CLI: `rimz event …` to announce, `rimz feed …` to ask and answer. An agent hook, a `terraform apply`, a CI gate, and you all write to the same feed and read the same room. The sidebar is one renderer of that feed; `rimz feed list` is another. Agent integrations are adapters over the same primitives a shell script uses, so a script reaches every surface an agent does.
+Every event reaches the room through one CLI: `rimz event …` to announce, `rimz feed …` to ask and answer. Agent hooks are the primary writers; the same primitives are open to anything else on the machine, so a `terraform apply` or a CI gate can announce itself or post a question to the same feed an agent writes to. The sidebar is one renderer of that feed; `rimz feed list` is another. Agent integrations are adapters over those primitives, which is what lets a script reach every surface an agent does.
 
 ### Resolve when you opt in
 
@@ -78,6 +78,6 @@ Each line is a decision a reader might challenge, with the reason on the same li
 ## Non-goals
 
 - Not a cloud control plane or cross-workspace orchestrator: one root, one room.
-- Agents are optional; scripts and humans are first-class citizens of the feed.
-- The resolver protocol is the product. Two reference resolvers ship as examples (see [resolvers.md](./docs/internals/resolvers.md)).
+- The feed is open beyond agents: a script or a human can announce events and answer questions through the same CLI an agent's hooks use.
+- Resolver policy is yours to write. Two reference resolvers ship as examples (see [resolvers.md](./docs/internals/resolvers.md)).
 - Process resurrection across host restart is the host's job. The ledger survives a reboot; running sessions need tmux-resurrect, Zellij resurrect, systemd, or another supervisor.

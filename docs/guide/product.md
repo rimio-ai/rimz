@@ -2,7 +2,7 @@
 
 > See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
 
-Rimz gives every project one room: a Zellij or tmux session with a sidebar where humans, scripts, CI, and coding agents share one feed. This is the five-minute tour: what the sidebar shows, who it serves, how a blocked agent reaches you, and the commands you'd run today. For the felt walk-through from first keystroke to a ten-agent fleet, see [experience.md](./experience.md).
+Rimz gives every project one room: a Zellij or tmux session with a sidebar where you watch and steer every coding agent. This is the five-minute tour: what the sidebar shows, who it serves, how a blocked agent reaches you, and the commands you'd run today. For the felt walk-through from first keystroke to a ten-agent fleet, see [experience.md](./experience.md).
 
 ## The sidebar
 
@@ -10,54 +10,49 @@ Rimz gives every project one room: a Zellij or tmux session with a sidebar where
 
 The sidebar is a worktree-keyed presence and attention map. Every pane is a row: a bare shell reads as `○ zsh` and becomes the agent's row the moment you launch one, carrying its status, the task it's on, and its context meter, grouped by the worktree it lives in. Ranking does the triage for you: the most overdue work rises to the top, calm work settles below, and a one-line cockpit summarizes the whole fleet (`? 2  ! 1 …`). Account-scoped usage budgets lift off the rows into the provider dashboard pinned at the bottom, one tab per provider showing its plan, spend, and draining budget bars. Select a row and you land in that pane, where you read the prompt and answer in the agent's own UI. The column always mirrors what's running: when an agent exits, its row reverts to the shell.
 
-## Three audiences, one room
+## Who it serves
 
-- **Agent users.** You have four Claude Code or Codex sessions in flight across two worktrees. One hits a permission prompt. The sidebar surfaces it, you focus the pane, read what it wants to run, and approve in Claude's own prompt. Triage goes from "stare at five terminals" to "answer the questions that need me, when they need me."
-- **Remote developers.** Your dev box is on a server. You start agents, close the laptop, and reopen from a tablet on the train. `ssh dev-box rimz attach query-engine` reconstructs the sidebar from the ledger: every agent where you left it, every pending question still waiting.
-- **Script and tool authors.** Your deploy pipeline runs 40 minutes unattended, then pauses at the staging-to-prod gate. The script calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"` and a teammate answers it from their phone over Tailscale, alongside everything the agents are doing.
+Rimz is built for developers running many coding agents in parallel, both locally and remotely.
+
+Running a fleet locally, you might have four Claude Code or Codex sessions in flight across two worktrees when one hits a permission prompt. The sidebar surfaces it, you focus the pane, read what the agent wants to run, and approve in Claude's own prompt. Triage goes from "stare at five terminals" to "answer the questions that need me, when they need me."
+
+Running agents remotely, your dev box lives on a server. You start agents, close the laptop, and reopen from a tablet on the train. `ssh dev-box rimz attach query-engine` reconstructs the sidebar from the ledger: every agent where you left it, every pending question still waiting. With a resolver chain enrolled, the routine prompts get answered while you are gone, so the fleet keeps moving and only the questions that genuinely need you are still waiting when you reattach.
 
 ## How a question reaches you
 
-Every actionable item travels one of three paths. The schema names (`native_ui`, `bridge`, `script`) and the wire-level details live in [ledger.md](../internals/ledger.md); the human story is:
+When an agent needs a decision, Rimz gets you to it. The two everyday paths (the schema names `native_ui` and `bridge`, with wire-level details in [ledger.md](../internals/ledger.md)) are:
 
-1. **Default: the agent asks in its own UI.** The everyday path, with nothing extra enrolled. Rimz writes the feed item, wakes the sidebar, and points you at the pane. You see "claude · waiting · permission", focus that pane, and answer Claude's prompt; the sidebar clears when the agent moves on.
-2. **Bridge: a resolver answers ahead of you.** Enrol a resolver on this machine and Rimz holds the agent's hook open long enough for the resolver to take the routine items first; anything it passes on falls through to you, with the agent's own UI as the final fallback. This is the opt-in upgrade; see [resolver chains](#resolver-chains-the-morning-after) below.
-3. **Script: your script chose Rimz as its decision surface.** A deploy script calls `rimz feed ask --title "Promote?"` and blocks. Because it declared its options, the question lands in the sidebar with answer buttons, and anyone with shell access (or a resolver) answers through the CLI. The script owns the question end to end.
+1. The agent asks in its own UI. The everyday path, with nothing extra enrolled. Rimz writes the feed item, wakes the sidebar, and points you at the pane. You see "claude · waiting · permission", focus that pane, and answer Claude's prompt; the sidebar clears when the agent moves on.
+2. A resolver answers ahead of you. Enrol a resolver on this machine and Rimz holds the agent's hook open long enough for the resolver to take the routine items first; anything it passes on falls through to you, with the agent's own UI as the final fallback. This is the opt-in upgrade that keeps a fleet moving while you step away; see [resolver chains](#resolver-chains-the-morning-after) below.
+
+A third path exists for scripts: a process can call `rimz feed ask` and route its own decision into the same sidebar (the `script` surface), covered under [scripts on the same feed](#scripts-on-the-same-feed).
 
 ## Five-minute tour
 
 ```sh
-# 1. Start (or attach to) the workspace for this project
+# 1. Start (or attach to) the room for this project
 cd ~/code/query-engine
 rimz
 
-# 2. Emit a workspace event from any pane — no agent required
-rimz event emit --kind build.started --title "Building web"
-
-# 3. Ask the human a yes/no question from a script
-rimz feed ask --title "Deploy staging?" \
-              --options yes,no --timeout 1h
-
-# 4. From another terminal, resolve without the sidebar
-rimz feed list
-rimz feed resolve <request-id> --decision '{"choice":"yes"}'
-
-# 5. Detach. Everything keeps running.
-#    Zellij: Ctrl-O then d. tmux: prefix then d.
-
-# 6. Come back later from anywhere
-ssh dev-box rimz attach query-engine
-
-# 7. Launch a coding agent in a new pane
+# 2. Launch a coding agent in a new pane
 rimz pane split
 claude   # or: codex
+
+# 3. Work. When an agent needs you, the sidebar surfaces it;
+#    press ␣ to jump straight to the pane that is waiting.
+
+# 4. Detach. Everything keeps running.
+#    Zellij: Ctrl-O then d. tmux: prefix then d.
+
+# 5. Come back later from anywhere
+ssh dev-box rimz attach query-engine
 ```
 
 That's the loop. Every other feature in Rimz is a variation on those primitives.
 
 ## Many agents, many worktrees
 
-Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the *same* worktree trigger a one-time advisory.
+Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
 ## Many repos, one room
 
@@ -65,11 +60,11 @@ A room doesn't need a repo. Run `rimz start` in any directory (`~/code` holding 
 
 ## Survive overnight, survive reboot
 
-The workspace and its ledger outlive the terminal session. Two things a long-running agent run depends on:
+The workspace and its ledger outlive the terminal session. A long-running agent run depends on two things.
 
-**Reboot.** The ledger survives a host restart because it's a directory of flat files under `~/.local/state/rimz/`. Running processes don't. To carry an overnight agent run across a reboot, the host keeps them alive with a systemd unit, tmux-resurrect, or Zellij's resurrect mode. Detail in [DESIGN.md](../../DESIGN.md) under "Non-goals."
+The ledger survives a host restart because it is a directory of flat files under `~/.local/state/rimz/`. Running processes do not. To carry an overnight agent run across a reboot, the host keeps them alive with a systemd unit, tmux-resurrect, or Zellij's resurrect mode (detail in [DESIGN.md](../../DESIGN.md) under "Non-goals").
 
-**Overnight without a human.** An agent that hits a permission prompt with nobody attached waits on its own native UI until you return or its timeout fires. Two ways to scale past your sleep schedule: enrol a resolver chain so routine answers happen without you (next section), or run the agent with its own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). The unattended-CI pattern is covered in "Unattended runs" below.
+To run overnight without a human, plan for the prompts. An agent that hits a permission prompt with nobody attached waits on its own native UI until you return or its timeout fires. Two ways scale past your sleep schedule: enrol a resolver chain so routine answers happen without you (next section), or run the agent with its own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). The unattended pattern is covered in [Unattended runs](#unattended-runs) below.
 
 ## Resolver chains: the morning after
 
@@ -92,22 +87,27 @@ Each link has its own budget. When the budget elapses (or the resolver abstains)
 
 The morning after six overnight agents: "Opus answered 47 routine permissions, abstained on 3 architecture-shaped questions, Slack pinged my co-lead who answered two in his timezone, and one fell through to me in the sidebar." Your team's attention bandwidth scales with the chain, not with the agent count.
 
-Two reference resolvers ship with Rimz, ready to enrol and adapt:
+Two reference resolvers ship with Rimz, ready to enrol and adapt.
 
-- **hook-bridge** (`hook_bridge_resolver.py`): answers routine permission requests against a policy you set, read-only tools out of the box. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision, so you keep a per-decision record while the prompts stop interrupting you.
-- **pane-send** (`pane_send_resolver.py`): captures well-known terminal prompts in the agent's own pane, matches a bounded pattern list, types the reply, and confirms. The same skeleton adapts into a rate-limit resumer that nudges a stalled run the moment the `↻` countdown on the provider dashboard resets, so long runs pick themselves back up overnight.
+The `hook_bridge_resolver.py` example answers routine permission requests against a policy you set, with read-only tools allowed out of the box. It is the audited form of yolo mode: every approval flows through the bridge and lands in the ledger as a real decision, so you keep a per-decision record while the prompts stop interrupting you.
+
+The `pane_send_resolver.py` example captures well-known terminal prompts in the agent's own pane, matches a bounded pattern list, types the reply, and confirms. The same skeleton adapts into a rate-limit resumer that nudges a stalled run the moment the `↻` countdown on the provider dashboard resets, so long runs pick themselves back up overnight.
 
 Both are starting points you copy and edit. The chain mechanics, the heartbeat protocol, and the two examples live in [resolvers.md](../internals/resolvers.md); trust gates and the allowlist are in [security.md](./security.md).
 
-## Unattended runs in CI / sandbox
+## Unattended runs
 
-Inside a sandboxed CI runner there's no human to ask. Two patterns work:
+To run agents unattended, overnight or on a sandboxed runner with no human to ask, two patterns work.
 
-**Agent-native bypass.** Launch each agent with its own bypass flag: `claude --dangerously-skip-permissions`, `codex --ask-for-approval never --sandbox danger-full-access`. The agent runs straight through. Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff: the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
+The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --ask-for-approval never --sandbox danger-full-access` and it runs straight through. Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
 
-**Permissive resolver.** Enrol a resolver that answers `allow` to anything (or anything matching a policy); the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
+The second is a permissive resolver. Enrol a resolver that answers `allow` to anything (or anything matching a policy); the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 
-The two patterns compose: a permissive resolver for routine cases, with the agent's bypass flag as the ultimate fallback for anything the resolver doesn't catch in time.
+The two patterns compose: a permissive resolver for routine cases, with the agent's bypass flag as the fallback for anything the resolver does not catch in time.
+
+## Scripts on the same feed
+
+Once the room is running agents, the same CLI lets a script join the feed. A deploy pipeline that runs unattended and then pauses at a staging-to-prod gate can call `rimz feed ask --title "Promote build 2026.05.18-rc.4?"`, and the question lands in the sidebar with answer buttons alongside everything the agents are doing; you or a resolver answers it from anywhere. The script owns the question end to end. It is the same primitives an agent integration uses, reached from a shell script instead, so anything an agent can surface, a script can too.
 
 ## The design behind it
 
