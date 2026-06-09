@@ -6,7 +6,7 @@
 //! fork-bearing input pre-published fresh, the rollup folding O(new bytes)
 //! through the worker's cursor — finishes far inside one data tick even with a
 //! fleet-scale ledger and pane set, so the reconciling post never starves the
-//! paint behind it. Companion to `compose_budget` in `sidebar_renderer`,
+//! paint behind it. Companion to `compose_budget` in `sidebar_pane`,
 //! which bounds the frame composition over the produced snapshot.
 
 use std::time::{Duration, Instant};

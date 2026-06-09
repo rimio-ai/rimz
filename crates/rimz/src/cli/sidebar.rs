@@ -281,7 +281,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 Some(mux) => mux,
                 None => rimz::mux::auto_detect_backend(globals.mux)?,
             };
-            rimz::sidebar_renderer::app::serve(rimz::sidebar_renderer::app::ServeConfig {
+            rimz::sidebar_pane::app::serve(rimz::sidebar_pane::app::ServeConfig {
                 workspace_id,
                 mux,
                 session_name,
@@ -301,7 +301,7 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 .read_to_string(&mut buf)
                 .context("reading stdin")?;
             let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
-            rimz::sidebar_renderer::render::render_fixed(
+            rimz::sidebar_pane::render::render_fixed(
                 io::stdout(),
                 &snapshot,
                 None,

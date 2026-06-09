@@ -108,7 +108,7 @@ All `insta` snapshots — CLI stdout, `--json` event payloads, hook stdout, side
 
 - **Volatile output.** Normalize UUIDs, timestamps, absolute paths, workspace IDs, multiplexer session names, and other transient identifiers at the assertion boundary before snapshotting. Add a shared redaction helper only when more than one suite needs the same normalization. Snapshots compare semantic shape, not transient identifiers.
 - **Failure-shape snapshots.** Error messages, `--json` error envelopes, and hook neutral silence are snapshotted alongside success cases. Wire-shape error changes are reviewed events, not silent regressions.
-- **Sidebar render snapshots.** `crates/rimz/src/sidebar_renderer` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
+- **Sidebar render snapshots.** `crates/rimz/src/sidebar_pane` snapshot tests render through a `vt100::Parser`-backed ratatui backend and assert on the parsed screen contents, never on widget internals. Resize the backend within the test to exercise wrapping and truncation.
 
 ## Sidebar tests
 

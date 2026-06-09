@@ -944,8 +944,8 @@ fn invariants(root: &Path) -> Result<()> {
             || path.starts_with(root.join("xtask"))
             || path.extension().and_then(OsStr::to_str) == Some("md")
     };
-    let outside_sidebar_renderer = |path: &Path| {
-        !path.starts_with(root.join("crates/rimz/src/sidebar_renderer"))
+    let outside_sidebar_pane = |path: &Path| {
+        !path.starts_with(root.join("crates/rimz/src/sidebar_pane"))
             || path.starts_with(root.join("xtask"))
     };
 
@@ -986,7 +986,7 @@ fn invariants(root: &Path) -> Result<()> {
         ensure_no_match(
             &files,
             needle,
-            outside_sidebar_renderer,
+            outside_sidebar_pane,
             "sidebar renderer must not import ledger writer APIs",
         )?;
     }

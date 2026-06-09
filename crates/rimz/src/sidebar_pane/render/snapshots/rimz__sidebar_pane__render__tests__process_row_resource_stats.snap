@@ -1,0 +1,19 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests.rs
+assertion_line: 83
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 0
+ ──────────────────────────────────────────────────────
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⣾ cargo                       C  34%  M 512M  ⇅   8M/s
+▌  cargo build --release
+
+ no agents yet
+ install hooks:
+ rimz hooks install claude
+                       ? for help

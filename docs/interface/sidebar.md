@@ -410,7 +410,7 @@ Press `x` to dismiss it; a fresh failure re-arms it. `r` reloads the tab.
 
 ## Keeping these frames honest
 
-The renderer's golden tests in [`crates/rimz/src/sidebar_renderer/render/`](../../crates/rimz/src/sidebar_renderer/render/) are the machine-checked source of truth for these frames — `cargo xtask test` re-renders each scenario and diffs it against a committed `.snap`. The frames in this doc are drawn from those scenarios:
+The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../crates/rimz/src/sidebar_pane/render/) are the machine-checked source of truth for these frames — `cargo xtask test` re-renders each scenario and diffs it against a committed `.snap`. The frames in this doc are drawn from those scenarios:
 
 | scenario | golden test |
 |----------|-------------|

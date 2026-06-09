@@ -29,7 +29,7 @@ pub struct SidebarOwnView {
     pub own_is_active: bool,
     /// The view's active working pane: the non-sidebar sibling carrying the
     /// per-view `is_focused` mark. The renderer derives its selection baseline
-    /// from it (see `sidebar_renderer::app::selection`) — same-tab by
+    /// from it (see `sidebar_pane::app::selection`) — same-tab by
     /// construction, defined whether or not a client is viewing the tab.
     pub active_pane_id: Option<PaneId>,
     /// The view's working (non-sidebar) sibling pane ids — the only panes a

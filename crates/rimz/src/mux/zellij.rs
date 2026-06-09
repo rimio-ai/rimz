@@ -502,7 +502,7 @@ impl ZellijBackend {
     /// pane on the left and focuses the user's terminal on the right. The layout
     /// doubles as the default tab template, so new tabs are born with a sidebar
     /// too. The sidebar pane is `close_on_exit`, so when its own process exits
-    /// the pane closes — see the self-close loop in `sidebar_renderer::app`.
+    /// the pane closes — see the self-close loop in `sidebar_pane::app`.
     ///
     /// Zellij parses `--default-layout` asynchronously, after the
     /// `--create-background` client returns, so the temp layout file must

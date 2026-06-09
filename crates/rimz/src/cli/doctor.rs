@@ -81,7 +81,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
             }
             Err(err) => println!("  multiplexer   : unavailable ({err})"),
         }
-        report_sidebar_renderer();
+        report_sidebar_pane();
         report_agent_hooks();
         report_remote_control();
         report_room_tree(workspace.as_ref().ok());
@@ -504,7 +504,7 @@ fn report_remote_control() {
     clippy::print_stdout,
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
-fn report_sidebar_renderer() {
+fn report_sidebar_pane() {
     println!("  sidebar renderer: built into rimz");
 }
 

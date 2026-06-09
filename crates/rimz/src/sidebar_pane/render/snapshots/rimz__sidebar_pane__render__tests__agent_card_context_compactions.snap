@@ -1,0 +1,19 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests.rs
+assertion_line: 83
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 1
+ ──────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                       ⢿ 1   ○ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌⣾ claude · Opus 4.8 · high · 200k                $1.27
+▌  ledger refactor
+▌  ▣ ━━━━━━━━━━━━━━━━━─────────────────────────── 38.2%
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · ↻ 2
+
+                       ? for help

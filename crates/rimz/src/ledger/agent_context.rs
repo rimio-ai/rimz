@@ -4,7 +4,7 @@
 //! statusline feed, hook ingestion/local transcript refresh, and detached
 //! helpers (CLI paths), plus the elder renderer's producer-side triggers (the
 //! in-process snapshot-produce backstop and the transcript watcher,
-//! `sidebar_renderer::app::transcript_watch`) — as one atomic file per
+//! `sidebar_pane::app::transcript_watch`) — as one atomic file per
 //! `(kind, agent_id)` session under the runtime `agent_context/` dir. The
 //! snapshot read-side folds it in through
 //! [`crate::ledger::snapshot::SidebarSnapshot::with_agent_context`]. It never

@@ -1,0 +1,25 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests.rs
+assertion_line: 83
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 1
+ ────────────────────────────────────────────────────
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                     ⢿ 1   ○ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌_ claude · Opus 4.8 · high · 200k              $1.27
+▌  ledger refactor
+▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k
+▌  ⧉ subagents (2)
+▌    ✓ Explore — locate the render seam
+▌      ◇ 12k · Opus 4.8  · high                 ◔  1m
+▌    · review — audit the trust hash
+▌      ◇  3k · Haiku 4.5                        ◔ <1m
+
+
+                      ? for help

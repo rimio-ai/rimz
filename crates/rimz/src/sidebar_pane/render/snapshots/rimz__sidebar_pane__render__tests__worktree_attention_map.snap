@@ -1,0 +1,24 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 3
+ ────────────────────────────────────
+ ? 2   ! 0   ⏸︎ 0   ✓ 0     ⢿ 1   ○ 0
+
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌? claude
+▌  investigate destructive query guar
+▌  ▢ ──────────────────────────    0%
+▏⣾ codex · GPT 5.5 · 258k
+▏  add tests
+▏  ▢ ──────────────────────────    0%
+
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
+ ? deploy.sh
+   Deploy staging?
+
+        ␣ next ?!   ? for help
