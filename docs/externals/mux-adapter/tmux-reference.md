@@ -224,7 +224,7 @@ The server copies its spawn environment into the **global environment**; each se
 
 ## Control mode
 
-`tmux -C` turns a client into a line-oriented protocol endpoint: commands go in on stdin, replies and asynchronous notifications come out on stdout. `-CC` additionally puts the tty in raw mode and brackets the stream with a `\eP1000p` DCS preamble and a closing `\e\\` (the iTerm2 integration shape); plain `-C` emits no terminal markers. [`PresenceWatch`](../../../crates/rimz/src/mux/tmux.rs) holds `tmux -C attach-session -r -f no-output -t <session>` and reads notifications only.
+`tmux -C` turns a client into a line-oriented protocol endpoint: commands go in on stdin, replies and asynchronous notifications come out on stdout. `-CC` additionally puts the tty in raw mode and brackets the stream with a `\eP1000p` DCS preamble and a closing `\e\\` (the iTerm2 integration shape); plain `-C` emits no terminal markers. [`PresenceWatch`](../../../crates/rimz/src/mux/tmux/presence.rs) holds `tmux -C attach-session -r -f no-output -t <session>` and reads notifications only.
 
 ### Protocol shape
 
