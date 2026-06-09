@@ -18,7 +18,7 @@ The hidden `rimz agents exec` wrapper runs the agent command in the pane and inh
 
 The cleanup decision is pure:
 
-| Marker | Status | Other live pane inside path | Decision |
+| Marker | Status | Other live user pane inside path | Decision |
 | --- | --- | --- | --- |
 | absent | any | any | skip |
 | present | clean and not ahead | no | remove worktree and delete branch with `git branch -d` |
@@ -27,7 +27,9 @@ The cleanup decision is pure:
 
 The automatic path never force-deletes a branch. The interactive dirty `remove` choice and `rimz worktree remove --force` use Git's force removal path because the human explicitly chose destruction.
 
-`rimz gc` also sweeps clean, marked worktrees in the current repo when no live pane cwd sits inside them, then runs `git worktree prune`.
+Rimz sidebar panes are chrome: they inherit the tab cwd for launch, and worktree liveness reads user panes only.
+
+`rimz gc` also sweeps clean, marked worktrees in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`.
 
 ## Tab layout IR
 

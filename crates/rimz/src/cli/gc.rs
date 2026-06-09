@@ -1,5 +1,6 @@
 //! `rimz gc` — remove stale runtime liveness hints.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -80,12 +81,7 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
     let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions::default())
-            .map(|panes| {
-                panes
-                    .into_iter()
-                    .filter_map(|pane| pane.cwd.map(std::path::PathBuf::from))
-                    .collect::<Vec<_>>()
-            })
+            .map(|panes| live_user_cwds(&panes))
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
@@ -132,6 +128,14 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
     swept
 }
 
+fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>) -> Vec<PathBuf> {
+    panes
+        .into_iter()
+        .filter(|pane| !pane.is_rimz_sidebar())
+        .filter_map(|pane| pane.cwd.as_deref().map(PathBuf::from))
+        .collect()
+}
+
 /// Render the per-workspace removal lines for the prune step.
 #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
 fn print_prune_removals(report: &gc::WorkspacePruneReport) {
@@ -157,6 +161,7 @@ fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::{MuxName, PaneId};
 
     #[test]
     fn parse_duration_accepts_short_units() {
@@ -166,5 +171,45 @@ mod tests {
         assert!(parse_duration("").is_err());
         assert!(parse_duration("30").is_err());
         assert!(parse_duration("30d").is_err());
+    }
+
+    #[test]
+    fn live_user_cwds_excludes_sidebar_chrome() {
+        let panes = vec![
+            pane(
+                "terminal_side",
+                Some("rimz-sidebar"),
+                Some("/repo-worktrees/demo"),
+            ),
+            pane(
+                "terminal_agent",
+                Some("codex"),
+                Some("/repo-worktrees/demo"),
+            ),
+            pane(
+                "terminal_shell",
+                Some("zsh"),
+                Some("/repo-worktrees/demo/src"),
+            ),
+            pane("terminal_unknown", None, Some("/repo-worktrees/demo")),
+            pane("terminal_empty", Some("zsh"), None),
+        ];
+
+        assert_eq!(
+            live_user_cwds(&panes),
+            vec![
+                PathBuf::from("/repo-worktrees/demo"),
+                PathBuf::from("/repo-worktrees/demo/src"),
+                PathBuf::from("/repo-worktrees/demo")
+            ]
+        );
+    }
+
+    fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::feed::PaneRef {
+        rimz::feed::PaneRef {
+            command: command.map(ToOwned::to_owned),
+            cwd: cwd.map(ToOwned::to_owned),
+            ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+        }
     }
 }

@@ -297,8 +297,17 @@ fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
     let Ok(panes) = backend.list_panes(rimz::mux::PaneListOptions::default()) else {
         return false;
     };
+    other_live_user_pane_inside(&panes, &own, path)
+}
+
+fn other_live_user_pane_inside<'a>(
+    panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>,
+    own: &rimz::PaneId,
+    path: &Path,
+) -> bool {
     panes.into_iter().any(|pane| {
-        pane.pane_id != own
+        &pane.pane_id != own
+            && !pane.is_rimz_sidebar()
             && pane
                 .cwd
                 .as_deref()
@@ -363,6 +372,7 @@ fn exec_shell(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use rimz::{MuxName, PaneId};
 
     #[derive(Debug, Parser)]
     struct ExecHarness {
@@ -391,5 +401,41 @@ mod tests {
         assert_eq!(args.worktree_path, Some(PathBuf::from("/x")));
         assert_eq!(args.prompt.as_deref(), Some("hi"));
         assert_eq!(args.extra_args, ["--model", "gpt-5-codex"]);
+    }
+
+    #[test]
+    fn other_live_user_pane_inside_ignores_sidebar_and_own_pane() {
+        let worktree = Path::new("/repo-worktrees/demo");
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
+        let panes = vec![
+            pane("terminal_side", Some("rimz-sidebar"), Some(worktree)),
+            pane("terminal_outside", Some("zsh"), Some(Path::new("/repo"))),
+            pane("terminal_own", Some("codex"), Some(worktree)),
+        ];
+
+        assert!(
+            !other_live_user_pane_inside(&panes, &own, worktree),
+            "sidebar, outside pane, and own pane do not pin cleanup"
+        );
+    }
+
+    #[test]
+    fn other_live_user_pane_inside_counts_agent_or_shell_under_worktree() {
+        let worktree = Path::new("/repo-worktrees/demo");
+        let shell_dir = worktree.join("src");
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
+        let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
+        let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
+
+        assert!(other_live_user_pane_inside(&agent, &own, worktree));
+        assert!(other_live_user_pane_inside(&shell, &own, worktree));
+    }
+
+    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::feed::PaneRef {
+        rimz::feed::PaneRef {
+            command: command.map(ToOwned::to_owned),
+            cwd: cwd.map(|path| path.display().to_string()),
+            ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+        }
     }
 }

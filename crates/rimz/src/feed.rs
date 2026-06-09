@@ -381,6 +381,15 @@ impl PaneRef {
             elevated_agent: None,
         }
     }
+
+    /// Whether this pane is Rimz's own sidebar chrome. Worktree liveness checks
+    /// ignore it because the sidebar inherits its view's cwd without being a
+    /// user pane working in that tree.
+    pub fn is_rimz_sidebar(&self) -> bool {
+        self.command
+            .as_deref()
+            .is_some_and(crate::ledger::snapshot::command_is_sidebar_chrome)
+    }
 }
 
 fn is_false(value: &bool) -> bool {
@@ -923,6 +932,25 @@ mod tests {
             let back: FeedStatus = serde_json::from_str(&wire).unwrap();
             assert_eq!(status, back);
         }
+    }
+
+    #[test]
+    fn pane_ref_classifies_rimz_sidebar_from_command() {
+        fn pane(command: Option<&str>) -> PaneRef {
+            PaneRef {
+                command: command.map(ToOwned::to_owned),
+                cwd: Some("/repo-worktrees/demo".to_owned()),
+                ..PaneRef::from_id(PaneId::from_parts(
+                    crate::ids::MuxName::Zellij,
+                    "terminal_1",
+                ))
+            }
+        }
+
+        assert!(pane(Some("rimz-sidebar")).is_rimz_sidebar());
+        assert!(!pane(Some("codex")).is_rimz_sidebar());
+        assert!(!pane(Some("zsh")).is_rimz_sidebar());
+        assert!(!pane(None).is_rimz_sidebar());
     }
 
     #[test]
