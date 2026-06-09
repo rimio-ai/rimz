@@ -115,7 +115,8 @@ pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
 
 /// The `· ↻ N` compaction tail for the context line, shown from the first
 /// completed compaction. The `·` seam reads at the dim chrome like the
-/// composition seams; the marker wears the violet compaction tone.
+/// composition seams; only the marker wears the violet compaction tone, and
+/// the count stays dim like the adjacent context figures.
 pub(in crate::sidebar_pane::render) fn context_compaction_spans(
     theme: &Theme,
     count: u32,
@@ -125,10 +126,8 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
     }
     vec![
         Span::styled(" · ", theme.dim()),
-        Span::styled(
-            format!("{CONTEXT_COMPACTIONS} {count}"),
-            compacting_style(theme),
-        ),
+        Span::styled(CONTEXT_COMPACTIONS, compacting_style(theme)),
+        Span::styled(format!(" {count}"), theme.dim()),
     ]
 }
 

@@ -361,3 +361,18 @@ fn context_breakdown_markers_wear_their_segment_colors() {
         .expect("no seam span");
     assert_eq!(seam.style, theme.dim(), "the seam stays dim chrome");
 }
+
+/// The compaction count uses the same visual grammar as the context-token
+/// stats: a colored marker, then a dim figure.
+#[test]
+fn context_compaction_styles_marker_only() {
+    let theme = Theme::fixed(false);
+    let spans = context_compaction_spans(&theme, 2);
+    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
+    assert_eq!(text, " · ↻ 2");
+
+    assert_eq!(spans[0].style, theme.dim(), "seam");
+    assert_eq!(spans[1].style, compacting_style(&theme), "marker");
+    assert_eq!(spans[2].style, theme.dim(), "count");
+    assert!(context_compaction_spans(&theme, 0).is_empty());
+}
