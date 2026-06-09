@@ -11,8 +11,8 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut, PaneFields, Poke,
-        PokePolicy, TimerGate,
+        self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut,
+        ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
 
@@ -145,13 +145,8 @@ mod shell {
                     );
                 }
                 Event::CommandChanged(pane_id, command, is_foreground, _) => {
-                    if is_foreground {
-                        if policy::command_args_are_launch_chrome(&command) {
-                            self.forget_foreground_command(&pane_id);
-                            self.signal_change(now);
-                        } else if let Some(command_text) =
-                            policy::joined_foreground_command(&command)
-                        {
+                    match policy::foreground_command_update(&command, is_foreground) {
+                        ForegroundCommandUpdate::Remember(command_text) => {
                             self.remember_foreground_command(&pane_id, command_text);
                             if self.poke_command_changed(&pane_id, &command, now) {
                                 if let Some(policy) = self.policy.as_mut() {
@@ -162,6 +157,10 @@ mod shell {
                             } else {
                                 self.signal_change(now);
                             }
+                        }
+                        ForegroundCommandUpdate::Forget => {
+                            self.forget_foreground_command(&pane_id);
+                            self.signal_change(now);
                         }
                     }
                 }

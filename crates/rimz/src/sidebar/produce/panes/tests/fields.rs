@@ -1,4 +1,11 @@
 use super::*;
+use std::collections::HashMap;
+
+fn tmux_pane(command: &str) -> crate::feed::PaneRef {
+    let mut pane = pane("%1", Some(command), Some("/repo"));
+    pane.pane_id = crate::ids::PaneId::from_parts(crate::ids::MuxName::Tmux, "%1");
+    pane
+}
 
 #[test]
 fn rotate_from_cache_repairs_raced_nulls_from_disk() {
@@ -400,6 +407,233 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
             .pane_states()
             .all(|pane| pane.current.started_at.is_none())
     );
+}
+
+#[test]
+fn stale_active_command_clears_when_process_tree_has_no_match() {
+    let mut frame = frame(vec![pane(
+        "terminal_1",
+        Some("cargo build --release"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).children = vec![200];
+    first_mut(&mut frame).metrics = PaneMetrics {
+        process_state: Some(crate::ProcessState::Stuck),
+        rss_kb: Some(1024),
+        cpu_pct: Some(250),
+        io_bps: Some(4096),
+    };
+    let cmdlines = HashMap::from([(100, "zsh".to_owned())]);
+    let comms = HashMap::from([(100, "zsh".to_owned())]);
+    let children = HashMap::<u32, Vec<u32>>::new();
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command,
+        None,
+        "a stale active foreground with only an idle shell behind it drops"
+    );
+    assert_eq!(first(&frame).metrics, PaneMetrics::default());
+    assert!(
+        first(&frame).children.is_empty(),
+        "stale process metadata is cleared with the command"
+    );
+}
+
+#[test]
+fn zellij_active_command_stays_when_a_descendant_matches_exactly() {
+    let mut frame = frame(vec![pane(
+        "terminal_1",
+        Some("cargo build --release"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([
+        (100, "zsh".to_owned()),
+        (200, "bash -lc cargo build --release".to_owned()),
+        (300, "cargo build --release".to_owned()),
+    ]);
+    let comms = HashMap::from([
+        (100, "zsh".to_owned()),
+        (200, "bash".to_owned()),
+        (300, "cargo".to_owned()),
+    ]);
+    let children = HashMap::from([(100, vec![200]), (200, vec![300])]);
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command.as_deref(),
+        Some("cargo build --release")
+    );
+}
+
+#[test]
+fn zellij_stale_full_command_ignores_same_program_with_different_argv() {
+    let mut frame = frame(vec![pane(
+        "terminal_1",
+        Some("cargo build --release"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([(100, "zsh".to_owned()), (200, "cargo test".to_owned())]);
+    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "cargo".to_owned())]);
+    let children = HashMap::from([(100, vec![200])]);
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command,
+        None,
+        "Zellij retains full argv commands; a same-program descendant with \
+         different argv must not keep a stale command alive"
+    );
+}
+
+#[test]
+fn tmux_short_command_matches_child_program_label_when_cmdline_has_args() {
+    let mut frame = frame(vec![tmux_pane("cargo")]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([
+        (100, "zsh".to_owned()),
+        (200, "/usr/bin/cargo build --release".to_owned()),
+    ]);
+    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "cargo".to_owned())]);
+    let children = HashMap::from([(100, vec![200])]);
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(first(&frame).current.command.as_deref(), Some("cargo"));
+}
+
+#[test]
+fn tmux_long_program_prefers_cmdline_label_over_truncated_comm() {
+    let mut frame = frame(vec![tmux_pane("mutable-unicorn-server")]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([
+        (100, "zsh".to_owned()),
+        (200, "/opt/bin/mutable-unicorn-server --serve".to_owned()),
+    ]);
+    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "mutable-unicor".to_owned())]);
+    let children = HashMap::from([(100, vec![200])]);
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command.as_deref(),
+        Some("mutable-unicorn-server")
+    );
+}
+
+#[test]
+fn tmux_mismatched_cmdline_without_comm_counts_as_absent() {
+    let mut frame = frame(vec![tmux_pane("cargo")]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([(100, "zsh".to_owned()), (200, "make check".to_owned())]);
+    let children = HashMap::from([(100, vec![200])]);
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|_| None,
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command,
+        None,
+        "a readable tmux cmdline mismatch is process evidence even when comm is unavailable"
+    );
+}
+
+#[test]
+fn command_pane_root_matches_without_children() {
+    let mut frame = frame(vec![pane(
+        "terminal_1",
+        Some("cargo build --release"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let cmdlines = HashMap::from([(100, "cargo build --release".to_owned())]);
+    let comms = HashMap::from([(100, "cargo".to_owned())]);
+    let children = HashMap::<u32, Vec<u32>>::new();
+
+    drop_finished_active_commands(
+        &mut frame,
+        &|pid| cmdlines.get(&pid).cloned(),
+        &|pid| comms.get(&pid).cloned(),
+        &|pid| children.get(&pid).cloned().unwrap_or_default(),
+    );
+
+    assert_eq!(
+        first(&frame).current.command.as_deref(),
+        Some("cargo build --release")
+    );
+}
+
+#[test]
+fn active_command_stays_when_process_evidence_is_unavailable() {
+    let mut frame = frame(vec![pane(
+        "terminal_1",
+        Some("cargo build --release"),
+        Some("/repo"),
+    )]);
+    first_mut(&mut frame).current.pid = Some(100);
+    let children = HashMap::<u32, Vec<u32>>::new();
+
+    drop_finished_active_commands(&mut frame, &|_| None, &|_| None, &|pid| {
+        children.get(&pid).cloned().unwrap_or_default()
+    });
+
+    assert_eq!(
+        first(&frame).current.command.as_deref(),
+        Some("cargo build --release"),
+        "missing /proc evidence is an abstention, not proof of exit"
+    );
+}
+
+#[test]
+fn idle_and_agent_commands_are_not_process_gated() {
+    for command in ["zsh", "codex"] {
+        let mut frame = frame(vec![pane("terminal_1", Some(command), Some("/repo"))]);
+        first_mut(&mut frame).current.pid = Some(100);
+
+        drop_finished_active_commands(
+            &mut frame,
+            &|pid| -> Option<String> { panic!("cmdline must not be read for {command}: {pid}") },
+            &|pid| -> Option<String> { panic!("comm must not be read for {command}: {pid}") },
+            &|pid| -> Vec<u32> { panic!("children must not be read for {command}: {pid}") },
+        );
+
+        assert_eq!(first(&frame).current.command.as_deref(), Some(command));
+    }
 }
 
 #[test]

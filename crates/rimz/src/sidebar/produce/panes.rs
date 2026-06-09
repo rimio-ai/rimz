@@ -15,7 +15,7 @@ use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache, snapshot_cache_is_fresh,
     unix_now_ms,
 };
-use crate::sidebar::frame::{PaneFrame, assemble_frame};
+use crate::sidebar::frame::{PaneFrame, PaneMetrics, assemble_frame};
 
 mod starts;
 
@@ -123,6 +123,12 @@ fn repair_pane_frame(
     } else {
         super::metrics::backfill_zellij_pane_pids_from_proc(frame, session);
     }
+    drop_finished_active_commands(
+        frame,
+        &crate::proc::cmdline,
+        &crate::proc::comm,
+        &crate::proc::children,
+    );
     backfill_pane_cwds(frame, &|pid| crate::proc::cwd(pid));
     stamp_pane_resumed_session_ids(
         frame,
@@ -186,6 +192,156 @@ fn backfill_pane_cwds(frame: &mut PaneFrame, proc_cwd: &dyn Fn(u32) -> Option<Pa
         {
             pane.current.cwd = Some(cwd);
         }
+    }
+}
+
+/// Clear an active foreground command when the pane's root process tree no
+/// longer contains that command. Zellij's presence topology is a latency cache:
+/// it can retain a finished `CommandChanged` foreground after the shell has
+/// returned to idle. The mux-repaired root pid is live truth; if neither the
+/// root nor any descendant still matches the active command, the command is
+/// stale and the pane should fold as its idle shell.
+fn drop_finished_active_commands(
+    frame: &mut PaneFrame,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
+    proc_comm: &dyn Fn(u32) -> Option<String>,
+    proc_children: &dyn Fn(u32) -> Vec<u32>,
+) {
+    for pane in frame.pane_states_mut() {
+        let Some(command) = pane.current.command.as_deref() else {
+            continue;
+        };
+        if !crate::ledger::snapshot::process_is_active(command) {
+            continue;
+        }
+        let Some(root_pid) = pane.current.pid else {
+            continue;
+        };
+        let match_mode = ProcessCommandMatch::for_mux(pane.pane_id.mux());
+        if process_tree_command_status(
+            root_pid,
+            command,
+            match_mode,
+            proc_cmdline,
+            proc_comm,
+            proc_children,
+        ) == ProcessCommandStatus::Absent
+        {
+            pane.current.command = None;
+            pane.metrics = PaneMetrics::default();
+            pane.children.clear();
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessCommandMatch {
+    /// Zellij reports a full foreground argv/cmdline, and its pid backfill uses
+    /// that same exact equality. Keep the check symmetric so an unrelated
+    /// same-program descendant cannot keep a stale full command alive.
+    ExactCmdline,
+    /// tmux reports `#{pane_current_command}`: a short program name. Match it
+    /// against the live process program label/comm, not the full argv.
+    ProgramLabel,
+}
+
+impl ProcessCommandMatch {
+    fn for_mux(mux: MuxName) -> Self {
+        match mux {
+            MuxName::Zellij => Self::ExactCmdline,
+            MuxName::Tmux => Self::ProgramLabel,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessCommandStatus {
+    Present,
+    Absent,
+    Unknown,
+}
+
+fn process_tree_command_status(
+    root_pid: u32,
+    command: &str,
+    match_mode: ProcessCommandMatch,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
+    proc_comm: &dyn Fn(u32) -> Option<String>,
+    proc_children: &dyn Fn(u32) -> Vec<u32>,
+) -> ProcessCommandStatus {
+    let mut found_process_evidence = false;
+    match process_command_probe(root_pid, command, match_mode, proc_cmdline, proc_comm) {
+        ProcessCommandProbe::Match => return ProcessCommandStatus::Present,
+        ProcessCommandProbe::Mismatch => found_process_evidence = true,
+        ProcessCommandProbe::Unknown => {}
+    }
+
+    let mut seen = HashSet::new();
+    let mut stack = proc_children(root_pid);
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        match process_command_probe(pid, command, match_mode, proc_cmdline, proc_comm) {
+            ProcessCommandProbe::Match => return ProcessCommandStatus::Present,
+            ProcessCommandProbe::Mismatch => found_process_evidence = true,
+            ProcessCommandProbe::Unknown => {}
+        }
+        stack.extend(proc_children(pid));
+    }
+    if found_process_evidence {
+        ProcessCommandStatus::Absent
+    } else {
+        ProcessCommandStatus::Unknown
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProcessCommandProbe {
+    Match,
+    Mismatch,
+    Unknown,
+}
+
+fn process_command_probe(
+    pid: u32,
+    command: &str,
+    match_mode: ProcessCommandMatch,
+    proc_cmdline: &dyn Fn(u32) -> Option<String>,
+    proc_comm: &dyn Fn(u32) -> Option<String>,
+) -> ProcessCommandProbe {
+    let command = command.trim();
+    if command.is_empty() {
+        return ProcessCommandProbe::Unknown;
+    }
+    let command_label = crate::ledger::snapshot::program_label(command);
+    let mut saw_cmdline_mismatch = false;
+    match proc_cmdline(pid).map(|cmdline| cmdline.trim().to_owned()) {
+        Some(cmdline) if !cmdline.is_empty() => match match_mode {
+            ProcessCommandMatch::ExactCmdline if cmdline == command => {
+                return ProcessCommandProbe::Match;
+            }
+            ProcessCommandMatch::ExactCmdline => return ProcessCommandProbe::Mismatch,
+            ProcessCommandMatch::ProgramLabel
+                if crate::ledger::snapshot::program_label(&cmdline) == command_label =>
+            {
+                return ProcessCommandProbe::Match;
+            }
+            ProcessCommandMatch::ProgramLabel => saw_cmdline_mismatch = true,
+        },
+        _ => {}
+    }
+    match match_mode {
+        ProcessCommandMatch::ExactCmdline => ProcessCommandProbe::Unknown,
+        ProcessCommandMatch::ProgramLabel => match proc_comm(pid)
+            .map(|comm| comm.trim().to_owned())
+            .filter(|comm| !comm.is_empty())
+        {
+            Some(comm) if comm == command_label => ProcessCommandProbe::Match,
+            Some(_) => ProcessCommandProbe::Mismatch,
+            None if saw_cmdline_mismatch => ProcessCommandProbe::Mismatch,
+            None => ProcessCommandProbe::Unknown,
+        },
     }
 }
 

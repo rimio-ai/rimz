@@ -432,6 +432,40 @@ fn launch_chrome_classifier_scopes_to_rimz_tab() {
 }
 
 #[test]
+fn foreground_command_update_remembers_real_foreground_commands() {
+    assert_eq!(
+        foreground_command_update(
+            &[
+                "cargo".to_owned(),
+                "clippy".to_owned(),
+                "--all-targets".to_owned(),
+            ],
+            true,
+        ),
+        ForegroundCommandUpdate::Remember("cargo clippy --all-targets".to_owned())
+    );
+}
+
+#[test]
+fn foreground_command_update_forgets_finished_empty_and_launch_chrome_events() {
+    assert_eq!(
+        foreground_command_update(&["cargo".to_owned(), "clippy".to_owned()], false),
+        ForegroundCommandUpdate::Forget,
+        "a foreground-end event clears the retained command"
+    );
+    assert_eq!(
+        foreground_command_update(&["".to_owned()], true),
+        ForegroundCommandUpdate::Forget,
+        "an empty foreground event clears the retained command"
+    );
+    assert_eq!(
+        foreground_command_update(&["rimz tab --layout claude,codex".to_owned()], true),
+        ForegroundCommandUpdate::Forget,
+        "launch chrome clears instead of publishing as foreground work"
+    );
+}
+
+#[test]
 fn foreground_retention_survives_rebuild_and_clears_on_close() {
     let command = joined_foreground_command(&["codex".to_owned(), "--foo".to_owned()])
         .expect("joined foreground");

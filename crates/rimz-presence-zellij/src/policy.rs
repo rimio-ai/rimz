@@ -292,6 +292,29 @@ pub fn command_args_are_launch_chrome(command: &[String]) -> bool {
     joined_foreground_command(command).is_some_and(|command| foreground_is_launch_chrome(&command))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForegroundCommandUpdate {
+    Remember(String),
+    Forget,
+}
+
+/// Project one Zellij `CommandChanged` event into the retained foreground map.
+/// A non-foreground or empty foreground event means the previous foreground
+/// tenant ended; a real foreground command replaces it, unless it is Rimz launch
+/// chrome, which should never leak into the pane roster.
+pub fn foreground_command_update(
+    command: &[String],
+    is_foreground: bool,
+) -> ForegroundCommandUpdate {
+    if !is_foreground || command_args_are_launch_chrome(command) {
+        return ForegroundCommandUpdate::Forget;
+    }
+    match joined_foreground_command(command) {
+        Some(command) => ForegroundCommandUpdate::Remember(command),
+        None => ForegroundCommandUpdate::Forget,
+    }
+}
+
 pub fn apply_foreground_commands(
     tabs: &mut BTreeMap<usize, Vec<PaneFields>>,
     foreground: &BTreeMap<u32, String>,
