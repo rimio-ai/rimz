@@ -1,0 +1,311 @@
+//! The per-agent card: identity line, description, the context meter and its
+//! token line, and the expanded subagent list. The card anatomy is drawn in
+//! docs/interface/sidebar.md; the invariants (selection only appends, never
+//! reshapes) live in docs/internals/sidebar.md.
+
+use crate::agents::{AgentContext, TurnPhase};
+use crate::config::ContextSeverityConfig;
+use crate::feed::{AgentStatus, ContextSeverity};
+use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
+use jiff::Timestamp;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+
+use crate::sidebar_pane::render::CostRolls;
+use crate::sidebar_pane::render::fmt::{
+    activity_short, age_secs, clip, dollars2, elapsed_label, model_label, pct_label,
+    time_remaining, tokens_int, window_short,
+};
+use crate::sidebar_pane::render::labels::{
+    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
+    agent_glyph, agent_style, attention_glyph_style, compacting_glyph, compacting_style,
+    context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
+    gauge_spans, loading_dots, resolver_glyph, segmented_gauge_spans, severity_color, status_style,
+    subagent_glyph, subagent_style, todo_spans, window_style,
+};
+use crate::sidebar_pane::render::theme::Theme;
+
+mod description;
+mod gauge;
+mod identity;
+
+use self::{description::*, gauge::*, identity::*};
+
+use super::process::{composed_row, process_detail_line, process_row_line};
+use super::{
+    Gutter, Tier, VALUE_FLASH, content_width, pin_right, trim_spans_to_width, with_gutter,
+};
+
+/// The context-meter label — a framed square reading as "the window", replacing
+/// the `ctx` word now that it is the row's one bar (the account-scoped budget
+/// bars moved to the provider dashboard). A fresh, unfilled window reads as the
+/// hollow [`CONTEXT_EMPTY_GLYPH`].
+const CONTEXT_GLYPH: &str = "▣";
+
+/// The context-meter label for an empty (0%) window: a hollow square, the
+/// unfilled sibling of `▣`, so a just-started window reads "nothing in it yet".
+const CONTEXT_EMPTY_GLYPH: &str = "▢";
+
+/// The expanded card's subagent-section glyph: stacked panes for the children an
+/// agent spawned this turn.
+const SUBAGENTS_GLYPH: &str = "⧉";
+
+/// Width budget for the agent name on line 1: short agent kinds (`claude`,
+/// `codex`) fit comfortably, and a longer name clips with `…` rather than
+/// pushing the model/effort tokens off the line.
+const NAME_MAX: usize = 12;
+
+/// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
+/// with no real usage behind it yet. Its 0% bar and zeroed stat lines are noise,
+/// so the card collapses to identity + description (+ the last-activity age).
+fn idle_unstarted(row: &SidebarRow) -> bool {
+    matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
+        && gauge_percent(row).unwrap_or(0) == 0
+}
+
+fn agent(row: &SidebarRow) -> Option<&AgentCard> {
+    row.as_agent()
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn row_lines(
+    theme: &Theme,
+    row: &SidebarRow,
+    providers: &[SidebarProviderPanel],
+    now: Timestamp,
+    width: usize,
+    tier: Tier,
+    selected: bool,
+    animation_phase: u64,
+    cost_rolls: &CostRolls,
+    bands: &ContextSeverityConfig,
+    gutter: Gutter,
+) -> Vec<Line<'static>> {
+    let cw = content_width(width);
+    // The resting (unselected) card is line 1 (identity), line 2 (description),
+    // the ctx bar, and the token line. Selection only *appends* the subagent
+    // list; it never reshapes a line already on screen, so the card never reflows
+    // on expand. The budgets are account-scoped, so they live in the pinned
+    // provider dashboard, never on a row.
+    let identity = IdentityLineContext {
+        theme,
+        providers,
+        now,
+        tier,
+        width: cw,
+        animation_phase,
+        cost_rolls,
+    };
+    let mut inner = vec![identity_line(identity, row)];
+    // An active process row carries its full command on a dim second line under
+    // the shell anchor — the build or `sudo` install reads in full while line 1
+    // stays the stable shell label. Idle process rows have no detail to add.
+    if row.is_process()
+        && let Some(line) = process_detail_line(theme, row, cw)
+    {
+        inner.push(line);
+    }
+    if let Some(agent) = agent(row) {
+        inner.push(description_line(theme, row, tier, cw, animation_phase));
+        // A just-started idle agent sits on the 0% baseline gauge with nothing
+        // behind it, so it rests at identity + description alone. Once an agent
+        // has real context, the bar and the context line — the per-card
+        // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age — join
+        // the resting card.
+        if !idle_unstarted(row) {
+            if let Some(line) = gauge_line(theme, row, bands, cw) {
+                inner.push(line);
+            }
+            if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
+                inner.push(line);
+            }
+        }
+        // The subagents this agent spawned this turn, listed only in the expanded
+        // card — appended after the stats so the resting card never reflows
+        // (selection only ever adds lines).
+        if selected && !agent.sub_agents.is_empty() {
+            inner.extend(sub_agent_lines(
+                theme,
+                &agent.sub_agents,
+                cw,
+                animation_phase,
+            ));
+        }
+    }
+    inner
+        .into_iter()
+        .map(|line| with_gutter(theme, line, gutter))
+        .collect()
+}
+
+/// The expanded card's subagent list: a `⧉ subagents (N)` header — the marker
+/// in the delegation violet, the label dim — then up to two indented lines per
+/// child. Line 1 leads with the same live cell an agent row wears — the
+/// thinking sparkle while the child reasons, the working fill while it acts,
+/// the static `✓`/`!` verdict once it finishes — then the type and the
+/// description of what the parent asked it to do; line 2 (deeper indent) is
+/// its token spend `◇` (the card's whole-unit figure, never a decimal), model,
+/// and reasoning effort — one per-card column grid, each slot sized to its
+/// widest sibling so the figures, models, and efforts stack — with elapsed
+/// work (the clock-fill glyph over a fixed `<1m`/`9m`/`2h` label in the
+/// parent's age tone ramp) pinned right under the parent's own stats. Children
+/// are
+/// subordinate to the parent card, so their text stays at the soft middle
+/// weight — the model/effort metadata a step deeper at the dim chrome, like
+/// the parent's capability tokens — and indented past the parent's stat
+/// lines. The description, tokens,
+/// and elapsed ride in from
+/// Claude's `subagentStatusLine`; the model, effort, and phase from the
+/// child's own lifecycle events. A child with none of them degrades to the
+/// bare type line, with line 2 dropped.
+fn sub_agent_lines(
+    theme: &Theme,
+    sub_agents: &[SidebarSubAgent],
+    width: usize,
+    animation_phase: u64,
+) -> Vec<Line<'static>> {
+    // The `⧉` marker wears the violet of the delegation/meta family (the
+    // compacting head, the `⇅ rc` flag); the label text reads at the soft
+    // middle weight like the children below it.
+    let mut lines = vec![Line::from(trim_spans_to_width(
+        vec![
+            Span::styled(
+                format!("  {SUBAGENTS_GLYPH}"),
+                theme.style(Color::Magenta, Modifier::empty()),
+            ),
+            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.soft()),
+        ],
+        width,
+    ))];
+    // The metadata lines below form one per-card grid: the token figure
+    // right-aligns to the widest sibling and the model pads to the widest
+    // sibling, so the `·` seams, the models, and the efforts stack into
+    // columns across children (the elapsed cluster already stacks via its
+    // fixed right-pinned slot). A column exists only while some child carries
+    // the field; a child missing a carried field blank-fills the slot.
+    let child_tokens = |sub: &SidebarSubAgent| sub.total_tokens.filter(|total| *total > 0);
+    let token_col = sub_agents
+        .iter()
+        .filter_map(child_tokens)
+        .map(|total| tokens_int(total).chars().count())
+        .max()
+        .unwrap_or(0);
+    let model_col = sub_agents
+        .iter()
+        .filter_map(|sub| sub.model.as_deref())
+        .map(|model| model_label(model).chars().count())
+        .max()
+        .unwrap_or(0);
+    for sub in sub_agents {
+        // The leading cell is the agent-row vocabulary verbatim: a running
+        // child sparkles (reasoning) or fills (acting) in the live clay, a
+        // finished one holds its static `✓`/`!` verdict — one head grammar
+        // for the parent's cell and its children's.
+        let mut spans = vec![
+            Span::raw("    "),
+            Span::styled(
+                agent_glyph(sub.status, sub.phase, animation_phase),
+                agent_style(theme, sub.status),
+            ),
+            Span::raw(" "),
+            Span::styled(sub.name.clone(), theme.soft()),
+        ];
+        // Prefer the `subagentStatusLine` description; fall back to the task
+        // descriptor, shown only when it differs from the name (the name already
+        // is the type for most children) so the line never reads `Explore —
+        // Explore`.
+        let detail = sub
+            .description
+            .as_deref()
+            .or(sub.task.as_deref().filter(|task| *task != sub.name));
+        if let Some(detail) = detail {
+            spans.push(Span::styled(format!(" — {detail}"), theme.soft()));
+        }
+        lines.push(Line::from(trim_spans_to_width(spans, width)));
+
+        // Line 2: token spend, model, and effort (left) and elapsed work
+        // (right-pinned). A deeper indent sets it below the type line; the
+        // clock-fill glyph lands under the parent's age and fills with the
+        // child's worked span.
+        let tokens = child_tokens(sub);
+        let elapsed = sub.elapsed_secs;
+        let model = sub.model.as_deref();
+        let effort = sub.effort.as_deref();
+        if tokens.is_some() || elapsed.is_some() || model.is_some() || effort.is_some() {
+            let mut left = vec![Span::raw("      ")];
+            // Walks token → model → effort; a `·` seam paints only between two
+            // fields this child actually renders, and blank-fills its three
+            // cells otherwise, so the indent never carries an orphan separator
+            // and the columns hold across siblings.
+            let mut prev_rendered = false;
+            if token_col > 0 {
+                match tokens {
+                    Some(total) => {
+                        // Children stay subordinate to the parent card, so the
+                        // figure keeps the soft weight the rest of the subagent
+                        // list wears, the `◇` its violet.
+                        left.push(Span::styled(
+                            TOKENS_TOTAL,
+                            theme.style(Color::Magenta, Modifier::empty()),
+                        ));
+                        left.push(Span::styled(
+                            format!(" {:>token_col$}", tokens_int(total)),
+                            theme.soft(),
+                        ));
+                        prev_rendered = true;
+                    }
+                    // Marker cell + space + figure slot, all blank.
+                    None => left.push(Span::raw(" ".repeat(2 + token_col))),
+                }
+            }
+            if model_col > 0 {
+                // The model rides after the spend at the parent's dim
+                // capability weight, left-padded to the widest sibling so the
+                // effort column stacks.
+                let seam = if token_col > 0 { 3 } else { 0 };
+                match model {
+                    Some(model) => {
+                        if prev_rendered {
+                            left.push(Span::styled(" · ", theme.dim()));
+                        } else {
+                            left.push(Span::raw(" ".repeat(seam)));
+                        }
+                        left.push(Span::styled(
+                            format!("{:<model_col$}", model_label(model)),
+                            theme.dim(),
+                        ));
+                        prev_rendered = true;
+                    }
+                    None => left.push(Span::raw(" ".repeat(seam + model_col))),
+                }
+            }
+            if let Some(effort) = effort {
+                // Effort keeps the parent line's `model · effort` adjacency and
+                // weight. The last left field pads nothing — nothing aligns
+                // after it — but still blanks its seam when this child renders
+                // no field before it, so sibling efforts stay stacked.
+                if prev_rendered {
+                    left.push(Span::styled(" · ", theme.dim()));
+                } else if token_col > 0 || model_col > 0 {
+                    left.push(Span::raw("   "));
+                }
+                left.push(Span::styled(effort.to_owned(), theme.dim()));
+            }
+            // Elapsed work in the parent's age vocabulary: the clock-fill glyph
+            // and a fixed three-cell m/h label (`<1m`, ` 9m`, ` 2h`, `>1d`,
+            // never seconds), toned by the same quarter-hour heat ramp the
+            // parent's age wears — so the right-pinned clusters stack into one
+            // column across children and a long-running child visibly heats up.
+            let right = elapsed
+                .map(|secs| {
+                    vec![Span::styled(
+                        format!("{} {:>3}", elapsed_glyph(secs), elapsed_label(secs)),
+                        activity_age_style(theme, secs),
+                    )]
+                })
+                .unwrap_or_default();
+            lines.push(pin_right(left, right, width));
+        }
+    }
+    lines
+}

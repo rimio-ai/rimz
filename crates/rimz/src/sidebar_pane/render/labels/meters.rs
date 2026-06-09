@@ -1,277 +1,4 @@
-//! Semantic sidebar vocabulary: the canonical status glyphs and the
-//! gauge / spinner / pulse glyph helpers.
-//!
-//! Every meter in the sidebar — context-window %, todo progress, diff stats —
-//! renders through the same vocabulary so they read as siblings, not as
-//! one-off widgets (see [the sidebar grammar](../../../docs/internals/sidebar.md)).
-
-use crate::agents::TurnPhase;
-use crate::config::BudgetZonesConfig;
-use crate::feed::AgentStatus;
-use crate::feed::ContextSeverity;
-use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Span;
-
-use super::theme::{ORANGE, Theme};
-
-/// The static status glyph — used for the legend, the worktree tally, the
-/// attention line, and as the leading cell for every non-animated state. The
-/// shape carries the status under `NO_COLOR`; color reinforces it. `Running`
-/// returns a representative working frame `⢿` as the still fallback (distinct
-/// from idle `○`); the *animated* working/thinking cells live in
-/// [`working_glyph`]/[`thinking_glyph`]. Idle is a hollow `○` (the filled `◌`
-/// reads as "cached" in the token line). A `running` agent that has gone silent
-/// past the stall window is projected to `Failed` upstream, so it reads here as
-/// the attention `!` — there is no separate stalled glyph.
-pub(super) fn status_glyph(status: AgentStatus) -> &'static str {
-    match status {
-        // `?` needs your answer; `!` needs a look (a failed turn or a wedged
-        // agent); `⏸` is paused mid-turn on a provider limit. The three attention-class
-        // states — the first two actionable, the last a non-actionable wait.
-        AgentStatus::Waiting => "?",
-        AgentStatus::Failed => "!",
-        AgentStatus::Running => WORKING_FRAMES[3],
-        AgentStatus::Idle => "○",
-        AgentStatus::Success => "✓",
-        AgentStatus::Paused => PAUSED_GLYPH,
-    }
-}
-
-/// Paused: a media `pause` mark carrying the text-presentation selector
-/// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a
-/// double-width color emoji that would shift the cockpit columns after it. The
-/// agent stopped mid-turn on a provider limit, so it waits at rest until the
-/// provider recovers or the window resets.
-const PAUSED_GLYPH: &str = "⏸\u{FE0E}";
-
-/// Working: a braille spinner cycling its dots. Spans the most time of any
-/// state, so it is the steady motion the eye learns to ignore until something
-/// changes. No frame matches idle `○`, so a frozen frame still reads as "working".
-const WORKING_FRAMES: [&str; 8] = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
-
-/// Thinking: a sparkle that grows, fades back down, then repeats. The opening
-/// phase of every turn — the agent is reasoning and reading, not yet writing —
-/// so its motion reads as lighter than the working fill. The turn's first file
-/// edit flips the cell to the working spinner.
-const THINKING_FRAMES: [&str; 8] = ["·", "✢", "✳", "✶", "✻", "✶", "✳", "✢"];
-const THINKING_FRAME_HOLD: u64 = 3;
-
-/// Resolver answering: a braille spinner while a resolver composes the answer on
-/// the bridge. This is the one "waiting for an answer" motion — it is genuinely
-/// active and time-bounded by the resolver budget, unlike a human-blocked `?`,
-/// which stays still.
-const RESOLVER_FRAMES: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-
-/// Compacting: a single bar pulsing taller then shorter, like a compression
-/// meter squeezing the context window down. Short-lived — the next lifecycle
-/// event returns the agent to its resting head — so it never earns a cockpit
-/// bucket; it paints in cool violet (the token/context-domain color) to read as
-/// housekeeping, not the clay working fill.
-const COMPACTING_FRAMES: [&str; 10] = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
-
-/// Waiting on subagents: a low tick bobbing up off the baseline and back — a
-/// quiet wave that reads as "the work is in the children below", distinct from
-/// the dense working braille. Stays in the agent's clay: the parent is still its
-/// live head, just delegating.
-const SUBAGENT_FRAMES: [&str; 8] = ["_", "-", "`", "´", "'", "´", "`", "-"];
-
-/// Idle, waiting-for-a-prompt: a static `...` placeholder that stands in for the
-/// em-dash on a just-started agent with nothing to describe yet.
-const LOADING_DOTS: &str = "...";
-
-fn frame(frames: &[&'static str], animation_phase: u64) -> &'static str {
-    frames[(animation_phase as usize) % frames.len()]
-}
-
-/// The idle loading-dots cue. The phase argument is accepted so the card render
-/// path stays aligned with the other glyph helpers, but idle agents stay still.
-pub(super) fn loading_dots(_animation_phase: u64) -> &'static str {
-    LOADING_DOTS
-}
-
-/// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
-/// frame, paced by the same [`age_heat`] ramp the glyph's color wears. While
-/// yellow it is a slow triangle pulse — `DIM` at the troughs, normal through
-/// the middle, `BOLD` at the peak — so the marker swells and fades like a
-/// breath (~2.4s at the 100ms animation tick), pulling the eye back to an
-/// unanswered row without strobing. Amber doubles the tempo (~1.2s): the row
-/// sits past the half hour and the breath quickens with it. Red drops the
-/// swell for a hard `BOLD`↔`DIM` blink (~0.6s, flipping on the slow paint
-/// grid) — past the hour the glyph earns the strobe the young breath avoids.
-/// Every tier holds the glyph in its cell (never blanking, so the column never
-/// shifts) and is modifier-only, so the urgency cadence survives under
-/// `NO_COLOR`.
-pub(super) fn attention_breath(animation_phase: u64, age_secs: i64) -> Modifier {
-    match age_heat(age_secs) {
-        // Red: a hard square wave, flipping every third tick.
-        Some(Color::Red) => {
-            if animation_phase % 6 < 3 {
-                Modifier::BOLD
-            } else {
-                Modifier::DIM
-            }
-        }
-        // Amber: the same triangle at double-time.
-        Some(color) if color == ORANGE => breath_wave(animation_phase.wrapping_mul(2)),
-        // Yellow (including the fresh yellow floor): the resting cadence.
-        _ => breath_wave(animation_phase),
-    }
-}
-
-/// One step of the breath's triangle wave: rise `DIM` → normal → `BOLD` over
-/// the first half-cycle, fall back over the second.
-fn breath_wave(phase: u64) -> Modifier {
-    const CYCLE: u64 = 24;
-    let pos = phase % CYCLE;
-    // Distance toward the peak at the half-cycle: rise 0→12, then fall 12→24.
-    let level = if pos <= CYCLE / 2 { pos } else { CYCLE - pos };
-    match level {
-        0..=3 => Modifier::DIM,
-        4..=8 => Modifier::empty(),
-        _ => Modifier::BOLD,
-    }
-}
-
-/// The clock-fill glyph for an elapsed span: the face fills a quarter per
-/// quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●` to the hour — and
-/// past the hour reads the ringed `◉`, so any time readout on a card carries
-/// its magnitude iconographically. One cell, so it never disturbs alignment.
-pub(super) fn elapsed_glyph(secs: i64) -> &'static str {
-    match secs {
-        i64::MIN..=900 => "◔",
-        901..=1800 => "◑",
-        1801..=2700 => "◕",
-        2701..=3600 => "●",
-        _ => "◉",
-    }
-}
-
-/// The shared age heat: one tone ramp for every idle-age reader — the clock
-/// cluster, the breathing `?`/`!`, and the cockpit attention buckets — stepping
-/// with the quarter-hour buckets that fill the clock face ([`elapsed_glyph`]).
-/// `None` through the first quarter (callers pick the resting tone), yellow to
-/// the half hour, amber beyond it, red past the hour — when resuming would
-/// almost certainly re-read the whole context at uncached input rates.
-pub(super) fn age_heat(age_secs: i64) -> Option<Color> {
-    match age_secs {
-        i64::MIN..=900 => None,
-        901..=1800 => Some(Color::Yellow),
-        1801..=3600 => Some(ORANGE),
-        _ => Some(Color::Red),
-    }
-}
-
-/// Tone for the card's elapsed-age cluster at `age_secs` of inactivity: the
-/// shared [`age_heat`] over the dim resting weight — metadata a step under
-/// the card's soft text — so a fresh age stays quiet and a red one reads as
-/// the cost warning it is. The figure itself still carries the magnitude
-/// under `NO_COLOR`.
-pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
-    age_heat(age_secs).map_or(theme.dim(), |color| theme.style(color, Modifier::empty()))
-}
-
-pub(super) fn working_glyph(animation_phase: u64) -> &'static str {
-    frame(&WORKING_FRAMES, animation_phase)
-}
-
-pub(super) fn thinking_glyph(animation_phase: u64) -> &'static str {
-    frame(&THINKING_FRAMES, animation_phase / THINKING_FRAME_HOLD)
-}
-
-pub(super) fn resolver_glyph(animation_phase: u64) -> &'static str {
-    frame(&RESOLVER_FRAMES, animation_phase)
-}
-
-pub(super) fn compacting_glyph(animation_phase: u64) -> &'static str {
-    frame(&COMPACTING_FRAMES, animation_phase)
-}
-
-pub(super) fn subagent_glyph(animation_phase: u64) -> &'static str {
-    frame(&SUBAGENT_FRAMES, animation_phase)
-}
-
-/// The leading cell for an agent row, animated when the agent is actively doing
-/// something. A `running` agent sparkles (reasoning, before the turn's first
-/// file edit) or fills (acting or parked); every other state is the static
-/// [`status_glyph`]. Stall is already folded into `Failed` upstream, so it
-/// falls through to the static `!`.
-pub(super) fn agent_glyph(
-    status: AgentStatus,
-    phase: TurnPhase,
-    animation_phase: u64,
-) -> &'static str {
-    match status {
-        AgentStatus::Running if phase == TurnPhase::Reasoning => thinking_glyph(animation_phase),
-        AgentStatus::Running => working_glyph(animation_phase),
-        other => status_glyph(other),
-    }
-}
-
-pub(super) fn status_style(theme: &Theme, status: AgentStatus) -> Style {
-    match status {
-        AgentStatus::Waiting => theme.style(Color::Yellow, Modifier::BOLD),
-        AgentStatus::Failed => theme.style(Color::Red, Modifier::BOLD),
-        AgentStatus::Running => theme.style(Color::Green, Modifier::empty()),
-        // Idle and success are the two calm "nothing needs you" states, so both
-        // read in a quiet green at full strength — the hollow `○` and the `✓`
-        // carry the meaning, and the rest weight (no bold, no breath) already
-        // keeps them below the live attention states.
-        AgentStatus::Idle => theme.style(Color::Green, Modifier::empty()),
-        AgentStatus::Success => theme.style(Color::Green, Modifier::empty()),
-        // Paused stays in the amber attention family but at rest weight
-        // (not bold, and `attention_glyph_style` never heats it): it is
-        // attention-class, but parked with nothing to do right now — the held
-        // tone sets it apart from the loud, actionable `?`/`!`.
-        AgentStatus::Paused => theme.style(Color::Yellow, Modifier::empty()),
-    }
-}
-
-/// The compacting head's tone: cool violet, the token/context-domain color the
-/// `◇` token glyph already uses, so a pulsing context-condense reads as
-/// housekeeping rather than the clay working fill.
-pub(super) fn compacting_style(theme: &Theme) -> Style {
-    theme.style(Color::Magenta, Modifier::empty())
-}
-
-/// The waiting-on-subagents head's tone: the agent's clay, same as the working
-/// fill — the parent is still its live head, just delegating; the quiet wave
-/// motion, not the color, carries "the work is in the children".
-pub(super) fn subagent_style(theme: &Theme) -> Style {
-    theme.style(ORANGE, Modifier::empty())
-}
-
-/// Style for an agent row's leading cell. A running agent's working spinner and
-/// its thinking sparkle both paint in Claude clay, so the live head aligns with
-/// the agent's own UI; every other state takes its [`status_style`].
-pub(super) fn agent_style(theme: &Theme, status: AgentStatus) -> Style {
-    if status == AgentStatus::Running {
-        return theme.style(ORANGE, Modifier::empty());
-    }
-    status_style(theme, status)
-}
-
-/// Style for an agent row's leading glyph. Both attention states — `?` waiting
-/// and `!` failed — breathe (a `DIM`↔`BOLD` brightness pulse, see
-/// [`attention_breath`]) and wear the shared [`age_heat`] over a yellow floor:
-/// a fresh ask reads calm-urgent yellow ("a human is needed here") and heats
-/// through amber to red on the same quarter-hour ramp as the age clock beside
-/// it, so the glyph and the clock never disagree while warm. The breath paces
-/// with the same heat — slow while yellow, double-time at amber, a hard blink
-/// at red. Every calm state keeps its resting [`agent_style`] tone,
-/// unbreathing.
-pub(super) fn attention_glyph_style(
-    theme: &Theme,
-    status: AgentStatus,
-    age_secs: i64,
-    animation_phase: u64,
-) -> Style {
-    if status.is_actionable() {
-        let color = age_heat(age_secs).unwrap_or(Color::Yellow);
-        theme.style(color, attention_breath(animation_phase, age_secs))
-    } else {
-        agent_style(theme, status)
-    }
-}
+use super::*;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
 /// the cumulative total (input with cache-write folded in, plus output), the
@@ -284,18 +11,18 @@ pub(super) fn attention_glyph_style(
 /// answers a different question — what is in the window, not what the fleet
 /// burned — so it leads with `▤` and reorders the same four columns by how the
 /// window filled ([`context_breakdown_spans`]).
-pub(super) const TOKENS_TOTAL: &str = "◇";
-pub(super) const TOKENS_IN: &str = "↘";
-pub(super) const TOKENS_OUT: &str = "↗";
-pub(super) const TOKENS_CACHE_WRITE: &str = "◍";
-pub(super) const TOKENS_CACHED: &str = "◌";
+pub(in crate::sidebar_pane::render) const TOKENS_TOTAL: &str = "◇";
+pub(in crate::sidebar_pane::render) const TOKENS_IN: &str = "↘";
+pub(in crate::sidebar_pane::render) const TOKENS_OUT: &str = "↗";
+pub(in crate::sidebar_pane::render) const TOKENS_CACHE_WRITE: &str = "◍";
+pub(in crate::sidebar_pane::render) const TOKENS_CACHED: &str = "◌";
 /// The agent card's context-line marker: a filled square for the taken part of
 /// the context window, sibling to the `▣` meter glyph so the two context reads
 /// pair visually while staying distinct from the `◇` fleet totals.
-pub(super) const CONTEXT_FILLED: &str = "▤";
+pub(in crate::sidebar_pane::render) const CONTEXT_FILLED: &str = "▤";
 /// The agent card's compaction marker: a recycle arrow for how many times the
 /// session has condensed its window. Violet — the compaction vocabulary's tone.
-pub(super) const CONTEXT_COMPACTIONS: &str = "↻";
+pub(in crate::sidebar_pane::render) const CONTEXT_COMPACTIONS: &str = "↻";
 
 /// The context-window composition colors — one tone per segment, shared by the
 /// bar's colored runs and the context line's `◌`/`◍`/`↘` markers so the line
@@ -305,10 +32,10 @@ pub(super) const CONTEXT_COMPACTIONS: &str = "↻";
 /// is fleet vocabulary and `◍` belongs to the card context line. `↗` output is
 /// not in the window (it joins next turn), so it carries no bar segment; its
 /// green is free because the meter's calm tier reads blue.
-pub(super) const SEGMENT_CACHE_READ: Color = Color::Blue;
-pub(super) const SEGMENT_CACHE_WRITE: Color = Color::Magenta;
-pub(super) const SEGMENT_INPUT: Color = Color::Red;
-pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
+pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_READ: Color = Color::Blue;
+pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_WRITE: Color = Color::Magenta;
+pub(in crate::sidebar_pane::render) const SEGMENT_INPUT: Color = Color::Red;
+pub(in crate::sidebar_pane::render) const SEGMENT_OUTPUT: Color = Color::Green;
 
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
@@ -321,7 +48,7 @@ pub(super) const SEGMENT_OUTPUT: Color = Color::Green;
 /// (`tokens_int` live, `tokens_short` for the precise W/M rows). `total` is the
 /// caller's `◇` value (`input` with cache-write folded in, plus output), passed
 /// in so a row can read it straight from its accumulated window.
-pub(super) fn token_breakdown_spans(
+pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
     theme: &Theme,
     total: u64,
     input: u64,
@@ -356,7 +83,7 @@ pub(super) fn token_breakdown_spans(
 /// bar's color-keyed legend; the figures read at the dim chrome weight — a step
 /// under the name line's soft tokens, so the colored markers carry the line.
 #[allow(clippy::too_many_arguments)]
-pub(super) fn context_breakdown_spans(
+pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
     theme: &Theme,
     severity: Color,
     filled: u64,
@@ -389,7 +116,10 @@ pub(super) fn context_breakdown_spans(
 /// The `· ↻ N` compaction tail for the context line, shown from the first
 /// completed compaction. The `·` seam reads at the dim chrome like the
 /// composition seams; the marker wears the violet compaction tone.
-pub(super) fn context_compaction_spans(theme: &Theme, count: u32) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn context_compaction_spans(
+    theme: &Theme,
+    count: u32,
+) -> Vec<Span<'static>> {
     if count == 0 {
         return Vec::new();
     }
@@ -410,7 +140,7 @@ pub(super) fn context_compaction_spans(theme: &Theme, count: u32) -> Vec<Span<'s
 /// rollout-only total, or Claude before its first API call) uses it alone, with
 /// the provider's rollup total standing in for the filled window. Display-only,
 /// never a decision driver.
-pub(super) fn context_total_spans(
+pub(in crate::sidebar_pane::render) fn context_total_spans(
     theme: &Theme,
     severity: Color,
     filled: u64,
@@ -438,8 +168,8 @@ const MANA_TRACK: char = '▱';
 /// The agent-cards viewport scrollbar, ridden on the right-margin column when
 /// the cards overflow: a solid `▐` thumb over a hairline `▕` track. The
 /// solid/thin shape difference carries the position, so it survives `NO_COLOR`.
-pub(super) const SCROLL_THUMB: &str = "▐";
-pub(super) const SCROLL_TRACK: &str = "▕";
+pub(in crate::sidebar_pane::render) const SCROLL_THUMB: &str = "▐";
+pub(in crate::sidebar_pane::render) const SCROLL_TRACK: &str = "▕";
 
 /// Filled-cell count for `percent` of `width`, to the nearest whole cell: 0%
 /// stays an unbroken track, 100% fills the whole width.
@@ -485,7 +215,7 @@ fn two_tone_bar(
 /// vocabulary and of the composition segments. The *tier* is the domain's
 /// verdict ([`ContextSeverity`], classified on the producer and stamped on the
 /// row); the renderer only maps it to a tone here.
-pub(super) fn severity_color(severity: ContextSeverity) -> Color {
+pub(in crate::sidebar_pane::render) fn severity_color(severity: ContextSeverity) -> Color {
     match severity {
         ContextSeverity::Calm => Color::Blue,
         ContextSeverity::Yellow => Color::Yellow,
@@ -501,7 +231,7 @@ pub(super) fn severity_color(severity: ContextSeverity) -> Color {
 /// below that, level with the model/effort tokens beside it. The tinted bands
 /// ride the `DIM` modifier so the token never outshines the meter; under
 /// `NO_COLOR` every band collapses to the same bare DIM weight.
-pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
+pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) -> Style {
     let color = match window {
         1_000_000.. => ORANGE,
         258_000.. => Color::Yellow,
@@ -515,7 +245,7 @@ pub(super) fn window_style(theme: &Theme, window: u64) -> Style {
 /// fills, painted in `color` (the caller's [`severity_color`]) over a faint
 /// track. The label and value columns live in the renderer's shared bar row;
 /// here we paint just the meter.
-pub(super) fn gauge_spans(
+pub(in crate::sidebar_pane::render) fn gauge_spans(
     theme: &Theme,
     color: Color,
     percent: u8,
@@ -541,7 +271,7 @@ pub(super) fn gauge_spans(
 /// draw it falls back to the plain gauge. Under `NO_COLOR` the segments merge
 /// into one heavy run — the split is a color enrichment; the fill level still
 /// reads by shape.
-pub(super) fn segmented_gauge_spans(
+pub(in crate::sidebar_pane::render) fn segmented_gauge_spans(
     theme: &Theme,
     segments: &[(u64, Color)],
     fallback_color: Color,
@@ -578,7 +308,10 @@ pub(super) fn segmented_gauge_spans(
 /// method: floor each share, then hand the leftover cells to the largest
 /// fractional remainders. The result always sums to `total`, so a segmented bar
 /// fills exactly its run with no rounding drift.
-fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize> {
+pub(in crate::sidebar_pane::render) fn apportion(
+    weights: impl IntoIterator<Item = u64>,
+    total: usize,
+) -> Vec<usize> {
     let weights: Vec<u64> = weights.into_iter().collect();
     let sum: u128 = weights.iter().map(|w| u128::from(*w)).sum();
     if sum == 0 {
@@ -613,7 +346,7 @@ fn apportion(weights: impl IntoIterator<Item = u64>, total: usize) -> Vec<usize>
 /// context-gauge track, so the spent share stays legible on the dashboard. At
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
-pub(super) fn mana_bar_spans(
+pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
     width: usize,
@@ -644,7 +377,10 @@ pub(super) fn mana_bar_spans(
 /// An unknown provider budget: the window identity is known (`5h`, `7d`, …) but
 /// the account reading is older than the longest reset. Paint a plain dim empty
 /// track, distinct from a full green bar and from the fully-spent red track.
-pub(super) fn unknown_mana_bar_spans(theme: &Theme, width: usize) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
+    theme: &Theme,
+    width: usize,
+) -> Vec<Span<'static>> {
     vec![Span::styled(
         std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
         theme.dim(),
@@ -659,7 +395,11 @@ pub(super) fn unknown_mana_bar_spans(theme: &Theme, width: usize) -> Vec<Span<'s
 /// worst-first, so a misordered user config degrades to the worse tier. Shared
 /// by the bar fill and the `5h`/`7d` label beside it so the label mirrors its
 /// bar's tone.
-pub(super) fn mana_style(theme: &Theme, remaining_pct: u8, zones: &BudgetZonesConfig) -> Style {
+pub(in crate::sidebar_pane::render) fn mana_style(
+    theme: &Theme,
+    remaining_pct: u8,
+    zones: &BudgetZonesConfig,
+) -> Style {
     if remaining_pct < zones.red {
         theme.style(Color::Red, Modifier::empty())
     } else if remaining_pct < zones.amber {
@@ -677,7 +417,11 @@ pub(super) fn mana_style(theme: &Theme, remaining_pct: u8, zones: &BudgetZonesCo
 /// unmetered bar; the empty `▱` shape keeps it from competing with a real
 /// draining fill, and under `NO_COLOR` the unbroken run still reads as an
 /// empty track by shape.
-pub(super) fn infinite_bar_spans(theme: &Theme, color: u8, width: usize) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
+    theme: &Theme,
+    color: u8,
+    width: usize,
+) -> Vec<Span<'static>> {
     vec![Span::styled(
         std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
         theme.style(Color::Indexed(color), Modifier::empty()),
@@ -687,7 +431,11 @@ pub(super) fn infinite_bar_spans(theme: &Theme, color: u8, width: usize) -> Vec<
 /// Todo progress: filled dots for done, hollow dots for remaining, with the
 /// numeric ratio appended. The shape carries it; the dots stay dim chrome and
 /// the ratio reads at the card's soft middle weight.
-pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn todo_spans(
+    theme: &Theme,
+    done: u32,
+    total: u32,
+) -> Vec<Span<'static>> {
     let total = total.max(done);
     let cap = 5_u32;
     let scaled_total = total.min(cap);
@@ -716,7 +464,7 @@ pub(super) fn todo_spans(theme: &Theme, done: u32, total: u32) -> Vec<Span<'stat
 /// `tokens_short` for the precise W/M rows). The diamond is a colored marker;
 /// the figure reads at the soft tier ([`Theme::soft`]) like every stat figure.
 /// Display-only, never a decision driver.
-pub(super) fn tokens_total_spans(
+pub(in crate::sidebar_pane::render) fn tokens_total_spans(
     theme: &Theme,
     total: u64,
     fmt: fn(u64) -> String,
@@ -731,7 +479,11 @@ pub(super) fn tokens_total_spans(
 /// components omitted. Both dim cyan — commit-level branch facts rhyme with
 /// the bold-cyan worktree name and stay a category apart from the green/red
 /// line-level churn; the `⇡`/`⇣` shape carries the direction under `NO_COLOR`.
-pub(super) fn branch_delta_spans(theme: &Theme, ahead: u32, behind: u32) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn branch_delta_spans(
+    theme: &Theme,
+    ahead: u32,
+    behind: u32,
+) -> Vec<Span<'static>> {
     let style = theme.style(Color::Cyan, Modifier::DIM);
     let mut spans = Vec::new();
     if ahead > 0 {
@@ -752,7 +504,10 @@ pub(super) fn branch_delta_spans(theme: &Theme, ahead: u32, behind: u32) -> Vec<
 /// yet scannable when hunting removable worktrees; the `≡` shape carries the
 /// verdict under `NO_COLOR`. The trunk worktree itself never wears it — the
 /// caller gates on the group's live branch.
-pub(super) fn trunk_equal_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
+    theme: &Theme,
+    trunk: &str,
+) -> Vec<Span<'static>> {
     vec![Span::styled(
         format!("≡ {trunk}"),
         theme.style(Color::Green, Modifier::DIM),
@@ -765,7 +520,10 @@ pub(super) fn trunk_equal_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>
 /// calm-positive family, told apart by shape under `NO_COLOR`: `≡` "this is
 /// the trunk", `✓` "finished, removable". The trunk worktree itself never
 /// wears it — the caller gates on the group's live branch.
-pub(super) fn trunk_clear_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn trunk_clear_spans(
+    theme: &Theme,
+    trunk: &str,
+) -> Vec<Span<'static>> {
     vec![Span::styled(
         format!("✓ {trunk}"),
         theme.style(Color::Green, Modifier::DIM),
@@ -774,7 +532,11 @@ pub(super) fn trunk_clear_spans(theme: &Theme, trunk: &str) -> Vec<Span<'static>
 
 /// `+127 -43`-style diff stat. Added in green, removed in red, both dim to
 /// stay chrome — the gauge ramp owns the loud color slots.
-pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'static>> {
+pub(in crate::sidebar_pane::render) fn diff_spans(
+    theme: &Theme,
+    added: u32,
+    removed: u32,
+) -> Vec<Span<'static>> {
     vec![
         Span::styled(
             format!("+{added}"),
@@ -787,6 +549,3 @@ pub(super) fn diff_spans(theme: &Theme, added: u32, removed: u32) -> Vec<Span<'s
         ),
     ]
 }
-
-#[cfg(test)]
-mod tests;

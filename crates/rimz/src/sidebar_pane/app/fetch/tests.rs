@@ -2,10 +2,10 @@ use super::*;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
-use crate::{MuxName, SidebarInstanceId};
+use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 #[test]
-fn produce_guard_maps_an_error_to_a_degraded_outcome() {
+fn produce_guard_maps_failures_to_degraded_outcomes() {
     let mut cursor = RollupCursor::new();
     let result = run_produce_guarded(&mut cursor, |_| {
         Err(crate::sidebar::produce::ProduceErr::Fixture {
@@ -14,15 +14,12 @@ fn produce_guard_maps_an_error_to_a_degraded_outcome() {
         })
     });
     assert!(result.unwrap_err().contains("injected failure"));
-}
 
-#[test]
-fn produce_guard_maps_a_panic_to_a_degraded_outcome() {
+    let previous_hook = std::panic::take_hook();
     // Silence the default hook's backtrace spew; the guard catches the unwind.
     std::panic::set_hook(Box::new(|_| {}));
-    let mut cursor = RollupCursor::new();
     let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
-    let _ = std::panic::take_hook();
+    std::panic::set_hook(previous_hook);
     assert_eq!(result.unwrap_err(), "sidebar produce panicked");
 }
 
@@ -109,18 +106,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     )
     .unwrap();
 
-    let config = ServeConfig {
-        workspace_id,
-        mux: MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: SidebarInstanceId::new(),
-        tick_seconds: 2,
-        refresh_ms_override: None,
-        notification_prefs: NotificationsPrefs::default(),
-        // No own pane: the fold must admit every published fixture pane even
-        // when the test process itself runs inside a live mux pane.
-        own_pane: None,
-    };
+    let config = test_config(workspace_id, SidebarInstanceId::new());
     let request = FetchRequest {
         mode: FetchMode::HardRefresh,
         min_pane_cache_ms: None,
@@ -253,6 +239,21 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
     }
 }
 
+fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> ServeConfig {
+    ServeConfig {
+        workspace_id,
+        mux: MuxName::Zellij,
+        session_name: "rimz-test".to_owned(),
+        instance_id,
+        tick_seconds: 2,
+        refresh_ms_override: None,
+        notification_prefs: NotificationsPrefs::default(),
+        // No own pane: the fold must admit every published fixture pane even
+        // when the test process itself runs inside a live mux pane.
+        own_pane: None,
+    }
+}
+
 #[test]
 fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let dir = tempfile::tempdir().unwrap();
@@ -289,18 +290,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     )
     .unwrap();
 
-    let config = ServeConfig {
-        workspace_id,
-        mux: MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: younger,
-        tick_seconds: 2,
-        refresh_ms_override: None,
-        notification_prefs: NotificationsPrefs::default(),
-        // No own pane: the fold must admit every published fixture pane even
-        // when the test process itself runs inside a live mux pane.
-        own_pane: None,
-    };
+    let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
@@ -357,18 +347,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     )
     .unwrap();
 
-    let config = ServeConfig {
-        workspace_id,
-        mux: MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: younger,
-        tick_seconds: 2,
-        refresh_ms_override: None,
-        notification_prefs: NotificationsPrefs::default(),
-        // No own pane: the fold must admit every published fixture pane even
-        // when the test process itself runs inside a live mux pane.
-        own_pane: None,
-    };
+    let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
@@ -483,18 +462,7 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     )
     .unwrap();
 
-    let config = ServeConfig {
-        workspace_id,
-        mux: MuxName::Zellij,
-        session_name: "rimz-test".to_owned(),
-        instance_id: younger,
-        tick_seconds: 2,
-        refresh_ms_override: None,
-        notification_prefs: NotificationsPrefs::default(),
-        // No own pane: the fold must admit every published fixture pane even
-        // when the test process itself runs inside a live mux pane.
-        own_pane: None,
-    };
+    let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
