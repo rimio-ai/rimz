@@ -140,7 +140,15 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
 - **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
-An **empty room** shows only identity and the `◎ 0` / `¤ 0` summary, no make-up line. The first-run hint names the real next step: an un-wired room points at `rimz hooks install`, a wired one reads `run claude or codex / in a pane to begin`. It clears the instant the first agent or pane appears.
+An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
+
+```
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 0
+ ──────────────────────────────────────────────────────────
+```
 
 ## Zone 2 — the agent cards
 
@@ -396,8 +404,6 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 
 | scenario | golden test |
 |----------|-------------|
-| empty room, un-wired | `first_run_nudge` |
-| empty room, wired | `first_run_nudge_wired` |
 | narrow card | `l0_density_minimal_row` |
 | capability + window | `agent_capability` |
 | selected, enriched card | `enriched_selected_agent_card` |

@@ -296,29 +296,3 @@ pub(crate) fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus)
         .sum()
 }
 
-/// Dim getting-started hint for a healthy room with no agent or feed rows.
-/// Shell/editor process rows can still be present; the renderer suppresses
-/// this cue once an agent-like process or product row appears.
-///
-/// The cue names the *real* next step. Until hooks are wired, running
-/// claude/codex registers nothing, so an un-wired room points at `rimz hooks
-/// install`; once wired (`hooks_ready`), it invites launching an agent.
-pub(in crate::sidebar_pane::render) fn first_run_hint_lines(
-    theme: &Theme,
-    hooks_ready: bool,
-) -> Vec<Line<'static>> {
-    let dim = theme.dim();
-    let lines: [&str; 3] = if hooks_ready {
-        ["no agents yet", "run claude or codex", "in a pane to begin"]
-    } else {
-        [
-            "no agents yet",
-            "install hooks:",
-            "rimz hooks install claude",
-        ]
-    };
-    lines
-        .into_iter()
-        .map(|text| Line::styled(text, dim))
-        .collect()
-}

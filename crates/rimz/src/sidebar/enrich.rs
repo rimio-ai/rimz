@@ -175,15 +175,6 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
     }
 }
 
-/// Whether any supported agent has its hooks installed. Environment, not ledger,
-/// so the reducer can't know it — the renderer's first-run hint points at
-/// `rimz hooks install` until a supported agent is wired.
-pub fn agent_hooks_ready() -> bool {
-    crate::agents::ADAPTERS
-        .iter()
-        .any(|agent| agent.descriptor().capabilities.hook_install && agent.hooks_installed())
-}
-
 /// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
 /// the idle-instance synthesis on a wired-but-unbound agent pane. Filtered to lazy
 /// agents (not `agent_hooks_ready`'s any-agent check), so a Claude-only install
@@ -369,8 +360,6 @@ pub fn enrich(
         snapshot = snapshot.with_admitted_live_panes(admitted_panes, &lazy_pairings);
         apply_pane_metrics(&mut snapshot, metrics);
     }
-    snapshot.agent_hooks_ready = agent_hooks_ready();
-
     // Per-machine display preferences and the per-provider dashboard are
     // environment, not ledger, so the rollup base carries neither. The
     // producer probes accounts out of band and publishes them alongside its

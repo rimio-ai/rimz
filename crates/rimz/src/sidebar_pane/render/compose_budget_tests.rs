@@ -162,7 +162,6 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         needs_attention: Vec::new(),
         resolver_working: Vec::new(),
         agents: Vec::new(),
-        agent_hooks_ready: true,
         wired_lazy_kinds: Vec::new(),
         lazy_agent_default_models: std::collections::BTreeMap::new(),
         own_view: None,

@@ -1748,8 +1748,6 @@ fn render_recovered_alert_lingers_with_dismiss_hint() {
 
     assert!(rendered.contains("last alert"), "{rendered}");
     assert!(rendered.contains("x dismiss"), "{rendered}");
-    // Recovered means the room is live again: the first-run hint returns.
-    assert!(rendered.contains("rimz hooks install"), "{rendered}");
 }
 
 #[test]
@@ -1763,31 +1761,16 @@ fn render_no_alert_omits_banner() {
 }
 
 #[test]
-fn render_first_run_nudge_points_at_install_when_unwired() {
-    // No hooks wired (the default): running an agent registers nothing, so
-    // the hint must point at `rimz hooks install`, not "run claude or codex".
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
-    assert!(!snapshot.agent_hooks_ready);
-    let rendered = snapshot_to_screen(&snapshot, 80, 18);
-
-    assert!(!rendered.contains("all clear"));
-    assert!(rendered.contains("rimz hooks install"));
-    assert!(!rendered.contains("run claude or codex"));
-    assert_snapshot("first_run_nudge", rendered);
-}
-
-#[test]
-fn render_process_row_keeps_first_run_hint() {
+fn render_process_row_shows_without_hint() {
     let snapshot = snapshot_with(Vec::new(), Vec::new())
         .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
     let rendered = snapshot_to_screen(&snapshot, 80, 18);
 
     assert!(rendered.contains("○ zsh"));
-    assert!(rendered.contains("rimz hooks install"));
 }
 
 #[test]
-fn render_agent_process_rows_suppress_first_run_hint() {
+fn render_agent_process_rows_present() {
     let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
         vec![
             pane("%1", "claude", "/repo/main"),
@@ -1799,9 +1782,6 @@ fn render_agent_process_rows_suppress_first_run_hint() {
 
     assert!(rendered.contains("○ claude"));
     assert!(rendered.contains("○ node"));
-    assert!(!rendered.contains("no agents yet"));
-    assert!(!rendered.contains("rimz hooks install"));
-    assert!(!rendered.contains("run claude or codex"));
 }
 
 #[test]
@@ -2103,31 +2083,6 @@ fn chrome_rebuilds_carry_line_level_styles() {
     for line in help_lines(&theme) {
         assert_eq!(line.style, theme.faint());
     }
-}
-
-#[test]
-fn render_first_run_nudge_invites_launch_when_wired() {
-    // Hooks wired but no agent launched yet: the hint invites running one.
-    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
-    snapshot.agent_hooks_ready = true;
-    let rendered = snapshot_to_screen(&snapshot, 80, 18);
-
-    assert!(!rendered.contains("all clear"));
-    assert!(rendered.contains("run claude or codex"));
-    assert!(!rendered.contains("rimz hooks install"));
-    assert_snapshot("first_run_nudge_wired", rendered);
-}
-
-#[test]
-fn render_active_alert_empty_suppresses_first_run_nudge() {
-    // An empty body under an active alert is a failed snapshot, not an
-    // empty room — the nudge would misreport. The banner speaks instead.
-    let snapshot = snapshot_with(Vec::new(), Vec::new());
-    let alert = Alert::active("snapshot failed: ledger not found");
-    let rendered = snapshot_to_screen_with_alert(&snapshot, Some(&alert), 80, 18);
-
-    assert!(!rendered.contains("run claude or codex"));
-    assert!(!rendered.contains("rimz hooks install"));
 }
 
 #[test]

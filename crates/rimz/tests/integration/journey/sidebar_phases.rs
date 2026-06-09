@@ -18,13 +18,12 @@ use crate::common::Env;
 
 /// Phase 0 → 1 onboarding. Running an agent before wiring its hooks is not
 /// invisible: the pane is live, so it shows as a dim `○ codex` process row (the
-/// same hollow idle glyph an agent shows, set apart by the dim process tone), and
-/// because a known agent is visible the first-run hint steps aside. But the row
-/// carries no agent enrichment — without an installed hook nothing reaches the
-/// ledger, so no model, status, or task folds in. Only after `rimz hooks install`
-/// does a fresh `SessionStart` light up the agent row with its model. The room is
-/// deliberately correct to require `rimz hooks install` (Rimz never silently
-/// rewrites the user's agent config); the empty-room hint says exactly that.
+/// same hollow idle glyph an agent shows, set apart by the dim process tone). But
+/// the row carries no agent enrichment — without an installed hook nothing reaches
+/// the ledger, so no model, status, or task folds in. Only after `rimz hooks
+/// install` does a fresh `SessionStart` light up the agent row with its model. The
+/// room is deliberately correct to require `rimz hooks install` (Rimz never
+/// silently rewrites the user's agent config).
 ///
 /// The harness fires agents through their *installed* hook, so an un-onboarded
 /// `agent_hook` reaches the ledger as a no-op — exactly what a real agent does
@@ -37,18 +36,8 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
     }
     let room = RoomHarness::launch(&env, MuxName::Tmux);
 
-    // Empty room: the hint names the real next step — installing hooks — not
-    // "run claude or codex", which does nothing until the hooks are wired.
-    let screen = room.wait_for(|s| s.contains("no agents yet"), SETTLE);
-    assert!(
-        screen.contains("rimz hooks install"),
-        "an empty room must point the user at `rimz hooks install`; agents are \
-         invisible until their hooks are wired:\n{screen}"
-    );
-    assert!(
-        !screen.contains("all clear"),
-        "the empty-room nudge should not spend the top line on all-clear copy:\n{screen}"
-    );
+    // Empty room: cockpit shows ◎ 0, no agents yet.
+    let _screen = room.wait_for(|s| s.contains("◎ 0"), SETTLE);
 
     // The user runs codex before wiring it. The pane is live, so it shows as a
     // process row and the first-run hint steps aside — but with no installed hook

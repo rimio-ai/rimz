@@ -67,15 +67,6 @@ pub struct SidebarSnapshot {
     pub needs_attention: Vec<FeedItem>,
     pub resolver_working: Vec<FeedItem>,
     pub agents: Vec<AgentState>,
-    /// Whether any supported agent has its Rimz hooks wired. The sidebar's
-    /// first-run hint reads it: with no hooks installed, running an agent
-    /// registers nothing, so the empty-room hint points at `rimz hooks
-    /// install` rather than "run claude or codex". This is environment state,
-    /// not ledger truth, so the pure reducer leaves it `false` and the `rimz
-    /// sidebar snapshot` CLI fills it; the placeholder/persisted snapshot keeps
-    /// `false`, where the renderer suppresses the hint anyway.
-    #[serde(default)]
-    pub agent_hooks_ready: bool,
     /// The lazy-registering agent kinds whose Rimz hooks are wired
     /// ([`crate::agents::Capabilities::registers_lazily`] ∩ installed). Gates the
     /// idle-instance synthesis in `rows_from_panes`: a launched-but-unbound pane
@@ -376,7 +367,6 @@ impl SidebarSnapshot {
             needs_attention,
             resolver_working,
             agents,
-            agent_hooks_ready: false,
             wired_lazy_kinds: Vec::new(),
             lazy_agent_default_models: BTreeMap::new(),
             own_view: None,

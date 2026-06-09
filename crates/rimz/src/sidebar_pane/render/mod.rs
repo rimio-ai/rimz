@@ -41,8 +41,8 @@ use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use self::fmt::age_short;
 pub(crate) use self::sections::{MakeUpHit, ProviderTabHit, status_total};
 use self::sections::{
-    cockpit_spend_line, cockpit_summary_line, content_width, first_run_hint_lines,
-    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
+    cockpit_spend_line, cockpit_summary_line, content_width, fleet_header_lines, fleet_ledger_lines,
+    fleet_size, provider_panel_lines, worktree_group_lines,
 };
 use self::theme::Theme;
 
@@ -977,17 +977,7 @@ fn scroll_lines(
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
-    if snapshot.worktree_groups.is_empty() {
-        if !active && should_show_first_run_hint(snapshot) {
-            lines.push(Line::from(""));
-            map.push(None);
-            extend_inert(
-                &mut lines,
-                &mut map,
-                first_run_hint_lines(theme, snapshot.agent_hooks_ready),
-            );
-        }
-    } else {
+    if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees
@@ -1020,15 +1010,6 @@ fn scroll_lines(
                 &ui.cost_rolls,
                 &mut lines,
                 &mut map,
-            );
-        }
-        if !active && should_show_first_run_hint(snapshot) {
-            lines.push(Line::from(""));
-            map.push(None);
-            extend_inert(
-                &mut lines,
-                &mut map,
-                first_run_hint_lines(theme, snapshot.agent_hooks_ready),
             );
         }
         if ui.help_visible && !active {
@@ -1171,21 +1152,6 @@ fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<Line<'static
             theme.style(Color::Yellow, Modifier::DIM),
         )]
     }
-}
-
-fn should_show_first_run_hint(snapshot: &SidebarSnapshot) -> bool {
-    snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .all(|row| row.is_process() && !is_known_agent_process(row))
-}
-
-fn is_known_agent_process(row: &crate::SidebarRow) -> bool {
-    // tmux can expose Claude/Codex as the shared Node host before hook
-    // enrichment claims the pane, so `node` is agent-like for the empty-room cue.
-    row.is_process()
-        && (crate::agents::known_kinds().any(|kind| kind == row.name) || row.name == "node")
 }
 
 fn footer_lines(snapshot: &SidebarSnapshot, theme: &Theme, width: usize) -> Vec<Line<'static>> {
