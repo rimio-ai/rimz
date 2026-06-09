@@ -10,10 +10,15 @@
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 
 [agents.layouts]
-# Named tab layouts for `rimz tab --layout <name>`. Commas split columns, plus
-# signs stack rows, and cells are agent kinds or `term`.
-## dual = "claude,codex"
-## review = "claude,codex+term"
+# A layout is a shape string (commas split columns, + stacks rows; cells are
+# agent kinds or `term`) or a table with `shape` plus a `flags` map of per-agent
+# launch flags. `peer` (claude,codex) is built in; redefine it to add flags.
+## stacked = "claude,codex+term"
+## [agents.layouts.peer]
+## shape = "claude,codex"
+## [agents.layouts.peer.flags]
+## claude = "--permission-mode plan"
+## codex = "--model gpt-5-codex -c model_reasoning_effort=high"
 
 [remote_control]
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab

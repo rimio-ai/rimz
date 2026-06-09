@@ -293,10 +293,25 @@ fn resume_command_is_pi_with_the_session_id() {
 
 #[test]
 fn launch_command_is_pi_with_optional_prompt() {
-    assert_eq!(PiAdapter.launch_command(None), Some(vec!["pi".to_owned()]));
     assert_eq!(
-        PiAdapter.launch_command(Some("review this")),
+        PiAdapter.launch_command(&[], None),
+        Some(vec!["pi".to_owned()])
+    );
+    assert_eq!(
+        PiAdapter.launch_command(&[], Some("review this")),
         Some(vec!["pi".to_owned(), "review this".to_owned()])
+    );
+    assert_eq!(
+        PiAdapter.launch_command(
+            &["--model".to_owned(), "large".to_owned()],
+            Some("review this")
+        ),
+        Some(vec![
+            "pi".to_owned(),
+            "--model".to_owned(),
+            "large".to_owned(),
+            "review this".to_owned()
+        ])
     );
 }
 

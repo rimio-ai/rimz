@@ -17,12 +17,31 @@ fn resume_command_is_codex_resume_with_the_session_id() {
 #[test]
 fn launch_command_is_codex_with_optional_prompt() {
     assert_eq!(
-        CodexAdapter.launch_command(None),
+        CodexAdapter.launch_command(&[], None),
         Some(vec!["codex".to_owned()])
     );
     assert_eq!(
-        CodexAdapter.launch_command(Some("review this")),
+        CodexAdapter.launch_command(&[], Some("review this")),
         Some(vec!["codex".to_owned(), "review this".to_owned()])
+    );
+    assert_eq!(
+        CodexAdapter.launch_command(
+            &[
+                "--model".to_owned(),
+                "gpt-5-codex".to_owned(),
+                "-c".to_owned(),
+                "model_reasoning_effort=high".to_owned()
+            ],
+            Some("review this")
+        ),
+        Some(vec![
+            "codex".to_owned(),
+            "--model".to_owned(),
+            "gpt-5-codex".to_owned(),
+            "-c".to_owned(),
+            "model_reasoning_effort=high".to_owned(),
+            "review this".to_owned()
+        ])
     );
 }
 

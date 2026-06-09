@@ -222,7 +222,9 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
 }
 
 fn is_agent_layout_key(path: &[String]) -> bool {
-    path.len() == 3 && path[0] == "agents" && path[1] == "layouts"
+    matches!(path, [root, child, _] if root == "agents" && child == "layouts")
+        || matches!(path, [root, child, _, leaf] if root == "agents" && child == "layouts" && leaf == "shape")
+        || matches!(path, [root, child, _, branch, _] if root == "agents" && child == "layouts" && branch == "flags")
 }
 
 fn is_provider_style_key(path: &[String]) -> bool {
@@ -351,9 +353,12 @@ mod tests {
     fn validates_static_and_dynamic_keys() {
         validate_set_key(&parse_key("sidebar.max_cols").unwrap()).unwrap();
         validate_set_key(&parse_key("agents.layouts.review").unwrap()).unwrap();
+        validate_set_key(&parse_key("agents.layouts.peer.shape").unwrap()).unwrap();
+        validate_set_key(&parse_key("agents.layouts.peer.flags.codex").unwrap()).unwrap();
         validate_set_key(&parse_key("sidebar.providers.claude.color").unwrap()).unwrap();
 
         assert!(validate_set_key(&parse_key("sidebar.nope").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("agents.layouts.peer.flags").unwrap()).is_err());
         assert!(validate_set_key(&parse_key("sidebar.providers.claude.nope").unwrap()).is_err());
     }
 

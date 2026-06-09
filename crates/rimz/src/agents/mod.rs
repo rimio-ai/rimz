@@ -449,9 +449,10 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// The argv that launches a fresh interactive session of this agent in the
-    /// pane's cwd. `prompt`, when present, is passed as the agent's positional
-    /// startup prompt; an agent with no launch CLI returns `None`.
-    fn launch_command(&self, _prompt: Option<&str>) -> Option<Vec<String>> {
+    /// pane's cwd. `extra_args` are direct agent CLI arguments from the chosen
+    /// tab layout; `prompt`, when present, is passed as the agent's positional
+    /// startup prompt after them. An agent with no launch CLI returns `None`.
+    fn launch_command(&self, _extra_args: &[String], _prompt: Option<&str>) -> Option<Vec<String>> {
         None
     }
 

@@ -31,15 +31,15 @@ The automatic path never force-deletes a branch. The interactive dirty `remove` 
 
 ## Tab layout IR
 
-`rimz tab --layout` resolves either a named `[agents.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a registered agent kind or `term`.
+`rimz tab --layout` resolves either a named `[agents.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a registered agent kind or `term`. Named layouts may be a table with `shape` plus per-agent `flags`; inline specs are shape-only.
 
 ```text
 claude,codex+term
 ```
 
-That example creates two columns: Claude on the left, Codex stacked above a shell on the right. The built-in `dual` layout is `claude,codex`; no layout means one `term` cell.
+That example creates two columns: Claude on the left, Codex stacked above a shell on the right. The built-in `peer` layout is `claude,codex`; no layout means one `term` cell.
 
-The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt` and optional `--worktree-path`; `term` cells run the user's shell. Backends never resolve agent kinds or worktrees.
+The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt`, optional `--worktree-path`, and `-- <flags>` when the named layout supplies launch flags for that kind; `term` cells run the user's shell. Backends never resolve agent kinds or worktrees.
 
 ## Backend shape
 

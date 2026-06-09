@@ -52,6 +52,8 @@ struct ExecArgs {
     worktree_path: Option<PathBuf>,
     #[arg(long)]
     prompt: Option<String>,
+    #[arg(last = true)]
+    extra_args: Vec<String>,
 }
 
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
@@ -83,7 +85,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             args.worktree.as_deref(),
         )?;
         let cwd = launch.cwd;
-        let layout = LayoutSpec::single(Cell::Agent(adapter.descriptor().kind_id()));
+        let layout = LayoutSpec::single(Cell::agent(adapter.descriptor().kind_id()));
         let title = rimz::tab_layout::default_tab_title(&layout, &cwd);
         let room = RoomTarget {
             workspace_id: &workspace.workspace_id,
@@ -122,7 +124,7 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let argv = adapter
-        .launch_command(args.prompt.as_deref())
+        .launch_command(&args.extra_args, args.prompt.as_deref())
         .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?;
     let (program, rest) = argv
         .split_first()
@@ -355,4 +357,39 @@ fn exec_shell(path: &Path) -> Result<()> {
         bail!("shell exited with {status}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+
+    #[derive(Debug, Parser)]
+    struct ExecHarness {
+        #[command(subcommand)]
+        command: AgentsSubcmd,
+    }
+
+    #[test]
+    fn exec_subcommand_captures_agent_args_after_separator() {
+        let parsed = ExecHarness::try_parse_from([
+            "rimz",
+            "exec",
+            "codex",
+            "--worktree-path",
+            "/x",
+            "--prompt",
+            "hi",
+            "--",
+            "--model",
+            "gpt-5-codex",
+        ])
+        .expect("parse exec");
+
+        let AgentsSubcmd::Exec(args) = parsed.command;
+        assert_eq!(args.kind, "codex");
+        assert_eq!(args.worktree_path, Some(PathBuf::from("/x")));
+        assert_eq!(args.prompt.as_deref(), Some("hi"));
+        assert_eq!(args.extra_args, ["--model", "gpt-5-codex"]);
+    }
 }

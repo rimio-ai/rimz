@@ -42,6 +42,11 @@ jiff = { version = "0.2", features = ["serde"] }
 
 # CLI
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+# Layout launch flags are authored as shell-like strings in TOML but launched as
+# direct argv, so Rimz needs quote removal without invoking a shell. `shlex` is a
+# tiny POSIX-compatible splitter already present through the build graph and
+# vetted for deploy; making it direct avoids a bespoke parser on a launch path.
+shlex = "2"
 
 # Terminal geometry probe — the launch paths read the invoking terminal's
 # width once to pick the sidebar's birth size (fixed cap vs percentage).

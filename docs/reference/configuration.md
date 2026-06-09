@@ -36,7 +36,7 @@ Eight sections make up the per-machine file:
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[agents.layouts]` | named tab layouts for `rimz tab --layout` |
+| `[agents.layouts]` | named tab layouts and per-agent launch flags for `rimz tab --layout` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
 | `[sidebar]` | sidebar width, render timing, ordering, scroll, glow, and display bands |
@@ -108,11 +108,17 @@ base = "fresh"
 
 ```toml
 [agents.layouts]
-dual = "claude,codex"
-review = "claude,codex+term"
+stacked = "claude,codex+term"
+
+[agents.layouts.peer]
+shape = "claude,codex"
+
+[agents.layouts.peer.flags]
+claude = "--permission-mode plan"
+codex = "--model gpt-5-codex -c model_reasoning_effort=high"
 ```
 
-Named layouts feed `rimz tab --layout <name>`. Commas split columns, plus signs stack rows in a column, and cells are registered agent kinds or `term`. The built-in `dual = "claude,codex"` exists even when unset; defining it here overrides the built-in for this machine.
+Named layouts feed `rimz tab --layout <name>`. A layout is either a shape string or a table with `shape` plus `flags`. Shape strings use commas for columns, plus signs for stacked rows in a column, and registered agent kinds or `term` as cells. The built-in `peer = "claude,codex"` exists even when unset; defining `[agents.layouts.peer]` overrides the built-in for this machine, usually to attach flags. Layout names `term` and registered agent kinds are reserved for inline single-cell specs. Flags are shell-split, passed as direct argv to that agent kind, and apply to every matching cell when a shape repeats a kind. Inline CLI specs such as `rimz tab --layout "claude,codex+term"` stay shape-only.
 
 ### Sidebar Bands
 

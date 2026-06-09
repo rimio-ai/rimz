@@ -10,9 +10,11 @@
 //! and unknown keys are ignored so an older binary tolerates a newer file.
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::num::{NonZeroU16, NonZeroU32};
 use std::path::{Path, PathBuf};
 
+use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Serialize, Serializer};
 
 use crate::feed::AgentStatus;
@@ -274,7 +276,7 @@ impl<'de> Deserialize<'de> for WorktreeBase {
     }
 }
 
-/// Agent-launch preferences. Layout strings name registry-backed agent kinds or
+/// Agent-launch preferences. Layout entries name registry-backed agent kinds or
 /// `term`; the parser lives in [`crate::tab_layout`].
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -284,7 +286,97 @@ pub struct AgentsConfig {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
-pub struct LayoutsConfig(pub BTreeMap<String, String>);
+pub struct LayoutsConfig(pub BTreeMap<String, LayoutEntry>);
+
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub enum LayoutEntry {
+    Shape(String),
+    Detailed {
+        shape: String,
+        flags: BTreeMap<String, String>,
+    },
+}
+
+impl<'de> Deserialize<'de> for LayoutEntry {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_any(LayoutEntryVisitor)
+    }
+}
+
+struct LayoutEntryVisitor;
+
+impl<'de> Visitor<'de> for LayoutEntryVisitor {
+    type Value = LayoutEntry;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a layout shape string or a table with `shape`")
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(LayoutEntry::Shape(value.to_owned()))
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E>
+    where
+        E: de::Error,
+    {
+        Ok(LayoutEntry::Shape(value))
+    }
+
+    fn visit_map<A>(self, mut map: A) -> std::result::Result<Self::Value, A::Error>
+    where
+        A: MapAccess<'de>,
+    {
+        let mut shape = None;
+        let mut flags = None;
+        while let Some(key) = map.next_key::<String>()? {
+            match key.as_str() {
+                "shape" => {
+                    if shape.is_some() {
+                        return Err(de::Error::duplicate_field("shape"));
+                    }
+                    shape = Some(map.next_value()?);
+                }
+                "flags" => {
+                    if flags.is_some() {
+                        return Err(de::Error::duplicate_field("flags"));
+                    }
+                    flags = Some(map.next_value()?);
+                }
+                _ => {
+                    let _ = map.next_value::<de::IgnoredAny>()?;
+                }
+            }
+        }
+        let shape = shape.ok_or_else(|| de::Error::missing_field("shape"))?;
+        Ok(LayoutEntry::Detailed {
+            shape,
+            flags: flags.unwrap_or_default(),
+        })
+    }
+}
+
+impl LayoutEntry {
+    pub fn shape(&self) -> &str {
+        match self {
+            Self::Shape(shape) => shape,
+            Self::Detailed { shape, .. } => shape,
+        }
+    }
+
+    pub fn flags(&self) -> Option<&BTreeMap<String, String>> {
+        match self {
+            Self::Shape(_) => None,
+            Self::Detailed { flags, .. } => Some(flags),
+        }
+    }
+}
 
 /// Rimz-owned Zellij room defaults. These are passed as `zellij attach …
 /// options …` when a Rimz session is born or reattached, so they do not require
@@ -892,20 +984,14 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_is_default_off() {
+    fn missing_or_empty_file_is_default_off() {
         let dir = tempdir().expect("tempdir");
-        let config = MachineConfig::load_from(&dir.path().join("absent.toml")).expect("load");
-        assert_eq!(config, MachineConfig::default());
-        assert!(!config.remote_control.claude);
-        assert!(!config.remote_control.codex);
-    }
-
-    #[test]
-    fn empty_file_keeps_remote_control_off() {
-        let dir = tempdir().expect("tempdir");
-        let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-        assert!(!config.remote_control.claude);
-        assert!(!config.remote_control.codex);
+        for path in [dir.path().join("absent.toml"), write(&dir, "")] {
+            let config = MachineConfig::load_from(&path).expect("load");
+            assert_eq!(config, MachineConfig::default());
+            assert!(!config.remote_control.claude);
+            assert!(!config.remote_control.codex);
+        }
     }
 
     #[test]
@@ -935,19 +1021,39 @@ mod tests {
     }
 
     #[test]
-    fn agents_layouts_parse_as_named_specs() {
+    fn agents_layouts_parse_shape_and_detailed_entries() {
+        const CODEX_FLAGS: &str = "--model gpt-5-codex -c model_reasoning_effort=high";
         let dir = tempdir().expect("tempdir");
         let config = MachineConfig::load_from(&write(
             &dir,
             "[agents.layouts]\n\
-             review = \"claude,codex+term\"\n",
+             stacked = \"claude,codex+term\"\n\
+             [agents.layouts.peer]\n\
+             shape = \"claude,codex\"\n\
+             [agents.layouts.peer.flags]\n\
+             claude = \"--permission-mode plan\"\n\
+             codex = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n",
         ))
         .expect("load");
+        let layouts = &config.agents.layouts.0;
         assert_eq!(
-            config.agents.layouts.0.get("review").map(String::as_str),
+            layouts.get("stacked").map(LayoutEntry::shape),
             Some("claude,codex+term")
         );
-        assert!(MachineConfig::default().agents.layouts.0.is_empty());
+        let peer = layouts.get("peer").expect("peer layout");
+        assert_eq!(peer.shape(), "claude,codex");
+        let flags = peer.flags().expect("peer flags");
+        assert_eq!(
+            flags.get("claude").map(String::as_str),
+            Some("--permission-mode plan")
+        );
+        assert_eq!(flags.get("codex").map(String::as_str), Some(CODEX_FLAGS));
+        let err = MachineConfig::load_from(&write(
+            &dir,
+            "[agents.layouts.peer]\n[agents.layouts.peer.flags]\ncodex = \"--model x\"\n",
+        ))
+        .unwrap_err();
+        assert!(err.to_string().contains("missing field `shape`"));
     }
 
     #[test]

@@ -159,7 +159,7 @@ fn pane_cmd(
 ) -> Result<PaneCmd> {
     let argv = match cell {
         Cell::Term => vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())],
-        Cell::Agent(kind) => {
+        Cell::Agent { kind, args } => {
             let mut argv = vec![
                 rimz_bin.to_string_lossy().into_owned(),
                 "agents".to_owned(),
@@ -174,6 +174,10 @@ fn pane_cmd(
             }
             if let Some(prompt) = prompt.filter(|value| !value.is_empty()) {
                 argv.extend(["--prompt".to_owned(), prompt.to_owned()]);
+            }
+            if !args.is_empty() {
+                argv.push("--".to_owned());
+                argv.extend(args.iter().cloned());
             }
             argv
         }
@@ -203,7 +207,7 @@ mod tests {
     fn layout_panes_wraps_agents_and_shells_terms() {
         let layout = LayoutSpec {
             columns: vec![Column {
-                rows: vec![Cell::Agent(AgentKind::new_unchecked("codex")), Cell::Term],
+                rows: vec![Cell::agent(AgentKind::new_unchecked("codex")), Cell::Term],
             }],
         };
         let panes =
@@ -218,12 +222,44 @@ mod tests {
     }
 
     #[test]
+    fn layout_panes_passes_agent_args_after_exec_separator() {
+        let layout = LayoutSpec {
+            columns: vec![Column {
+                rows: vec![Cell::Agent {
+                    kind: AgentKind::new_unchecked("codex"),
+                    args: vec![
+                        "--model".to_owned(),
+                        "gpt-5-codex".to_owned(),
+                        "-c".to_owned(),
+                        "model_reasoning_effort=high".to_owned(),
+                    ],
+                }],
+            }],
+        };
+        let panes =
+            layout_panes(&layout, Path::new("/repo-wt/a"), Some("hi"), true).expect("panes");
+        let argv = &panes.columns[0][0].argv;
+        let tail: Vec<&str> = argv[argv.len() - 5..].iter().map(String::as_str).collect();
+
+        assert_eq!(
+            tail,
+            vec![
+                "--",
+                "--model",
+                "gpt-5-codex",
+                "-c",
+                "model_reasoning_effort=high"
+            ]
+        );
+    }
+
+    #[test]
     fn worktree_tab_title_uses_resolved_worktree_name() {
         let layout = LayoutSpec {
             columns: vec![Column {
                 rows: vec![
-                    Cell::Agent(AgentKind::new_unchecked("claude")),
-                    Cell::Agent(AgentKind::new_unchecked("codex")),
+                    Cell::agent(AgentKind::new_unchecked("claude")),
+                    Cell::agent(AgentKind::new_unchecked("codex")),
                     Cell::Term,
                 ],
             }],
@@ -240,7 +276,7 @@ mod tests {
     fn non_worktree_tab_title_uses_plain_directory_name() {
         let layout = LayoutSpec {
             columns: vec![Column {
-                rows: vec![Cell::Agent(AgentKind::new_unchecked("claude"))],
+                rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
             }],
         };
         let launch = ResolvedCwd {

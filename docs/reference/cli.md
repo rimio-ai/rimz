@@ -92,7 +92,7 @@ rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
 
 `rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty or ahead worktrees unless `--force` is explicit.
 
-`rimz tab` opens one Zellij tab or tmux window in the current room. `--layout` accepts a named `[agents.layouts]` entry or an inline spec: commas split columns, plus signs stack rows, and cells are agent kinds (`claude`, `codex`, `pi`) or `term`; the built-in `dual` layout is `claude,codex`, and no layout is one terminal.
+`rimz tab` opens one Zellij tab or tmux window in the current room. `--layout` accepts a named `[agents.layouts]` entry or an inline spec: commas split columns, plus signs stack rows, and cells are agent kinds (`claude`, `codex`, `pi`) or `term`; the built-in `peer` layout is `claude,codex`, named layouts may attach per-agent launch flags, and no layout is one terminal.
 
 `--worktree` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare `--worktree` creates a fresh generated name; `--worktree demo` reuses `demo` when marked or creates it. New worktree branches use the worktree name directly unless `rimz worktree new --branch` overrides it. `rimz tab` defaults to the cwd basename as the view title; `rimz tab --worktree demo` defaults to `⑂ demo`; `--name` overrides the title. `--prompt` is passed to agent cells; `term` cells run your shell.
 
