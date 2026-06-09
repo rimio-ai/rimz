@@ -1,6 +1,6 @@
 # Performance
 
-> This is the performance model over the mechanisms, not the mechanisms themselves. Sidebar data flow, cadences, and the published-file inventory live in [state.md](./state.md); presence, ranking, and recovery in [sidebar.md](./sidebar.md); the durability contract and write classes in [ledger.md](./ledger.md#durable-state); the `list-panes` round-trip and the Zellij presence channel in [multiplexers.md](./multiplexers.md). This doc says where the milliseconds go, which optimizations bound them, and the rules the next change follows.
+> This is the performance model over the mechanisms, not the mechanisms themselves. Sidebar data flow, cadences, and the published-file inventory live in [state.md](./state.md); presence, ranking, and recovery in [sidebar.md](./sidebar.md); the durability contract and write classes in [ledger.md](./ledger.md#durable-state); the `list-panes` round-trip and the Zellij presence channel in [multiplexers.md](./multiplexers.md). This doc says where the milliseconds go, what the whole fleet costs Rimz, which optimizations bound them, and the rules the next change follows.
 
 ## The performance model
 
@@ -61,6 +61,32 @@ Where the milliseconds are, and what bounds each. Figures are orders of magnitud
 | fleet spending walk (producer) | within `SPENDING_TTL`: one read of shared `provider-spending.json`, zero transcript IO; on the due walk, one stat per file + O(appended bytes) per grown file | the shared cache stamp gates the whole walk, single-flighted across rooms (`spending.lock`); the incremental `(mtime, len, cursor)` parse keeps it history-independent ([transcript.md](./transcript.md), guard `spending_walk_io_is_history_independent`) |
 | Codex local transcript context refresh | steady-state: one stat on the prior rollout path; changed file: one bounded 64 KiB tail parse, no app-server subprocess | three stat-gated triggers — hook, the elder's transcript watcher, and the producer backstop ([state.md → Push Channels](./state.md#push-channels)); app-server fields stay detached and throttled |
 | `/proc` pane metrics (producer) | active panes sample ~1s, idle panes ~5s; within a pane's window the stored values and pane→root-pid binding carry forward, zero `/proc` IO | per-pane stamps in `metrics-sample.json`; the full process-table walk runs only on pane churn or a foreground change — exactly when `list-panes` already refreshed |
+
+## The overhead, at fleet scale
+
+Rimz is the layer that watches a fleet for one human, so its own footprint is sized against a single agent rather than the fleet: the cost of observing twenty or a hundred agents stays a small, near-flat fraction of running one of them, and that ratio is the performance target as much as the measurement. The figures below are measured on a real fleet and projected to 20, 50, and 100 concurrent agents spread across a handful of rooms — two to five workspaces, each a repo or a directory of worktrees, which is how a developer's agents actually divide. Like the cost map they are orders of magnitude, and the constants that bound them live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs).
+
+The cost attaches to three units, and only the cheapest grows with the agent count:
+
+- **Per workspace, once.** Each room elects its eldest renderer as the sole producer, which pays every external read for that room — `list-panes`, the git probes, `/proc`, the spend walk, the account probe — then publishes caches the other tabs fold in process. One round-trip per tick covers a room whether it holds two agents or a hundred, so the expensive work is bounded by the workspace count, not by the agent count: a few rooms means a few producers, each flat in the agents under it.
+- **Per worktree, activity-tiered.** The git diff-stats input set scales with distinct group roots, not agents; a root drops to the 60s idle TTL the moment its agents go quiet, and the whole sweep is capped at `MAX_PARALLEL_GIT` (8) fork chains. A hundred agents sharing a few checkouts pay a few hot roots; a hundred-worktree room pays the cap and the idle tier.
+- **Per agent, cheap and event-driven.** An agent reports through a short-lived `rimz hooks feed` child that appends to the ledger only when something happens — a turn boundary, a question, a resolution — and exits. Nothing resident wraps a running agent. The default path writes a question's feed item and hands the ask back to the agent's own UI, so even a waiting agent holds no Rimz process; only an enrolled resolver's bridge parks one ~6 MiB child while it answers, for at most the hook cap.
+
+Two costs stay flat in the agent count by design: durability is one group `fdatasync` per second per workspace however many agents append into it, and the snapshot publish is one debounced cache rename per second per workspace — both scale with rooms, not agents. The hot runtime caches — the published snapshot, heartbeats, diff-stats, `/proc` samples — land in `$XDG_RUNTIME_DIR` (tmpfs), so their churn is memory traffic, never disk IO.
+
+The table totals across a 2–5 room fleet and names the per-workspace rate where it matters:
+
+| Resource | 20 agents | 50 agents | 100 agents | What sets it |
+| --- | --- | --- | --- | --- |
+| CPU, idle | ~0 | ~0 | ~0 | loops block in `recv`; no poll spin, no per-frame fork |
+| CPU, busy | <0.3 core | ~0.3–0.8 core | ~0.5–1.5 core | one producer per room runs git / `/proc` / spend on its fetch worker, bursting toward the per-room 8-fork cap, never on the render thread |
+| RAM, resident | ~80–150 MiB | ~100–180 MiB | ~120–220 MiB | one ~30 MiB renderer per open room + per-room producer caches + a thin per-Codex-session broker; scales with rooms, flat in agents |
+| Durable write | ~1–3 KiB/s | ~2–4 KiB/s | ~2–5 KiB/s | event frames (~0.5 KiB) per turn; a ~7.6 KiB feed item only on a question; summed across rooms |
+| fsync rate | ~rooms/s | ~rooms/s | ~rooms/s | one group `fdatasync` per second per workspace (≈2–5/s for the fleet) |
+| State on disk | tens of MiB | tens of MiB | ~100s of MiB | rotation-capped event log + ~5 KiB/agent snapshot + relocating feed items, per workspace |
+| Network | 1 pricing fetch/day | 1/day | 1/day | fleet-shared, single-flighted; local datagrams and unix sockets otherwise; no core egress |
+
+Set against the agents it tracks, the overhead reads as a rounding error, and the gap widens as the fleet grows. One developer's week of Claude and Codex sessions came to 1.23 GiB of transcript JSONL — ~177 MiB a day — with runtime processes resident at 250–340 MiB (Claude) and 50–65 MiB (Codex) each; Rimz watched the same fleet for tens of MiB of durable state total, a resident set on the order of a single one of those agent processes, a fsync a second per room, and one pricing refresh a day over the network. The agents' transcript and process cost climbs with the agent count; Rimz's climbs only with the room and worktree count, so a denser fleet widens the ratio rather than narrowing it. The scaling terms the model flags first — git enrichment across many worktrees and transcript-discovery stat volume as fleet history grows — are producer-side and activity-gated, so they surface in fetch-worker latency long before they reach the human's frame.
 
 ## Principles
 
