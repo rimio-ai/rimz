@@ -202,7 +202,7 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compacting: bool,
     /// Lifetime count of completed context compactions, copied from the rollup;
-    /// the context line renders `↻ N` only past the first.
+    /// the context line renders `↻ N` from the first completed compaction.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
     /// Provider error label projected while a dead turn escalates to failed.

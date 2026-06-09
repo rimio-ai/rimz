@@ -492,7 +492,7 @@ fn render_enriched_selected_agent_card() {
 }
 
 #[test]
-fn agent_context_line_renders_compaction_count_past_first() {
+fn agent_context_line_renders_compaction_count() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -515,7 +515,7 @@ fn agent_context_line_renders_compaction_count_past_first() {
 }
 
 #[test]
-fn agent_context_line_omits_single_compaction_count() {
+fn agent_context_line_renders_first_compaction() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -531,8 +531,30 @@ fn agent_context_line_omits_single_compaction_count() {
     let rendered = snapshot_to_screen(&snapshot, 56, 14);
 
     assert!(
-        !rendered.contains('↻') && !rendered.contains("· ↻"),
-        "a single compaction stays quiet:\n{rendered}"
+        rendered.contains("▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k · ↻ 1"),
+        "the first completed compaction shows on the context line:\n{rendered}"
+    );
+}
+
+#[test]
+fn agent_context_line_omits_zero_compaction_count() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    claude.compaction_count = 0;
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+    assert!(
+        !rendered.contains('↻'),
+        "an uncompacted session shows no compaction marker:\n{rendered}"
     );
 }
 

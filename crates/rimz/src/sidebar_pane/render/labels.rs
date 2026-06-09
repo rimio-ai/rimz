@@ -386,12 +386,11 @@ pub(super) fn context_breakdown_spans(
     spans
 }
 
-/// The `· ↻ N` compaction tail for the context line, shown only past the first
-/// compaction so a single condense stays quiet. The `·` seam reads at the dim
-/// chrome like the composition seams; the marker wears the violet compaction
-/// tone.
+/// The `· ↻ N` compaction tail for the context line, shown from the first
+/// completed compaction. The `·` seam reads at the dim chrome like the
+/// composition seams; the marker wears the violet compaction tone.
 pub(super) fn context_compaction_spans(theme: &Theme, count: u32) -> Vec<Span<'static>> {
-    if count <= 1 {
+    if count == 0 {
         return Vec::new();
     }
     vec![

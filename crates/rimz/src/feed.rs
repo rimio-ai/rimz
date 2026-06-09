@@ -857,7 +857,8 @@ pub struct AgentState {
     /// How many times this session has condensed its context window — the count
     /// of completed compaction brackets. Derived by the rollup from trailing
     /// compaction hooks, carried forward unchanged on every other event, and
-    /// rendered by the card as `↻ N` past the first. Display-only.
+    /// rendered by the card as `↻ N` from the first completed compaction.
+    /// Display-only.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
     pub last_seen: Timestamp,
