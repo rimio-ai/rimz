@@ -6,47 +6,6 @@ Rimz gives every project one room: a Zellij or tmux session with a sidebar where
 
 ## The sidebar
 
-```
- ⌘ query-engine            ~/code/query-engine
-
- ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6                                    $4.20
- ──────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0            ⢿ 2   ○ 1
-
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌? claude · Opus · xhigh
-▌  fix auth flow
-▌  ▣ ━━━━━━━━━━──────────────── 41%
-▏
-▏✻ claude · Sonnet · high · plan
-▏  add tests
-▏  ▣ ━━━━━─────────────────────  18%
-▏
-▏⢿ codex · GPT 5.5 · high
-▏  refactor api
-▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
-
- feature-migration                     +230 -23
- ! claude · Opus · 1m
-   db migrate
-
- ○ codex · GPT 5.5 · low
-   —
-
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
- ? deploy
-   promote?
-
- ──────────────────────────────────────────────
- Claude Code v2.1.158 · Claude Max          ⇅ rc
-  ▐▛███▜▌  $4.20 · ◇ 486.0k
- ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m
-   ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
- ──────────────────────────────────────────────
-            ␣ next ?!   ? for help
-```
-
 > The product invariant lives in [DESIGN.md](../../DESIGN.md); every glyph and meter in this frame is broken down, zone by zone, in the [interface reference](../interface/sidebar.md).
 
 The sidebar is a worktree-keyed presence and attention map. Every pane is a row: a bare shell reads as `○ zsh` and becomes the agent's row the moment you launch one, carrying its status, the task it's on, and its context meter, grouped by the worktree it lives in. Ranking does the triage for you: the most overdue work rises to the top, calm work settles below, and a one-line cockpit summarizes the whole fleet (`? 2  ! 1 …`). Account-scoped usage budgets lift off the rows into the provider dashboard pinned at the bottom, one tab per provider showing its plan, spend, and draining budget bars. Select a row and you land in that pane, where you read the prompt and answer in the agent's own UI. The column always mirrors what's running: when an agent exits, its row reverts to the shell.

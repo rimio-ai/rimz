@@ -679,6 +679,30 @@ fn render_process_row_pins_resource_stats_at_l2() {
 }
 
 #[test]
+fn idle_process_row_hides_resource_stats() {
+    // The resource grid is working-pane vocabulary: an idle shell can carry
+    // sampled metrics, but its row stays bare.
+    let shell = pane("%1", "zsh", "/repo/main");
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![shell], None);
+    let row = &mut snapshot.worktree_groups[0].rows[0];
+    let process = row.as_process_mut().unwrap();
+    process.cpu_pct = Some(1);
+    process.rss_kb = Some(512 * 1_024);
+    process.io_bps = Some(8 * 1_048_576);
+
+    let rendered = snapshot_to_screen(&snapshot, 56, 14);
+
+    assert!(
+        rendered.contains("○ zsh"),
+        "the idle process row still renders:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("C   1%") && !rendered.contains("M 512M") && !rendered.contains("8M/s"),
+        "idle process rows hide the full resource grid:\n{rendered}"
+    );
+}
+
+#[test]
 fn proc_stats_hold_a_fixed_dim_grid() {
     // Each marker wears its own DIM-weighted tone — `C` sky, `M` sage, `⇅`
     // violet — while figures and seams stay in the dim process tone, and each

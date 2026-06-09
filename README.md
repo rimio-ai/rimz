@@ -5,44 +5,35 @@ Run one coding agent and you flip tabs. Run four and you lose them.
 Rimz pins every repo to one durable room — a Zellij or tmux session with a sidebar that tells you which pane needs you, and a ledger that survives detach, sidebar reload, and reattach from anywhere. Humans, scripts, CI, and coding agents share one feed through one CLI.
 
 ```
- ⌘ query-engine            ~/code/query-engine
+ ⌘ query-engine                    ~/code/query-engine
 
- ◎ 12                  ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6                                    $4.20
- ──────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0            ⢿ 2   ○ 1
+ ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M
+ ¤ 16                                          $420.00
+ ─────────────────────────────────────────────────────
+ ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2
 
-▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
-▌? claude · Opus · xhigh
-▌  fix auth flow
-▌  ▣ ━━━━━━━━━━──────────────── 41%
-▏
-▏✻ claude · Sonnet · high · plan
-▏  add tests
-▏  ▣ ━━━━━─────────────────────  18%
-▏
-▏⢿ codex · GPT 5.5 · high
-▏  refactor api
-▏  ▣ ━━━━━━━━━━━━━━━──────────── 63%
+▏⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43
+▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27
+▌  ledger refactor
+▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 1m
+▌  ⧉ subagents (2)
+▌    ✓ Explore — locate the render seam
+▌      ◇ 12k · Opus 4.8                          ◔ 10m
+▌    ✻ Explore — audit the trust hash
+▌      ◇  3k · Opus 4.8                          ◔  3m
 
- feature-migration                     +230 -23
- ! claude · Opus · 1m
-   db migrate
+ ─────────────────────────────────────────────────────
+  Claude v2.1.169 · Claude Max                    ⇅ rc
 
- ○ codex · GPT 5.5 · low
-   —
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88
+ ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m
+   ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1
- ? deploy
-   promote?
+ W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
+ M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66
 
- ──────────────────────────────────────────────
- Claude Code v2.1.158 · Claude Max          ⇅ rc
-  ▐▛███▜▌  $4.20 · ◇ 486.0k
- ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m
-   ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
- ──────────────────────────────────────────────
-            ␣ next ?!   ? for help
+                      ? for help
 ```
 
 > Product invariant lives in [DESIGN.md](./DESIGN.md). The short version: Rimz shows you which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. Enrol a resolver — a small process you trust on this machine — when you want routine answers handled ahead of you; the chain still ends with you.

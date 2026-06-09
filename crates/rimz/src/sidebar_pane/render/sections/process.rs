@@ -60,9 +60,10 @@ pub(super) fn process_row_line(
         left.push(Span::raw(" "));
         left.push(Span::styled(format!("({user})"), theme.dim()));
     }
-    // At L2 width, resource stats pin right: `C  11%  M 1.1G  ⇅   3M/s`.
-    // The whole cluster drops at L0/L1, or until every metric has reported.
-    if Tier::for_width(width) == Tier::L2 {
+    // At L2 width, active process rows pin resource stats right:
+    // `C  11%  M 1.1G  ⇅   3M/s`. Idle shells and editors stay bare; the
+    // whole cluster also drops at L0/L1, or until every metric has reported.
+    if Tier::for_width(width) == Tier::L2 && !state.is_idle() {
         let right = proc_stats_spans(theme, row);
         if !right.is_empty() {
             return pin_right(left, right, width);
