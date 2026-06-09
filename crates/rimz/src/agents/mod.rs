@@ -504,9 +504,8 @@ pub trait AgentAdapter: Send + Sync {
     /// Whether this agent's per-user config currently carries Rimz-managed
     /// hooks — i.e. the user ran `rimz hooks install`. Best-effort: a missing
     /// file or any read/parse failure reads as "not installed". An agent only
-    /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` and the
-    /// sidebar's first-run hint surface it — an un-wired agent is invisible,
-    /// never silently broken.
+    /// ever fires `rimz hooks feed` when this holds, so `rimz doctor` surfaces
+    /// it — an un-wired agent is invisible, never silently broken.
     fn hooks_installed(&self) -> bool {
         false
     }

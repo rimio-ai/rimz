@@ -7,7 +7,7 @@
 //! [grammar in docs/internals/sidebar.md](../../../../docs/internals/sidebar.md).
 //!
 //! One module per section: [`cockpit`] (the summary + spend lines), [`fleet`]
-//! (the make-up line and first-run hint), [`worktree`] (group headers and the
+//! (the make-up line), [`worktree`] (group headers and the
 //! row roster), [`agent_card`] (the per-agent card), [`process`] (bare process
 //! rows), and [`provider`] (the provider dashboard and the W/M fleet ledger).
 //! This file owns only the shared layout primitives — the width tiers, the

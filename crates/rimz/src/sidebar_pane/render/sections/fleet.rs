@@ -1,5 +1,4 @@
-//! The fleet make-up line — the cockpit's status buckets — and the first-run
-//! hint an empty room shows in its place.
+//! The fleet make-up line — the cockpit's status buckets.
 
 use crate::SidebarWorktreeGroup;
 use crate::feed::AgentStatus;
@@ -295,4 +294,3 @@ pub(crate) fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus)
         .map(|count| count.count)
         .sum()
 }
-

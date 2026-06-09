@@ -41,8 +41,8 @@ use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 use self::fmt::age_short;
 pub(crate) use self::sections::{MakeUpHit, ProviderTabHit, status_total};
 use self::sections::{
-    cockpit_spend_line, cockpit_summary_line, content_width, fleet_header_lines, fleet_ledger_lines,
-    fleet_size, provider_panel_lines, worktree_group_lines,
+    cockpit_spend_line, cockpit_summary_line, content_width, fleet_header_lines,
+    fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
 };
 use self::theme::Theme;
 
@@ -958,11 +958,11 @@ fn top_lines(
 /// Compose the scrollable agent-cards zone and, in lockstep, its hit-test map:
 /// every content line gets one map entry, `Some(row)` for an agent/process row
 /// line and the worktree header that jumps into it, `None` for structural
-/// chrome (gaps, the external divider, first-run hint, help, `+K more`).
+/// chrome (gaps, the external divider, help, `+K more`).
 /// Populated rooms take their opening gap from the pinned cockpit separator;
-/// empty rooms keep a scroll-zone gap before the first-run hint. [`compose_lines`]
-/// windows this zone by the scroll offset and pins the cockpit above it and the
-/// bottom chrome below.
+/// empty rooms keep the scroll zone clear. [`compose_lines`] windows this zone
+/// by the scroll offset and pins the cockpit above it and the bottom chrome
+/// below.
 fn scroll_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -971,7 +971,7 @@ fn scroll_lines(
     theme: &Theme,
 ) -> (Vec<Line<'static>>, Vec<Option<usize>>) {
     // An *active* alert means the body is a stale/empty fetch, not a live room:
-    // suppress the first-run hint, footer, and help so the alert speaks alone.
+    // suppress the footer and help so the alert speaks alone.
     // A recovered alert is just a lingering notice — the room below it is live.
     let active = alert.is_some_and(Alert::is_active);
     let mut lines = Vec::new();

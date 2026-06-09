@@ -104,14 +104,10 @@ The column shows presence from the first frame: their shell pane is itself a row
 ▏main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌○ zsh
 
- no agents yet
- run claude or codex
- in a pane to begin
-
                   ? for help
 ```
 
-**Does:** Looks left, reads two words of hint, looks back at the prompt.
+**Does:** Looks left, sees the shell pane, looks back at the prompt.
 
 **Feels:** Oriented. Nothing is demanding anything. The `⌘ query-engine` line is the project name they recognize; the `▏main` lane tells them which worktree they're standing in.
 
@@ -119,8 +115,8 @@ The column shows presence from the first frame: their shell pane is itself a row
 
 > **Design laws for the empty room.**
 > - **Presence from the first frame.** Even with nothing running, the shell pane is a row, so the column demonstrates its core idea (one row per pane) before any agent exists.
-> - **The hint is the next literal command, and it adapts.** Hooks wired → *"run claude or codex."* Hooks skipped → *"install hooks: rimz hooks install claude."* It clears the instant the first agent or feed item appears.
-> - **The hint belongs to a *healthy* empty room.** If the refresh loop is degraded, the banner takes over and the hint steps aside: an empty body under a failed fetch is a *missing* snapshot, not an empty room (see [Phase 9](#phase-9-when-something-is-wrong)).
+> - **The empty room stays quiet.** It shows live panes and the footer; the first agent or feed item fills the body without changing the surrounding chrome.
+> - **The footer belongs to a *healthy* room.** If the refresh loop is degraded, the banner takes over and the footer steps aside: an empty body under a failed fetch is a *missing* snapshot, not an empty room (see [Phase 9](#phase-9-when-something-is-wrong)).
 
 ---
 
@@ -353,7 +349,7 @@ The product's honesty law gets tested when a fetch fails: the binary moved, the 
  failed: ledger not found
 ```
 
-The loop keeps the last good snapshot for the body but pins a sticky banner to the *bottom* edge (status-bar style, so the body truncates before the banner ever clips) explaining *why* the UI isn't updating and *for how long*. When a fetch finally succeeds the banner steps down to a dim `⚠ last alert 8s ago: … · x dismiss` notice, so a failure that flickered past stays visible, and clears for good when the reader presses `x` (a fresh failure re-arms it). The first-run hint and footer step aside while the alert is active: an empty body under a failed fetch is a missing snapshot, not an empty room.
+The loop keeps the last good snapshot for the body but pins a sticky banner to the *bottom* edge (status-bar style, so the body truncates before the banner ever clips) explaining *why* the UI isn't updating and *for how long*. When a fetch finally succeeds the banner steps down to a dim `⚠ last alert 8s ago: … · x dismiss` notice, so a failure that flickered past stays visible, and clears for good when the reader presses `x` (a fresh failure re-arms it). The footer steps aside while the alert is active: an empty body under a failed fetch is a missing snapshot, not an empty room.
 
 The same honesty extends to trust and protocol: an untrusted `.rimz/config.toml` keeps its command-running fields inert until the reader runs `rimz trust grant` after reviewing the diff; a sidebar whose protocol version drifts after an upgrade gets a `rimz doctor` mismatch report instead of a rail that silently stops updating.
 

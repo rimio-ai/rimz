@@ -398,7 +398,6 @@ fn sidebar_fixture_snapshot(state: SidebarFixtureState) -> Result<rimz::SidebarS
         needs_attention: Vec::new(),
         resolver_working: Vec::new(),
         agents: Vec::new(),
-        agent_hooks_ready: state != SidebarFixtureState::Empty,
         wired_lazy_kinds: vec!["codex".to_owned()],
         lazy_agent_default_models: std::collections::BTreeMap::new(),
         own_view: None,

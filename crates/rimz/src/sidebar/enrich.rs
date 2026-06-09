@@ -177,7 +177,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
 
 /// The lazy-registering agent kinds whose Rimz hooks are installed — the gate for
 /// the idle-instance synthesis on a wired-but-unbound agent pane. Filtered to lazy
-/// agents (not `agent_hooks_ready`'s any-agent check), so a Claude-only install
+/// agents (not a broad any-agent hook check), so a Claude-only install
 /// never promotes an unwired Codex pane to an idle agent (it would otherwise read
 /// as a forever-idle agent Rimz can report no status for). Environment, not ledger.
 pub fn wired_lazy_kinds() -> Vec<String> {
