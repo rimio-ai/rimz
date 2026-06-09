@@ -294,37 +294,7 @@ pub fn compute_spending(
     // main-chain entry anywhere across all files, so sidechain replays can be
     // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
     // they bucket under the right kind.
-    let mut by_exact_key: HashMap<(String, Option<String>), (&'static str, CachedEntry)> =
-        HashMap::new();
-    let mut msg_has_non_sidechain: HashMap<String, bool> = HashMap::new();
-    let mut free_entries: Vec<(&'static str, CachedEntry)> = Vec::new();
-
-    for (adapter, file) in files {
-        let kind = adapter.descriptor().kind;
-        let key = file.to_string_lossy().into_owned();
-        let Some(cached_file) = cache.files.get(&key) else {
-            continue;
-        };
-        for e in &cached_file.entries {
-            if let Some(ref msg_id) = e.message_id {
-                let has_ns = msg_has_non_sidechain.entry(msg_id.clone()).or_insert(false);
-                if !e.is_sidechain {
-                    *has_ns = true;
-                }
-                let exact_key = (msg_id.clone(), e.request_id.clone());
-                by_exact_key
-                    .entry(exact_key)
-                    .and_modify(|(_, existing)| {
-                        if existing.is_sidechain && !e.is_sidechain {
-                            *existing = e.clone();
-                        }
-                    })
-                    .or_insert_with(|| (kind, e.clone()));
-            } else {
-                free_entries.push((kind, e.clone()));
-            }
-        }
-    }
+    let deduped = dedup_cached_entries(files, cache);
 
     let mut spending = Spending::default();
     let mut add = |provider: &str, entry: &CachedEntry| {
@@ -337,9 +307,10 @@ pub fn compute_spending(
     };
 
     // Message-ID entries bucket under the kind whose file they were kept from.
-    for ((msg_id, _), (kind, entry)) in &by_exact_key {
+    for ((msg_id, _), (kind, entry)) in &deduped.by_exact_key {
         let is_sidechain_replay = entry.is_sidechain
-            && msg_has_non_sidechain
+            && deduped
+                .msg_has_non_sidechain
                 .get(msg_id.as_str())
                 .copied()
                 .unwrap_or(false);
@@ -347,7 +318,7 @@ pub fn compute_spending(
             add(kind, entry);
         }
     }
-    for (provider, entry) in &free_entries {
+    for (provider, entry) in &deduped.free_entries {
         add(provider, entry);
     }
 
@@ -384,6 +355,58 @@ pub fn compute_spending(
     }
 
     spending
+}
+
+struct DedupedCachedEntries {
+    by_exact_key: HashMap<(String, Option<String>), (&'static str, CachedEntry)>,
+    msg_has_non_sidechain: HashMap<String, bool>,
+    free_entries: Vec<(&'static str, CachedEntry)>,
+}
+
+fn dedup_cached_entries(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> DedupedCachedEntries {
+    let mut deduped = DedupedCachedEntries {
+        by_exact_key: HashMap::new(),
+        msg_has_non_sidechain: HashMap::new(),
+        free_entries: Vec::new(),
+    };
+    for (adapter, file) in files {
+        let kind = adapter.descriptor().kind;
+        let key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&key) else {
+            continue;
+        };
+        for entry in &cached_file.entries {
+            insert_dedup_entry(&mut deduped, kind, entry);
+        }
+    }
+    deduped
+}
+
+fn insert_dedup_entry(deduped: &mut DedupedCachedEntries, kind: &'static str, entry: &CachedEntry) {
+    let Some(ref msg_id) = entry.message_id else {
+        deduped.free_entries.push((kind, entry.clone()));
+        return;
+    };
+    let has_non_sidechain = deduped
+        .msg_has_non_sidechain
+        .entry(msg_id.clone())
+        .or_insert(false);
+    if !entry.is_sidechain {
+        *has_non_sidechain = true;
+    }
+    let exact_key = (msg_id.clone(), entry.request_id.clone());
+    deduped
+        .by_exact_key
+        .entry(exact_key)
+        .and_modify(|(_, existing)| {
+            if existing.is_sidechain && !entry.is_sidechain {
+                *existing = entry.clone();
+            }
+        })
+        .or_insert_with(|| (kind, entry.clone()));
 }
 
 fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {

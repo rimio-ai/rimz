@@ -294,26 +294,61 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 /// and takes the most recent record. Best-effort: any IO or parse failure
 /// yields empty fields (enrichment, never correctness).
 pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
-    // The per-call fields of the most recent `token_count` record, raw so an
-    // absent field stays unknown.
-    struct LastUsage {
-        input: Option<u64>,
-        total: Option<u64>,
-        window: u64,
-        cached: Option<u64>,
-        output: Option<u64>,
-    }
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
-    // Walk the tail newest-first. Capture the latest `token_count` entry for
-    // the gauge fields (context_pct, total_tokens) and the cumulative billing
-    // totals (cumulative_input_tokens, etc.), plus the model from
-    // `turn_context`. Bail once all targets are filled.
-    let mut latest_model: Option<String> = None;
-    let mut latest_usage: Option<LastUsage> = None;
-    // (cumulative_input, cumulative_cached, cumulative_output)
-    let mut latest_cumulative: Option<(u64, u64, u64)> = None;
+    scan_transcript_tail(&text).into_usage()
+}
+
+struct LastUsage {
+    input: Option<u64>,
+    total: Option<u64>,
+    window: u64,
+    cached: Option<u64>,
+    output: Option<u64>,
+}
+
+#[derive(Default)]
+struct TranscriptScan {
+    latest_model: Option<String>,
+    latest_usage: Option<LastUsage>,
+    latest_cumulative: Option<(u64, u64, u64)>,
+}
+
+impl TranscriptScan {
+    fn complete(&self) -> bool {
+        self.latest_model.is_some()
+            && self.latest_usage.is_some()
+            && self.latest_cumulative.is_some()
+    }
+
+    fn into_usage(self) -> TranscriptUsage {
+        let (cumulative_input_tokens, cumulative_cached_tokens, cumulative_output_tokens) =
+            match self.latest_cumulative {
+                Some((i, c, o)) => (Some(i), c, Some(o)),
+                None => (None, 0, None),
+            };
+        match self.latest_usage {
+            Some(last) => usage_from_last_record(
+                last,
+                self.latest_model,
+                cumulative_input_tokens,
+                cumulative_cached_tokens,
+                cumulative_output_tokens,
+            ),
+            None => TranscriptUsage {
+                model: self.latest_model,
+                cumulative_input_tokens,
+                cumulative_cached_tokens,
+                cumulative_output_tokens,
+                ..TranscriptUsage::fresh()
+            },
+        }
+    }
+}
+
+fn scan_transcript_tail(text: &str) -> TranscriptScan {
+    let mut scan = TranscriptScan::default();
     for line in text.lines().rev() {
         let line = line.trim();
         if line.is_empty() {
@@ -322,114 +357,127 @@ pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
         let Ok(value) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        if latest_model.is_none()
-            && value.get("type").and_then(Value::as_str) == Some("turn_context")
-            && let Some(model) = value
+        scan_transcript_record(&value, &mut scan);
+        if scan.complete() {
+            break;
+        }
+    }
+    scan
+}
+
+fn scan_transcript_record(value: &Value, scan: &mut TranscriptScan) {
+    if scan.latest_model.is_none() {
+        scan.latest_model = turn_context_model(value);
+    }
+    if scan.latest_usage.is_some() && scan.latest_cumulative.is_some() {
+        return;
+    }
+    let Some(payload) = value.get("payload") else {
+        return;
+    };
+    if payload.get("type").and_then(Value::as_str) != Some("token_count") {
+        return;
+    }
+    let info = payload.get("info");
+    if scan.latest_usage.is_none() {
+        scan.latest_usage = last_usage_from_info(info);
+    }
+    if scan.latest_cumulative.is_none() {
+        scan.latest_cumulative = cumulative_usage_from_info(info);
+    }
+}
+
+fn turn_context_model(value: &Value) -> Option<String> {
+    (value.get("type").and_then(Value::as_str) == Some("turn_context"))
+        .then(|| {
+            value
                 .get("payload")
                 .and_then(|p| p.get("model"))
                 .and_then(Value::as_str)
                 .filter(|model| !model.is_empty())
-        {
-            latest_model = Some(model.to_owned());
-        }
-        if (latest_usage.is_none() || latest_cumulative.is_none())
-            && let Some(payload) = value.get("payload")
-            && payload.get("type").and_then(Value::as_str) == Some("token_count")
-        {
-            let info = payload.get("info");
-            if latest_usage.is_none() {
-                let window = info
-                    .and_then(|info| info.get("model_context_window"))
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                let last = info.and_then(|info| info.get("last_token_usage"));
-                let input = last
-                    .and_then(|last| last.get("input_tokens"))
-                    .and_then(Value::as_u64);
-                let total = last
-                    .and_then(|last| last.get("total_tokens"))
-                    .and_then(Value::as_u64);
-                let cached = last
-                    .and_then(|last| last.get("cached_input_tokens"))
-                    .and_then(Value::as_u64);
-                let output = last
-                    .and_then(|last| last.get("output_tokens"))
-                    .and_then(Value::as_u64);
-                if window > 0 || input.unwrap_or(0) > 0 || total.is_some() {
-                    latest_usage = Some(LastUsage {
-                        input,
-                        total,
-                        window,
-                        cached,
-                        output,
-                    });
-                }
-            }
-            if latest_cumulative.is_none() {
-                let total_usage = info.and_then(|info| info.get("total_token_usage"));
-                let cum_input = total_usage
-                    .and_then(|u| u.get("input_tokens"))
-                    .and_then(Value::as_u64);
-                let cum_output = total_usage
-                    .and_then(|u| u.get("output_tokens"))
-                    .and_then(Value::as_u64);
-                let cum_cached = total_usage
-                    .and_then(|u| {
-                        u.get("cached_input_tokens")
-                            .or_else(|| u.get("cache_read_input_tokens"))
-                    })
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0);
-                if let (Some(i), Some(o)) = (cum_input, cum_output) {
-                    latest_cumulative = Some((i, cum_cached, o));
-                }
-            }
-        }
-        if latest_model.is_some() && latest_usage.is_some() && latest_cumulative.is_some() {
-            break;
-        }
+                .map(ToOwned::to_owned)
+        })
+        .flatten()
+}
+
+fn last_usage_from_info(info: Option<&Value>) -> Option<LastUsage> {
+    let window = info
+        .and_then(|info| info.get("model_context_window"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let last = info.and_then(|info| info.get("last_token_usage"));
+    let input = last
+        .and_then(|last| last.get("input_tokens"))
+        .and_then(Value::as_u64);
+    let total = last
+        .and_then(|last| last.get("total_tokens"))
+        .and_then(Value::as_u64);
+    let cached = last
+        .and_then(|last| last.get("cached_input_tokens"))
+        .and_then(Value::as_u64);
+    let output = last
+        .and_then(|last| last.get("output_tokens"))
+        .and_then(Value::as_u64);
+    (window > 0 || input.unwrap_or(0) > 0 || total.is_some()).then_some(LastUsage {
+        input,
+        total,
+        window,
+        cached,
+        output,
+    })
+}
+
+fn cumulative_usage_from_info(info: Option<&Value>) -> Option<(u64, u64, u64)> {
+    let total_usage = info.and_then(|info| info.get("total_token_usage"));
+    let cum_input = total_usage
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(Value::as_u64);
+    let cum_output = total_usage
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(Value::as_u64);
+    let cum_cached = total_usage
+        .and_then(|u| {
+            u.get("cached_input_tokens")
+                .or_else(|| u.get("cache_read_input_tokens"))
+        })
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    match (cum_input, cum_output) {
+        (Some(i), Some(o)) => Some((i, cum_cached, o)),
+        _ => None,
     }
-    let (cumulative_input_tokens, cumulative_cached_tokens, cumulative_output_tokens) =
-        match latest_cumulative {
-            Some((i, c, o)) => (Some(i), c, Some(o)),
-            None => (None, 0, None),
-        };
-    match latest_usage {
-        Some(last) => {
-            let context_window_reported = last.window > 0;
-            let context_window = if context_window_reported {
-                last.window
-            } else {
-                DEFAULT_CONTEXT_WINDOW
-            };
-            let context_pct = last
-                .input
-                .unwrap_or(0)
-                .saturating_mul(100)
-                .checked_div(context_window)
-                .map(|pct| pct.min(100) as u8);
-            TranscriptUsage {
-                context_pct,
-                context_window: Some(context_window),
-                context_window_reported,
-                total_tokens: last.total,
-                model: latest_model,
-                last_input_tokens: last.input,
-                last_cached_input_tokens: last.cached,
-                last_output_tokens: last.output,
-                cumulative_input_tokens,
-                cumulative_cached_tokens,
-                cumulative_output_tokens,
-            }
-        }
-        None => TranscriptUsage {
-            // Opened cleanly but no `token_count` yet — fresh session, may
-            // still have a `turn_context` model captured above.
-            model: latest_model,
-            cumulative_input_tokens,
-            cumulative_cached_tokens,
-            cumulative_output_tokens,
-            ..TranscriptUsage::fresh()
-        },
+}
+
+fn usage_from_last_record(
+    last: LastUsage,
+    model: Option<String>,
+    cumulative_input_tokens: Option<u64>,
+    cumulative_cached_tokens: u64,
+    cumulative_output_tokens: Option<u64>,
+) -> TranscriptUsage {
+    let context_window_reported = last.window > 0;
+    let context_window = if context_window_reported {
+        last.window
+    } else {
+        DEFAULT_CONTEXT_WINDOW
+    };
+    let context_pct = last
+        .input
+        .unwrap_or(0)
+        .saturating_mul(100)
+        .checked_div(context_window)
+        .map(|pct| pct.min(100) as u8);
+    TranscriptUsage {
+        context_pct,
+        context_window: Some(context_window),
+        context_window_reported,
+        total_tokens: last.total,
+        model,
+        last_input_tokens: last.input,
+        last_cached_input_tokens: last.cached,
+        last_output_tokens: last.output,
+        cumulative_input_tokens,
+        cumulative_cached_tokens,
+        cumulative_output_tokens,
     }
 }

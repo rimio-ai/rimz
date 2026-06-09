@@ -39,10 +39,12 @@ use self::install::{
     uninstall_from, wrapped_status_line_command_from,
 };
 use self::payloads::{
-    ClaudePermissionBehavior, ClaudePermissionDecisionOutput, ClaudePermissionHookOutput,
-    ClaudePreToolUseDecisionOutput, ClaudePreToolUseHookOutput, parse_post_compact,
-    parse_pre_tool_use, parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    ClaudeCommon, ClaudePermissionBehavior, ClaudePermissionDecisionOutput,
+    ClaudePermissionHookOutput, ClaudePostCompact, ClaudePreToolUseDecisionOutput,
+    ClaudePreToolUseHookOutput, ClaudeSessionStart, ClaudeStop, ClaudeSubagentStart,
+    ClaudeSubagentStop, ClaudeUserPromptSubmit, parse_post_compact, parse_pre_tool_use,
+    parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start, parse_subagent_stop,
+    parse_user_prompt_submit,
 };
 #[cfg(test)]
 use super::StatusLineChange;
@@ -359,175 +361,21 @@ impl AgentAdapter for ClaudeAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        // Each event that yields an observation parses through its own typed
-        // struct; silent events (read-only PostToolUse, Notification) and the
-        // blocking PermissionRequest return `None`. The native-event → signal
-        // mapping is the Claude column of docs/internals/hooks.md.
-        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let user_prompt =
-            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
-        let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
-        let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
-        let stop = (event_name == "Stop").then(|| parse_stop(payload));
-        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
-        let pending_background = stop
-            .as_ref()
-            .map(|p| pending_background_tasks(&p.background_tasks))
-            .unwrap_or_default();
-        // The status decision lives in the shared `lifecycle::step` table —
-        // here the adapter only names the intent.
-        let signal = match event_name {
-            "SessionStart" => LifecycleSignal::Registered,
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
-            // A subagent fires before the child model request, so it registers
-            // running under the child `agent_id`; a finished child resolves to
-            // success, or failed on a non-zero exit code.
-            "SubagentStart" => LifecycleSignal::SubagentStarted,
-            "SubagentStop" => LifecycleSignal::SubagentStopped {
-                errored: subagent_stop
-                    .as_ref()
-                    .and_then(|p| p.exit_code)
-                    .is_some_and(|code| code != 0),
-            },
-            // A clean Stop completes the turn; in-flight `background_tasks`
-            // (Claude Code v2.1.145+) mean the main thread only parked, so `step`
-            // keeps it running and the row paints a secondary background marker
-            // rather than a false success.
-            "Stop" => LifecycleSignal::TurnEnded {
-                errored: stop_payload_errored(payload),
-                parked_on_background: !pending_background.is_empty(),
-            },
-            // Only a *mutating* tool rides the lifecycle channel: it is proof of
-            // real work (read-only tools stay silent). The `edits` bit marks the
-            // file-writing subset, which ends the turn's thinking head.
-            "PostToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: self.descriptor().tool_edits_files(payload),
-            },
-            // A non-blocking PreToolUse is proof-of-work only: the ingestion
-            // path persists it only when it reconciles a resting row to running.
-            "PreToolUse" => LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
-            },
-            // Compaction is a transient head, not a transition: `step` keeps the
-            // prior status and only stamps the compacting marker.
-            "PreCompact" => LifecycleSignal::Compacting,
-            "PostCompact" => LifecycleSignal::CompactionEnded {
-                auto: Some(
-                    post_compact
-                        .as_ref()
-                        .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
-                ),
-            },
-            // SessionEnd drops the row; `ends_session` then expires its pending asks.
-            "SessionEnd" => LifecycleSignal::Ended,
-            _ => return None,
-        };
-        // Both subagent events flatten the same `ClaudeCommon`; unify on it so the
-        // child id / type / parent reads are written once.
-        let subagent_common = subagent_start
-            .as_ref()
-            .map(|p| &p.common)
-            .or_else(|| subagent_stop.as_ref().map(|p| &p.common));
-        // A subagent keys on its own child id under its parent root; a malformed
-        // subagent event (no distinct child id) is quarantined — never folded
-        // onto, and never corrupting, the parent's row. Root events key on the
-        // session id and carry no parent link — and Claude stamps `agent_id` on
-        // every payload fired inside a subagent, so a non-Subagent* event
-        // carrying a distinct one is the child's per-tool latency, dropped here
-        // rather than folded onto the parent (it would advance the parent past
-        // a pending ask; the child-keyed heartbeat carries the activity).
-        let (agent_id, parent_agent_id) = match subagent_common {
-            Some(c) => match resolve_subagent_identity(
-                self.descriptor().kind,
-                event_name,
-                c.agent_id.as_deref(),
-                c.common.session_id.as_deref(),
-                payload,
-            ) {
-                SubagentIdentity::Resolved {
-                    agent_id,
-                    parent_agent_id,
-                } => (Some(agent_id), Some(parent_agent_id)),
-                SubagentIdentity::Quarantined => return None,
-            },
-            None => match resolve_root_identity(
-                self.descriptor().kind,
-                event_name,
-                optional_payload_string(payload, &["agent_id"]).as_deref(),
-                optional_payload_string(payload, &["session_id"]).as_deref(),
-            ) {
-                RootIdentity::Root { agent_id } => (agent_id, None),
-                RootIdentity::ForeignChild => return None,
-            },
-        };
-        // Context budget lives in the transcript, not the payload — read its tail
-        // on these low-frequency events. Resolve the model first: only the payload
-        // id carries the `[1m]` marker that widens the window (the transcript id
-        // never does), so it wins over the bare transcript id before the gauge.
-        let transcript_path = optional_payload_string(payload, &["session_id"])
-            .and_then(|_| optional_payload_string(payload, &["transcript_path"]));
-        let usage = transcript_path
-            .as_deref()
-            .map(usage_from_transcript)
-            .unwrap_or_default();
-        let payload_model = session_start
-            .as_ref()
-            .and_then(|p| p.common.model.clone())
-            .or_else(|| optional_payload_string(payload, &["model"]));
-        let model = payload_model.clone().or(usage.model);
-        let window = context_window_for(model.as_deref()).max(1);
-        let context_pct = payload_context_pct(
+        let parts = ClaudeLifecycleParts::parse(event_name, payload);
+        let signal = map_claude_lifecycle_signal(self.descriptor(), event_name, payload, &parts)?;
+        let (agent_id, parent_agent_id) = resolve_claude_observation_identity(
+            self.descriptor().kind,
+            event_name,
             payload,
-            usage
-                .context_tokens
-                .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8),
-        );
-        let (todo_done, todo_total) = todos_from_payload(payload);
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.parent_agent_id = parent_agent_id;
-        // A subagent labels its row with what it is (`agent_type`) or what it was
-        // asked (`description`) — trusted agent metadata, kept across stop so a
-        // finished child stays labelled while it lingers in the parent's list. A
-        // root labels with the user's *sanitized* task/prompt, so a synthetic
-        // background-task count and harness control text never reach the row.
-        observation.task = match subagent_common {
-            Some(c) => c.agent_type.clone().or_else(|| {
-                optional_payload_string(payload, &["subagent_type", "description", "task"])
-            }),
-            None => sanitize_user_prompt(
-                optional_payload_string(payload, &["task", "prompt"]).as_deref(),
-            ),
-        };
-        observation.prompt =
-            sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
-        observation.transcript_path = transcript_path;
-        observation.model = model;
-        // `effort` is an `{ "level": … }` object on the tool-use-context events
-        // (Stop / SubagentStop here); the flat `thinking_level` string is a legacy
-        // fallback the typed struct does not model.
-        observation.effort = stop
-            .as_ref()
-            .and_then(|p| p.common.effort.as_ref())
-            .or_else(|| {
-                subagent_stop
-                    .as_ref()
-                    .and_then(|p| p.common.effort.as_ref())
-            })
-            .and_then(|e| e.level.clone())
-            .or_else(|| optional_payload_string(payload, &["thinking_level"]));
-        observation.context_pct = context_pct;
-        // The resolved window doubles as the card's window label — published
-        // only when the payload named the model, since only the payload id can
-        // carry the `[1m]` marker: a transcript-resolved bare id would read as
-        // the standard window and clobber a wider carry-forward.
-        observation.context_window = payload_model.is_some().then_some(window);
-        observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
-        observation.todo_done = todo_done;
-        observation.todo_total = todo_total;
-        Some(observation)
+            &parts,
+        )?;
+        Some(build_claude_observation(
+            payload,
+            &parts,
+            signal,
+            agent_id,
+            parent_agent_id,
+        ))
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
@@ -637,6 +485,198 @@ impl AgentAdapter for ClaudeAdapter {
     ) -> crate::agents::spending::SpendParse {
         spend::parse_claude_spend(path, resume.map_or(0, |cursor| cursor.offset), prices)
     }
+}
+
+struct ClaudeLifecycleParts {
+    session_start: Option<ClaudeSessionStart>,
+    user_prompt: Option<ClaudeUserPromptSubmit>,
+    subagent_start: Option<ClaudeSubagentStart>,
+    subagent_stop: Option<ClaudeSubagentStop>,
+    stop: Option<ClaudeStop>,
+    post_compact: Option<ClaudePostCompact>,
+    pending_background: Vec<String>,
+}
+
+impl ClaudeLifecycleParts {
+    fn parse(event_name: &str, payload: &Value) -> Self {
+        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
+        let user_prompt =
+            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
+        let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
+        let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
+        let stop = (event_name == "Stop").then(|| parse_stop(payload));
+        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
+        let pending_background = stop
+            .as_ref()
+            .map(|p| pending_background_tasks(&p.background_tasks))
+            .unwrap_or_default();
+        Self {
+            session_start,
+            user_prompt,
+            subagent_start,
+            subagent_stop,
+            stop,
+            post_compact,
+            pending_background,
+        }
+    }
+
+    fn subagent_common(&self) -> Option<&ClaudeCommon> {
+        self.subagent_start
+            .as_ref()
+            .map(|p| &p.common)
+            .or_else(|| self.subagent_stop.as_ref().map(|p| &p.common))
+    }
+}
+
+fn map_claude_lifecycle_signal(
+    descriptor: &AgentDescriptor,
+    event_name: &str,
+    payload: &Value,
+    parts: &ClaudeLifecycleParts,
+) -> Option<LifecycleSignal> {
+    match event_name {
+        "SessionStart" => Some(LifecycleSignal::Registered),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
+        "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
+            errored: parts
+                .subagent_stop
+                .as_ref()
+                .and_then(|p| p.exit_code)
+                .is_some_and(|code| code != 0),
+        }),
+        "Stop" => Some(LifecycleSignal::TurnEnded {
+            errored: stop_payload_errored(payload),
+            parked_on_background: !parts.pending_background.is_empty(),
+        }),
+        "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: descriptor.tool_edits_files(payload),
+        }),
+        "PreToolUse" => Some(LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        }),
+        "PreCompact" => Some(LifecycleSignal::Compacting),
+        "PostCompact" => Some(LifecycleSignal::CompactionEnded {
+            auto: Some(
+                parts
+                    .post_compact
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
+            ),
+        }),
+        "SessionEnd" => Some(LifecycleSignal::Ended),
+        _ => None,
+    }
+}
+
+type ObservationIdentity = (
+    Option<crate::ids::AgentSessionId>,
+    Option<crate::ids::AgentSessionId>,
+);
+
+fn resolve_claude_observation_identity(
+    kind: &str,
+    event_name: &str,
+    payload: &Value,
+    parts: &ClaudeLifecycleParts,
+) -> Option<ObservationIdentity> {
+    match parts.subagent_common() {
+        Some(c) => match resolve_subagent_identity(
+            kind,
+            event_name,
+            c.agent_id.as_deref(),
+            c.common.session_id.as_deref(),
+            payload,
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => Some((Some(agent_id), Some(parent_agent_id))),
+            SubagentIdentity::Quarantined => None,
+        },
+        None => match resolve_root_identity(
+            kind,
+            event_name,
+            optional_payload_string(payload, &["agent_id"]).as_deref(),
+            optional_payload_string(payload, &["session_id"]).as_deref(),
+        ) {
+            RootIdentity::Root { agent_id } => Some((agent_id, None)),
+            RootIdentity::ForeignChild => None,
+        },
+    }
+}
+
+fn build_claude_observation(
+    payload: &Value,
+    parts: &ClaudeLifecycleParts,
+    signal: LifecycleSignal,
+    agent_id: Option<crate::ids::AgentSessionId>,
+    parent_agent_id: Option<crate::ids::AgentSessionId>,
+) -> AgentLifecycleObservation {
+    let transcript_path = optional_payload_string(payload, &["session_id"])
+        .and_then(|_| optional_payload_string(payload, &["transcript_path"]));
+    let usage = transcript_path
+        .as_deref()
+        .map(usage_from_transcript)
+        .unwrap_or_default();
+    let payload_model = parts
+        .session_start
+        .as_ref()
+        .and_then(|p| p.common.model.clone())
+        .or_else(|| optional_payload_string(payload, &["model"]));
+    let model = payload_model.clone().or(usage.model);
+    let window = context_window_for(model.as_deref()).max(1);
+    let context_pct = payload_context_pct(
+        payload,
+        usage
+            .context_tokens
+            .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8),
+    );
+    let (todo_done, todo_total) = todos_from_payload(payload);
+    let mut observation =
+        AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+    observation.parent_agent_id = parent_agent_id;
+    observation.task = claude_task(payload, parts.subagent_common());
+    observation.prompt =
+        sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+    observation.transcript_path = transcript_path;
+    observation.model = model;
+    observation.effort = claude_effort(payload, parts);
+    observation.context_pct = context_pct;
+    observation.context_window = payload_model.is_some().then_some(window);
+    observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    observation.todo_done = todo_done;
+    observation.todo_total = todo_total;
+    observation
+}
+
+fn claude_task(payload: &Value, subagent_common: Option<&ClaudeCommon>) -> Option<String> {
+    match subagent_common {
+        Some(c) => c.agent_type.clone().or_else(|| {
+            optional_payload_string(payload, &["subagent_type", "description", "task"])
+        }),
+        None => {
+            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
+        }
+    }
+}
+
+fn claude_effort(payload: &Value, parts: &ClaudeLifecycleParts) -> Option<String> {
+    parts
+        .stop
+        .as_ref()
+        .and_then(|p| p.common.effort.as_ref())
+        .or_else(|| {
+            parts
+                .subagent_stop
+                .as_ref()
+                .and_then(|p| p.common.effort.as_ref())
+        })
+        .and_then(|e| e.level.clone())
+        .or_else(|| optional_payload_string(payload, &["thinking_level"]))
 }
 
 /// In-flight background tasks from a typed Claude `Stop` payload

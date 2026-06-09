@@ -173,8 +173,25 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     // Compaction is the one signal that preserves the prior status; it is a
     // transient head, not a transition. Every other signal clears the head.
     let compacting = matches!(signal, LifecycleSignal::Compacting);
+    let status = map_status(signal, prior_status, &mut kind);
+    let phase = map_phase(signal, prior_phase, status);
 
-    let status = match signal {
+    Transition {
+        next: LifecycleState {
+            status,
+            phase,
+            compacting,
+        },
+        kind,
+    }
+}
+
+fn map_status(
+    signal: &LifecycleSignal,
+    prior_status: Option<AgentStatus>,
+    kind: &mut TransitionKind,
+) -> AgentStatus {
+    match signal {
         LifecycleSignal::Registered => AgentStatus::Idle,
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => AgentStatus::Running,
         // A finished child resolves to a terminal verdict, so the parent's
@@ -207,7 +224,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
             match prior_status {
                 Some(AgentStatus::Running) => AgentStatus::Running,
                 Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
-                    kind = TransitionKind::Reconciled {
+                    *kind = TransitionKind::Reconciled {
                         from: resting,
                         reason: "tool used outside a running turn",
                     };
@@ -215,7 +232,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
                 }
                 Some(other) => other,
                 None => {
-                    kind = TransitionKind::Reconciled {
+                    *kind = TransitionKind::Reconciled {
                         from: AgentStatus::Idle,
                         reason: "tool used before session registered",
                     };
@@ -228,7 +245,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         LifecycleSignal::CompactionEnded { auto: Some(true) } => match prior_status {
             Some(AgentStatus::Running) => AgentStatus::Running,
             Some(resting @ (AgentStatus::Idle | AgentStatus::Success)) => {
-                kind = TransitionKind::Reconciled {
+                *kind = TransitionKind::Reconciled {
                     from: resting,
                     reason: "auto-compaction resumed a turn",
                 };
@@ -236,7 +253,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
             }
             Some(other) => other,
             None => {
-                kind = TransitionKind::Reconciled {
+                *kind = TransitionKind::Reconciled {
                     from: AgentStatus::Idle,
                     reason: "auto-compaction resumed a turn",
                 };
@@ -249,8 +266,10 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
         }
         // Handled above.
         LifecycleSignal::Ended => unreachable!("Ended returns early"),
-    };
+    }
+}
 
+fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStatus) -> TurnPhase {
     // The turn phase: a fresh turn (or child task) opens reasoning; its first
     // file edit moves it to acting; a clean end parking on background work
     // parks it; any other boundary rests it. Compaction preserves the phase
@@ -286,19 +305,10 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     };
     // The phase axis exists only inside a running turn — a resting or
     // attention status always reads `Idle`, by construction.
-    let phase = if status == AgentStatus::Running {
+    if status == AgentStatus::Running {
         phase
     } else {
         TurnPhase::Idle
-    };
-
-    Transition {
-        next: LifecycleState {
-            status,
-            phase,
-            compacting,
-        },
-        kind,
     }
 }
 

@@ -43,8 +43,9 @@ use self::install::{
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    parse_post_compact, parse_session_start, parse_subagent_start, parse_subagent_stop,
-    parse_user_prompt_submit,
+    CodexPostCompact, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
+    CodexUserPromptSubmit, parse_post_compact, parse_session_start, parse_subagent_start,
+    parse_subagent_stop, parse_user_prompt_submit,
 };
 pub use self::transcript::refresh_transcript_context;
 #[cfg(test)]
@@ -283,155 +284,21 @@ impl AgentAdapter for CodexAdapter {
         event_name: &str,
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
-        // Each event that yields an observation parses through its own typed
-        // struct; silent events (PermissionRequest, read-only PostToolUse) return
-        // `None`. The per-event status mapping is the Codex column of
-        // docs/internals/hooks.md.
-        let session_start = (event_name == "SessionStart").then(|| parse_session_start(payload));
-        let user_prompt =
-            (event_name == "UserPromptSubmit").then(|| parse_user_prompt_submit(payload));
-        let subagent_start = (event_name == "SubagentStart").then(|| parse_subagent_start(payload));
-        let subagent_stop = (event_name == "SubagentStop").then(|| parse_subagent_stop(payload));
-        let post_compact = (event_name == "PostCompact").then(|| parse_post_compact(payload));
-        // The status decision lives in the shared `lifecycle::step` table —
-        // here the adapter only names the intent.
-        let signal = match event_name {
-            "SessionStart" => {
-                let p = session_start.as_ref().unwrap();
-                if p.source == SessionSource::Compact {
-                    return None;
-                } else {
-                    LifecycleSignal::Registered
-                }
-            }
-            // A subagent fires before the child model request, so it registers
-            // running under the child `agent_id`.
-            "SubagentStart" => LifecycleSignal::SubagentStarted,
-            "UserPromptSubmit" => LifecycleSignal::TurnStarted,
-            // A child finishing resolves to success — Codex reports no subagent
-            // error signal; the root Stop completes the turn (success), or fails
-            // it on an error signal. Codex has no background-task parking.
-            "SubagentStop" => LifecycleSignal::SubagentStopped { errored: false },
-            "Stop" => LifecycleSignal::TurnEnded {
-                errored: stop_payload_errored(payload),
-                parked_on_background: false,
-            },
-            // Only a *mutating* tool rides the lifecycle channel: it is proof of
-            // real work (read-only tools stay silent). The `edits` bit marks the
-            // file-writing subset, which ends the turn's thinking head.
-            "PostToolUse" if self.descriptor().tool_mutates(payload) => LifecycleSignal::ToolUsed {
-                mutates: true,
-                edits: self.descriptor().tool_edits_files(payload),
-            },
-            // A non-blocking PreToolUse is proof-of-work only: the ingestion
-            // path persists it only when it reconciles a resting row to running.
-            "PreToolUse" => LifecycleSignal::ToolUsed {
-                mutates: false,
-                edits: false,
-            },
-            "PreCompact" => LifecycleSignal::Compacting,
-            "PostCompact" => LifecycleSignal::CompactionEnded {
-                auto: Some(
-                    post_compact
-                        .as_ref()
-                        .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
-                ),
-            },
-            _ => return None,
-        };
-        // Both subagent events carry the same (child id, type, parent session);
-        // unify them so the identity reads below are written once. Codex keeps
-        // `agent_id`/`agent_type` beside `common` (not inside it, unlike Claude).
-        let subagent = subagent_start
-            .as_ref()
-            .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
-            .or_else(|| {
-                subagent_stop
-                    .as_ref()
-                    .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
-            });
-        // A subagent keys on its own child id under its parent root; a malformed
-        // subagent event (no distinct child id) is quarantined — never folded
-        // onto, and never corrupting, the parent's row. Root events key on the
-        // session id and carry no parent link — a non-Subagent* event carrying
-        // a distinct `agent_id` fired inside a subagent and is dropped rather
-        // than keyed as a parentless phantom root (Codex stamps `agent_id` only
-        // on Subagent* today, so this is the same guard Claude needs, latent).
-        let (agent_id, parent_agent_id) = match subagent {
-            Some((child, _, parent)) => match resolve_subagent_identity(
-                self.descriptor().kind,
-                event_name,
-                child.as_deref(),
-                parent.as_deref(),
-                payload,
-            ) {
-                SubagentIdentity::Resolved {
-                    agent_id,
-                    parent_agent_id,
-                } => (Some(agent_id), Some(parent_agent_id)),
-                SubagentIdentity::Quarantined => return None,
-            },
-            None => match resolve_root_identity(
-                self.descriptor().kind,
-                event_name,
-                optional_payload_string(payload, &["agent_id"]).as_deref(),
-                optional_payload_string(payload, &["session_id"]).as_deref(),
-            ) {
-                RootIdentity::Root { agent_id } => (agent_id, None),
-                RootIdentity::ForeignChild => return None,
-            },
-        };
-        // Context budget lives in the rollout JSONL, not the payload — locate the
-        // session's file by id and read its tail. The rollout carries a precomputed
-        // percentage (it has the window directly), unlike Claude's raw tokens.
-        let transcript_path = optional_payload_string(payload, &["session_id"])
-            .and_then(|id| find_session_transcript(&id));
-        let usage = transcript_path
-            .as_deref()
-            .map(usage_from_transcript)
-            .unwrap_or_default();
-        let mut observation =
-            AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
-        observation.parent_agent_id = parent_agent_id;
-        // A subagent labels its row with its `agent_type` (trusted agent
-        // metadata), kept across stop so a finished child stays labelled while it
-        // lingers in the parent's list. A root labels with the user's *sanitized*
-        // task/prompt, so harness control text never reaches the row.
-        observation.task = match subagent {
-            Some((_, agent_type, _)) => agent_type.clone().or_else(|| {
-                sanitize_user_prompt(
-                    optional_payload_string(payload, &["task", "prompt"]).as_deref(),
-                )
-            }),
-            None => sanitize_user_prompt(
-                optional_payload_string(payload, &["task", "prompt"]).as_deref(),
-            ),
-        };
-        observation.prompt =
-            sanitize_user_prompt(user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
-        observation.transcript_path =
-            transcript_path.map(|path| path.to_string_lossy().into_owned());
-        let reported_context_window = usage.reported_context_window();
-        observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
-        observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
-        observation.context_pct = payload_context_pct(payload, usage.context_pct);
-        // The rollout's `model_context_window` (e.g. 258k for GPT-5.5) doubles
-        // as the card's exact window label; the 258k fallback stays in the
-        // sidecar/view-model path so it never overwrites an exact rollup value.
-        observation.context_window = reported_context_window;
-        observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
-        // The latest call's split — the card's composition line. The rollout's
-        // `input_tokens` includes the cached slice (the protocol reports no
-        // per-call cache-write), so fresh input is the uncached remainder.
-        observation.cache_read_input_tokens = usage.last_cached_input_tokens;
-        observation.fresh_input_tokens = usage
-            .last_input_tokens
-            .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
-        observation.output_tokens = usage.last_output_tokens;
-        // Codex exposes no stable todo-state hook field; the dots stay None.
-        observation.todo_done = None;
-        observation.todo_total = None;
-        Some(observation)
+        let parts = CodexLifecycleParts::parse(event_name, payload);
+        let signal = map_codex_lifecycle_signal(self.descriptor(), event_name, payload, &parts)?;
+        let (agent_id, parent_agent_id) = resolve_codex_observation_identity(
+            self.descriptor().kind,
+            event_name,
+            payload,
+            &parts,
+        )?;
+        Some(build_codex_observation(
+            payload,
+            &parts,
+            signal,
+            agent_id,
+            parent_agent_id,
+        ))
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -526,6 +393,163 @@ impl AgentAdapter for CodexAdapter {
         prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
         spend::parse_codex_spend(path, resume, prices)
+    }
+}
+
+struct CodexLifecycleParts {
+    session_start: Option<CodexSessionStart>,
+    user_prompt: Option<CodexUserPromptSubmit>,
+    subagent_start: Option<CodexSubagentStart>,
+    subagent_stop: Option<CodexSubagentStop>,
+    post_compact: Option<CodexPostCompact>,
+}
+
+type CodexSubagent<'a> = (&'a Option<String>, &'a Option<String>, &'a Option<String>);
+
+impl CodexLifecycleParts {
+    fn parse(event_name: &str, payload: &Value) -> Self {
+        Self {
+            session_start: (event_name == "SessionStart").then(|| parse_session_start(payload)),
+            user_prompt: (event_name == "UserPromptSubmit")
+                .then(|| parse_user_prompt_submit(payload)),
+            subagent_start: (event_name == "SubagentStart").then(|| parse_subagent_start(payload)),
+            subagent_stop: (event_name == "SubagentStop").then(|| parse_subagent_stop(payload)),
+            post_compact: (event_name == "PostCompact").then(|| parse_post_compact(payload)),
+        }
+    }
+
+    fn subagent(&self) -> Option<CodexSubagent<'_>> {
+        self.subagent_start
+            .as_ref()
+            .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            .or_else(|| {
+                self.subagent_stop
+                    .as_ref()
+                    .map(|p| (&p.agent_id, &p.agent_type, &p.common.common.session_id))
+            })
+    }
+}
+
+fn map_codex_lifecycle_signal(
+    descriptor: &AgentDescriptor,
+    event_name: &str,
+    payload: &Value,
+    parts: &CodexLifecycleParts,
+) -> Option<LifecycleSignal> {
+    match event_name {
+        "SessionStart" => {
+            let p = parts.session_start.as_ref()?;
+            (p.source != SessionSource::Compact).then_some(LifecycleSignal::Registered)
+        }
+        "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
+        "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
+        "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
+        "Stop" => Some(LifecycleSignal::TurnEnded {
+            errored: stop_payload_errored(payload),
+            parked_on_background: false,
+        }),
+        "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: descriptor.tool_edits_files(payload),
+        }),
+        "PreToolUse" => Some(LifecycleSignal::ToolUsed {
+            mutates: false,
+            edits: false,
+        }),
+        "PreCompact" => Some(LifecycleSignal::Compacting),
+        "PostCompact" => Some(LifecycleSignal::CompactionEnded {
+            auto: Some(
+                parts
+                    .post_compact
+                    .as_ref()
+                    .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
+            ),
+        }),
+        _ => None,
+    }
+}
+
+type ObservationIdentity = (
+    Option<crate::ids::AgentSessionId>,
+    Option<crate::ids::AgentSessionId>,
+);
+
+fn resolve_codex_observation_identity(
+    kind: &str,
+    event_name: &str,
+    payload: &Value,
+    parts: &CodexLifecycleParts,
+) -> Option<ObservationIdentity> {
+    match parts.subagent() {
+        Some((child, _, parent)) => match resolve_subagent_identity(
+            kind,
+            event_name,
+            child.as_deref(),
+            parent.as_deref(),
+            payload,
+        ) {
+            SubagentIdentity::Resolved {
+                agent_id,
+                parent_agent_id,
+            } => Some((Some(agent_id), Some(parent_agent_id))),
+            SubagentIdentity::Quarantined => None,
+        },
+        None => match resolve_root_identity(
+            kind,
+            event_name,
+            optional_payload_string(payload, &["agent_id"]).as_deref(),
+            optional_payload_string(payload, &["session_id"]).as_deref(),
+        ) {
+            RootIdentity::Root { agent_id } => Some((agent_id, None)),
+            RootIdentity::ForeignChild => None,
+        },
+    }
+}
+
+fn build_codex_observation(
+    payload: &Value,
+    parts: &CodexLifecycleParts,
+    signal: LifecycleSignal,
+    agent_id: Option<crate::ids::AgentSessionId>,
+    parent_agent_id: Option<crate::ids::AgentSessionId>,
+) -> AgentLifecycleObservation {
+    let transcript_path = optional_payload_string(payload, &["session_id"])
+        .and_then(|id| find_session_transcript(&id));
+    let usage = transcript_path
+        .as_deref()
+        .map(usage_from_transcript)
+        .unwrap_or_default();
+    let mut observation =
+        AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
+    observation.parent_agent_id = parent_agent_id;
+    observation.task = codex_task(payload, parts.subagent());
+    observation.prompt =
+        sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
+    observation.transcript_path = transcript_path.map(|path| path.to_string_lossy().into_owned());
+    let reported_context_window = usage.reported_context_window();
+    observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
+    observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
+    observation.context_pct = payload_context_pct(payload, usage.context_pct);
+    observation.context_window = reported_context_window;
+    observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
+    observation.cache_read_input_tokens = usage.last_cached_input_tokens;
+    observation.fresh_input_tokens = usage
+        .last_input_tokens
+        .map(|input| input.saturating_sub(usage.last_cached_input_tokens.unwrap_or(0)));
+    observation.output_tokens = usage.last_output_tokens;
+    observation.todo_done = None;
+    observation.todo_total = None;
+    observation
+}
+
+fn codex_task(payload: &Value, subagent: Option<CodexSubagent<'_>>) -> Option<String> {
+    match subagent {
+        Some((_, agent_type, _)) => agent_type.clone().or_else(|| {
+            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
+        }),
+        None => {
+            sanitize_user_prompt(optional_payload_string(payload, &["task", "prompt"]).as_deref())
+        }
     }
 }
 
