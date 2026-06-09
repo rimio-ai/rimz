@@ -1848,11 +1848,11 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
 }
 
 fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
-    let path = root.join("crates/rimz/src/ledger/snapshot/view.rs");
+    let path = root.join("crates/rimz/src/ledger/snapshot/view/live.rs");
     let text =
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let Some(live_fold) = text.find("pub fn with_live_panes(") else {
-        bail!("sidebar live-pane fold must stay in view.rs");
+        bail!("sidebar live-pane fold must stay in view/live.rs");
     };
     let after = &text[live_fold..];
     let Some(groups_fold) = after.find("self.worktree_groups =") else {

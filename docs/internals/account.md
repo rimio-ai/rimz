@@ -64,7 +64,7 @@ An unknown kind has no probe arm yet and reads as `LoggedOut`.
 
 ## Producer aggregation
 
-[`SidebarSnapshot::with_provider_aggregates`](../../crates/rimz/src/ledger/snapshot/view.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) per kind.
+[`SidebarSnapshot::with_provider_aggregates`](../../crates/rimz/src/ledger/snapshot/view/providers.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../crates/rimz/src/ledger/snapshot/view.rs) per kind.
 It is **producer-only**: it needs per-machine config and the out-of-band probe the pure reducer cannot read, so the reducer leaves `providers` empty and every consumer tab reads the producer's published panel (see [sidebar.md → State access](./sidebar.md#state-access)).
 
 Per panel:
@@ -83,7 +83,7 @@ A panel's today line — the `◎` session count then the token breakdown `◇ �
 ### Stable window selection
 
 Balance is account-scoped, but the *freshest* session is not the truest reading: parallel sessions report the same window at slightly different instants, so "freshest wins" flickers between ticks.
-[`stable_windows`](../../crates/rimz/src/ledger/snapshot/view.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
+[`stable_windows`](../../crates/rimz/src/ledger/snapshot/view/providers.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
 Same inputs, same bars, regardless of which session reported last.
 
 ### Spent windows and paused rows
