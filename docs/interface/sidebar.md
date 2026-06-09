@@ -10,32 +10,38 @@ Every frame below is what the renderer actually paints. The structure, glyphs, c
 
 ## The whole frame at a glance
 
-A real room: one Claude agent working in `main`, its card selected, with the per-provider dashboard pinned at the bottom.
+A complete frame: a selected agent in a worktree, with the per-provider dashboard pinned at the bottom. The provider and ledger figures use the current Rimz room's live session totals.
 
 ```
- ⌘ query-engine                                          ← workspace identity
-                                                         ← blank line below the name
- ◎ 12                         ◇ 96k ↘ 32k ↗ 64k ◌ 68k    ← sessions today · today's tokens (right)
- ¤ 1                                             $4.20    ← live agents · today's fleet spend
- ────────────────────────────────────────────────────
- ? 0   ! 0   ⏸ 0   ✓ 0                      ⢿ 1   ○ 0    ← make-up: attention/parked/done | working/free
+ ⌘ query-engine                    ~/code/query-engine    ← workspace identity
 
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in (lane spine ▏)
-▌⣾ claude · Opus 4.8 · high · 1m                $1.27    ← line 1: identity · capability · $cost
-▌  ledger refactor                                       ← line 2: what it's on
-▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    ← context meter: how full the window is
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                 ◔ 1m    ← context line: filled window · last-activity age
+ ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← sessions today · today's tokens (right)
+ ¤ 16                                          $420.00    ← live agents · today's fleet usd value
+ ─────────────────────────────────────────────────────
+ ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
 
- ────────────────────────────────────────────────────
- Claude v2.1.158 · Claude Max                    ⇅ rc    ← provider · plan · remote-control flag
-                                                         ← blank line below the name
-  ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50    ← brand emblem · sessions · today's tokens · spend
- ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱ ↻ 2h06m    ← 5-hour budget left, until reset
-   ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    ← 7-day budget left, until reset
+▏⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in · commits diff · lines diff
+▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · effort · context window · usd value
+▌  ledger refactor                                        ← line 2: session description
+▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 1m    ← token stats: filled toks in context window
+▌  ⧉ subagents (2)                                        ← subagents spawned this turn
+▌    ✓ Explore — locate the render seam                   ← done child: subagent kind · task
+▌      ◇ 12k · Opus 4.8                          ◔ 10m    ← tokens · model · elapsed time
+▌    ✻ Explore — audit the trust hash                     ← active child: thinking head
+▌      ◇  3k · Opus 4.8                          ◔  3m    ← same
 
-  W: ◎  92  ◇ 16.5k ↘  2.3k ↗ 14.2k ◌ 168k     $140.57  ← week ledger: sessions · tokens · spend
-  M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k     $240.57  ← month ledger
-                      ? for help                         ← footer (pinned to the bottom edge)
+ ─────────────────────────────────────────────────────
+  Claude v2.1.169 · Claude Max                    ⇅ rc    ← provider · version · plan · remote-control flag
+
+  ▐▛███▜▌  ◎ 53  ◇ 16M ↘ 13M ↗ 2M ◌ 198M       $188.88    ← today stats: sessions · tokens · usd value
+ ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m    ← 5-hour budget left, until reset time
+   ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h    ← 7-day budget left, until reset time
+
+ W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88    ← week stats: sessions · tokens · usd value
+ M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66    ← month stats: sessions · tokens · usd value
+
+                      ? for help                          ← footer (help message)
 ```
 
 The rest of this doc reads that frame zone by zone.
@@ -120,12 +126,12 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 The top block. Fixed height, so the rows below it never jump as agents change state. Top to bottom it answers: *whose room is this, what's it costing, who needs me, and what has the fleet done.*
 
 ```
- ⌘ query-engine                            ~/code/query-engine
+ ⌘ query-engine                    ~/code/query-engine
 
- ◎ 12                             ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 5                                                  $4.20
- ──────────────────────────────────────────────────────────
- ? 2   ! 1   ⏸ 0   ✓ 0                            ⢿ 2   ○ 1
+ ◎ 12                          ◇ 88k ↘ 24k ↗ 64k ◌ 68k
+ ¤ 6                                             $4.20
+ ─────────────────────────────────────────────────────
+ ? 2   ! 1   ⏸ 0   ✓ 0                       ⢿ 2   ○ 1
 ```
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
@@ -134,21 +140,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
 - **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
-An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
-
-```
- ⌘ query-engine
-
- ◎ 0
- ¤ 0
- ──────────────────────────────────────────────────────────
-
- no agents yet
- install hooks:
- rimz hooks install claude
-```
-
-The first-run hint names the real next step: an un-wired room points at `rimz hooks install`, a wired one reads `run claude or codex / in a pane to begin`. It clears the instant the first agent or pane appears.
+An **empty room** shows only identity and the `◎ 0` / `¤ 0` summary, no make-up line. The first-run hint names the real next step: an un-wired room points at `rimz hooks install`, a wired one reads `run claude or codex / in a pane to begin`. It clears the instant the first agent or pane appears.
 
 ## Zone 2 — the agent cards
 
@@ -162,11 +154,22 @@ While a [make-up bucket](#zone-1--the-cockpit) is picked, the body shows only th
 
 An agent is a small stacked card. The resting card is four lines; selecting it appends any subagents. Selection never reshapes a line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
 
+idle:
+
 ```
-▌⣾ claude · Opus 4.8 · high · 1m                $1.27    line 1 — glyph · name · model · effort · window, $cost right
-▌  ledger refactor                          ●●●○○ 3/5    line 2 — what it's on; todo pins right when wide
-▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%    context meter — the resting card's one bar
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                ◔ 1m    context line — filled window · composition · age (≥1m)
+○ claude · Opus 4.8 · xhigh · 1m                         ← line 1 — glyph · name · model · effort · window
+  refactor auth module                                   ← line 2 — what it's on
+  ▢ ───────────────────────────────────────────    0%    ← context meter — empty window
+  ▤ 12k · ◌ 10k ↘ 2k                             ◔ 4m    ← context line — filled window · composition · age
+```
+
+complete:
+
+```
+✓ claude · Opus 4.8 · xhigh · 1m                $2.14
+  ledger refactor
+  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━───────────── 78.4%
+  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                   ◔ 8m
 ```
 
 - **Line 1 — identity.** The animated leading cell, then the agent kind in its provider brand color (mid-gray chrome for unknown kinds), then capability: model, effort, and the context-window token (`258k`, `1m`) at the dim chrome — metadata a step under the soft stat figures, so the brand-colored name and the task line carry the card — over `·` seams of the same weight, the window tinted by size class (clay amber 1m+ · gold 258k · sky 128k · plain dim below). Capability degrades by width — a wide card carries model · effort · window, a medium one drops effort, a narrow one keeps just the name. The session `$cost` pins right, counting up in the cockpit headline's eased odometer tick with the same settle brighten, and joins the line once the session has actually spent — an idle agent at `$0.00` shows nothing.
@@ -178,15 +181,23 @@ The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an 
 
 **Selection.** The resting card is the four lines above. Selecting any row lights the bold `▌` spine and *appends* the agent's subagents beneath — it never reshapes a line already on screen, so the card never reflows:
 
+resting:
+
 ```
-   resting                        selected — only appends, never reshapes
-   ─────────────────              ────────────────────────────────────────
-    ⣾ claude · Opus · 1m          ▌⣾ claude · Opus · 1m              $1.27
-      ledger refactor             ▌  ledger refactor
-      ▣ ━━━━━━━──── 38.2%         ▌  ▣ ━━━━━━━──── 38.2%
-      ▤ 76k · ◌ 68k ◍ 6k         ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k    ◔ 1m
-                                  ▌  ⧉ subagents (1)                  ← appended
-                                  ▌    ⢿ Explore
+ ⣾ claude · Opus · 1m                           $1.27
+   ledger refactor
+   ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
+   ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 1m
+```
+
+selected — only appends, never reshapes
+```
+▌⣾ claude · Opus · 1m                           $1.27
+▌  ledger refactor
+▌  ▣ ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━──────────── 78.4%
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ 1m
+▌  ⧉ subagents (1)                                       ← appended
+▌    ⢿ Explore
 ```
 
 The expanded card also lists any **subagents** the agent spawned this turn. A `⧉ subagents (N)` header (the marker violet, the label soft) opens the list, then one entry per child in spawn order (creation time ascending, stable across refreshes). Each entry leads with the same live head an agent row wears — the `✻` thinking sparkle while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's type and what the parent asked it to do. A deeper-indented second line carries the child's metadata: token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. Elapsed work pins right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the parent's age ramp, so a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
@@ -194,9 +205,9 @@ The expanded card also lists any **subagents** the agent spawned this turn. A `�
 ```
 ▌  ⧉ subagents (2)
 ▌    ✻ Explore — locate the render seam
-▌      ◇ 12k · Opus 4.8                          ◔ 14m
+▌      ◇ 12k · Opus 4.8                         ◔ 14m
 ▌    ✓ review — audit the trust hash
-▌      ◇  3k · Haiku 4.5 · high                  ◔ <1m
+▌      ◇  3k · Haiku 4.5 · high                 ◔ <1m
 ```
 
 The description, tokens, and elapsed time ride in from Claude's `subagentStatusLine` (Claude-only, harvested at install time). The model, effort, and turn phase come from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child sparkles like its parent would. (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes.) A child with none of these — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
@@ -206,19 +217,13 @@ The description, tokens, and elapsed time ride in from Claude's `subagentStatusL
 A waiting or failed agent is the whole point. Its glyph leads, bold, and the card rises to the top of its worktree:
 
 ```
-▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄
+▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌! claude · Opus · 1m
 ▌  db migrate
-▌  ▢ ──────────────────────    0%
+▌  ▢ ──────────────────────────────────────────    0%    ← context meter — empty window
 ```
 
 A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs you and *what task*, and selecting it lands you in the agent's pane, where the full prompt and its safe defaults live — that is the row's job, to route you there. A script's `feed ask` is the one item answerable from the sidebar itself: it chose Rimz as its surface, so its declared options render as buttons on the row.
-
-**A resolver answering** replaces the `?` with a braille spinner and fills the task slot with the resolver name and its remaining budget — the item is pending, just being handled. It flips back to `? waiting` if the chain exhausts:
-
-```
-? claude  fix auth flow  1m      →      ⠙ claude  opus-policy 24s   1m
-```
 
 ### Process rows
 
@@ -226,7 +231,7 @@ A pane no agent has stamped reads like a slim agent card, one soft step quieter:
 
 ```
 ○ zsh
-⢿ zsh                           C  34%  M 512M  ⇅   8M/s
+⢿ zsh                        C  34%  M 512M  ⇅   8M/s
     cargo build --release
 ```
 
@@ -239,21 +244,21 @@ Worktrees stack as bounded blocks. The one **holding your selection** reads as a
 The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped) — untracked file content counts into the `+`, so work `git diff` can't see still reads as work. A worktree holding nothing of its own — zero commits ahead, a zero diff, and a clean `git status` (no uncommitted changes, no untracked files) — collapses the whole cluster to a landed marker: `≡ main` when it sits exactly at the trunk tip (this checkout IS main), `✓ main` once the trunk has moved on — done, safe to remove; behind never blocks removability, it only picks the marker. The trunk worktree itself wears neither — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#trunk-branch)).
 
 ```
-▏⑂ feature-migration ┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
-▏⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
-▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
+▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
+▏⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
+▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
 ```
 
 ```
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌? claude
 ▌  permission
-▌  ▢ ──────────────────────────    0%
+▌  ▢ ──────────────────────────────────────────    0%
 ▏⣾ codex · GPT 5.5
 ▏  add tests
-▏  ▢ ──────────────────────────    0%
+▏  ▢ ──────────────────────────────────────────    0%
 
- ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ? 1   ← out-of-project panes, attention-only tally
+ ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← out-of-project panes, attention-only tally
  ? deploy.sh
    Deploy staging?
 ```
@@ -263,11 +268,11 @@ The `external` block is the catch-all for panes outside the project — untether
 A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the same way with its child repos as the pods: each child repo keeps the full `⑂` header with its own per-repo git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
 
 ```
-▏⑂ query-engine ┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3    ← a child repo: full pod header, per-repo stats
+▏⑂ query-engine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3    ← a child repo: full pod header, per-repo stats
 ▌⣾ claude
 ▌  db migrate
 
- agents                                  ← the room's own pod: name-only, no git story
+ agents                                                  ← the room's own pod: name-only, no git story
  ○ zsh
 ```
 
@@ -276,13 +281,13 @@ A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the 
 **The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the calm tail; every `waiting`/`failed` row is always shown, so the cap can never hide something that needs you:
 
 ```
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌⣾ codex
 ▌  task-0
-▌  ▢ ────────────────────────    0%
+▌  ▢ ──────────────────────────────────────────    0%
 ▏⣾ codex
 ▏  task-1
-▏  ▢ ────────────────────────    0%
+▏  ▢ ──────────────────────────────────────────    0%
 ▏  +3 more
 ```
 
@@ -300,7 +305,7 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 ## Zone 3 — the provider dashboard
 
-The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. `provider_tabs = "auto"` stacks one or two accounts as visible blocks and switches to a tab rail at three or more; `always` tabs whenever more than one provider is present; `never` stacks every provider block. `provider_list` picks which provider kinds show and their order, including the `"all"` token for "the rest here." In tabbed mode, the panel's top hairline becomes a tab rail naming every provider: each label in its brand color at full strength, the active tab a brand-filled bold chip set into the line. The rail's glyphs are identical whichever tab is active, so a switch moves color and weight alone — and under `NO_COLOR`, where the fill drops, `┤ ├` caps notch the active tab instead, carrying the pick by shape. One account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.158`), indented to start over the `◎` stats column. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block. Every account that is logged in but idle this run still earns its block, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
+The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. `provider_tabs = "auto"` stacks one or two accounts as visible blocks and switches to a tab rail at three or more; `always` tabs whenever more than one provider is present; `never` stacks every provider block. `provider_list` picks which provider kinds show and their order, including the `"all"` token for "the rest here." In tabbed mode, the panel's top hairline becomes a tab rail naming every provider: each label in its brand color at full strength, the active tab a brand-filled bold chip set into the line. The rail's glyphs are identical whichever tab is active, so a switch moves color and weight alone — and under `NO_COLOR`, where the fill drops, `┤ ├` caps notch the active tab instead, carrying the pick by shape. One account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.169`), indented to start over the `◎` stats column. The active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block. Every account that is logged in but idle this run still earns its block, so your accounts and budgets show even between turns. Each provider shows one bar per window it reports — both Claude and Codex a 5-hour and a 7-day — so the dashboard tracks whatever windows a provider exposes. Codex budgets are pulled out-of-band from the app-server: active sessions refresh during long turns, and a logged-in idle account refreshes from the shared cache path.
 
 Each block's stats line speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right.
 
@@ -310,61 +315,38 @@ These are **sliding windows** that begin counting only on your first token, so u
 
 When Rimz is reading only cached budgets and the longest cached window has already reset, the balance is unknown until the provider refreshes. The panel keeps the account and window labels, but every cached budget row becomes a dim empty track with no countdown, so it does not claim either a refreshed full budget or an exhausted one.
 
-```
- ─── Claude ──── Codex ──────────────────────────────    tab rail — the panel's top hairline; the selected pane runs Claude, so its chip fills
-                                                         blank line below the rail
-           Claude Max · v2.1.158                 ⇅ rc    header — plan · version over the stats column, rc flag right
-  ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50    emblem + sessions · today's tokens · spend (right)
- ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m    5-hour window left, until reset
-   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h    7-day window, same start/end column
-```
-
-In the default `auto` mode, two accounts stack as full blocks with plain hairlines and no tab rail:
+Provider blocks stacked (`provider_tabs = "never"`). Claude and Codex use the current Rimz room's live session totals; Pi is shown as an idle API-key block to pin its built-in emblem:
 
 ```
- ────────────────────────────────────────────────────
- Claude v2.1.158 · Claude Max                  ⇅ rc
-  ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50
- ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻ 2h06m
-   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻ 1d02h
- ────────────────────────────────────────────────────
- Codex v0.135.0 · ChatGPT Pro
-  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20
- ▝▜█████▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
-   ▘▘ ▝▝
+  Claude v2.1.169 · Claude Max                   ⇅ rc
+  ▐▛███▜▌  ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M      $188.88
+ ▝▜█████▛▘ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 1h47m
+   ▘▘ ▝▝   7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 5d22h
+
+  Codex v0.137.0 · ChatGPT Pro                   ⇅ rc
+  ▗▛███▜▖  ◎ 42  ◇ 16M ↘ 15M ↗ 1M ◌ 272M      $288.88
+ ▐▜▌ ▚ ▐▛▌ 5h  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱ ↻ 1h45m
+  ▝▀▀▀▀▀▘  7d  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱ ↻ 3d19h
+
+  Pi v0.78.1 · OpenAI API
+  █▜███▛█  ◎ 19  ◇  8M ↘  7M ↗ 1M ◌ 142M      $420.42
+ ▝▜▛▀▀▀▜▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱
+  ▝▘   ▝▘
 ```
 
-Switching the tab (`→`, or a click on `Codex`) moves the chip's fill onto the picked tab and swaps the block in place — the rail's glyphs are identical in both states, so the pick is pure color and not a cell moves. This account is **unmetered** (an API key): no budget to drain, so it shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color so the row reads as one branded unmetered bar, no countdown:
-
-```
- ─── Claude ──── Codex ──────────────────────────────    the picked tab — the same glyphs, the chip's fill now on Codex
-
-           ChatGPT Pro · v0.135.0                        header — plan · version
-  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20    emblem + sessions · today's tokens · spend
- ▝▜█████▛▘ ∞   ▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱▱            unmetered — branded `∞` bar, no countdown
-   ▘▘ ▝▝
-```
-
-The dashboard isn't pinned to a fixed set of windows, either — a provider's bars are whatever windows it reports. When a server-side bug briefly widened Codex's window to ~30 days, the block painted one bar labeled by its length instead of misrendering:
-
-```
- Codex v0.136.0 · ChatGPT Pro
-
-  ▐▛███▜▌  ◎ 3  ◇ 88k ↘ 76k ↗ 12k ◌ 8k          $1.20
- ▝▜█████▛▘ 30d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱ ↻ 28d04h    a single window, labeled by length
-```
+Switching the tab (`→`, or a click on a provider label) moves the chip's fill onto the picked tab and swaps the block in place — the rail's glyphs are identical in both states, so the pick is pure color and not a cell moves. An **unmetered** account (an API key) shows an `∞` bar — the icon in the front slot and an empty track, both in the provider's brand color, no countdown. The dashboard isn't pinned to a fixed set of windows: a provider's bars are whatever windows it reports, each labeled by its length.
 
 A **Pi block** names its version and the subscription it runs on — `Pi v0.78.1 · Anthropic OAuth` — read out-of-band from `pi --version` and Pi's auth file (the freshest session's provider picks among several credentials; [account.md](../internals/account.md#per-provider-mapping)). Pi reads no window surface of its own, but an OAuth sub *is* a sibling provider's account — Anthropic OAuth is the Claude account, OpenAI OAuth the Codex one — so the Pi tab paints that account's 5h/7d bars: same budget, same bars as the sibling's own tab. A sub with no sibling readings shows no bars, and an API key the `∞` bar.
 
-Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider (Claude only — it's host infrastructure, never its own row). Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
+Every bar shares one start column and one end column whichever tab is active, so the dashboard reads as one aligned grid. The `⇅ rc` flag pins to the block's top-right when remote control is on for that provider — host infrastructure, never its own row. Below ~34 columns the emblem is dropped and the bars run full-width. The brand emblem, color, and name are config-driven (`[sidebar.providers.<kind>]`, see [configuration.md](../reference/configuration.md)).
 
 ### The fleet ledger
 
 The fleet's running totals seal the bottom of the dashboard, above the footer — a quiet two-row ledger you learn to glance at, never a cue that competes with the rows. A trailing-week (`W:`) row and a trailing-month (`M:`) row, fleet-wide across every provider.
 
 ```
-  W: ◎  92  ◇ 16.5k ↘  2.3k ↗ 14.2k ◌ 168k     $140.57
-  M: ◎ 212  ◇ 76.5k ↘ 12.3k ↗ 64.2k ◌ 668k     $240.57
+ W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88
+ M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66
 ```
 
 - **The rows.** Each reads `◎ sessions  ◇ total ↘ input ↗ output ◌ cache-read  $spend`: the thread count, the precise one-decimal token figures (the exact record beside the cockpit's coarse live read) at the soft tier, and the spend pinned to the right edge in money-green. A one-cell lead pad sets the `W:`/`M:` tags a hair off the chrome edge; the tags wear sky blue, and each marker its one shared color — the teal `◎`, the soft-violet `◇`, the segment-toned `↘ ↗ ◌`. Every numeric field is right-aligned into one shared grid, so the `W:` / `M:` labels stack and each column lines up. Cache creation is counted in the `↘` input figure, so the ledger keeps to the headline figures.
@@ -379,8 +361,8 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
 **Footer.** Faint chrome — the deepest legible gray, receding to pure scaffolding. At rest it is just `? for help`; the triage key joins it only when something actually needs you, so the signature `␣` stays discoverable without shouting:
 
 ```
-                      ? for help            ← nothing needs you
-      ␣ next ?!   ? for help                ← at least one waiting/failed row
+                             ? for help                  ← nothing needs you
+             ␣ next ?!       ? for help                  ← at least one waiting/failed row
 ```
 
 **Help overlay** (`?`). The legend and keys, in place, in the faint chrome tier — summoned reference, not live state:
