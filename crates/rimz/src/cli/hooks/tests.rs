@@ -91,9 +91,59 @@ fn agent_kind_matches_known_launch_shapes() {
 
 #[test]
 fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
+    for case in focus_recovery_cases() {
+        let prior_ids: Vec<PaneId> = case.prior_stamps.iter().map(|(raw, _)| id(raw)).collect();
+        let prior: Vec<PriorAgentPane<'_>> = case
+            .prior_stamps
+            .iter()
+            .zip(&prior_ids)
+            .map(|((_, last_activity), pane_id)| PriorAgentPane {
+                kind: "codex",
+                agent_id: "old",
+                pane_id: Some(pane_id),
+                last_activity: *last_activity,
+            })
+            .collect();
+        let selected = select_focused_pane_binding(
+            "codex",
+            "new",
+            "/repo/main",
+            &prior,
+            &case.panes,
+            case.client_focus.as_deref(),
+        );
+
+        assert_eq!(
+            selected.pane_id.as_ref().map(|pane| pane.raw()),
+            case.expected_pane,
+            "{} selected pane",
+            case.name,
+        );
+        assert_eq!(
+            selected.candidate_count, case.candidate_count,
+            "{} candidate count",
+            case.name,
+        );
+        assert_eq!(
+            selected.method, case.method,
+            "{} selection method",
+            case.name
+        );
+        for (index, reason) in case.reject_reasons {
+            assert!(
+                selected.candidates[index].reject_reasons.contains(&reason),
+                "{} candidate {index} missing {reason:?}: {:?}",
+                case.name,
+                selected.candidates[index].reject_reasons,
+            );
+        }
+    }
+}
+
+fn focus_recovery_cases() -> Vec<Case> {
     let epoch = jiff::Timestamp::UNIX_EPOCH;
     let later = jiff::Timestamp::from_second(60).unwrap();
-    let cases = vec![
+    vec![
         Case {
             name: "unique client focus",
             panes: vec![
@@ -176,55 +226,7 @@ fn focused_pane_recovery_selects_or_rejects_by_focus_and_stamp_state() {
             method: BindingSelectionMethod::None,
             reject_reasons: vec![(0, stamped_old())],
         },
-    ];
-
-    for case in cases {
-        let prior_ids: Vec<PaneId> = case.prior_stamps.iter().map(|(raw, _)| id(raw)).collect();
-        let prior: Vec<PriorAgentPane<'_>> = case
-            .prior_stamps
-            .iter()
-            .zip(&prior_ids)
-            .map(|((_, last_activity), pane_id)| PriorAgentPane {
-                kind: "codex",
-                agent_id: "old",
-                pane_id: Some(pane_id),
-                last_activity: *last_activity,
-            })
-            .collect();
-        let selected = select_focused_pane_binding(
-            "codex",
-            "new",
-            "/repo/main",
-            &prior,
-            &case.panes,
-            case.client_focus.as_deref(),
-        );
-
-        assert_eq!(
-            selected.pane_id.as_ref().map(|pane| pane.raw()),
-            case.expected_pane,
-            "{} selected pane",
-            case.name,
-        );
-        assert_eq!(
-            selected.candidate_count, case.candidate_count,
-            "{} candidate count",
-            case.name,
-        );
-        assert_eq!(
-            selected.method, case.method,
-            "{} selection method",
-            case.name
-        );
-        for (index, reason) in case.reject_reasons {
-            assert!(
-                selected.candidates[index].reject_reasons.contains(&reason),
-                "{} candidate {index} missing {reason:?}: {:?}",
-                case.name,
-                selected.candidates[index].reject_reasons,
-            );
-        }
-    }
+    ]
 }
 
 #[test]

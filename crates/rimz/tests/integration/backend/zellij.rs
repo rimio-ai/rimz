@@ -2408,39 +2408,14 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
 #[test]
 fn presence_plugin_live_roster_topology_stays_full_through_pane_churn() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+    let Some(wasm) = supported_presence_wasm() else {
         return;
     };
-    match zellij::capabilities() {
-        Ok(caps)
-            if caps
-                .parsed_version
-                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
-        _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
-            return;
-        }
-    }
-
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
-    let name = unique_session_name("presence-topology");
-    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
-
-    let poke_log = session.xdg.path().join("poke-args.log");
-    let rimz_shim = write_poke_args_shim(session.xdg.path(), &poke_log);
-    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
-    ZellijBackend::with_runtime_dir(session.xdg.path())
-        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
-            session_name: name.clone(),
-            workspace_id,
-            wasm,
-            rimz_bin: rimz_shim,
-            converge: false,
-        })
-        .expect("load presence plugin");
-    wait_for_poke_arg_lines(&poke_log, 1);
+    let PresenceArgSession {
+        session,
+        name,
+        poke_log,
+    } = load_presence_args_session("presence-topology", &wasm);
 
     open_new_tab(session.xdg.path(), &name);
     open_new_tab(session.xdg.path(), &name);
@@ -2633,38 +2608,14 @@ fn presence_plugin_refocuses_working_pane_after_tab_switch() {
 #[test]
 fn presence_plugin_does_not_flag_cross_tab_jump() {
     require_zellij!();
-    let Some(wasm) = presence_wasm_artifact() else {
-        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+    let Some(wasm) = supported_presence_wasm() else {
         return;
     };
-    match zellij::capabilities() {
-        Ok(caps)
-            if caps
-                .parsed_version
-                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
-        _ => {
-            eprintln!("zellij below the presence-plugin floor; skipping test");
-            return;
-        }
-    }
-
-    let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
-    let name = unique_session_name("presence-jump");
-    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
-
-    let poke_log = session.xdg.path().join("poke.log");
-    let rimz_shim = write_poke_shim(session.xdg.path(), &poke_log);
-    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
-    ZellijBackend::with_runtime_dir(session.xdg.path())
-        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
-            session_name: name.clone(),
-            workspace_id,
-            wasm,
-            rimz_bin: rimz_shim,
-            converge: false,
-        })
-        .expect("load presence plugin");
+    let PresenceLineSession {
+        session,
+        name,
+        poke_log,
+    } = load_presence_line_session("presence-jump", &wasm);
     let initial_lines = wait_for_poke_lines(&poke_log, 1);
 
     open_new_tab(session.xdg.path(), &name);
@@ -2740,4 +2691,80 @@ fn presence_plugin_does_not_flag_cross_tab_jump() {
         Some(work),
         "focus should remain on the jumped-to working pane after the settle window",
     );
+}
+
+struct PresenceArgSession {
+    session: ZellijSession,
+    name: String,
+    poke_log: PathBuf,
+}
+
+struct PresenceLineSession {
+    session: ZellijSession,
+    name: String,
+    poke_log: PathBuf,
+}
+
+fn supported_presence_wasm() -> Option<PathBuf> {
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return None;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) =>
+        {
+            Some(wasm)
+        }
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            None
+        }
+    }
+}
+
+fn load_presence_args_session(prefix: &str, wasm: &Path) -> PresenceArgSession {
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), wasm);
+    let name = unique_session_name(prefix);
+    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let poke_log = session.xdg.path().join("poke-args.log");
+    let rimz_shim = write_poke_args_shim(session.xdg.path(), &poke_log);
+    load_presence_plugin(&session, &name, wasm, rimz_shim);
+    wait_for_poke_arg_lines(&poke_log, 1);
+    PresenceArgSession {
+        session,
+        name,
+        poke_log,
+    }
+}
+
+fn load_presence_line_session(prefix: &str, wasm: &Path) -> PresenceLineSession {
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), wasm);
+    let name = unique_session_name(prefix);
+    let session = ZellijSession::attach_pty(xdg, name.clone(), true);
+    let poke_log = session.xdg.path().join("poke.log");
+    let rimz_shim = write_poke_shim(session.xdg.path(), &poke_log);
+    load_presence_plugin(&session, &name, wasm, rimz_shim);
+    PresenceLineSession {
+        session,
+        name,
+        poke_log,
+    }
+}
+
+fn load_presence_plugin(session: &ZellijSession, name: &str, wasm: &Path, rimz_shim: PathBuf) {
+    let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id");
+    ZellijBackend::with_runtime_dir(session.xdg.path())
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.to_owned(),
+            workspace_id,
+            wasm: wasm.to_path_buf(),
+            rimz_bin: rimz_shim,
+            converge: false,
+        })
+        .expect("load presence plugin");
 }

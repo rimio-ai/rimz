@@ -15,198 +15,64 @@ fn install_into_empty_dir_creates_managed_entries() {
             .contains(&"PermissionRequest".to_owned())
     );
 
-    // Lock the full on-disk shape: event set, sync flags, command strings,
-    // and the 120 s blocking-hook timeout. Every command is identical (no
-    // `--event`; the helper reads the event from stdin), and every event
-    // installs as a single broad hook with no matcher — `PreToolUse`
-    // self-classifies its blocking sub-events from `tool_name`. The file is
-    // deterministic, so the whole settings.json snapshots cleanly.
-    let written = std::fs::read_to_string(&path).unwrap();
-    insta::assert_snapshot!(written, @r###"
-        {
-          "hooks": {
-            "Notification": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "PermissionRequest": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": true,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "PostCompact": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "PostToolUse": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "PreCompact": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "PreToolUse": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "SessionEnd": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "SessionStart": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "Stop": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "StopFailure": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "SubagentStart": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "SubagentStop": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ],
-            "UserPromptSubmit": [
-              {
-                "_rimz_managed": true,
-                "_rimz_sync": false,
-                "hooks": [
-                  {
-                    "command": "RIMZ_AGENT_PID=$PPID exec rimz hooks feed --source claude",
-                    "timeout": 120,
-                    "type": "command"
-                  }
-                ]
-              }
-            ]
-          },
-          "statusLine": {
-            "_rimz_managed": true,
-            "command": "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude",
-            "type": "command"
-          },
-          "subagentStatusLine": {
-            "_rimz_managed": true,
-            "command": "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent",
-            "type": "command"
-          }
-        }
-        "###);
+    assert_managed_settings_json(&path);
+}
+
+fn assert_managed_settings_json(path: &std::path::Path) {
+    let parsed: Value = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let top_keys = parsed.as_object().unwrap().keys().collect::<Vec<_>>();
+    assert_eq!(top_keys, vec!["hooks", "statusLine", "subagentStatusLine"]);
+    assert_managed_hook_entries(parsed["hooks"].as_object().unwrap());
+    assert_status_command(&parsed, STATUS_LINE.key, STATUS_LINE.command);
+    assert_status_command(
+        &parsed,
+        SUBAGENT_STATUS_LINE.key,
+        SUBAGENT_STATUS_LINE.command,
+    );
+}
+
+fn assert_managed_hook_entries(hooks: &serde_json::Map<String, Value>) {
+    let expected = INSTALLED_EVENTS
+        .iter()
+        .map(|(event, _)| *event)
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = hooks
+        .keys()
+        .map(String::as_str)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(actual, expected);
+    for (event, matcher) in INSTALLED_EVENTS {
+        let entries = hooks[*event].as_array().unwrap();
+        assert_eq!(entries.len(), 1, "event {event}");
+        assert_managed_hook_entry(&entries[0], event, *matcher);
+    }
+}
+
+fn assert_managed_hook_entry(entry: &Value, event: &str, matcher: Option<&str>) {
+    assert_eq!(entry.get("matcher").and_then(Value::as_str), matcher);
+    assert_eq!(entry["_rimz_managed"], true);
+    assert_eq!(entry["_rimz_sync"], blocking_event_sync(event, matcher));
+    let commands = entry["hooks"].as_array().unwrap();
+    assert_eq!(commands.len(), 1, "event {event}");
+    assert_eq!(commands[0]["type"], "command");
+    assert_eq!(commands[0]["command"], RIMZ_HOOK_COMMAND);
+    assert_eq!(commands[0]["timeout"], CLAUDE_HOOK_TIMEOUT_SECS);
+}
+
+fn blocking_event_sync(event: &str, matcher: Option<&str>) -> bool {
+    BLOCKING_EVENTS
+        .iter()
+        .any(|(blocking, blocking_matcher)| *blocking == event && *blocking_matcher == matcher)
+}
+
+fn assert_status_command(root: &Value, key: &str, command: &str) {
+    assert_eq!(root[key]["_rimz_managed"], true);
+    assert!(
+        root[key].get("_rimz_wrapped").is_none(),
+        "{key} should not mark an empty install as wrapping a user command"
+    );
+    assert_eq!(root[key]["command"], command);
+    assert_eq!(root[key]["type"], "command");
 }
 
 #[test]

@@ -38,6 +38,41 @@ const SESSION_NAME: &str = "rimz-wakeup-pipe-test";
 #[test]
 fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
     let trace_bin = trace_shim_path();
+    assert_trace_shim_exists(&trace_bin);
+    let rimz_bin = rimz_cli_path();
+
+    let Some(fixture) = wakeup_fixture() else {
+        return;
+    };
+
+    run_wakeup_trigger(&rimz_bin, &trace_bin, &fixture);
+
+    // The datagram — the channel of record — reaches *both* fresh sidebars on the
+    // session: the walk fans out one datagram per instance, which is what replaced
+    // the old per-session pipe dedup. Each payload is the typed `LedgerDelta` event
+    // the renderer folds.
+    assert_ledger_delta(&fixture.recv_a, "sidebar.a", &fixture.workspace_id);
+    assert_ledger_delta(&fixture.recv_b, "sidebar.b", &fixture.workspace_id);
+
+    // The walk must not shell out to `zellij`: the consumerless pipe broadcast
+    // was removed, so the trace shim is never invoked. The push has returned, so
+    // any (erroneous) synchronous pipe spawn would already be logged.
+    assert_no_zellij_pipe_spawned(&fixture.log_path);
+    drop(fixture.tempdir);
+}
+
+struct WakeupFixture {
+    tempdir: TempDir,
+    project_root: PathBuf,
+    state_root: PathBuf,
+    runtime_root: PathBuf,
+    log_path: PathBuf,
+    workspace_id: WorkspaceId,
+    recv_a: std::os::unix::net::UnixDatagram,
+    recv_b: std::os::unix::net::UnixDatagram,
+}
+
+fn assert_trace_shim_exists(trace_bin: &Path) {
     assert!(
         trace_bin.is_file(),
         "zellij-trace shim binary not found at {}; \
@@ -45,8 +80,9 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
          declaration in crates/rimz/Cargo.toml",
         trace_bin.display(),
     );
-    let rimz_bin = rimz_cli_path();
+}
 
+fn wakeup_fixture() -> Option<WakeupFixture> {
     let tempdir = TempDir::new().expect("tempdir");
     let project_root = tempdir.path().join("project");
     let state_root = tempdir.path().join("state");
@@ -55,57 +91,73 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
     std::fs::create_dir_all(&project_root).expect("mkdir project");
     std::fs::create_dir_all(&state_root).expect("mkdir state");
     std::fs::create_dir_all(&runtime_root).expect("mkdir runtime");
-
-    // Compute the workspace id the subprocess will derive and the runtime
-    // paths it will use, then plant two Zellij heartbeats under the same
-    // session: both must receive their own datagram (the fanout that replaced
-    // the old per-session pipe), and neither must trigger a `zellij` spawn.
     let workspace_id = WorkspaceId::from_project_root(&project_root);
     let runtime =
         RuntimePaths::under(workspace_id.clone(), &runtime_root).expect("RuntimePaths::under");
     runtime.ensure_dirs().expect("ensure runtime dirs");
-
     if crate::common::af_unix_bind_sandboxed(&runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
-        return;
+        return None;
     }
+    let (recv_a, recv_b) = bind_wakeup_receivers(&runtime, &workspace_id);
+    Some(WakeupFixture {
+        tempdir,
+        project_root,
+        state_root,
+        runtime_root,
+        log_path,
+        workspace_id,
+        recv_a,
+        recv_b,
+    })
+}
+
+fn bind_wakeup_receivers(
+    runtime: &RuntimePaths,
+    workspace_id: &WorkspaceId,
+) -> (
+    std::os::unix::net::UnixDatagram,
+    std::os::unix::net::UnixDatagram,
+) {
     let sock_a = runtime.sock_dir.join("sidebar.a.sock");
-    let recv_a = std::os::unix::net::UnixDatagram::bind(&sock_a).expect("bind sock_a");
-    recv_a
-        .set_read_timeout(Some(Duration::from_secs(2)))
-        .expect("set read timeout");
+    let recv_a = bind_receiver(&sock_a, "sock_a");
     let sock_b = runtime.sock_dir.join("sidebar.b.sock");
-    let recv_b = std::os::unix::net::UnixDatagram::bind(&sock_b).expect("bind sock_b");
-    recv_b
-        .set_read_timeout(Some(Duration::from_secs(2)))
+    let recv_b = bind_receiver(&sock_b, "sock_b");
+    write_sidebar_heartbeat(runtime, "sidebar.a.json", workspace_id, sock_a);
+    write_sidebar_heartbeat(runtime, "sidebar.b.json", workspace_id, sock_b);
+    (recv_a, recv_b)
+}
+
+fn bind_receiver(path: &Path, name: &str) -> std::os::unix::net::UnixDatagram {
+    let recv =
+        std::os::unix::net::UnixDatagram::bind(path).unwrap_or_else(|_| panic!("bind {name}"));
+    recv.set_read_timeout(Some(Duration::from_secs(2)))
         .expect("set read timeout");
+    recv
+}
 
+fn write_sidebar_heartbeat(
+    runtime: &RuntimePaths,
+    filename: &str,
+    workspace_id: &WorkspaceId,
+    socket: PathBuf,
+) {
     write_heartbeat(
-        &runtime,
-        "sidebar.a.json",
+        runtime,
+        filename,
         SidebarHeartbeat::new(
             workspace_id.clone(),
             SidebarInstanceId::new(),
             MuxName::Zellij,
             SESSION_NAME,
-            sock_a,
+            socket,
             None,
         ),
     );
-    write_heartbeat(
-        &runtime,
-        "sidebar.b.json",
-        SidebarHeartbeat::new(
-            workspace_id.clone(),
-            SidebarInstanceId::new(),
-            MuxName::Zellij,
-            SESSION_NAME,
-            sock_b,
-            None,
-        ),
-    );
+}
 
-    let output = Command::new(&rimz_bin)
+fn run_wakeup_trigger(rimz_bin: &Path, trace_bin: &Path, fixture: &WakeupFixture) {
+    let output = Command::new(rimz_bin)
         .scrub_session_env()
         .args([
             "feed",
@@ -115,11 +167,11 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
             "--title",
             "trigger wakeup",
         ])
-        .current_dir(&project_root)
-        .env("XDG_STATE_HOME", &state_root)
-        .env("XDG_RUNTIME_DIR", &runtime_root)
-        .env("RIMZ_ZELLIJ_BIN", &trace_bin)
-        .env("RIMZ_TEST_ZELLIJ_LOG", &log_path)
+        .current_dir(&fixture.project_root)
+        .env("XDG_STATE_HOME", &fixture.state_root)
+        .env("XDG_RUNTIME_DIR", &fixture.runtime_root)
+        .env("RIMZ_ZELLIJ_BIN", trace_bin)
+        .env("RIMZ_TEST_ZELLIJ_LOG", &fixture.log_path)
         .output()
         .expect("spawn rimz feed push");
     assert!(
@@ -127,38 +179,34 @@ fn wakeup_walk_sends_datagram_and_spawns_no_zellij_pipe() {
         "rimz feed push failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
+}
 
-    // The datagram — the channel of record — reaches *both* fresh sidebars on the
-    // session: the walk fans out one datagram per instance, which is what replaced
-    // the old per-session pipe dedup. Each payload is the typed `LedgerDelta` event
-    // the renderer folds.
-    let assert_ledger_delta = |recv: &std::os::unix::net::UnixDatagram, who: &str| {
-        let mut buf = [0u8; 4096];
-        let len = recv
-            .recv(&mut buf)
-            .unwrap_or_else(|err| panic!("the wakeup walk sends a datagram to {who}: {err}"));
-        let parsed: serde_json::Value =
-            serde_json::from_slice(&buf[..len]).expect("datagram payload is JSON");
-        assert_eq!(
-            parsed["v"],
-            rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
-        );
-        assert_eq!(
-            parsed["workspace_id"],
-            serde_json::to_value(&workspace_id).expect("workspace_id JSON"),
-        );
-        // Ledger deltas are workspace-scoped: no session_name on the envelope.
-        assert!(parsed.get("session_name").is_none());
-        assert!(parsed["sent_at_ms"].as_u64().is_some());
-        assert_eq!(parsed["event"]["kind"], "ledger_delta");
-    };
-    assert_ledger_delta(&recv_a, "sidebar.a");
-    assert_ledger_delta(&recv_b, "sidebar.b");
+fn assert_ledger_delta(
+    recv: &std::os::unix::net::UnixDatagram,
+    who: &str,
+    workspace_id: &WorkspaceId,
+) {
+    let mut buf = [0u8; 4096];
+    let len = recv
+        .recv(&mut buf)
+        .unwrap_or_else(|err| panic!("the wakeup walk sends a datagram to {who}: {err}"));
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&buf[..len]).expect("datagram payload is JSON");
+    assert_eq!(
+        parsed["v"],
+        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
+    );
+    assert_eq!(
+        parsed["workspace_id"],
+        serde_json::to_value(workspace_id).expect("workspace_id JSON"),
+    );
+    assert!(parsed.get("session_name").is_none());
+    assert!(parsed["sent_at_ms"].as_u64().is_some());
+    assert_eq!(parsed["event"]["kind"], "ledger_delta");
+}
 
-    // The walk must not shell out to `zellij`: the consumerless pipe broadcast
-    // was removed, so the trace shim is never invoked. The push has returned, so
-    // any (erroneous) synchronous pipe spawn would already be logged.
-    let lines = read_trace_lines(&log_path, Duration::from_millis(200));
+fn assert_no_zellij_pipe_spawned(log_path: &Path) {
+    let lines = read_trace_lines(log_path, Duration::from_millis(200));
     assert!(
         lines.is_empty(),
         "the wakeup walk must not spawn a zellij pipe, but the trace shim logged: {lines:?}",

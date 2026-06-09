@@ -289,26 +289,23 @@ mod tests {
     #[test]
     fn app_server_merge_preserves_transcript_owned_fields() {
         let (_dir, runtime) = runtime();
+        seed_transcript_context(&runtime);
+        let app_at = Timestamp::from_second(1_700_000_050).unwrap();
+        merge_app_server_context(&runtime, "sess-1", app_server_context(app_at)).unwrap();
+        assert_merged_context(&runtime, app_at);
+    }
+
+    fn seed_transcript_context(runtime: &RuntimePaths) {
         let transcript_at = Timestamp::from_second(1_700_000_000).unwrap();
         rimz::ledger::agent_context::merge_local_context(
-            &runtime,
+            runtime,
             "codex",
             "sess-1",
             None,
             LocalContextRefresh {
                 model_id: Some("gpt-5".to_owned()),
                 effort: Some("xhigh".to_owned()),
-                tokens: Some(AgentTokenUsage {
-                    context_window_size: Some(1000),
-                    used_percentage: Some(25),
-                    remaining_percentage: Some(75),
-                    current_usage: Some(AgentCurrentUsage {
-                        input_tokens: Some(200),
-                        output_tokens: Some(50),
-                        cache_creation_input_tokens: None,
-                        cache_read_input_tokens: Some(50),
-                    }),
-                }),
+                tokens: Some(transcript_tokens()),
                 cost: Some(AgentCost {
                     total_cost_usd: Some(0.42),
                     ..AgentCost::default()
@@ -323,46 +320,58 @@ mod tests {
             transcript_at,
         )
         .unwrap();
+    }
 
-        let app_at = Timestamp::from_second(1_700_000_050).unwrap();
-        merge_app_server_context(
-            &runtime,
-            "sess-1",
-            AgentContext {
-                source: "codex".to_owned(),
-                session_name: Some("TUI prototype".to_owned()),
-                session_preview: Some("Create a TUI".to_owned()),
-                model_id: Some("gpt-5".to_owned()),
-                model_display_name: Some("GPT-5".to_owned()),
-                effort: Some("high".to_owned()),
-                thinking_enabled: None,
-                output_style: None,
-                vim_mode: None,
-                agent_version: Some("1.2.3".to_owned()),
-                exceeds_200k_tokens: None,
-                cost: None,
-                tokens: None,
-                rate_limits: Some(AgentRateLimits {
-                    windows: vec![RateLimitWindow {
-                        used_percentage: Some(55),
-                        resets_at: None,
-                        duration_mins: Some(300),
-                    }],
-                }),
-                pr: None,
-                account: Some(AgentAccount {
-                    plan: Some("pro".to_owned()),
-                    metered: Some(true),
-                    version: None,
-                    sub_provider: None,
-                }),
-                turn_error: None,
-                observed_at: app_at,
-            },
-        )
-        .unwrap();
+    fn transcript_tokens() -> AgentTokenUsage {
+        AgentTokenUsage {
+            context_window_size: Some(1000),
+            used_percentage: Some(25),
+            remaining_percentage: Some(75),
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(200),
+                output_tokens: Some(50),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(50),
+            }),
+        }
+    }
 
-        let merged = rimz::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    fn app_server_context(app_at: Timestamp) -> AgentContext {
+        AgentContext {
+            source: "codex".to_owned(),
+            session_name: Some("TUI prototype".to_owned()),
+            session_preview: Some("Create a TUI".to_owned()),
+            model_id: Some("gpt-5".to_owned()),
+            model_display_name: Some("GPT-5".to_owned()),
+            effort: Some("high".to_owned()),
+            thinking_enabled: None,
+            output_style: None,
+            vim_mode: None,
+            agent_version: Some("1.2.3".to_owned()),
+            exceeds_200k_tokens: None,
+            cost: None,
+            tokens: None,
+            rate_limits: Some(AgentRateLimits {
+                windows: vec![RateLimitWindow {
+                    used_percentage: Some(55),
+                    resets_at: None,
+                    duration_mins: Some(300),
+                }],
+            }),
+            pr: None,
+            account: Some(AgentAccount {
+                plan: Some("pro".to_owned()),
+                metered: Some(true),
+                version: None,
+                sub_provider: None,
+            }),
+            turn_error: None,
+            observed_at: app_at,
+        }
+    }
+
+    fn assert_merged_context(runtime: &RuntimePaths, app_at: Timestamp) {
+        let merged = rimz::ledger::agent_context::read_one(runtime, "codex", "sess-1").unwrap();
         assert_eq!(
             merged
                 .context
