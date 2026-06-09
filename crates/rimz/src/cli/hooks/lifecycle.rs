@@ -1,5 +1,270 @@
 use super::*;
 
+pub(super) fn handle_lifecycle_hook(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    // A lifecycle boundary can strand the session's pending native_ui asks:
+    // the agent answers those in its own UI and never reports back, so they
+    // pile up as duplicate attention. Session end expires every surface; a
+    // live session moving on expires only native_ui asks so an in-flight bridge
+    // ask keeps resolving.
+    let expiry_scope = if agent.ends_session(event_name) {
+        Some(AskExpiry::SessionEnded)
+    } else if agent.moves_on(event_name) {
+        Some(AskExpiry::MovedOn)
+    } else {
+        None
+    };
+    let agent_id = payload_agent_id(payload);
+    let expiry = match (agent_id, expiry_scope) {
+        (Some(agent_id), Some(scope)) => Some((agent_id, scope)),
+        _ => None,
+    };
+    let model_hint = record_lifecycle_observation(
+        workspace, ledger, agent, event_name, payload, globals, expiry,
+    );
+    if let Some(agent_id) = agent_id {
+        manage_agent_context(
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            payload,
+            agent_id,
+            model_hint.as_deref(),
+        );
+    }
+    Ok(())
+}
+
+/// Record the agent lifecycle observation and expire superseded asks in the
+/// same ledger write when the adapter emitted a durable transition.
+fn record_lifecycle_observation(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    globals: &GlobalFlags,
+    expiry: Option<(&str, AskExpiry)>,
+) -> Option<String> {
+    if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
+        attach_agent_owner(agent.descriptor().kind, &mut observation);
+        attach_agent_pane(&mut observation);
+        if observation.worktree_path.is_none() {
+            observation.worktree_path = Some(workspace.worktree_root.display().to_string());
+        }
+        if observation.worktree_branch.is_none() {
+            observation.worktree_branch = workspace.worktree_branch.clone();
+        }
+        recover_focused_pane_binding(
+            agent.descriptor().kind,
+            agent.descriptor().capabilities.registers_lazily,
+            globals.mux,
+            workspace,
+            ledger,
+            &mut observation,
+        );
+        let model_hint = observation.model.clone();
+        // Validate the transition this event drives against the prior rollup
+        // and log any anomaly once, here at ingestion. Replay re-derives the
+        // same state silently.
+        let transition = log_lifecycle_transition(ledger, agent.descriptor().kind, &observation);
+        let envelope = EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            agent.descriptor().kind,
+            event_name,
+            &observation,
+        );
+        // `ToolUsed { false, false }` is reserved for non-blocking PreToolUse
+        // proof-of-work. PostToolUse observations are emitted only from the
+        // `tool_mutates` arm, so they always carry `mutates: true`; this gate
+        // keeps PreToolUse out of the durable log unless it reconciles a
+        // resting row to running.
+        let append_lifecycle = !proof_of_work_pre_tool(&observation.signal)
+            || transition.is_some_and(|transition| {
+                matches!(transition.kind, TransitionKind::Reconciled { .. })
+            });
+        let append_expiry =
+            expiry.map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
+        if append_lifecycle
+            && let Err(err) = ledger.append_event_and_expire(&envelope, append_expiry)
+        {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to record the agent.lifecycle event",
+            );
+        }
+        return model_hint;
+    }
+
+    if let Some((agent_id, scope)) = expiry {
+        // A boundary event the adapter doesn't observe still expires the
+        // session's superseded asks through the standalone path.
+        let result = match scope {
+            AskExpiry::SessionEnded => ledger.expire_agent_session(
+                agent.descriptor().kind,
+                agent_id,
+                &workspace.session_name,
+            ),
+            AskExpiry::MovedOn => ledger.expire_agent_native_ui_asks(
+                agent.descriptor().kind,
+                agent_id,
+                &workspace.session_name,
+            ),
+        };
+        if let Err(err) = result {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to expire the session's pending asks",
+            );
+        }
+    }
+    None
+}
+
+fn manage_agent_context(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    agent_id: &str,
+    model_hint: Option<&str>,
+) {
+    // Tombstone the session's statusline context sidecar so it cannot pin stale
+    // enrichment to a session the rollup has dropped.
+    if agent.ends_session(event_name)
+        && let Err(err) = rimz::ledger::agent_context::remove(
+            ledger.runtime_paths(),
+            agent.descriptor().kind,
+            agent_id,
+        )
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to remove the session's context sidecar",
+        );
+    }
+    // Refresh the activity heartbeat on progress-proving events so the
+    // sidebar's `last_activity` advances per tool call, not just per turn.
+    if agent.descriptor().records_activity(event_name)
+        && let Err(err) =
+            rimz::agent_activity::touch(ledger.runtime_paths(), agent.descriptor().kind, agent_id)
+    {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to touch the agent activity heartbeat",
+        );
+    }
+    if let Some(context_agent_id) = payload_context_agent_id(payload) {
+        merge_agent_context_sidecars(
+            ledger,
+            agent,
+            event_name,
+            payload,
+            context_agent_id,
+            model_hint,
+        );
+    }
+    // An adapter can request a detached `rimz` helper after a lifecycle event.
+    // Spawned with fresh stdio and never awaited, so it adds no latency to the
+    // agent's turn.
+    let refresh_ctx = rimz::agents::LifecycleRefreshCtx {
+        agent_id,
+        workspace_id: workspace.workspace_id.as_str(),
+        model_hint,
+    };
+    if let Some(spawn) = agent.post_lifecycle_refresh(event_name, &refresh_ctx) {
+        spawn_refresh_detached(&spawn);
+    }
+}
+
+fn merge_agent_context_sidecars(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    context_agent_id: &str,
+    model_hint: Option<&str>,
+) {
+    if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
+        if let Err(err) = rimz::ledger::agent_context::merge_turn_error(
+            ledger.runtime_paths(),
+            agent.descriptor().kind,
+            context_agent_id,
+            marker,
+        ) {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to merge turn-error marker",
+            );
+        } else {
+            let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+        }
+    }
+
+    let prior = rimz::ledger::agent_context::read_one(
+        ledger.runtime_paths(),
+        agent.descriptor().kind,
+        context_agent_id,
+    );
+    let local_model_hint = model_hint.or_else(|| {
+        prior
+            .as_ref()
+            .and_then(|record| record.context.model_id.as_deref())
+    });
+    let refresh_ctx = rimz::agents::LocalContextRefreshCtx {
+        agent_id: context_agent_id,
+        model_hint: local_model_hint,
+        prior_effort: prior
+            .as_ref()
+            .and_then(|record| record.context.effort.as_deref()),
+        prior_transcript_path: prior
+            .as_ref()
+            .and_then(|record| record.transcript_path.as_deref()),
+        prior_transcript_stat: prior
+            .as_ref()
+            .and_then(|record| record.transcript_stat.as_ref()),
+    };
+    let Some(refresh) = agent.local_context_refresh(event_name, &refresh_ctx) else {
+        return;
+    };
+    if let Err(err) = rimz::ledger::agent_context::merge_local_context(
+        ledger.runtime_paths(),
+        agent.descriptor().kind,
+        context_agent_id,
+        prior,
+        refresh,
+        jiff::Timestamp::now(),
+    ) {
+        warn!(
+            agent = agent.descriptor().kind,
+            event = %event_name,
+            error = %err,
+            "lifecycle: failed to merge local context sidecar",
+        );
+    } else {
+        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+}
+
 /// Fold this observation's signal onto the prior rollup state through the shared
 /// `lifecycle::step` table and log any anomaly once, under the
 /// `rimz::agent::lifecycle` target (stderr — never stdout, the hook decision

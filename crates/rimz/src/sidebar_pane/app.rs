@@ -11,6 +11,7 @@
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
@@ -95,6 +96,401 @@ pub enum SidebarAppErr {
 
 pub type Result<T> = std::result::Result<T, SidebarAppErr>;
 
+struct LoopState {
+    last_snapshot: Option<SidebarSnapshot>,
+    current: SidebarSnapshot,
+    last_pulled: SidebarSnapshot,
+    event_store: EventStore,
+    health: Health,
+    gate: GateState,
+    self_close: SelfCloseState,
+    ui: UiState,
+    dirty: bool,
+    paint_held: bool,
+    next_frame: Instant,
+    fetched_at: Instant,
+    last_self_close_check: Instant,
+    last_heartbeat: Option<Instant>,
+    prev_width: Option<u16>,
+    should_exit: bool,
+    tab_emptied: bool,
+    reexec_to: Option<PathBuf>,
+}
+
+impl LoopState {
+    fn new(workspace_id: WorkspaceId, initial_width: Option<u16>) -> Self {
+        let current = placeholder_snapshot(workspace_id);
+        let now = Instant::now();
+        Self {
+            last_snapshot: None,
+            last_pulled: current.clone(),
+            current,
+            event_store: EventStore::default(),
+            health: Health::default(),
+            gate: GateState::default(),
+            self_close: SelfCloseState::default(),
+            ui: UiState::default(),
+            dirty: true,
+            paint_held: false,
+            next_frame: now,
+            fetched_at: now,
+            last_self_close_check: now,
+            last_heartbeat: None,
+            prev_width: initial_width,
+            should_exit: false,
+            tab_emptied: false,
+            reexec_to: None,
+        }
+    }
+
+    fn frame_timing(&self, tick: Duration, anim_start: Instant) -> (bool, Duration) {
+        let phase = wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
+        let active = is_animating(&self.current, &self.ui, phase) || self.dirty;
+        let timeout = if active {
+            self.next_frame
+                .saturating_duration_since(Instant::now())
+                .max(FRAME_MIN_TIMEOUT)
+        } else {
+            // Cap by the watchdog so the self-close backstop fires on time even
+            // when the data tick is much longer.
+            let watchdog_due =
+                SELF_CLOSE_WATCHDOG.saturating_sub(self.last_self_close_check.elapsed());
+            tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
+        };
+        (active, timeout)
+    }
+
+    fn on_snapshot(
+        &mut self,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        result_rx: &Receiver<FetchOutcome>,
+        anim_start: Instant,
+    ) -> Result<()> {
+        let mut latest = None;
+        let mut saw_final = false;
+        while let Ok(outcome) = result_rx.try_recv() {
+            saw_final |= outcome.final_for_request;
+            latest = Some(outcome);
+        }
+        if saw_final {
+            fetch.mark_request_complete();
+        }
+        let mut rejected = false;
+        if let Some(mut outcome) = latest {
+            let snapshot_ok = outcome.snapshot.is_ok();
+            let fresh_pane_frame = outcome.fresh_pane_frame;
+            if let Ok(pulled) = outcome.snapshot {
+                self.last_pulled = pulled;
+                let now_ms = crate::sidebar::cache::unix_now_ms();
+                self.event_store.prune(now_ms);
+                outcome.snapshot = Ok(fuse(&self.last_pulled, &self.event_store, now_ms));
+            }
+            self.fetched_at = Instant::now();
+            rejected = self.fold_outcome(config, outcome, anim_start)?;
+            if snapshot_ok {
+                self.last_self_close_check = Instant::now();
+            }
+            if !self.should_exit && !rejected && fresh_pane_frame {
+                // The snapshot folded a post-signal pane frame. Its own-view
+                // verdict has decided the resize-grow case: exit without
+                // painting when alone, or release the hold and paint at the new
+                // size when siblings remain.
+                self.paint_held = false;
+            }
+        }
+        if !self.should_exit
+            && saw_final
+            && let Some(request) = fetch.take_pending()
+        {
+            fetch.request(request, false);
+        }
+        // A held transient regression asks for one more read so the
+        // last-known-good cache heals to the next good frame. Single-flight
+        // bounds this to one extra run.
+        if !self.should_exit && saw_final && rejected {
+            fetch.request(FetchRequest::default(), false);
+        }
+        Ok(())
+    }
+
+    fn on_event(
+        &mut self,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        envelope: SidebarEventEnvelope,
+        anim_start: Instant,
+    ) -> Result<LoopFlow> {
+        if !event_targets_this_renderer(&envelope, config) {
+            return Ok(LoopFlow::Repoll);
+        }
+        let requests_verification = envelope.event.requests_producer_verification();
+        let sent_at_ms = envelope.sent_at_ms;
+        match envelope.event {
+            SidebarEvent::Reload => {
+                if let Some(target) = reload_or_refetch(&config.session_name, fetch) {
+                    self.reexec_to = Some(target);
+                    return Ok(LoopFlow::Exit);
+                }
+            }
+            // The producer published a fresh shared pane frame: fold it from
+            // cache immediately; consumers stay read-only and the producer's
+            // own receipt is cheap because the frame is just-published.
+            SidebarEvent::PaneFramePublished => {
+                fetch.request(FetchRequest::pane_frame_published(), true);
+            }
+            SidebarEvent::Notify { title, body, panes } => {
+                if let Err(err) = emit_terminal_notification(
+                    config,
+                    terminal,
+                    &self.current,
+                    &config.notification_prefs,
+                    &title,
+                    &body,
+                    &panes,
+                ) {
+                    debug!(error = %err, "terminal notification emit failed");
+                }
+            }
+            SidebarEvent::FocusStranded { pane_id } => {
+                let now_ms = crate::sidebar::cache::unix_now_ms();
+                let own_pane = crate::mux::own_pane_id(config.mux);
+                if let Some(target) = focus_stranded_target(
+                    &self.current,
+                    &self.ui,
+                    &pane_id,
+                    own_pane.as_ref(),
+                    sent_at_ms,
+                    now_ms,
+                ) {
+                    spawn_pane_focus(target);
+                }
+            }
+            // An overlay event fuses into the in-memory state and paints this
+            // frame. A topology overlay also asks the producer to verify with a
+            // real pull, which supersedes the overlay once its fresh frame
+            // folds in. A resize-grow paint hold stays held until a pulled
+            // sibling-count verdict releases it.
+            event if event.is_overlay() => {
+                let now_ms = crate::sidebar::cache::unix_now_ms();
+                self.event_store.append(event, sent_at_ms, now_ms);
+                let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
+                self.fold_outcome(
+                    config,
+                    FetchOutcome {
+                        snapshot: Ok(fused),
+                        final_for_request: false,
+                        fresh_pane_frame: false,
+                    },
+                    anim_start,
+                )?;
+                // Snap the frame deadline so this turn's frame phase paints
+                // the fused frame now instead of waiting out a previously armed
+                // grid boundary.
+                self.next_frame = Instant::now();
+                if !self.should_exit && requests_verification {
+                    fetch.request(FetchRequest::producer_fresh_panes(), true);
+                }
+            }
+            // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
+            // `PaneOpened` without a command: nothing to fuse, so refetch,
+            // bypassing the pane cache when the event says topology moved.
+            _ => {
+                fetch.request(
+                    if requests_verification {
+                        FetchRequest::producer_fresh_panes()
+                    } else {
+                        FetchRequest::default()
+                    },
+                    true,
+                );
+            }
+        }
+        Ok(LoopFlow::Continue)
+    }
+
+    fn on_resize(
+        &mut self,
+        fetch: &mut FetchDispatcher,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        anim_start: Instant,
+    ) -> Result<()> {
+        // A grow is the mux handing the sidebar a freed sibling's space — the
+        // precondition for the self-close full-width flash. Hold the paint until
+        // the next fresh pane-frame fold carries the sibling count.
+        let grew = match terminal.size().map(|s| s.width).ok() {
+            Some(width) => {
+                let grew = resize_grew(self.prev_width, width);
+                self.prev_width = Some(width);
+                grew
+            }
+            None => false,
+        };
+        if grew {
+            self.dirty = true;
+            self.paint_held = true;
+        } else {
+            if apply_input(
+                Wakeup::Resize,
+                &mut self.ui,
+                &mut self.health,
+                terminal,
+                &self.current,
+                anim_start,
+            )? {
+                self.dirty = false;
+            }
+            // A safe-width paint just landed; drop any stale hold a prior grow
+            // left pending so it cannot suppress this frame.
+            self.paint_held = false;
+        }
+        self.last_self_close_check = Instant::now();
+        // A resize is the mux telling us topology changed. Pull a fresh pane
+        // list through the elected producer and require a cache produced after
+        // this signal.
+        fetch.request(FetchRequest::producer_fresh_panes(), true);
+        Ok(())
+    }
+
+    fn on_input(
+        &mut self,
+        wakeup: Wakeup,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        anim_start: Instant,
+    ) -> Result<()> {
+        if apply_input(
+            wakeup,
+            &mut self.ui,
+            &mut self.health,
+            terminal,
+            &self.current,
+            anim_start,
+        )? {
+            // Key/mouse input paints synchronously for instant feedback; a
+            // paint settles any frame the loop owed.
+            self.dirty = false;
+        }
+        Ok(())
+    }
+
+    fn run_maintenance(
+        &mut self,
+        config: &ServeConfig,
+        runtime: &RuntimePaths,
+        socket_path: &Path,
+        fetch: &mut FetchDispatcher,
+        tick: Duration,
+    ) {
+        // Data backstop: catch pane/git drift no ledger delta announced. It is
+        // self-gated to the data tick and no-ops while a fetch is in flight.
+        if self.fetched_at.elapsed() >= tick {
+            fetch.request(FetchRequest::default(), false);
+        }
+
+        // Heartbeat: fast in-process atomic write on the main thread so the
+        // exit path never races a background writer.
+        if heartbeat_write_due(self.last_heartbeat) {
+            self.last_heartbeat = Some(Instant::now());
+            if let Err(err) = write_heartbeat(config, runtime, socket_path) {
+                warn!(
+                    session = %config.session_name,
+                    error = %err,
+                    "heartbeat write failed",
+                );
+            }
+        }
+
+        // Self-close watchdog: if no resize or presence event fired, ask the
+        // normal snapshot path to refresh so the snapshot's own-view count can
+        // close a lone sidebar.
+        if self.last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
+            self.last_self_close_check = Instant::now();
+            fetch.request(FetchRequest::default(), false);
+        }
+    }
+
+    fn paint_frame_if_due(
+        &mut self,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        anim_start: Instant,
+        active: bool,
+    ) -> Result<()> {
+        let now = Instant::now();
+        if self.dirty {
+            let dirty_deadline = now + animation_frame(&self.current);
+            if self.next_frame > dirty_deadline {
+                self.next_frame = dirty_deadline;
+            }
+        }
+        // Once the tab has emptied, never paint again. A grow resize also
+        // defers its paint until the sibling-count verdict releases the hold.
+        if !self.should_exit && !self.paint_held && (active || self.dirty) && now >= self.next_frame
+        {
+            self.ui.animation_phase =
+                wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
+            let animating = is_animating(&self.current, &self.ui, self.ui.animation_phase);
+            if self.dirty || animating {
+                render::draw_to_terminal_with_ui(
+                    terminal,
+                    &self.current,
+                    self.health.alert.as_ref(),
+                    &mut self.ui,
+                )?;
+                self.dirty = false;
+            }
+            self.next_frame = next_frame_after(
+                self.next_frame,
+                now,
+                frame_interval(&self.current, &self.ui),
+            );
+        } else if !active && !self.dirty {
+            // Idle re-arm only: with a fold pending, the armed boundary must
+            // hold so a paint already due within one frame is not pushed out.
+            self.next_frame = now + animation_frame(&self.current);
+        }
+        Ok(())
+    }
+
+    fn fold_outcome(
+        &mut self,
+        config: &ServeConfig,
+        outcome: FetchOutcome,
+        anim_start: Instant,
+    ) -> Result<bool> {
+        let applied = apply_fetch_outcome(
+            config,
+            outcome,
+            &mut self.last_snapshot,
+            &mut self.current,
+            &mut self.health,
+            &mut self.gate,
+            &mut self.self_close,
+            &mut self.ui,
+            anim_start,
+        )?;
+        self.should_exit = applied.should_exit;
+        self.tab_emptied |= applied.tab_emptied;
+        self.dirty = true;
+        Ok(applied.rejected)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum LoopFlow {
+    Continue,
+    Repoll,
+    Exit,
+}
+
+fn is_animating(snapshot: &SidebarSnapshot, ui: &UiState, phase: u64) -> bool {
+    render::has_live_animation(snapshot)
+        || ui.tally.any_rolling(phase)
+        || ui.cost_rolls.any_rolling(phase)
+        || ui.scrollbar.fading(phase)
+        || ui.effects.any_active()
+}
+
 pub fn serve(config: ServeConfig) -> Result<()> {
     set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
@@ -124,15 +520,8 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
     terminal.clear()?;
 
-    let mut last_snapshot: Option<SidebarSnapshot> = None;
-    let mut current = placeholder_snapshot(config.workspace_id.clone());
-    let mut last_pulled = current.clone();
-    let mut event_store = EventStore::default();
-    let mut health = Health::default();
-    let mut gate = GateState::default();
-    let mut self_close = SelfCloseState::default();
-    let mut ui = UiState::default();
-    let mut reexec_to: Option<PathBuf> = None;
+    let initial_width = terminal.size().map(|s| s.width).ok();
+    let mut state = LoopState::new(config.workspace_id.clone(), initial_width);
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
     // across re-fetches and ledger deltas, so no redraw path can stall it.
@@ -192,9 +581,6 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // can take several seconds (Zellij just started, git cold-start), and a
     // blocked main thread delays the self-close watchdog, stalling cleanup.
     // The placeholder snapshot renders while the first real result is in flight.
-    let mut fetched_at = Instant::now();
-    let mut should_exit = false;
-    let mut tab_emptied = false;
     fetch.request(FetchRequest::default(), false);
 
     // One fixed-timestep event loop. Events fold into the in-process model and
@@ -207,210 +593,18 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     // animation arrives. The loop blocks only in `recv`, so no path forks a
     // subprocess on the render thread and a busy fetch never freezes the spin
     // or swallows a keypress.
-    let mut dirty = true;
-    let mut next_frame = Instant::now();
-    let mut last_self_close_check = Instant::now();
-    // The sidebar's own pane width as of the last resize the loop processed. A
-    // resize that grows it is the precondition for the self-close full-width
-    // flash, so a grow holds its repaint (`paint_held`) until the sibling-count
-    // verdict lands — close exits without painting, stay paints at the new size.
-    let mut prev_width: Option<u16> = terminal.size().map(|s| s.width).ok();
-    let mut paint_held = false;
-    // Heartbeat writes live on the main thread (fast in-process atomic writes)
-    // so the exit path can remove the file without racing a background writer.
-    let mut last_heartbeat: Option<Instant> = None;
-    while !should_exit {
-        // A live row's spinner or a value-corner count-up keeps the frame grid
-        // warm; a pending fold (`dirty`) does too. With neither, drop to the
-        // slow data backstop until the next wakeup re-arms the grid.
-        let phase = wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
-        let animating = render::has_live_animation(&current)
-            || ui.tally.any_rolling(phase)
-            || ui.cost_rolls.any_rolling(phase)
-            || ui.scrollbar.fading(phase)
-            || ui.effects.any_active();
-        let active = animating || dirty;
-        let timeout = if active {
-            next_frame
-                .saturating_duration_since(Instant::now())
-                .max(FRAME_MIN_TIMEOUT)
-        } else {
-            // Cap by the watchdog so the self-close backstop fires on time even
-            // when the data tick is much longer.
-            let watchdog_due = SELF_CLOSE_WATCHDOG.saturating_sub(last_self_close_check.elapsed());
-            tick.min(watchdog_due).max(FRAME_MIN_TIMEOUT)
-        };
+    while !state.should_exit {
+        let (active, timeout) = state.frame_timing(tick, anim_start);
         socket.set_read_timeout(Some(timeout))?;
         match wait_for_wakeup(&socket)? {
-            // A background fetch posted a result. Take the most recent one
-            // (drop any older queued posts — later is fresher), fold it, then
-            // fire the deferred refetch a ledger delta asked for while the
-            // cycle was in flight. A cycle's fast in-process frame arrives
-            // marked non-final while its fork still runs; only a final outcome
-            // closes the cycle for the single-flight accounting.
             Wakeup::Snapshot => {
-                let mut latest = None;
-                let mut saw_final = false;
-                while let Ok(outcome) = result_rx.try_recv() {
-                    saw_final |= outcome.final_for_request;
-                    latest = Some(outcome);
-                }
-                if saw_final {
-                    fetch.mark_request_complete();
-                }
-                let mut rejected = false;
-                if let Some(mut outcome) = latest {
-                    let snapshot_ok = outcome.snapshot.is_ok();
-                    let fresh_pane_frame = outcome.fresh_pane_frame;
-                    if let Ok(pulled) = outcome.snapshot {
-                        last_pulled = pulled;
-                        let now_ms = crate::sidebar::cache::unix_now_ms();
-                        event_store.prune(now_ms);
-                        outcome.snapshot = Ok(fuse(&last_pulled, &event_store, now_ms));
-                    }
-                    fetched_at = Instant::now();
-                    let applied = apply_fetch_outcome(
-                        &config,
-                        outcome,
-                        &mut last_snapshot,
-                        &mut current,
-                        &mut health,
-                        &mut gate,
-                        &mut self_close,
-                        &mut ui,
-                        anim_start,
-                    )?;
-                    should_exit = applied.should_exit;
-                    tab_emptied |= applied.tab_emptied;
-                    rejected = applied.rejected;
-                    if snapshot_ok {
-                        last_self_close_check = Instant::now();
-                    }
-                    // The fold mutated the model; the frame phase paints it.
-                    dirty = true;
-                    if !should_exit && !applied.rejected && fresh_pane_frame {
-                        // The snapshot folded a post-signal pane frame. Its
-                        // own-view verdict has decided the resize-grow case:
-                        // exit without painting when alone, or release the hold
-                        // and paint at the new size when siblings remain.
-                        paint_held = false;
-                    }
-                }
-                if !should_exit
-                    && saw_final
-                    && let Some(request) = fetch.take_pending()
-                {
-                    fetch.request(request, false);
-                }
-                // A held transient regression: ask for one more read so the
-                // last-known-good cache heals to the next good frame. Single-
-                // flight bounds this to one extra run; once the escape hatch
-                // opens, the fetch is accepted and `rejected` clears, so this
-                // never spins.
-                if !should_exit && saw_final && rejected {
-                    fetch.request(FetchRequest::default(), false);
-                }
+                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start)?;
             }
             Wakeup::Event(envelope) => {
-                if !event_targets_this_renderer(&envelope, &config) {
-                    continue;
-                }
-                let requests_verification = envelope.event.requests_producer_verification();
-                let sent_at_ms = envelope.sent_at_ms;
-                match envelope.event {
-                    SidebarEvent::Reload => {
-                        if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
-                            reexec_to = Some(target);
-                            break;
-                        }
-                    }
-                    // The producer published a fresh shared pane frame: fold it
-                    // from cache immediately; consumers stay read-only and the
-                    // producer's own receipt is cheap because the frame is
-                    // just-published.
-                    SidebarEvent::PaneFramePublished => {
-                        fetch.request(FetchRequest::pane_frame_published(), true);
-                    }
-                    SidebarEvent::Notify { title, body, panes } => {
-                        if let Err(err) = emit_terminal_notification(
-                            &config,
-                            &mut terminal,
-                            &current,
-                            &config.notification_prefs,
-                            &title,
-                            &body,
-                            &panes,
-                        ) {
-                            debug!(error = %err, "terminal notification emit failed");
-                        }
-                    }
-                    SidebarEvent::FocusStranded { pane_id } => {
-                        let now_ms = crate::sidebar::cache::unix_now_ms();
-                        let own_pane = crate::mux::own_pane_id(config.mux);
-                        if let Some(target) = focus_stranded_target(
-                            &current,
-                            &ui,
-                            &pane_id,
-                            own_pane.as_ref(),
-                            sent_at_ms,
-                            now_ms,
-                        ) {
-                            spawn_pane_focus(target);
-                        }
-                    }
-                    // An overlay event fuses into the in-memory state and paints
-                    // this frame — the zero-latency path. A topology overlay also
-                    // asks the producer to verify with a real pull, which
-                    // supersedes the overlay once its fresh frame folds in. The
-                    // resize-grow `paint_held` deliberately stays held: only a
-                    // *pulled* sibling-count verdict may release it, so a fused
-                    // close never paints the grown full-width frame on its way out.
-                    event if event.is_overlay() => {
-                        let now_ms = crate::sidebar::cache::unix_now_ms();
-                        event_store.append(event, sent_at_ms, now_ms);
-                        let fused = fuse(&last_pulled, &event_store, now_ms);
-                        let applied = apply_fetch_outcome(
-                            &config,
-                            FetchOutcome {
-                                snapshot: Ok(fused),
-                                final_for_request: false,
-                                fresh_pane_frame: false,
-                            },
-                            &mut last_snapshot,
-                            &mut current,
-                            &mut health,
-                            &mut gate,
-                            &mut self_close,
-                            &mut ui,
-                            anim_start,
-                        )?;
-                        should_exit = applied.should_exit;
-                        tab_emptied |= applied.tab_emptied;
-                        dirty = true;
-                        // Snap the frame deadline so this turn's frame phase
-                        // paints the fused frame now — the same instant
-                        // feedback input gets — instead of waiting out a grid
-                        // boundary armed before this event landed. The grid
-                        // re-anchors off this paint, so a burst of events
-                        // still coalesces to one paint per base frame.
-                        next_frame = Instant::now();
-                        if !should_exit && requests_verification {
-                            fetch.request(FetchRequest::producer_fresh_panes(), true);
-                        }
-                    }
-                    // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
-                    // `PaneOpened` without a command: nothing to fuse, so refetch,
-                    // bypassing the pane cache when the event says topology moved.
-                    _ => {
-                        fetch.request(
-                            if requests_verification {
-                                FetchRequest::producer_fresh_panes()
-                            } else {
-                                FetchRequest::default()
-                            },
-                            true,
-                        );
-                    }
+                match state.on_event(&config, &mut fetch, &mut terminal, envelope, anim_start)? {
+                    LoopFlow::Continue => {}
+                    LoopFlow::Repoll => continue,
+                    LoopFlow::Exit => break,
                 }
             }
             // A recv timeout: the active grid reached a frame boundary, or the
@@ -419,155 +613,29 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             // backstop poll runs there too.
             Wakeup::Tick => {}
             Wakeup::Resize => {
-                // A grow is the mux handing the sidebar a freed sibling's space —
-                // the precondition for the self-close full-width flash. Hold the
-                // paint until the next fresh pane-frame fold carries the sibling
-                // count: a "close" verdict exits without ever painting the grown
-                // frame (the frame phase guards on `should_exit`); a "stay" verdict
-                // releases the hold and paints at the new size. A shrink, a
-                // same-width resize, or an unreadable size cannot flash, so each
-                // keeps the instant repaint for snappy attach/redraw feedback.
-                let grew = match terminal.size().map(|s| s.width).ok() {
-                    Some(width) => {
-                        let grew = resize_grew(prev_width, width);
-                        prev_width = Some(width);
-                        grew
-                    }
-                    None => false,
-                };
-                if grew {
-                    dirty = true;
-                    paint_held = true;
-                } else {
-                    if apply_input(
-                        Wakeup::Resize,
-                        &mut ui,
-                        &mut health,
-                        &mut terminal,
-                        &current,
-                        anim_start,
-                    )? {
-                        dirty = false;
-                    }
-                    // A safe-width paint just landed; drop any stale hold a prior
-                    // grow left pending so it cannot suppress this frame.
-                    paint_held = false;
-                }
-                last_self_close_check = Instant::now();
-                // A resize is the mux telling us topology changed: a split
-                // opened/closed, or the sidebar got space back. Pull a fresh
-                // pane list through the elected producer and require a cache
-                // produced after this signal; consumers wait for the producer's
-                // publication wake instead of locally producing.
-                fetch.request(FetchRequest::producer_fresh_panes(), true);
+                state.on_resize(&mut fetch, &mut terminal, anim_start)?;
             }
             // The `r` keypress rides the local `reload` control word; an
             // external `rimz reload` arrives as the typed event. Both resolve
             // through the same helper.
             Wakeup::Reload => {
                 if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
-                    reexec_to = Some(target);
+                    state.reexec_to = Some(target);
                     break;
                 }
             }
             wakeup => {
-                // Key/mouse input paints synchronously for instant feedback; a
-                // paint settles any frame the loop owed.
-                if apply_input(
-                    wakeup,
-                    &mut ui,
-                    &mut health,
-                    &mut terminal,
-                    &current,
-                    anim_start,
-                )? {
-                    dirty = false;
-                }
+                state.on_input(wakeup, &mut terminal, anim_start)?;
             }
         }
 
-        // Data backstop: catch pane/git drift no ledger delta announced. Self-
-        // gated to the `tick` interval and a no-op while a fetch is in flight, so
-        // it neither double-fires nor rides the frame grid (the removed
-        // ACTIVE_REFRESH anti-pattern). Runs once per loop turn regardless of why
-        // we woke.
-        if fetched_at.elapsed() >= tick {
-            fetch.request(FetchRequest::default(), false);
-        }
-
-        // Heartbeat: fast in-process atomic write on the main thread so the
-        // exit path (drop _heartbeat_cleanup) never races a background writer.
-        if heartbeat_write_due(last_heartbeat) {
-            last_heartbeat = Some(Instant::now());
-            if let Err(err) = write_heartbeat(&config, &runtime, &socket_path) {
-                warn!(
-                    session = %config.session_name,
-                    error = %err,
-                    "heartbeat write failed",
-                );
-            }
-        }
-
-        // Self-close watchdog: if no resize or presence event fired (e.g.
-        // background sessions where the mux omits SIGWINCH after a pane closes),
-        // ask the normal snapshot path to refresh so the snapshot's own-view
-        // count can close a lone sidebar. This preserves the one-producer bound:
-        // consumers read the shared pane cache in process instead of each
-        // forking `list-panes`.
-        if last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
-            last_self_close_check = Instant::now();
-            fetch.request(FetchRequest::default(), false);
-        }
-
-        // Frame phase: at the boundary, advance the spin and paint once, folding
-        // every change that landed this frame into a single draw. Paint when the
-        // model changed (`dirty`) or a row is animating; an idle frame is a bare
-        // timer wake with no recompose. While idle, keep the grid armed so the
-        // next event paints within one base frame.
-        let now = Instant::now();
-        if dirty {
-            let dirty_deadline = now + animation_frame(&current);
-            if next_frame > dirty_deadline {
-                next_frame = dirty_deadline;
-            }
-        }
-        // `!should_exit`: once the tab has emptied, never paint again — this is
-        // what stops the last frame from flashing at the grown/full width on the
-        // way out. `!paint_held`: a grow resize defers its paint until the
-        // sibling-count verdict releases the hold (see the resize handler).
-        // `active || dirty`: `active` is the turn-entry view, so a fold this
-        // turn re-activates the phase through the `dirty` it set — without it,
-        // an overlay event landing in an idle room would wait out one more
-        // recv before its snapped deadline could paint.
-        if !should_exit && !paint_held && (active || dirty) && now >= next_frame {
-            ui.animation_phase =
-                wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
-            let animating = render::animation_cadence(&current) != render::AnimationCadence::None
-                || ui.tally.any_rolling(ui.animation_phase)
-                || ui.cost_rolls.any_rolling(ui.animation_phase)
-                || ui.scrollbar.fading(ui.animation_phase)
-                || ui.effects.any_active();
-            if dirty || animating {
-                render::draw_to_terminal_with_ui(
-                    &mut terminal,
-                    &current,
-                    health.alert.as_ref(),
-                    &mut ui,
-                )?;
-                dirty = false;
-            }
-            next_frame = next_frame_after(next_frame, now, frame_interval(&current, &ui));
-        } else if !active && !dirty {
-            // Idle re-arm only: with a fold pending (`dirty`), the armed
-            // boundary must hold — re-arming here would push a paint already
-            // due within one frame out by another.
-            next_frame = now + animation_frame(&current);
-        }
+        state.run_maintenance(&config, &runtime, &socket_path, &mut fetch, tick);
+        state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
-    if tab_emptied {
+    if state.tab_emptied {
         close_self_closing_view_floating_panes(&config);
     }
-    if let Some(target) = reexec_to {
+    if let Some(target) = state.reexec_to {
         // Restore the terminal and release this instance's runtime files before
         // replacing the process image — `exec` never returns, so their RAII
         // Drop would otherwise be skipped and leak a stale socket + heartbeat.
