@@ -16,8 +16,8 @@ use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
     MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
-    ensure_pane_backend,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
+    TabOptions, ensure_pane_backend,
 };
 
 impl MuxBackend for ZellijBackend {
@@ -308,17 +308,7 @@ impl MuxBackend for ZellijBackend {
         // Kept sidebars (not planned for closing) whose geometry sits off the
         // layout's dock — the residue of a mis-mounted add — converge in place
         // this pass, renderer untouched.
-        let closing: std::collections::HashSet<&PaneId> = plan.close.iter().collect();
-        let off_spec: Vec<(u64, u64)> = panes
-            .iter()
-            .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
-            .filter(|pane| {
-                let id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id));
-                !closing.contains(&id)
-            })
-            .filter(|pane| sidebar_geometry_off_spec(pane, &panes, opts.width))
-            .map(|pane| (pane.tab_id, pane.id))
-            .collect();
+        let off_spec = off_spec_sidebars(&panes, &plan.close, opts.width);
         if plan.close.is_empty() && plan.add.is_empty() && off_spec.is_empty() {
             return Ok(SidebarRecovery::default());
         }
@@ -326,26 +316,12 @@ impl MuxBackend for ZellijBackend {
         // Adding (and closing) a pane shifts focus, so remember each tab's
         // focused (working) pane to restore afterwards, and the user's own
         // invoking pane to return the visible tab to where they ran `rimz reload`.
-        let focused_in_tab: std::collections::HashMap<u64, u64> = panes
-            .iter()
-            .filter(|pane| pane.is_focused && !pane.is_plugin)
-            .map(|pane| (pane.tab_id, pane.id))
-            .collect();
+        let focused_in_tab = focused_work_panes(&panes);
 
         let mut report = SidebarRecovery::default();
         // Close duplicate / unresponsive sidebar panes first, so a view that lost
         // its only live sidebar reads as missing and gains exactly one fresh one.
-        for pane in &plan.close {
-            match self.close_pane(&opts.session_name, pane) {
-                Ok(()) => report.closed += 1,
-                Err(err) => tracing::warn!(
-                    session = %opts.session_name,
-                    pane = %pane.as_str(),
-                    error = %err,
-                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-                ),
-            }
-        }
+        close_planned_sidebars(self, &opts.session_name, &plan.close, &mut report);
         // In-place adds and geometry moves both need an attached client: a
         // detached session's screen thread drops the mount while the spawned
         // serve pair keeps running, so adding there only leaks (the closes
@@ -369,58 +345,7 @@ impl MuxBackend for ZellijBackend {
                 "sidebar reconcile: no attached client; deferring in-place adds",
             );
         } else {
-            let mut tabs_with_sidebar = if plan.add.is_empty() {
-                Some(std::collections::HashSet::new())
-            } else {
-                match self.list_panes_with_session(Some(&opts.session_name)) {
-                    Ok(panes) => Some(tabs_with_sidebars(&panes)),
-                    Err(err) => {
-                        tracing::warn!(
-                            session = %opts.session_name,
-                            error = %err,
-                            "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
-                        );
-                        None
-                    }
-                }
-            };
-            for tab in &plan.add {
-                let Ok(tab_id) = tab.parse::<u64>() else {
-                    report.failed += 1;
-                    continue;
-                };
-                let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
-                    report.failed += 1;
-                    continue;
-                };
-                if occupied_tabs.contains(tab) {
-                    tracing::warn!(
-                        session = %opts.session_name,
-                        tab = tab_id,
-                        "sidebar reconcile: add skipped because the tab still has a sidebar",
-                    );
-                    report.failed += 1;
-                    continue;
-                }
-                match self.add_sidebar_to_tab(opts, tab_id) {
-                    Ok(()) => {
-                        report.recovered += 1;
-                        occupied_tabs.insert(tab.clone());
-                        if let Some(work) = focused_in_tab.get(&tab_id) {
-                            let _ = self.focus_terminal(&opts.session_name, *work);
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(
-                            session = %opts.session_name,
-                            tab = tab_id,
-                            error = %err,
-                            "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
-                        );
-                        report.failed += 1;
-                    }
-                }
-            }
+            add_missing_sidebars(self, opts, &plan.add, &focused_in_tab, &mut report);
         }
         if let Some(own) = own_zellij_pane_id() {
             let _ = self.focus_terminal(&opts.session_name, own);
@@ -538,4 +463,141 @@ impl MuxBackend for ZellijBackend {
         // First writer wins on a probe race; both raced probes read one binary.
         Ok(self.version.get_or_init(|| raw).clone())
     }
+}
+
+fn off_spec_sidebars(
+    panes: &[RawPane],
+    closing: &[PaneId],
+    width: SidebarWidth,
+) -> Vec<(u64, u64)> {
+    let closing: std::collections::HashSet<&PaneId> = closing.iter().collect();
+    panes
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
+        .filter(|pane| {
+            let id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id));
+            !closing.contains(&id)
+        })
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, width))
+        .map(|pane| (pane.tab_id, pane.id))
+        .collect()
+}
+
+fn focused_work_panes(panes: &[RawPane]) -> std::collections::HashMap<u64, u64> {
+    panes
+        .iter()
+        .filter(|pane| pane.is_focused && !pane.is_plugin)
+        .map(|pane| (pane.tab_id, pane.id))
+        .collect()
+}
+
+fn close_planned_sidebars(
+    backend: &ZellijBackend,
+    session_name: &str,
+    close: &[PaneId],
+    report: &mut SidebarRecovery,
+) {
+    for pane in close {
+        match backend.close_pane(session_name, pane) {
+            Ok(()) => report.closed += 1,
+            Err(err) => tracing::warn!(
+                session = %session_name,
+                pane = %pane.as_str(),
+                error = %err,
+                "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+            ),
+        }
+    }
+}
+
+fn add_missing_sidebars(
+    backend: &ZellijBackend,
+    opts: &SidebarPaneOptions,
+    add: &[String],
+    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    report: &mut SidebarRecovery,
+) {
+    let mut tabs_with_sidebar = existing_sidebar_tabs(backend, &opts.session_name, add);
+    for tab in add {
+        let Ok(tab_id) = tab.parse::<u64>() else {
+            report.failed += 1;
+            continue;
+        };
+        let Some(occupied_tabs) = tabs_with_sidebar.as_mut() else {
+            report.failed += 1;
+            continue;
+        };
+        if occupied_tabs.contains(tab) {
+            warn_sidebar_add_skipped(&opts.session_name, tab_id);
+            report.failed += 1;
+            continue;
+        }
+        add_sidebar_to_tab(
+            backend,
+            opts,
+            tab,
+            tab_id,
+            focused_in_tab,
+            occupied_tabs,
+            report,
+        );
+    }
+}
+
+fn existing_sidebar_tabs(
+    backend: &ZellijBackend,
+    session_name: &str,
+    add: &[String],
+) -> Option<std::collections::HashSet<String>> {
+    if add.is_empty() {
+        return Some(std::collections::HashSet::new());
+    }
+    match backend.list_panes_with_session(Some(session_name)) {
+        Ok(panes) => Some(tabs_with_sidebars(&panes)),
+        Err(err) => {
+            tracing::warn!(
+                session = %session_name,
+                error = %err,
+                "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
+            );
+            None
+        }
+    }
+}
+
+fn add_sidebar_to_tab(
+    backend: &ZellijBackend,
+    opts: &SidebarPaneOptions,
+    tab: &str,
+    tab_id: u64,
+    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    occupied_tabs: &mut std::collections::HashSet<String>,
+    report: &mut SidebarRecovery,
+) {
+    match backend.add_sidebar_to_tab(opts, tab_id) {
+        Ok(()) => {
+            report.recovered += 1;
+            occupied_tabs.insert(tab.to_owned());
+            if let Some(work) = focused_in_tab.get(&tab_id) {
+                let _ = backend.focus_terminal(&opts.session_name, *work);
+            }
+        }
+        Err(err) => {
+            tracing::warn!(
+                session = %opts.session_name,
+                tab = tab_id,
+                error = %err,
+                "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
+            );
+            report.failed += 1;
+        }
+    }
+}
+
+fn warn_sidebar_add_skipped(session_name: &str, tab_id: u64) {
+    tracing::warn!(
+        session = %session_name,
+        tab = tab_id,
+        "sidebar reconcile: add skipped because the tab still has a sidebar",
+    );
 }

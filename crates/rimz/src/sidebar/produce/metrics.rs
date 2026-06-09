@@ -173,96 +173,10 @@ pub(super) fn enrich_pane_metrics(
             }
             continue;
         }
-        pane.metrics = PaneMetrics::default();
-        let Some(shell_pid) = pane.current.pid else {
-            new_entries.insert(
-                pane_key,
-                unbound_entry(pane.current.command.clone(), now_ms),
-            );
-            continue;
-        };
-        // If the shell has exactly one child, its stats are more informative
-        // than the shell's own (which idles while the child runs). Fall back to
-        // the shell when there are zero or multiple children.
-        let kids = match children.get(&shell_pid) {
-            Some(kids) => kids.clone(),
-            None if !needs_walk => crate::proc::children(shell_pid),
-            None => Vec::new(),
-        };
-        pane.children = kids.clone();
-        let stats_pid = match kids.as_slice() {
-            &[child] => child,
-            _ => shell_pid,
-        };
-
-        // One `stat` read serves both CPU ticks and RSS (the separate `status`
-        // read for VmRSS was a third file open per pane for one display figure).
-        let stat_now = crate::proc::stat_metrics(stats_pid);
-        let rss_kb = stat_now.map(|stat| stat.rss_kb);
-        let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
-        let state_char = stat_now.map(|stat| stat.state);
-        let io_now = crate::proc::io_bytes(stats_pid);
-
-        let mut prior_state_char = None;
-        let mut cpu_pct = None;
-        let mut io_bps = None;
-        if let Some(prior_entry) = prior.entries.get(&pane_key) {
-            prior_state_char = prior_entry.state_char;
-            // Only compute a rate when the stats PID hasn't changed across ticks
-            // and the elapsed time is non-trivial (a very short gap yields noise).
-            // A changed command on the same long-lived shell is a new tenant:
-            // keep the raw counters but wait for a second same-tenant sample
-            // before publishing CPU/M/IO together.
-            if prior_entry.command == pane.current.command && prior_entry.stats_pid == stats_pid {
-                let elapsed_ms = now_ms.saturating_sub(prior_entry.sampled_at_ms);
-                let elapsed_secs = elapsed_ms as f64 / 1_000.0;
-                if elapsed_secs >= 0.1 {
-                    if let Some(ticks) = cpu_now {
-                        let delta = ticks.saturating_sub(prior_entry.cpu_ticks);
-                        let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
-                        cpu_pct = Some(pct.clamp(0.0, u16::MAX as f64) as u16);
-                    }
-                    if let Some(bytes) = io_now {
-                        let delta = bytes.saturating_sub(prior_entry.io_bytes);
-                        io_bps = Some((delta as f64 / elapsed_secs) as u64);
-                    }
-                }
-            }
-        }
-        let process_state =
-            process_state_from_stat(state_char, prior_state_char).filter(ProcessState::is_stuck);
-        if display_metrics_ready(cpu_pct, io_bps, rss_kb) {
-            pane.metrics.rss_kb = rss_kb;
-            pane.metrics.cpu_pct = cpu_pct;
-            pane.metrics.io_bps = io_bps;
-        }
-        pane.metrics.process_state = process_state;
-
-        // The root binding recorded for the next tick's restore: the shell's
-        // own stat read covers it when it is also the stats pid; an active
-        // child costs one extra small read.
-        let root_start_ticks = if stats_pid == shell_pid {
-            stat_now.map(|stat| stat.start_ticks)
-        } else {
-            crate::proc::stat_metrics(shell_pid).map(|stat| stat.start_ticks)
-        };
-        new_entries.insert(
-            pane_key,
-            MetricsSampleEntry {
-                stats_pid,
-                cpu_ticks: cpu_now.unwrap_or(0),
-                io_bytes: io_now.unwrap_or(0),
-                sampled_at_ms: now_ms,
-                pane_pid: Some(shell_pid),
-                root_start_ticks,
-                command: pane.current.command.clone(),
-                cpu_pct: pane.metrics.cpu_pct,
-                io_bps: pane.metrics.io_bps,
-                rss_kb: pane.metrics.rss_kb,
-                state_char,
-                process_state,
-            },
+        let entry = sample_due_pane(
+            pane, &prior, &pane_key, &children, needs_walk, clk_tck, now_ms,
         );
+        new_entries.insert(pane_key, entry);
     }
 
     // Every due key names a frame pane, so a non-empty `due` always sampled
@@ -275,6 +189,106 @@ pub(super) fn enrich_pane_metrics(
         tracing::warn!(error = %err, "metrics sample cache write failed");
     }
     true
+}
+
+fn sample_due_pane(
+    pane: &mut PaneState,
+    prior: &MetricsSampleCache,
+    pane_key: &str,
+    children: &HashMap<u32, Vec<u32>>,
+    needs_walk: bool,
+    clk_tck: f64,
+    now_ms: u64,
+) -> MetricsSampleEntry {
+    pane.metrics = PaneMetrics::default();
+    let Some(shell_pid) = pane.current.pid else {
+        return unbound_entry(pane.current.command.clone(), now_ms);
+    };
+    let kids = match children.get(&shell_pid) {
+        Some(kids) => kids.clone(),
+        None if !needs_walk => crate::proc::children(shell_pid),
+        None => Vec::new(),
+    };
+    pane.children = kids.clone();
+    let stats_pid = match kids.as_slice() {
+        &[child] => child,
+        _ => shell_pid,
+    };
+
+    let stat_now = crate::proc::stat_metrics(stats_pid);
+    let rss_kb = stat_now.map(|stat| stat.rss_kb);
+    let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
+    let state_char = stat_now.map(|stat| stat.state);
+    let io_now = crate::proc::io_bytes(stats_pid);
+    let (prior_state_char, cpu_pct, io_bps) = rate_metrics(
+        prior.entries.get(pane_key),
+        pane,
+        stats_pid,
+        cpu_now,
+        io_now,
+        clk_tck,
+        now_ms,
+    );
+    let process_state =
+        process_state_from_stat(state_char, prior_state_char).filter(ProcessState::is_stuck);
+    if display_metrics_ready(cpu_pct, io_bps, rss_kb) {
+        pane.metrics.rss_kb = rss_kb;
+        pane.metrics.cpu_pct = cpu_pct;
+        pane.metrics.io_bps = io_bps;
+    }
+    pane.metrics.process_state = process_state;
+
+    let root_start_ticks = if stats_pid == shell_pid {
+        stat_now.map(|stat| stat.start_ticks)
+    } else {
+        crate::proc::stat_metrics(shell_pid).map(|stat| stat.start_ticks)
+    };
+    MetricsSampleEntry {
+        stats_pid,
+        cpu_ticks: cpu_now.unwrap_or(0),
+        io_bytes: io_now.unwrap_or(0),
+        sampled_at_ms: now_ms,
+        pane_pid: Some(shell_pid),
+        root_start_ticks,
+        command: pane.current.command.clone(),
+        cpu_pct: pane.metrics.cpu_pct,
+        io_bps: pane.metrics.io_bps,
+        rss_kb: pane.metrics.rss_kb,
+        state_char,
+        process_state,
+    }
+}
+
+fn rate_metrics(
+    prior_entry: Option<&MetricsSampleEntry>,
+    pane: &PaneState,
+    stats_pid: u32,
+    cpu_now: Option<u64>,
+    io_now: Option<u64>,
+    clk_tck: f64,
+    now_ms: u64,
+) -> (Option<char>, Option<u16>, Option<u64>) {
+    let Some(prior_entry) = prior_entry else {
+        return (None, None, None);
+    };
+    if prior_entry.command != pane.current.command || prior_entry.stats_pid != stats_pid {
+        return (prior_entry.state_char, None, None);
+    }
+    let elapsed_ms = now_ms.saturating_sub(prior_entry.sampled_at_ms);
+    let elapsed_secs = elapsed_ms as f64 / 1_000.0;
+    if elapsed_secs < 0.1 {
+        return (prior_entry.state_char, None, None);
+    }
+    let cpu_pct = cpu_now.map(|ticks| {
+        let delta = ticks.saturating_sub(prior_entry.cpu_ticks);
+        let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
+        pct.clamp(0.0, u16::MAX as f64) as u16
+    });
+    let io_bps = io_now.map(|bytes| {
+        let delta = bytes.saturating_sub(prior_entry.io_bytes);
+        (delta as f64 / elapsed_secs) as u64
+    });
+    (prior_entry.state_char, cpu_pct, io_bps)
 }
 
 /// The entry recorded for a due pidless pane the walk could not match: no

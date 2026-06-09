@@ -183,10 +183,9 @@ fn sub_agent_lines(
     // columns across children (the elapsed cluster already stacks via its
     // fixed right-pinned slot). A column exists only while some child carries
     // the field; a child missing a carried field blank-fills the slot.
-    let child_tokens = |sub: &SidebarSubAgent| sub.total_tokens.filter(|total| *total > 0);
     let token_col = sub_agents
         .iter()
-        .filter_map(child_tokens)
+        .filter_map(sub_agent_tokens)
         .map(|total| tokens_int(total).chars().count())
         .max()
         .unwrap_or(0);
@@ -223,89 +222,135 @@ fn sub_agent_lines(
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
 
-        // Line 2: token spend, model, and effort (left) and elapsed work
-        // (right-pinned). A deeper indent sets it below the type line; the
-        // clock-fill glyph lands under the parent's age and fills with the
-        // child's worked span.
-        let tokens = child_tokens(sub);
-        let elapsed = sub.elapsed_secs;
-        let model = sub.model.as_deref();
-        let effort = sub.effort.as_deref();
-        if tokens.is_some() || elapsed.is_some() || model.is_some() || effort.is_some() {
-            let mut left = vec![Span::raw("      ")];
-            // Walks token → model → effort; a `·` seam paints only between two
-            // fields this child actually renders, and blank-fills its three
-            // cells otherwise, so the indent never carries an orphan separator
-            // and the columns hold across siblings.
-            let mut prev_rendered = false;
-            if token_col > 0 {
-                match tokens {
-                    Some(total) => {
-                        // Children stay subordinate to the parent card, so the
-                        // figure keeps the soft weight the rest of the subagent
-                        // list wears, the `◇` its violet.
-                        left.push(Span::styled(
-                            TOKENS_TOTAL,
-                            theme.style(Color::Magenta, Modifier::empty()),
-                        ));
-                        left.push(Span::styled(
-                            format!(" {:>token_col$}", tokens_int(total)),
-                            theme.soft(),
-                        ));
-                        prev_rendered = true;
-                    }
-                    // Marker cell + space + figure slot, all blank.
-                    None => left.push(Span::raw(" ".repeat(2 + token_col))),
-                }
-            }
-            if model_col > 0 {
-                // The model rides after the spend at the parent's dim
-                // capability weight, left-padded to the widest sibling so the
-                // effort column stacks.
-                let seam = if token_col > 0 { 3 } else { 0 };
-                match model {
-                    Some(model) => {
-                        if prev_rendered {
-                            left.push(Span::styled(" · ", theme.dim()));
-                        } else {
-                            left.push(Span::raw(" ".repeat(seam)));
-                        }
-                        left.push(Span::styled(
-                            format!("{:<model_col$}", model_label(model)),
-                            theme.dim(),
-                        ));
-                        prev_rendered = true;
-                    }
-                    None => left.push(Span::raw(" ".repeat(seam + model_col))),
-                }
-            }
-            if let Some(effort) = effort {
-                // Effort keeps the parent line's `model · effort` adjacency and
-                // weight. The last left field pads nothing — nothing aligns
-                // after it — but still blanks its seam when this child renders
-                // no field before it, so sibling efforts stay stacked.
-                if prev_rendered {
-                    left.push(Span::styled(" · ", theme.dim()));
-                } else if token_col > 0 || model_col > 0 {
-                    left.push(Span::raw("   "));
-                }
-                left.push(Span::styled(effort.to_owned(), theme.dim()));
-            }
-            // Elapsed work in the parent's age vocabulary: the clock-fill glyph
-            // and a fixed three-cell m/h label (`<1m`, ` 9m`, ` 2h`, `>1d`,
-            // never seconds), toned by the same quarter-hour heat ramp the
-            // parent's age wears — so the right-pinned clusters stack into one
-            // column across children and a long-running child visibly heats up.
-            let right = elapsed
-                .map(|secs| {
-                    vec![Span::styled(
-                        format!("{} {:>3}", elapsed_glyph(secs), elapsed_label(secs)),
-                        activity_age_style(theme, secs),
-                    )]
-                })
-                .unwrap_or_default();
-            lines.push(pin_right(left, right, width));
+        if let Some(line) = sub_agent_metadata_line(theme, sub, token_col, model_col, width) {
+            lines.push(line);
         }
     }
     lines
+}
+
+fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
+    sub.total_tokens.filter(|total| *total > 0)
+}
+
+fn sub_agent_metadata_line(
+    theme: &Theme,
+    sub: &SidebarSubAgent,
+    token_col: usize,
+    model_col: usize,
+    width: usize,
+) -> Option<Line<'static>> {
+    let tokens = sub_agent_tokens(sub);
+    let elapsed = sub.elapsed_secs;
+    let model = sub.model.as_deref();
+    let effort = sub.effort.as_deref();
+    if tokens.is_none() && elapsed.is_none() && model.is_none() && effort.is_none() {
+        return None;
+    }
+    let mut left = vec![Span::raw("      ")];
+    let mut prev_rendered = append_sub_agent_tokens(theme, &mut left, tokens, token_col);
+    append_sub_agent_model(
+        theme,
+        &mut left,
+        model,
+        token_col,
+        model_col,
+        &mut prev_rendered,
+    );
+    append_sub_agent_effort(
+        theme,
+        &mut left,
+        effort,
+        token_col,
+        model_col,
+        prev_rendered,
+    );
+    Some(pin_right(left, sub_agent_elapsed(theme, elapsed), width))
+}
+
+fn append_sub_agent_tokens(
+    theme: &Theme,
+    left: &mut Vec<Span<'static>>,
+    tokens: Option<u64>,
+    token_col: usize,
+) -> bool {
+    if token_col == 0 {
+        return false;
+    }
+    match tokens {
+        Some(total) => {
+            left.push(Span::styled(
+                TOKENS_TOTAL,
+                theme.style(Color::Magenta, Modifier::empty()),
+            ));
+            left.push(Span::styled(
+                format!(" {:>token_col$}", tokens_int(total)),
+                theme.soft(),
+            ));
+            true
+        }
+        None => {
+            left.push(Span::raw(" ".repeat(2 + token_col)));
+            false
+        }
+    }
+}
+
+fn append_sub_agent_model(
+    theme: &Theme,
+    left: &mut Vec<Span<'static>>,
+    model: Option<&str>,
+    token_col: usize,
+    model_col: usize,
+    prev_rendered: &mut bool,
+) {
+    if model_col == 0 {
+        return;
+    }
+    let seam = if token_col > 0 { 3 } else { 0 };
+    match model {
+        Some(model) => {
+            if *prev_rendered {
+                left.push(Span::styled(" · ", theme.dim()));
+            } else {
+                left.push(Span::raw(" ".repeat(seam)));
+            }
+            left.push(Span::styled(
+                format!("{:<model_col$}", model_label(model)),
+                theme.dim(),
+            ));
+            *prev_rendered = true;
+        }
+        None => left.push(Span::raw(" ".repeat(seam + model_col))),
+    }
+}
+
+fn append_sub_agent_effort(
+    theme: &Theme,
+    left: &mut Vec<Span<'static>>,
+    effort: Option<&str>,
+    token_col: usize,
+    model_col: usize,
+    prev_rendered: bool,
+) {
+    let Some(effort) = effort else {
+        return;
+    };
+    if prev_rendered {
+        left.push(Span::styled(" · ", theme.dim()));
+    } else if token_col > 0 || model_col > 0 {
+        left.push(Span::raw("   "));
+    }
+    left.push(Span::styled(effort.to_owned(), theme.dim()));
+}
+
+fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {
+    elapsed
+        .map(|secs| {
+            vec![Span::styled(
+                format!("{} {:>3}", elapsed_glyph(secs), elapsed_label(secs)),
+                activity_age_style(theme, secs),
+            )]
+        })
+        .unwrap_or_default()
 }
