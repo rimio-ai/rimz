@@ -1541,17 +1541,31 @@ fn is_agent_spend_parser_path(path: &Path, agents_root: &Path) -> bool {
 /// across `concat!` calls so this file does not itself trip its own greps.
 fn invariants(root: &Path) -> Result<()> {
     let files = tracked_text_files(root)?;
-    let is_docs_or_xtask = |path: &Path| {
-        path.starts_with(root.join("docs"))
-            || path.starts_with(root.join("xtask"))
-            || path.extension().and_then(OsStr::to_str) == Some("md")
-    };
-    let outside_sidebar_pane = |path: &Path| {
-        !path.starts_with(root.join("crates/rimz/src/sidebar_pane"))
-            || path.starts_with(root.join("xtask"))
-    };
+    ensure_banned_imports(root, &files)?;
+    ensure_hook_stdio(root, &files)?;
+    ensure_sidebar_renderer_boundaries(root, &files)?;
+    ensure_spend_parser_boundaries(root, &files)?;
+    ensure_sidebar_library_boundaries(root, &files)?;
+    ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
+    ensure_sidebar_enrich_folds_before_live_panes(root)?;
+    ensure_card_admission_predicate(root)?;
+    ensure_config_template_sections(root)?;
+    ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
+    ensure_ledger_durability(root, &files)?;
+    ensure_participant_identity(root, &files)?;
+    ensure_no_core_pane_auto_use(root, &files)?;
+    ensure_inline_tests_stay_small(&files)?;
+    Ok(())
+}
 
-    let banned_imports: &[(&str, &str)] = &[
+fn is_docs_or_xtask(root: &Path, path: &Path) -> bool {
+    path.starts_with(root.join("docs"))
+        || path.starts_with(root.join("xtask"))
+        || path.extension().and_then(OsStr::to_str) == Some("md")
+}
+
+fn ensure_banned_imports(root: &Path, files: &[PathBuf]) -> Result<()> {
+    for (needle, message) in [
         (
             concat!("chrono", "::"),
             "workspace crates must use jiff, not chrono",
@@ -1564,21 +1578,25 @@ fn invariants(root: &Path) -> Result<()> {
             concat!("tokio_util", "::"),
             "workspace crates must not import tokio_util",
         ),
-    ];
-    for (needle, message) in banned_imports {
-        ensure_no_match(&files, needle, is_docs_or_xtask, message)?;
+    ] {
+        ensure_no_match(files, needle, |path| is_docs_or_xtask(root, path), message)?;
     }
+    Ok(())
+}
 
+fn ensure_hook_stdio(root: &Path, files: &[PathBuf]) -> Result<()> {
     ensure_no_match(
-        &files,
+        files,
         concat!("Stdio", "::", "inherit"),
         |path| {
             path.starts_with(root.join("xtask"))
                 || path.extension().and_then(OsStr::to_str) == Some("md")
         },
         "hook subprocess paths must not inherit stdio",
-    )?;
+    )
+}
 
+fn ensure_sidebar_renderer_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
     for needle in [
         "rimz::ledger::atomic",
         "crate::ledger::atomic",
@@ -1586,27 +1604,20 @@ fn invariants(root: &Path) -> Result<()> {
         "crate::ledger::writer",
     ] {
         ensure_no_match(
-            &files,
+            files,
             needle,
-            outside_sidebar_pane,
+            |path| {
+                !path.starts_with(root.join("crates/rimz/src/sidebar_pane"))
+                    || path.starts_with(root.join("xtask"))
+            },
             "sidebar renderer must not import ledger writer APIs",
         )?;
     }
+    Ok(())
+}
 
-    // Adapter spend parsers are the read-only, sidebar-safe cost surface
-    // (`crates/rimz/src/agents/<name>/spend.rs`,
-    // `crates/rimz/src/agents/<name>/spend/*.rs`, and the shared
-    // `transcript_fs`): they must stay free of ledger-write, bridge, and broker
-    // imports so the spending walk can never write durable state or block on a
-    // socket.
-    let outside_spend_parsers = {
-        let agents_root = root.join("crates/rimz/src/agents");
-        move |path: &Path| !is_agent_spend_parser_path(path, &agents_root)
-    };
-    // Both the path form (`…::atomic`, catching `crate::ledger::atomic` and
-    // `rimz::ledger::atomic` alike) and the usage form (`atomic::…`, catching
-    // a grouped `use crate::ledger::{atomic, …}` through its call sites —
-    // an unused grouped import already fails the lint gate).
+fn ensure_spend_parser_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let agents_root = root.join("crates/rimz/src/agents");
     for needle in [
         concat!("::", "atomic"),
         concat!("atomic", "::"),
@@ -1616,22 +1627,17 @@ fn invariants(root: &Path) -> Result<()> {
         concat!("broker", "::"),
     ] {
         ensure_no_match(
-            &files,
+            files,
             needle,
-            &outside_spend_parsers,
+            |path| !is_agent_spend_parser_path(path, &agents_root),
             "adapter spend parsers are read-only: no ledger writes, bridge, or broker imports",
         )?;
     }
+    Ok(())
+}
 
-    // The sidebar library tree (the consumer read in `snapshot.rs` and the
-    // produce pipeline in `produce/`) is read-only on ledger truth: the rollup
-    // arrives through the cursor fold and every write is a cache-class runtime
-    // file. Ledger writers, the feed store, the decision bridge, and the Codex
-    // broker belong outside it.
-    let outside_sidebar_library = {
-        let sidebar_root = root.join("crates/rimz/src/sidebar");
-        move |path: &Path| !path.starts_with(&sidebar_root)
-    };
+fn ensure_sidebar_library_boundaries(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let sidebar_root = root.join("crates/rimz/src/sidebar");
     for needle in [
         concat!("ledger", "::", "writer"),
         concat!("feed_", "store"),
@@ -1641,40 +1647,35 @@ fn invariants(root: &Path) -> Result<()> {
         concat!("broker", "::"),
     ] {
         ensure_no_match(
-            &files,
+            files,
             needle,
-            &outside_sidebar_library,
+            |path| !path.starts_with(&sidebar_root),
             "crates/rimz/src/sidebar is read-only on the ledger: no writer, feed-store, bridge, or broker imports",
         )?;
     }
-    ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
-    ensure_sidebar_enrich_folds_before_live_panes(root)?;
-    ensure_card_admission_predicate(root)?;
-    ensure_config_template_sections(root)?;
-    ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
+    Ok(())
+}
 
-    // Durability barriers live in one file: every fsync syscall goes through
-    // `ledger/atomic.rs`, so the write-class contract is auditable in one
-    // place and its testkit counter observes every sync.
+fn ensure_ledger_durability(root: &Path, files: &[PathBuf]) -> Result<()> {
     for needle in [concat!(".sync_", "all("), concat!(".sync_", "data(")] {
         ensure_no_match(
-            &files,
+            files,
             needle,
-            |path: &Path| {
-                path.ends_with("crates/rimz/src/ledger/atomic.rs") || is_docs_or_xtask(path)
+            |path| {
+                path.ends_with("crates/rimz/src/ledger/atomic.rs") || is_docs_or_xtask(root, path)
             },
             "fsync syscalls live in ledger/atomic.rs alone — route through its helpers",
         )?;
     }
+    Ok(())
+}
 
-    // Participant surfaces — hook entrypoints, event/feed publishers, the
-    // statusline sidecars, pane helpers, and the sidebar renderer — resolve
-    // identity through the session pin (`resolve_participant`); the
-    // create-mode resolver would re-derive identity from cwd and split-brain
-    // an agent working inside a nested repo.
-    let outside_participants = {
-        let cli_root = root.join("crates/rimz/src/cli");
-        move |path: &Path| {
+fn ensure_participant_identity(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let cli_root = root.join("crates/rimz/src/cli");
+    ensure_no_match(
+        files,
+        concat!("WorkspaceResolver::", "resolve("),
+        |path| {
             let participant_cli = path.starts_with(&cli_root)
                 && matches!(
                     path.file_name().and_then(OsStr::to_str),
@@ -1688,18 +1689,9 @@ fn invariants(root: &Path) -> Result<()> {
                     )
                 );
             !participant_cli
-        }
-    };
-    ensure_no_match(
-        &files,
-        concat!("WorkspaceResolver::", "resolve("),
-        &outside_participants,
+        },
         "participant surfaces resolve identity through the session pin — use resolve_participant",
-    )?;
-
-    ensure_no_core_pane_auto_use(root, &files)?;
-    ensure_inline_tests_stay_small(&files)?;
-    Ok(())
+    )
 }
 
 fn tracked_text_files(root: &Path) -> Result<Vec<PathBuf>> {
@@ -1785,6 +1777,10 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
         if !path.starts_with(&render_root)
             || path.extension().and_then(OsStr::to_str) != Some("rs")
             || path
+                .strip_prefix(&render_root)
+                .ok()
+                .is_some_and(path_has_tests_component)
+            || path
                 .file_name()
                 .and_then(OsStr::to_str)
                 .is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
@@ -1818,6 +1814,11 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
         "sidebar render runtime must use the snapshot clock; pass snapshot.now/current frame time instead of Timestamp::now()\n{}",
         violations.join("\n")
     );
+}
+
+fn path_has_tests_component(path: &Path) -> bool {
+    path.components()
+        .any(|component| component.as_os_str() == OsStr::new("tests"))
 }
 
 fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
@@ -2128,6 +2129,17 @@ mod tests {
             Path::new("/repo/crates/rimz/src/sidebar/spend/wire.rs"),
             agents_root,
         ));
+    }
+
+    #[test]
+    fn tests_path_component_matches_nested_test_trees() {
+        assert!(path_has_tests_component(Path::new("tests/mod.rs")));
+        assert!(path_has_tests_component(Path::new(
+            "labels/tests/glyphs.rs"
+        )));
+        assert!(!path_has_tests_component(Path::new(
+            "labels/contest/glyphs.rs"
+        )));
     }
 
     #[test]
