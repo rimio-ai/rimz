@@ -22,6 +22,7 @@ mod reset;
 mod resolver;
 mod resume;
 mod room_recovery;
+mod run;
 mod session_record;
 mod setup;
 mod sidebar;
@@ -78,6 +79,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
+        Some(Subcmd::Run(args)) => run::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
@@ -176,6 +178,8 @@ enum Subcmd {
     Pane(pane::PaneArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),
+    /// Run one supervised agent prompt and print its final answer.
+    Run(run::RunArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
     Sidebar(sidebar::SidebarArgs),

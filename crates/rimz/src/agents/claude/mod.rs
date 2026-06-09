@@ -59,11 +59,12 @@ use super::{
     AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow, classify_agent_hook,
-    optional_payload_string, read_transcript_tail, resolve_root_identity,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::run::PermissionMode;
 
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
 /// margin so the bridge never holds the hook past Claude's kill window.
@@ -238,6 +239,14 @@ impl AgentAdapter for ClaudeAdapter {
             "--resume".to_owned(),
             session_id.to_owned(),
         ])
+    }
+
+    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
+        match mode {
+            PermissionMode::Auto => vec!["--permission-mode".to_owned(), "acceptEdits".to_owned()],
+            PermissionMode::Ask => Vec::new(),
+            PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
+        }
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
@@ -421,6 +430,25 @@ impl AgentAdapter for ClaudeAdapter {
                 .as_deref()
                 .and_then(statusline::cap_turn_error_label),
         })
+    }
+
+    fn last_assistant_message(
+        &self,
+        _event_name: &str,
+        payload: &Value,
+        observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        optional_payload_string(payload, &["last_assistant_message", "assistant_message"])
+            .as_deref()
+            .and_then(non_empty_trimmed)
+            .or_else(|| {
+                let path = observation
+                    .transcript_path
+                    .as_deref()
+                    .or_else(|| payload.get("transcript_path").and_then(Value::as_str))?;
+                let tail = read_transcript_tail(Path::new(path))?;
+                statusline::last_assistant_message(&tail)
+            })
     }
 
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {

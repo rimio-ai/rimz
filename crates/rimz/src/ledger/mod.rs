@@ -39,6 +39,7 @@ pub mod gc;
 pub mod lock;
 pub(crate) mod parse_cache;
 pub mod paths;
+pub mod run_store;
 pub mod runtime;
 pub mod single_flight;
 pub mod snapshot;

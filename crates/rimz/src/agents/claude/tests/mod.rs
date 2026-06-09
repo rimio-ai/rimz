@@ -1,6 +1,7 @@
 use super::*;
 use crate::agents::{AgentHookClass, TurnErrorClass};
 use crate::feed::ResolutionMethod;
+use crate::run::PermissionMode;
 use serde_json::json;
 use std::path::Path;
 
@@ -43,5 +44,22 @@ fn launch_command_is_claude_with_optional_prompt() {
             "plan".to_owned(),
             "review this".to_owned()
         ])
+    );
+}
+
+#[test]
+fn claude_permission_args_match_run_posture() {
+    assert_eq!(
+        ClaudeAdapter.permission_args(PermissionMode::Auto),
+        vec!["--permission-mode", "acceptEdits"]
+    );
+    assert!(
+        ClaudeAdapter
+            .permission_args(PermissionMode::Ask)
+            .is_empty()
+    );
+    assert_eq!(
+        ClaudeAdapter.permission_args(PermissionMode::Yolo),
+        vec!["--dangerously-skip-permissions"]
     );
 }

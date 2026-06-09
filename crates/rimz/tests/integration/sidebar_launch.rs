@@ -265,6 +265,10 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
+    fn close_pane(&self, _session: &str, _pane: &PaneId) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> rimz::mux::Result<()> {
         Ok(())
     }

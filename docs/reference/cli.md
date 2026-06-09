@@ -88,6 +88,9 @@ rimz worktree remove <name> [--force]
 
 rimz tab [--layout <name|spec>] [--worktree [NAME]] [--name <title>] [--prompt <text>] [--no-focus]
 rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
+rimz run [--agent <KIND>] [--worktree [NAME]] [--ask|--yolo] [--timeout <duration>] [--keep] [--detach] <prompt>
+rimz run status <run-id> [--json]
+rimz run list [--json]
 ```
 
 `rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty or ahead worktrees unless `--force` is explicit.
@@ -99,6 +102,8 @@ rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
 Worktree launchers require a repo-backed room. In a marker or directory room, `rimz tab --worktree <name>` and `rimz agents ... --worktree <name>` fail at launch with `--worktree requires a git repository-backed room`; plain `rimz tab` and `rimz agents` run in the room root. Because `rimz tab` and `rimz agents` are participating commands, running them from `/tmp` inside a repo room still targets the pinned repo room and creates or reuses the named worktree there; running them from `/tmp` outside any room resolves `/tmp` as a directory workspace, so `--worktree` fails.
 
 `rimz agents` is launcher sugar: each positional kind opens its own single-agent tab. Repeating a kind opens a fleet. Bare `--worktree` creates one fresh worktree per agent; a named worktree is shared by all launched agents. Details and cleanup state machine: [internals/worktrees.md](../internals/worktrees.md).
+
+`rimz run` launches one interactive agent in the room, waits for that agent's root turn to finish, prints the final assistant message, and exits with the run status code (`0` completed, `1` failed, `124` timed out). The command requires the selected agent's Rimz hooks to be installed and trusted, because hooks are the completion signal; it refuses an unwired explicit agent instead of guessing from pane exit. Omitting `--agent` selects the first registered agent whose hooks are installed, trusted, and whose binary is on PATH; `--agent <kind>` pins the choice. Default permissions accept edits where the adapter has that mode, `--ask` leaves the provider's prompts in place, and `--yolo` passes the adapter's explicit bypass flag. `--detach` prints the run id and returns; unless `--keep` is set, the launched wrapper closes its pane after the run record reaches a terminal status. `status` and `list` read the current workspace's retained run records and report durable status only. Detail: [internals/run.md](../internals/run.md).
 
 ## Publish events and ask questions
 
@@ -209,9 +214,9 @@ rimz sidebar serve ...                             # the terminal sidebar render
 rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin poke (stamp + eldest nudge)
 rimz statusline feed --source <agent>              # captures statusline context
 rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
-rimz agents exec <agent> [--worktree-path <p>] [--prompt <text>] # supervised agent pane wrapper
+rimz agents exec <agent> [--run-id <id>] [--worktree-path <p>] [--prompt <text>] # supervised agent pane wrapper
 rimz codex ...                                     # Codex enrichment helpers
 rimz workspace resolve [PATH]                      # print the resolved workspace as JSON
 ```
 
-The installed hook command passes only `--source`; the event is read from the payload on stdin. `agents exec` is what `rimz tab` and `rimz agents` run inside agent panes: it launches the adapter's CLI and performs marked-worktree cleanup after exit. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md), [internals/transcript.md](../internals/transcript.md), and [internals/worktrees.md](../internals/worktrees.md).
+The installed hook command passes only `--source`; the event is read from the payload on stdin. `agents exec` is what `rimz tab`, `rimz agents`, and `rimz run` run inside agent panes: it launches the adapter's CLI, forwards `RIMZ_RUN_ID` when a supervised run owns the pane, and performs marked-worktree cleanup after exit. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md), [internals/transcript.md](../internals/transcript.md), and [internals/worktrees.md](../internals/worktrees.md).

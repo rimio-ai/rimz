@@ -26,9 +26,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tracing::debug;
 
-use crate::bridge::{WakeupFrame, feed_socket_path};
+use crate::bridge::{WakeupFrame, feed_socket_path, run_socket_path};
 use crate::feed::FeedItem;
 use crate::ledger::RuntimePaths;
+use crate::run::RunRecord;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::event::{EventEnvelope, EventKind};
 use crate::schema::heartbeat::SidebarHeartbeat;
@@ -68,6 +69,23 @@ pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
         workspace_id: item.workspace_id.clone(),
         request_id: item.request_id.clone(),
         nonce: item.nonce.clone(),
+    };
+    let payload = serde_json::to_vec(&frame)?;
+    send_datagram(&payload, &target);
+    Ok(())
+}
+
+/// Send a `run_completed` datagram to the `rimz run` waiter. The run record on
+/// disk is authoritative; this socket only cuts latency for the blocking CLI.
+pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
+    let target = run_socket_path(rt, &record.run_id);
+    if !target.exists() {
+        return Ok(());
+    }
+    let frame = WakeupFrame::RunCompleted {
+        workspace_id: record.workspace_id.clone(),
+        run_id: record.run_id.clone(),
+        status: record.status,
     };
     let payload = serde_json::to_vec(&frame)?;
     send_datagram(&payload, &target);

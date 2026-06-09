@@ -64,7 +64,7 @@ The workspace and its ledger outlive the terminal session. A long-running agent 
 
 The ledger survives a host restart because it is a directory of flat files under `~/.local/state/rimz/`. Running processes do not. To carry an overnight agent run across a reboot, the host keeps them alive with a systemd unit, tmux-resurrect, or Zellij's resurrect mode (detail in [DESIGN.md](../../DESIGN.md) under "Non-goals").
 
-To run overnight without a human, plan for the prompts. An agent that hits a permission prompt with nobody attached waits on its own native UI until you return or its timeout fires. Two ways scale past your sleep schedule: enrol a resolver chain so routine answers happen without you (next section), or run the agent with its own bypass flag (`claude --dangerously-skip-permissions`, `codex --ask-for-approval never`). The unattended pattern is covered in [Unattended runs](#unattended-runs) below.
+To run overnight without a human, plan for the prompts. An agent that hits a permission prompt with nobody attached waits on its own native UI until you return or its timeout fires. Two ways scale past your sleep schedule: enrol a resolver chain so routine answers happen without you (next section), or run the agent with its own bypass flag (`claude --dangerously-skip-permissions`, `codex --dangerously-bypass-approvals-and-sandbox`). The unattended pattern is covered in [Unattended runs](#unattended-runs) below.
 
 ## Resolver chains: the morning after
 
@@ -99,7 +99,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 To run agents unattended, overnight or on a sandboxed runner with no human to ask, two patterns work.
 
-The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --ask-for-approval never --sandbox danger-full-access` and it runs straight through. Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
+The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through. Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
 
 The second is a permissive resolver. Enrol a resolver that answers `allow` to anything (or anything matching a policy); the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 

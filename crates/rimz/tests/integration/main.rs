@@ -27,6 +27,7 @@ mod reload;
 mod remote_attach;
 mod reset;
 mod resolver;
+mod run;
 mod sidebar_launch;
 mod start;
 mod transcript_watch;

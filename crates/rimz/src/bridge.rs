@@ -21,8 +21,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
-use crate::ids::{RequestId, WorkspaceId};
+use crate::ids::{RequestId, RunId, WorkspaceId};
 use crate::ledger::RuntimePaths;
+use crate::run::RunStatus;
 
 /// `AF_UNIX` socket paths hold at most 108 bytes including the NUL
 /// terminator. The socket names under `sock_dir` use 12-hex short ids
@@ -73,6 +74,12 @@ pub enum BridgeOutcome {
     Neutral,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+pub enum RunWakeOutcome {
+    Completed(RunStatus),
+    Neutral,
+}
+
 /// Validation triple a waiter expects on every wakeup frame.
 #[derive(Clone, Debug)]
 pub struct ExpectedFrame {
@@ -81,9 +88,15 @@ pub struct ExpectedFrame {
     pub nonce: String,
 }
 
+#[derive(Clone, Debug)]
+pub struct ExpectedRunFrame {
+    pub workspace_id: WorkspaceId,
+    pub run_id: RunId,
+}
+
 /// Wakeup frame the ledger writer sends to a per-request socket when a
-/// resolution lands. Intentionally small: the feed file on disk carries the
-/// decision payload.
+/// resolution lands, or to a per-run socket when `rimz run` reaches a
+/// terminal state. Intentionally small: disk files carry the payload.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WakeupFrame {
@@ -91,6 +104,11 @@ pub enum WakeupFrame {
         workspace_id: WorkspaceId,
         request_id: RequestId,
         nonce: String,
+    },
+    RunCompleted {
+        workspace_id: WorkspaceId,
+        run_id: RunId,
+        status: RunStatus,
     },
 }
 
@@ -100,6 +118,10 @@ pub enum WakeupFrame {
 pub fn feed_socket_path(rt: &RuntimePaths, request_id: &RequestId) -> PathBuf {
     rt.sock_dir
         .join(format!("feed.{}.sock", request_id.short()))
+}
+
+pub fn run_socket_path(rt: &RuntimePaths, run_id: &RunId) -> PathBuf {
+    rt.sock_dir.join(format!("run.{}.sock", run_id.short()))
 }
 
 /// Bind a per-request datagram socket. Caller owns both the returned
@@ -114,7 +136,14 @@ pub fn feed_socket_path(rt: &RuntimePaths, request_id: &RequestId) -> PathBuf {
 /// it during `open`); we re-check defensively here only by removing a stale
 /// file at the derived path before binding.
 pub fn bind(rt: &RuntimePaths, request_id: &RequestId) -> Result<(StdUnixDatagram, PathBuf)> {
-    let path = feed_socket_path(rt, request_id);
+    bind_path(feed_socket_path(rt, request_id))
+}
+
+pub fn bind_run(rt: &RuntimePaths, run_id: &RunId) -> Result<(StdUnixDatagram, PathBuf)> {
+    bind_path(run_socket_path(rt, run_id))
+}
+
+fn bind_path(path: PathBuf) -> Result<(StdUnixDatagram, PathBuf)> {
     // Fail fast on the AF_UNIX length budget (the +1 is the NUL terminator):
     // `bind(2)` would reject the same path with an opaque EINVAL.
     let len = path.as_os_str().len();
@@ -203,6 +232,7 @@ pub async fn wait_for_resolution(
                     }
                     return Ok::<BridgeOutcome, BridgeErr>(BridgeOutcome::Resolved);
                 }
+                Ok(WakeupFrame::RunCompleted { .. }) => {}
                 Err(e) => {
                     debug!(error = %e, "bridge: dropping unparseable wakeup frame");
                 }
@@ -231,10 +261,62 @@ pub async fn wait_for_resolution_owning(
     wait_for_resolution(&sock, &expected, cap).await
 }
 
+pub async fn wait_for_run_completion(
+    sock: &tokio::net::UnixDatagram,
+    expected: &ExpectedRunFrame,
+    cap: Option<Duration>,
+) -> Result<RunWakeOutcome> {
+    let recv_valid = async {
+        let mut buf = vec![0u8; 4096];
+        loop {
+            let n = sock.recv(&mut buf).await.map_err(BridgeErr::Recv)?;
+            match serde_json::from_slice::<WakeupFrame>(&buf[..n]) {
+                Ok(WakeupFrame::RunCompleted {
+                    workspace_id,
+                    run_id,
+                    status,
+                }) => {
+                    if workspace_id != expected.workspace_id || run_id != expected.run_id {
+                        debug!(
+                            ?workspace_id,
+                            ?run_id,
+                            "bridge: dropping run wakeup frame failing (workspace_id, run_id) check"
+                        );
+                        continue;
+                    }
+                    return Ok::<RunWakeOutcome, BridgeErr>(RunWakeOutcome::Completed(status));
+                }
+                Ok(WakeupFrame::FeedResolved { .. }) => {}
+                Err(e) => {
+                    debug!(error = %e, "bridge: dropping unparseable wakeup frame");
+                }
+            }
+        }
+    };
+
+    match cap {
+        Some(cap) => match tokio::time::timeout(cap, recv_valid).await {
+            Ok(result) => result,
+            Err(_elapsed) => Ok(RunWakeOutcome::Neutral),
+        },
+        None => recv_valid.await,
+    }
+}
+
+pub async fn wait_for_run_completion_owning(
+    sock: StdUnixDatagram,
+    expected: ExpectedRunFrame,
+    cap: Option<Duration>,
+) -> Result<RunWakeOutcome> {
+    let sock = adopt(sock)?;
+    wait_for_run_completion(&sock, &expected, cap).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ids::WorkspaceId;
+    use tokio::net::UnixDatagram;
 
     /// The precondition fires before `bind(2)` ever sees the path, so the
     /// user gets the named fix (shorten the runtime dir) instead of an
@@ -255,5 +337,72 @@ mod tests {
             }
             other => panic!("expected SocketPathTooLong, got {other:?}"),
         }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_completion_wakeup_round_trips_and_ignores_wrong_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let rt = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        rt.ensure_dirs().expect("runtime dirs");
+        let run_id = RunId::new();
+        let other_run_id = RunId::new();
+        let (sock, sock_path) = bind_run(&rt, &run_id).expect("bind run");
+        let sender = UnixDatagram::unbound().expect("sender");
+
+        let wrong = WakeupFrame::RunCompleted {
+            workspace_id: workspace_id.clone(),
+            run_id: other_run_id,
+            status: RunStatus::Completed,
+        };
+        let wrong_bytes = serde_json::to_vec(&wrong).expect("serialize wrong");
+        sender
+            .send_to(&wrong_bytes, &sock_path)
+            .await
+            .expect("send wrong");
+        let right = WakeupFrame::RunCompleted {
+            workspace_id: workspace_id.clone(),
+            run_id: run_id.clone(),
+            status: RunStatus::Failed,
+        };
+        let right_bytes = serde_json::to_vec(&right).expect("serialize right");
+        sender
+            .send_to(&right_bytes, &sock_path)
+            .await
+            .expect("send right");
+
+        let outcome = wait_for_run_completion_owning(
+            sock,
+            ExpectedRunFrame {
+                workspace_id,
+                run_id,
+            },
+            Some(Duration::from_secs(1)),
+        )
+        .await
+        .expect("run wait");
+        assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn run_completion_wait_times_out_neutral() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let rt = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        rt.ensure_dirs().expect("runtime dirs");
+        let run_id = RunId::new();
+        let (sock, _sock_path) = bind_run(&rt, &run_id).expect("bind run");
+
+        let outcome = wait_for_run_completion_owning(
+            sock,
+            ExpectedRunFrame {
+                workspace_id,
+                run_id,
+            },
+            Some(Duration::from_millis(10)),
+        )
+        .await
+        .expect("run wait");
+        assert_eq!(outcome, RunWakeOutcome::Neutral);
     }
 }

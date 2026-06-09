@@ -3,6 +3,7 @@ use serde_json::json;
 use super::*;
 use crate::agents::AgentHookClass;
 use crate::feed::ResolutionMethod;
+use crate::run::PermissionMode;
 use std::io::Write;
 use std::path::Path;
 
@@ -51,6 +52,24 @@ fn launch_command_is_codex_with_optional_prompt() {
             "model_reasoning_effort=high".to_owned(),
             "review this".to_owned()
         ])
+    );
+}
+
+#[test]
+fn codex_permission_args_match_run_posture() {
+    assert_eq!(
+        CodexAdapter.permission_args(PermissionMode::Auto),
+        vec![
+            "--ask-for-approval",
+            "never",
+            "--sandbox",
+            "workspace-write"
+        ]
+    );
+    assert!(CodexAdapter.permission_args(PermissionMode::Ask).is_empty());
+    assert_eq!(
+        CodexAdapter.permission_args(PermissionMode::Yolo),
+        vec!["--dangerously-bypass-approvals-and-sandbox"]
     );
 }
 

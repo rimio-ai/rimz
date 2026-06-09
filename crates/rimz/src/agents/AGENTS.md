@@ -15,8 +15,8 @@ Topic detail lives in the internals leaves the root map describes — [hooks.md]
 
 An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs), and one line in [`registry::ADAPTERS`](./registry.rs) — nothing else.
 
-- **Adapters never touch the ledger.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every ledger write and all bridge I/O, calling the adapter for classification and rendering only.
-- **Emit only the two outputs downstream consumes** — an `AgentLifecycleObservation` and the decision `Value`. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
+- **Adapters never touch the ledger.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every ledger write and all bridge I/O, calling the adapter for classification, rendering, and normalized run output.
+- **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a decision `Value`, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
 - **Decision JSON is per-agent.** Never reuse one agent's decision shape for another — the providers diverge (e.g. Codex rejects `updatedInput` / `interrupt`). Render each agent's own shape.
 
 ## Hook discipline

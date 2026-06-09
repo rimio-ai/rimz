@@ -28,10 +28,11 @@ rimz CLI and hook subprocesses
                 ▼
 workspace ledger (~/.local/state/rimz/workspaces/<id>/)
   events.log.jsonl   snapshots/latest.json
-  feed/<request_id>.json   locks/workspace.lock
+  feed/<request_id>.json   runs/<run_id>.json   locks/workspace.lock
 
 runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   sock/feed.<short_id>.sock         per-request decision socket
+  sock/run.<short_id>.sock          supervised-run completion socket
   sock/sidebar.<instance_id>.sock   wakeup datagram socket
   heartbeat/sidebar.<instance_id>.json
   heartbeat/resolver.<resolver_id>.json
@@ -101,7 +102,7 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | `src/sidebar_pane/` | native pane-resident sidebar process: the fixed-timestep serve loop and producer election (`app/`, split into loop state, socket/heartbeat, timing, notification, fetch/state/gate/health/lifecycle/reload/selection/watch leaves), terminal notification OSC/BEL emission (`osc.rs`), and frame composition over the snapshot view-model (`render/`, split into UI state, compose, chrome, ANSI serialization, effects, labels, and section leaves including `agent_card/`) | [sidebar.md](./docs/internals/sidebar.md) · [notifications.md](./docs/internals/notifications.md) · [interface/sidebar.md](./docs/interface/sidebar.md) |
 | `src/schema/` | durable event envelope, typed sidebar event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) · [state.md](./docs/internals/state.md) |
 
-Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `worktree` (Rimz-owned Git worktrees and cleanup; [worktrees.md](./docs/internals/worktrees.md)), `tab_layout` (agent-tab layout DSL and IR; [worktrees.md](./docs/internals/worktrees.md)), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `bridge` (per-request sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote_control` (agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
+Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `worktree` (Rimz-owned Git worktrees and cleanup; [worktrees.md](./docs/internals/worktrees.md)), `tab_layout` (agent-tab layout DSL and IR; [worktrees.md](./docs/internals/worktrees.md)), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `run` (supervised one-shot run records and lifecycle completion; [run.md](./docs/internals/run.md)), `bridge` (per-request and per-run sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote_control` (agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
 
 `build.rs` embeds the checked-in pricing snapshot (`pricing/litellm-pricing.json`) at compile time, network-free; `cargo xtask pricing-refresh` refreshes it ([pricing.md](./docs/internals/pricing.md)). Hidden subcommands are machinery, not humans — the `sidebar` and `statusline` helper APIs and the `codex` helpers (`refresh-context`, `refresh-rate-limits`, and the `app-server serve` broker hosted in the `rimzd` daemon view) — listed in [cli.md](./docs/reference/cli.md#commands-rimz-calls-for-you).
 

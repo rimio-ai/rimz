@@ -44,8 +44,8 @@ use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
     CodexPostCompact, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
-    CodexUserPromptSubmit, parse_post_compact, parse_session_start, parse_subagent_start,
-    parse_subagent_stop, parse_user_prompt_submit,
+    CodexUserPromptSubmit, parse_post_compact, parse_session_start, parse_stop,
+    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
 };
 pub use self::transcript::refresh_transcript_context;
 #[cfg(test)]
@@ -69,10 +69,11 @@ use super::{
     AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
     HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
     LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity, SubagentIdentity, choice_is_allow,
-    classify_agent_hook, optional_payload_string, resolve_root_identity, resolve_subagent_identity,
-    sanitize_user_prompt, stop_payload_errored,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, resolve_root_identity,
+    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
+use crate::run::PermissionMode;
 
 /// Codex's effective hook cap. Upstream's blocking-hook deadline is shorter
 /// than Claude's; this leaves a small safety margin so the bridge never holds
@@ -207,6 +208,19 @@ impl AgentAdapter for CodexAdapter {
         ])
     }
 
+    fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
+        match mode {
+            PermissionMode::Yolo => vec!["--dangerously-bypass-approvals-and-sandbox".to_owned()],
+            PermissionMode::Auto => vec![
+                "--ask-for-approval".to_owned(),
+                "never".to_owned(),
+                "--sandbox".to_owned(),
+                "workspace-write".to_owned(),
+            ],
+            PermissionMode::Ask => Vec::new(),
+        }
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = vec!["codex".to_owned()];
         argv.extend(extra_args.iter().cloned());
@@ -299,6 +313,21 @@ impl AgentAdapter for CodexAdapter {
             agent_id,
             parent_agent_id,
         ))
+    }
+
+    fn last_assistant_message(
+        &self,
+        event_name: &str,
+        payload: &Value,
+        _observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        match event_name {
+            "Stop" => parse_stop(payload)
+                .last_assistant_message
+                .as_deref()
+                .and_then(non_empty_trimmed),
+            _ => None,
+        }
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {

@@ -25,21 +25,26 @@ pub(super) fn handle_lifecycle_hook(
         (Some(agent_id), Some(scope)) => Some((agent_id, scope)),
         _ => None,
     };
-    let model_hint = record_lifecycle_observation(
+    let recorded = record_lifecycle_observation(
         workspace, ledger, agent, event_name, payload, globals, expiry,
     );
+    let model_hint = recorded
+        .as_ref()
+        .and_then(|recorded| recorded.model_hint.as_deref());
     if let Some(agent_id) = agent_id {
         manage_agent_context(
-            workspace,
-            ledger,
-            agent,
-            event_name,
-            payload,
-            agent_id,
-            model_hint.as_deref(),
+            workspace, ledger, agent, event_name, payload, agent_id, model_hint,
         );
     }
+    if let Some(recorded) = recorded.as_ref() {
+        record_run_lifecycle(ledger, agent, event_name, payload, recorded);
+    }
     Ok(())
+}
+
+struct RecordedLifecycle {
+    model_hint: Option<String>,
+    observation: AgentLifecycleObservation,
 }
 
 /// Record the agent lifecycle observation and expire superseded asks in the
@@ -52,7 +57,7 @@ fn record_lifecycle_observation(
     payload: &Value,
     globals: &GlobalFlags,
     expiry: Option<(&str, AskExpiry)>,
-) -> Option<String> {
+) -> Option<RecordedLifecycle> {
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
         attach_agent_owner(agent.descriptor().kind, &mut observation);
         attach_agent_pane(&mut observation);
@@ -103,7 +108,10 @@ fn record_lifecycle_observation(
                 "lifecycle: failed to record the agent.lifecycle event",
             );
         }
-        return model_hint;
+        return Some(RecordedLifecycle {
+            model_hint,
+            observation,
+        });
     }
 
     if let Some((agent_id, scope)) = expiry {
@@ -131,6 +139,66 @@ fn record_lifecycle_observation(
         }
     }
     None
+}
+
+fn record_run_lifecycle(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    payload: &Value,
+    recorded: &RecordedLifecycle,
+) {
+    let Some(run_id) = env_run_id() else {
+        return;
+    };
+    let last_message = rimz::run::terminal_status_for_signal(&recorded.observation.signal)
+        .is_some()
+        .then(|| agent.last_assistant_message(event_name, payload, &recorded.observation))
+        .flatten();
+    match rimz::run::record_lifecycle(
+        ledger.paths(),
+        &run_id,
+        agent.descriptor().kind,
+        &recorded.observation,
+        last_message,
+    ) {
+        Ok(Some(record)) => {
+            if let Err(err) = rimz::ledger::wakeup::wake_run(ledger.runtime_paths(), &record) {
+                warn!(
+                    agent = agent.descriptor().kind,
+                    event = %event_name,
+                    run_id = %run_id,
+                    error = %err,
+                    "lifecycle: failed to wake the completed run",
+                );
+            }
+        }
+        Ok(None) => {}
+        Err(err) => {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                run_id = %run_id,
+                error = %err,
+                "lifecycle: failed to update the supervised run",
+            );
+        }
+    }
+}
+
+fn env_run_id() -> Option<rimz::RunId> {
+    let raw = std::env::var(rimz::run::ENV_RUN_ID).ok()?;
+    match raw.parse() {
+        Ok(run_id) => Some(run_id),
+        Err(err) => {
+            warn!(
+                run_id = %raw,
+                error = %err,
+                "lifecycle: ignoring invalid supervised run id",
+            );
+            None
+        }
+    }
 }
 
 fn manage_agent_context(

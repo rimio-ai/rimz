@@ -253,6 +253,7 @@ fn validate_uuid_id(
 }
 
 uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
+uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
     SidebarInstanceId,

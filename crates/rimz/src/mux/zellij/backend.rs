@@ -422,6 +422,10 @@ impl MuxBackend for ZellijBackend {
         Ok(())
     }
 
+    fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
+        ZellijBackend::close_pane(self, session, pane)
+    }
+
     fn close_view_floating_panes(&self, session: &str, anchor: &PaneId) -> Result<Vec<PaneId>> {
         ensure_pane_backend(anchor, MuxName::Zellij)?;
         let panes = self.list_panes_bounded(Some(session), super::super::COMMAND_TIMEOUT)?;

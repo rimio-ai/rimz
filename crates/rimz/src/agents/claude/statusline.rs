@@ -254,6 +254,37 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
     None
 }
 
+/// Extract Claude's latest main-thread assistant message from a transcript
+/// tail. Sidechain entries are child-agent replay and ignored. A provider API
+/// error marker is decisive but not product output, so it returns `None`
+/// instead of walking back into an earlier turn.
+pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
+    for line in tail.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+            continue;
+        }
+        let entry_type = value.get("type").and_then(Value::as_str);
+        if !matches!(entry_type, Some("assistant" | "user")) {
+            continue;
+        }
+        if entry_type == Some("user") {
+            return None;
+        }
+        if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
+            return None;
+        }
+        return assistant_text(&value);
+    }
+    None
+}
+
 /// The error entry's text ("API Error: Overloaded"): the first text block of
 /// `message.content` (or a flat string), trimmed and capped. `None` when the
 /// shape is unfamiliar — the marker still escalates, just unlabeled.
@@ -267,6 +298,33 @@ fn turn_error_label(entry: &Value) -> Option<String> {
         _ => return None,
     };
     cap_turn_error_label(text)
+}
+
+fn assistant_text(entry: &Value) -> Option<String> {
+    let content = entry.get("message")?.get("content")?;
+    content_text(content)
+}
+
+fn content_text(content: &Value) -> Option<String> {
+    match content {
+        Value::String(text) => non_empty_text(text),
+        Value::Array(blocks) => {
+            let text = blocks
+                .iter()
+                .filter_map(|block| block.get("text").and_then(Value::as_str))
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            (!text.is_empty()).then_some(text)
+        }
+        _ => None,
+    }
+}
+
+fn non_empty_text(text: &str) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 impl StatuslinePayload {
@@ -591,6 +649,36 @@ mod tests {
         let sidechain = r#"{"type":"assistant","isSidechain":true,"isApiErrorMessage":true,"timestamp":"2026-06-04T03:01:00.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\n");
         assert!(detect_turn_error(&tail).is_none());
+    }
+
+    #[test]
+    fn last_assistant_message_reads_latest_main_thread_text() {
+        let earlier = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"old"}]}}"#;
+        let latest = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}}"#;
+        let tail = format!("{earlier}\n{latest}\n");
+
+        assert_eq!(
+            last_assistant_message(&tail).as_deref(),
+            Some("hello\nworld")
+        );
+    }
+
+    #[test]
+    fn last_assistant_message_skips_sidechain_text() {
+        let sidechain = r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"child answer"}]}}"#;
+        let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\n");
+
+        assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
+    }
+
+    #[test]
+    fn last_assistant_message_does_not_surface_api_error_text_or_prior_turn() {
+        let prior_turn = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"previous turn"}]}}"#;
+        let user =
+            r#"{"type":"user","message":{"content":[{"type":"text","text":"current prompt"}]}}"#;
+        let tail = format!("{prior_turn}\n{user}\n{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n");
+
+        assert!(last_assistant_message(&tail).is_none());
     }
 
     #[test]

@@ -416,6 +416,10 @@ pub trait MuxBackend: Send + Sync {
     /// global sidebar is included by backend convention: tmux relies on the
     /// session's `after-new-window` hook; Zellij renders it into the tab layout.
     fn open_tab(&self, opts: &TabOptions) -> Result<()>;
+    /// Close one pane by normalized id. Used by supervised one-shot launches
+    /// after their terminal result is recorded; callers treat failure as
+    /// best-effort cleanup.
+    fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()>;
     /// Close any floating panes sharing `anchor`'s view, returning the closed
     /// pane ids. A self-closing sidebar uses this to tear down Zellij overlays
     /// that would otherwise keep an empty tab alive; tmux has no floating panes,

@@ -18,6 +18,8 @@ use rimz::workspace::WorkspaceResolver;
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
+const RUN_MONITOR_POLL: Duration = Duration::from_millis(250);
+const RUN_EXIT_TERMINAL_GRACE: Duration = Duration::from_millis(500);
 static CLEANUP_SIGNAL_RECEIVED: OnceLock<Arc<AtomicBool>> = OnceLock::new();
 
 #[derive(Debug, Args)]
@@ -48,6 +50,12 @@ enum AgentsSubcmd {
 #[derive(Debug, Args)]
 struct ExecArgs {
     kind: String,
+    #[arg(long)]
+    run_id: Option<rimz::RunId>,
+    #[arg(long, hide = true)]
+    exit_on_run_completion: bool,
+    #[arg(long, hide = true)]
+    close_pane_on_exit: bool,
     #[arg(long)]
     worktree_path: Option<PathBuf>,
     #[arg(long)]
@@ -121,6 +129,10 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         reset_cleanup_signal_flag();
         install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
     }
+    let run_context = run_exec_context(&args, globals)?;
+    if let Some(context) = run_context.as_ref() {
+        record_own_run_pane(context);
+    }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let argv = adapter
@@ -129,11 +141,27 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
-    let child = Command::new(program)
-        .args(rest)
+    let mut command = Command::new(program);
+    command.args(rest);
+    if let Some(run_id) = args.run_id.as_ref() {
+        command.env(rimz::run::ENV_RUN_ID, run_id.as_str());
+    }
+    let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
-    let outcome = supervise_child(child).context("supervising agent process")?;
+    let monitor = if args.exit_on_run_completion {
+        Some(
+            run_context
+                .as_ref()
+                .context("--exit-on-run-completion requires --run-id")?,
+        )
+    } else {
+        None
+    };
+    let outcome = supervise_child(child, monitor).context("supervising agent process")?;
+    if let Some(context) = run_context.as_ref() {
+        fail_run_if_child_exited_first(context, RUN_EXIT_TERMINAL_GRACE);
+    }
 
     if let Some(path) = args.worktree_path.as_deref()
         && let Err(err) = cleanup_worktree(path, globals, !outcome.signaled)
@@ -143,7 +171,112 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
+    if args.close_pane_on_exit
+        && let Some(context) = run_context.as_ref()
+    {
+        close_own_pane(globals, &context.session_name);
+    }
     std::process::exit(outcome.status.code().unwrap_or(1));
+}
+
+#[derive(Clone, Debug)]
+struct RunExecContext {
+    run_id: rimz::RunId,
+    paths: rimz::StatePaths,
+    runtime: rimz::RuntimePaths,
+    session_name: String,
+}
+
+impl RunExecContext {
+    fn is_terminal(&self) -> bool {
+        match rimz::run::load(&self.paths, &self.run_id) {
+            Ok(record) => record.status.is_terminal(),
+            Err(err) => {
+                tracing::debug!(
+                    run_id = %self.run_id,
+                    error = %err,
+                    "could not read supervised run record while monitoring pane",
+                );
+                false
+            }
+        }
+    }
+}
+
+fn run_exec_context(args: &ExecArgs, globals: &GlobalFlags) -> Result<Option<RunExecContext>> {
+    if args.exit_on_run_completion && args.run_id.is_none() {
+        bail!("--exit-on-run-completion requires --run-id");
+    }
+    let Some(run_id) = args.run_id.clone() else {
+        return Ok(None);
+    };
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving supervised run workspace")?;
+    let ledger = super::open_ledger(&workspace).context("opening supervised run ledger")?;
+    Ok(Some(RunExecContext {
+        run_id,
+        paths: ledger.paths().clone(),
+        runtime: ledger.runtime_paths().clone(),
+        session_name: workspace.session_name,
+    }))
+}
+
+fn record_own_run_pane(context: &RunExecContext) {
+    let Some(pane_id) = rimz::mux::ambient_pane_id() else {
+        return;
+    };
+    if let Err(err) = rimz::run::record_pane(&context.paths, &context.run_id, pane_id.clone()) {
+        tracing::debug!(
+            run_id = %context.run_id,
+            pane = %pane_id,
+            error = %err,
+            "could not persist supervised run pane id",
+        );
+    }
+}
+
+fn fail_run_if_child_exited_first(context: &RunExecContext, terminal_grace: Duration) {
+    if wait_for_terminal_run(context, terminal_grace) {
+        return;
+    }
+    match rimz::run::load(&context.paths, &context.run_id) {
+        Ok(record) if record.status.is_terminal() => {}
+        Ok(_) => match rimz::run::fail_if_nonterminal(&context.paths, &context.run_id) {
+            Ok(Some(record)) => {
+                if let Err(err) = rimz::ledger::wakeup::wake_run(&context.runtime, &record) {
+                    tracing::debug!(
+                        run_id = %context.run_id,
+                        error = %err,
+                        "could not wake supervised run waiter after agent process exit",
+                    );
+                }
+            }
+            Ok(None) => {}
+            Err(err) => tracing::debug!(
+                run_id = %context.run_id,
+                error = %err,
+                "could not mark supervised run failed after agent process exit",
+            ),
+        },
+        Err(err) => tracing::debug!(
+            run_id = %context.run_id,
+            error = %err,
+            "could not inspect supervised run after agent process exit",
+        ),
+    }
+}
+
+fn wait_for_terminal_run(context: &RunExecContext, cap: Duration) -> bool {
+    let deadline = Instant::now() + cap;
+    loop {
+        if context.is_terminal() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(CHILD_WAIT_POLL);
+    }
 }
 
 #[derive(Debug)]
@@ -152,16 +285,21 @@ struct ExecOutcome {
     signaled: bool,
 }
 
-fn supervise_child(mut child: Child) -> Result<ExecOutcome> {
+fn supervise_child(mut child: Child, run_monitor: Option<&RunExecContext>) -> Result<ExecOutcome> {
     let mut signal_seen_at = cleanup_signal_received().then(Instant::now);
     let mut term_sent_at: Option<Instant> = None;
     let mut kill_sent = false;
+    let mut run_completed = false;
+    let mut next_run_check = Instant::now();
     loop {
+        let now = Instant::now();
         match child.try_wait() {
             Ok(Some(status)) => {
                 return Ok(ExecOutcome {
                     status,
-                    signaled: signal_seen_at.is_some() || cleanup_signal_received(),
+                    signaled: run_completed
+                        || signal_seen_at.is_some()
+                        || cleanup_signal_received(),
                 });
             }
             Ok(None) => {}
@@ -169,24 +307,31 @@ fn supervise_child(mut child: Child) -> Result<ExecOutcome> {
             Err(err) => return Err(err).context("waiting for agent process"),
         }
 
-        if cleanup_signal_received() {
-            let now = Instant::now();
-            let first_seen = *signal_seen_at.get_or_insert(now);
-            if now.duration_since(first_seen) >= CHILD_SIGNAL_GRACE {
-                match term_sent_at {
-                    None => {
-                        signal_child(child.id(), ChildSignal::Term);
-                        term_sent_at = Some(now);
-                    }
-                    Some(sent_at)
-                        if !kill_sent && now.duration_since(sent_at) >= CHILD_SIGNAL_GRACE =>
-                    {
-                        signal_child(child.id(), ChildSignal::Kill);
-                        kill_sent = true;
-                    }
-                    Some(_) => {}
-                }
+        if !run_completed
+            && let Some(monitor) = run_monitor
+            && now >= next_run_check
+        {
+            next_run_check = now + RUN_MONITOR_POLL;
+            if monitor.is_terminal() {
+                run_completed = true;
+                signal_child(child.id(), ChildSignal::Term);
+                term_sent_at = Some(now);
             }
+        }
+
+        if cleanup_signal_received() {
+            let first_seen = *signal_seen_at.get_or_insert(now);
+            if term_sent_at.is_none() && now.duration_since(first_seen) >= CHILD_SIGNAL_GRACE {
+                signal_child(child.id(), ChildSignal::Term);
+                term_sent_at = Some(now);
+            }
+        }
+        if let Some(sent_at) = term_sent_at
+            && !kill_sent
+            && now.duration_since(sent_at) >= CHILD_SIGNAL_GRACE
+        {
+            signal_child(child.id(), ChildSignal::Kill);
+            kill_sent = true;
         }
 
         std::thread::sleep(CHILD_WAIT_POLL);
@@ -300,6 +445,23 @@ fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
     other_live_user_pane_inside(&panes, &own, path)
 }
 
+fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
+    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
+        return;
+    };
+    let Some(own) = own_pane_id(mux) else {
+        return;
+    };
+    let backend = rimz::mux::backend_for(mux);
+    if let Err(err) = backend.close_pane(session_name, &own) {
+        tracing::debug!(
+            pane = %own,
+            error = %err,
+            "supervised run wrapper could not close its pane",
+        );
+    }
+}
+
 fn other_live_user_pane_inside<'a>(
     panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>,
     own: &rimz::PaneId,
@@ -372,6 +534,9 @@ fn exec_shell(path: &Path) -> Result<()> {
 mod tests {
     use super::*;
     use clap::Parser;
+    use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
+    use rimz::ids::{AgentKind, WorkspaceId};
+    use rimz::run::{PermissionMode, RunRecord, RunStatus};
     use rimz::{MuxName, PaneId};
 
     #[derive(Debug, Parser)]
@@ -386,6 +551,10 @@ mod tests {
             "rimz",
             "exec",
             "codex",
+            "--run-id",
+            "run_0123456789abcdef0123456789abcdef",
+            "--exit-on-run-completion",
+            "--close-pane-on-exit",
             "--worktree-path",
             "/x",
             "--prompt",
@@ -398,9 +567,59 @@ mod tests {
 
         let AgentsSubcmd::Exec(args) = parsed.command;
         assert_eq!(args.kind, "codex");
+        assert_eq!(
+            args.run_id.as_ref().map(rimz::RunId::as_str),
+            Some("run_0123456789abcdef0123456789abcdef")
+        );
+        assert!(args.exit_on_run_completion);
+        assert!(args.close_pane_on_exit);
         assert_eq!(args.worktree_path, Some(PathBuf::from("/x")));
         assert_eq!(args.prompt.as_deref(), Some("hi"));
         assert_eq!(args.extra_args, ["--model", "gpt-5-codex"]);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
+        let state = tempfile::tempdir().expect("state dir");
+        let runtime_root = tempfile::tempdir().expect("runtime dir");
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = rimz::StatePaths::under(workspace_id.clone(), state.path()).expect("paths");
+        let runtime =
+            rimz::RuntimePaths::under(workspace_id.clone(), runtime_root.path()).expect("runtime");
+        paths.ensure_dirs().expect("state dirs");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "summarize".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        let run_id = record.run_id.clone();
+        rimz::run::create(&paths, &record).expect("create run");
+        let (sock, _sock_path) = rimz::bridge::bind_run(&runtime, &run_id).expect("bind run");
+        let context = RunExecContext {
+            run_id: run_id.clone(),
+            paths: paths.clone(),
+            runtime,
+            session_name: "rimz-test".to_owned(),
+        };
+
+        fail_run_if_child_exited_first(&context, Duration::ZERO);
+
+        let failed = rimz::run::load(&paths, &run_id).expect("load failed run");
+        assert_eq!(failed.status, RunStatus::Failed);
+        let outcome = rimz::bridge::wait_for_run_completion_owning(
+            sock,
+            ExpectedRunFrame {
+                workspace_id,
+                run_id,
+            },
+            Some(Duration::from_secs(1)),
+        )
+        .await
+        .expect("run wait");
+        assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
     }
 
     #[test]

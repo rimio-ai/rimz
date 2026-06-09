@@ -24,6 +24,7 @@ pub mod remote;
 pub mod remote_control;
 pub mod resolver;
 pub mod resume;
+pub mod run;
 pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
@@ -40,7 +41,8 @@ pub use crate::feed::{
     ResolverStep, ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 pub use crate::ids::{
-    EventId, MuxName, PaneId, RequestId, ResolverId, SidebarInstanceId, ViewKind, WorkspaceId,
+    EventId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
+    WorkspaceId,
 };
 pub use crate::ledger::{
     AgentCard, Ledger, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,

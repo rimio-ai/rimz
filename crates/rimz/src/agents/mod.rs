@@ -38,6 +38,7 @@ use tracing::{debug, error};
 
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
+use crate::run::PermissionMode;
 
 pub use context::{
     AgentAccount, AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits,
@@ -327,6 +328,18 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Extract the user-facing final assistant text for a completed supervised
+    /// `rimz run`. The adapter owns native payload and transcript shapes; the
+    /// run store receives only this normalized string.
+    fn last_assistant_message(
+        &self,
+        _event_name: &str,
+        _payload: &Value,
+        _observation: &AgentLifecycleObservation,
+    ) -> Option<String> {
+        None
+    }
+
     /// Harvest per-subagent enrichment from an out-of-band render payload —
     /// Claude's `subagentStatusLine` tasks today. One payload renders many child
     /// rows, so this returns one [`SubagentObservation`] per attributable task
@@ -446,6 +459,13 @@ pub trait AgentAdapter: Send + Sync {
     /// that cannot resume yet.
     fn resume_command(&self, _session_id: &str, _cwd: &Path) -> Option<Vec<String>> {
         None
+    }
+
+    /// Extra launch argv for a supervised `rimz run` permission posture. The
+    /// adapter owns provider-specific CLI flags; the run command only chooses
+    /// the posture.
+    fn permission_args(&self, _mode: PermissionMode) -> Vec<String> {
+        Vec::new()
     }
 
     /// The argv that launches a fresh interactive session of this agent in the
@@ -584,6 +604,11 @@ pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<
         .find_map(|key| payload.get(*key).and_then(Value::as_str))
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
+}
+
+pub(crate) fn non_empty_trimmed(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_owned())
 }
 
 /// Common helper: does the resolver decision read as an "allow"?

@@ -466,6 +466,10 @@ impl MuxBackend for TmuxBackend {
         Ok(())
     }
 
+    fn close_pane(&self, _session: &str, pane: &PaneId) -> Result<()> {
+        self.kill_pane(pane)
+    }
+
     fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {
         // tmux has no pipe equivalent; the sidebar wakeup socket is the
         // only channel. Socket fanout lives above this trait in the ledger

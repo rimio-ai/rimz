@@ -42,7 +42,7 @@ Rimz adds a sidebar and a feed to the terminal you already run, and keeps its ow
 
 ### One feed, one CLI
 
-Every event reaches the room through one CLI: `rimz event …` to announce, `rimz feed …` to ask and answer. Agent hooks are the primary writers; the same primitives are open to anything else on the machine, so a `terraform apply` or a CI gate can announce itself or post a question to the same feed an agent writes to. The sidebar is one renderer of that feed; `rimz feed list` is another. Agent integrations are adapters over those primitives, which is what lets a script reach every surface an agent does.
+Every event reaches the room through one CLI: `rimz event …` to announce, `rimz feed …` to ask and answer, and `rimz run …` to launch one supervised agent turn from a script. Agent hooks are the primary writers; the same primitives are open to anything else on the machine, so a `terraform apply` or a CI gate can announce itself or post a question to the same feed an agent writes to. The sidebar is one renderer of that feed; `rimz feed list` is another. Agent integrations are adapters over those primitives, which is what lets a script reach every surface an agent does.
 
 ### Resolve when you opt in
 
@@ -73,7 +73,7 @@ Each line is a decision a reader might challenge, with the reason on the same li
 - **Resolvers are explicit and per-machine.** A resolver engages the bridge when it is on the local allowlist *and* heartbeating freshly. The allowlist plus a fresh heartbeat is the trust boundary; same-UID file access alone never grants it.
 - **Transcripts and panes enrich display.** Pane contents and transcripts decorate rows; the ledger and explicit events decide permissions, state, and correctness. Core reads a pane only to render it.
 - **Pane I/O is a resolver primitive.** `pane capture` and `pane send` are public primitives for humans and resolvers; core treats panes as opaque.
-- **Headless works.** Hooks, the bridge, and `rimz feed ask` run with no sidebar and no attached client. The sidebar is a UI over a workspace that runs fine without one.
+- **Headless works.** Hooks, the bridge, `rimz feed ask`, and `rimz run` run with no sidebar and no attached client. The sidebar is a UI over a workspace that runs fine without one.
 
 ## Non-goals
 
