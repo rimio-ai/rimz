@@ -6,6 +6,7 @@
 
 use std::os::unix::net::UnixDatagram;
 use std::path::PathBuf;
+use std::sync::mpsc::Sender;
 
 use crate::config::NotificationsPrefs;
 use crate::ids::PaneId;
@@ -46,9 +47,9 @@ fn run_produce_guarded(
 
 /// One refresh cycle's result: the snapshot fetch outcome. A cycle can post
 /// two — the in-process fast frame, then the produce that reconciles it.
-/// `final_for_request` marks the cycle's last outcome: the loop clears
-/// `in_flight` (and releases any deferred refetch) only on it, so the
-/// single-flight discipline still counts whole cycles, not posts.
+/// `final_for_request` marks the cycle's last outcome: the loop completes the
+/// dispatcher's in-flight request (and releases any deferred refetch) only on
+/// it, so the single-flight discipline still counts whole cycles, not posts.
 pub(super) struct FetchOutcome {
     pub(super) snapshot: std::result::Result<SidebarSnapshot, String>,
     pub(super) final_for_request: bool,
@@ -423,27 +424,49 @@ pub(super) fn spawn_fetch_worker(
     })
 }
 
-/// Ask the fetch worker for a fresh snapshot. `in_flight` collapses redundant
-/// requests while one is already running; `force_after` (set by a ledger delta,
-/// i.e. new committed data) guarantees one more fetch once the in-flight one
-/// returns, so a delta that races an in-flight fetch is never lost.
-/// `request` carries the strongest freshness requirement currently known.
-pub(super) fn request_fetch(
-    request_tx: &std::sync::mpsc::Sender<FetchRequest>,
-    in_flight: &mut bool,
-    pending_refetch: &mut Option<FetchRequest>,
-    request: FetchRequest,
-    force_after: bool,
-) {
-    if !*in_flight {
-        if request_tx.send(request).is_ok() {
-            *in_flight = true;
+/// The render loop's handle to the fetch worker. It owns the single-flight
+/// accounting: at most one cycle is in flight, and at most one merged request
+/// waits behind it when a forced event races that cycle.
+pub(super) struct FetchDispatcher {
+    tx: Sender<FetchRequest>,
+    in_flight: bool,
+    pending_refetch: Option<FetchRequest>,
+}
+
+impl FetchDispatcher {
+    pub(super) fn new(tx: Sender<FetchRequest>) -> Self {
+        Self {
+            tx,
+            in_flight: false,
+            pending_refetch: None,
         }
-    } else if force_after {
-        match pending_refetch {
-            Some(pending) => pending.merge(request),
-            None => *pending_refetch = Some(request),
+    }
+
+    /// Ask the fetch worker for a fresh snapshot. `in_flight` collapses
+    /// redundant requests while one is already running; `force_after` (set by a
+    /// ledger delta, i.e. new committed data) guarantees one more fetch once
+    /// the in-flight one returns, so a delta that races an in-flight fetch is
+    /// never lost. `request` carries the strongest freshness requirement
+    /// currently known.
+    pub(super) fn request(&mut self, request: FetchRequest, force_after: bool) {
+        if !self.in_flight {
+            if self.tx.send(request).is_ok() {
+                self.in_flight = true;
+            }
+        } else if force_after {
+            match &mut self.pending_refetch {
+                Some(pending) => pending.merge(request),
+                None => self.pending_refetch = Some(request),
+            }
         }
+    }
+
+    pub(super) fn mark_request_complete(&mut self) {
+        self.in_flight = false;
+    }
+
+    pub(super) fn take_pending(&mut self) -> Option<FetchRequest> {
+        self.pending_refetch.take()
     }
 }
 

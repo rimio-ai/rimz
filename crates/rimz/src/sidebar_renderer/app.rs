@@ -43,7 +43,7 @@ mod state;
 mod tmux_watch;
 mod transcript_watch;
 
-use fetch::{FetchOutcome, FetchRequest, request_fetch, spawn_fetch_worker};
+use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
 use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
@@ -140,9 +140,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
 
     // The snapshot fetch (fast in-process fold plus optional produce) runs on a
     // background worker, so animation and input never block on it. The worker
-    // posts `SNAPSHOT_WAKEUP` when a result is ready; `in_flight`/
-    // `pending_refetch` coalesce requests so a ledger-delta storm or a slow
-    // produce can never queue more than one extra run.
+    // posts `SNAPSHOT_WAKEUP` when a result is ready. The dispatcher coalesces
+    // requests so a ledger-delta storm or a slow produce can never queue more
+    // than one extra run.
     let (request_tx, request_rx) = std::sync::mpsc::channel::<FetchRequest>();
     let (result_tx, result_rx) = std::sync::mpsc::channel::<FetchOutcome>();
     // `JoinHandle` drops without blocking: the thread runs to completion on its
@@ -155,8 +155,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         request_rx,
         result_tx,
     );
-    let mut in_flight = false;
-    let mut pending_refetch: Option<FetchRequest> = None;
+    let mut fetch = FetchDispatcher::new(request_tx);
 
     // tmux fast path: the elected producer streams control-mode topology
     // nudges into this loop's socket so a pane open/close can publish a fresh
@@ -196,13 +195,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     let mut fetched_at = Instant::now();
     let mut should_exit = false;
     let mut tab_emptied = false;
-    request_fetch(
-        &request_tx,
-        &mut in_flight,
-        &mut pending_refetch,
-        FetchRequest::default(),
-        false,
-    );
+    fetch.request(FetchRequest::default(), false);
 
     // One fixed-timestep event loop. Events fold into the in-process model and
     // mark the frame dirty; the loop paints at most once per configured base
@@ -263,7 +256,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     latest = Some(outcome);
                 }
                 if saw_final {
-                    in_flight = false;
+                    fetch.mark_request_complete();
                 }
                 let mut rejected = false;
                 if let Some(mut outcome) = latest {
@@ -305,15 +298,9 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
                 if !should_exit
                     && saw_final
-                    && let Some(request) = pending_refetch.take()
+                    && let Some(request) = fetch.take_pending()
                 {
-                    request_fetch(
-                        &request_tx,
-                        &mut in_flight,
-                        &mut pending_refetch,
-                        request,
-                        false,
-                    );
+                    fetch.request(request, false);
                 }
                 // A held transient regression: ask for one more read so the
                 // last-known-good cache heals to the next good frame. Single-
@@ -321,13 +308,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 // opens, the fetch is accepted and `rejected` clears, so this
                 // never spins.
                 if !should_exit && saw_final && rejected {
-                    request_fetch(
-                        &request_tx,
-                        &mut in_flight,
-                        &mut pending_refetch,
-                        FetchRequest::default(),
-                        false,
-                    );
+                    fetch.request(FetchRequest::default(), false);
                 }
             }
             Wakeup::Event(envelope) => {
@@ -338,12 +319,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 let sent_at_ms = envelope.sent_at_ms;
                 match envelope.event {
                     SidebarEvent::Reload => {
-                        if let Some(target) = reload_or_refetch(
-                            &config.session_name,
-                            &request_tx,
-                            &mut in_flight,
-                            &mut pending_refetch,
-                        ) {
+                        if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
                             reexec_to = Some(target);
                             break;
                         }
@@ -353,13 +329,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                     // producer's own receipt is cheap because the frame is
                     // just-published.
                     SidebarEvent::PaneFramePublished => {
-                        request_fetch(
-                            &request_tx,
-                            &mut in_flight,
-                            &mut pending_refetch,
-                            FetchRequest::pane_frame_published(),
-                            true,
-                        );
+                        fetch.request(FetchRequest::pane_frame_published(), true);
                     }
                     SidebarEvent::Notify { title, body, panes } => {
                         if let Err(err) = emit_terminal_notification(
@@ -425,23 +395,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                         // still coalesces to one paint per base frame.
                         next_frame = Instant::now();
                         if !should_exit && requests_verification {
-                            request_fetch(
-                                &request_tx,
-                                &mut in_flight,
-                                &mut pending_refetch,
-                                FetchRequest::producer_fresh_panes(),
-                                true,
-                            );
+                            fetch.request(FetchRequest::producer_fresh_panes(), true);
                         }
                     }
                     // Identity-free nudges — `LedgerDelta`, `PanesChanged`, a
                     // `PaneOpened` without a command: nothing to fuse, so refetch,
                     // bypassing the pane cache when the event says topology moved.
                     _ => {
-                        request_fetch(
-                            &request_tx,
-                            &mut in_flight,
-                            &mut pending_refetch,
+                        fetch.request(
                             if requests_verification {
                                 FetchRequest::producer_fresh_panes()
                             } else {
@@ -498,24 +459,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 // pane list through the elected producer and require a cache
                 // produced after this signal; consumers wait for the producer's
                 // publication wake instead of locally producing.
-                request_fetch(
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                    FetchRequest::producer_fresh_panes(),
-                    true,
-                );
+                fetch.request(FetchRequest::producer_fresh_panes(), true);
             }
             // The `r` keypress rides the local `reload` control word; an
             // external `rimz reload` arrives as the typed event. Both resolve
             // through the same helper.
             Wakeup::Reload => {
-                if let Some(target) = reload_or_refetch(
-                    &config.session_name,
-                    &request_tx,
-                    &mut in_flight,
-                    &mut pending_refetch,
-                ) {
+                if let Some(target) = reload_or_refetch(&config.session_name, &mut fetch) {
                     reexec_to = Some(target);
                     break;
                 }
@@ -542,13 +492,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // ACTIVE_REFRESH anti-pattern). Runs once per loop turn regardless of why
         // we woke.
         if fetched_at.elapsed() >= tick {
-            request_fetch(
-                &request_tx,
-                &mut in_flight,
-                &mut pending_refetch,
-                FetchRequest::default(),
-                false,
-            );
+            fetch.request(FetchRequest::default(), false);
         }
 
         // Heartbeat: fast in-process atomic write on the main thread so the
@@ -572,13 +516,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         // forking `list-panes`.
         if last_self_close_check.elapsed() >= SELF_CLOSE_WATCHDOG {
             last_self_close_check = Instant::now();
-            request_fetch(
-                &request_tx,
-                &mut in_flight,
-                &mut pending_refetch,
-                FetchRequest::default(),
-                false,
-            );
+            fetch.request(FetchRequest::default(), false);
         }
 
         // Frame phase: at the boundary, advance the spin and paint once, folding
@@ -983,9 +921,7 @@ fn duration_millis(duration: Duration) -> u64 {
 /// un-sticks a tab whose producer has stalled.
 fn reload_or_refetch(
     session_name: &str,
-    request_tx: &std::sync::mpsc::Sender<FetchRequest>,
-    in_flight: &mut bool,
-    pending_refetch: &mut Option<FetchRequest>,
+    fetch: &mut FetchDispatcher,
 ) -> Option<std::path::PathBuf> {
     match reload_action() {
         ReloadAction::Reexec(target) => {
@@ -1012,13 +948,7 @@ fn reload_or_refetch(
             );
         }
     }
-    request_fetch(
-        request_tx,
-        in_flight,
-        pending_refetch,
-        FetchRequest::hard_refresh(),
-        true,
-    );
+    fetch.request(FetchRequest::hard_refresh(), true);
     None
 }
 

@@ -401,28 +401,28 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
 #[test]
 fn fetch_request_sends_immediately_when_idle() {
     let (tx, rx) = std::sync::mpsc::channel();
-    let mut in_flight = false;
-    let mut pending = None;
+    let mut dispatcher = FetchDispatcher::new(tx);
     let request = FetchRequest::producer_fresh_panes();
 
-    request_fetch(&tx, &mut in_flight, &mut pending, request, true);
+    dispatcher.request(request, true);
 
-    assert!(in_flight);
+    assert!(dispatcher.in_flight);
     assert_eq!(rx.try_recv().unwrap().mode, FetchMode::ProducerFreshPanes);
-    assert!(pending.is_none());
+    assert!(dispatcher.pending_refetch.is_none());
 }
 
 #[test]
 fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
     let (tx, _rx) = std::sync::mpsc::channel();
-    let mut in_flight = true;
-    let mut pending = Some(FetchRequest::default());
+    let mut dispatcher = FetchDispatcher::new(tx);
+    dispatcher.request(FetchRequest::default(), false);
+    dispatcher.request(FetchRequest::default(), true);
     let request = FetchRequest::producer_fresh_panes();
     let min_pane_cache_ms = request.min_pane_cache_ms;
 
-    request_fetch(&tx, &mut in_flight, &mut pending, request, true);
+    dispatcher.request(request, true);
 
-    let pending = pending.expect("pending refetch");
+    let pending = dispatcher.take_pending().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::ProducerFreshPanes);
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
 }
@@ -430,14 +430,15 @@ fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
 #[test]
 fn hard_refresh_dominates_pending_producer_only_refresh() {
     let (tx, _rx) = std::sync::mpsc::channel();
-    let mut in_flight = true;
-    let mut pending = Some(FetchRequest::producer_fresh_panes());
+    let mut dispatcher = FetchDispatcher::new(tx);
+    dispatcher.request(FetchRequest::default(), false);
+    dispatcher.request(FetchRequest::producer_fresh_panes(), true);
     let request = FetchRequest::hard_refresh();
 
-    request_fetch(&tx, &mut in_flight, &mut pending, request, true);
+    dispatcher.request(request, true);
 
-    assert!(in_flight);
-    let pending = pending.expect("pending refetch");
+    assert!(dispatcher.in_flight);
+    let pending = dispatcher.take_pending().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
 }
