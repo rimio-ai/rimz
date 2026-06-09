@@ -89,6 +89,37 @@ fn backfill(
 }
 
 #[test]
+fn resolve_candidate_root_accepts_one_root_without_cwd() {
+    let candidates = [(300, 200), (301, 200)];
+
+    let matched = resolve_candidate_root(&candidates, None, &|_| panic!("cwd is not needed"));
+
+    assert_eq!(matched, Some(200));
+}
+
+#[test]
+fn resolve_candidate_root_abstains_without_candidates() {
+    let matched = resolve_candidate_root(&[], Some("/repo"), &|_| {
+        panic!("empty candidates do not need cwd")
+    });
+
+    assert_eq!(matched, None);
+}
+
+#[test]
+fn resolve_candidate_root_uses_cwd_to_narrow_plural_roots() {
+    let candidates = [(300, 200), (310, 210)];
+
+    let matched = resolve_candidate_root(&candidates, Some("/repo/feature"), &|pid| match pid {
+        300 => Some(PathBuf::from("/repo/main")),
+        310 => Some(PathBuf::from("/repo/feature")),
+        _ => None,
+    });
+
+    assert_eq!(matched, Some(210));
+}
+
+#[test]
 fn unique_foreground_match_backfills_the_pane_root() {
     // The htop pane: Zellij reports the foreground cmdline; the matcher
     // finds the one forest process with it and binds the pane to its root

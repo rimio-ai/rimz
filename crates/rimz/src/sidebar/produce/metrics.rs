@@ -496,30 +496,35 @@ fn backfill_zellij_pane_pids(
                     .map(|root| (p.pid, root))
             })
             .collect();
-        let roots = unique_candidate_roots(&candidates);
-        let matched = if roots.len() == 1 {
-            Some(roots[0])
-        } else if roots.is_empty() {
-            None
-        } else {
-            let narrowed: Vec<(u32, u32)> = match pane.current.cwd.as_deref() {
-                Some(cwd) => candidates
-                    .iter()
-                    .copied()
-                    .filter(|&(pid, _)| proc_cwd(pid).as_deref() == Some(Path::new(cwd)))
-                    .collect(),
-                None => Vec::new(),
-            };
-            let narrowed_roots = unique_candidate_roots(&narrowed);
-            if narrowed_roots.len() == 1 {
-                Some(narrowed_roots[0])
-            } else {
-                None
-            }
-        };
+        let matched = resolve_candidate_root(&candidates, pane.current.cwd.as_deref(), proc_cwd);
         if let Some(root) = matched {
             pane.current.pid = Some(root);
             claimed_roots.insert(root);
+        }
+    }
+}
+
+fn resolve_candidate_root(
+    candidates: &[(u32, u32)],
+    cwd: Option<&str>,
+    proc_cwd: &dyn Fn(u32) -> Option<PathBuf>,
+) -> Option<u32> {
+    let roots = unique_candidate_roots(candidates);
+    match roots.as_slice() {
+        [root] => Some(*root),
+        [] => None,
+        _ => {
+            let cwd = cwd?;
+            let narrowed: Vec<(u32, u32)> = candidates
+                .iter()
+                .copied()
+                .filter(|&(pid, _)| proc_cwd(pid).as_deref() == Some(Path::new(cwd)))
+                .collect();
+            let narrowed_roots = unique_candidate_roots(&narrowed);
+            match narrowed_roots.as_slice() {
+                [root] => Some(*root),
+                _ => None,
+            }
         }
     }
 }
