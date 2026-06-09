@@ -10,9 +10,8 @@ use tracing::debug;
 
 use super::fold::agent_rollup_with_carryover;
 use super::panes::SidebarOwnView;
-use super::row::SidebarRow;
-use crate::agents::{RateLimitWindow, SpendTally};
-use crate::feed::{AgentState, AgentStatus, FeedItem, FeedStatus, Surface};
+use crate::agents::SpendTally;
+use crate::feed::{AgentState, FeedItem, FeedStatus, Surface};
 use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
@@ -23,10 +22,14 @@ use crate::workspace::RootClass;
 mod aggregate;
 mod layout;
 mod live;
+mod model;
 mod providers;
 mod reap;
 mod rows;
 
+pub use model::{
+    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+};
 use reap::{agent_hook_session_stale, is_agent_native_item};
 
 #[cfg(test)]
@@ -179,125 +182,6 @@ pub struct SidebarSnapshot {
     /// which read as stale so a fresh fold replaces them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reflects_log: Option<event_log::LogExtent>,
-}
-
-/// One provider's aggregate dashboard block, pinned to the bottom of the
-/// sidebar. Account-scoped: every session of one agent kind folds into one
-/// block — summed spend and tokens, plus the freshest session's plan, version,
-/// and rate-limit windows — so the budgets render once per account, never
-/// per row. Resolved on the producer into a ready-to-paint shape: the renderer
-/// reads art, color, and plan straight off it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarProviderPanel {
-    pub kind: String,
-    /// Header display name (`Claude`, `Codex`, …).
-    pub product_name: String,
-    /// Multi-line ASCII emblem, painted brand-colored at the block's left.
-    pub art: Vec<String>,
-    /// 256-color index for the emblem.
-    pub color: u8,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub version: Option<String>,
-    /// Brand plan label (`Claude Max`, `ChatGPT Pro`); `None` when unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub plan: Option<String>,
-    /// Whether the account is metered by rate-limit windows. `false` paints the
-    /// "infinite power" bar in place of draining budget bars.
-    pub metered: bool,
-    /// Whether remote control is enabled for this provider (the `⇅ rc` flag).
-    pub remote_control: bool,
-    /// JSONL-computed today / week / month / all-time spend and tokens for this
-    /// provider, summed across all of its sessions' transcript history — the one
-    /// source for the panel's `$` and `◇` figures, and the only cost source for
-    /// token-only providers like Codex. `None` until the producer's spending
-    /// enrichment runs.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub spending: Option<SpendTally>,
-    /// The account-scoped budget windows, ordered short→long by duration. A
-    /// metered account drains one mana bar per window; the persisted cache folds
-    /// in so an idle account still paints its last-known bars.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub windows: Vec<RateLimitWindow>,
-}
-
-impl SidebarProviderPanel {
-    /// The figure the dashboard ranks panels by: today's JSONL spend, so the
-    /// provider you are spending on right now floats to the top.
-    fn rank_cost(&self) -> f64 {
-        self.spending.as_ref().map_or(0.0, |s| s.today.usd)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SidebarWorktreeKind {
-    /// A group root with a git story: a repo room's worktree checkout or a
-    /// directory room's child repo. Carries the header's diff/commit cluster.
-    Worktree,
-    /// A non-repo room's own pod — panes at the root and in non-repo subdirs.
-    /// Name-only header; excluded from every git read.
-    Root,
-    /// The out-of-project catch-all: untethered scripts/CI and shells whose
-    /// cwd is outside every group root. Renders as the dim `external` divider.
-    External,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarWorktreeGroup {
-    pub key: String,
-    pub label: String,
-    pub kind: SidebarWorktreeKind,
-    pub status_counts: Vec<SidebarStatusCount>,
-    pub rows: Vec<SidebarRow>,
-    pub hidden_count: usize,
-    /// The worktree's total insertions and deletions relative to the trunk —
-    /// committed, staged, and unstaged folded into one `+/-` by diffing the
-    /// working tree against the merge-base with `main`. Projected by the
-    /// `rimz sidebar snapshot` CLI (the reducer stays pure). Lives on the
-    /// group header — never on a per-agent row — so the shared-worktree
-    /// "whose diff?" ambiguity is resolved by belonging to the worktree, not
-    /// the agent. `None` when no git read was attempted or the worktree is
-    /// not a git repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff_added: Option<u32>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub diff_removed: Option<u32>,
-    /// Commits this worktree carries ahead of the trunk — `git rev-list --count
-    /// <merge-base>..HEAD`, the committed work waiting to land (the `+/-` diff
-    /// also folds in staged/unstaged change). Like the diff, it is a property of
-    /// the worktree path, projected by the `rimz sidebar snapshot` CLI; `None`
-    /// when no git read was attempted or the worktree is not a git repository.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commits_ahead: Option<u32>,
-    /// Commits the trunk has advanced past this worktree's fork point — `git
-    /// rev-list --count <merge-base>..<trunk>`, the work the branch would pick
-    /// up by rebasing. Projected alongside `commits_ahead`; `None` on the same
-    /// terms.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub commits_behind: Option<u32>,
-    /// The resolved trunk name the diff and commit delta compare against
-    /// (configured `[sidebar] trunk`, else detected `main`/`master`/remote
-    /// default; `origin/` stripped for display). Names the landed markers — a
-    /// non-trunk worktree holding no work of its own (zero ahead, zero diff,
-    /// clean tree) renders `≡ <trunk>` at zero behind and `✓ <trunk>` once the
-    /// trunk has moved on; the trunk worktree itself (`label == trunk`) never
-    /// wears either, since "landed on itself" carries no information.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub trunk: Option<String>,
-    /// Whether the working tree is clean — `git status --porcelain` emptiness,
-    /// untracked files included — the safe-to-remove verdict both landed
-    /// markers require. Untracked content also folds into `diff_added` as line
-    /// counts, so an untracked-only worktree reads `+N` rather than landed.
-    /// `None` when no status read was attempted or an old producer wrote the
-    /// cache; the renderer treats that as not proven clean.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub clean: Option<bool>,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct SidebarStatusCount {
-    pub status: AgentStatus,
-    pub count: usize,
 }
 
 impl SidebarSnapshot {

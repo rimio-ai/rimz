@@ -8,15 +8,19 @@
 //!   paths.rs        StatePaths, RuntimePaths, XDG resolution
 //!   atomic.rs       temp+rename, length-framed append
 //!   lock.rs         workspace advisory lock
-//!   event_log.rs    framed append log
+//!   event_log.rs    framed append-log façade
+//!   event_log/      frame codec, rotation, recovery, unit tests
 //!   feed_store.rs   atomic feed item I/O + status CAS
-//!   writer.rs       write choreography: lock → write → append → wake → publish
+//!   writer.rs       write choreography façade: lock → write → append → wake → publish
+//!   writer/         debounce, publish, expiry, resolver-chain writes
+//!   gc.rs           maintenance façade
+//!   gc/             runtime collection and dead-workspace pruning
 //!   snapshot/       reduced snapshot rebuild
 //!     fold.rs       resumable event-log rollup + carryover
 //!     project.rs    agent-lifecycle reducer
-//!     panes.rs      pane binding + own/daemon view
-//!     process.rs    non-agent process rows + command classification
-//!     view.rs       sidebar view-model assembly
+//!     panes.rs      pane binding + own/daemon view; lazy pairing in panes/
+//!     process.rs    non-agent process rows; command classifier in process/
+//!     view.rs       sidebar view-model façade; live/group/provider projection in view/
 //!     assemble.rs   read entry points + fresh-latest fast path
 //! ```
 //!

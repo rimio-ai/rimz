@@ -93,7 +93,7 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | Subtree | Owns | Detail |
 | --- | --- | --- |
 | `src/cli/` | command parsing and per-subcommand handlers; one `run(...)` per subcommand | [cli.md](./docs/reference/cli.md) |
-| `src/ledger/` | durable state: atomic helpers, event log, feed store, snapshot rebuild and staged view projection (`snapshot/view/`), wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/ledger.md) |
+| `src/ledger/` | durable state: atomic helpers, framed event log, feed store, split write path, snapshot rebuild and staged view projection (`snapshot/view/`), wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/ledger.md) |
 | `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/multiplexers.md) |
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
 | `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
