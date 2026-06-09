@@ -81,16 +81,16 @@ pub(super) fn row_lines(
     // list; it never reshapes a line already on screen, so the card never reflows
     // on expand. The budgets are account-scoped, so they live in the pinned
     // provider dashboard, never on a row.
-    let mut inner = vec![identity_line(
+    let identity = IdentityLineContext {
         theme,
-        row,
         providers,
         now,
         tier,
-        cw,
+        width: cw,
         animation_phase,
         cost_rolls,
-    )];
+    };
+    let mut inner = vec![identity_line(identity, row)];
     // An active process row carries its full command on a dim second line under
     // the shell anchor — the build or `sudo` install reads in full while line 1
     // stays the stable shell label. Idle process rows have no detail to add.
@@ -316,18 +316,19 @@ fn agent_name_style(theme: &Theme, providers: &[SidebarProviderPanel], kind: &st
         .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()))
 }
 
-fn identity_line(
-    theme: &Theme,
-    row: &SidebarRow,
-    providers: &[SidebarProviderPanel],
+struct IdentityLineContext<'a> {
+    theme: &'a Theme,
+    providers: &'a [SidebarProviderPanel],
     now: Timestamp,
     tier: Tier,
     width: usize,
     animation_phase: u64,
-    cost_rolls: &CostRolls,
-) -> Line<'static> {
+    cost_rolls: &'a CostRolls,
+}
+
+fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> Line<'static> {
     if row.is_process() {
-        return process_row_line(theme, row, width, animation_phase);
+        return process_row_line(ctx.theme, row, ctx.width, ctx.animation_phase);
     }
 
     if let Some(resolver) = row.resolver() {
@@ -337,36 +338,36 @@ fn identity_line(
             .unwrap_or_else(|| resolver.resolver_id.as_str());
         let remaining = resolver
             .budget_until
-            .map(|deadline| time_remaining(deadline, now))
+            .map(|deadline| time_remaining(deadline, ctx.now))
             .unwrap_or_else(|| "?".to_owned());
         // A resolver mid-flight is the one "waiting for an answer" motion: a
         // braille spinner while the resolver composes the decision, bounded by
         // its budget. The resolver + budget fill the slot a task would.
         return composed_row(
-            theme,
+            ctx.theme,
             Span::styled(
-                resolver_glyph(animation_phase),
-                status_style(theme, AgentStatus::Waiting),
+                resolver_glyph(ctx.animation_phase),
+                status_style(ctx.theme, AgentStatus::Waiting),
             ),
             &row.name,
             &format!("{resolver_name} {remaining}"),
             row.last_activity,
-            now,
-            width,
+            ctx.now,
+            ctx.width,
         );
     }
 
     let status = row.status().unwrap_or(AgentStatus::Idle);
     agent_identity_line(
-        theme,
+        ctx.theme,
         row,
-        providers,
-        now,
+        ctx.providers,
+        ctx.now,
         status,
-        tier,
-        width,
-        animation_phase,
-        cost_rolls,
+        ctx.tier,
+        ctx.width,
+        ctx.animation_phase,
+        ctx.cost_rolls,
     )
 }
 
