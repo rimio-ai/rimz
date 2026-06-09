@@ -16,6 +16,7 @@ use rimz::feed::{
 use rimz::ids::{RequestId, ResolverId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
 use rimz::workspace::WorkspaceResolver;
+use rimz::{Ledger, ResolvedWorkspace};
 
 #[derive(Debug, Args)]
 pub struct FeedArgs {
@@ -113,238 +114,303 @@ pub fn run(args: FeedArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     match args.command {
-        FeedSubcmd::Push { kind, title, body } => {
-            let mut item = FeedItem::new(
-                workspace.workspace_id.clone(),
-                Surface::NativeUi,
-                FeedKind::from_cli(&kind),
-                title,
-                "rimz",
-                "cli",
-            );
-            item.body = body;
-            attach_worktree(&mut item, &workspace);
-            attach_current_owner(&mut item);
-            ledger.push_feed_item(&item, &workspace.session_name)?;
-            #[expect(clippy::print_stdout, reason = "command result is the request id")]
-            {
-                println!("{}", item.request_id);
-            }
-            Ok(())
-        }
+        FeedSubcmd::Push { kind, title, body } => push(&ledger, &workspace, kind, title, body),
         FeedSubcmd::Ask {
             title,
             options,
             timeout,
             no_block,
-        } => {
-            let mut item = FeedItem::new(
-                workspace.workspace_id.clone(),
-                Surface::Script,
-                FeedKind::Question,
-                title,
-                "rimz",
-                "cli",
-            );
-            item.options = options;
-            attach_worktree(&mut item, &workspace);
-            attach_current_owner(&mut item);
-            // The pane the asking script runs inside, when it runs inside one —
-            // the per-pane mux env survives into this CLI child. The stamp is
-            // what renders the ask as a jumpable sidebar card once the live
-            // frame admits the pane; outside any pane (CI, cron) the ask stays
-            // rollup metadata served by `feed list` and `feed resolve`.
-            item.pane = rimz::mux::ambient_pane_id().map(PaneRef::from_id);
-            item.hook_wait_timeout_seconds = timeout.map(|d| d.as_secs()).unwrap_or(0);
-            if let Some(deadline) = timeout {
-                item.feed_deadline_at = Some(Timestamp::now() + deadline);
-            }
-            let request_id = item.request_id.clone();
-
-            if no_block {
-                ledger.push_feed_item(&item, &workspace.session_name)?;
-                #[expect(clippy::print_stdout, reason = "user-visible request id")]
-                {
-                    println!("{request_id}");
-                }
-                return Ok(());
-            }
-
-            // Bind before push so a fast resolver can't miss the socket.
-            let expected = ExpectedFrame {
-                workspace_id: item.workspace_id.clone(),
-                request_id: request_id.clone(),
-                nonce: item.nonce.clone(),
-            };
-            let (sock, sock_path) = bridge::bind(ledger.runtime_paths(), &request_id)
-                .context("binding bridge socket")?;
-            let _cleanup = SocketGuard::new(sock_path);
-
-            ledger.push_feed_item(&item, &workspace.session_name)?;
-            #[expect(clippy::print_stdout, reason = "user-visible request id")]
-            {
-                println!("{request_id}");
-            }
-
-            let cap = timeout;
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .context("building bridge runtime")?;
-            let outcome = runtime
-                .block_on(bridge::wait_for_resolution_owning(sock, expected, cap))
-                .context("waiting on bridge")?;
-
-            match outcome {
-                BridgeOutcome::Resolved => {
-                    let resolved = ledger.load_feed_item(&request_id)?;
-                    let decision = resolved
-                        .resolution
-                        .as_ref()
-                        .map(|r| &r.decision)
-                        .ok_or_else(|| {
-                            anyhow::anyhow!("bridge signalled resolved but no resolution on disk")
-                        })?;
-                    let rendered = serde_json::to_string(decision)?;
-                    #[expect(clippy::print_stdout, reason = "user-visible decision payload")]
-                    {
-                        println!("{rendered}");
-                    }
-                    Ok(())
-                }
-                BridgeOutcome::Neutral => {
-                    let timeout = ledger.mark_feed_item_timed_out(
-                        &request_id,
-                        &workspace.session_name,
-                        AbandonReason::ScriptWaitTimeout,
-                    )?;
-                    if timeout.status == FeedStatus::Resolved {
-                        let resolved = ledger.load_feed_item(&request_id)?;
-                        let decision = resolved
-                            .resolution
-                            .as_ref()
-                            .map(|r| &r.decision)
-                            .ok_or_else(|| {
-                                anyhow::anyhow!("feed item resolved without a resolution payload")
-                            })?;
-                        let rendered = serde_json::to_string(decision)?;
-                        #[expect(clippy::print_stdout, reason = "user-visible decision payload")]
-                        {
-                            println!("{rendered}");
-                        }
-                        return Ok(());
-                    }
-                    bail!("timed out waiting for resolution of {request_id}");
-                }
-            }
-        }
-        FeedSubcmd::List { json, audit } => {
-            let items = if audit {
-                ledger.list_feed_items()?
-            } else {
-                ledger.runtime_projection(RuntimeScope::Runtime)?.items
-            };
-            if json {
-                let rendered = serde_json::to_string_pretty(&items)?;
-                #[expect(clippy::print_stdout, reason = "json emitter")]
-                {
-                    println!("{rendered}");
-                }
-            } else {
-                for item in items {
-                    #[expect(clippy::print_stdout, reason = "human listing")]
-                    {
-                        println!(
-                            "{}\t{}\t{}\t{}",
-                            item.request_id, item.status, item.surface, item.title
-                        );
-                    }
-                }
-            }
-            Ok(())
-        }
-        FeedSubcmd::Show { request_id, json } => {
-            let id = request_id.parse::<RequestId>()?;
-            let item = ledger.load_feed_item(&id)?;
-            if json {
-                let rendered = serde_json::to_string_pretty(&item)?;
-                #[expect(clippy::print_stdout, reason = "json emitter")]
-                {
-                    println!("{rendered}");
-                }
-            } else {
-                #[expect(clippy::print_stdout, reason = "human display")]
-                {
-                    println!(
-                        "{} [{}/{}] {}",
-                        item.request_id, item.status, item.surface, item.title
-                    );
-                    if let Some(body) = item.body {
-                        println!("{body}");
-                    }
-                }
-            }
-            Ok(())
-        }
+        } => ask(&ledger, &workspace, title, options, timeout, no_block),
+        FeedSubcmd::List { json, audit } => list(&ledger, json, audit),
+        FeedSubcmd::Show { request_id, json } => show(&ledger, request_id, json),
         FeedSubcmd::Resolve {
             request_id,
             decision,
             resolver_id,
             method,
             override_chain,
-        } => {
-            let id = request_id.parse::<RequestId>()?;
-            let decision: Value =
-                serde_json::from_str(&decision).context("parsing --decision as JSON")?;
-            let mut resolution = Resolution::new(decision, method.into());
-            resolution.resolver_id = resolver_id.map(|id| id.parse::<ResolverId>()).transpose()?;
-            let outcome = ledger.resolve_feed_item(
-                &id,
-                resolution,
-                override_chain,
-                &workspace.session_name,
-            )?;
-            #[expect(clippy::print_stdout, reason = "command outcome")]
-            {
-                println!(
-                    "{} effective={} late={}",
-                    outcome.request_id, outcome.effective, outcome.late
-                );
-            }
-            Ok(())
-        }
+        } => resolve(
+            &ledger,
+            &workspace,
+            request_id,
+            decision,
+            resolver_id,
+            method,
+            override_chain,
+        ),
         FeedSubcmd::Dismiss { request_id, reason } => {
-            let id = request_id.parse::<RequestId>()?;
-            ledger.dismiss_feed_item(&id, reason, &workspace.session_name)?;
-            Ok(())
+            dismiss(&ledger, &workspace, request_id, reason)
         }
         FeedSubcmd::Abstain {
             request_id,
             resolver_id,
             reason,
-        } => {
-            let id = request_id.parse::<RequestId>()?;
-            let resolver = resolver_id.parse::<ResolverId>()?;
-            let outcome =
-                ledger.abstain_feed_item(&id, &resolver, reason, &workspace.session_name)?;
-            #[expect(clippy::print_stdout, reason = "command outcome")]
-            {
-                println!(
-                    "{} next_resolver={}",
-                    outcome.request_id,
-                    outcome
-                        .next_resolver
-                        .as_ref()
-                        .map(|r| r.as_str())
-                        .unwrap_or("(none)"),
-                );
-            }
-            Ok(())
-        }
+        } => abstain(&ledger, &workspace, request_id, resolver_id, reason),
     }
 }
 
-fn attach_worktree(item: &mut FeedItem, workspace: &rimz::ResolvedWorkspace) {
+fn push(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    kind: String,
+    title: String,
+    body: Option<String>,
+) -> Result<()> {
+    let mut item = FeedItem::new(
+        workspace.workspace_id.clone(),
+        Surface::NativeUi,
+        FeedKind::from_cli(&kind),
+        title,
+        "rimz",
+        "cli",
+    );
+    item.body = body;
+    attach_worktree(&mut item, workspace);
+    attach_current_owner(&mut item);
+    ledger.push_feed_item(&item, &workspace.session_name)?;
+    #[expect(clippy::print_stdout, reason = "command result is the request id")]
+    {
+        println!("{}", item.request_id);
+    }
+    Ok(())
+}
+
+fn ask(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    title: String,
+    options: Vec<String>,
+    timeout: Option<Duration>,
+    no_block: bool,
+) -> Result<()> {
+    let item = ask_item(workspace, title, options, timeout);
+    let request_id = item.request_id.clone();
+
+    if no_block {
+        ledger.push_feed_item(&item, &workspace.session_name)?;
+        print_request_id(&request_id);
+        return Ok(());
+    }
+
+    // Bind before push so a fast resolver can't miss the socket.
+    let expected = ExpectedFrame {
+        workspace_id: item.workspace_id.clone(),
+        request_id: request_id.clone(),
+        nonce: item.nonce.clone(),
+    };
+    let (sock, sock_path) =
+        bridge::bind(ledger.runtime_paths(), &request_id).context("binding bridge socket")?;
+    let _cleanup = SocketGuard::new(sock_path);
+
+    ledger.push_feed_item(&item, &workspace.session_name)?;
+    print_request_id(&request_id);
+
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .context("building bridge runtime")?;
+    let outcome = runtime
+        .block_on(bridge::wait_for_resolution_owning(sock, expected, timeout))
+        .context("waiting on bridge")?;
+
+    emit_bridge_outcome(ledger, workspace, &request_id, outcome)
+}
+
+fn ask_item(
+    workspace: &ResolvedWorkspace,
+    title: String,
+    options: Vec<String>,
+    timeout: Option<Duration>,
+) -> FeedItem {
+    let mut item = FeedItem::new(
+        workspace.workspace_id.clone(),
+        Surface::Script,
+        FeedKind::Question,
+        title,
+        "rimz",
+        "cli",
+    );
+    item.options = options;
+    attach_worktree(&mut item, workspace);
+    attach_current_owner(&mut item);
+    // The pane the asking script runs inside, when it runs inside one; outside
+    // a pane the ask stays rollup metadata served by feed list/resolve.
+    item.pane = rimz::mux::ambient_pane_id().map(PaneRef::from_id);
+    item.hook_wait_timeout_seconds = timeout.map(|d| d.as_secs()).unwrap_or(0);
+    if let Some(deadline) = timeout {
+        item.feed_deadline_at = Some(Timestamp::now() + deadline);
+    }
+    item
+}
+
+fn emit_bridge_outcome(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    request_id: &RequestId,
+    outcome: BridgeOutcome,
+) -> Result<()> {
+    match outcome {
+        BridgeOutcome::Resolved => emit_resolved_decision(
+            ledger,
+            request_id,
+            "bridge signalled resolved but no resolution on disk",
+        ),
+        BridgeOutcome::Neutral => emit_neutral_outcome(ledger, workspace, request_id),
+    }
+}
+
+fn emit_neutral_outcome(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    request_id: &RequestId,
+) -> Result<()> {
+    let timeout = ledger.mark_feed_item_timed_out(
+        request_id,
+        &workspace.session_name,
+        AbandonReason::ScriptWaitTimeout,
+    )?;
+    if timeout.status == FeedStatus::Resolved {
+        return emit_resolved_decision(
+            ledger,
+            request_id,
+            "feed item resolved without a resolution payload",
+        );
+    }
+    bail!("timed out waiting for resolution of {request_id}");
+}
+
+fn emit_resolved_decision(ledger: &Ledger, request_id: &RequestId, missing: &str) -> Result<()> {
+    let resolved = ledger.load_feed_item(request_id)?;
+    let decision = resolved
+        .resolution
+        .as_ref()
+        .map(|r| &r.decision)
+        .ok_or_else(|| anyhow::anyhow!(missing.to_owned()))?;
+    let rendered = serde_json::to_string(decision)?;
+    #[expect(clippy::print_stdout, reason = "user-visible decision payload")]
+    {
+        println!("{rendered}");
+    }
+    Ok(())
+}
+
+fn list(ledger: &Ledger, json: bool, audit: bool) -> Result<()> {
+    let items = if audit {
+        ledger.list_feed_items()?
+    } else {
+        ledger.runtime_projection(RuntimeScope::Runtime)?.items
+    };
+    if json {
+        let rendered = serde_json::to_string_pretty(&items)?;
+        #[expect(clippy::print_stdout, reason = "json emitter")]
+        {
+            println!("{rendered}");
+        }
+    } else {
+        for item in items {
+            #[expect(clippy::print_stdout, reason = "human listing")]
+            {
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    item.request_id, item.status, item.surface, item.title
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn show(ledger: &Ledger, request_id: String, json: bool) -> Result<()> {
+    let id = request_id.parse::<RequestId>()?;
+    let item = ledger.load_feed_item(&id)?;
+    if json {
+        let rendered = serde_json::to_string_pretty(&item)?;
+        #[expect(clippy::print_stdout, reason = "json emitter")]
+        {
+            println!("{rendered}");
+        }
+    } else {
+        #[expect(clippy::print_stdout, reason = "human display")]
+        {
+            println!(
+                "{} [{}/{}] {}",
+                item.request_id, item.status, item.surface, item.title
+            );
+            if let Some(body) = item.body {
+                println!("{body}");
+            }
+        }
+    }
+    Ok(())
+}
+
+fn resolve(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    request_id: String,
+    decision: String,
+    resolver_id: Option<String>,
+    method: MethodArg,
+    override_chain: bool,
+) -> Result<()> {
+    let id = request_id.parse::<RequestId>()?;
+    let decision: Value = serde_json::from_str(&decision).context("parsing --decision as JSON")?;
+    let mut resolution = Resolution::new(decision, method.into());
+    resolution.resolver_id = resolver_id.map(|id| id.parse::<ResolverId>()).transpose()?;
+    let outcome =
+        ledger.resolve_feed_item(&id, resolution, override_chain, &workspace.session_name)?;
+    #[expect(clippy::print_stdout, reason = "command outcome")]
+    {
+        println!(
+            "{} effective={} late={}",
+            outcome.request_id, outcome.effective, outcome.late
+        );
+    }
+    Ok(())
+}
+
+fn dismiss(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    request_id: String,
+    reason: Option<String>,
+) -> Result<()> {
+    let id = request_id.parse::<RequestId>()?;
+    ledger.dismiss_feed_item(&id, reason, &workspace.session_name)?;
+    Ok(())
+}
+
+fn abstain(
+    ledger: &Ledger,
+    workspace: &ResolvedWorkspace,
+    request_id: String,
+    resolver_id: String,
+    reason: Option<String>,
+) -> Result<()> {
+    let id = request_id.parse::<RequestId>()?;
+    let resolver = resolver_id.parse::<ResolverId>()?;
+    let outcome = ledger.abstain_feed_item(&id, &resolver, reason, &workspace.session_name)?;
+    #[expect(clippy::print_stdout, reason = "command outcome")]
+    {
+        println!(
+            "{} next_resolver={}",
+            outcome.request_id,
+            outcome
+                .next_resolver
+                .as_ref()
+                .map(|r| r.as_str())
+                .unwrap_or("(none)"),
+        );
+    }
+    Ok(())
+}
+
+#[expect(clippy::print_stdout, reason = "user-visible request id")]
+fn print_request_id(request_id: &RequestId) {
+    println!("{request_id}");
+}
+
+fn attach_worktree(item: &mut FeedItem, workspace: &ResolvedWorkspace) {
     item.worktree_path = Some(workspace.worktree_root.display().to_string());
     item.worktree_branch = workspace.worktree_branch.clone();
 }

@@ -14,7 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
-use rimz::ids::{MuxName, SidebarInstanceId, WorkspaceId};
+use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::schema::sidebar_event::SidebarEvent;
@@ -149,201 +149,38 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             min_pane_cache_ms,
             json,
             no_produce,
-        } => {
-            // A producer reads `list-panes`/git and publishes the shared cache;
-            // a non-producer renders read-only from that cache. Default is to
-            // produce, so bare CLI calls and the plugin rail are unchanged.
-            let produce = !no_produce;
-            let mut resolved_session = None;
-            let workspace_id = match workspace_id {
-                Some(raw) => raw.parse::<WorkspaceId>()?,
-                None => {
-                    let workspace =
-                        WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-                    resolved_session = Some(workspace.session_name.clone());
-                    workspace.workspace_id
-                }
-            };
-            let state =
-                StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
-            let runtime = RuntimePaths::for_workspace(workspace_id.clone())
-                .context("preparing runtime paths")?;
-            state.ensure_dirs().context("preparing state paths")?;
-            runtime.ensure_dirs().context("preparing runtime paths")?;
-            let session_name = session_name
-                .or(resolved_session)
-                .or_else(|| session_name_from_record(&state));
-            let exclude = exclude_pane_id
-                .as_deref()
-                .map(rimz::ids::PaneId::parse)
-                .transpose()?;
-
-            let emit = |snapshot: &rimz::SidebarSnapshot| -> Result<()> {
-                if json {
-                    let rendered = serde_json::to_string_pretty(snapshot)?;
-                    #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
-                    {
-                        println!("{rendered}");
-                    }
-                } else {
-                    let tally = |status| {
-                        snapshot
-                            .worktree_groups
-                            .iter()
-                            .flat_map(|group| &group.status_counts)
-                            .filter(|count| count.status == status)
-                            .map(|count| count.count)
-                            .sum::<usize>()
-                    };
-                    let waiting = tally(rimz::feed::AgentStatus::Waiting);
-                    let failed = tally(rimz::feed::AgentStatus::Failed);
-                    #[expect(clippy::print_stdout, reason = "human summary")]
-                    {
-                        println!("Workspace:       {}", snapshot.display_name);
-                        println!("Worktree groups: {}", snapshot.worktree_groups.len());
-                        println!("Waiting:         {waiting}");
-                        println!("Failed:          {failed}");
-                    }
-                }
-                Ok(())
-            };
-
-            // Consumer: render the producer's published frame in process. A
-            // cold cache (no publish yet) returns the bare rollup with the
-            // same read-only enrichments until the next tick. One-shot CLI
-            // process, so a fresh cursor (a cold fold) is the only kind.
-            // A pane fixture defers to the produce path, which short-circuits
-            // on it — deterministic tests neither poison nor read the cache.
-            if !produce
-                && !pane_fixture_active()
-                && let Some(session) = session_name.as_deref()
-            {
-                let snapshot = read_published_snapshot(
-                    &mut RollupCursor::new(),
-                    &state,
-                    &runtime,
-                    session,
-                    exclude.as_ref(),
-                )
-                .context("reading the consumer snapshot")?;
-                return emit(&snapshot);
-            }
-
-            // Producer (or a deterministic test fixture, or a bare inspection
-            // call): the library pipeline resolves the base — ledger rollup
-            // plus live pane list, single-flighted across the fleet — folds
-            // the producer enrichments, and publishes the caches consumers
-            // read. With no session or no detectable mux there is no pane
-            // frame to produce; the frameless arm runs the same metadata
-            // enrichments over the bare rollup and emits no groups.
-            let mux = mux
-                .or(globals.mux)
-                .or_else(|| rimz::mux::auto_detect_backend(None).ok());
-            let rollup_only = |reason: Option<&dyn std::fmt::Display>| -> Result<()> {
-                if let Some(error) = reason {
-                    tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
-                }
-                emit(&produce_rollup_snapshot(
-                    &mut RollupCursor::new(),
-                    &state,
-                    &runtime,
-                    exclude.as_ref(),
-                    min_pane_cache_ms,
-                )?)
-            };
-            match (session_name, mux) {
-                (Some(session_name), Some(mux)) => {
-                    let opts = ProduceOptions {
-                        mux,
-                        session_name,
-                        exclude: exclude.clone(),
-                        min_pane_cache_ms,
-                    };
-                    match produce_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
-                        Ok(snapshot) => emit(&snapshot),
-                        // An inspection call has no live frame to hold (the
-                        // serve loop produces in process and owns its own
-                        // degraded path); fall back to the ledger rollup.
-                        Err(err) => rollup_only(Some(&err)),
-                    }
-                }
-                _ => rollup_only(None),
-            }
-        }
+        } => snapshot(
+            globals,
+            SnapshotCommand {
+                workspace_id,
+                mux,
+                session_name,
+                exclude_pane_id,
+                min_pane_cache_ms,
+                json,
+                no_produce,
+            },
+        ),
         SidebarSubcmd::Serve {
             workspace_id,
             mux,
             session_name,
             tick_seconds,
             refresh_ms,
-        } => {
-            let needs_workspace_resolve = workspace_id.is_none() || session_name.is_none();
-            let resolved = if needs_workspace_resolve {
-                Some(WorkspaceResolver::resolve_participant(
-                    ".",
-                    globals.root.clone(),
-                )?)
-            } else {
-                None
-            };
-            let workspace_id = match workspace_id {
-                Some(raw) => raw.parse::<WorkspaceId>()?,
-                None => resolved
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("workspace_id missing but workspace was not resolved"))?
-                    .workspace_id
-                    .clone(),
-            };
-            let session_name = match session_name {
-                Some(name) => name,
-                None => resolved
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("session_name missing but workspace was not resolved"))?
-                    .session_name
-                    .clone(),
-            };
-            let mux = match mux {
-                Some(mux) => mux,
-                None => rimz::mux::auto_detect_backend(globals.mux)?,
-            };
-            rimz::sidebar_pane::app::serve(rimz::sidebar_pane::app::ServeConfig {
-                workspace_id,
-                mux,
-                session_name,
-                instance_id: SidebarInstanceId::new(),
-                tick_seconds,
-                refresh_ms_override: refresh_ms,
-                notification_prefs: rimz::config::MachineConfig::load()
-                    .unwrap_or_default()
-                    .notifications,
-                own_pane: rimz::mux::own_pane_id(mux),
-            })
-            .context("serving sidebar")
-        }
-        SidebarSubcmd::Render { width, height } => {
-            let mut buf = String::new();
-            io::stdin()
-                .read_to_string(&mut buf)
-                .context("reading stdin")?;
-            let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
-            rimz::sidebar_pane::render::render_fixed(io::stdout(), &snapshot, None, width, height)
-                .context("rendering snapshot")
-        }
+        } => serve(
+            globals,
+            workspace_id,
+            mux,
+            session_name,
+            tick_seconds,
+            refresh_ms,
+        ),
+        SidebarSubcmd::Render { width, height } => render(width, height),
         SidebarSubcmd::Fixture {
             state,
             width,
             height,
-        } => {
-            let snapshot = sidebar_fixture_snapshot(state)?;
-            rimz::sidebar_pane::render::render_fixed_line_ansi(
-                io::stdout(),
-                &snapshot,
-                None,
-                width,
-                height,
-            )
-            .context("rendering sidebar fixture")
-        }
+        } => fixture(state, width, height),
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
@@ -353,42 +190,297 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             focused_pane_ids,
             unfocused_pane_ids,
             topology,
-        } => {
-            // Feather-weight by design: the poke needs only the workspace
-            // runtime dir — one stamp write plus at most one datagram — so it
-            // never opens the ledger, never lists panes, never touches the
-            // mux. The plugin calls this per presence event.
-            let workspace_id = match workspace_id {
-                Some(raw) => raw.parse::<WorkspaceId>()?,
-                None => {
-                    WorkspaceResolver::resolve_participant(".", globals.root.clone())?.workspace_id
-                }
-            };
-            let runtime =
-                RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
-            // Every reason refreshes the stamp that flips the producer's pane
-            // TTL to event mode; the write is best-effort cache-class — a miss
-            // only means the channel reads as dead one poke longer.
-            write_presence_stamp(&runtime);
-            write_topology_cache(&runtime, topology.as_deref());
-            let Some(event) = wake_event(
+        } => wake(
+            globals,
+            WakeCommand {
+                workspace_id,
                 reason,
-                pane_id.as_deref(),
-                &command_args,
-                &focused_pane_ids,
-                &unfocused_pane_ids,
-            ) else {
-                return Ok(());
-            };
-            if let Err(err) = rimz::ledger::wakeup::broadcast_sidebar_event(
-                &runtime,
-                session_name.as_deref(),
-                event,
-            ) {
-                tracing::debug!(error = %err, "presence poke: event datagram failed");
-            }
-            Ok(())
+                session_name,
+                pane_id,
+                command_args,
+                focused_pane_ids,
+                unfocused_pane_ids,
+                topology,
+            },
+        ),
+    }
+}
+
+struct SnapshotCommand {
+    workspace_id: Option<String>,
+    mux: Option<MuxName>,
+    session_name: Option<String>,
+    exclude_pane_id: Option<String>,
+    min_pane_cache_ms: Option<u64>,
+    json: bool,
+    no_produce: bool,
+}
+
+struct SnapshotContext {
+    state: StatePaths,
+    runtime: RuntimePaths,
+    session_name: Option<String>,
+    exclude: Option<PaneId>,
+    min_pane_cache_ms: Option<u64>,
+}
+
+fn snapshot(globals: &GlobalFlags, command: SnapshotCommand) -> Result<()> {
+    let context = resolve_snapshot_context(globals, &command)?;
+    if try_emit_consumer_snapshot(&context, !command.no_produce, command.json)? {
+        return Ok(());
+    }
+    emit_producer_snapshot(&context, command.mux, globals, command.json)
+}
+
+fn resolve_snapshot_context(
+    globals: &GlobalFlags,
+    command: &SnapshotCommand,
+) -> Result<SnapshotContext> {
+    let mut resolved_session = None;
+    let workspace_id = match command.workspace_id.as_deref() {
+        Some(raw) => raw.parse::<WorkspaceId>()?,
+        None => {
+            let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+            resolved_session = Some(workspace.session_name.clone());
+            workspace.workspace_id
         }
+    };
+    let state = StatePaths::for_workspace(workspace_id.clone()).context("preparing state paths")?;
+    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    state.ensure_dirs().context("preparing state paths")?;
+    runtime.ensure_dirs().context("preparing runtime paths")?;
+    let session_name = command
+        .session_name
+        .clone()
+        .or(resolved_session)
+        .or_else(|| session_name_from_record(&state));
+    let exclude = command
+        .exclude_pane_id
+        .as_deref()
+        .map(PaneId::parse)
+        .transpose()?;
+    Ok(SnapshotContext {
+        state,
+        runtime,
+        session_name,
+        exclude,
+        min_pane_cache_ms: command.min_pane_cache_ms,
+    })
+}
+
+fn try_emit_consumer_snapshot(
+    context: &SnapshotContext,
+    produce: bool,
+    json: bool,
+) -> Result<bool> {
+    if produce || pane_fixture_active() {
+        return Ok(false);
+    }
+    let Some(session) = context.session_name.as_deref() else {
+        return Ok(false);
+    };
+    let snapshot = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &context.state,
+        &context.runtime,
+        session,
+        context.exclude.as_ref(),
+    )
+    .context("reading the consumer snapshot")?;
+    emit_snapshot(&snapshot, json)?;
+    Ok(true)
+}
+
+fn emit_producer_snapshot(
+    context: &SnapshotContext,
+    mux: Option<MuxName>,
+    globals: &GlobalFlags,
+    json: bool,
+) -> Result<()> {
+    let mux = mux
+        .or(globals.mux)
+        .or_else(|| rimz::mux::auto_detect_backend(None).ok());
+    let (Some(session_name), Some(mux)) = (context.session_name.clone(), mux) else {
+        return emit_rollup_snapshot(context, json, None);
+    };
+    let opts = ProduceOptions {
+        mux,
+        session_name,
+        exclude: context.exclude.clone(),
+        min_pane_cache_ms: context.min_pane_cache_ms,
+    };
+    match produce_snapshot(
+        &mut RollupCursor::new(),
+        &context.state,
+        &context.runtime,
+        &opts,
+    ) {
+        Ok(snapshot) => emit_snapshot(&snapshot, json),
+        Err(err) => emit_rollup_snapshot(context, json, Some(&err)),
+    }
+}
+
+fn emit_rollup_snapshot(
+    context: &SnapshotContext,
+    json: bool,
+    reason: Option<&dyn std::fmt::Display>,
+) -> Result<()> {
+    if let Some(error) = reason {
+        tracing::warn!(%error, "sidebar snapshot pane discovery failed; emitting frameless rollup metadata");
+    }
+    let snapshot = produce_rollup_snapshot(
+        &mut RollupCursor::new(),
+        &context.state,
+        &context.runtime,
+        context.exclude.as_ref(),
+        context.min_pane_cache_ms,
+    )?;
+    emit_snapshot(&snapshot, json)
+}
+
+fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
+    if json {
+        let rendered = serde_json::to_string_pretty(snapshot)?;
+        #[expect(clippy::print_stdout, reason = "json emitter for sidebar")]
+        {
+            println!("{rendered}");
+        }
+    } else {
+        let waiting = status_tally(snapshot, rimz::feed::AgentStatus::Waiting);
+        let failed = status_tally(snapshot, rimz::feed::AgentStatus::Failed);
+        #[expect(clippy::print_stdout, reason = "human summary")]
+        {
+            println!("Workspace:       {}", snapshot.display_name);
+            println!("Worktree groups: {}", snapshot.worktree_groups.len());
+            println!("Waiting:         {waiting}");
+            println!("Failed:          {failed}");
+        }
+    }
+    Ok(())
+}
+
+fn status_tally(snapshot: &rimz::SidebarSnapshot, status: rimz::feed::AgentStatus) -> usize {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.status_counts)
+        .filter(|count| count.status == status)
+        .map(|count| count.count)
+        .sum()
+}
+
+fn serve(
+    globals: &GlobalFlags,
+    workspace_id: Option<String>,
+    mux: Option<MuxName>,
+    session_name: Option<String>,
+    tick_seconds: u64,
+    refresh_ms: Option<u16>,
+) -> Result<()> {
+    let (workspace_id, session_name) = resolve_serve_identity(globals, workspace_id, session_name)?;
+    let mux = match mux {
+        Some(mux) => mux,
+        None => rimz::mux::auto_detect_backend(globals.mux)?,
+    };
+    rimz::sidebar_pane::app::serve(rimz::sidebar_pane::app::ServeConfig {
+        workspace_id,
+        mux,
+        session_name,
+        instance_id: SidebarInstanceId::new(),
+        tick_seconds,
+        refresh_ms_override: refresh_ms,
+        notification_prefs: rimz::config::MachineConfig::load()
+            .unwrap_or_default()
+            .notifications,
+        own_pane: rimz::mux::own_pane_id(mux),
+    })
+    .context("serving sidebar")
+}
+
+fn resolve_serve_identity(
+    globals: &GlobalFlags,
+    workspace_id: Option<String>,
+    session_name: Option<String>,
+) -> Result<(WorkspaceId, String)> {
+    let needs_workspace_resolve = workspace_id.is_none() || session_name.is_none();
+    let resolved = if needs_workspace_resolve {
+        Some(WorkspaceResolver::resolve_participant(
+            ".",
+            globals.root.clone(),
+        )?)
+    } else {
+        None
+    };
+    let workspace_id = match workspace_id {
+        Some(raw) => raw.parse::<WorkspaceId>()?,
+        None => resolved
+            .as_ref()
+            .ok_or_else(|| anyhow!("workspace_id missing but workspace was not resolved"))?
+            .workspace_id
+            .clone(),
+    };
+    let session_name = match session_name {
+        Some(name) => name,
+        None => resolved
+            .as_ref()
+            .ok_or_else(|| anyhow!("session_name missing but workspace was not resolved"))?
+            .session_name
+            .clone(),
+    };
+    Ok((workspace_id, session_name))
+}
+
+fn render(width: u16, height: u16) -> Result<()> {
+    let mut buf = String::new();
+    io::stdin()
+        .read_to_string(&mut buf)
+        .context("reading stdin")?;
+    let snapshot = serde_json::from_str(&buf).context("parsing snapshot from stdin")?;
+    rimz::sidebar_pane::render::render_fixed(io::stdout(), &snapshot, None, width, height)
+        .context("rendering snapshot")
+}
+
+fn fixture(state: SidebarFixtureState, width: u16, height: u16) -> Result<()> {
+    let snapshot = sidebar_fixture_snapshot(state)?;
+    rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
+        .context("rendering sidebar fixture")
+}
+
+struct WakeCommand {
+    workspace_id: Option<String>,
+    reason: WakeReason,
+    session_name: Option<String>,
+    pane_id: Option<String>,
+    command_args: Vec<String>,
+    focused_pane_ids: Vec<String>,
+    unfocused_pane_ids: Vec<String>,
+    topology: Option<String>,
+}
+
+fn wake(globals: &GlobalFlags, command: WakeCommand) -> Result<()> {
+    let workspace_id = match command.workspace_id.as_deref() {
+        Some(raw) => raw.parse::<WorkspaceId>()?,
+        None => WorkspaceResolver::resolve_participant(".", globals.root.clone())?.workspace_id,
+    };
+    let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
+    write_presence_stamp(&runtime);
+    write_topology_cache(&runtime, command.topology.as_deref());
+    let Some(event) = wake_event(
+        command.reason,
+        command.pane_id.as_deref(),
+        &command.command_args,
+        &command.focused_pane_ids,
+        &command.unfocused_pane_ids,
+    ) else {
+        return Ok(());
+    };
+    broadcast_wake_event(&runtime, command.session_name.as_deref(), event);
+    Ok(())
+}
+
+fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, event: SidebarEvent) {
+    if let Err(err) = rimz::ledger::wakeup::broadcast_sidebar_event(runtime, session_name, event) {
+        tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
 }
 
