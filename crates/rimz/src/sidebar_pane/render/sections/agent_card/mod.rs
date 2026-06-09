@@ -1,10 +1,10 @@
 //! The per-agent card: identity line, description, the context meter and its
 //! token line, and the expanded subagent list. The card anatomy is drawn in
-//! docs/interface/sidebar.md; the invariants (selection only appends, never
-//! reshapes) live in docs/internals/sidebar.md.
+//! docs/interface/sidebar.md; the density and selection invariants live in
+//! docs/internals/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
-use crate::config::ContextSeverityConfig;
+use crate::config::{CardDensityMode, ContextSeverityConfig};
 use crate::feed::{AgentStatus, ContextSeverity};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use jiff::Timestamp;
@@ -76,17 +76,17 @@ pub(super) fn row_lines(
     width: usize,
     tier: Tier,
     selected: bool,
+    card_density: CardDensityMode,
     animation_phase: u64,
     cost_rolls: &CostRolls,
     bands: &ContextSeverityConfig,
     gutter: Gutter,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
-    // The resting (unselected) card is line 1 (identity), line 2 (description),
-    // the ctx bar, and the token line. Selection only *appends* the subagent
-    // list; it never reshapes a line already on screen, so the card never reflows
-    // on expand. The budgets are account-scoped, so they live in the pinned
-    // provider dashboard, never on a row.
+    // Auto/expanded modes keep the stable card shape: selection only appends
+    // subagents (expanded appends them on every card). Compact is deliberately
+    // different: resting cards trim by status, and the selected card opens back
+    // to the full shape.
     let identity = IdentityLineContext {
         theme,
         providers,
@@ -106,30 +106,48 @@ pub(super) fn row_lines(
         inner.push(line);
     }
     if let Some(agent) = agent(row) {
-        inner.push(description_line(theme, row, tier, cw, animation_phase));
-        // A just-started idle agent sits on the 0% baseline gauge with nothing
-        // behind it, so it rests at identity + description alone. Once an agent
-        // has real context, the bar and the context line — the per-card
-        // `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill last-activity age — join
-        // the resting card.
-        if !idle_unstarted(row) {
-            if let Some(line) = gauge_line(theme, row, bands, cw) {
-                inner.push(line);
+        let compact_resting = card_density == CardDensityMode::Compact && !selected;
+        if compact_resting {
+            match row.status().unwrap_or(AgentStatus::Idle) {
+                AgentStatus::Idle => {}
+                AgentStatus::Running | AgentStatus::Waiting => {
+                    inner.push(description_line(theme, row, tier, cw, animation_phase));
+                    if let Some(line) = gauge_line(theme, row, bands, cw) {
+                        inner.push(line);
+                    }
+                }
+                AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
+                    inner.push(description_line(theme, row, tier, cw, animation_phase));
+                }
             }
-            if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
-                inner.push(line);
+        } else {
+            inner.push(description_line(theme, row, tier, cw, animation_phase));
+            // A just-started idle agent sits on the 0% baseline gauge with
+            // nothing behind it, so it rests at identity + description alone.
+            // Once an agent has real context, the bar and the context line —
+            // the per-card `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill
+            // last-activity age — join the resting card.
+            if !idle_unstarted(row) {
+                if let Some(line) = gauge_line(theme, row, bands, cw) {
+                    inner.push(line);
+                }
+                if let Some(line) = context_tokens_line(theme, row, bands, now, cw) {
+                    inner.push(line);
+                }
             }
-        }
-        // The subagents this agent spawned this turn, listed only in the expanded
-        // card — appended after the stats so the resting card never reflows
-        // (selection only ever adds lines).
-        if selected && !agent.sub_agents.is_empty() {
-            inner.extend(sub_agent_lines(
-                theme,
-                &agent.sub_agents,
-                cw,
-                animation_phase,
-            ));
+            // The subagents this agent spawned this turn, appended after the
+            // stats. Auto and compact show them on the selected card; expanded
+            // shows them on every card.
+            if (selected || card_density == CardDensityMode::Expanded)
+                && !agent.sub_agents.is_empty()
+            {
+                inner.extend(sub_agent_lines(
+                    theme,
+                    &agent.sub_agents,
+                    cw,
+                    animation_phase,
+                ));
+            }
         }
     }
     inner

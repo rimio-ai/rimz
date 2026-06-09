@@ -39,7 +39,7 @@ Eight sections make up the per-machine file:
 | `[agents.layouts]` | named tab layouts and per-agent launch flags for `rimz tab --layout` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
-| `[sidebar]` | sidebar width, render timing, ordering, scroll, glow, and display bands |
+| `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, glow, and display bands |
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding policy when a room is reborn |
@@ -142,12 +142,21 @@ max_cols = 72
 refresh_ms = 100
 scrollbar = "auto"
 glow = "auto"
+card_density = "auto"
 trunk = "develop"
 ```
 
 `max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
 
 `glow = "auto"` follows `COLORTERM` for the truecolor attention glow and transition flashes. `always` is useful when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM`; `never` keeps the plain 256-color render. `NO_COLOR` still disables color effects.
+
+`card_density = "auto"` keeps the standard agent card: identity, description, context meter, context line, and subagents on the selected card. `expanded` shows every card's subagents. `compact` trims resting cards by status while the selected card opens to the standard card.
+
+| status in `compact` | resting lines |
+|---------------------|---------------|
+| `idle` | identity |
+| `running`, `waiting` | identity + description + context meter |
+| `paused`, `success`, `failed` | identity + description |
 
 `trunk` is a preferred comparison target for the worktree header's git stats. A repo where that branch does not resolve falls back to the detection ladder: `main`, then `master`, then the remote's advertised default.
 

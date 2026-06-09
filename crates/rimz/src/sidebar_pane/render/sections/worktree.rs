@@ -2,7 +2,7 @@
 //! story, the dim `external` divider, and the row roster with its parallel
 //! hit-test map entries.
 
-use crate::config::ContextSeverityConfig;
+use crate::config::{CardDensityMode, ContextSeverityConfig};
 use crate::feed::AgentStatus;
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 use jiff::Timestamp;
@@ -38,6 +38,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     now: Timestamp,
     width: usize,
     bands: &ContextSeverityConfig,
+    card_density: CardDensityMode,
     filter: Option<AgentStatus>,
     row_index: &mut usize,
     selected_index: usize,
@@ -95,6 +96,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             width,
             tier,
             selected,
+            card_density,
             animation_phase,
             cost_rolls,
             bands,

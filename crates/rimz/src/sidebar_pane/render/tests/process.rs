@@ -211,6 +211,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             snapshot.now,
             44,
             &snapshot.sidebar.context,
+            snapshot.sidebar.card_density,
             None,
             &mut row_index,
             0,

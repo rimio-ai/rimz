@@ -160,7 +160,9 @@ While a [make-up bucket](#zone-1--the-cockpit) is picked, the body shows only th
 
 ### The card
 
-An agent is a small stacked card. The resting card is four lines; selecting it appends any subagents. Selection never reshapes a line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
+An agent is a small stacked card. The standard resting card is four lines; selecting it appends any subagents. Selection never reshapes a standard card line already on screen — it only *appends* and lights the spine — so the card never reflows as it expands.
+
+`[sidebar] card_density` tunes that body without changing routing: `auto` uses the standard card, `expanded` shows subagents on every parent card, and `compact` trims resting cards by status while the selected card opens to the full standard shape. Compact resting cards read idle as identity only, running/waiting as identity + description + meter, and paused/done/failed as identity + description.
 
 idle:
 
@@ -187,7 +189,7 @@ complete:
 
 The `▣`/`▢` and `▤` glyphs share one lead column, so the card reads as an aligned grid.
 
-**Selection.** The resting card is the four lines above. Selecting any row lights the bold `▌` spine and *appends* the agent's subagents beneath — it never reshapes a line already on screen, so the card never reflows:
+**Selection.** In `auto` and `expanded`, the resting card is the four lines above. Selecting any row lights the bold `▌` spine and *appends* the agent's subagents beneath — it never reshapes a line already on screen, so the card never reflows:
 
 resting:
 

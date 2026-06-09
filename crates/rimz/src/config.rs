@@ -628,6 +628,22 @@ pub enum ProviderTabsMode {
     Never,
 }
 
+/// `[sidebar] card_density`: how much detail resting agent cards show.
+/// Display-only.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum CardDensityMode {
+    /// Keep the default card shape: resting cards show their normal detail, and
+    /// the selected card appends its subagents.
+    #[default]
+    Auto,
+    /// Show each card's subagent section while keeping the normal card lines.
+    Expanded,
+    /// Trim resting cards by status; the selected agent still opens to the
+    /// full default card.
+    Compact,
+}
+
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -707,6 +723,12 @@ pub struct SidebarConfig {
     /// breath. `NO_COLOR` beats every mode. Resolved producer-side onto the
     /// snapshot like the rest of `[sidebar]`.
     pub glow: GlowMode,
+    /// How much detail resting agent cards show. `auto` keeps the standard
+    /// card shape; `expanded` shows every card's subagent section; `compact`
+    /// trims resting cards by status while the selected card opens to the full
+    /// form. Resolved producer-side onto the snapshot like the rest of
+    /// `[sidebar]`.
+    pub card_density: CardDensityMode,
 }
 
 impl Default for SidebarConfig {
@@ -725,6 +747,7 @@ impl Default for SidebarConfig {
             theme: SidebarThemeConfig::default(),
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
+            card_density: CardDensityMode::default(),
         }
     }
 }

@@ -1,0 +1,32 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 7
+ ────────────────────────────────────────────────────
+ ? 1   ! 1   ⏸︎ 1   ✓ 1                     ⢿ 1   ○ 2
+
+ ⑂ main
+ ? waiter · opus · high · 200k
+   waiting task
+   ▣ ━━━━━━━━━━━━━━━━━━────────────────────────   42%
+ ! failed · opus · high · 200k
+   failed task
+ ⏸︎ paused · opus · high · 200k
+   paused task
+ ✓ done · opus · high · 200k
+   done task
+ ⣾ runner · opus · high · 200k
+   running task
+   ▣ ━━━━━━━━━━━━━━━━──────────────────────────   38%
+ ○ idlebot · opus · high · 200k
+
+▏⑂ other ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▌○ selector · opus · high · 200k
+▌  selected other
+
+
+                ␣ next ?!   ? for help

@@ -42,6 +42,7 @@
 # max_cols = 72                       # creation-time cap for sidebar pane width
 # scrollbar = "auto"                  # "auto", "always", or "never"
 # glow = "auto"                       # "auto", "always", or "never"
+# card_density = "auto"               # "auto", "expanded", or "compact"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
 [sidebar.context]

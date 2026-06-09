@@ -120,6 +120,29 @@ fn config_set_round_trips_arrays_and_context_bands() {
         .assert()
         .success()
         .stdout("90\n");
+
+    env.rimz()
+        .args(["config", "get", "sidebar.card_density"])
+        .assert()
+        .success()
+        .stdout("auto\n");
+
+    env.rimz()
+        .args(["config", "set", "sidebar.card_density", "compact"])
+        .assert()
+        .success();
+
+    env.rimz()
+        .args(["config", "get", "sidebar.card_density"])
+        .assert()
+        .success()
+        .stdout("compact\n");
+
+    env.rimz()
+        .args(["config", "set", "sidebar.card_density", "tiny"])
+        .assert()
+        .failure()
+        .stderr(contains("validating `sidebar.card_density`"));
 }
 
 #[test]

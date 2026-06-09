@@ -253,6 +253,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.provider_tabs",
         "sidebar.provider_list",
         "sidebar.max_cols",
+        "sidebar.card_density",
         "sidebar.context.yellow",
         "sidebar.context.amber",
         "sidebar.context.red",

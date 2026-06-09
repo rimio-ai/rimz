@@ -214,6 +214,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             snapshot.now,
             54,
             &snapshot.sidebar.context,
+            snapshot.sidebar.card_density,
             None,
             &mut row_index,
             selected_index,

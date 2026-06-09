@@ -482,6 +482,7 @@ pub(super) fn scroll_lines(
                 snapshot.now,
                 width,
                 &snapshot.sidebar.context,
+                snapshot.sidebar.card_density,
                 ui.make_up_filter,
                 &mut row_index,
                 ui.selected_index,
