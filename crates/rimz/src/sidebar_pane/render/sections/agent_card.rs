@@ -316,6 +316,7 @@ fn agent_name_style(theme: &Theme, providers: &[SidebarProviderPanel], kind: &st
         .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn identity_line(
     theme: &Theme,
     row: &SidebarRow,
