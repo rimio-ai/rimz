@@ -150,9 +150,14 @@ impl PaneState {
     /// Join this fresh pane state to the prior frame's state for the same pane
     /// id. A changed spawn command, pid, or process start is a new tenant: the
     /// prior current process rotates to `previous` and the fresh record stands
-    /// clean. A stable identity repairs raced-null mux fields (`command`,
-    /// `spawn_command`, `cwd`, `started_at`) from the prior read and carries
-    /// `previous` along.
+    /// clean. A stable identity repairs raced-null mux fields (`spawn_command`,
+    /// `cwd`, `started_at`) from the prior read and carries `previous` along.
+    /// Foreground command repair is narrower: idle commands and agent hosts may
+    /// be restored freely, but active commands require a known same pane-root
+    /// pid. Zellij's fresh list-panes path usually has no pid here, so an
+    /// exited foreground task does not keep rendering as busy when the shell
+    /// returns and the mux reports no fresh command for a tick. tmux's pid is
+    /// the stable pane root, so this still preserves tmux raced-null repair.
     ///
     /// `current.pid` is never backfilled here: on Zellij the pid is a
     /// metrics-layer derivation, and only that layer's `starttime` pid-reuse
@@ -181,7 +186,18 @@ impl PaneState {
 
         self.previous = prior.previous.clone();
         if self.current.command.is_none() {
-            self.current.command = prior.current.command.clone();
+            let prior_is_idle = prior
+                .current
+                .command
+                .as_deref()
+                .is_none_or(|command| !crate::ledger::snapshot::process_is_active(command));
+            let same_known_pid = matches!(
+                (self.current.pid, prior.current.pid),
+                (Some(fresh), Some(previous)) if fresh == previous
+            );
+            if prior_is_idle || same_known_pid {
+                self.current.command = prior.current.command.clone();
+            }
         }
         if self.current.spawn_command.is_none() {
             self.current.spawn_command = prior.current.spawn_command.clone();
@@ -456,6 +472,80 @@ mod tests {
                 .previous
                 .as_ref()
                 .and_then(|previous| previous.command.as_deref()),
+            Some("zsh")
+        );
+    }
+
+    #[test]
+    fn active_command_null_fresh_no_pid_does_not_backfill() {
+        let start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+        let mut prior = assemble_frame(
+            vec![pane("terminal_1", "tab_0", Some("git push"), false)],
+            1,
+            "rimz-test",
+        );
+        prior.tabs[0].panes[0].current.spawn_command = Some("zsh".to_owned());
+        prior.tabs[0].panes[0].current.started_at = Some(start);
+        let mut fresh = assemble_frame(
+            vec![PaneRef {
+                cwd: None,
+                ..pane("terminal_1", "tab_0", None, false)
+            }],
+            2,
+            "rimz-test",
+        );
+
+        fresh.rotate_against_prior(&prior);
+
+        let state = &fresh.tabs[0].panes[0];
+        assert_eq!(state.current.command, None);
+        assert_eq!(state.current.spawn_command.as_deref(), Some("zsh"));
+        assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"));
+        assert_eq!(state.current.started_at, Some(start));
+    }
+
+    #[test]
+    fn active_command_null_fresh_same_pid_backfills() {
+        let mut prior = assemble_frame(
+            vec![pane("terminal_1", "tab_0", Some("cargo build"), false)],
+            1,
+            "rimz-test",
+        );
+        prior.tabs[0].panes[0].current.pid = Some(42);
+        let mut fresh = assemble_frame(
+            vec![PaneRef {
+                pane_pid: Some(42),
+                ..pane("terminal_1", "tab_0", None, false)
+            }],
+            2,
+            "rimz-test",
+        );
+
+        fresh.rotate_against_prior(&prior);
+
+        assert_eq!(
+            fresh.tabs[0].panes[0].current.command.as_deref(),
+            Some("cargo build")
+        );
+    }
+
+    #[test]
+    fn idle_command_null_fresh_always_backfills() {
+        let prior = assemble_frame(
+            vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
+            1,
+            "rimz-test",
+        );
+        let mut fresh = assemble_frame(
+            vec![pane("terminal_1", "tab_0", None, false)],
+            2,
+            "rimz-test",
+        );
+
+        fresh.rotate_against_prior(&prior);
+
+        assert_eq!(
+            fresh.tabs[0].panes[0].current.command.as_deref(),
             Some("zsh")
         );
     }
