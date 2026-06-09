@@ -3,7 +3,7 @@ use crate::ids::PaneId;
 use jiff::Timestamp;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
-use super::{CostRolls, EffectState, ScrollbarFade, TallyAnim};
+use super::{CostRolls, EffectState, ScrollbarFade, TallyAnim, UnreadTracker};
 
 #[derive(Clone, Debug, Default)]
 pub struct UiState {
@@ -26,6 +26,9 @@ pub struct UiState {
     /// card at `animation_phase`; ORed into the serve loop's animation gate
     /// beside the tally. Crate-internal, like `tally`.
     pub(crate) cost_rolls: CostRolls,
+    /// Per-renderer read/unread memory keyed by row id. Folded from status
+    /// transitions and focused-pane truth before each committed snapshot paints.
+    pub(crate) unread: UnreadTracker,
     /// The post-render effects pass's memory — the transition detector's diff
     /// base and the live one-shot flashes ([`effects::EffectState`]). Observed
     /// and painted as a byproduct of every draw, after the paragraph render;
@@ -141,10 +144,10 @@ pub struct Alert {
 }
 
 impl Alert {
-    pub fn active(reason: impl Into<String>) -> Self {
+    pub fn active(reason: impl Into<String>, since: Timestamp) -> Self {
         Self {
             reason: reason.into(),
-            since: Timestamp::now(),
+            since,
             recovered_at: None,
         }
     }

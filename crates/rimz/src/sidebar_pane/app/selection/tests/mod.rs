@@ -31,6 +31,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         pane: Some(pane("terminal_9", "tab_0", false)),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        unread: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: Some(crate::feed::AgentStatus::Running),
@@ -51,6 +52,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         pane: Some(pane("terminal_10", "tab_0", false)),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        unread: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     };
@@ -137,6 +139,7 @@ fn filter_row(
         pane: Some(pane(pane_name, "tab_0", false)),
         worktree_path: Some(worktree.to_owned()),
         worktree_branch: None,
+        unread: false,
         last_activity: Timestamp::now(),
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {

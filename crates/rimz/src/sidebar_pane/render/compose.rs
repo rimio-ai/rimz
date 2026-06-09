@@ -418,6 +418,7 @@ pub(super) fn top_lines(
         &snapshot.worktree_groups,
         snapshot.now,
         ui.make_up_filter,
+        ui.animation_phase,
         inner,
     );
     for hit in &mut make_up_hits {

@@ -23,6 +23,7 @@ mod scrollbar;
 mod sections;
 mod theme;
 mod ui_state;
+mod unread;
 
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::hairline_rule;
@@ -36,6 +37,7 @@ pub(crate) use self::ui_state::{Browse, DashboardTab, ManualScroll};
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
+pub(crate) use unread::UnreadTracker;
 
 use std::io::{self, Write};
 
@@ -59,13 +61,14 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), or an attention row whose
-/// `?`/`!` glyph breathes. The serve loop uses this as the broad "does anything
-/// move?" gate; [`animation_cadence`] decides whether the movement needs the
-/// fast frame grid or the slower cosmetic cadence. A fully settled sidebar
-/// (only quiet idle/done rows) keeps idling on the slow data tick. A stalled
-/// agent is projected to `failed` upstream, so it reads as a breathing `!`
-/// here. The cockpit's today-spend count-up rides a separate gate
+/// real work (a build, a test, a `sudo` install), or a row whose lead glyph
+/// breathes (`?`/`!`, plus unread calm results). The serve loop uses this as
+/// the broad "does anything move?" gate; [`animation_cadence`] decides whether
+/// the movement needs the fast frame grid or the slower cosmetic cadence. A
+/// fully settled sidebar (only quiet read idle/done rows) keeps idling on the
+/// slow data tick. A stalled agent is projected to `failed` upstream, so it
+/// reads as a breathing `!` here. The cockpit's today-spend count-up rides a
+/// separate gate
 /// (`UiState::tally`), so a finished-turn climb keeps the tick alive even when
 /// every row is otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
@@ -86,10 +89,9 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // `?`/`!` breathe to pull the eye back to an unanswered row,
-            // quickening with age up to the red blink, which flips every
-            // 300ms by design so it samples cleanly on this grid.
-            if row.status().is_some_and(AgentStatus::is_actionable) {
+            // `?`/`!` keep breathing until resolved. Unread calm completions
+            // breathe only until the pane is focused.
+            if row.unread || row.status().is_some_and(AgentStatus::is_actionable) {
                 slow = true;
             }
         } else if row.process_is_busy() {

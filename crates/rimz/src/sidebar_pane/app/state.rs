@@ -8,7 +8,7 @@ use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use tracing::{debug, warn};
 
-use crate::sidebar_pane::render::UiState;
+use crate::sidebar_pane::render::{UiState, UnreadTracker};
 
 use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate};
@@ -147,6 +147,20 @@ pub(super) fn apply_fetch_outcome(
     *last_snapshot = state.last_snapshot;
     *health = state.health;
     *current = state.snapshot;
+    let focused_pane = focused_working_pane(current);
+    let focused_row_id = focused_pane
+        .as_ref()
+        .and_then(|pane| row_id_of_pane(current, pane));
+    ui.unread.observe(
+        current
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter()),
+        focused_row_id.as_deref(),
+    );
+    stamp_unread(current, &ui.unread);
+    // Presentation sort only reorders the producer's already-capped visible set.
+    current.sort_groups_for_presentation();
     // Reconcile the highlight as part of the fold, before the next frame paints:
     // re-anchor the identity-keyed selection to its row (so a status-churn
     // reorder never slides it onto a neighbour) and re-derive the baseline from
@@ -157,12 +171,7 @@ pub(super) fn apply_fetch_outcome(
     // `None` and the baseline holds its last value. It is deliberately blind to
     // the make-up filter — the active pane is real however the body is
     // narrowed, so a hidden baseline holds rather than blanks.
-    let derived = current
-        .own_view
-        .as_ref()
-        .filter(|view| !view.own_is_active)
-        .and_then(|view| view.active_pane_id.clone())
-        .filter(|pane| row_index_of_pane(current, None, pane).is_some());
+    let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
     ui.animation_phase = wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
     // Fold the fresh today-spend into the count-up: a higher figure starts a
@@ -240,6 +249,38 @@ pub(super) fn apply_fetch_outcome(
         tab_emptied: false,
         rejected,
     })
+}
+
+fn focused_working_pane(snapshot: &SidebarSnapshot) -> Option<crate::ids::PaneId> {
+    snapshot
+        .own_view
+        .as_ref()
+        .filter(|view| !view.own_is_active)
+        .and_then(|view| view.active_pane_id.clone())
+        .filter(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+}
+
+fn row_id_of_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> Option<String> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .find(|row| {
+            row.pane
+                .as_ref()
+                .is_some_and(|pane| pane.pane_id == *pane_id)
+        })
+        .map(|row| row.id.clone())
+}
+
+fn stamp_unread(snapshot: &mut SidebarSnapshot, unread: &UnreadTracker) {
+    for row in snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        row.unread = unread.is_unread(&row.id);
+    }
 }
 
 #[cfg(test)]

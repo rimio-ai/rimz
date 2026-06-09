@@ -299,6 +299,13 @@ impl SidebarSnapshot {
         self
     }
 
+    /// Re-sort the already-built worktree groups after a renderer-local
+    /// presentation flag such as `SidebarRow::unread` changes. This preserves
+    /// the producer's row cap and status counts; it only changes visible order.
+    pub fn sort_groups_for_presentation(&mut self) {
+        layout::sort_groups_for_presentation(&mut self.worktree_groups);
+    }
+
     /// Attach each session's rich context sidecar to its `AgentState` by
     /// `(kind, agent_id)`. Context is display-only — it never changes ranking,
     /// since `last_activity` is untouched — and reaches rows only through the

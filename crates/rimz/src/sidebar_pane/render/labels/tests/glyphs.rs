@@ -59,20 +59,42 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     // step with the clock quarters. The glyph breathes, so its brightness
     // modifier varies by frame; only the color is asserted here.
     for status in [AgentStatus::Waiting, AgentStatus::Failed] {
-        assert_eq!(attention_glyph_style(&theme, status, 5 * 60, 0).fg, yellow);
-        assert_eq!(attention_glyph_style(&theme, status, 25 * 60, 0).fg, yellow);
-        assert_eq!(attention_glyph_style(&theme, status, 31 * 60, 0).fg, amber);
-        assert_eq!(attention_glyph_style(&theme, status, 61 * 60, 0).fg, red);
+        assert_eq!(
+            attention_glyph_style(&theme, status, 5 * 60, 0, false).fg,
+            yellow
+        );
+        assert_eq!(
+            attention_glyph_style(&theme, status, 25 * 60, 0, false).fg,
+            yellow
+        );
+        assert_eq!(
+            attention_glyph_style(&theme, status, 31 * 60, 0, false).fg,
+            amber
+        );
+        assert_eq!(
+            attention_glyph_style(&theme, status, 61 * 60, 0, false).fg,
+            red
+        );
     }
     // Calm states never heat, however old — they take their plain style.
     assert_eq!(
-        attention_glyph_style(&theme, AgentStatus::Idle, 2 * 60 * 60, 0).fg,
+        attention_glyph_style(&theme, AgentStatus::Idle, 2 * 60 * 60, 0, false).fg,
         agent_style(&theme, AgentStatus::Idle).fg
     );
     assert_eq!(
-        attention_glyph_style(&theme, AgentStatus::Running, 2 * 60 * 60, 0).fg,
+        attention_glyph_style(&theme, AgentStatus::Running, 2 * 60 * 60, 0, false).fg,
         agent_style(&theme, AgentStatus::Running).fg
     );
+}
+
+#[test]
+fn unread_calm_glyph_breathes_without_heating() {
+    let theme = Theme::fixed(false);
+    let read = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, false);
+    let unread = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, true);
+
+    assert_eq!(unread.fg, agent_style(&theme, AgentStatus::Success).fg);
+    assert_ne!(read.add_modifier, unread.add_modifier);
 }
 /// Each animation cycles through its frames and wraps, so the phase can grow
 /// without bound.
@@ -245,7 +267,7 @@ fn paused_rests_in_held_amber_and_never_reddens() {
     let style = status_style(&theme, AgentStatus::Paused);
     assert_eq!(style.fg, Some(Color::Indexed(179)));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
-    let long_parked = attention_glyph_style(&theme, AgentStatus::Paused, 2 * 60 * 60, 0);
+    let long_parked = attention_glyph_style(&theme, AgentStatus::Paused, 2 * 60 * 60, 0, false);
     assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
 }

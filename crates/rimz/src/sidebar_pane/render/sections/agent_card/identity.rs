@@ -109,6 +109,7 @@ pub(super) fn agent_lead_cell(
             status,
             age_secs(row.last_activity, now),
             animation_phase,
+            row.unread,
         ),
     )
 }

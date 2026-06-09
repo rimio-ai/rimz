@@ -157,6 +157,13 @@ pub(super) fn refresh_overlay_group(group: &mut SidebarWorktreeGroup) {
     group.hidden_count = total.saturating_sub(group.rows.len());
 }
 
+pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) {
+    for group in groups.iter_mut() {
+        group.rows.sort_by(compare_rows);
+    }
+    groups.sort_by(compare_groups);
+}
+
 /// Trim a group's calm tail to `WORKTREE_ROW_CAP`, always keeping the rows that
 /// need you (`waiting`/`failed`) and the focused pane. Because `idle` ranks
 /// last among agents, it is the first calm bucket trimmed behind `+K more` —
@@ -179,8 +186,10 @@ pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
     // The final tiebreak is the stable `id` alone — never `name`, which mutates
     // through the session-name → task → prompt label ladder and would reshuffle
     // a bucket on every rename.
-    row_rank(left)
-        .cmp(&row_rank(right))
+    right
+        .unread
+        .cmp(&left.unread)
+        .then_with(|| row_rank(left).cmp(&row_rank(right)))
         .then_with(|| within_bucket(left, right))
         .then_with(|| left.id.cmp(&right.id))
 }
@@ -254,8 +263,13 @@ pub(super) fn compare_groups(
 /// status collapses to one tier: a calm group's position must not leapfrog a
 /// sibling just because its top row flipped success↔running↔idle — calm groups
 /// hold the stable earliest-pane order, and only genuine attention reorders.
-fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
-    match group.rows.first().map(SidebarRow::status) {
+fn group_tier(group: &SidebarWorktreeGroup) -> (u8, u8) {
+    let unread_tier = if group.rows.first().is_some_and(|row| row.unread) {
+        0
+    } else {
+        1
+    };
+    let status_tier = match group.rows.first().map(SidebarRow::status) {
         Some(Some(AgentStatus::Waiting)) => 0,
         Some(Some(AgentStatus::Failed)) => 1,
         Some(Some(AgentStatus::Paused)) => 2,
@@ -264,7 +278,8 @@ fn group_tier(group: &SidebarWorktreeGroup) -> u8 {
         // Process-only group.
         Some(None) => 4,
         None => u8::MAX,
-    }
+    };
+    (unread_tier, status_tier)
 }
 
 fn group_is_external(group: &SidebarWorktreeGroup) -> bool {

@@ -16,9 +16,9 @@ use crate::{
     AgentCard, RowCard, SidebarProviderPanel, SidebarRow, SidebarSnapshot, SidebarStatusCount,
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, SpendTally, SpendWindow,
 };
-use jiff::Timestamp;
 
 fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
+    let now = super::fixed_now();
     SidebarSubAgent {
         id: format!("{parent}-sub-{index}"),
         name: "Explore".to_owned(),
@@ -30,8 +30,8 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         description: Some(format!("scan module {index} for callers")),
         total_tokens: Some(40_000 + (index as u64) * 7_321),
         elapsed_secs: Some(90 + index as i64),
-        started_at: Some(Timestamp::now()),
-        last_activity: Timestamp::now(),
+        started_at: Some(now),
+        last_activity: now,
     }
 }
 
@@ -57,7 +57,8 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         }),
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),
-        last_activity: Timestamp::now(),
+        unread: false,
+        last_activity: super::fixed_now(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(crate::feed::AgentStatus::Running),
             phase: crate::agents::TurnPhase::Acting,
@@ -111,12 +112,12 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         windows: vec![
             RateLimitWindow {
                 used_percentage: Some(((index * 17) % 100) as u8),
-                resets_at: Some(Timestamp::now()),
+                resets_at: Some(super::fixed_now()),
                 duration_mins: Some(300),
             },
             RateLimitWindow {
                 used_percentage: Some(((index * 7) % 100) as u8),
-                resets_at: Some(Timestamp::now()),
+                resets_at: Some(super::fixed_now()),
                 duration_mins: Some(10_080),
             },
         ],
@@ -131,7 +132,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
 /// measured work rather than short-circuiting on empty fixtures.
 fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
     let workspace_id = WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap();
-    let now = Timestamp::now();
+    let now = super::fixed_now();
     SidebarSnapshot {
         workspace_id,
         display_name: "query-engine".to_owned(),

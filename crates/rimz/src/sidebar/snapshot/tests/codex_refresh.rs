@@ -187,6 +187,7 @@ fn config_fold_stamps_agent_context_severity() {
         pane: None,
         worktree_path: None,
         worktree_branch: None,
+        unread: false,
         last_activity: jiff::Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: Some(AgentStatus::Running),
@@ -201,6 +202,7 @@ fn config_fold_stamps_agent_context_severity() {
         pane: None,
         worktree_path: None,
         worktree_branch: None,
+        unread: false,
         last_activity: jiff::Timestamp::now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     };

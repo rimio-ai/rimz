@@ -97,7 +97,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         );
         waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(Vec::new(), vec![waiting]);
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 60)
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 60)
             .0
             .iter()
             .flat_map(|line| line.spans.iter())
@@ -135,7 +135,7 @@ fn state_glyphs_never_dim() {
         Some("a"),
     );
     let snapshot = snapshot_with(Vec::new(), vec![working]);
-    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 60).0;
+    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 60).0;
     let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
     let glyph_style = |glyph: &str| {
         spans
@@ -180,8 +180,16 @@ fn state_glyphs_never_dim() {
 fn make_up_filter_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
-    let compose =
-        |filter| fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, filter, 38);
+    let compose = |filter| {
+        fleet_header_lines(
+            &theme,
+            &snapshot.worktree_groups,
+            snapshot.now,
+            filter,
+            0,
+            38,
+        )
+    };
     let (resting_lines, resting_hits) = compose(None);
     let (failed_lines, failed_hits) = compose(Some(AgentStatus::Failed));
     let (running_lines, running_hits) = compose(Some(AgentStatus::Running));
@@ -228,12 +236,13 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     let theme = Theme::fixed(true);
     let snapshot = make_up_snapshot();
     let (resting_lines, resting_hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 38);
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 38);
     let (lines, hits) = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
         Some(AgentStatus::Failed),
+        0,
         38,
     );
     assert_eq!(resting_hits, hits, "the pick keeps click targets fixed");
@@ -276,7 +285,7 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
     let (lines, hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 38);
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 38);
     let text = make_up_text(&lines);
     assert_eq!(
         hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
@@ -304,7 +313,8 @@ fn make_up_clipped_bucket_drops_its_hit() {
     let snapshot = make_up_snapshot();
     // 18 columns forces the left-packed fallback and clips the live-capacity tail, so
     // the right-cluster `⢿ 1` bucket falls past the edge.
-    let (_, hits) = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 18);
+    let (_, hits) =
+        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 18);
     assert!(
         hits.iter().all(|hit| usize::from(hit.col_end) <= 18),
         "no hit points past the visible edge: {hits:?}"
@@ -314,6 +324,47 @@ fn make_up_clipped_bucket_drops_its_hit() {
         vec![AgentStatus::Failed],
         "the clipped working bucket keeps no hit"
     );
+}
+
+#[test]
+fn unread_bucket_breathes_by_modifier() {
+    let theme = Theme::fixed(false);
+    let mut snapshot = make_up_snapshot();
+    let bucket_modifier =
+        |snapshot: &SidebarSnapshot, animation_phase, filter: Option<AgentStatus>| {
+            fleet_header_lines(
+                &theme,
+                &snapshot.worktree_groups,
+                snapshot.now,
+                filter,
+                animation_phase,
+                38,
+            )
+            .0
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .find(|span| span.content.as_ref() == "! 1")
+            .expect("failed bucket")
+            .style
+            .add_modifier
+        };
+    let read = bucket_modifier(&snapshot, 0, None);
+    snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.status() == Some(AgentStatus::Failed))
+        .expect("failed row")
+        .unread = true;
+    let trough = bucket_modifier(&snapshot, 0, None);
+    let peak = bucket_modifier(&snapshot, 12, None);
+    let picked_trough = bucket_modifier(&snapshot, 0, Some(AgentStatus::Failed));
+
+    assert_eq!(read, Modifier::BOLD);
+    assert_eq!(trough, Modifier::DIM);
+    assert_eq!(peak, Modifier::BOLD);
+    assert_ne!(trough, peak);
+    assert_eq!(picked_trough, Modifier::DIM);
 }
 /// A make-up bucket click narrows the body to that status: only the `!` card
 /// remains — the running agent's worktree is skipped whole (header included),
@@ -336,6 +387,7 @@ fn render_make_up_filter_narrows_the_body() {
         pane: Some(pane("%9", "zsh", "/home/me/query-engine")),
         worktree_path: Some("/home/me/query-engine".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        unread: false,
         last_activity: fixed_now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     });

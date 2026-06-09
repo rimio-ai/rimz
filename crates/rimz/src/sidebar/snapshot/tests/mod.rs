@@ -133,6 +133,7 @@ fn activity_row(
         pane: None,
         worktree_path: Some(worktree_path.display().to_string()),
         worktree_branch: None,
+        unread: false,
         last_activity,
         card: if is_agent {
             crate::RowCard::Agent(Box::new(crate::AgentCard {

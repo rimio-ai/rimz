@@ -293,6 +293,7 @@ fn idle_agent_row(
         pane: Some(pane.clone()),
         worktree_path: Some(worktree_path.to_owned()),
         worktree_branch: None,
+        unread: false,
         last_activity: pane.pane_process_start.unwrap_or(now),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(AgentStatus::Idle),

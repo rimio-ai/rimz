@@ -36,7 +36,7 @@ fn fixed_workspace() -> WorkspaceId {
 fn fixed_now() -> Timestamp {
     // Pin every test to one timestamp so the redaction filter has a
     // deterministic input to scrub.
-    Timestamp::now()
+    Timestamp::from_second(1_700_000_000).unwrap()
 }
 
 fn snapshot_to_screen(snapshot: &SidebarSnapshot, width: u16, height: u16) -> String {
@@ -133,7 +133,7 @@ fn snapshot_with(items: Vec<FeedItem>, mut agents: Vec<AgentState>) -> SidebarSn
         items,
         Vec::new(),
         agents,
-        Timestamp::now(),
+        fixed_now(),
     );
     if !panes.is_empty() {
         snapshot = snapshot.with_live_panes(panes, None);

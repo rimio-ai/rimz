@@ -69,6 +69,7 @@ fn frame_interval_slows_cosmetic_animation_only() {
             pane: None,
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
+            unread: false,
             last_activity: Timestamp::now(),
             card: crate::RowCard::Agent(Box::new(crate::AgentCard {
                 status: Some(crate::feed::AgentStatus::Waiting),

@@ -193,7 +193,7 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     );
     assert_eq!(animation_cadence(&idle_empty), AnimationCadence::None);
 
-    let calm = snapshot_with(
+    let mut calm = snapshot_with(
         Vec::new(),
         vec![agent(
             "claude-1",
@@ -205,6 +205,9 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
         )],
     );
     assert_eq!(animation_cadence(&calm), AnimationCadence::None);
+
+    calm.worktree_groups[0].rows[0].unread = true;
+    assert_eq!(animation_cadence(&calm), AnimationCadence::Slow);
 }
 /// Honesty test: a running agent silent past the stall window is projected
 /// to the attention bucket, so its cell reads as the attention `!` rather than

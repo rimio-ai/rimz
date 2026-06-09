@@ -37,7 +37,7 @@ use ratatui::style::Color;
 use tachyonfx::{CellFilter, Effect, EffectTimer, Interpolation, fx};
 
 use super::fmt::age_secs;
-use super::labels::age_heat;
+use super::labels::{age_heat, status_glyph};
 use super::row_passes_filter;
 use super::theme::{ORANGE, Theme};
 
@@ -322,9 +322,9 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
 }
 
 /// The glow's lightness lift for `row` at `phase`, or `None` when the row
-/// holds no glow: only an unresolved actionable row breathes, the resolver
-/// spinner means the ask is being handled, and at red heat the hard modifier
-/// blink owns the cell — a smooth swell under a strobe would mush both.
+/// holds no glow: unresolved actionable rows and unread calm rows breathe, the
+/// resolver spinner means the ask is being handled, and at red heat the hard
+/// modifier blink owns the cell — a smooth swell under a strobe would mush both.
 /// The wave is the breath's own triangle (same cycle, same amber double-time,
 /// see [`super::labels::attention_breath`]), so color and modifier swell as
 /// one motion.
@@ -332,7 +332,7 @@ fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
     if !row.is_agent() || row.resolver().is_some() {
         return None;
     }
-    if !row.status().is_some_and(AgentStatus::is_actionable) {
+    if !(row.unread || row.status().is_some_and(AgentStatus::is_actionable)) {
         return None;
     }
     let heat = age_heat(age_secs(row.last_activity, now));
@@ -418,18 +418,19 @@ fn spine_rect(area: Rect, run: &Range<usize>) -> Rect {
     )
 }
 
-/// The glow's word rect: the gutter cell, the attention glyph, and the agent
-/// name on the card's identity line — found by scanning the row's run for the
-/// composed `?`/`!` in the glyph column, which also skips the group header
+/// The glow's word rect: the gutter cell, the status glyph, and the agent name
+/// on the card's identity line — found by scanning the row's run for the
+/// composed status glyph in the glyph column, which also skips the group header
 /// line sharing the run. `None` when the identity line is scrolled out or the
 /// glyph is not on screen this frame.
 fn word_rect(buf: &Buffer, area: Rect, run: &Range<usize>, row: &SidebarRow) -> Option<Rect> {
+    let glyph = row.status().map(status_glyph)?;
     for line in run.clone() {
         let y = area.y.saturating_add(line as u16);
         let Some(cell) = buf.cell((area.x + 1, y)) else {
             continue;
         };
-        if matches!(cell.symbol(), "?" | "!") {
+        if cell.symbol() == glyph {
             let label = 3 + row.name.chars().count() as u16;
             return Some(Rect::new(
                 area.x,
@@ -480,6 +481,7 @@ mod tests {
             pane: Some(pane(id)),
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
+            unread: false,
             last_activity: Timestamp::now(),
             card: RowCard::Agent(Box::new(AgentCard {
                 status: Some(status),
@@ -765,6 +767,14 @@ mod tests {
 
         let calm = row("a", AgentStatus::Running);
         assert_eq!(glow_delta(&calm, now, mid_breath), None);
+
+        let mut unread_done = row("a", AgentStatus::Success);
+        unread_done.unread = true;
+        assert_eq!(
+            glow_delta(&unread_done, now, mid_breath),
+            Some(GLOW_MAX_LIGHTNESS / 2.0),
+            "unread calm rows ride the same breath swell"
+        );
 
         let mut handled = row("a", AgentStatus::Waiting);
         handled.as_agent_mut().unwrap().resolver = Some(SidebarResolverState {

@@ -48,7 +48,7 @@ fn bottom_chrome_active_alert_suppresses_dashboard_ledger_and_footer() {
         Some((25, 40)),
     )];
     snapshot.value_tally = Some(bottom_tally());
-    let alert = Alert::active("snapshot failed");
+    let alert = Alert::active("snapshot failed", snapshot.now);
 
     let (lines, hits) = bottom_chrome_texts(&snapshot, Some(&alert));
     let text = lines.join("\n");

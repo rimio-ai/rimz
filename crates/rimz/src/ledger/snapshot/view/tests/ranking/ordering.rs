@@ -186,3 +186,57 @@ fn attention_bucket_sorts_longest_overdue_first() {
     // Waiting leads failed; within each, the longest-overdue (oldest activity) rises.
     assert_eq!(order, vec!["wait-old", "wait-new", "fail-old", "fail-new"]);
 }
+
+#[test]
+fn unread_rows_form_the_primary_inbox_band() {
+    let agents = vec![
+        agent_in("seen-wait", "/repo/main", AgentStatus::Waiting, 1_000),
+        agent_in("new-done", "/repo/main", AgentStatus::Success, 2_000),
+        agent_in("seen-fail", "/repo/main", AgentStatus::Failed, 3_000),
+    ];
+    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
+    row_mut(&mut snapshot, "new-done").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["new-done", "seen-wait", "seen-fail"],
+        "unread done work sits above already-seen actionable rows"
+    );
+}
+
+#[test]
+fn unread_topped_group_floats_above_seen_attention_group() {
+    let agents = vec![
+        agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
+        agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
+    ];
+    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
+    row_mut(&mut snapshot, "new-done").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let groups = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.label.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
+        vec!["b", "a"],
+        "a group with unread work enters the inbox band before read attention"
+    );
+}
+
+fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
+    snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.id == id)
+        .unwrap_or_else(|| panic!("row {id} present"))
+}

@@ -175,7 +175,7 @@ fn render_omits_history_sections() {
         vec![answered],
         vec![event],
         vec![],
-        Timestamp::now(),
+        fixed_now(),
     );
     snapshot.display_name = "query-engine".to_owned();
     let rendered = snapshot_to_screen(&snapshot, 38, 10);

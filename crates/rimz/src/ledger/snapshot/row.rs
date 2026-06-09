@@ -19,6 +19,11 @@ pub struct SidebarRow {
     pub pane: Option<PaneRef>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
+    /// Renderer-local presentation state: this row changed since this sidebar
+    /// view last focused its pane. Producer snapshots leave it false; the
+    /// native sidebar stamps it in memory before painting.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unread: bool,
     pub last_activity: Timestamp,
     #[serde(flatten)]
     pub card: RowCard,

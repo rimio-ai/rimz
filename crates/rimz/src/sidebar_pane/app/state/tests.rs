@@ -2,13 +2,14 @@ use super::*;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::render::Alert;
+use crate::{AgentCard, PaneId, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
 
 /// Health seeded with a live alert, as if a failure already crossed the
 /// debounce threshold — the starting point for recovery/sticky tests.
 fn degraded_health(reason: &str) -> Health {
     Health {
         failure_streak: ALERT_AFTER_FAILURES,
-        alert: Some(Alert::active(reason)),
+        alert: Some(Alert::active(reason, jiff::Timestamp::now())),
     }
 }
 
@@ -37,6 +38,80 @@ fn snapshot_with_sibling_count(ws: &WorkspaceId, sibling_count: usize) -> Sideba
     snapshot
 }
 
+fn row_snapshot(
+    ws: &WorkspaceId,
+    status: crate::feed::AgentStatus,
+    focused: bool,
+) -> SidebarSnapshot {
+    let pane_id = PaneId::from_parts(crate::MuxName::Tmux, "%1");
+    let mut snap = snapshot(ws);
+    snap.worktree_groups = vec![SidebarWorktreeGroup {
+        key: "/repo/main".to_owned(),
+        label: "main".to_owned(),
+        kind: crate::SidebarWorktreeKind::Worktree,
+        status_counts: vec![SidebarStatusCount { status, count: 1 }],
+        rows: vec![crate::SidebarRow {
+            id: "sess-1".to_owned(),
+            name: "claude".to_owned(),
+            pane: Some(crate::feed::PaneRef::from_id(pane_id.clone())),
+            worktree_path: Some("/repo/main".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            unread: false,
+            last_activity: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+            card: RowCard::Agent(Box::new(AgentCard {
+                status: Some(status),
+                phase: crate::agents::TurnPhase::Idle,
+                ..AgentCard::default()
+            })),
+        }],
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+    }];
+    if focused {
+        snap.own_view = Some(crate::SidebarOwnView {
+            sibling_count: 2,
+            own_is_active: false,
+            active_pane_id: Some(pane_id),
+            working_pane_ids: Vec::new(),
+            own_view_is_daemon: false,
+        });
+    }
+    snap
+}
+
+fn apply_ok(
+    config: &ServeConfig,
+    snapshot: SidebarSnapshot,
+    last_snapshot: &mut Option<SidebarSnapshot>,
+    current: &mut SidebarSnapshot,
+    ui: &mut UiState,
+) {
+    let mut health = Health::default();
+    let mut gate = GateState::default();
+    let mut self_close = SelfCloseState::default();
+    apply_fetch_outcome(
+        config,
+        FetchOutcome {
+            snapshot: Ok(snapshot),
+            final_for_request: true,
+            fresh_pane_frame: true,
+        },
+        last_snapshot,
+        current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        ui,
+        std::time::Instant::now(),
+    )
+    .expect("apply ok fetch");
+}
+
 #[test]
 fn first_ok_fetch_clears_status_and_records_snapshot() {
     let ws = workspace();
@@ -46,6 +121,42 @@ fn first_ok_fetch_clears_status_and_records_snapshot() {
     assert_eq!(state.health.failure_streak, 0);
     assert!(state.last_snapshot.is_some());
     assert_eq!(state.snapshot.workspace_id, ws);
+}
+
+#[test]
+fn unread_marks_done_transition_and_focus_clears_it() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let mut last_snapshot = None;
+    let mut current = snapshot(&ws);
+    let mut ui = UiState::default();
+
+    apply_ok(
+        &config,
+        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+    );
+    assert!(!current.worktree_groups[0].rows[0].unread);
+
+    apply_ok(
+        &config,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+    );
+    assert!(current.worktree_groups[0].rows[0].unread);
+
+    apply_ok(
+        &config,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+    );
+    assert!(!current.worktree_groups[0].rows[0].unread);
 }
 
 #[test]

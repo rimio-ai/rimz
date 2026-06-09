@@ -49,6 +49,7 @@ pub(crate) fn snapshot_with_panes(ws: &WorkspaceId, panes: Vec<PaneRef>) -> Side
                 pane: Some(pane),
                 worktree_path: Some("/repo/main".to_owned()),
                 worktree_branch: Some("main".to_owned()),
+                unread: false,
                 last_activity: Timestamp::now(),
                 card: crate::RowCard::Process(crate::ProcessCard::default()),
             })
@@ -73,6 +74,7 @@ pub(crate) fn agent_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         pane: Some(pane("terminal_9", "tab_0", false)),
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
+        unread: false,
         last_activity: Timestamp::now(),
         card: crate::RowCard::Agent(Box::new(crate::AgentCard {
             status: Some(crate::feed::AgentStatus::Idle),

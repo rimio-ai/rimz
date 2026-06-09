@@ -234,10 +234,13 @@ pub(in crate::sidebar_pane::render) fn attention_glyph_style(
     status: AgentStatus,
     age_secs: i64,
     animation_phase: u64,
+    unread: bool,
 ) -> Style {
     if status.is_actionable() {
         let color = age_heat(age_secs).unwrap_or(Color::Yellow);
         theme.style(color, attention_breath(animation_phase, age_secs))
+    } else if unread {
+        agent_style(theme, status).add_modifier(attention_breath(animation_phase, age_secs))
     } else {
         agent_style(theme, status)
     }

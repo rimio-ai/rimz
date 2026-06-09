@@ -7,7 +7,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
-use crate::sidebar_pane::render::labels::{age_heat, agent_style, status_glyph, status_style};
+use crate::sidebar_pane::render::labels::{
+    age_heat, agent_style, attention_breath, status_glyph, status_style,
+};
 use crate::sidebar_pane::render::theme::{ORANGE, Theme};
 
 use super::{TAB_INK, pin_right, trim_spans_to_width};
@@ -53,13 +55,15 @@ pub(crate) struct MakeUpHit {
 /// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
 /// relative to the unpadded content. The `filter` is the active pick: that
 /// bucket paints the same `glyph count` cells as rest (ink on its semantic
-/// fill, bold), so moving the pick changes style without moving text. Under
-/// `NO_COLOR`, where the fill drops, reverse-video marks the same fixed cells.
+/// fill plus the bucket's current weight), so moving the pick changes style
+/// without moving text. Under `NO_COLOR`, where the fill drops, reverse-video
+/// marks the same fixed cells.
 pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     now: Timestamp,
     filter: Option<AgentStatus>,
+    animation_phase: u64,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
     let working = status_total(groups, AgentStatus::Running);
@@ -87,13 +91,27 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         Color::Yellow,
         waiting,
-        attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Waiting,
+            now,
+            animation_phase,
+            attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
+        ),
     );
     left.push_count(
         AgentStatus::Failed,
         Color::Red,
         failed,
-        attention_bucket_style(theme, groups, AgentStatus::Failed, now),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Failed,
+            now,
+            animation_phase,
+            attention_bucket_style(theme, groups, AgentStatus::Failed, now),
+        ),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
     // but still a row worth spotting. It renders like every other bucket — the
@@ -105,13 +123,27 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Paused,
         Color::Yellow,
         paused,
-        status_style(theme, AgentStatus::Paused),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Paused,
+            now,
+            animation_phase,
+            status_style(theme, AgentStatus::Paused),
+        ),
     );
     left.push_count(
         AgentStatus::Success,
         Color::Green,
         success,
-        status_style(theme, AgentStatus::Success),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Success,
+            now,
+            animation_phase,
+            status_style(theme, AgentStatus::Success),
+        ),
     );
     let mut right = Cluster::new(theme, filter);
     right.push_count(
@@ -199,8 +231,9 @@ impl<'a> Cluster<'a> {
     /// bold, no heat), reads its count at the soft stat tier, and emits no hit
     /// — inert, as if not a tab. The active filter's bucket paints the fixed
     /// `glyph count` footprint as a chip (`TAB_INK` on the glyph's semantic
-    /// fill, bold); under `NO_COLOR` it keeps the footprint and adds reverse
-    /// video because there is no fill color to carry the pick.
+    /// fill plus the bucket's current weight); under `NO_COLOR` it keeps the
+    /// footprint and adds reverse video because there is no fill color to carry
+    /// the pick.
     fn push_count(&mut self, status: AgentStatus, glyph_color: Color, count: usize, style: Style) {
         if !self.spans.is_empty() {
             self.spans.push(Span::raw("   "));
@@ -209,13 +242,21 @@ impl<'a> Cluster<'a> {
         let glyph = status_glyph(status);
         let start = self.col;
         if self.filter == Some(status) && count > 0 {
-            let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::BOLD);
+            let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::empty());
             let pick = if chip.bg.is_none() {
                 chip.add_modifier(Modifier::REVERSED)
             } else {
                 chip
             };
-            self.push_span(Span::styled(format!("{glyph} {count}"), pick));
+            let weight = if style.add_modifier.is_empty() {
+                Modifier::BOLD
+            } else {
+                style.add_modifier
+            };
+            self.push_span(Span::styled(
+                format!("{glyph} {count}"),
+                pick.add_modifier(weight),
+            ));
         } else if count == 0 {
             self.push_span(Span::styled(
                 glyph.to_owned(),
@@ -280,6 +321,46 @@ fn attention_bucket_style(
         .max()
         .unwrap_or(0);
     theme.style(age_heat(oldest).unwrap_or(Color::Yellow), Modifier::BOLD)
+}
+
+fn unread_bucket_style(
+    theme: &Theme,
+    groups: &[SidebarWorktreeGroup],
+    status: AgentStatus,
+    now: Timestamp,
+    animation_phase: u64,
+    base: Style,
+) -> Style {
+    let Some(oldest) = oldest_unread_age(groups, status, now) else {
+        return base;
+    };
+    theme.style(
+        bucket_breath_color(status, oldest),
+        attention_breath(animation_phase, oldest),
+    )
+}
+
+fn bucket_breath_color(status: AgentStatus, age_secs: i64) -> Color {
+    match status {
+        AgentStatus::Waiting | AgentStatus::Failed => age_heat(age_secs).unwrap_or(Color::Yellow),
+        AgentStatus::Paused => Color::Yellow,
+        AgentStatus::Success => Color::Green,
+        AgentStatus::Running => ORANGE,
+        AgentStatus::Idle => Color::Green,
+    }
+}
+
+fn oldest_unread_age(
+    groups: &[SidebarWorktreeGroup],
+    status: AgentStatus,
+    now: Timestamp,
+) -> Option<i64> {
+    groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.unread && row.status() == Some(status))
+        .map(|row| age_secs(row.last_activity, now))
+        .max()
 }
 
 /// The full-fleet count for one make-up bucket — the sum of every group's
