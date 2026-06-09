@@ -34,23 +34,7 @@ impl SidebarSnapshot {
         remote_control: &BTreeMap<String, bool>,
         provider_spending: &BTreeMap<String, SpendTally>,
     ) -> Self {
-        let mut kinds: Vec<String> = Vec::new();
-        for agent in &self.agents {
-            if agent.parent_agent_id.is_some() {
-                continue;
-            }
-            if !kinds.iter().any(|known| agent.kind == **known) {
-                kinds.push(agent.kind.to_string());
-            }
-        }
-        // A provider that is logged in but has no active session this run still
-        // earns a block, so the dashboard shows your accounts and budgets between
-        // turns — fold in every probed-account kind not already covered.
-        for (kind, account) in probed_accounts {
-            if account_creates_provider_panel(account) && !kinds.iter().any(|known| known == kind) {
-                kinds.push(kind.clone());
-            }
-        }
+        let kinds = provider_kinds(&self.agents, probed_accounts);
         let mut panels: Vec<SidebarProviderPanel> = Vec::new();
         for kind in kinds {
             let sessions: Vec<&AgentState> = self
@@ -176,6 +160,24 @@ impl SidebarSnapshot {
         );
         self
     }
+}
+
+fn provider_kinds(
+    agents: &[AgentState],
+    probed_accounts: &BTreeMap<String, AgentAccount>,
+) -> Vec<String> {
+    let mut kinds: Vec<String> = Vec::new();
+    for agent in agents {
+        if agent.parent_agent_id.is_none() && !kinds.iter().any(|known| agent.kind == **known) {
+            kinds.push(agent.kind.to_string());
+        }
+    }
+    for (kind, account) in probed_accounts {
+        if account_creates_provider_panel(account) && !kinds.iter().any(|known| known == kind) {
+            kinds.push(kind.clone());
+        }
+    }
+    kinds
 }
 
 fn account_creates_provider_panel(account: &AgentAccount) -> bool {

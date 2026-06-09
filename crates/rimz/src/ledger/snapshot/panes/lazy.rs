@@ -114,54 +114,21 @@ pub(crate) fn compute_lazy_agent_pairings(
     panes: &[PaneRef],
     agents: &[AgentState],
 ) -> LazyAgentPairingResult {
-    let stamped_bound = BTreeSet::new();
-    let mut live_stamped_agents = BTreeSet::new();
-    let mut candidates = Vec::new();
-    for pane in panes {
-        if let Some(agent) = agent_for_pane(pane, agents, &stamped_bound) {
-            live_stamped_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
-            continue;
-        }
-        let Some((kind, _, cwd)) = agent_pane_identity(pane) else {
-            continue;
-        };
-        candidates.push(LazyPaneCandidate { pane, kind, cwd });
-    }
-    candidates.sort_by(|left, right| {
-        left.pane
-            .pane_process_start
-            .cmp(&right.pane.pane_process_start)
-            .then_with(|| {
-                left.pane
-                    .pane_id
-                    .to_string()
-                    .cmp(&right.pane.pane_id.to_string())
-            })
-    });
+    let (candidates, live_stamped_agents) = lazy_pane_candidates(panes, agents);
 
     let mut pairings: HashMap<PaneId, usize> = HashMap::new();
     let mut diagnostics = Vec::new();
     let mut used_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
     let mut used_panes: HashSet<PaneId> = HashSet::new();
 
-    for candidate in &candidates {
-        let Some(resumed) = candidate.pane.resumed_session_id.as_ref() else {
-            continue;
-        };
-        let Some((agent_index, agent)) = agents.iter().enumerate().find(|(_, agent)| {
-            agent.parent_agent_id.is_none()
-                && agent.kind == candidate.kind
-                && agent.agent_id == *resumed
-                && agent.worktree_path.as_deref() == Some(candidate.cwd)
-                && !live_stamped_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-                && !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-        }) else {
-            continue;
-        };
-        pairings.insert(candidate.pane.pane_id.clone(), agent_index);
-        used_panes.insert(candidate.pane.pane_id.clone());
-        used_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
-    }
+    pair_resumed_sessions(
+        &candidates,
+        agents,
+        &live_stamped_agents,
+        &mut pairings,
+        &mut used_agents,
+        &mut used_panes,
+    );
 
     let mut sessions = agents
         .iter()
@@ -229,6 +196,84 @@ pub(crate) fn compute_lazy_agent_pairings(
         pairings,
         diagnostics,
     }
+}
+
+fn lazy_pane_candidates<'a>(
+    panes: &'a [PaneRef],
+    agents: &'a [AgentState],
+) -> (
+    Vec<LazyPaneCandidate<'a>>,
+    BTreeSet<(AgentKind, AgentSessionId)>,
+) {
+    let stamped_bound = BTreeSet::new();
+    let mut live_stamped_agents = BTreeSet::new();
+    let mut candidates = Vec::new();
+    for pane in panes {
+        if let Some(agent) = agent_for_pane(pane, agents, &stamped_bound) {
+            live_stamped_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+            continue;
+        }
+        let Some((kind, _, cwd)) = agent_pane_identity(pane) else {
+            continue;
+        };
+        candidates.push(LazyPaneCandidate { pane, kind, cwd });
+    }
+    candidates.sort_by(|left, right| {
+        left.pane
+            .pane_process_start
+            .cmp(&right.pane.pane_process_start)
+            .then_with(|| {
+                left.pane
+                    .pane_id
+                    .to_string()
+                    .cmp(&right.pane.pane_id.to_string())
+            })
+    });
+    (candidates, live_stamped_agents)
+}
+
+fn pair_resumed_sessions(
+    candidates: &[LazyPaneCandidate<'_>],
+    agents: &[AgentState],
+    live_stamped_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
+    pairings: &mut HashMap<PaneId, usize>,
+    used_agents: &mut BTreeSet<(AgentKind, AgentSessionId)>,
+    used_panes: &mut HashSet<PaneId>,
+) {
+    for candidate in candidates {
+        let Some(resumed) = candidate.pane.resumed_session_id.as_ref() else {
+            continue;
+        };
+        let Some((agent_index, agent)) = resumed_agent_for_candidate(
+            agents,
+            candidate,
+            resumed,
+            live_stamped_agents,
+            used_agents,
+        ) else {
+            continue;
+        };
+        pairings.insert(candidate.pane.pane_id.clone(), agent_index);
+        used_panes.insert(candidate.pane.pane_id.clone());
+        used_agents.insert((agent.kind.clone(), agent.agent_id.clone()));
+    }
+}
+
+fn resumed_agent_for_candidate<'a>(
+    agents: &'a [AgentState],
+    candidate: &LazyPaneCandidate<'_>,
+    resumed: &AgentSessionId,
+    live_stamped_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
+    used_agents: &BTreeSet<(AgentKind, AgentSessionId)>,
+) -> Option<(usize, &'a AgentState)> {
+    agents.iter().enumerate().find(|(_, agent)| {
+        agent.parent_agent_id.is_none()
+            && agent.kind == candidate.kind
+            && agent.agent_id == *resumed
+            && agent.worktree_path.as_deref() == Some(candidate.cwd)
+            && !live_stamped_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+            && !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone()))
+    })
 }
 
 #[derive(Clone, Copy)]

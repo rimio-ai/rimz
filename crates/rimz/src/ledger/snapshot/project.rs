@@ -4,10 +4,12 @@
 
 use std::collections::BTreeMap;
 
+use jiff::Timestamp;
 use tracing::debug;
 
+use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
-use crate::feed::{AgentState, PaneRef, RuntimeOwner, RuntimeOwnerKind};
+use crate::feed::{AgentState, AgentStatus, PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::ids::{AgentKind, AgentSessionId};
 use crate::schema::event::{EventEnvelope, EventKind};
 
@@ -110,12 +112,6 @@ pub(super) fn reduce_agent_states_seeded(
             continue;
         };
         let event_name = payload.event_name.as_deref();
-        let non_empty_string = |value: Option<&str>| {
-            value
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToOwned::to_owned)
-        };
         let event_parent_agent_id =
             non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
         let event_task = non_empty_string(observation.task.as_deref());
@@ -144,55 +140,6 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         }
-        let prev_state = prior.map(AgentState::lifecycle);
-        let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
-        let status = next.status;
-        let phase = next.phase;
-        // Compaction stamps the moment it began and preserves it across the
-        // multi-event head. The trailing compaction hook is the modeled
-        // terminator; any other later lifecycle signal also clears the marker
-        // because it proves the bracket has ended. A crashed mid-compact can't
-        // stick — the projection also expires it past `COMPACTING_WINDOW_SECS`.
-        let compacting_since = if next.compacting {
-            prior
-                .and_then(|p| p.compacting_since)
-                .or(Some(event.timestamp))
-        } else {
-            None
-        };
-        // Every completed compaction bracket bumps the lifetime counter. The
-        // trailing hook (`CompactionEnded`) is the modeled terminator, so the
-        // card's `↻ N` matches the number of windows condensed.
-        let compaction_count = prior.map_or(0, |p| p.compaction_count)
-            + u32::from(matches!(
-                signal,
-                lifecycle::LifecycleSignal::CompactionEnded { .. }
-            ));
-        // Enrichment fields carry forward when an event omits them.
-        let context_pct = observation
-            .context_pct
-            .or_else(|| prior.and_then(|p| p.context_pct));
-        let context_window = observation
-            .context_window
-            .or_else(|| prior.and_then(|p| p.context_window));
-        let total_tokens = observation
-            .total_tokens
-            .or_else(|| prior.and_then(|p| p.total_tokens));
-        let cache_read_input_tokens = observation
-            .cache_read_input_tokens
-            .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
-        let fresh_input_tokens = observation
-            .fresh_input_tokens
-            .or_else(|| prior.and_then(|p| p.fresh_input_tokens));
-        let output_tokens = observation
-            .output_tokens
-            .or_else(|| prior.and_then(|p| p.output_tokens));
-        let todo_done = observation
-            .todo_done
-            .or_else(|| prior.and_then(|p| p.todo_done));
-        let todo_total = observation
-            .todo_total
-            .or_else(|| prior.and_then(|p| p.todo_total));
         let establishes_identity = matches!(
             signal,
             lifecycle::LifecycleSignal::Registered | lifecycle::LifecycleSignal::SubagentStarted
@@ -207,161 +154,326 @@ pub(super) fn reduce_agent_states_seeded(
                 "non-start lifecycle event created an unseen session in the reducer",
             );
         }
-        // The parent link is pure identity: only ever set, never cleared. Adopt
-        // it from any event that carries it, then carry it forward. A typed
-        // `SubagentStop` can be the first useful child event Claude reports;
-        // without its parent link, that Stop-only child would masquerade as a
-        // root session on its parent's pane. A typeless stop-only event is
-        // ignored above, since it is not enough identity to create a child row.
-        // Root agents never carry one.
-        let parent_agent_id =
-            event_parent_agent_id.or_else(|| prior.and_then(|p| p.parent_agent_id.clone()));
-        // The current turn's start instant — advanced only by a turn start,
-        // never by a turn end. It is the "next prompt" boundary the
-        // subagent-list retention reads; carried forward across all other
-        // events.
-        let turn_started_at = if matches!(signal, lifecycle::LifecycleSignal::TurnStarted) {
-            Some(event.timestamp)
-        } else {
-            prior.and_then(|p| p.turn_started_at)
-        };
-        let event_worktree_path = observation.worktree_path.clone();
-        let event_worktree_branch = observation.worktree_branch.clone();
-        let prior_worktree_path = prior.and_then(|p| p.worktree_path.clone());
-        let prior_worktree_branch = prior.and_then(|p| p.worktree_branch.clone());
-        let worktree_path = if establishes_identity || event_name.is_none() {
-            event_worktree_path.or(prior_worktree_path)
-        } else {
-            prior_worktree_path.or(event_worktree_path)
-        };
-        let worktree_branch = if establishes_identity || event_name.is_none() {
-            event_worktree_branch.or(prior_worktree_branch)
-        } else {
-            prior_worktree_branch.or(event_worktree_branch)
-        };
-        let agent_pid = observation
-            .agent_pid
-            .or_else(|| prior.and_then(|p| p.agent_pid));
-        let agent_process_start = observation
-            .agent_process_start
-            .clone()
-            .or_else(|| prior.and_then(|p| p.agent_process_start.clone()));
-        let runtime_owner = observation
-            .runtime_owner
-            .clone()
-            .or_else(|| {
-                agent_pid.map(|pid| {
-                    RuntimeOwner::new(
-                        RuntimeOwnerKind::Agent,
-                        agent_id.to_string(),
-                        pid,
-                        agent_process_start.clone(),
-                    )
-                })
-            })
-            .or_else(|| prior.and_then(|p| p.runtime_owner.clone()));
-        // A root's `task` is activity: a fresh event replaces it and idle clears
-        // it back to "—" (the persisted `prompt` then labels the unnamed
-        // session). A subagent's `task` is its *type* ("Explore", "review") —
-        // identity, not activity — so carry it forward like the parent link
-        // above: a task-less or blank-task `SubagentStop` (or any later child
-        // event) then leaves a finished child labeled instead of degrading it to
-        // `subagent <hash>`.
-        let task = if parent_agent_id.is_some() {
-            event_task.or_else(|| prior.and_then(|p| p.task.clone()))
-        } else {
-            non_empty_string(observation.task.as_deref())
-        };
-        // The latest prompt, unlike `task`, persists: only the prompt-bearing
-        // event sets it, so carry the prior one forward to label an unnamed
-        // session past idle until it earns a real name. The same event appends
-        // to the bounded prompt history (newest last, oldest dropped).
-        let event_prompt = observation.prompt.clone();
-        let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
-        if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
-            recent_prompts.push(prompt.to_owned());
-            let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
-            if excess > 0 {
-                recent_prompts.drain(0..excess);
-            }
-        }
-        let prompt = event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone()));
-        let transcript_path = observation
-            .transcript_path
-            .clone()
-            .or_else(|| prior.and_then(|p| p.transcript_path.clone()));
-        // Always store the canonical model id. The agent reports a suffixed id
-        // (`claude-opus-4-8[1m]`) only on a fresh-launch SessionStart; every
-        // other event (and the transcript fallback) carries the bare id, so the
-        // `.or(prior)` carry-forward would otherwise flip the label the first
-        // time a suffix-less event arrived. Canonicalizing at reduce time pins
-        // the label and keeps the event log faithful to the raw payload.
-        let model = observation
-            .model
-            .clone()
-            .map(|raw| canonical_model(&raw))
-            .or_else(|| prior.and_then(|p| p.model.clone()));
-        let effort = observation
-            .effort
-            .clone()
-            .or_else(|| prior.and_then(|p| p.effort.clone()));
-        // The hook stamps the mux pane id it ran inside on every lifecycle
-        // event; carry it forward when an event omits it so a `Stop` doesn't
-        // unbind the agent from its pane. Only the pane id is reduced — the
-        // rest of `PaneRef` is filled by the live `pane list` overlay.
-        let pane = observation
-            .pane_id
-            .clone()
-            .map(PaneRef::from_id)
-            .or_else(|| prior.and_then(|p| p.pane.clone()));
-        // Identity, never activity: the first event's instant, carried forward
-        // unchanged — the durable spawn key the sidebar's calm tiebreak falls
-        // back to when a pane reports no process start.
-        let registered_at = prior
-            .and_then(|p| p.registered_at)
-            .or(Some(event.timestamp));
-        let state = AgentState {
-            agent_id: agent_id.clone(),
-            kind: kind.clone(),
-            status,
-            phase,
-            pane,
-            agent_pid,
-            agent_process_start,
-            runtime_owner,
-            parent_agent_id,
-            worktree_path,
-            worktree_branch,
-            task,
-            prompt,
-            transcript_path,
-            recent_prompts,
-            model,
-            effort,
-            context_pct,
-            context_window,
-            total_tokens,
-            cache_read_input_tokens,
-            fresh_input_tokens,
-            output_tokens,
-            todo_done,
-            todo_total,
-            // Never reduced from events — the snapshot CLI folds the latest
-            // statusline context in via `with_agent_context`, and the per-child
-            // `subagentStatusLine` enrichment in via `with_subagent_context`.
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at,
-            compacting_since,
-            compaction_count,
-            last_seen: event.timestamp,
-            last_activity: event.timestamp,
-            registered_at,
-        };
+        let state = assemble_agent_state(AgentStateInput {
+            kind: &kind,
+            agent_id: &agent_id,
+            event,
+            event_name,
+            observation: &observation,
+            signal,
+            prior,
+            event_parent_agent_id,
+            event_task,
+            establishes_identity,
+        });
         map.insert((kind, agent_id), state);
     }
     map
+}
+
+struct AgentStateInput<'a> {
+    kind: &'a AgentKind,
+    agent_id: &'a AgentSessionId,
+    event: &'a EventEnvelope,
+    event_name: Option<&'a str>,
+    observation: &'a AgentLifecycleObservation,
+    signal: lifecycle::LifecycleSignal,
+    prior: Option<&'a AgentState>,
+    event_parent_agent_id: Option<AgentSessionId>,
+    event_task: Option<String>,
+    establishes_identity: bool,
+}
+
+fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
+    let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
+    let enrichment = enrichment_projection(input.observation, input.prior);
+    let parent_agent_id = input
+        .event_parent_agent_id
+        .or_else(|| input.prior.and_then(|p| p.parent_agent_id.clone()));
+    let worktree = worktree_projection(
+        input.observation,
+        input.prior,
+        input.establishes_identity,
+        input.event_name,
+    );
+    let runtime = runtime_projection(input.observation, input.prior, input.agent_id);
+    let prompt = prompt_projection(
+        input.observation,
+        input.prior,
+        parent_agent_id.is_some(),
+        input.event_task,
+    );
+    AgentState {
+        agent_id: input.agent_id.clone(),
+        kind: input.kind.clone(),
+        status: lifecycle.status,
+        phase: lifecycle.phase,
+        pane: pane_projection(input.observation, input.prior),
+        agent_pid: runtime.agent_pid,
+        agent_process_start: runtime.agent_process_start,
+        runtime_owner: runtime.runtime_owner,
+        parent_agent_id,
+        worktree_path: worktree.path,
+        worktree_branch: worktree.branch,
+        task: prompt.task,
+        prompt: prompt.prompt,
+        transcript_path: transcript_path_projection(input.observation, input.prior),
+        recent_prompts: prompt.recent_prompts,
+        model: model_projection(input.observation, input.prior),
+        effort: effort_projection(input.observation, input.prior),
+        context_pct: enrichment.context_pct,
+        context_window: enrichment.context_window,
+        total_tokens: enrichment.total_tokens,
+        cache_read_input_tokens: enrichment.cache_read_input_tokens,
+        fresh_input_tokens: enrichment.fresh_input_tokens,
+        output_tokens: enrichment.output_tokens,
+        todo_done: enrichment.todo_done,
+        todo_total: enrichment.todo_total,
+        context: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: lifecycle.turn_started_at,
+        compacting_since: lifecycle.compacting_since,
+        compaction_count: lifecycle.compaction_count,
+        last_seen: input.event.timestamp,
+        last_activity: input.event.timestamp,
+        registered_at: lifecycle.registered_at,
+    }
+}
+
+struct LifecycleProjection {
+    status: AgentStatus,
+    phase: lifecycle::TurnPhase,
+    compacting_since: Option<Timestamp>,
+    compaction_count: u32,
+    turn_started_at: Option<Timestamp>,
+    registered_at: Option<Timestamp>,
+}
+
+fn lifecycle_projection(
+    prior: Option<&AgentState>,
+    timestamp: Timestamp,
+    signal: lifecycle::LifecycleSignal,
+) -> LifecycleProjection {
+    let prev_state = prior.map(AgentState::lifecycle);
+    let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
+    let compacting_since = if next.compacting {
+        prior.and_then(|p| p.compacting_since).or(Some(timestamp))
+    } else {
+        None
+    };
+    let compaction_count = prior.map_or(0, |p| p.compaction_count)
+        + u32::from(matches!(
+            signal,
+            lifecycle::LifecycleSignal::CompactionEnded { .. }
+        ));
+    let turn_started_at = if matches!(signal, lifecycle::LifecycleSignal::TurnStarted) {
+        Some(timestamp)
+    } else {
+        prior.and_then(|p| p.turn_started_at)
+    };
+    LifecycleProjection {
+        status: next.status,
+        phase: next.phase,
+        compacting_since,
+        compaction_count,
+        turn_started_at,
+        registered_at: prior.and_then(|p| p.registered_at).or(Some(timestamp)),
+    }
+}
+
+struct EnrichmentProjection {
+    context_pct: Option<u8>,
+    context_window: Option<u64>,
+    total_tokens: Option<u64>,
+    cache_read_input_tokens: Option<u64>,
+    fresh_input_tokens: Option<u64>,
+    output_tokens: Option<u64>,
+    todo_done: Option<u32>,
+    todo_total: Option<u32>,
+}
+
+fn enrichment_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> EnrichmentProjection {
+    EnrichmentProjection {
+        context_pct: observation
+            .context_pct
+            .or_else(|| prior.and_then(|p| p.context_pct)),
+        context_window: observation
+            .context_window
+            .or_else(|| prior.and_then(|p| p.context_window)),
+        total_tokens: observation
+            .total_tokens
+            .or_else(|| prior.and_then(|p| p.total_tokens)),
+        cache_read_input_tokens: observation
+            .cache_read_input_tokens
+            .or_else(|| prior.and_then(|p| p.cache_read_input_tokens)),
+        fresh_input_tokens: observation
+            .fresh_input_tokens
+            .or_else(|| prior.and_then(|p| p.fresh_input_tokens)),
+        output_tokens: observation
+            .output_tokens
+            .or_else(|| prior.and_then(|p| p.output_tokens)),
+        todo_done: observation
+            .todo_done
+            .or_else(|| prior.and_then(|p| p.todo_done)),
+        todo_total: observation
+            .todo_total
+            .or_else(|| prior.and_then(|p| p.todo_total)),
+    }
+}
+
+struct WorktreeProjection {
+    path: Option<String>,
+    branch: Option<String>,
+}
+
+fn worktree_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+    establishes_identity: bool,
+    event_name: Option<&str>,
+) -> WorktreeProjection {
+    let event_path = observation.worktree_path.clone();
+    let event_branch = observation.worktree_branch.clone();
+    let prior_path = prior.and_then(|p| p.worktree_path.clone());
+    let prior_branch = prior.and_then(|p| p.worktree_branch.clone());
+    let event_first = establishes_identity || event_name.is_none();
+    WorktreeProjection {
+        path: if event_first {
+            event_path.or(prior_path)
+        } else {
+            prior_path.or(event_path)
+        },
+        branch: if event_first {
+            event_branch.or(prior_branch)
+        } else {
+            prior_branch.or(event_branch)
+        },
+    }
+}
+
+struct RuntimeProjection {
+    agent_pid: Option<u32>,
+    agent_process_start: Option<String>,
+    runtime_owner: Option<RuntimeOwner>,
+}
+
+fn runtime_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+    agent_id: &AgentSessionId,
+) -> RuntimeProjection {
+    let agent_pid = observation
+        .agent_pid
+        .or_else(|| prior.and_then(|p| p.agent_pid));
+    let agent_process_start = observation
+        .agent_process_start
+        .clone()
+        .or_else(|| prior.and_then(|p| p.agent_process_start.clone()));
+    let runtime_owner = observation
+        .runtime_owner
+        .clone()
+        .or_else(|| {
+            agent_pid.map(|pid| {
+                RuntimeOwner::new(
+                    RuntimeOwnerKind::Agent,
+                    agent_id.to_string(),
+                    pid,
+                    agent_process_start.clone(),
+                )
+            })
+        })
+        .or_else(|| prior.and_then(|p| p.runtime_owner.clone()));
+    RuntimeProjection {
+        agent_pid,
+        agent_process_start,
+        runtime_owner,
+    }
+}
+
+struct PromptProjection {
+    task: Option<String>,
+    prompt: Option<String>,
+    recent_prompts: Vec<String>,
+}
+
+fn prompt_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+    is_subagent: bool,
+    event_task: Option<String>,
+) -> PromptProjection {
+    let task = if is_subagent {
+        event_task.or_else(|| prior.and_then(|p| p.task.clone()))
+    } else {
+        non_empty_string(observation.task.as_deref())
+    };
+    let event_prompt = observation.prompt.clone();
+    let mut recent_prompts = prior.map(|p| p.recent_prompts.clone()).unwrap_or_default();
+    if let Some(prompt) = event_prompt.as_deref().filter(|prompt| !prompt.is_empty()) {
+        recent_prompts.push(prompt.to_owned());
+        let excess = recent_prompts.len().saturating_sub(RECENT_PROMPTS_LIMIT);
+        if excess > 0 {
+            recent_prompts.drain(0..excess);
+        }
+    }
+    PromptProjection {
+        task,
+        prompt: event_prompt.or_else(|| prior.and_then(|p| p.prompt.clone())),
+        recent_prompts,
+    }
+}
+
+fn transcript_path_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<String> {
+    observation
+        .transcript_path
+        .clone()
+        .or_else(|| prior.and_then(|p| p.transcript_path.clone()))
+}
+
+fn model_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<String> {
+    observation
+        .model
+        .clone()
+        .map(|raw| canonical_model(&raw))
+        .or_else(|| prior.and_then(|p| p.model.clone()))
+}
+
+fn effort_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<String> {
+    observation
+        .effort
+        .clone()
+        .or_else(|| prior.and_then(|p| p.effort.clone()))
+}
+
+fn pane_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<PaneRef> {
+    observation
+        .pane_id
+        .clone()
+        .map(PaneRef::from_id)
+        .or_else(|| prior.and_then(|p| p.pane.clone()))
+}
+
+fn non_empty_string(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 #[cfg(test)]
