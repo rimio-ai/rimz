@@ -1,0 +1,102 @@
+use super::owner::hook_agent_pid;
+use super::*;
+
+pub(super) fn build_item(
+    workspace: &ResolvedWorkspace,
+    surface: Surface,
+    feed_kind: FeedKind,
+    agent: &dyn AgentAdapter,
+    payload: Value,
+) -> FeedItem {
+    let mut item = FeedItem::new(
+        workspace.workspace_id.clone(),
+        surface,
+        feed_kind,
+        format!("{} needs attention", agent.descriptor().kind),
+        agent.descriptor().kind,
+        "agent-hook",
+    );
+    item.payload = payload;
+    item.runtime_owner = agent_runtime_owner(agent.descriptor().kind, &item.payload);
+    item.worktree_path = Some(workspace.worktree_root.display().to_string());
+    item.worktree_branch = workspace.worktree_branch.clone();
+    item
+}
+
+/// Spawn an adapter-requested `rimz` helper detached, with all stdio nulled
+/// (the fresh-stdio invariant for hook helper children). The hook drops the
+/// child into the shared reaper, so it returns before the helper runs and never
+/// adds latency to the agent's turn. Best-effort: a spawn failure is logged and
+/// ignored — out-of-band enrichment is never correctness.
+pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            warn!(error = %err, "lifecycle: cannot locate rimz to spawn the refresh helper");
+            return;
+        }
+    };
+    let mut cmd = Command::new(exe);
+    cmd.args(&spawn.args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    if let Err(err) = rimz::child_process::spawn_detached_reaped(&mut cmd, "adapter-refresh") {
+        warn!(error = %err, "lifecycle: failed to spawn the adapter refresh helper");
+    }
+}
+
+/// The agent session id from a hook payload, read in the same order as
+/// [`rimz::feed::FeedItem::agent_session_id`] (`agent_id`, then `session_id`)
+/// so a session resolves to the same key whether read from a lifecycle event
+/// or from a stored ask. Empty ids are filtered out.
+pub(super) fn payload_agent_id(payload: &Value) -> Option<&str> {
+    ["agent_id", "session_id"].into_iter().find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
+}
+
+/// The sidecar key for local context enrichment. Root sessions file context
+/// under `session_id`; child-specific `agent_id`s are lifecycle identities, not
+/// Codex rollout files.
+pub(super) fn payload_context_agent_id(payload: &Value) -> Option<&str> {
+    ["session_id", "agent_id"].into_iter().find_map(|key| {
+        payload
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+    })
+}
+
+fn agent_runtime_owner(source: &str, payload: &Value) -> Option<rimz::RuntimeOwner> {
+    let subject_id = payload_agent_id(payload)?;
+    let pid = hook_agent_pid(source)?;
+    Some(process_owner(RuntimeOwnerKind::Agent, subject_id, pid))
+}
+
+pub(super) fn attach_resolver_chain(item: &mut FeedItem, fresh: &[AllowlistEntry]) {
+    let chain = fresh
+        .iter()
+        .map(|entry| ResolverStep {
+            resolver_id: entry.id.clone(),
+            display_name: entry.display_name.clone(),
+            order: i32::try_from(entry.order).unwrap_or(i32::MAX),
+            budget_ms: entry.budget_seconds.saturating_mul(1000),
+            state: ResolverStepState::Queued,
+            reason: None,
+        })
+        .collect();
+    item.activate_resolver_chain(chain);
+}
+
+pub(super) fn hook_cap_for(agent: &dyn AgentAdapter) -> Duration {
+    if let Ok(raw) = std::env::var(HOOK_CAP_OVERRIDE_ENV)
+        && let Ok(ms) = raw.parse::<u64>()
+    {
+        return Duration::from_millis(ms);
+    }
+    agent.descriptor().hook_cap
+}

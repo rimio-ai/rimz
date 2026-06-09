@@ -1,4 +1,5 @@
-use super::*;
+use super::SidebarFixtureState;
+use super::fixture::sidebar_fixture_snapshot;
 
 fn strip_sgr(ansi: &[u8]) -> String {
     let text = String::from_utf8_lossy(ansi);
