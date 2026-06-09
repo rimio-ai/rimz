@@ -1,21 +1,4 @@
 use super::*;
-use crate::ledger::atomic;
-use crate::sidebar::produce::test_support::pane;
-use crate::sidebar::snapshot::SNAPSHOT_CACHE_TTL;
-
-fn frame(panes: Vec<crate::feed::PaneRef>) -> crate::sidebar::frame::PaneFrame {
-    crate::sidebar::frame::assemble_frame(panes, 1, "s")
-}
-
-fn first(frame: &crate::sidebar::frame::PaneFrame) -> &crate::sidebar::frame::PaneState {
-    &frame.tabs[0].panes[0]
-}
-
-fn first_mut(
-    frame: &mut crate::sidebar::frame::PaneFrame,
-) -> &mut crate::sidebar::frame::PaneState {
-    &mut frame.tabs[0].panes[0]
-}
 
 #[test]
 fn rotate_from_cache_repairs_raced_nulls_from_disk() {
@@ -44,116 +27,90 @@ fn rotate_from_cache_is_noop_without_prior() {
 }
 
 #[test]
-fn backfill_pane_cwds_repairs_a_raced_empty_cwd_from_proc() {
+fn backfill_pane_cwds_repairs_missing_or_empty_cwd_from_proc() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().to_path_buf();
     let expected = cwd.to_string_lossy().into_owned();
-    let seen = std::cell::Cell::new(None);
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
-    first_mut(&mut frame).current.pid = Some(100);
 
-    backfill_pane_cwds(&mut frame, &|pid| {
-        seen.set(Some(pid));
-        Some(cwd.clone())
-    });
+    for (name, pane_ref) in [
+        ("missing cwd", pane("terminal_1", Some("zsh"), None)),
+        ("empty cwd", pane("terminal_1", Some("zsh"), Some(""))),
+        ("commandless pane", pane("terminal_1", None, None)),
+    ] {
+        let seen = std::cell::Cell::new(None);
+        let mut frame = frame(vec![pane_ref]);
+        first_mut(&mut frame).current.pid = Some(100);
 
-    assert_eq!(seen.get(), Some(100));
-    assert_eq!(
-        first(&frame).current.cwd.as_deref(),
-        Some(expected.as_str())
-    );
+        backfill_pane_cwds(&mut frame, &|pid| {
+            seen.set(Some(pid));
+            Some(cwd.clone())
+        });
+
+        assert_eq!(seen.get(), Some(100), "{name}");
+        assert_eq!(
+            first(&frame).current.cwd.as_deref(),
+            Some(expected.as_str()),
+            "{name}"
+        );
+    }
 }
 
 #[test]
-fn backfill_pane_cwds_repairs_an_empty_string_cwd() {
+fn backfill_pane_cwds_skips_reported_pidless_missing_and_deleted_cwds() {
     let dir = tempfile::tempdir().unwrap();
-    let cwd = dir.path().to_path_buf();
-    let expected = cwd.to_string_lossy().into_owned();
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), Some(""))]);
-    first_mut(&mut frame).current.pid = Some(100);
-
-    backfill_pane_cwds(&mut frame, &|pid| {
-        assert_eq!(pid, 100);
-        Some(cwd.clone())
-    });
-
-    assert_eq!(
-        first(&frame).current.cwd.as_deref(),
-        Some(expected.as_str())
-    );
-}
-
-#[test]
-fn backfill_pane_cwds_never_overrides_a_mux_reported_cwd() {
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo/main"))]);
-    first_mut(&mut frame).current.pid = Some(100);
-
-    backfill_pane_cwds(&mut frame, &|_| {
-        panic!("must not read /proc when the mux reported cwd")
-    });
-
-    assert_eq!(first(&frame).current.cwd.as_deref(), Some("/repo/main"));
-}
-
-#[test]
-fn backfill_pane_cwds_leaves_a_pidless_pane_untouched() {
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
-
-    backfill_pane_cwds(&mut frame, &|_| {
-        panic!("must not read /proc without a pane pid")
-    });
-
-    assert_eq!(first(&frame).current.cwd, None);
-}
-
-#[test]
-fn backfill_pane_cwds_repairs_a_command_less_pane() {
-    let dir = tempfile::tempdir().unwrap();
-    let cwd = dir.path().to_path_buf();
-    let expected = cwd.to_string_lossy().into_owned();
-    let mut frame = frame(vec![pane("terminal_1", None, None)]);
-    first_mut(&mut frame).current.pid = Some(100);
-
-    backfill_pane_cwds(&mut frame, &|pid| {
-        assert_eq!(pid, 100);
-        Some(cwd.clone())
-    });
-
-    assert_eq!(first(&frame).current.command, None);
-    assert_eq!(
-        first(&frame).current.cwd.as_deref(),
-        Some(expected.as_str())
-    );
-}
-
-#[test]
-fn backfill_pane_cwds_skips_a_pane_with_no_proc_cwd() {
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
-    first_mut(&mut frame).current.pid = Some(100);
-
-    backfill_pane_cwds(&mut frame, &|pid| {
-        assert_eq!(pid, 100);
-        None
-    });
-
-    assert_eq!(first(&frame).current.cwd, None);
-}
-
-#[test]
-fn backfill_pane_cwds_skips_a_proc_cwd_that_no_longer_exists() {
-    let dir = tempfile::tempdir().unwrap();
+    let live = dir.path().to_path_buf();
     let deleted = dir.path().join("gone");
     std::fs::create_dir(&deleted).unwrap();
     std::fs::remove_dir(&deleted).unwrap();
-    let mut frame = frame(vec![pane("terminal_1", Some("zsh"), None)]);
-    first_mut(&mut frame).current.pid = Some(100);
 
-    backfill_pane_cwds(&mut frame, &|pid| {
-        assert_eq!(pid, 100);
-        Some(deleted.clone())
-    });
+    let cases = [
+        (
+            "mux reported cwd",
+            pane("terminal_1", Some("zsh"), Some("/repo/main")),
+            Some(100),
+            Some(live.clone()),
+            Some("/repo/main"),
+            false,
+        ),
+        (
+            "pidless pane",
+            pane("terminal_1", Some("zsh"), None),
+            None,
+            Some(live),
+            None,
+            false,
+        ),
+        (
+            "no proc cwd",
+            pane("terminal_1", Some("zsh"), None),
+            Some(100),
+            None,
+            None,
+            true,
+        ),
+        (
+            "deleted proc cwd",
+            pane("terminal_1", Some("zsh"), None),
+            Some(100),
+            Some(deleted),
+            None,
+            true,
+        ),
+    ];
 
-    assert_eq!(first(&frame).current.cwd, None);
+    for (name, pane_ref, pid, proc_cwd, expected, expect_read) in cases {
+        let seen = std::cell::Cell::new(None);
+        let mut frame = frame(vec![pane_ref]);
+        first_mut(&mut frame).current.pid = pid;
+
+        backfill_pane_cwds(&mut frame, &|pid| {
+            seen.set(Some(pid));
+            proc_cwd.clone()
+        });
+
+        assert_eq!(seen.get().is_some(), expect_read, "{name}");
+        assert_eq!(first(&frame).current.cwd.as_deref(), expected, "{name}");
+    }
 }
 
 #[test]
@@ -202,33 +159,30 @@ fn foreground_handoff_with_stable_spawn_keeps_process_start() {
 }
 
 #[test]
-fn stamp_pane_process_starts_stamps_a_codex_pane_lacking_a_native_start() {
+fn stamp_pane_process_starts_derives_from_command_or_spawn_command() {
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+
     // A Zellij codex pane arrives with no native process start and no pid
     // binding yet; the warmup cwd scan derives one so the published frame
     // carries it and the cwd-fallback guard fires on the consumer in-process
     // fold, not just the produce fork.
-    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
-    let mut frame = frame(vec![pane("terminal_30", Some("codex"), Some("/repo"))]);
-    let unstamped = natively_unstamped(&frame);
-    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|kind, cwd| {
+    let mut cwd_frame = frame(vec![pane("terminal_30", Some("codex"), Some("/repo"))]);
+    let unstamped = natively_unstamped(&cwd_frame);
+    stamp_pane_process_starts(&mut cwd_frame, &unstamped, &|_, _| None, &|kind, cwd| {
         assert_eq!(kind, "codex");
         assert_eq!(cwd, "/repo");
         vec![start]
     });
-    assert_eq!(first(&frame).current.started_at, Some(start));
-}
+    assert_eq!(first(&cwd_frame).current.started_at, Some(start));
 
-#[test]
-fn stamp_pane_process_starts_classifies_from_spawn_command() {
-    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
     let mut pane = pane("terminal_30", None, Some("/repo"));
     pane.pane_pid = Some(777);
     pane.spawn_command = Some("rimz agents exec codex --worktree-path /repo".to_owned());
-    let mut frame = frame(vec![pane]);
-    let unstamped = natively_unstamped(&frame);
+    let mut spawn_frame = frame(vec![pane]);
+    let unstamped = natively_unstamped(&spawn_frame);
 
     stamp_pane_process_starts(
-        &mut frame,
+        &mut spawn_frame,
         &unstamped,
         &|kind, pid| {
             assert_eq!(kind, "codex");
@@ -240,7 +194,7 @@ fn stamp_pane_process_starts_classifies_from_spawn_command() {
         },
     );
 
-    assert_eq!(first(&frame).current.started_at, Some(start));
+    assert_eq!(first(&spawn_frame).current.started_at, Some(start));
 }
 
 #[test]
@@ -491,134 +445,4 @@ fn annotate_elevated_agents_marks_only_wrapper_panes_with_a_pid() {
     );
     assert_eq!(by_id(&pane_ids[1]).current.elevated_agent, None);
     assert_eq!(by_id(&pane_ids[2]).current.elevated_agent, None);
-}
-
-fn write_snapshot_cache(path: &Path, session: &str, produced_at_ms: u64) {
-    let cache = crate::sidebar::frame::assemble_frame(Vec::new(), produced_at_ms, session);
-    atomic::write_temp_then_rename(path, &cache).expect("write snapshot cache");
-}
-
-#[test]
-fn snapshot_cache_serves_a_fresh_same_session_entry() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_some());
-}
-
-#[test]
-fn snapshot_cache_misses_a_different_session() {
-    // One session's panes must never be served to a sidebar pinned to
-    // another — the Zellij backend stamps PaneRef.session_name from the
-    // requested session, so a cross-session hit would mislabel panes.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    write_snapshot_cache(&path, "rimz-query-engine", unix_now_ms());
-    assert!(fresh_snapshot_cache(&path, "rimz-other", None, SNAPSHOT_CACHE_TTL).is_none());
-}
-
-#[test]
-fn snapshot_cache_misses_a_stale_entry() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
-    write_snapshot_cache(&path, "rimz-query-engine", stale);
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
-}
-
-#[test]
-fn snapshot_cache_misses_before_requested_pane_freshness_floor() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    let produced_at_ms = unix_now_ms();
-    write_snapshot_cache(&path, "rimz-query-engine", produced_at_ms);
-
-    assert!(
-        fresh_snapshot_cache(
-            &path,
-            "rimz-query-engine",
-            Some(produced_at_ms),
-            SNAPSHOT_CACHE_TTL
-        )
-        .is_some(),
-        "a cache produced at the requested floor is usable"
-    );
-    assert!(
-        fresh_snapshot_cache(
-            &path,
-            "rimz-query-engine",
-            Some(produced_at_ms.saturating_add(1)),
-            SNAPSHOT_CACHE_TTL,
-        )
-        .is_none(),
-        "a pane-sensitive wakeup rejects the pre-signal pane cache"
-    );
-}
-
-#[test]
-fn snapshot_cache_misses_when_absent_or_unreadable() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
-    std::fs::write(&path, b"{ not json").unwrap();
-    assert!(fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none());
-}
-
-#[test]
-fn read_only_consumer_serves_a_stale_same_session_base() {
-    // A `--no-produce` renderer holds the producer's last published base even
-    // past the freshness TTL — it renders the last good frame rather than
-    // forking its own `list-panes`. The fresh-only read (the producer's fast
-    // path) misses the stale entry; the TTL-agnostic read still serves it.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    let stale = unix_now_ms().saturating_sub(SNAPSHOT_CACHE_TTL.as_millis() as u64 + 1);
-    write_snapshot_cache(&path, "rimz-query-engine", stale);
-    assert!(
-        fresh_snapshot_cache(&path, "rimz-query-engine", None, SNAPSHOT_CACHE_TTL).is_none(),
-        "the producer's fresh-only fast path skips a stale entry"
-    );
-    assert!(
-        read_snapshot_cache(&path, "rimz-query-engine").is_some(),
-        "the consumer's read serves the stale entry as last-good"
-    );
-}
-
-#[test]
-fn metrics_only_refresh_preserves_the_pane_frame_timestamp() {
-    let dir = tempfile::tempdir().unwrap();
-    let runtime = crate::RuntimePaths::under(
-        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/metrics-frame")),
-        dir.path(),
-    )
-    .unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let mut pidded = pane("terminal_1", Some("zsh"), Some("/repo"));
-    pidded.pane_pid = Some(std::process::id());
-    let produced_at_ms = unix_now_ms();
-    let frame = crate::sidebar::frame::assemble_frame(vec![pidded], produced_at_ms, "s");
-    let cache_path = runtime.root.join("snapshot.json");
-    atomic::write_temp_then_rename_cache(&cache_path, &frame).unwrap();
-
-    let refreshed = refresh_cached_metrics(
-        frame,
-        &runtime,
-        &cache_path,
-        &runtime.root.join("snapshot.lock"),
-        "s",
-        None,
-        SNAPSHOT_CACHE_TTL,
-    );
-
-    assert_eq!(refreshed.produced_at_ms, produced_at_ms);
-    let published = read_snapshot_cache(&cache_path, "s").unwrap();
-    assert_eq!(
-        published.produced_at_ms, produced_at_ms,
-        "a metrics-only publish must not masquerade as a fresh pane listing"
-    );
-    assert!(
-        runtime.root.join("metrics-sample.json").exists(),
-        "metrics refresh samples /proc and writes its own cache"
-    );
 }

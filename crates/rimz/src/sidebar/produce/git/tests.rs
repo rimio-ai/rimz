@@ -1,4 +1,51 @@
 use super::*;
+use std::path::PathBuf;
+
+struct GitFixture {
+    dir: tempfile::TempDir,
+    initialized: bool,
+}
+
+impl GitFixture {
+    fn init(args: &[&str]) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let initialized = Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(args)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false);
+        let fixture = Self { dir, initialized };
+        if initialized {
+            let _ = fixture.git(&["config", "user.email", "t@example.com"]);
+            let _ = fixture.git(&["config", "user.name", "t"]);
+        }
+        fixture
+    }
+
+    fn path(&self) -> &Path {
+        self.dir.path()
+    }
+
+    fn path_str(&self) -> &str {
+        self.path().to_str().unwrap()
+    }
+
+    fn git(&self, args: &[&str]) -> bool {
+        Command::new("git")
+            .arg("-C")
+            .arg(self.path())
+            .args(args)
+            .status()
+            .map(|status| status.success())
+            .unwrap_or(false)
+    }
+
+    fn write(&self, name: &str, body: &str) {
+        std::fs::write(self.path().join(name), body).unwrap();
+    }
+}
 
 #[test]
 fn parse_numstat_sums_text_diff_and_ignores_binary_rows() {
@@ -81,33 +128,20 @@ fn untracked_added_lines_spends_a_shared_read_budget() {
 
 #[test]
 fn worktree_branch_reads_live_checkout() {
-    let dir = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        let status = Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(args)
-            .status();
-        match status {
-            Ok(status) => status.success(),
-            Err(_) => false,
-        }
-    };
-    if !git(&["init", "-q"]) {
+    let repo = GitFixture::init(&["init", "-q"]);
+    if !repo.initialized {
         // No git on PATH (or init failed); the helper degrades to None,
         // which is the documented fallback. Nothing to assert.
-        assert_eq!(worktree_branch(dir.path()), None);
+        assert_eq!(worktree_branch(repo.path()), None);
         return;
     }
-    let _ = git(&["config", "user.email", "t@example.com"]);
-    let _ = git(&["config", "user.name", "t"]);
-    let _ = git(&["checkout", "-q", "-b", "feature-migration"]);
-    std::fs::write(dir.path().join("f"), "x").unwrap();
-    let _ = git(&["add", "f"]);
-    let _ = git(&["commit", "-q", "-m", "init"]);
+    let _ = repo.git(&["checkout", "-q", "-b", "feature-migration"]);
+    repo.write("f", "x");
+    let _ = repo.git(&["add", "f"]);
+    let _ = repo.git(&["commit", "-q", "-m", "init"]);
 
     assert_eq!(
-        worktree_branch(dir.path()).as_deref(),
+        worktree_branch(repo.path()).as_deref(),
         Some("feature-migration"),
         "the live branch is read from the worktree, overriding any pinned label"
     );
@@ -118,50 +152,37 @@ fn worktree_branch_reads_live_checkout() {
 
 #[test]
 fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().to_str().unwrap();
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(args)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    };
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     // `-b main` needs Git >= 2.28; an older git fails init and the helper
     // degrades to None, which is the documented fallback.
-    if !git(&["init", "-q", "-b", "main"]) {
-        assert_eq!(refresh_entry(path, 0, None).stats(), None);
+    if !repo.initialized {
+        assert_eq!(refresh_entry(repo.path_str(), 0, None).stats(), None);
         return;
     }
-    let _ = git(&["config", "user.email", "t@example.com"]);
-    let _ = git(&["config", "user.name", "t"]);
-    let write = |name: &str, body: &str| std::fs::write(dir.path().join(name), body).unwrap();
 
     // Fork point on `main`: a three-line tracked file.
-    write("base.txt", "a\nb\nc\n");
-    let _ = git(&["add", "base.txt"]);
-    let _ = git(&["commit", "-q", "-m", "base"]);
-    let _ = git(&["branch", "feature-migration"]);
+    repo.write("base.txt", "a\nb\nc\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
+    let _ = repo.git(&["branch", "feature-migration"]);
 
     // `main` advances *after* the fork — a merge-base diff must ignore this,
     // so it never shows up as the worktree's own churn.
-    write("base.txt", "a\nB\nc\n");
-    let _ = git(&["commit", "-aqm", "trunk moves on"]);
+    repo.write("base.txt", "a\nB\nc\n");
+    let _ = repo.git(&["commit", "-aqm", "trunk moves on"]);
 
-    let _ = git(&["checkout", "-q", "feature-migration"]);
+    let _ = repo.git(&["checkout", "-q", "feature-migration"]);
     // Committed on the branch: a new two-line file.
-    write("feat.txt", "x\ny\n");
-    let _ = git(&["add", "feat.txt"]);
-    let _ = git(&["commit", "-q", "-m", "feature work"]);
+    repo.write("feat.txt", "x\ny\n");
+    let _ = repo.git(&["add", "feat.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "feature work"]);
     // Staged but uncommitted: a new one-line file.
-    write("staged.txt", "s\n");
-    let _ = git(&["add", "staged.txt"]);
+    repo.write("staged.txt", "s\n");
+    let _ = repo.git(&["add", "staged.txt"]);
     // Unstaged: one more line appended to a tracked file.
-    write("base.txt", "a\nb\nc\nd\n");
+    repo.write("base.txt", "a\nb\nc\nd\n");
 
-    let entry = refresh_entry(path, 0, None);
+    let entry = refresh_entry(repo.path_str(), 0, None);
     assert_eq!(
         entry.stats(),
         Some(DiffStats {
@@ -202,41 +223,29 @@ fn worktree_diff_stats_total_committed_staged_and_unstaged_over_trunk() {
 
 #[test]
 fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().to_str().unwrap();
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(args)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    };
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
     // `-b main` needs Git >= 2.28; an older git fails init and the helper
     // degrades to None, which is the documented fallback.
-    if !git(&["init", "-q", "-b", "main"]) {
-        assert_eq!(refresh_entry(path, 0, None).clean, None);
+    if !repo.initialized {
+        assert_eq!(refresh_entry(repo.path_str(), 0, None).clean, None);
         return;
     }
-    let _ = git(&["config", "user.email", "t@example.com"]);
-    let _ = git(&["config", "user.name", "t"]);
-    std::fs::write(dir.path().join("base.txt"), "a\nb\n").unwrap();
-    let _ = git(&["add", "base.txt"]);
-    let _ = git(&["commit", "-q", "-m", "base"]);
+    repo.write("base.txt", "a\nb\n");
+    let _ = repo.git(&["add", "base.txt"]);
+    let _ = repo.git(&["commit", "-q", "-m", "base"]);
 
     // A pristine checkout at the trunk tip: proven clean, zero churn — the
     // exact reading the `≡` marker requires.
-    let entry = refresh_entry(path, 0, None);
+    let entry = refresh_entry(repo.path_str(), 0, None);
     assert_eq!(entry.clean, Some(true));
     assert_eq!(entry.stats(), Some(DiffStats::default()));
 
     // An untracked two-line file nested in an untracked directory: invisible
     // to `git diff`, so the status probe must flag the tree dirty and fold
     // the lines into `+` (`--untracked-files=all` reaches inside the dir).
-    std::fs::create_dir_all(dir.path().join("sub")).unwrap();
-    std::fs::write(dir.path().join("sub/notes.txt"), "n1\nn2\n").unwrap();
-    let entry = refresh_entry(path, 0, None);
+    std::fs::create_dir_all(repo.path().join("sub")).unwrap();
+    repo.write("sub/notes.txt", "n1\nn2\n");
+    let entry = refresh_entry(repo.path_str(), 0, None);
     assert_eq!(entry.clean, Some(false));
     assert_eq!(
         entry.stats(),
@@ -248,8 +257,8 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
     );
 
     // An untracked binary contributes no lines but still dirties the tree.
-    std::fs::write(dir.path().join("blob.bin"), b"\x00\x01\x02").unwrap();
-    let entry = refresh_entry(path, 0, None);
+    std::fs::write(repo.path().join("blob.bin"), b"\x00\x01\x02").unwrap();
+    let entry = refresh_entry(repo.path_str(), 0, None);
     assert_eq!(entry.clean, Some(false));
     assert_eq!(
         entry.stats(),
@@ -263,44 +272,33 @@ fn worktree_status_folds_untracked_into_churn_and_reads_clean() {
 
 #[test]
 fn trunk_ladder_prefers_a_configured_branch_that_resolves() {
-    let dir = tempfile::tempdir().unwrap();
-    let git = |args: &[&str]| {
-        Command::new("git")
-            .arg("-C")
-            .arg(dir.path())
-            .args(args)
-            .status()
-            .map(|status| status.success())
-            .unwrap_or(false)
-    };
-    if !git(&["init", "-q", "-b", "main"]) {
-        assert_eq!(trunk_ref(dir.path(), Some("develop")), None);
+    let repo = GitFixture::init(&["init", "-q", "-b", "main"]);
+    if !repo.initialized {
+        assert_eq!(trunk_ref(repo.path(), Some("develop")), None);
         return;
     }
-    let _ = git(&["config", "user.email", "t@example.com"]);
-    let _ = git(&["config", "user.name", "t"]);
-    std::fs::write(dir.path().join("f"), "x").unwrap();
-    let _ = git(&["add", "f"]);
-    let _ = git(&["commit", "-q", "-m", "init"]);
-    let _ = git(&["branch", "develop"]);
+    repo.write("f", "x");
+    let _ = repo.git(&["add", "f"]);
+    let _ = repo.git(&["commit", "-q", "-m", "init"]);
+    let _ = repo.git(&["branch", "develop"]);
 
     // The configured branch exists here, so it wins over `main`.
     assert_eq!(
-        trunk_ref(dir.path(), Some("develop")).as_deref(),
+        trunk_ref(repo.path(), Some("develop")).as_deref(),
         Some("develop")
     );
     // A machine-wide preference this repo lacks falls through to detection
     // rather than losing the repo's stats.
     assert_eq!(
-        trunk_ref(dir.path(), Some("absent")).as_deref(),
+        trunk_ref(repo.path(), Some("absent")).as_deref(),
         Some("main")
     );
     // An option-shaped name is never handed to git; detection stands alone.
     assert_eq!(
-        trunk_ref(dir.path(), Some("--help")).as_deref(),
+        trunk_ref(repo.path(), Some("--help")).as_deref(),
         Some("main")
     );
-    assert_eq!(trunk_ref(dir.path(), None).as_deref(), Some("main"));
+    assert_eq!(trunk_ref(repo.path(), None).as_deref(), Some("main"));
 }
 
 #[test]

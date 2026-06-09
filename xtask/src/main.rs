@@ -1964,10 +1964,15 @@ fn ensure_snapshot_json_writes_stay_in_produce(root: &Path, files: &[PathBuf]) -
     let mut violations = Vec::new();
 
     for path in files {
+        // Unit-test modules write snapshot.json fixtures legitimately; exempt
+        // both the inline-sized sibling (`tests.rs`) and the grown form a large
+        // suite splits into (a `tests/` directory of concern modules).
+        let in_test_module = path.file_name().and_then(OsStr::to_str) == Some("tests.rs")
+            || path.components().any(|part| part.as_os_str() == "tests");
         if path.extension().and_then(OsStr::to_str) != Some("rs")
             || !path.starts_with(&source_root)
             || path.starts_with(&producer_root)
-            || path.file_name().and_then(OsStr::to_str) == Some("tests.rs")
+            || in_test_module
         {
             continue;
         }
