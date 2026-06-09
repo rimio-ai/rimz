@@ -1,0 +1,317 @@
+use super::*;
+
+#[test]
+fn transcript_tail_populates_context_gauge() {
+    // Codex reports token usage only in the rollout JSONL; the lifecycle
+    // hooks read its tail to fill the context gauge. Half the model's
+    // 258_400-token window = 50% with the `last_token_usage.total_tokens`
+    // surfacing through to `total_tokens`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n\
+             {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":\
+             {\"last_token_usage\":{\"input_tokens\":129200,\"total_tokens\":130000},\
+             \"model_context_window\":258400}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.context_pct, Some(50));
+    assert_eq!(usage.reported_context_window(), Some(258_400));
+    assert_eq!(usage.total_tokens, Some(130_000));
+    assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
+}
+
+#[test]
+fn fresh_transcript_reports_zero_context_not_unknown() {
+    // A brand-new session has a rollout with no `token_count` event yet.
+    // It must read as 0% (empty gauge), not `None` (no gauge), so a
+    // just-launched idle Codex shows an empty context bar — matching the
+    // Claude adapter's fresh-session behaviour.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.context_pct, Some(0));
+    assert_eq!(usage.context_window, Some(258_000));
+    assert_eq!(usage.reported_context_window(), None);
+    assert_eq!(usage.total_tokens, Some(0));
+    // The per-call split reads an explicit zero too, mirroring the totals.
+    assert_eq!(usage.last_input_tokens, Some(0));
+    assert_eq!(usage.last_cached_input_tokens, Some(0));
+    assert_eq!(usage.last_output_tokens, Some(0));
+}
+
+#[test]
+fn missing_transcript_leaves_context_unknown() {
+    // No readable rollout means unknown, not zero — the gauge stays
+    // hidden rather than asserting a false 0%.
+    let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
+    assert_eq!(usage.context_pct, None);
+    assert_eq!(usage.context_window, None);
+    assert_eq!(usage.total_tokens, None);
+}
+
+#[test]
+fn transcript_tail_populates_cumulative_totals() {
+    // total_token_usage carries the cumulative session billing totals;
+    // usage_from_transcript must surface them so refresh_context can
+    // price the session cost.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"codex-mini\"}}\n\
+             {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"total_token_usage\":{\"input_tokens\":1000,\"output_tokens\":200,\
+             \"cached_input_tokens\":400},\
+             \"model_context_window\":100000}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.cumulative_input_tokens, Some(1000));
+    assert_eq!(usage.cumulative_output_tokens, Some(200));
+    assert_eq!(usage.cumulative_cached_tokens, 400);
+    assert_eq!(usage.model.as_deref(), Some("codex-mini"));
+}
+
+#[test]
+fn transcript_tail_populates_the_per_call_split() {
+    // `last_token_usage` carries the latest call's full field set —
+    // `input_tokens` (the cached slice included), `cached_input_tokens`, and
+    // `output_tokens` — which the card's composition line legends (`◌`
+    // cache-read, `↘` fresh input, `↗` output). The parser must surface them
+    // raw; the adapter derives fresh input as `input − cached`.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":129200,\"cached_input_tokens\":120000,\
+             \"output_tokens\":800,\"total_tokens\":130000},\
+             \"model_context_window\":258400}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.last_input_tokens, Some(129_200));
+    assert_eq!(usage.last_cached_input_tokens, Some(120_000));
+    assert_eq!(usage.last_output_tokens, Some(800));
+}
+
+#[test]
+fn transcript_enrichment_maps_codex_split_to_rich_usage() {
+    let usage = TranscriptUsage {
+        context_pct: Some(42),
+        context_window: Some(10_000),
+        context_window_reported: true,
+        total_tokens: Some(4_200),
+        model: Some("gpt-5".to_owned()),
+        last_input_tokens: Some(1_200),
+        last_cached_input_tokens: Some(1_000),
+        last_output_tokens: Some(80),
+        cumulative_input_tokens: None,
+        cumulative_cached_tokens: 0,
+        cumulative_output_tokens: None,
+    };
+    let (tokens, cost, model_id) = transcript_enrichment(&usage, None);
+    let tokens = tokens.expect("tokens are mapped");
+    let current = tokens.current_usage.expect("current usage is mapped");
+    assert_eq!(tokens.context_window_size, Some(10_000));
+    assert_eq!(tokens.used_percentage, Some(42));
+    assert_eq!(tokens.remaining_percentage, Some(58));
+    assert_eq!(current.input_tokens, Some(200));
+    assert_eq!(current.cache_read_input_tokens, Some(1_000));
+    assert_eq!(current.cache_creation_input_tokens, None);
+    assert_eq!(current.output_tokens, Some(80));
+    assert_eq!(
+        current.input_tokens.unwrap()
+            + current.cache_read_input_tokens.unwrap()
+            + current.cache_creation_input_tokens.unwrap_or(0),
+        usage.last_input_tokens.unwrap(),
+        "rich context numerator matches the row-level fallback"
+    );
+    assert_eq!(cost, None);
+    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn transcript_enrichment_prices_cumulative_totals() {
+    let usage = TranscriptUsage {
+        context_pct: None,
+        context_window: None,
+        context_window_reported: false,
+        total_tokens: None,
+        model: Some("gpt-5".to_owned()),
+        last_input_tokens: None,
+        last_cached_input_tokens: None,
+        last_output_tokens: None,
+        cumulative_input_tokens: Some(1_000),
+        cumulative_cached_tokens: 400,
+        cumulative_output_tokens: Some(200),
+    };
+    let (_tokens, cost, _model_id) = transcript_enrichment(&usage, None);
+    let cost = cost
+        .and_then(|cost| cost.total_cost_usd)
+        .expect("known model prices cumulative totals");
+    let price = PriceBook::embedded().price("gpt-5").unwrap();
+    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
+    assert!((cost - expected).abs() < f64::EPSILON);
+}
+
+#[test]
+fn transcript_enrichment_uses_model_hint_to_price_cumulative_totals() {
+    let usage = TranscriptUsage {
+        context_pct: None,
+        context_window: None,
+        context_window_reported: false,
+        total_tokens: None,
+        model: None,
+        last_input_tokens: None,
+        last_cached_input_tokens: None,
+        last_output_tokens: None,
+        cumulative_input_tokens: Some(1_000),
+        cumulative_cached_tokens: 400,
+        cumulative_output_tokens: Some(200),
+    };
+    let (_tokens, cost, model_id) = transcript_enrichment(&usage, Some("gpt-5"));
+    let cost = cost
+        .and_then(|cost| cost.total_cost_usd)
+        .expect("prior model hint prices a tail without turn_context");
+    let price = PriceBook::embedded().price("gpt-5").unwrap();
+    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
+    assert!((cost - expected).abs() < f64::EPSILON);
+    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+}
+
+#[test]
+fn refresh_transcript_context_stat_gate_skips_unchanged_tail() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5\"}}\n",
+    )
+    .unwrap();
+    let stat = transcript_stat(&path).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+    assert!(
+        refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat)).is_none(),
+        "unchanged stat skips the tail read and sidecar write"
+    );
+
+    std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap()
+        .write_all(
+            b"{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+              \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+              \"model_context_window\":100}}}\n",
+        )
+        .unwrap();
+    let refresh = refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat))
+        .expect("changed stat refreshes");
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(50)
+    );
+    assert_ne!(refresh.transcript_stat, Some(stat));
+}
+
+#[test]
+fn refresh_transcript_context_reruns_when_prior_effort_is_stale() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":50,\"total_tokens\":60},\
+             \"model_context_window\":100}}}\n",
+    )
+    .unwrap();
+    let stat = transcript_stat(&path).unwrap();
+    let path_string = path.to_string_lossy().into_owned();
+
+    let refresh = refresh_transcript_context(
+        "sess-1",
+        None,
+        Some("medium"),
+        Some(&path_string),
+        Some(&stat),
+    )
+    .expect("stale prior effort forces a local refresh despite unchanged stat");
+    assert_eq!(
+        refresh
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.used_percentage),
+        Some(50)
+    );
+}
+
+#[test]
+fn transcript_tail_without_split_fields_leaves_them_unknown() {
+    // An older rollout whose `last_token_usage` reports only `input_tokens`
+    // and `total_tokens` keeps the cached/output sides unknown rather than
+    // asserting a false zero — the card then renders the input it does know.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"model_context_window\":100000}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.last_input_tokens, Some(500));
+    assert_eq!(usage.last_cached_input_tokens, None);
+    assert_eq!(usage.last_output_tokens, None);
+}
+
+#[test]
+fn transcript_tail_without_total_token_usage_leaves_cumulative_none() {
+    // Older rollout files that only have last_token_usage must not produce
+    // a spurious cost estimate.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rollout-session.jsonl");
+    std::fs::write(
+        &path,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"model_context_window\":100000}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&path);
+    assert_eq!(usage.cumulative_input_tokens, None);
+    assert_eq!(usage.cumulative_output_tokens, None);
+    assert_eq!(usage.cumulative_cached_tokens, 0);
+}
+
+#[test]
+fn find_session_transcript_walks_codex_date_hierarchy() {
+    // Codex shards rollouts under `YYYY/MM/DD/`; the locator finds a file
+    // whose name ends with `{session_id}.jsonl` regardless of how deep the
+    // shard is.
+    let dir = tempfile::tempdir().unwrap();
+    let day_dir = dir.path().join("2026").join("05").join("26");
+    std::fs::create_dir_all(&day_dir).unwrap();
+    let expected = day_dir.join("rollout-2026-05-26T21-57-38-sess-abc.jsonl");
+    std::fs::write(&expected, "{}\n").unwrap();
+    // A noise file for a different session in the same day must not match.
+    std::fs::write(day_dir.join("rollout-other-sess.jsonl"), "{}\n").unwrap();
+
+    let found = find_session_transcript_under(dir.path(), "sess-abc").unwrap();
+    assert_eq!(found, expected);
+    assert!(find_session_transcript_under(dir.path(), "sess-missing").is_none());
+}

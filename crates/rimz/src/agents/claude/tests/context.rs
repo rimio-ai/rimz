@@ -1,0 +1,213 @@
+use super::*;
+
+#[test]
+fn transcript_tail_populates_context_gauge() {
+    // Claude reports token usage only in the transcript JSONL; the Stop hook
+    // reads its tail to fill the context gauge. 100k of a 200k window = 50%.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+            &transcript,
+            "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
+        )
+        .unwrap();
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "Stop",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(obs.context_pct, Some(50));
+    assert_eq!(obs.total_tokens, Some(100_500));
+    assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
+}
+
+#[test]
+fn payload_one_million_marker_widens_the_context_window() {
+    // The 1M beta is signalled by a `[1m]` marker that rides only the hook
+    // payload's model field — the transcript writes the bare id. The gauge
+    // must divide by the payload-resolved window: 100k of 1M = 10%, where
+    // the bare-id default would have over-read it as 50%.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+            &transcript,
+            "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
+        )
+        .unwrap();
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "Stop",
+            &json!({
+                "session_id": "sess-1",
+                "model": "claude-opus-4-8[1m]",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(obs.context_pct, Some(10));
+    assert_eq!(obs.total_tokens, Some(100_500));
+    assert_eq!(obs.model.as_deref(), Some("claude-opus-4-8[1m]"));
+}
+
+#[test]
+fn observe_turn_error_reads_the_tail_from_the_payload_path() {
+    // End-to-end over the real file path: the statusline payload names the
+    // transcript, the adapter reads its bounded tail, and the verified
+    // incident shape (flagged assistant entry + turn_duration, no Stop)
+    // yields the marker. A missing path or file yields None, never an error.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+            &transcript,
+            concat!(
+                "{\"type\":\"assistant\",\"isApiErrorMessage\":true,\"timestamp\":\"2026-06-04T02:56:32.919Z\",",
+                "\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"API Error: Overloaded\"}]}}\n",
+                "{\"type\":\"system\",\"subtype\":\"turn_duration\",\"timestamp\":\"2026-06-04T02:56:32.923Z\"}\n",
+            ),
+        )
+        .unwrap();
+    let error = ClaudeAdapter
+        .observe_turn_error(&json!({
+            "session_id": "sess-1",
+            "transcript_path": transcript.to_str().unwrap(),
+        }))
+        .expect("the dead turn is detected");
+    assert_eq!(error.class, TurnErrorClass::PausedOverloaded);
+    assert_eq!(error.label.as_deref(), Some("API Error: Overloaded"));
+
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error(&json!({ "session_id": "sess-1" }))
+            .is_none(),
+        "no transcript path, no marker"
+    );
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error(&json!({
+                "session_id": "sess-1",
+                "transcript_path": dir.path().join("gone.jsonl").to_str().unwrap(),
+            }))
+            .is_none(),
+        "an unreadable transcript degrades to no marker"
+    );
+}
+
+#[test]
+fn stop_failure_hook_maps_to_turn_error_marker() {
+    let marker = |error: &str| {
+        ClaudeAdapter
+            .observe_turn_error_from_hook(
+                "StopFailure",
+                &json!({
+                    "session_id": "sess-1",
+                    "error": error,
+                    "last_assistant_message": "You've hit your usage limit"
+                }),
+            )
+            .expect("marker")
+    };
+
+    assert_eq!(marker("rate_limit").class, TurnErrorClass::PausedRateLimit);
+    assert_eq!(marker("overloaded").class, TurnErrorClass::PausedOverloaded);
+
+    let failed = ClaudeAdapter
+        .observe_turn_error_from_hook(
+            "StopFailure",
+            &json!({
+                "session_id": "sess-1",
+                "error": "api_error",
+                "last_assistant_message": "API Error: Server Error"
+            }),
+        )
+        .expect("marker");
+    assert_eq!(failed.class, TurnErrorClass::Failed);
+    assert_eq!(failed.label.as_deref(), Some("API Error: Server Error"));
+
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error_from_hook("StopFailure", &json!({ "session_id": "sess-1" }))
+            .is_none(),
+        "missing error has no marker"
+    );
+    assert!(
+        ClaudeAdapter
+            .observe_turn_error_from_hook(
+                "Stop",
+                &json!({
+                    "session_id": "sess-1",
+                    "error": "rate_limit"
+                }),
+            )
+            .is_none(),
+        "only StopFailure carries this marker"
+    );
+}
+
+#[test]
+fn fresh_transcript_reports_zero_context_not_unknown() {
+    // A brand-new session has a transcript with no assistant usage yet. It
+    // must read as 0% (empty gauge), not None (no gauge), so a just-launched
+    // idle agent shows an empty context bar.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n",
+    )
+    .unwrap();
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "SessionStart",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": transcript.to_str().unwrap(),
+            }),
+        )
+        .unwrap();
+    assert_eq!(obs.context_pct, Some(0));
+    assert_eq!(obs.total_tokens, Some(0));
+}
+
+#[test]
+fn missing_transcript_leaves_context_unknown() {
+    // No readable transcript means unknown, not zero — the gauge stays
+    // hidden rather than asserting a false 0%.
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "SessionStart",
+            &json!({
+                "session_id": "sess-1",
+                "transcript_path": "/nonexistent/path/session.jsonl",
+            }),
+        )
+        .unwrap();
+    assert_eq!(obs.context_pct, None);
+    assert_eq!(obs.total_tokens, None);
+}
+
+#[test]
+fn transcript_requires_session_id() {
+    // Transcript reads are keyed by the agent's own session identity. A
+    // transcript path without a session id stays unknown; the sidebar row
+    // projection is responsible for the visible 0% baseline.
+    let dir = tempfile::tempdir().unwrap();
+    let transcript = dir.path().join("session.jsonl");
+    std::fs::write(
+        &transcript,
+        "{\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":\
+             {\"input_tokens\":100000,\"output_tokens\":500}}}\n",
+    )
+    .unwrap();
+    let obs = ClaudeAdapter
+        .observe_lifecycle(
+            "SessionStart",
+            &json!({ "transcript_path": transcript.to_str().unwrap() }),
+        )
+        .unwrap();
+    assert_eq!(obs.context_pct, None);
+    assert_eq!(obs.total_tokens, None);
+}

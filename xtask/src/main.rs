@@ -1514,6 +1514,24 @@ fn workspace_root() -> Result<PathBuf> {
         .context("xtask manifest has no workspace parent")
 }
 
+fn is_agent_spend_parser_path(path: &Path, agents_root: &Path) -> bool {
+    if !path.starts_with(agents_root) {
+        return false;
+    }
+    if matches!(
+        path.file_name().and_then(OsStr::to_str),
+        Some("spend.rs" | "transcript_fs.rs")
+    ) {
+        return true;
+    }
+    let Ok(relative) = path.strip_prefix(agents_root) else {
+        return false;
+    };
+    relative
+        .components()
+        .any(|component| component.as_os_str() == OsStr::new("spend"))
+}
+
 /// Architectural-invariant greps. Defense in depth: these are shallow string
 /// matches, so an aliased import or a macro-generated name will bypass.
 /// Treat them as a low-cost trip-wire that pairs with code review and the
@@ -1576,18 +1594,14 @@ fn invariants(root: &Path) -> Result<()> {
     }
 
     // Adapter spend parsers are the read-only, sidebar-safe cost surface
-    // (`crates/rimz/src/agents/<name>/spend.rs` + the shared `transcript_fs`):
-    // they must stay free of ledger-write, bridge, and broker imports so the
-    // spending walk can never write durable state or block on a socket.
+    // (`crates/rimz/src/agents/<name>/spend.rs`,
+    // `crates/rimz/src/agents/<name>/spend/*.rs`, and the shared
+    // `transcript_fs`): they must stay free of ledger-write, bridge, and broker
+    // imports so the spending walk can never write durable state or block on a
+    // socket.
     let outside_spend_parsers = {
         let agents_root = root.join("crates/rimz/src/agents");
-        move |path: &Path| {
-            !(path.starts_with(&agents_root)
-                && matches!(
-                    path.file_name().and_then(OsStr::to_str),
-                    Some("spend.rs" | "transcript_fs.rs")
-                ))
-        }
+        move |path: &Path| !is_agent_spend_parser_path(path, &agents_root)
     };
     // Both the path form (`…::atomic`, catching `crate::ledger::atomic` and
     // `rimz::ledger::atomic` alike) and the usage form (`atomic::…`, catching
@@ -2083,6 +2097,32 @@ mod tests {
 
     fn pane_list(panes: Value) -> Vec<u8> {
         serde_json::to_vec(&panes).unwrap()
+    }
+
+    #[test]
+    fn spend_parser_path_predicate_covers_nested_modules() {
+        let agents_root = Path::new("/repo/crates/rimz/src/agents");
+
+        assert!(is_agent_spend_parser_path(
+            &agents_root.join("codex/spend.rs"),
+            agents_root,
+        ));
+        assert!(is_agent_spend_parser_path(
+            &agents_root.join("codex/spend/wire.rs"),
+            agents_root,
+        ));
+        assert!(is_agent_spend_parser_path(
+            &agents_root.join("transcript_fs.rs"),
+            agents_root,
+        ));
+        assert!(!is_agent_spend_parser_path(
+            &agents_root.join("codex/mod.rs"),
+            agents_root,
+        ));
+        assert!(!is_agent_spend_parser_path(
+            Path::new("/repo/crates/rimz/src/sidebar/spend/wire.rs"),
+            agents_root,
+        ));
     }
 
     #[test]
