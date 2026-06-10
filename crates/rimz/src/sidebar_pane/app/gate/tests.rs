@@ -171,9 +171,14 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
         Some(prior.clone()),
         &Health::default(),
     );
-    let (state, gate, rejected) =
+    let (state, gate, gate_reject) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+    let rejected = gate_reject.is_some();
     assert!(rejected);
+    assert_eq!(
+        gate_reject.unwrap().demoted_panes,
+        vec!["zellij:terminal_9".to_owned()]
+    );
     // Both the rendered frame AND the next-tick baseline stay the good
     // frame, so the cache never advances onto the demotion.
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
@@ -199,10 +204,12 @@ fn reject_holds_prior_frame_over_frameless_fetch() {
         &Health::default(),
     );
 
-    let (state, gate, rejected) =
+    let (state, gate, gate_reject) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
+    let rejected = gate_reject.is_some();
 
     assert!(rejected);
+    assert!(gate_reject.unwrap().frameless_incoming);
     assert_eq!(
         state.snapshot.panes_produced_at_ms,
         prior.panes_produced_at_ms
@@ -227,7 +234,8 @@ fn accept_resets_the_gate() {
         reject_streak: 2,
         rejecting_since: Some(gate_now()),
     };
-    let (state, gate, rejected) = apply_gate(computed, true, &prior, &prev_gate, gate_now());
+    let (state, gate, gate_reject) = apply_gate(computed, true, &prior, &prev_gate, gate_now());
+    let rejected = gate_reject.is_some();
     assert!(!rejected);
     assert_eq!(gate, GateState::default());
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());

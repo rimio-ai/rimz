@@ -5,6 +5,8 @@ pub(super) struct LoopState {
     current: SidebarSnapshot,
     last_pulled: SidebarSnapshot,
     event_store: EventStore,
+    observer: observe::Observer,
+    observe_tx: SyncSender<ObserveMsg>,
     health: Health,
     gate: GateState,
     self_close: SelfCloseState,
@@ -22,7 +24,11 @@ pub(super) struct LoopState {
 }
 
 impl LoopState {
-    pub(super) fn new(workspace_id: WorkspaceId, initial_width: Option<u16>) -> Self {
+    pub(super) fn new(
+        workspace_id: WorkspaceId,
+        initial_width: Option<u16>,
+        observe_tx: SyncSender<ObserveMsg>,
+    ) -> Self {
         let current = placeholder_snapshot(workspace_id);
         let now = Instant::now();
         Self {
@@ -30,6 +36,8 @@ impl LoopState {
             last_pulled: current.clone(),
             current,
             event_store: EventStore::default(),
+            observer: observe::Observer::default(),
+            observe_tx,
             health: Health::default(),
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
@@ -375,8 +383,79 @@ impl LoopState {
         )?;
         self.should_exit = applied.should_exit;
         self.tab_emptied |= applied.tab_emptied;
+        self.observe_commit(applied.gate_reject.as_ref());
         self.dirty = true;
         Ok(applied.rejected)
+    }
+
+    fn observe_commit(&mut self, gate_reject: Option<&observe::GateRejectInfo>) {
+        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let health_reason = self
+            .health
+            .alert
+            .as_ref()
+            .filter(|alert| alert.is_active())
+            .map(|alert| alert.reason.clone());
+        let sig = observe::extract_sig(
+            &self.current,
+            &self.last_pulled,
+            &self.event_store,
+            self.gate.reject_streak,
+            self.health.failure_streak,
+            health_reason,
+            now_ms,
+        );
+        for draft in self.observer.observe(sig, gate_reject) {
+            let carried_drops = draft.dropped_msgs;
+            if self
+                .observe_tx
+                .try_send(ObserveMsg::Anomaly(Box::new(draft)))
+                .is_err()
+            {
+                self.observer.dropped_msgs = self
+                    .observer
+                    .dropped_msgs
+                    .saturating_add(carried_drops)
+                    .saturating_add(1);
+            }
+        }
+        if let Some(roster) = self.observer.pending_roster_update() {
+            if self.observe_tx.try_send(ObserveMsg::Roster(roster)).is_ok() {
+                self.observer.clear_roster_update();
+            } else {
+                self.observer.dropped_msgs = self.observer.dropped_msgs.saturating_add(1);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sidebar_pane::app::fixtures::{agent_snapshot, workspace};
+
+    #[test]
+    fn failed_anomaly_send_preserves_carried_drop_count() {
+        let ws = workspace();
+        let (tx, _rx) = std::sync::mpsc::sync_channel(0);
+        let mut state = LoopState::new(ws.clone(), None, tx);
+        let mut current = agent_snapshot(&ws);
+        let mut duplicate = current.worktree_groups[0].rows[0].clone();
+        duplicate.pane = duplicate.pane.map(|mut pane| {
+            pane.pane_id = crate::ids::PaneId::from_parts(crate::MuxName::Zellij, "terminal_10");
+            pane
+        });
+        current.worktree_groups[0].rows.push(duplicate);
+        current.worktree_groups[0].status_counts[0].count = 2;
+        state.current = current;
+        state.observer.dropped_msgs = 3;
+
+        state.observe_commit(None);
+
+        assert!(
+            state.observer.dropped_msgs >= 4,
+            "the prior drop count must be retained when its carrier draft fails to queue"
+        );
     }
 }
 

@@ -4,13 +4,8 @@
 use jiff::Timestamp;
 
 pub(super) use crate::sidebar::timing::GIVE_UP_AFTER_DEGRADED;
+pub(super) use crate::sidebar::timing::HEALTH_ALERT_AFTER_FAILURES as ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::render::Alert;
-
-/// A single transient fetch hiccup must not flash a scary banner: the loop
-/// already holds the last good frame, so absorb the first failures silently
-/// and only raise an alert once a failure persists this many consecutive
-/// fetches. Sustained failures still surface promptly (~one tick apart).
-pub(super) const ALERT_AFTER_FAILURES: u32 = 2;
 
 /// Debounced, sticky health of the refresh loop. `failure_streak` counts
 /// consecutive failed fetches so a lone blip never alarms; `alert` is the

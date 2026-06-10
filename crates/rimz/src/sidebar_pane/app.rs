@@ -11,7 +11,7 @@
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::Receiver;
+use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
 use crate::config::NotificationsPrefs;
@@ -20,6 +20,7 @@ use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::fuse::fuse;
+use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
@@ -132,7 +133,15 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     terminal.clear()?;
 
     let initial_width = terminal.size().map(|s| s.width).ok();
-    let mut state = LoopState::new(config.workspace_id.clone(), initial_width);
+    let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(64);
+    let _observe_handle = observe::log::spawn_writer(
+        runtime.clone(),
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        config.instance_id.clone(),
+        observe_rx,
+    );
+    let mut state = LoopState::new(config.workspace_id.clone(), initial_width, observe_tx);
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
     // across re-fetches and ledger deltas, so no redraw path can stall it.

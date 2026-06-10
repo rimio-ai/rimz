@@ -159,6 +159,39 @@ pub const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
 /// round-trip, and well under [`GIVE_UP_AFTER_DEGRADED`].
 pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
+/// Consecutive refresh failures before the renderer surfaces a degraded
+/// health alert. The observer reads the same threshold to log the rising edge.
+pub const HEALTH_ALERT_AFTER_FAILURES: u32 = 2;
+
+/// Observer window for a populated roster that empties and refills.
+pub const OBSERVE_ROSTER_FLAP_WINDOW: Duration = Duration::from_secs(10);
+
+/// Observer window for one row disappearing and returning, or being born and
+/// vanishing quickly.
+pub const OBSERVE_ROW_FLAP_WINDOW: Duration = Duration::from_secs(7);
+
+/// Observer window for exact A→B→A value oscillations.
+pub const OBSERVE_VALUE_OSC_WINDOW: Duration = Duration::from_secs(5);
+
+/// Observer window for sustained status transition churn.
+pub const OBSERVE_STATUS_CHURN_WINDOW: Duration = Duration::from_secs(30);
+
+/// Startup/reload grace before windowed observer anomalies are emitted.
+pub const OBSERVE_WARMUP: Duration = Duration::from_secs(10);
+
+/// Minimum gap between writer-side real-world cross-check passes.
+pub const OBSERVE_CROSSCHECK_TTL: Duration = Duration::from_secs(5);
+
+/// Consecutive writer-side `/proc` observations required before a dead PID is
+/// logged.
+pub const OBSERVE_DEADPID_CONFIRMATIONS: u32 = 2;
+
+/// Per-kind diagnostic cooldown window.
+pub const OBSERVE_COOLDOWN: Duration = Duration::from_secs(30);
+
+/// Maximum size of one observer diagnostic log generation.
+pub const OBSERVE_LOG_MAX_BYTES: u64 = 1_048_576;
+
 /// Default render base grid: 100ms, or 10Hz.
 pub const DEFAULT_REFRESH_MS: u16 = 100;
 

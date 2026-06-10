@@ -4,6 +4,7 @@
 
 use std::time::Instant;
 
+use crate::sidebar::observe::GateRejectInfo;
 use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use tracing::{debug, warn};
@@ -94,6 +95,7 @@ pub(super) struct ApplyOutcome {
     pub(super) should_exit: bool,
     pub(super) tab_emptied: bool,
     pub(super) rejected: bool,
+    pub(super) gate_reject: Option<GateRejectInfo>,
 }
 
 /// Fold one fetch outcome into the render state: gate it against the
@@ -133,8 +135,9 @@ pub(super) fn apply_fetch_outcome(
         // frameless/status-only fast fold that precedes it.
         computed.health = health.clone();
     }
-    let (state, next_gate, rejected) =
+    let (state, next_gate, gate_reject) =
         apply_gate(computed, fetch_was_ok, &prev_good, gate, Timestamp::now());
+    let rejected = gate_reject.is_some();
     *gate = next_gate;
     if let Some(alert) = state
         .health
@@ -223,6 +226,7 @@ pub(super) fn apply_fetch_outcome(
             should_exit: true,
             tab_emptied: false,
             rejected,
+            gate_reject,
         });
     }
 
@@ -242,12 +246,14 @@ pub(super) fn apply_fetch_outcome(
             should_exit: true,
             tab_emptied: true,
             rejected,
+            gate_reject,
         });
     }
     Ok(ApplyOutcome {
         should_exit: false,
         tab_emptied: false,
         rejected,
+        gate_reject,
     })
 }
 

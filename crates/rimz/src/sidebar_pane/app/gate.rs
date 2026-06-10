@@ -7,6 +7,7 @@
 
 use crate::SidebarSnapshot;
 use crate::ids::PaneId;
+use crate::sidebar::observe::GateRejectInfo;
 use jiff::Timestamp;
 use std::collections::HashSet;
 
@@ -122,19 +123,20 @@ pub(super) fn apply_gate(
     prev_good: &SidebarSnapshot,
     gate: &GateState,
     now: Timestamp,
-) -> (RenderState, GateState, bool) {
+) -> (RenderState, GateState, Option<GateRejectInfo>) {
     if fetch_was_ok
         && gate_commit(prev_good, &state.snapshot, gate, now) == CommitDecision::KeepPrior
     {
+        let reject_info = GateRejectInfo::from_snapshots(prev_good, &state.snapshot);
         state.snapshot = prev_good.clone();
         state.last_snapshot = Some(prev_good.clone());
         let next = GateState {
             reject_streak: gate.reject_streak.saturating_add(1),
             rejecting_since: gate.rejecting_since.or(Some(now)),
         };
-        (state, next, true)
+        (state, next, Some(reject_info))
     } else {
-        (state, GateState::default(), false)
+        (state, GateState::default(), None)
     }
 }
 
