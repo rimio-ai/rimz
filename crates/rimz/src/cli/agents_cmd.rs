@@ -390,26 +390,28 @@ fn cleanup_worktree(path: &Path, globals: &GlobalFlags, interactive: bool) -> Re
     let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
         return Ok(());
     };
-    let status = rimz::worktree::status(path, &marker.base_ref)?;
+    let status = rimz::worktree::status(path, &marker)?;
     if !interactive {
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let other_pane_inside = other_live_pane_inside(path, globals);
     match rimz::worktree::cleanup_decision(status, true, other_pane_inside) {
         rimz::worktree::CleanupDecision::RemoveClean => {
-            remove_after_leaving_worktree(path, &marker, false)?;
+            let branch = remove_after_leaving_worktree(path, &marker, false)?;
             let _ = writeln!(
                 std::io::stderr().lock(),
                 "rimz: removed clean worktree {}",
                 path.display()
             );
+            report_kept_branch(branch, &marker);
         }
         rimz::worktree::CleanupDecision::PromptDirty => {
             if interactive {
                 match dirty_choice(path)? {
                     DirtyChoice::Keep => {}
                     DirtyChoice::Remove => {
-                        remove_after_leaving_worktree(path, &marker, true)?;
+                        let branch = remove_after_leaving_worktree(path, &marker, true)?;
+                        report_kept_branch(branch, &marker);
                     }
                     DirtyChoice::Shell => exec_shell(path)?,
                 }
@@ -424,11 +426,24 @@ fn remove_after_leaving_worktree(
     path: &Path,
     marker: &rimz::worktree::WorktreeMarker,
     force: bool,
-) -> Result<()> {
+) -> Result<rimz::worktree::BranchDeletion> {
     std::env::set_current_dir(&marker.repo_root)
         .with_context(|| format!("leaving worktree before removing {}", path.display()))?;
-    rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)?;
-    Ok(())
+    rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)
+        .map_err(Into::into)
+}
+
+fn report_kept_branch(
+    branch: rimz::worktree::BranchDeletion,
+    marker: &rimz::worktree::WorktreeMarker,
+) {
+    if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
+        let _ = writeln!(
+            std::io::stderr().lock(),
+            "rimz: kept branch {} because its work was not proven merged into its base",
+            marker.branch
+        );
+    }
 }
 
 fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
@@ -492,7 +507,7 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
     let mut stderr = std::io::stderr().lock();
     writeln!(
         stderr,
-        "rimz: worktree {} has local changes or commits.",
+        "rimz: worktree {} has local changes or unmerged commits.",
         path.display()
     )?;
     write!(stderr, "Choose keep/remove/shell [keep]: ")?;

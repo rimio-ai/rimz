@@ -6,30 +6,30 @@ Rimz launches agent fleets by separating three choices: **agents** choose which 
 
 ## Rimz-owned worktrees
 
-`rimz worktree new` creates a Git worktree under the per-machine `[worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref). The marker stores the resolved base commit snapshot, so later cleanup compares against the commit the worktree was born from rather than a moving symbolic ref. Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`.
+`rimz worktree new` creates a Git worktree under the per-machine `[worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref). The marker stores the base branch name and the resolved base commit snapshot, so cleanup measures committed work against the live base branch and keeps the snapshot as the detached or unresolved fallback. Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`.
 
 The checkout stays clean of Rimz metadata. Ownership lives in `rimz-worktree.json` inside the worktree's Git admin directory (`git rev-parse --git-dir` for that worktree). Cleanup, `remove`, and `gc` only act when that marker is present.
 
-The marker records the name, branch, base commit, repo root, worktree path, and marker version. A missing marker reads as user-owned, even if the path matches the configured directory template.
+The marker records the name, branch, base branch name, base commit, repo root, worktree path, and marker version. A missing marker reads as user-owned, even if the path matches the configured directory template.
 
 ## Cleanup
 
-The hidden `rimz agents exec` wrapper runs the agent command in the pane and inherits the pane's TTY. When the agent exits with `--worktree-path`, it re-reads the marker, checks `git status --porcelain`, checks commits ahead of the marker base commit with `git rev-list --count <base>..HEAD`, and asks the mux for live pane cwd values. If the ahead count cannot be computed, cleanup treats the worktree as not clean and keeps it.
+The hidden `rimz agents exec` wrapper runs the agent command in the pane and inherits the pane's TTY. When the agent exits with `--worktree-path`, it re-reads the marker, checks `git status --porcelain`, checks commits not yet landed on the live base with `git rev-list --count <base>..HEAD`, applies a bounded patch-equivalence check for rebased, cherry-picked, or squash-merged work, and asks the mux for live pane cwd values. If the live base branch is unavailable, cleanup tries `main`, `master`, `origin/HEAD`, then the creation snapshot; if the unmerged count cannot be computed, cleanup treats the worktree as not clean and keeps it.
 
 The cleanup decision is pure:
 
 | Marker | Status | Other live user pane inside path | Decision |
 | --- | --- | --- | --- |
 | absent | any | any | skip |
-| present | clean and not ahead | no | remove worktree and delete branch with `git branch -d` |
-| present | dirty or ahead | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
+| present | clean with no unmerged commits | no | remove worktree and delete the branch after proving its work landed |
+| present | dirty or carrying unmerged commits | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
 | present | any | yes | skip |
 
-The automatic path never force-deletes a branch. The interactive dirty `remove` choice and `rimz worktree remove --force` use Git's force removal path because the human explicitly chose destruction.
+The automatic path deletes a branch only after proving its work landed on the live base: it tries `git branch -d`, escalates to `git branch -D` only after the same landed-work check succeeds, and keeps the branch otherwise. The interactive dirty `remove` choice and `rimz worktree remove --force` use Git's force removal path because the human explicitly chose destruction.
 
 Rimz sidebar panes are chrome: they inherit the tab cwd for launch, and worktree liveness reads user panes only.
 
-`rimz gc` also sweeps clean, marked worktrees in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`.
+`rimz gc` also sweeps clean, marked worktrees whose work has landed on their base in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.
 
 ## Tab layout IR
 

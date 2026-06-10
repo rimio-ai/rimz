@@ -34,7 +34,7 @@ enum WorktreeSubcmd {
     /// Remove a Rimz-owned worktree.
     Remove {
         name: String,
-        /// Remove even when the worktree is dirty or ahead of its base.
+        /// Remove even when the worktree is dirty or has unmerged commits.
         #[arg(long)]
         force: bool,
     },
@@ -62,6 +62,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                 println!("created {}", created.name);
                 println!("  path   : {}", created.path.display());
                 println!("  branch : {}", created.branch);
+                if let Some(base_branch) = created.base_branch.as_deref() {
+                    println!("  base branch: {base_branch}");
+                }
                 println!("  base   : {}", created.base_ref);
             }
             Ok(())
@@ -76,17 +79,17 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                 }
             } else {
                 for entry in entries {
-                    let commits_ahead = entry
-                        .commits_ahead
+                    let commits_unmerged = entry
+                        .commits_unmerged
                         .map_or_else(|| "?".to_owned(), |count| count.to_string());
                     #[expect(clippy::print_stdout, reason = "human listing")]
                     {
                         println!(
-                            "{}\t{}\t{}\t{} ahead{}",
+                            "{}\t{}\t{}\t{} unmerged{}",
                             entry.name,
                             entry.path.display(),
                             entry.branch.as_deref().unwrap_or("-"),
-                            commits_ahead,
+                            commits_unmerged,
                             if entry.dirty { " dirty" } else { "" }
                         );
                     }
@@ -95,10 +98,13 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
             Ok(())
         }
         WorktreeSubcmd::Remove { name, force } => {
-            rimz::worktree::remove(&workspace.project_root, &config, &name, force)?;
+            let branch = rimz::worktree::remove(&workspace.project_root, &config, &name, force)?;
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
                 println!("removed {name}");
+                if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
+                    println!("  branch kept: work not proven merged into its base");
+                }
             }
             Ok(())
         }

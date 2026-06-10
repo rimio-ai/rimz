@@ -96,7 +96,7 @@ rimz run send <run-id> [--enter] -- <text>
 rimz run stream <run-id> [--from-start] [--timeout <duration>]
 ```
 
-`rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty or ahead worktrees unless `--force` is explicit.
+`rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty worktrees or commits not yet merged into their base unless `--force` is explicit.
 
 `rimz tab` opens one Zellij tab or tmux window in the current room. `--layout` accepts a named `[agents.layouts]` entry or an inline spec: commas split columns, plus signs stack rows, and cells are agent kinds (`claude`, `codex`, `pi`) or `term`; the built-in `peer` layout is `claude,codex`, named layouts may attach per-agent launch flags, and no layout is one terminal.
 
@@ -186,12 +186,12 @@ Resolvers form an ordered chain that ends with you. Each entry carries its own `
 ```sh
 rimz reset [--yes] [--no-start] [PATH]   # destroy a wedged room and rebuild it clean
 rimz reload                              # converge every running sidebar to a healthy set
-rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, clean marked worktrees
+rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, landed marked worktrees
 rimz workspace migrate <old-root> <new-root>
 rimz workspace rotate-events [--max-bytes <size>] [--archive-older-than <duration>]
 ```
 
-`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats and sockets, abandons pending items whose owner process has exited, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees in the current repo when no live user pane is inside them.
+`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats and sockets, abandons pending items whose owner process has exited, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed on their base in the current repo when no live user pane is inside them.
 
 `workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
 

@@ -10,6 +10,7 @@ use std::time::{Duration, Instant};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use serde_json::Value;
+use serde_json::json;
 
 use crate::common::Env;
 
@@ -47,6 +48,7 @@ fn worktree_new_list_and_remove_round_trip() {
         git_stdout(&env.project_root, &["rev-parse", "HEAD"]),
         "marker stores the base commit snapshot"
     );
+    assert_eq!(marker.base_branch.as_deref(), Some("main"));
 
     let out = env
         .rimz()
@@ -57,7 +59,7 @@ fn worktree_new_list_and_remove_round_trip() {
     let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(parsed.as_array().expect("array").len(), 1);
     assert_eq!(parsed[0]["name"], "demo");
-    assert_eq!(parsed[0]["commits_ahead"], 0);
+    assert_eq!(parsed[0]["commits_unmerged"], 0);
 
     env.rimz()
         .args(["worktree", "remove", "demo"])
@@ -110,6 +112,49 @@ fn worktree_remove_refuses_dirty_without_force() {
         .assert()
         .success();
     assert!(!path.exists(), "force removes dirty worktree");
+}
+
+#[test]
+fn worktree_new_with_at_base_keeps_unmerged_commits() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", "@"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        marker.base_branch.as_deref(),
+        Some("main"),
+        "`@` is captured as the creation-time branch, not the linked worktree HEAD"
+    );
+
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(1),
+        "the clean commit is still unmerged into main"
+    );
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("--force"));
+
+    assert!(path.exists(), "unmerged @-based worktree is kept");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "unmerged @-based branch is kept"
+    );
 }
 
 #[cfg(unix)]
@@ -203,7 +248,7 @@ fn agents_exec_sighup_keeps_dirty_worktree() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_keeps_ahead_clean_worktree() {
+fn agents_exec_sighup_keeps_unmerged_clean_worktree() {
     if git_missing() {
         return;
     }
@@ -219,18 +264,11 @@ fn agents_exec_sighup_keeps_ahead_clean_worktree() {
         .expect("marker");
     commit_file(&path, "feature.txt", "feature\n", "feature");
     assert_eq!(
-        rimz::worktree::status(&path, &marker.base_ref)
+        rimz::worktree::status(&path, &marker)
             .expect("status")
-            .commits_ahead,
+            .commits_unmerged,
         Some(1),
-        "resolved base snapshot counts the clean local commit"
-    );
-    assert_eq!(
-        rimz::worktree::status(&path, "HEAD")
-            .expect("legacy symbolic status")
-            .commits_ahead,
-        None,
-        "symbolic legacy bases are not treated as clean"
+        "clean local commit is unmerged until it lands on the base"
     );
     let mut child = spawn_agent_exec(&env, &path, "ahead");
 
@@ -238,10 +276,294 @@ fn agents_exec_sighup_keeps_ahead_clean_worktree() {
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join("ahead.pid"));
 
-    assert!(path.exists(), "ahead worktree is kept after SIGHUP");
+    assert!(path.exists(), "unmerged worktree is kept after SIGHUP");
     assert!(
         branch_exists(&env.project_root, "demo"),
-        "ahead worktree branch is kept"
+        "unmerged worktree branch is kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_fast_forward_merged_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(&env.project_root, &["merge", "--ff-only", "demo"]);
+
+    let mut child = spawn_agent_exec(&env, &path, "ff-merged");
+    wait_for_file(&env.home_root.join("ff-merged.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("ff-merged.pid"));
+
+    assert!(!path.exists(), "merged worktree removed after SIGHUP");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "merged worktree branch deleted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_merge_committed_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    commit_file(&env.project_root, "main.txt", "main\n", "main");
+    git(
+        &env.project_root,
+        &["merge", "--no-ff", "-m", "merge demo", "demo"],
+    );
+
+    let mut child = spawn_agent_exec(&env, &path, "merge-committed");
+    wait_for_file(&env.home_root.join("merge-committed.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("merge-committed.pid"));
+
+    assert!(!path.exists(), "merge-committed worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "merge-committed branch deleted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_squash_merged_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature-a.txt", "a\n", "feature a");
+    commit_file(&path, "feature-b.txt", "b\n", "feature b");
+    git(&env.project_root, &["merge", "--squash", "demo"]);
+    git(&env.project_root, &["commit", "-m", "squash demo"]);
+
+    let mut child = spawn_agent_exec(&env, &path, "squash-merged");
+    wait_for_file(&env.home_root.join("squash-merged.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("squash-merged.pid"));
+
+    assert!(!path.exists(), "squash-merged worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "squash-merged branch deleted after proof"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_cherry_picked_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature-a.txt", "a\n", "feature a");
+    commit_file(&path, "feature-b.txt", "b\n", "feature b");
+    let commits = git_stdout(&env.project_root, &["rev-list", "--reverse", "main..demo"]);
+    for commit in commits.lines() {
+        git(&env.project_root, &["cherry-pick", commit]);
+    }
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(0),
+        "patch-equivalent cherry-picked commits count as landed"
+    );
+
+    let mut child = spawn_agent_exec(&env, &path, "cherry-picked");
+    wait_for_file(&env.home_root.join("cherry-picked.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("cherry-picked.pid"));
+
+    assert!(!path.exists(), "cherry-picked worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "cherry-picked branch deleted after proof"
+    );
+}
+
+#[test]
+fn worktree_remove_merged_succeeds_without_force() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(&env.project_root, &["merge", "--ff-only", "demo"]);
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("removed demo"));
+
+    assert!(!path.exists(), "merged worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "merged branch deleted"
+    );
+}
+
+#[test]
+fn gc_sweeps_merged_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(&env.project_root, &["merge", "--ff-only", "demo"]);
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees swept: 1"));
+
+    assert!(!path.exists(), "gc swept merged worktree");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "gc deleted merged branch"
+    );
+}
+
+#[test]
+fn legacy_marker_self_heals_via_gc_trunk_ladder() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    rewrite_marker_as_v2(&path);
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(&env.project_root, &["merge", "--ff-only", "demo"]);
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees swept: 1"));
+
+    assert!(
+        !path.exists(),
+        "legacy marker was swept through main ladder"
+    );
+}
+
+#[test]
+fn legacy_marker_snapshot_fallback_when_no_trunk() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo_on_branch(&env.project_root, "trunk");
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    rewrite_marker_as_v2(&path);
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("--force"));
+
+    assert!(path.exists(), "snapshot fallback keeps unmerged worktree");
+}
+
+#[cfg(unix)]
+#[test]
+fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    git(&env.project_root, &["branch", "develop"]);
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", "develop"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(&env.project_root, &["fetch", ".", "demo:develop"]);
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(marker.base_branch.as_deref(), Some("develop"));
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(0),
+        "feature is landed on explicit base even though main lacks it"
+    );
+
+    let mut child = spawn_agent_exec(&env, &path, "explicit-base");
+    wait_for_file(&env.home_root.join("explicit-base.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("explicit-base.pid"));
+
+    assert!(!path.exists(), "explicit-base worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "branch deleted after proving it landed on develop"
+    );
+    assert!(
+        branch_exists(&env.project_root, "develop"),
+        "base branch remains"
     );
 }
 
@@ -280,7 +602,11 @@ fn git_missing() -> bool {
 }
 
 fn init_repo(path: &Path) {
-    git(path, &["init"]);
+    init_repo_on_branch(path, "main");
+}
+
+fn init_repo_on_branch(path: &Path, branch: &str) {
+    git(path, &["init", "-b", branch]);
     git(path, &["config", "user.email", "rimz@example.com"]);
     git(path, &["config", "user.name", "Rimz Test"]);
     commit_file(path, "README.md", "fixture\n", "initial");
@@ -320,6 +646,22 @@ fn git_stdout(cwd: &Path, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr),
     );
     String::from_utf8_lossy(&output.stdout).trim().to_owned()
+}
+
+fn rewrite_marker_as_v2(path: &Path) {
+    let marker_path = rimz::worktree::marker_path(path).expect("marker path");
+    let marker = rimz::worktree::read_marker_for_worktree(path)
+        .expect("read marker")
+        .expect("marker");
+    let mut value = serde_json::to_value(marker).expect("marker json");
+    let object = value.as_object_mut().expect("marker object");
+    object.insert("version".to_owned(), json!(2));
+    object.remove("base_branch");
+    std::fs::write(
+        &marker_path,
+        serde_json::to_vec_pretty(&value).expect("serialize marker"),
+    )
+    .expect("rewrite marker");
 }
 
 #[cfg(unix)]
