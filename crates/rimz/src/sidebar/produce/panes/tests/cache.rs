@@ -131,6 +131,25 @@ fn fresh_publishable_snapshot_cache_rejects_invalid_cached_frames() {
 }
 
 #[test]
+fn zombie_stat_metrics_do_not_prove_liveness() {
+    let zombie = crate::proc::StatMetrics {
+        state: 'Z',
+        cpu_ticks: 1,
+        rss_kb: 0,
+        start_ticks: 42,
+    };
+    let sleeping = crate::proc::StatMetrics {
+        state: 'S',
+        cpu_ticks: 1,
+        rss_kb: 4,
+        start_ticks: 43,
+    };
+
+    assert_eq!(live_start_ticks(zombie), None);
+    assert_eq!(live_start_ticks(sleeping), Some(43));
+}
+
+#[test]
 fn rejected_frame_holds_only_a_publishable_prior() {
     let dir = tempfile::tempdir().unwrap();
     let workspace_id = crate::ids::WorkspaceId::from_project_root(std::path::Path::new(
@@ -251,16 +270,19 @@ fn verified_shrink_repull_result_is_published() {
     ]);
     let calls = std::cell::Cell::new(0);
 
-    let repulled = verify_shrink(
+    let repulled = confirm_and_carry(
         raced,
         Some(&prior),
-        &|enrich_metrics| {
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
             assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
             calls.set(calls.get() + 1);
             Ok(verified.clone())
         },
         None,
         true,
+        &runtime,
     )
     .expect("re-pull succeeds");
 
@@ -282,6 +304,131 @@ fn verified_shrink_repull_result_is_published() {
         2,
         "the verified re-pull, not the first shrunken read, is published"
     );
+}
+
+#[test]
+fn refuted_initial_carry_records_diagnostic() {
+    if crate::proc::stat_metrics(std::process::id()).is_none() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/refuted-carry"));
+    let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
+
+    let mut prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+    ]);
+    prior
+        .pane_states_mut()
+        .find(|pane| pane.pane_id.raw() == "terminal_2")
+        .expect("terminal_2 present")
+        .current
+        .pid = Some(std::process::id());
+    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let verified = prior.clone();
+
+    let repulled = confirm_and_carry(
+        fresh,
+        Some(&prior),
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
+            assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
+            Ok(verified.clone())
+        },
+        Some(&sink),
+        true,
+        &runtime,
+    )
+    .expect("confirm succeeds");
+
+    assert_eq!(pane_count(&repulled), 2);
+    assert!(repulled.carried_panes.is_empty());
+    let events = diagnostic_events(&sink);
+    assert!(matches!(
+        events.as_slice(),
+        [crate::schema::diag::DiagEvent::PaneCarryRefuted {
+            carried,
+            pids,
+            prior: 2,
+            fresh: 1,
+            verified: 2,
+            frames_ref: Some(_),
+        }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
+            && pids == &vec![std::process::id()]
+    ));
+}
+
+#[test]
+fn confirmed_partial_frame_carries_live_dropped_pane_and_records_diagnostic() {
+    let Some(root_ticks) =
+        crate::proc::stat_metrics(std::process::id()).map(|stat| stat.start_ticks)
+    else {
+        return;
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/confirmed-carry"));
+    let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
+
+    let mut prior = frame(vec![
+        pane("terminal_1", Some("zsh"), Some("/repo")),
+        pane("terminal_2", Some("zsh"), Some("/repo")),
+    ]);
+    prior
+        .pane_states_mut()
+        .find(|pane| pane.pane_id.raw() == "terminal_2")
+        .expect("terminal_2 present")
+        .current
+        .pid = Some(std::process::id());
+    let fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
+    let calls = std::cell::Cell::new(0);
+
+    let carried = confirm_and_carry(
+        fresh.clone(),
+        Some(&prior),
+        None,
+        &|enrich_metrics, min_topology_produced_at_ms| {
+            assert!(enrich_metrics);
+            assert!(min_topology_produced_at_ms.is_some());
+            calls.set(calls.get() + 1);
+            Ok(fresh.clone())
+        },
+        Some(&sink),
+        true,
+        &runtime,
+    )
+    .expect("carry confirmation succeeds");
+
+    assert_eq!(calls.get(), 1);
+    assert_eq!(pane_count(&carried), 2);
+    assert_eq!(carried.carried_panes.len(), 1);
+    assert_eq!(
+        carried.carried_panes[0].pane_id.raw(),
+        "terminal_2",
+        "the omitted live pane is carried"
+    );
+    assert_eq!(carried.carried_panes[0].start_ticks, Some(root_ticks));
+
+    let events = diagnostic_events(&sink);
+    assert!(matches!(
+        events.as_slice(),
+        [crate::schema::diag::DiagEvent::PaneCarryForward {
+            carried,
+            pids,
+            prior: 2,
+            fresh: 1,
+            cli_confirmed: true,
+            frames_ref: Some(_),
+        }] if carried.len() == 1 && carried[0].raw() == "terminal_2"
+            && pids == &vec![std::process::id()]
+    ));
 }
 
 #[test]

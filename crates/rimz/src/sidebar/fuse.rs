@@ -12,9 +12,14 @@ use crate::sidebar::events::EventStore;
 
 pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> SidebarSnapshot {
     let baseline = pulled.panes_produced_at_ms.unwrap_or(0);
+    let carried_panes = pulled
+        .truth_degraded
+        .as_ref()
+        .map(|notice| notice.pane_ids.iter().cloned().collect::<HashSet<_>>())
+        .unwrap_or_default();
     let active = events
         .active(now_ms)
-        .filter(|event| event.sent_at_ms > baseline)
+        .filter(|event| event.sent_at_ms > baseline || closes_carried_pane(event, &carried_panes))
         .collect::<Vec<_>>();
     if active.is_empty() {
         return pulled.clone();
@@ -26,6 +31,7 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
         if let SidebarEvent::PaneClosed { pane_id } = &event.event {
             deleted.insert(pane_id.clone());
             fused.remove_pane_rows(pane_id);
+            remove_carried_notice(&mut fused, pane_id);
         }
     }
 
@@ -51,6 +57,33 @@ pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> Sideb
     }
 
     fused
+}
+
+fn closes_carried_pane(
+    event: &crate::sidebar::events::StoredEvent,
+    carried_panes: &HashSet<crate::ids::PaneId>,
+) -> bool {
+    match &event.event {
+        SidebarEvent::PaneClosed { pane_id } => carried_panes.contains(pane_id),
+        _ => false,
+    }
+}
+
+fn remove_carried_notice(snapshot: &mut SidebarSnapshot, pane_id: &crate::ids::PaneId) {
+    let Some(notice) = &mut snapshot.truth_degraded else {
+        return;
+    };
+    let before = notice.pane_ids.len();
+    notice.pane_ids.retain(|carried| carried != pane_id);
+    if before == notice.pane_ids.len() {
+        return;
+    }
+    notice.carried = notice
+        .carried
+        .saturating_sub(before - notice.pane_ids.len());
+    if notice.carried == 0 {
+        snapshot.truth_degraded = None;
+    }
 }
 
 #[cfg(test)]
@@ -198,6 +231,29 @@ mod tests {
             row_ids(&fuse(&snapshot, &store, 20)),
             vec!["zellij:terminal_1"]
         );
+    }
+
+    #[test]
+    fn carried_pane_close_older_than_pull_deletes_the_card() {
+        let carried = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let mut snapshot = pulled(vec![pane("terminal_1", "zsh")], 20);
+        snapshot.truth_degraded = Some(crate::TruthNotice {
+            carried: 1,
+            since_ms: 10,
+            pane_ids: vec![carried.clone()],
+        });
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            19,
+            SidebarEvent::PaneClosed {
+                pane_id: carried.clone(),
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 20);
+        assert!(row_ids(&fused).is_empty());
+        assert_eq!(fused.truth_degraded, None);
     }
 
     #[test]

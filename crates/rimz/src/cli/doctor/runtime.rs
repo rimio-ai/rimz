@@ -295,6 +295,44 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
                 .map(|name| format!("; frames {name}"))
                 .unwrap_or_default()
         ),
+        DiagEvent::PaneCarryForward {
+            carried,
+            prior,
+            fresh,
+            cli_confirmed,
+            frames_ref,
+            ..
+        } => format!(
+            "carried {} panes over source shrink {prior}->{fresh}; cli_confirmed={cli_confirmed}{}",
+            carried.len(),
+            frames_ref
+                .as_ref()
+                .map(|name| format!("; frames {name}"))
+                .unwrap_or_default()
+        ),
+        DiagEvent::PaneCarryRefuted {
+            carried,
+            prior,
+            fresh,
+            verified,
+            frames_ref,
+            ..
+        } => format!(
+            "refuted {} carried panes after source re-pull {prior}->{fresh}->{verified}{}",
+            carried.len(),
+            frames_ref
+                .as_ref()
+                .map(|name| format!("; frames {name}"))
+                .unwrap_or_default()
+        ),
+        DiagEvent::CarryForwardExpired {
+            pane_id,
+            pid,
+            carried_ms,
+        } => match pid {
+            Some(pid) => format!("expired carried {pane_id} pid {pid} after {carried_ms}ms"),
+            None => format!("expired carried {pane_id} after {carried_ms}ms"),
+        },
         DiagEvent::GateHold {
             rule,
             reject_streak,

@@ -3,9 +3,9 @@ use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use super::Alert;
 use super::fmt::age_short;
 use super::theme::Theme;
+use super::{Alert, GateNotice};
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
 /// glyph in bold on the left, and — when the project root is known — its
@@ -101,6 +101,39 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
             theme.style(Color::Yellow, Modifier::DIM),
         )]
+    }
+}
+
+pub(super) fn truth_notice_lines(
+    theme: &Theme,
+    notice: &crate::TruthNotice,
+    now: Timestamp,
+) -> Vec<Line<'static>> {
+    let since_ms = notice.since_ms.min(i64::MAX as u64) as i64;
+    let since = Timestamp::from_millisecond(since_ms).unwrap_or(now);
+    let elapsed = age_short(since, now);
+    let noun = if notice.carried == 1 { "pane" } else { "panes" };
+    vec![Line::styled(
+        format!(
+            "⚠ pane source degraded · {} carried {noun} · {elapsed}",
+            notice.carried
+        ),
+        theme.style(Color::Yellow, Modifier::DIM),
+    )]
+}
+
+pub(super) fn gate_notice_lines(theme: &Theme, notice: &GateNotice) -> Vec<Line<'static>> {
+    vec![Line::styled(
+        format!("⚠ pane updates held · {}", gate_rule_label(notice.rule)),
+        theme.style(Color::Yellow, Modifier::DIM),
+    )]
+}
+
+fn gate_rule_label(rule: crate::schema::diag::GateRule) -> &'static str {
+    match rule {
+        crate::schema::diag::GateRule::FramelessOverFrame => "frameless update",
+        crate::schema::diag::GateRule::AgentDemotedToProcess => "agent demotion",
+        crate::schema::diag::GateRule::EmptyStampedFrame => "empty pane frame",
     }
 }
 

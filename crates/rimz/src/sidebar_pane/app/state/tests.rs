@@ -489,6 +489,70 @@ fn diagnostics_record_gate_hold_and_release_details() {
 }
 
 #[test]
+fn gate_hold_notice_arms_and_clears_with_gate_state() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let mut current = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
+    current.panes_produced_at_ms = Some(10);
+    let mut last_snapshot = Some(current.clone());
+    let mut health = Health::default();
+    let mut gate = GateState::default();
+    let mut self_close = SelfCloseState::default();
+    let mut ui = UiState::default();
+    let mut empty = snapshot(&ws);
+    empty.panes_produced_at_ms = Some(11);
+
+    let held = apply_fetch_outcome(
+        &config,
+        FetchOutcome {
+            snapshot: Ok(empty),
+            final_for_request: true,
+            fresh_pane_frame: true,
+        },
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        &mut ui,
+        std::time::Instant::now(),
+        None,
+    )
+    .expect("apply held frame");
+
+    assert!(held.rejected);
+    assert!(matches!(
+        ui.gate_notice,
+        Some(crate::sidebar_pane::render::GateNotice {
+            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
+        })
+    ));
+
+    let mut recovered = current.clone();
+    recovered.panes_produced_at_ms = Some(12);
+    let accepted = apply_fetch_outcome(
+        &config,
+        FetchOutcome {
+            snapshot: Ok(recovered),
+            final_for_request: true,
+            fresh_pane_frame: true,
+        },
+        &mut last_snapshot,
+        &mut current,
+        &mut health,
+        &mut gate,
+        &mut self_close,
+        &mut ui,
+        std::time::Instant::now(),
+        None,
+    )
+    .expect("apply recovered frame");
+
+    assert!(!accepted.rejected);
+    assert!(ui.gate_notice.is_none());
+}
+
+#[test]
 fn diagnostics_record_health_alert_recovery_inside_rate_limit_window() {
     let dir = tempfile::tempdir().unwrap();
     let ws = workspace();

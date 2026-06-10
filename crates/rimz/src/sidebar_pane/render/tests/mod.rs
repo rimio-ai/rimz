@@ -402,8 +402,16 @@ fn bottom_chrome_texts(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
 ) -> (Vec<String>, Vec<ProviderTabHit>) {
+    bottom_chrome_texts_with_ui(snapshot, alert, &UiState::default())
+}
+
+fn bottom_chrome_texts_with_ui(
+    snapshot: &SidebarSnapshot,
+    alert: Option<&Alert>,
+    ui: &UiState,
+) -> (Vec<String>, Vec<ProviderTabHit>) {
     let theme = Theme::fixed(true);
-    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, &UiState::default());
+    let (lines, hits) = build_bottom_chrome(snapshot, alert, &theme, 40, ui);
     (line_texts(&lines), hits)
 }
 

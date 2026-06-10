@@ -340,6 +340,44 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
 }
 
 #[test]
+fn enrich_maps_carried_frame_to_truth_notice() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let carried_id = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let mut frame = assemble_frame(
+        vec![pane("terminal_1", "zsh", "/repo/main")],
+        1_234,
+        "rimz-test",
+    );
+    frame.carried_panes = vec![CarriedPane {
+        pane_id: carried_id.clone(),
+        pid: Some(42),
+        start_ticks: Some(9),
+        carried_since_ms: 1_000,
+    }];
+
+    let snapshot = enrich(
+        SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now()),
+        Some(frame),
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
+
+    assert_eq!(
+        snapshot.truth_degraded,
+        Some(crate::TruthNotice {
+            carried: 1,
+            since_ms: 1_000,
+            pane_ids: vec![carried_id],
+        })
+    );
+}
+
+#[test]
 fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
     // The event-fresh split: the consumer reads the rollup from `latest.json`
     // each call, so a status change shows even when the producer's published

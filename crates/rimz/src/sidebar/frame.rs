@@ -27,6 +27,21 @@ pub struct PaneFrame {
     pub build: Option<String>,
     pub session_name: String,
     pub tabs: Vec<TabFrame>,
+    /// Panes retained from the prior published frame because the latest pane
+    /// source omitted them while process liveness still proved them alive.
+    /// Empty on healthy frames and on legacy frames.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub carried_panes: Vec<CarriedPane>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CarriedPane {
+    pub pane_id: PaneId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_ticks: Option<u64>,
+    pub carried_since_ms: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -351,6 +366,7 @@ pub fn assemble_frame_with_diagnostics(
             build: crate::build_id::current().map(str::to_owned),
             session_name: session_name.into(),
             tabs: tabs.into_values().collect(),
+            carried_panes: Vec::new(),
         },
         diagnostics,
     )

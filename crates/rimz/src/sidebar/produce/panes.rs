@@ -13,16 +13,18 @@ use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::PaneListOptions;
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
-    effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache, snapshot_cache_is_fresh,
-    unix_now_ms,
+    SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
+    snapshot_cache_is_fresh, unix_now_ms,
 };
 use crate::sidebar::frame::{
     PaneFrame, PaneMetrics, assemble_frame, assemble_frame_with_diagnostics,
 };
 
+mod carry;
 mod starts;
 mod validate;
 
+use carry::{CarryOutcome, apply_carry_forward};
 use starts::stamp_pane_process_starts;
 use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
 
@@ -45,6 +47,11 @@ fn fresh_snapshot_cache(
     ttl: Duration,
 ) -> Option<PaneFrame> {
     let cache = read_snapshot_cache(cache_path, session)?;
+    let ttl = if cache.carried_panes.is_empty() {
+        ttl
+    } else {
+        std::cmp::min(ttl, SNAPSHOT_CACHE_TTL)
+    };
     snapshot_cache_is_fresh(&cache, unix_now_ms(), min_produced_at_ms, ttl).then_some(cache)
 }
 
@@ -451,27 +458,28 @@ pub(super) fn cached_panes_or_produce(
             diag,
         )
     };
-    let produce_candidate = |enrich_metrics: bool| -> Result<PaneFrame> {
-        let panes = match list_session_panes(
-            mux,
-            session,
-            runtime.workspace_id.clone(),
-            min_pane_cache_ms,
-            None,
-        ) {
-            Ok(panes) => panes,
-            Err(err) => {
-                emit_mux_error(diag, &cache_path, session, &err);
-                return Err(err);
-            }
+    let produce_candidate =
+        |enrich_metrics: bool, min_topology_produced_at_ms: Option<u64>| -> Result<PaneFrame> {
+            let panes = match list_session_panes(
+                mux,
+                session,
+                runtime.workspace_id.clone(),
+                min_topology_produced_at_ms,
+                None,
+            ) {
+                Ok(panes) => panes,
+                Err(err) => {
+                    emit_mux_error(diag, &cache_path, session, &err);
+                    return Err(err);
+                }
+            };
+            let panes = filter_foreign_session_panes(panes, session, diag);
+            let (mut frame, diagnostics) =
+                assemble_frame_with_diagnostics(panes, unix_now_ms(), session.to_owned());
+            emit_frame_diagnostics(diag, diagnostics);
+            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+            Ok(frame)
         };
-        let panes = filter_foreign_session_panes(panes, session, diag);
-        let (mut frame, diagnostics) =
-            assemble_frame_with_diagnostics(panes, unix_now_ms(), session.to_owned());
-        emit_frame_diagnostics(diag, diagnostics);
-        repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
-        Ok(frame)
-    };
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
@@ -484,24 +492,36 @@ pub(super) fn cached_panes_or_produce(
         // on this one path folds the anonymous row the winner path guards against.
         Coalesced::ProduceLocal => {
             let prior = read_snapshot_cache(&cache_path, session);
-            let mut frame = produce_candidate(false)?;
-            if shrink_needs_verification(&frame, prior.as_ref()) {
-                frame = verify_shrink(frame, prior.as_ref(), &produce_candidate, diag, false)?;
-            }
+            let frame = produce_candidate(false, min_pane_cache_ms)?;
+            let frame = confirm_and_carry(
+                frame,
+                prior.as_ref(),
+                own_pane,
+                &produce_candidate,
+                diag,
+                false,
+                runtime,
+            )?;
             validate_frame_for_publish(frame, prior, own_pane, diag, false, runtime, &cache_path)
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
             let prior = read_snapshot_cache(&cache_path, session);
-            let mut frame = produce_candidate(true)?;
+            let frame = produce_candidate(true, min_pane_cache_ms)?;
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame
             // ladder before publishing.
-            if shrink_needs_verification(&frame, prior.as_ref()) {
-                frame = verify_shrink(frame, prior.as_ref(), &produce_candidate, diag, true)?;
-            }
+            let frame = confirm_and_carry(
+                frame,
+                prior.as_ref(),
+                own_pane,
+                &produce_candidate,
+                diag,
+                true,
+                runtime,
+            )?;
             validate_frame_for_publish(frame, prior, own_pane, diag, true, runtime, &cache_path)
         }
     }
@@ -538,25 +558,179 @@ fn emit_frame_diagnostics(diag: Option<&crate::diag::DiagSink>, events: Vec<Diag
     }
 }
 
-fn verify_shrink(
+fn confirm_and_carry(
     frame: PaneFrame,
     prior: Option<&PaneFrame>,
-    produce_candidate: &dyn Fn(bool) -> Result<PaneFrame>,
+    own_pane: Option<&PaneId>,
+    produce_candidate: &dyn Fn(bool, Option<u64>) -> Result<PaneFrame>,
     diag: Option<&crate::diag::DiagSink>,
     enrich_metrics: bool,
+    runtime: &crate::RuntimePaths,
 ) -> Result<PaneFrame> {
+    let bindings = super::metrics::pane_root_bindings(runtime);
+    let initial_now_ms = unix_now_ms();
+    let initial_frame = frame.clone();
+    let initial = apply_carry_forward(
+        frame,
+        prior,
+        own_pane,
+        &bindings,
+        &read_start_ticks,
+        initial_now_ms,
+    );
+    let needs_confirm =
+        !initial.carried.is_empty() || shrink_needs_verification(&initial.frame, prior);
+    if !needs_confirm {
+        emit_carry_expired(diag, &initial);
+        return Ok(initial.frame);
+    }
+
     let prior_count = prior.map(pane_count).unwrap_or_default();
-    let fresh_count = pane_count(&frame);
-    let verified = produce_candidate(enrich_metrics)?;
-    if pane_count(&verified) == fresh_count
-        && let Some(diag) = diag
-    {
-        diag.emit(DiagEvent::FrameShrinkVerified {
-            prior: prior_count,
-            fresh: fresh_count,
+    let confirm_floor = Some(unix_now_ms());
+    let verified = produce_candidate(enrich_metrics, confirm_floor)?;
+    let verified_count = pane_count(&verified);
+    let confirmed_at_ms = unix_now_ms();
+    let verified_frame = verified.clone();
+    let confirmed = apply_carry_forward(
+        verified,
+        prior,
+        own_pane,
+        &bindings,
+        &read_start_ticks,
+        confirmed_at_ms,
+    );
+    if confirmed.carried.is_empty() {
+        if !initial.carried.is_empty() {
+            emit_pane_carry_refuted(
+                diag,
+                prior,
+                &initial_frame,
+                &initial,
+                prior_count,
+                pane_count(&initial_frame),
+                verified_count,
+                confirmed_at_ms,
+            );
+        }
+        if verified_count == pane_count(&initial.frame)
+            && shrink_needs_verification(&initial.frame, prior)
+            && let Some(diag) = diag
+        {
+            diag.emit(DiagEvent::FrameShrinkVerified {
+                prior: prior_count,
+                fresh: verified_count,
+            });
+        }
+    } else {
+        emit_pane_carry_forward(
+            diag,
+            prior,
+            &verified_frame,
+            &confirmed,
+            prior_count,
+            verified_count,
+            confirmed_at_ms,
+        );
+    }
+    emit_carry_expired(diag, &confirmed);
+    Ok(confirmed.frame)
+}
+
+fn read_start_ticks(pid: u32) -> Option<u64> {
+    crate::proc::stat_metrics(pid).and_then(live_start_ticks)
+}
+
+fn live_start_ticks(stat: crate::proc::StatMetrics) -> Option<u64> {
+    (stat.state != 'Z').then_some(stat.start_ticks)
+}
+
+fn emit_pane_carry_forward(
+    diag: Option<&crate::diag::DiagSink>,
+    prior: Option<&PaneFrame>,
+    offending_frame: &PaneFrame,
+    outcome: &CarryOutcome,
+    prior_count: usize,
+    fresh_count: usize,
+    at_ms: u64,
+) {
+    let Some(diag) = diag else {
+        return;
+    };
+    let carried = outcome
+        .carried
+        .iter()
+        .map(|carried| carried.pane_id.clone())
+        .collect::<Vec<_>>();
+    let mut pids = outcome
+        .carried
+        .iter()
+        .filter_map(|carried| carried.pid)
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids.dedup();
+    let frames_ref = prior.and_then(|prior| {
+        diag.capture_frame_pair("pane_carry_forward", prior, offending_frame, at_ms)
+    });
+    diag.emit(DiagEvent::PaneCarryForward {
+        carried,
+        pids,
+        prior: prior_count,
+        fresh: fresh_count,
+        cli_confirmed: true,
+        frames_ref,
+    });
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_pane_carry_refuted(
+    diag: Option<&crate::diag::DiagSink>,
+    prior: Option<&PaneFrame>,
+    offending_frame: &PaneFrame,
+    outcome: &CarryOutcome,
+    prior_count: usize,
+    fresh_count: usize,
+    verified_count: usize,
+    at_ms: u64,
+) {
+    let Some(diag) = diag else {
+        return;
+    };
+    let carried = outcome
+        .carried
+        .iter()
+        .map(|carried| carried.pane_id.clone())
+        .collect::<Vec<_>>();
+    let mut pids = outcome
+        .carried
+        .iter()
+        .filter_map(|carried| carried.pid)
+        .collect::<Vec<_>>();
+    pids.sort_unstable();
+    pids.dedup();
+    let frames_ref = prior.and_then(|prior| {
+        diag.capture_frame_pair("pane_carry_refuted", prior, offending_frame, at_ms)
+    });
+    diag.emit(DiagEvent::PaneCarryRefuted {
+        carried,
+        pids,
+        prior: prior_count,
+        fresh: fresh_count,
+        verified: verified_count,
+        frames_ref,
+    });
+}
+
+fn emit_carry_expired(diag: Option<&crate::diag::DiagSink>, outcome: &CarryOutcome) {
+    let Some(diag) = diag else {
+        return;
+    };
+    for expired in &outcome.expired {
+        diag.emit(DiagEvent::CarryForwardExpired {
+            pane_id: expired.pane_id.clone(),
+            pid: expired.pid,
+            carried_ms: expired.carried_ms,
         });
     }
-    Ok(verified)
 }
 
 fn validate_frame_for_publish(

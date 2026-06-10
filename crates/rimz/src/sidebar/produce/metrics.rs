@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::ProcessState;
+use crate::ids::PaneId;
 use crate::ledger::atomic;
 use crate::sidebar::cache::unix_now_ms;
 use crate::sidebar::frame::{PaneFrame, PaneMetrics, PaneState};
@@ -81,11 +82,40 @@ struct MetricsSampleCache {
     entries: HashMap<String, MetricsSampleEntry>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct PaneRootBinding {
+    pub(super) pid: u32,
+    pub(super) start_ticks: u64,
+}
+
 fn read_metrics_sample_cache(path: &Path) -> MetricsSampleCache {
     let Ok(bytes) = std::fs::read(path) else {
         return MetricsSampleCache::default();
     };
     serde_json::from_slice(&bytes).unwrap_or_default()
+}
+
+/// The cached pane-root bindings the pane producer can use as a pid-reuse
+/// guard when the mux source drops a pane. Entries without a root pid or
+/// recorded start ticks are omitted rather than guessed.
+pub(super) fn pane_root_bindings(
+    runtime: &crate::RuntimePaths,
+) -> HashMap<PaneId, PaneRootBinding> {
+    let prior = read_metrics_sample_cache(&runtime.root.join("metrics-sample.json"));
+    prior
+        .entries
+        .into_iter()
+        .filter_map(|(pane_id, entry)| {
+            let pane_id = PaneId::parse(&pane_id).ok()?;
+            Some((
+                pane_id,
+                PaneRootBinding {
+                    pid: entry.pane_pid?,
+                    start_ticks: entry.root_start_ticks?,
+                },
+            ))
+        })
+        .collect()
 }
 
 /// Whether any pane in `frame` needs a fresh `/proc` sample. Used by the pane

@@ -83,6 +83,30 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         frames_ref: Option<String>,
     },
+    PaneCarryForward {
+        carried: Vec<PaneId>,
+        pids: Vec<u32>,
+        prior: usize,
+        fresh: usize,
+        cli_confirmed: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames_ref: Option<String>,
+    },
+    PaneCarryRefuted {
+        carried: Vec<PaneId>,
+        pids: Vec<u32>,
+        prior: usize,
+        fresh: usize,
+        verified: usize,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frames_ref: Option<String>,
+    },
+    CarryForwardExpired {
+        pane_id: PaneId,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pid: Option<u32>,
+        carried_ms: u64,
+    },
     GateHold {
         rule: GateRule,
         prev_produced_at_ms: Option<u64>,
@@ -163,6 +187,9 @@ impl DiagEvent {
         match self {
             Self::FrameRejected { .. }
             | Self::PaneCountDrop { .. }
+            | Self::PaneCarryForward { .. }
+            | Self::PaneCarryRefuted { .. }
+            | Self::CarryForwardExpired { .. }
             | Self::GateHold { .. }
             | Self::FetchFailure { .. }
             | Self::HealthAlert {
@@ -195,6 +222,9 @@ impl DiagEvent {
             Self::FrameRejectEscape { .. } => "frame_reject_escape",
             Self::FrameShrinkVerified { .. } => "frame_shrink_verified",
             Self::PaneCountDrop { .. } => "pane_count_drop",
+            Self::PaneCarryForward { .. } => "pane_carry_forward",
+            Self::PaneCarryRefuted { .. } => "pane_carry_refuted",
+            Self::CarryForwardExpired { .. } => "carry_forward_expired",
             Self::GateHold { .. } => "gate_hold",
             Self::GateRelease { .. } => "gate_release",
             Self::FetchFailure { .. } => "fetch_failure",
@@ -217,6 +247,15 @@ impl DiagEvent {
             Self::FrameRejected { reason, .. } => format!("{}:{reason:?}", self.kind_name()),
             Self::PaneCountDrop { removed, added, .. } => {
                 format!("{}:{removed:?}:{added:?}", self.kind_name())
+            }
+            Self::PaneCarryForward { carried, .. } => {
+                format!("{}:{carried:?}", self.kind_name())
+            }
+            Self::PaneCarryRefuted { carried, .. } => {
+                format!("{}:{carried:?}", self.kind_name())
+            }
+            Self::CarryForwardExpired { pane_id, .. } => {
+                format!("{}:{pane_id}", self.kind_name())
             }
             Self::GateHold { rule, .. } | Self::GateRelease { rule, .. } => {
                 format!("{}:{rule:?}", self.kind_name())
@@ -509,6 +548,27 @@ mod tests {
                 removed: vec![pane("terminal_1")],
                 added: Vec::new(),
                 frames_ref: Some("frame.1.pane_count_drop.json".to_owned()),
+            },
+            DiagEvent::PaneCarryForward {
+                carried: vec![pane("terminal_1")],
+                pids: vec![42],
+                prior: 3,
+                fresh: 2,
+                cli_confirmed: true,
+                frames_ref: Some("frame.1.pane_carry_forward.json".to_owned()),
+            },
+            DiagEvent::PaneCarryRefuted {
+                carried: vec![pane("terminal_2")],
+                pids: vec![42],
+                prior: 3,
+                fresh: 2,
+                verified: 3,
+                frames_ref: Some("frame.1.pane_carry_refuted.json".to_owned()),
+            },
+            DiagEvent::CarryForwardExpired {
+                pane_id: pane("terminal_1"),
+                pid: Some(42),
+                carried_ms: 30_001,
             },
             DiagEvent::GateHold {
                 rule: GateRule::EmptyStampedFrame,

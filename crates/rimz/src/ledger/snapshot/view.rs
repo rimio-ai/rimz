@@ -12,7 +12,7 @@ use super::fold::agent_rollup_with_carryover;
 use super::panes::SidebarOwnView;
 use crate::agents::SpendTally;
 use crate::feed::{AgentState, FeedItem, FeedStatus, Surface};
-use crate::ids::{AgentKind, AgentSessionId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::agent_context::AgentContextRecord;
 use crate::ledger::event_log::{self};
 use crate::ledger::subagent_context::SubagentContextRecord;
@@ -39,6 +39,14 @@ pub(crate) use live::row_identity_violations;
 #[cfg(test)]
 pub(super) use rows::row_from_agent;
 
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TruthNotice {
+    pub carried: usize,
+    pub since_ms: u64,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pane_ids: Vec<PaneId>,
+}
+
 /// Serde default for [`SidebarSnapshot::root_class`]: `Repo` keeps a pre-class
 /// snapshot (and the pure reducer path) on the prior repo-room grouping.
 fn default_root_class() -> RootClass {
@@ -63,6 +71,11 @@ pub struct SidebarSnapshot {
     /// events older than this baseline are superseded by pulled truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panes_produced_at_ms: Option<u64>,
+    /// The pane frame is painting from carried prior-pane truth because the
+    /// latest mux pane source omitted panes whose processes are still alive.
+    /// Display-only and renderer-local: the ledger state stays unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub truth_degraded: Option<TruthNotice>,
     /// The single instant every time-window verdict in this projection reads —
     /// the compaction head, the stall escalation, rate-limit resets, and
     /// subagent retention all agree on one clock, captured once at
@@ -251,6 +264,7 @@ impl SidebarSnapshot {
             display_name,
             generated_at: now,
             panes_produced_at_ms: None,
+            truth_degraded: None,
             now,
             worktree_groups: Vec::new(),
             needs_attention,

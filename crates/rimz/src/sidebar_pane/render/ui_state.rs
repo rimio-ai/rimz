@@ -1,5 +1,6 @@
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
+use crate::schema::diag::GateRule;
 use jiff::Timestamp;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
@@ -97,6 +98,10 @@ pub struct UiState {
     /// bucket's footprint, written as a byproduct of every draw like
     /// `line_map` and `tab_hits`. Empty when no make-up line is on screen.
     pub(crate) make_up_hits: Vec<MakeUpHit>,
+    /// Renderer-local status for a successful fetch that the regression gate is
+    /// holding behind the last good frame. It is display-only evidence for the
+    /// bottom chrome; the durable record is `gate_hold`/`gate_release`.
+    pub(crate) gate_notice: Option<GateNotice>,
 }
 
 /// The manual dashboard-tab pick: the provider kind to show, plus the
@@ -141,6 +146,11 @@ pub struct Alert {
     pub reason: String,
     pub since: Timestamp,
     pub recovered_at: Option<Timestamp>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct GateNotice {
+    pub(crate) rule: GateRule,
 }
 
 impl Alert {

@@ -62,7 +62,7 @@ pub use crate::ledger::runtime::{RuntimeProjection, RuntimeScope};
 pub use crate::ledger::snapshot::{
     AgentCard, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarOwnView,
     SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount,
-    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

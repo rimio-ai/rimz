@@ -8,7 +8,7 @@ use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use tracing::{debug, warn};
 
-use crate::sidebar_pane::render::{UiState, UnreadTracker};
+use crate::sidebar_pane::render::{GateNotice, UiState, UnreadTracker};
 
 use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate, gate_held_ms};
@@ -58,6 +58,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         display_name,
         generated_at: now,
         panes_produced_at_ms: None,
+        truth_degraded: None,
         now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),
@@ -156,6 +157,7 @@ pub(super) fn apply_fetch_outcome(
         now,
     );
     *gate = next_gate;
+    ui.gate_notice = gate.rule.map(|rule| GateNotice { rule });
     if let Some(alert) = state
         .health
         .alert

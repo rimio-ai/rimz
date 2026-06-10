@@ -48,7 +48,7 @@ pub use row::{
 };
 pub use view::{
     SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind,
+    SidebarWorktreeKind, TruthNotice,
 };
 
 #[derive(Debug, thiserror::Error)]

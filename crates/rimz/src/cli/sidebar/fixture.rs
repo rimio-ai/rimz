@@ -10,6 +10,7 @@ pub(super) fn sidebar_fixture_snapshot(
         display_name: "query-engine".to_owned(),
         generated_at: now,
         panes_produced_at_ms: Some(1_781_009_600_000),
+        truth_degraded: None,
         now,
         worktree_groups: Vec::new(),
         needs_attention: Vec::new(),

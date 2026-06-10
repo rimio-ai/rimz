@@ -33,7 +33,7 @@ pub(crate) use self::compose::compose_lines;
 #[cfg(test)]
 use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
-pub(crate) use self::ui_state::{Browse, DashboardTab, ManualScroll};
+pub(crate) use self::ui_state::{Browse, DashboardTab, GateNotice, ManualScroll};
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;

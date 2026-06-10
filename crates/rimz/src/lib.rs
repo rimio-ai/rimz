@@ -51,7 +51,7 @@ pub use crate::ledger::{
     AgentCard, Ledger, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,
     RuntimeProjection, RuntimeScope, SidebarOwnView, SidebarProviderPanel, SidebarResolverState,
     SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StatePaths, WorkspaceRecord,
+    SidebarWorktreeKind, StatePaths, TruthNotice, WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

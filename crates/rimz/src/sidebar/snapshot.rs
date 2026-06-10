@@ -21,7 +21,9 @@ pub use super::enrich::{
     hot_worktree_paths, live_row_costs, merge_account_rate_limits, needed_worktree_paths,
     project_diff_stats, wired_lazy_default_models, wired_lazy_kinds,
 };
-pub use super::frame::{PaneFrame, PaneMetrics, PaneProcess, PaneState, TabFrame, assemble_frame};
+pub use super::frame::{
+    CarriedPane, PaneFrame, PaneMetrics, PaneProcess, PaneState, TabFrame, assemble_frame,
+};
 
 #[cfg(test)]
 pub(crate) use super::enrich::{

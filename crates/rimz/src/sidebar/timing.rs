@@ -47,6 +47,12 @@ pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 /// pane is a failed pull unless every reader would otherwise stay frameless.
 pub const FRAME_REJECT_ESCAPE: Duration = Duration::from_secs(5);
 
+/// Maximum time a pane omitted by the mux source may be carried from the last
+/// good frame while `/proc` still proves the old pane root alive. Long enough
+/// to bridge several bad pane pulls, short enough that a persistently lying mux
+/// source cannot freeze the room indefinitely.
+pub const PANE_CARRY_TTL: Duration = Duration::from_secs(30);
+
 /// How young the presence stamp must be for the producer to trust the push
 /// channel and use [`EVENT_PANE_TTL`]. 2.5× the plugin's 60s keepalive — two
 /// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps

@@ -2,7 +2,10 @@ use crate::SidebarSnapshot;
 use crate::config::ScrollbarMode;
 use ratatui::text::{Line, Span};
 
-use super::chrome::{alert_lines, footer_lines, hairline_rule, help_lines, repo_header_lines};
+use super::chrome::{
+    alert_lines, footer_lines, gate_notice_lines, hairline_rule, help_lines, repo_header_lines,
+    truth_notice_lines,
+};
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
     fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
@@ -229,6 +232,16 @@ pub(super) fn build_bottom_chrome(
             }
             bottom.extend(corner.into_iter().map(pad_chrome));
         }
+    }
+    if !active && let Some(notice) = snapshot.truth_degraded.as_ref() {
+        bottom.extend(
+            truth_notice_lines(theme, notice, snapshot.now)
+                .into_iter()
+                .map(pad_chrome),
+        );
+    }
+    if !active && let Some(notice) = ui.gate_notice.as_ref() {
+        bottom.extend(gate_notice_lines(theme, notice).into_iter().map(pad_chrome));
     }
     if !active {
         let footer = footer_lines(snapshot, theme, inner);

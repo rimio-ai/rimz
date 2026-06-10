@@ -375,6 +375,20 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
              ␣ next ?!       ? for help                  ← at least one waiting/failed row
 ```
 
+**Pane-source notice.** When the producer repairs a partial pane read by carrying live panes from the prior frame, a dim line appears above the footer while the room stays interactive:
+
+```
+ ⚠ pane source degraded · 2 carried panes · 8s
+```
+
+When the renderer is holding a successful-but-regressive fetch behind the last good frame, the same layer says why the rows are intentionally stale:
+
+```
+ ⚠ pane updates held · empty pane frame
+```
+
+These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
+
 **Help overlay** (`?`). The legend and keys, in place, in the faint chrome tier — summoned reference, not live state:
 
 ```
@@ -433,5 +447,6 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 | provider dashboard, stacked auto layout | `provider_dashboard_stacked` |
 | fleet ledger (week/month) | `fleet_ledger` |
 | health alert | `degraded_banner` |
+| pane-source notice | `render_truth_degraded_notice_keeps_room_chrome` |
 
 When the renderer changes how something looks, update the `.snap` (the test prints the diff) and this doc together.

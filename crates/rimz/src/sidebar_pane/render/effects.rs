@@ -522,6 +522,7 @@ mod tests {
             display_name: "query-engine".to_owned(),
             generated_at: now,
             panes_produced_at_ms: None,
+            truth_degraded: None,
             now,
             worktree_groups: vec![SidebarWorktreeGroup {
                 key: "/repo/main".to_owned(),

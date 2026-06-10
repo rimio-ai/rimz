@@ -348,6 +348,7 @@ pub fn enrich(
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
+        snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);
         }
@@ -426,6 +427,23 @@ pub fn enrich(
     );
     apply_live_today_spend(&mut snapshot, &spending_cache, &baselines.baselines);
     snapshot
+}
+
+fn truth_notice_for_frame(frame: &crate::sidebar::frame::PaneFrame) -> Option<crate::TruthNotice> {
+    let since_ms = frame
+        .carried_panes
+        .iter()
+        .map(|pane| pane.carried_since_ms)
+        .min()?;
+    Some(crate::TruthNotice {
+        carried: frame.carried_panes.len(),
+        since_ms,
+        pane_ids: frame
+            .carried_panes
+            .iter()
+            .map(|pane| pane.pane_id.clone())
+            .collect(),
+    })
 }
 
 fn log_lazy_pairing_ambiguities(

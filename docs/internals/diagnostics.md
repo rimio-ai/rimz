@@ -20,7 +20,7 @@ Records are anomaly-only. Routine fetch ticks, successful paints, and stable cac
 
 | Event | Emitter | Evidence |
 | --- | --- | --- |
-| `frame_rejected`, `frame_reject_escape`, `frame_shrink_verified`, `pane_count_drop`, `duplicate_pane_id`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, large pane drops, duplicate ids, foreign-session leaks |
+| `frame_rejected`, `frame_reject_escape`, `frame_shrink_verified`, `pane_count_drop`, `pane_carry_forward`, `pane_carry_refuted`, `carry_forward_expired`, `duplicate_pane_id`, `foreign_session_pane` | `sidebar::produce::panes` / `sidebar::frame` | Ok-but-empty frames, missing-own-pane reads, large pane drops, liveness-guarded carried panes, forced re-pulls that refute an initial omission, carry expiry, duplicate ids, foreign-session leaks |
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `producer_elected`, `producer_demoted`, `renderer_panic` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, producer handoff, panics that would otherwise disappear with the pane |
 | `row_conflict`, `newborn_quarantined`, `group_migration` | `ledger::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, rows moving between groups |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role ([observe.md](./observe.md)) |
