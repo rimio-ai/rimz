@@ -475,17 +475,14 @@ fn run_ssh_session(
                 report_link_restored(host, outage_active);
             }
         }
-        match recv_link_event(
+        if let Some(event) = recv_link_event(
             events,
             ssh_session_poll_interval(started, gatetime, reported_established),
         ) {
-            Some(event) => {
+            handle_link_event(host, event, outage_active);
+            while let Ok(event) = events.try_recv() {
                 handle_link_event(host, event, outage_active);
-                while let Ok(event) = events.try_recv() {
-                    handle_link_event(host, event, outage_active);
-                }
             }
-            None => {}
         }
     }
 }

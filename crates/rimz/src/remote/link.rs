@@ -342,10 +342,10 @@ impl ProbeWindow {
         }
         self.outcomes
             .iter()
-            .filter_map(|outcome| match outcome {
+            .map(|outcome| match outcome {
                 ProbeOutcome::Pending { sent_at_ms, .. }
                 | ProbeOutcome::Ack { sent_at_ms }
-                | ProbeOutcome::Miss { sent_at_ms } => Some(*sent_at_ms),
+                | ProbeOutcome::Miss { sent_at_ms } => *sent_at_ms,
             })
             .min()
             .map(|first| now_ms.saturating_sub(first))

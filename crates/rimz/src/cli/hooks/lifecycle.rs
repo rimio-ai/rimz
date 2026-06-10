@@ -109,9 +109,7 @@ fn record_lifecycle_observation(
         let append_expiry = observation
             .agent_id
             .as_deref()
-            .and_then(|agent_id| {
-                expiry_scope_for_signal(&observation.signal).map(|scope| (agent_id, scope))
-            })
+            .zip(expiry_scope_for_signal(&observation.signal))
             .map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
         if append_lifecycle
             && let Err(err) = ledger.append_event_and_expire(&envelope, append_expiry)
