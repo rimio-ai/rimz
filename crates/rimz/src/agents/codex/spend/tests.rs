@@ -172,3 +172,31 @@ fn parse_codex_session_headless() {
     assert_eq!(events[0].output_tokens, 80);
     assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
 }
+
+#[test]
+fn unpriced_model_is_recorded_as_unknown() {
+    use std::collections::BTreeMap;
+    use std::io::Write as _;
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("session.jsonl");
+    let timestamp = "2026-01-01T10:00:00.000Z";
+    let mut f = std::fs::File::create(&path).unwrap();
+    writeln!(
+        f,
+        r#"{{"model":"new-codex-release","timestamp":"{timestamp}","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
+    )
+    .unwrap();
+
+    let parsed = parse_codex_spend(&path, None, &PriceBook::from_litellm_json("{}"));
+
+    assert!(parsed.entries.is_empty());
+    assert_eq!(
+        parsed.unknown_models,
+        BTreeMap::from([(
+            "new-codex-release".to_owned(),
+            iso_to_unix_secs(timestamp).unwrap()
+        )])
+    );
+}

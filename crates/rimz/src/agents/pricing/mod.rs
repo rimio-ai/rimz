@@ -19,18 +19,22 @@
 //! Lookups are pure and network-free: the merged book is assembled once per
 //! process from the embedded data and the on-disk cache, and
 //! [`PriceBook::price`] resolves a model by exact match then a boundary-aware
-//! fuzzy scan. The only network is the gated refresh in [`load_for_spending`].
+//! fuzzy scan. The only network is the gated refresh in [`load_for_spending`]:
+//! a daily refresh, plus an escalating unknown-model chase when a transcript
+//! names a priceable model the current book cannot resolve.
 
 mod builtins;
 mod embedded;
 mod remote;
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+
+use super::spending::is_priceable_model_name;
 
 /// Per-token costs in USD for one model.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -112,15 +116,29 @@ impl PriceBook {
 }
 
 /// Load the price book for a spending pass, refreshing the on-disk cache at most
-/// once per TTL. Best-effort: a failed or skipped fetch falls back to the cache,
-/// then to the embedded snapshot — the returned book is always usable.
+/// once per TTL. A second gated trigger chases model names recorded by spend
+/// parsers when the assembled book still cannot price them, backing off from
+/// 30 minutes to the daily cap while the same names persist. Best-effort: a
+/// failed or skipped fetch falls back to the cache, then to the embedded
+/// snapshot — the returned book is always usable.
 ///
 /// `cache_path` is the producer's shared runtime `pricing-cache.json`.
-pub fn load_for_spending(cache_path: &Path) -> PriceBook {
+pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -> PriceBook {
     let mut cache = read_cache(cache_path);
+    let mut book = PriceBook::assembled(&cache);
+    let pending = unpriced_subset(&book, unknown_models);
     let now = unix_secs_now();
-    if should_refresh(&cache, now, remote::offline()) {
+    let mut write = false;
+
+    if pending.is_empty() {
+        write |= clear_unknown_chase(&mut cache);
+    }
+
+    if should_refresh(&cache, now, remote::offline(), &pending) {
         cache.last_attempt_secs = now;
+        if !pending.is_empty() {
+            note_chase_attempt(&mut cache, now, pending);
+        }
         if let Some(json) = remote::fetch_litellm() {
             let table = embedded::parse(&json);
             if !table.is_empty() {
@@ -134,9 +152,16 @@ pub fn load_for_spending(cache_path: &Path) -> PriceBook {
                 cache.models_dev = table;
             }
         }
+        book = PriceBook::assembled(&cache);
+        if unpriced_subset(&book, unknown_models).is_empty() {
+            clear_unknown_chase(&mut cache);
+        }
+        write = true;
+    }
+    if write {
         write_cache(cache_path, &cache);
     }
-    PriceBook::assembled(&cache)
+    book
 }
 
 // ── Disk cache ──────────────────────────────────────────────────────────────
@@ -145,6 +170,9 @@ pub fn load_for_spending(cache_path: &Path) -> PriceBook {
 /// persistent network outage never fetches on every snapshot.
 const REFRESH_TTL_SECS: u64 = 24 * 60 * 60;
 const RETRY_BACKOFF_SECS: u64 = 60 * 60;
+/// Chase a newly observed unpriced model after 30 minutes, then double up to the
+/// daily refresh cap while the same unknown set persists.
+const UNKNOWN_REFRESH_TTL_SECS: u64 = 30 * 60;
 
 /// On-disk pricing cache at the shared runtime `pricing-cache.json`. Sorted maps keep
 /// the file diff-stable.
@@ -158,14 +186,81 @@ struct PricingCache {
     litellm: BTreeMap<String, Pricing>,
     #[serde(default)]
     models_dev: BTreeMap<String, Pricing>,
+    #[serde(default)]
+    unknown_attempt_secs: u64,
+    #[serde(default)]
+    unknown_backoff_secs: u64,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    unknown_seen: BTreeSet<String>,
 }
 
-fn should_refresh(cache: &PricingCache, now: u64, offline: bool) -> bool {
+fn should_refresh(
+    cache: &PricingCache,
+    now: u64,
+    offline: bool,
+    pending: &BTreeSet<String>,
+) -> bool {
     if offline {
         return false;
     }
+    daily_refresh_due(cache, now) || unknown_refresh_due(cache, now, pending)
+}
+
+fn daily_refresh_due(cache: &PricingCache, now: u64) -> bool {
     now.saturating_sub(cache.fetched_at_secs) > REFRESH_TTL_SECS
         && now.saturating_sub(cache.last_attempt_secs) > RETRY_BACKOFF_SECS
+}
+
+fn unknown_refresh_due(cache: &PricingCache, now: u64, pending: &BTreeSet<String>) -> bool {
+    if pending.is_empty() || now.saturating_sub(cache.last_attempt_secs) <= UNKNOWN_REFRESH_TTL_SECS
+    {
+        return false;
+    }
+    let (_, gate) = chase_gate(cache, pending);
+    now.saturating_sub(cache.unknown_attempt_secs) > gate
+}
+
+fn unpriced_subset(book: &PriceBook, unknowns: &BTreeSet<String>) -> BTreeSet<String> {
+    unknowns
+        .iter()
+        .filter(|model| is_priceable_model_name(model) && book.price(model).is_none())
+        .cloned()
+        .collect()
+}
+
+fn note_chase_attempt(cache: &mut PricingCache, now: u64, pending: BTreeSet<String>) {
+    if pending.is_empty() {
+        clear_unknown_chase(cache);
+        return;
+    }
+    let (new_sighting, gate) = chase_gate(cache, &pending);
+    cache.unknown_attempt_secs = now;
+    cache.unknown_seen = pending;
+    cache.unknown_backoff_secs = if new_sighting {
+        UNKNOWN_REFRESH_TTL_SECS
+    } else {
+        gate.saturating_mul(2).min(REFRESH_TTL_SECS)
+    };
+}
+
+fn chase_gate(cache: &PricingCache, pending: &BTreeSet<String>) -> (bool, u64) {
+    let new_sighting = !pending.is_subset(&cache.unknown_seen);
+    let gate = if new_sighting {
+        UNKNOWN_REFRESH_TTL_SECS
+    } else {
+        cache.unknown_backoff_secs.max(UNKNOWN_REFRESH_TTL_SECS)
+    };
+    (new_sighting, gate)
+}
+
+fn clear_unknown_chase(cache: &mut PricingCache) -> bool {
+    let changed = cache.unknown_attempt_secs != 0
+        || cache.unknown_backoff_secs != 0
+        || !cache.unknown_seen.is_empty();
+    cache.unknown_attempt_secs = 0;
+    cache.unknown_backoff_secs = 0;
+    cache.unknown_seen.clear();
+    changed
 }
 
 fn read_cache(path: &Path) -> PricingCache {
@@ -227,6 +322,10 @@ fn prefix_at_boundary(want: &str, key: &str) -> bool {
 mod tests {
     use super::*;
 
+    fn set(models: &[&str]) -> BTreeSet<String> {
+        models.iter().map(|model| (*model).to_owned()).collect()
+    }
+
     fn book() -> PriceBook {
         PriceBook::from_litellm_json(
             r#"{
@@ -279,13 +378,23 @@ mod tests {
     #[test]
     fn offline_never_refreshes() {
         let cache = PricingCache::default();
-        assert!(!should_refresh(&cache, unix_secs_now(), true));
+        assert!(!should_refresh(
+            &cache,
+            unix_secs_now(),
+            true,
+            &BTreeSet::new()
+        ));
     }
 
     #[test]
     fn empty_cache_refreshes_when_online() {
         let cache = PricingCache::default();
-        assert!(should_refresh(&cache, unix_secs_now(), false));
+        assert!(should_refresh(
+            &cache,
+            unix_secs_now(),
+            false,
+            &BTreeSet::new()
+        ));
     }
 
     #[test]
@@ -296,7 +405,7 @@ mod tests {
             last_attempt_secs: now,
             ..Default::default()
         };
-        assert!(!should_refresh(&cache, now, false));
+        assert!(!should_refresh(&cache, now, false, &BTreeSet::new()));
     }
 
     #[test]
@@ -308,6 +417,126 @@ mod tests {
             last_attempt_secs: now,
             ..Default::default()
         };
-        assert!(!should_refresh(&cache, now, false));
+        assert!(!should_refresh(&cache, now, false, &BTreeSet::new()));
+    }
+
+    #[test]
+    fn first_sighting_chases_when_last_fetch_is_old() {
+        let now = 10 * UNKNOWN_REFRESH_TTL_SECS;
+        let cache = PricingCache {
+            fetched_at_secs: now,
+            ..Default::default()
+        };
+        assert!(should_refresh(&cache, now, false, &set(&["new-model"])));
+    }
+
+    #[test]
+    fn sighting_right_after_a_fetch_waits_the_floor() {
+        let now = 10 * UNKNOWN_REFRESH_TTL_SECS;
+        let cache = PricingCache {
+            fetched_at_secs: now,
+            last_attempt_secs: now,
+            ..Default::default()
+        };
+        assert!(!should_refresh(&cache, now, false, &set(&["new-model"])));
+    }
+
+    #[test]
+    fn same_pending_set_respects_the_doubled_gate() {
+        let now = 10 * UNKNOWN_REFRESH_TTL_SECS;
+        let cache = PricingCache {
+            fetched_at_secs: now,
+            unknown_attempt_secs: now - UNKNOWN_REFRESH_TTL_SECS - 1,
+            unknown_backoff_secs: 2 * UNKNOWN_REFRESH_TTL_SECS,
+            unknown_seen: set(&["new-model"]),
+            ..Default::default()
+        };
+
+        assert!(!should_refresh(&cache, now, false, &set(&["new-model"])));
+        assert!(should_refresh(
+            &cache,
+            now + UNKNOWN_REFRESH_TTL_SECS,
+            false,
+            &set(&["new-model"])
+        ));
+    }
+
+    #[test]
+    fn new_unknown_name_resets_the_gate() {
+        let now = 10 * UNKNOWN_REFRESH_TTL_SECS;
+        let cache = PricingCache {
+            fetched_at_secs: now,
+            unknown_attempt_secs: now - UNKNOWN_REFRESH_TTL_SECS - 1,
+            unknown_backoff_secs: 4 * UNKNOWN_REFRESH_TTL_SECS,
+            unknown_seen: set(&["old-model"]),
+            ..Default::default()
+        };
+
+        assert!(should_refresh(
+            &cache,
+            now,
+            false,
+            &set(&["old-model", "new-model"])
+        ));
+    }
+
+    #[test]
+    fn chase_attempt_doubles_the_gate_until_the_daily_cap() {
+        let mut cache = PricingCache::default();
+
+        note_chase_attempt(&mut cache, 1, set(&["new-model"]));
+        assert_eq!(cache.unknown_backoff_secs, UNKNOWN_REFRESH_TTL_SECS);
+
+        note_chase_attempt(&mut cache, 2, set(&["new-model"]));
+        assert_eq!(cache.unknown_backoff_secs, 2 * UNKNOWN_REFRESH_TTL_SECS);
+
+        cache.unknown_backoff_secs = REFRESH_TTL_SECS;
+        note_chase_attempt(&mut cache, 3, set(&["new-model"]));
+        assert_eq!(cache.unknown_backoff_secs, REFRESH_TTL_SECS);
+    }
+
+    #[test]
+    fn healed_unknowns_clear_the_chase_state() {
+        let mut cache = PricingCache {
+            unknown_attempt_secs: 10,
+            unknown_backoff_secs: UNKNOWN_REFRESH_TTL_SECS,
+            unknown_seen: set(&["new-model"]),
+            ..Default::default()
+        };
+
+        note_chase_attempt(&mut cache, 20, BTreeSet::new());
+
+        assert_eq!(cache.unknown_attempt_secs, 0);
+        assert_eq!(cache.unknown_backoff_secs, 0);
+        assert!(cache.unknown_seen.is_empty());
+    }
+
+    #[test]
+    fn priced_unknowns_do_not_pend() {
+        let b = PriceBook::from_litellm_json(
+            r#"{"new-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}"#,
+        );
+
+        assert!(unpriced_subset(&b, &set(&["new-model"])).is_empty());
+    }
+
+    #[test]
+    fn fuzzy_priced_unknown_does_not_pend() {
+        let b = PriceBook::from_litellm_json(
+            r#"{"new-model": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}"#,
+        );
+
+        assert!(unpriced_subset(&b, &set(&["new-model-via-provider"])).is_empty());
+    }
+
+    #[test]
+    fn offline_blocks_the_unknown_chase() {
+        let now = 10 * UNKNOWN_REFRESH_TTL_SECS;
+        let cache = PricingCache {
+            fetched_at_secs: now,
+            ..Default::default()
+        };
+
+        assert!(!should_refresh(&cache, now, true, &set(&["new-model"])));
     }
 }

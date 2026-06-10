@@ -27,6 +27,7 @@
 //! No cross-file deduplication is needed: Pi sessions are per-conversation
 //! single files and do not exhibit the btw/sidechain replay pattern.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -130,6 +131,7 @@ pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
                 offset: from_offset,
                 state: None,
             },
+            unknown_models: BTreeMap::new(),
         };
     };
     let content = String::from_utf8_lossy(&content);
@@ -183,6 +185,7 @@ pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
             offset: next_offset,
             state: None,
         },
+        unknown_models: BTreeMap::new(),
     }
 }
 

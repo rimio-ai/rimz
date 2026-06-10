@@ -26,12 +26,13 @@
 //! `spending::compute_spending`, so an incremental suffix parse never has to
 //! see the lines before its resume point.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendParse};
+use crate::agents::spending::{CachedEntry, SpendParse, record_unknown_model};
 
 use crate::agents::transcript_fs::{
     bytes_contains, collect_jsonl, expand_tilde, home_dir, read_spend_lines,
@@ -229,11 +230,13 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
                 offset: from_offset,
                 state: None,
             },
+            unknown_models: BTreeMap::new(),
         };
     };
     const USAGE_MARKER: &[u8] = br#""usage":{"#;
 
     let mut entries: Vec<CachedEntry> = Vec::new();
+    let mut unknown_models = BTreeMap::new();
 
     for line in content.split(|&b| b == b'\n') {
         if line.is_empty() {
@@ -269,14 +272,22 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         // model — is dropped rather than counted as a free turn.
         let cost = match entry.cost_usd {
             Some(cost) if cost > 0.0 => cost,
-            _ => price_usage(
+            _ => match price_usage(
                 prices,
                 entry.message.model.as_deref(),
                 input,
                 output,
                 cache_creation,
                 cache_read,
-            ),
+            ) {
+                Some(cost) => cost,
+                None => {
+                    if let Some(model) = entry.message.model.as_deref() {
+                        record_unknown_model(&mut unknown_models, model, ts_secs);
+                    }
+                    0.0
+                }
+            },
         };
         if cost <= 0.0 {
             continue;
@@ -303,6 +314,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             offset: next_offset,
             state: None,
         },
+        unknown_models,
     }
 }
 
@@ -310,8 +322,8 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
 ///
 /// Each token class bills at its own rate — uncached input, output,
 /// cache-creation (prompt-cache write), and cache-read (prompt-cache hit) — the
-/// same decomposition Codex spend uses. Returns `0.0` when the model is absent or
-/// unpriced (including the `<synthetic>` non-API turns), so the caller drops the
+/// same decomposition Codex spend uses. Returns `None` when the model is absent
+/// or unpriced; the caller records a priceable unknown model before dropping the
 /// entry instead of recording a zero-cost line.
 fn price_usage(
     prices: &PriceBook,
@@ -320,14 +332,14 @@ fn price_usage(
     output: u64,
     cache_creation: u64,
     cache_read: u64,
-) -> f64 {
-    let Some(price) = model.and_then(|model| prices.price(model)) else {
-        return 0.0;
-    };
-    input as f64 * price.input
-        + output as f64 * price.output
-        + cache_creation as f64 * price.cache_create
-        + cache_read as f64 * price.cache_read
+) -> Option<f64> {
+    let price = model.and_then(|model| prices.price(model))?;
+    Some(
+        input as f64 * price.input
+            + output as f64 * price.output
+            + cache_creation as f64 * price.cache_create
+            + cache_read as f64 * price.cache_read,
+    )
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -467,6 +479,64 @@ mod tests {
             entries.is_empty(),
             "an unpriced turn is dropped, not zeroed"
         );
+    }
+
+    #[test]
+    fn unpriced_model_is_recorded_as_unknown() {
+        let dir = TempDir::new().unwrap();
+        let timestamp = "2026-01-01T10:00:00.000Z";
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[&format!(
+                r#"{{"timestamp":"{timestamp}","requestId":"req-1","message":{{"id":"msg-1","model":"claude-new-release","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+            )],
+        );
+
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+
+        assert!(parsed.entries.is_empty());
+        assert_eq!(
+            parsed.unknown_models,
+            BTreeMap::from([(
+                "claude-new-release".to_owned(),
+                crate::agents::spending::iso_to_unix_secs(timestamp).unwrap()
+            )])
+        );
+    }
+
+    #[test]
+    fn synthetic_model_is_not_recorded_as_unknown() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            ],
+        );
+
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+
+        assert!(parsed.entries.is_empty());
+        assert!(parsed.unknown_models.is_empty());
+    }
+
+    #[test]
+    fn logged_cost_usd_does_not_record_unknown() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.25,"requestId":"req-1","message":{"id":"msg-1","model":"claude-new-release","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            ],
+        );
+
+        let parsed = parse_claude_spend(&file, 0, &no_prices());
+
+        assert_eq!(parsed.entries.len(), 1);
+        assert!(parsed.unknown_models.is_empty());
     }
 
     #[test]

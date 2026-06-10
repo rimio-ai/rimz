@@ -30,10 +30,13 @@
 //! (OpenAI), `input`/`output` (compact),
 //! `cached_tokens`/`cached_input_tokens` (cache).
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs};
+use crate::agents::spending::{
+    CachedEntry, SpendCursor, SpendParse, iso_to_unix_secs, record_unknown_model,
+};
 use crate::agents::transcript_fs::{collect_jsonl, home_dir};
 
 mod parse;
@@ -111,11 +114,15 @@ pub(crate) fn parse_codex_spend(
         .unwrap_or_default();
     let (events, next_offset) = parse_codex_session(path, from_offset, &mut state);
     let mut out = Vec::with_capacity(events.len());
+    let mut unknown_models = BTreeMap::new();
     for event in events {
         let Some(model) = event.model.as_deref() else {
             continue;
         };
         let Some(price) = prices.price(model) else {
+            if let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) {
+                record_unknown_model(&mut unknown_models, model, ts_secs);
+            }
             continue;
         };
         let uncached_input = event.input_tokens.saturating_sub(event.cached_input_tokens);
@@ -149,5 +156,6 @@ pub(crate) fn parse_codex_spend(
             offset: next_offset,
             state: serde_json::to_value(&state).ok(),
         },
+        unknown_models,
     }
 }

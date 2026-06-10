@@ -15,7 +15,7 @@
 //! fleet ledger and cockpit read the fleet pile and each dashboard panel reads
 //! its own.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -70,6 +70,10 @@ impl SpendWindow {
     }
 }
 
+/// The widest spend window. Entries at or beyond this age never contribute to
+/// totals, sessions, or the unknown-model pricing chase.
+const WIDEST_SPEND_WINDOW_SECS: u64 = 365 * 86_400;
+
 /// Rolling spend and token tally over four trailing windows: the last 24 hours,
 /// 7 days, 30 days, and 365 days. The windows nest — `year` (365 days) is the
 /// widest and subsumes the rest — so a recent entry lands in all four. Spend
@@ -117,10 +121,12 @@ pub struct Spending {
 /// as zero entries must re-parse), would otherwise stay frozen for that session
 /// and never heal. v5 makes the parse incremental: an entry without a real
 /// `len`/`cursor` would read as "grown from offset 0" and append a duplicate
-/// full parse, so the pre-cursor shape must cold-rebuild. A cache stamped with
-/// an older version is discarded on read, forcing a clean re-parse under the
-/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 5;
+/// full parse, so the pre-cursor shape must cold-rebuild. v6 records per-file
+/// unknown model names; the cold rebuild also heals entries silently dropped
+/// while unpriced under v5. A cache stamped with an older version is discarded
+/// on read, forcing a clean re-parse under the current shape. `0` is the
+/// implicit pre-versioning shape (no `version` field).
+const SPENDING_CACHE_VERSION: u32 = 6;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -161,6 +167,13 @@ pub struct FileCacheEntry {
     /// One entry per JSONL line with a positive cost. Duplicates within a file
     /// (retry writes) are kept raw here; the aggregation pass owns all dedup.
     pub entries: Vec<CachedEntry>,
+    /// Price lookup misses observed while parsing this file, keyed by model and
+    /// carrying the youngest timestamp seen for that model. The pricing refresh
+    /// chase unions active unknowns across currently discovered files. When one
+    /// later resolves while still inside the widest spend window, this file cold
+    /// re-parses so entries dropped before the cursor are recovered.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub unknown_models: BTreeMap<String, u64>,
 }
 
 /// Where an incremental spend parse left off: the byte offset just past the
@@ -181,6 +194,7 @@ pub struct SpendCursor {
 pub struct SpendParse {
     pub entries: Vec<CachedEntry>,
     pub cursor: SpendCursor,
+    pub unknown_models: BTreeMap<String, u64>,
 }
 
 /// A single cost entry with dedup keys for cross-file deduplication.
@@ -258,13 +272,18 @@ pub fn compute_spending(
     for (adapter, file) in files {
         let (mtime, len) = file_stat(file);
         let key = file.to_string_lossy().into_owned();
+        let heals = cache
+            .files
+            .get(&key)
+            .is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
         match cache.files.get_mut(&key) {
             // Unchanged: nothing to read.
-            Some(entry) if entry.mtime_secs == mtime && entry.len == len => {}
+            Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {}
             // Grown in place: parse only the appended suffix and extend.
-            Some(entry) if len > entry.len => {
+            Some(entry) if !heals && len > entry.len => {
                 let parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
                 entry.entries.extend(parsed.entries);
+                entry.unknown_models.extend(parsed.unknown_models);
                 entry.cursor = parsed.cursor;
                 entry.mtime_secs = mtime;
                 entry.len = len;
@@ -280,6 +299,7 @@ pub fn compute_spending(
                         len,
                         cursor: parsed.cursor,
                         entries: parsed.entries,
+                        unknown_models: parsed.unknown_models,
                     },
                 );
                 cache.dirty = true;
@@ -357,6 +377,61 @@ pub fn compute_spending(
     spending
 }
 
+/// Whether a model name from a transcript should feed the pricing refresh
+/// chase. Claude sentinel turns such as `<synthetic>` are not API model names
+/// and would otherwise keep the chase pending forever.
+pub(crate) fn is_priceable_model_name(model: &str) -> bool {
+    let model = model.trim();
+    !model.is_empty() && !model.starts_with('<')
+}
+
+/// Record a priceable model lookup miss at `ts_secs`, keeping the youngest
+/// timestamp so the chase stops once every occurrence ages out of the widest
+/// spend window.
+pub(crate) fn record_unknown_model(
+    unknowns: &mut BTreeMap<String, u64>,
+    model: &str,
+    ts_secs: u64,
+) {
+    let model = model.trim();
+    if !is_priceable_model_name(model) {
+        return;
+    }
+    unknowns
+        .entry(model.to_owned())
+        .and_modify(|seen| *seen = (*seen).max(ts_secs))
+        .or_insert(ts_secs);
+}
+
+/// Unknown models recorded by files still discovered in this spending pass.
+/// Deleted or moved transcripts do not keep a never-resolving name alive.
+pub fn recorded_unknown_models(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    now_secs: u64,
+) -> BTreeSet<String> {
+    let mut unknowns = BTreeSet::new();
+    for (_, file) in files {
+        let key = file.to_string_lossy().into_owned();
+        if let Some(entry) = cache.files.get(&key) {
+            unknowns.extend(
+                entry
+                    .unknown_models
+                    .iter()
+                    .filter(|(_, ts_secs)| within_widest_window(**ts_secs, now_secs))
+                    .map(|(model, _)| model.clone()),
+            );
+        }
+    }
+    unknowns
+}
+
+fn has_healed_unknown(entry: &FileCacheEntry, prices: &PriceBook, now_secs: u64) -> bool {
+    entry.unknown_models.iter().any(|(model, ts_secs)| {
+        within_widest_window(*ts_secs, now_secs) && prices.price(model).is_some()
+    })
+}
+
 struct DedupedCachedEntries {
     by_exact_key: HashMap<(String, Option<String>), (&'static str, CachedEntry)>,
     msg_has_non_sidechain: HashMap<String, bool>,
@@ -414,10 +489,10 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
     // Trailing-window bucketing: an entry counts toward each window whose span it
     // still falls within. The windows nest (24h ⊂ 7d ⊂ 30d ⊂ 365d), so a recent
     // entry lands in all four; one older than a year lands in none.
-    let age = now_secs.saturating_sub(entry.ts_secs);
-    if age >= 365 * 86_400 {
+    if !within_widest_window(entry.ts_secs, now_secs) {
         return;
     }
+    let age = now_secs.saturating_sub(entry.ts_secs);
     tally.year.add(usd, entry);
     if age < 30 * 86_400 {
         tally.month.add(usd, entry);
@@ -436,7 +511,7 @@ fn accum(tally: &mut SpendTally, entry: &CachedEntry, now_secs: u64) {
 /// year counts nowhere.
 fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64) {
     let age = now_secs.saturating_sub(youngest_ts);
-    if age >= 365 * 86_400 {
+    if age >= WIDEST_SPEND_WINDOW_SECS {
         return;
     }
     tally.year.sessions += 1;
@@ -449,6 +524,10 @@ fn bump_sessions(tally: &mut SpendTally, youngest_ts: u64, now_secs: u64) {
     if age < 86_400 {
         tally.today.sessions += 1;
     }
+}
+
+fn within_widest_window(ts_secs: u64, now_secs: u64) -> bool {
+    now_secs.saturating_sub(ts_secs) < WIDEST_SPEND_WINDOW_SECS
 }
 
 /// The thread a transcript file belongs to, per the adapter's declared

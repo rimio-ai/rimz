@@ -3,6 +3,7 @@ use super::*;
 /// The suite's fixed "now" (matches the snapshot testkit epoch), so the
 /// trailing-window bucketing is exact on any wall-clock day.
 const NOW_SECS: u64 = 1_750_000_000;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
 use tempfile::TempDir;
 
@@ -160,6 +161,7 @@ fn stale_version_cache_is_discarded_so_files_reparse() {
                     request_id: Some("req-old".to_string()),
                     is_sidechain: false,
                 }],
+                unknown_models: BTreeMap::new(),
             },
         )]),
         dirty: false,
@@ -196,6 +198,7 @@ fn stale_version_cache_is_discarded_so_files_reparse() {
                 request_id: None,
                 is_sidechain: false,
             }],
+            unknown_models: BTreeMap::new(),
         },
     );
     write_spending_cache(&path, &current);
@@ -727,6 +730,217 @@ fn per_provider_breakdown_splits_claude_and_codex() {
     assert!((spending.by_provider["claude"].today.usd - 0.5).abs() < 1e-9);
     assert!((spending.by_provider["codex"].today.usd - 0.001).abs() < 1e-9);
     assert!((spending.total.today.usd - 0.501).abs() < 1e-9);
+}
+
+#[test]
+fn unknown_models_round_trip_in_the_file_cache() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("spending.json");
+    let mut cache = SpendingDiskCache {
+        version: SPENDING_CACHE_VERSION,
+        ..Default::default()
+    };
+    cache.files.insert(
+        "/tmp/session.jsonl".to_owned(),
+        FileCacheEntry {
+            mtime_secs: 1,
+            len: 2,
+            cursor: SpendCursor::default(),
+            entries: Vec::new(),
+            unknown_models: BTreeMap::from([("new-model".to_owned(), NOW_SECS)]),
+        },
+    );
+
+    write_spending_cache(&path, &cache);
+    let read = read_spending_cache(&path);
+
+    assert_eq!(
+        read.files["/tmp/session.jsonl"].unknown_models,
+        BTreeMap::from([("new-model".to_owned(), NOW_SECS)])
+    );
+}
+
+#[test]
+fn heal_reparses_a_file_when_its_unknown_model_becomes_priced() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let model = "new-claude-pricing-test-model";
+    let line = format!(
+        r#"{{"timestamp":"{today}T10:00:00.000Z","requestId":"req-1","message":{{"id":"msg-1","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+    );
+    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line]);
+    let mut cache = SpendingDiskCache::default();
+
+    let first = compute_spending(
+        &[(claude_adapter(), file.clone())],
+        &mut cache,
+        &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
+    );
+    assert!(first.total.is_zero());
+    let cache_key = file.to_string_lossy().into_owned();
+    assert_eq!(
+        cache.files[&cache_key].unknown_models,
+        BTreeMap::from([(
+            model.to_owned(),
+            iso_to_unix_secs(&format!("{today}T10:00:00.000Z")).unwrap()
+        )])
+    );
+
+    cache.dirty = false;
+    let priced = PriceBook::from_litellm_json(&format!(
+        r#"{{"{model}": {{"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}}}"#
+    ));
+    let healed = compute_spending(
+        &[(claude_adapter(), file.clone())],
+        &mut cache,
+        &priced,
+        NOW_SECS,
+    );
+
+    assert!(
+        (healed.total.today.usd - 0.0002).abs() < 1e-12,
+        "100 input + 50 output repriced from byte zero"
+    );
+    assert!(cache.files[&cache_key].unknown_models.is_empty());
+    assert!(cache.dirty, "a healed file replaces its cached parse");
+}
+
+#[test]
+fn grown_file_unions_new_unknowns_into_the_entry() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let line_a = format!(
+        r#"{{"timestamp":"{today}T10:00:00.000Z","requestId":"req-a","message":{{"id":"msg-a","model":"unknown-a","usage":{{"input_tokens":10}}}}}}"#
+    );
+    let line_b = format!(
+        r#"{{"timestamp":"{today}T10:01:00.000Z","requestId":"req-b","message":{{"id":"msg-b","model":"unknown-b","usage":{{"input_tokens":20}}}}}}"#
+    );
+    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line_a]);
+    let mut cache = SpendingDiskCache::default();
+    compute_spending(
+        &[(claude_adapter(), file.clone())],
+        &mut cache,
+        &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
+    );
+
+    append_line(&file, &line_b);
+    compute_spending(
+        &[(claude_adapter(), file.clone())],
+        &mut cache,
+        &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
+    );
+
+    let cache_key = file.to_string_lossy().into_owned();
+    assert_eq!(
+        cache.files[&cache_key].unknown_models,
+        BTreeMap::from([
+            (
+                "unknown-a".to_owned(),
+                iso_to_unix_secs(&format!("{today}T10:00:00.000Z")).unwrap()
+            ),
+            (
+                "unknown-b".to_owned(),
+                iso_to_unix_secs(&format!("{today}T10:01:00.000Z")).unwrap()
+            )
+        ])
+    );
+}
+
+#[test]
+fn recorded_unknowns_skip_undiscovered_and_aged_out_files() {
+    let discovered = PathBuf::from("/tmp/discovered.jsonl");
+    let stale = PathBuf::from("/tmp/stale.jsonl");
+    let deleted = PathBuf::from("/tmp/deleted.jsonl");
+    let mut cache = SpendingDiskCache::default();
+    cache.files.insert(
+        discovered.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs: 0,
+            len: 0,
+            cursor: SpendCursor::default(),
+            entries: Vec::new(),
+            unknown_models: BTreeMap::from([("kept-model".to_owned(), NOW_SECS)]),
+        },
+    );
+    cache.files.insert(
+        stale.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs: 0,
+            len: 0,
+            cursor: SpendCursor::default(),
+            entries: Vec::new(),
+            unknown_models: BTreeMap::from([(
+                "stale-model".to_owned(),
+                NOW_SECS.saturating_sub(WIDEST_SPEND_WINDOW_SECS),
+            )]),
+        },
+    );
+    cache.files.insert(
+        deleted.to_string_lossy().into_owned(),
+        FileCacheEntry {
+            mtime_secs: 0,
+            len: 0,
+            cursor: SpendCursor::default(),
+            entries: Vec::new(),
+            unknown_models: BTreeMap::from([("deleted-model".to_owned(), NOW_SECS)]),
+        },
+    );
+
+    assert_eq!(
+        recorded_unknown_models(
+            &[(claude_adapter(), discovered), (claude_adapter(), stale)],
+            &cache,
+            NOW_SECS
+        ),
+        BTreeSet::from(["kept-model".to_owned()])
+    );
+}
+
+#[test]
+fn priced_aged_out_unknown_does_not_force_a_heal_reparse() {
+    let dir = TempDir::new().unwrap();
+    let model = "old-preview-model";
+    let old_ts = NOW_SECS.saturating_sub(WIDEST_SPEND_WINDOW_SECS);
+    let old_iso = format!("{}T00:00:00.000Z", utc_date(old_ts));
+    let line = format!(
+        r#"{{"timestamp":"{old_iso}","requestId":"req-old","message":{{"id":"msg-old","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
+    );
+    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line]);
+    let cache_key = file.to_string_lossy().into_owned();
+    let (mtime_secs, len) = file_stat(&file);
+    let mut cache = SpendingDiskCache::default();
+    cache.files.insert(
+        cache_key.clone(),
+        FileCacheEntry {
+            mtime_secs,
+            len,
+            cursor: SpendCursor {
+                offset: len,
+                state: None,
+            },
+            entries: Vec::new(),
+            unknown_models: BTreeMap::from([(model.to_owned(), old_ts)]),
+        },
+    );
+    let prices = PriceBook::from_litellm_json(&format!(
+        r#"{{"{model}": {{"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}}}"#
+    ));
+
+    let spending = compute_spending(&[(claude_adapter(), file)], &mut cache, &prices, NOW_SECS);
+
+    assert!(spending.total.is_zero());
+    assert!(!cache.dirty, "stale unknowns do not force cold healing");
+    assert!(cache.files[&cache_key].entries.is_empty());
+}
+
+#[test]
+fn sentinel_model_names_are_not_priceable() {
+    assert!(!is_priceable_model_name("<synthetic>"));
+    assert!(!is_priceable_model_name("   "));
+    assert!(is_priceable_model_name("claude-new"));
 }
 
 // ── Provider-spending cache (the SPENDING_TTL gate's stamp) ────────────────────

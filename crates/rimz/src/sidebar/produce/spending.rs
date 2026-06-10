@@ -108,15 +108,17 @@ fn walk_fleet_spending(
         Default::default()
     };
     // The price book exists only to price the walk, so its load (and TTL-gated
-    // remote refresh) rides the stale arm with it. A local fallback uses the
-    // embedded table so it never writes the shared pricing cache without the
-    // spending lock.
+    // remote refresh, including the unknown-model chase) rides the stale arm
+    // with it. A local fallback uses the embedded table so it never writes the
+    // shared pricing cache without the spending lock.
+    let now_secs = unix_secs_now();
     let prices = if publish {
-        pricing::load_for_spending(&runtime.shared_pricing_cache_path())
+        let unknowns = crate::agents::spending::recorded_unknown_models(&files, &cache, now_secs);
+        pricing::load_for_spending(&runtime.shared_pricing_cache_path(), &unknowns)
     } else {
         pricing::PriceBook::embedded()
     };
-    let spending = compute_spending(&files, &mut cache, &prices, unix_secs_now());
+    let spending = compute_spending(&files, &mut cache, &prices, now_secs);
     if publish && cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }
