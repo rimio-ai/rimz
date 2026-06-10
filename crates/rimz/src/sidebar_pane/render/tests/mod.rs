@@ -530,7 +530,7 @@ fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<L
 }
 
 /// The label foreground, the first bar-glyph foreground, and whether the row
-/// carries a `↻` reset countdown — the three things req 1/2 turn on.
+/// carries a `↻` reset countdown — the key color/shape facts for budget rows.
 fn bar_row_facts(line: &Line<'static>) -> (Option<Color>, Option<Color>, bool) {
     let label_fg = line.spans.first().and_then(|span| span.style.fg);
     let glyph_fg = line
@@ -540,6 +540,22 @@ fn bar_row_facts(line: &Line<'static>) -> (Option<Color>, Option<Color>, bool) {
         .and_then(|span| span.style.fg);
     let has_reset = line.spans.iter().any(|span| span.content.contains('↻'));
     (label_fg, glyph_fg, has_reset)
+}
+
+/// The foreground color of the reset countdown value span.
+fn reset_span_fg(line: &Line<'static>) -> Option<Color> {
+    line.spans
+        .iter()
+        .find(|span| span.content.contains('↻'))
+        .and_then(|span| span.style.fg)
+}
+
+/// The full style of the reset countdown value span.
+fn reset_span_style(line: &Line<'static>) -> Option<Style> {
+    line.spans
+        .iter()
+        .find(|span| span.content.contains('↻'))
+        .map(|span| span.style)
 }
 
 /// The full provider stats line (all spans joined) of one rendered panel.

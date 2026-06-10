@@ -1,4 +1,5 @@
 use super::*;
+use jiff::SignedDuration;
 
 /// The commit delta spells only what's there: zero components drop rather
 /// than printing `⇡0`, and a fully-zero delta is no spans at all — the
@@ -153,6 +154,7 @@ fn mana_style_honours_custom_and_misordered_zones() {
         yellow: 80,
         amber: 40,
         red: 20,
+        ..BudgetZonesConfig::default()
     };
     let tone = |color| lit.style(color, Modifier::empty());
     assert_eq!(mana_style(&lit, 70, &tuned), tone(Color::Yellow));
@@ -174,9 +176,84 @@ fn mana_style_honours_custom_and_misordered_zones() {
         yellow: 25,
         amber: 10,
         red: 50,
+        ..BudgetZonesConfig::default()
     };
     assert_eq!(mana_style(&lit, 30, &misordered), tone(Color::Red));
     assert_eq!(mana_style(&lit, 50, &misordered), tone(Color::Green));
+}
+/// Pace compares how much of a budget is used with how much of the window has
+/// elapsed, so the reset countdown can say whether the current burn rate lasts
+/// to reset independently of the remaining-budget bar color.
+#[test]
+fn pace_ratio_reads_burn_against_elapsed_window() {
+    let secs = SignedDuration::from_secs;
+    let ratio = |used, duration, until_reset| {
+        pace_ratio(used, secs(duration), secs(until_reset)).expect("pace ratio")
+    };
+    let assert_close = |actual: f64, expected: f64| {
+        assert!(
+            (actual - expected).abs() < 0.000_1,
+            "expected {expected}, got {actual}"
+        );
+    };
+
+    // User examples: half the budget after only one slice of the window has
+    // elapsed is burning too hot to sustain.
+    assert_close(ratio(50, 5 * 3_600, 4 * 3_600), 2.5);
+    assert_close(ratio(50, 7 * 86_400, 6 * 86_400), 3.5);
+
+    assert_close(ratio(20, 5 * 3_600, 4 * 3_600), 1.0);
+    assert_close(ratio(0, 5 * 3_600, 4 * 3_600), 0.0);
+    assert_close(ratio(10, 5 * 3_600, 5 * 3_600 - 60), 2.0);
+}
+/// Non-live or skewed windows stay uncolored until enough time has elapsed to
+/// make the pace meaningful. Overdue reset times count as a fully elapsed
+/// window so they do not understate the burn.
+#[test]
+fn pace_ratio_handles_edges() {
+    let secs = SignedDuration::from_secs;
+    assert_eq!(pace_ratio(50, secs(0), secs(0)), None);
+    assert_eq!(pace_ratio(50, secs(5 * 3_600), secs(5 * 3_600)), None);
+    assert_eq!(pace_ratio(50, secs(5 * 3_600), secs(5 * 3_600 + 60)), None);
+    let overdue = pace_ratio(40, secs(5 * 3_600), secs(-3_600)).expect("overdue pace");
+    assert!(
+        (overdue - 0.4).abs() < 0.000_1,
+        "overdue windows clamp to full elapsed: {overdue}"
+    );
+}
+/// The pace color ramp is configurable and exclusive above each bound: even
+/// burn rests blue, then yellow, amber, and red as burn rate outruns the reset.
+#[test]
+fn pace_style_honours_boundaries_custom_zones_and_no_color() {
+    let lit = Theme::fixed(false);
+    let defaults = BudgetPaceConfig::default();
+    let tone = |color| lit.style(color, Modifier::empty());
+    assert_eq!(pace_style(&lit, 1.0, &defaults), tone(Color::Blue));
+    assert_eq!(pace_style(&lit, 1.01, &defaults), tone(Color::Yellow));
+    assert_eq!(pace_style(&lit, 1.5, &defaults), tone(Color::Yellow));
+    assert_eq!(pace_style(&lit, 1.51, &defaults), tone(ORANGE));
+    assert_eq!(pace_style(&lit, 2.0, &defaults), tone(ORANGE));
+    assert_eq!(pace_style(&lit, 2.01, &defaults), tone(Color::Red));
+
+    let tuned = BudgetPaceConfig {
+        yellow: 80,
+        amber: 120,
+        red: 160,
+    };
+    assert_eq!(pace_style(&lit, 0.81, &tuned), tone(Color::Yellow));
+    assert_eq!(pace_style(&lit, 1.21, &tuned), tone(ORANGE));
+    assert_eq!(pace_style(&lit, 1.61, &tuned), tone(Color::Red));
+
+    let misordered = BudgetPaceConfig {
+        yellow: 200,
+        amber: 150,
+        red: 100,
+    };
+    assert_eq!(pace_style(&lit, 1.2, &misordered), tone(Color::Red));
+    assert_eq!(pace_style(&lit, 0.9, &misordered), tone(Color::Blue));
+
+    let plain = Theme::fixed(true);
+    assert_eq!(pace_style(&plain, 2.5, &defaults), plain.soft());
 }
 /// The drain edge states stay distinct: fully spent is a red empty track, while
 /// any nonzero remaining budget keeps at least one filled cell.

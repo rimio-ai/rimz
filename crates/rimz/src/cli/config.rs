@@ -260,6 +260,9 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.budget.yellow",
         "sidebar.budget.amber",
         "sidebar.budget.red",
+        "sidebar.budget.pace.yellow",
+        "sidebar.budget.pace.amber",
+        "sidebar.budget.pace.red",
         "sidebar.attention.stalled_after_secs",
         "sidebar.trunk",
         "sidebar.theme.good",
@@ -353,6 +356,7 @@ mod tests {
     #[test]
     fn validates_static_and_dynamic_keys() {
         validate_set_key(&parse_key("sidebar.max_cols").unwrap()).unwrap();
+        validate_set_key(&parse_key("sidebar.budget.pace.red").unwrap()).unwrap();
         validate_set_key(&parse_key("agents.layouts.review").unwrap()).unwrap();
         validate_set_key(&parse_key("agents.layouts.peer.shape").unwrap()).unwrap();
         validate_set_key(&parse_key("agents.layouts.peer.flags.codex").unwrap()).unwrap();

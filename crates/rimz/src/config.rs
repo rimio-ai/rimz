@@ -877,13 +877,13 @@ pub struct ContextBand {
     pub tokens: u64,
 }
 
-/// The provider dashboard's budget-bar color zones: each tier names the
-/// exclusive upper bound of *remaining* budget (in percent) where it applies,
-/// so the draining bar crosses into the tier as the remaining figure drops
-/// below the bound. At or above `yellow` the bar stays green. The mirror of
-/// [`ContextSeverityConfig`], whose bands bound a *rising* fill from below —
-/// here a *draining* figure is bounded from above. A fully spent window's
-/// full-width red track is a shape rule independent of these zones.
+/// The provider dashboard's budget color zones. The bar fields name the
+/// exclusive upper bound of *remaining* budget (in percent) where each tier
+/// applies, so the draining bar crosses into the tier as the remaining figure
+/// drops below the bound. At or above `yellow` the bar stays green. The nested
+/// pace fields color the reset countdown by burn rate against elapsed window
+/// time. A fully spent window's full-width red track is a shape rule
+/// independent of these zones.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetZonesConfig {
@@ -893,6 +893,8 @@ pub struct BudgetZonesConfig {
     pub amber: u8,
     /// Remaining % below which the bar goes red.
     pub red: u8,
+    /// Pace thresholds for the reset countdown.
+    pub pace: BudgetPaceConfig,
 }
 
 impl Default for BudgetZonesConfig {
@@ -901,6 +903,31 @@ impl Default for BudgetZonesConfig {
             yellow: 50,
             amber: 25,
             red: 10,
+            pace: BudgetPaceConfig::default(),
+        }
+    }
+}
+
+/// `[sidebar.budget.pace]`: reset-countdown color bands by burn rate. Values
+/// are percentages of even pace: `100` means budget use matches elapsed window
+/// time, `200` means it is burning twice as fast as the reset can sustain.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct BudgetPaceConfig {
+    /// Pace % above which the countdown leaves blue for yellow.
+    pub yellow: u16,
+    /// Pace % above which yellow deepens to amber.
+    pub amber: u16,
+    /// Pace % above which the countdown goes red.
+    pub red: u16,
+}
+
+impl Default for BudgetPaceConfig {
+    fn default() -> Self {
+        Self {
+            yellow: 100,
+            amber: 150,
+            red: 200,
         }
     }
 }
@@ -1164,8 +1191,6 @@ mod tests {
             72,
             "unset caps the percentage split at the 72-column default",
         );
-        // A zero-width sidebar can never work: fail at config load, with the
-        // parse error naming the field, rather than launching a broken pane.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
     }
 
@@ -1220,8 +1245,6 @@ mod tests {
             ScrollbarMode::Auto,
             "unset auto-hides: the bar shows only while the viewport moves",
         );
-        // A typo'd mode fails at config load, with the parse error naming the
-        // field, rather than silently painting the default.
         assert!(
             MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"bogus\"\n")).is_err()
         );
@@ -1267,9 +1290,6 @@ mod tests {
         assert_eq!(config.sidebar.theme.selection, Some(25));
         assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");
         assert!(MachineConfig::default().sidebar.theme.is_unset());
-        // Slots are 256-color indices: a value past u8 fails at config load,
-        // with the parse error naming the field, rather than rendering with a
-        // silently-wrong palette.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
     }
 
@@ -1287,8 +1307,6 @@ mod tests {
         let config =
             MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"never\"\n")).expect("load");
         assert_eq!(config.sidebar.glow, GlowMode::Never);
-        // The pre-mode boolean form fails at load with the parse error naming
-        // the field, rather than silently rendering with a default.
         assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).is_err());
     }
 
@@ -1401,7 +1419,6 @@ mod tests {
         assert_eq!(config.sidebar.max_provider_blocks, 3);
         assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Auto);
         assert!(config.sidebar.provider_list.is_empty());
-        // Set just one sidebar field: the cap still falls back to its default.
         let partial =
             MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 60\n")).expect("load");
         assert_eq!(partial.sidebar.max_provider_blocks, 3);
@@ -1429,20 +1446,18 @@ mod tests {
     #[test]
     fn context_severity_bands_default_and_parse() {
         let dir = tempdir().expect("tempdir");
-        // The shipped bands: yellow 60% / 160k, amber 80% / 258k (Codex's
-        // effective GPT-5.5 window), red 95% / 420k.
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         let defaults = ContextSeverityConfig::default();
         assert_eq!(config.sidebar.context, defaults);
-        assert_eq!(defaults.yellow.percent, 60);
-        assert_eq!(defaults.yellow.tokens, 160_000);
-        assert_eq!(defaults.amber.percent, 80);
-        assert_eq!(defaults.amber.tokens, 258_000);
-        assert_eq!(defaults.red.percent, 95);
-        assert_eq!(defaults.red.tokens, 420_000);
-
-        // A tuned tier states both axes together; an omitted tier keeps its
-        // default.
+        assert_eq!(
+            (defaults.yellow.percent, defaults.yellow.tokens),
+            (60, 160_000)
+        );
+        assert_eq!(
+            (defaults.amber.percent, defaults.amber.tokens),
+            (80, 258_000)
+        );
+        assert_eq!((defaults.red.percent, defaults.red.tokens), (95, 420_000));
         let tuned = MachineConfig::load_from(&write(
             &dir,
             "[sidebar.context]\nred = { percent = 50, tokens = 100000 }\n",
@@ -1462,22 +1477,35 @@ mod tests {
     #[test]
     fn budget_zones_default_and_parse() {
         let dir = tempdir().expect("tempdir");
-        // The shipped zones: green at/above 50% remaining, yellow below 50,
-        // amber below 25, red below 10.
         let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
         let defaults = BudgetZonesConfig::default();
         assert_eq!(config.sidebar.budget, defaults);
-        assert_eq!(defaults.yellow, 50);
-        assert_eq!(defaults.amber, 25);
-        assert_eq!(defaults.red, 10);
+        assert_eq!(
+            (defaults.yellow, defaults.amber, defaults.red),
+            (50, 25, 10)
+        );
+        assert_eq!(
+            (defaults.pace.yellow, defaults.pace.amber, defaults.pace.red),
+            (100, 150, 200)
+        );
 
-        // A tuned tier overrides just its bound; an omitted tier keeps its
-        // default.
-        let tuned =
-            MachineConfig::load_from(&write(&dir, "[sidebar.budget]\nred = 20\n")).expect("load");
-        assert_eq!(tuned.sidebar.budget.red, 20);
-        assert_eq!(tuned.sidebar.budget.amber, defaults.amber);
-        assert_eq!(tuned.sidebar.budget.yellow, defaults.yellow);
+        let tuned = MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.budget]\nred = 20\n[sidebar.budget.pace]\nred = 300\n",
+        ))
+        .expect("load");
+        let budget = tuned.sidebar.budget;
+        assert_eq!(
+            (budget.yellow, budget.amber, budget.red),
+            (defaults.yellow, defaults.amber, 20)
+        );
+        assert_eq!(
+            (budget.pace.yellow, budget.pace.amber, budget.pace.red),
+            (defaults.pace.yellow, defaults.pace.amber, 300)
+        );
+        let reparsed: MachineConfig =
+            toml::from_str(&toml::to_string(&tuned).expect("serialize")).expect("reparse");
+        assert_eq!(reparsed.sidebar.budget, tuned.sidebar.budget);
     }
 
     #[test]
@@ -1492,7 +1520,6 @@ mod tests {
             .expect("claude provider style");
         assert_eq!(claude.color, Some(173));
         assert_eq!(claude.ascii_art.as_deref(), Some(" ▐▛███▜▌"));
-        // An unset color leaves room for the built-in default downstream.
         assert_eq!(claude.product_name, None);
     }
 }

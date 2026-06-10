@@ -1,4 +1,5 @@
 use super::*;
+use jiff::SignedDuration;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
 /// the cumulative total (input with cache-write folded in, plus output), the
@@ -407,6 +408,58 @@ pub(in crate::sidebar_pane::render) fn mana_style(
         theme.style(Color::Yellow, Modifier::empty())
     } else {
         theme.style(Color::Green, Modifier::empty())
+    }
+}
+
+/// Treat the first five percent of a budget window as already elapsed for pace
+/// math. This renderer-only damping keeps a tiny early spend from exploding the
+/// reset countdown's color, and is deliberately a tuning constant rather than a
+/// user-facing band like `[sidebar.budget.pace]`.
+const PACE_ELAPSED_FLOOR: f64 = 0.05;
+
+/// Burn-rate pace for a budget window: used share divided by elapsed share.
+/// `1.0` means the current spend rate exactly lasts to reset. The first slice
+/// of a fresh window is floored so a tiny amount of usage does not explode the
+/// ratio, and overdue reset times clamp to a full elapsed window.
+pub(in crate::sidebar_pane::render) fn pace_ratio(
+    used_percentage: u8,
+    duration: SignedDuration,
+    until_reset: SignedDuration,
+) -> Option<f64> {
+    let duration_secs = duration.as_secs();
+    if duration_secs <= 0 {
+        return None;
+    }
+    let elapsed_secs = duration_secs - until_reset.as_secs();
+    if elapsed_secs <= 0 {
+        return None;
+    }
+    let elapsed_share = (elapsed_secs as f64 / duration_secs as f64).clamp(PACE_ELAPSED_FLOOR, 1.0);
+    Some((f64::from(used_percentage) / 100.0) / elapsed_share)
+}
+
+/// The reset countdown's tone at a burn-rate ratio. Each `[sidebar.budget.pace]`
+/// threshold names the exclusive upper bound of the calmer tier, checked
+/// worst-first so a misordered config degrades to the worse visible warning.
+pub(in crate::sidebar_pane::render) fn pace_style(
+    theme: &Theme,
+    ratio: f64,
+    pace: &BudgetPaceConfig,
+) -> Style {
+    let pace_pct = ratio * 100.0;
+    let style = if pace_pct > f64::from(pace.red) {
+        theme.style(Color::Red, Modifier::empty())
+    } else if pace_pct > f64::from(pace.amber) {
+        theme.style(ORANGE, Modifier::empty())
+    } else if pace_pct > f64::from(pace.yellow) {
+        theme.style(Color::Yellow, Modifier::empty())
+    } else {
+        theme.style(Color::Blue, Modifier::empty())
+    };
+    if style.fg.is_none() {
+        theme.soft()
+    } else {
+        style
     }
 }
 

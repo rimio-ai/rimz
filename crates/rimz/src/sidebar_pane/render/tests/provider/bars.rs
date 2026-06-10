@@ -81,6 +81,131 @@ fn provider_label_mirrors_its_bar_color() {
         "a green 5h and a yellow 7d label differ in tone"
     );
 }
+/// The reset countdown speaks burn pace, not remaining budget: half a 5-hour
+/// budget spent in the first hour is red-hot, while the remaining-budget bar
+/// and label are still green at the default zones.
+#[test]
+fn reset_countdown_reddens_when_pace_outruns_green_bar() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        used_percentage: Some(50),
+        resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+        duration_mins: Some(5 * 60),
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
+    assert!(has_reset, "started windows keep their reset countdown");
+    assert_eq!(
+        label_fg,
+        theme.style(Color::Green, Modifier::empty()).fg,
+        "50% remaining stays in the green bar zone"
+    );
+    assert_eq!(glyph_fg, label_fg, "the label still mirrors the bar");
+    assert_eq!(
+        reset_span_fg(&rows[0]),
+        theme.style(Color::Red, Modifier::empty()).fg,
+        "2.5x pace colors only the reset countdown"
+    );
+}
+
+/// Under NO_COLOR the reset countdown keeps the old soft weight: color is the
+/// pace signal, so when color is unavailable it should not become louder than
+/// the previous soft countdown.
+#[test]
+fn paced_reset_countdown_under_no_color_stays_soft() {
+    let theme = Theme::fixed(true);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        used_percentage: Some(50),
+        resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+        duration_mins: Some(5 * 60),
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(reset_span_style(&rows[0]), Some(theme.soft()));
+}
+
+/// Each window gets its own pace tone: a fresh short window can rest blue while
+/// the weekly budget's reset reads red because its burn rate cannot last.
+#[test]
+fn reset_countdowns_tone_each_window_independently() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: Some(0),
+            resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+            duration_mins: Some(5 * 60),
+        },
+        RateLimitWindow {
+            used_percentage: Some(50),
+            resets_at: Some(now + Duration::from_secs(6 * 86_400)),
+            duration_mins: Some(7 * 24 * 60),
+        },
+    ];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 2);
+    assert_eq!(
+        reset_span_fg(&rows[0]),
+        theme.style(Color::Blue, Modifier::empty()).fg,
+        "unused started 5h window rests blue"
+    );
+    assert_eq!(
+        reset_span_fg(&rows[1]),
+        theme.style(Color::Red, Modifier::empty()).fg,
+        "half the 7d budget after one day burns at 3.5x pace"
+    );
+}
+/// A countdown with no duration has no pace denominator, so it keeps the old
+/// soft tone instead of claiming a sustainable or hot burn rate.
+#[test]
+fn reset_countdown_with_unknown_duration_stays_soft() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        used_percentage: Some(50),
+        resets_at: Some(now + Duration::from_secs(4 * 3_600)),
+        duration_mins: None,
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    assert_eq!(reset_span_fg(&rows[0]), theme.soft().fg);
+}
+/// A spent window still owns its reset countdown unless a longer spent window
+/// gates it; the red empty track says exhausted, while the reset countdown
+/// reports how fast it got there.
+#[test]
+fn spent_window_keeps_its_pace_toned_countdown() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.windows = vec![RateLimitWindow {
+        used_percentage: Some(100),
+        resets_at: Some(now + Duration::from_secs(150 * 60)),
+        duration_mins: Some(5 * 60),
+    }];
+
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    let (label_fg, _, has_reset) = bar_row_facts(&rows[0]);
+    assert!(has_reset, "the spent window keeps its own countdown");
+    assert_eq!(label_fg, theme.style(Color::Red, Modifier::empty()).fg);
+    assert_eq!(
+        reset_span_fg(&rows[0]),
+        theme.style(theme::ORANGE, Modifier::empty()).fg,
+        "spent exactly halfway through the window reads as 2x amber pace"
+    );
+}
 /// A spent weekly cap gates the short window: with 7d exhausted the 5h row is
 /// painted exhausted — red, a full empty track, and no reset countdown —
 /// regardless of the 5h window's own (here untouched) reading.
