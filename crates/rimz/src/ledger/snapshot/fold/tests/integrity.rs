@@ -8,7 +8,7 @@ fn catch_up_rollup_rejects_a_zeroed_middle_frame() {
     // appenders), so the fold must fail loudly rather than silently drop
     // the surviving frames behind the hole — this is the recovery
     // boundary the `O_APPEND` rejection in
-    // `docs/internals/performance.md` leans on.
+    // `docs/internals/health/performance.md` leans on.
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();

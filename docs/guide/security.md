@@ -30,7 +30,7 @@ Project config is read inertly until trusted.
 - Command-running fields are disabled until trust is granted again.
 - Auto-revoke is implicit: every `rimz trust status` and `rimz doctor` re-hashes the live `.rimz/config.toml` and reports `stale` without a separate sweep.
 
-The **executable surface** is every project field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, and any future project command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new project command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/trust.md`](../internals/trust.md).
+The **executable surface** is every project field that can cause a process to run: agent launch commands, hook commands, PATH-affecting env overrides, layout-launched commands, tmux status `#(...)`, tmux popup `display-popup -E`, and any future project command string. A single hash over all of these is what `rimz trust grant` pins. Adding a new project command-running field that isn't in the hash is a CI invariant violation. Implementation detail in [`docs/internals/sidebar/trust.md`](../internals/sidebar/trust.md).
 
 The per-machine `[notifications].command` lives in `~/.config/rimz/config.toml`, outside project trust. It is personal routing on this host, often with local push credentials, and a cloned repository never supplies it.
 
@@ -42,11 +42,11 @@ Optional `--binary <path>` pins a resolver's executable path; Rimz then verifies
 
 Project config that *launches* a resolver binary flows through the project trust gate first. The two gates layer: project trust controls whether project config can launch a resolver at all; the resolver allowlist controls whether a heartbeating resolver can answer once launched.
 
-Detail in [resolvers.md](../internals/resolvers.md).
+Detail in [resolvers.md](../internals/agents/resolvers.md).
 
 ## Hook safety
 
-The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [hooks.md](../internals/hooks.md#hook-stdout-is-the-decision-channel).
+The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [hooks.md](../internals/agents/hooks.md#hook-stdout-is-the-decision-channel).
 
 - Hook stdout is reserved for the agent's decision channel.
 - Logs go to stderr or Rimz runtime state logs such as `binding.log.jsonl`.
@@ -64,7 +64,7 @@ An agent launched through `sudo`, `su`, or `doas` as another real uid is visible
 
 ## The Zellij presence plugin
 
-On Zellij, rimz loads a small presence plugin into each session so the sidebar learns of pane changes by push instead of polling and tab switches land back on work instead of the sidebar ([internals](../internals/multiplexers.md#zellij-presence-channel)). The first load surfaces Zellij's own permission prompt, once: **Access Zellij state** (it watches pane/tab shape) and **Run commands** (it runs `rimz sidebar wake`, a fixed argv rimz pins at load). Approve with `y` and the prompt pane closes itself; Zellij remembers the grant across sessions and restarts, keyed to the plugin path rimz materializes under the user data directory. The plugin reports a switched-to tab that restored focus to the sidebar; the matching renderer moves focus through the same host command used for an ordinary sidebar jump. Declining costs latency and tab-focus correction — the sidebar falls back to its poll and Zellij keeps its native remembered focus — and `rimz doctor` shows which mode a workspace is in. The plugin's argv, artifact, and configuration are all rimz-owned (never your `config.kdl`), it ships no pane content anywhere, and the grant stays in Zellij's own permission store where its plugin manager can revoke it.
+On Zellij, rimz loads a small presence plugin into each session so the sidebar learns of pane changes by push instead of polling and tab switches land back on work instead of the sidebar ([internals](../internals/sidebar/multiplexers.md#zellij-presence-channel)). The first load surfaces Zellij's own permission prompt, once: **Access Zellij state** (it watches pane/tab shape) and **Run commands** (it runs `rimz sidebar wake`, a fixed argv rimz pins at load). Approve with `y` and the prompt pane closes itself; Zellij remembers the grant across sessions and restarts, keyed to the plugin path rimz materializes under the user data directory. The plugin reports a switched-to tab that restored focus to the sidebar; the matching renderer moves focus through the same host command used for an ordinary sidebar jump. Declining costs latency and tab-focus correction — the sidebar falls back to its poll and Zellij keeps its native remembered focus — and `rimz doctor` shows which mode a workspace is in. The plugin's argv, artifact, and configuration are all rimz-owned (never your `config.kdl`), it ships no pane content anywhere, and the grant stays in Zellij's own permission store where its plugin manager can revoke it.
 
 ## State safety
 

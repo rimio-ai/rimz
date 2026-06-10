@@ -1,7 +1,7 @@
 //! The per-agent card: identity line, description, the context meter and its
 //! token line, and the expanded subagent list. The card anatomy is drawn in
 //! docs/interface/sidebar.md; the density and selection invariants live in
-//! docs/internals/sidebar.md.
+//! docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
 use crate::config::{CardDensityMode, ContextSeverityConfig};

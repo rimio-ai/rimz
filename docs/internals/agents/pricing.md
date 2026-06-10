@@ -6,7 +6,7 @@ Rimz totals an agent's spend from its transcript history. Claude and Codex log t
 
 Pricing is **enrichment, never correctness** — the no-transcript-correctness rule. A failed fetch, a missing snapshot, an unknown model: each degrades to stale-but-usable prices or an omitted entry, never a hard failure.
 
-The table lives in [`agents/pricing/`](../../crates/rimz/src/agents/pricing/mod.rs): per-token [`Pricing`](../../crates/rimz/src/agents/pricing/mod.rs) keyed by model in a [`PriceBook`](../../crates/rimz/src/agents/pricing/mod.rs). Lookups are pure and network-free; the only network is the gated refresh in `load_for_spending`.
+The table lives in [`agents/pricing/`](../../../crates/rimz/src/agents/pricing/mod.rs): per-token [`Pricing`](../../../crates/rimz/src/agents/pricing/mod.rs) keyed by model in a [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs). Lookups are pure and network-free; the only network is the gated refresh in `load_for_spending`.
 
 ## Three layers
 
@@ -14,9 +14,9 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 | Layer | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM-shaped snapshot, generated from LiteLLM plus authoritative models.dev fillers, compacted into the binary by [`build.rs`](../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../crates/rimz/src/agents/pricing/embedded.rs)) |
-| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../crates/rimz/src/agents/pricing/remote.rs)) |
-| 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../crates/rimz/src/agents/pricing/builtins.rs)) |
+| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM-shaped snapshot, generated from LiteLLM plus authoritative models.dev fillers, compacted into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)) |
+| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
+| 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../../crates/rimz/src/agents/pricing/builtins.rs)) |
 
 `gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
 
@@ -26,7 +26,7 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](./transcript.md#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before Rimz asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
 
-`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
+`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
 
 ## Resolving a model
 
@@ -34,4 +34,4 @@ An unknown-model chase rides the same producer walk, with no timer of its own. W
 
 ## Computing token-priced cost
 
-`spending::compute_spending` prices the token-only providers per turn. **Codex** multiplies each [`CodexTokenEvent`](../../crates/rimz/src/agents/codex/spend.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. **Claude** prices each `message.usage` the same way and adds the cache-creation slice at the cache-creation (prompt-cache write) rate, since its transcripts now omit `costUSD`; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price contributes nothing rather than guessing.
+`spending::compute_spending` prices the token-only providers per turn. **Codex** multiplies each [`CodexTokenEvent`](../../../crates/rimz/src/agents/codex/spend.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. **Claude** prices each `message.usage` the same way and adds the cache-creation slice at the cache-creation (prompt-cache write) rate, since its transcripts now omit `costUSD`; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price contributes nothing rather than guessing.

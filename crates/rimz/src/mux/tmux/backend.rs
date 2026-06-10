@@ -248,7 +248,7 @@ impl MuxBackend for TmuxBackend {
         // tmux can reorder windows freely, so the daemon view leads via
         // `open_background_view` (`swap-window`) rather than a birth layout; the
         // `daemon` hint is Zellij's concern and ignored here.
-        // Managed sidebar pane per docs/internals/multiplexers.md:
+        // Managed sidebar pane per docs/internals/sidebar/multiplexers.md:
         //   tmux split-window -d -h -l <cols> -b -t <session> 'rimz sidebar serve ...'
         // `-d` keeps the spawning client focused on its existing pane;
         // `-b` places the new pane before the target so the sidebar sits

@@ -82,7 +82,7 @@ Every actionable feed item carries a `surface` that decides which CLI action is 
 | `bridge` | An agent hook when a fresh enrolled resolver is active. | `rimz feed resolve` delivers a decision to the waiting hook. `rimz feed abstain` advances the resolver chain. |
 | `script` | `rimz feed ask`. | `rimz feed resolve` delivers JSON to the blocked script. `rimz feed abstain` lets the next resolver try. |
 
-The ledger owns the socket, nonce, compare-and-swap, late-answer, and audit rules; see [ledger and bridge](../../internals/ledger.md) for the wire contract.
+The ledger owns the socket, nonce, compare-and-swap, late-answer, and audit rules; see [ledger and bridge](../../internals/sidebar/ledger.md) for the wire contract.
 
 `rimz feed list` reads the runtime view by default. Runtime views hide pending records whose owner process is gone, while `rimz feed list --audit` reads durable history. `rimz feed show <request-id>` is always an exact audit lookup.
 
@@ -241,7 +241,7 @@ rimz feed abstain --resolver-id readonly-policy "$request_id" --reason "write co
 
 ## Resolver chain
 
-Resolvers are trusted per machine. The allowlist decides which heartbeating resolver ids may engage the bridge; a same-UID process writing heartbeat files is not enough. The resolver protocol and reference resolver patterns live in [resolvers](../../internals/resolvers.md), and the user-facing threat model lives in [security and trust](../../guide/security.md).
+Resolvers are trusted per machine. The allowlist decides which heartbeating resolver ids may engage the bridge; a same-UID process writing heartbeat files is not enough. The resolver protocol and reference resolver patterns live in [resolvers](../../internals/agents/resolvers.md), and the user-facing threat model lives in [security and trust](../../guide/security.md).
 
 ```sh
 rimz resolver add <id> [--order <n>] [--budget <duration>] [--binary <path>] [--display-name <name>]
@@ -284,7 +284,7 @@ rimz hooks install codex
 rimz hooks uninstall claude
 ```
 
-Installed hooks call Rimz's hidden hook entrypoint for lifecycle events and blocking feed events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and route blocking decisions through the bridge; see [agent hooks](../../internals/hooks.md) for the adapter contract.
+Installed hooks call Rimz's hidden hook entrypoint for lifecycle events and blocking feed events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and route blocking decisions through the bridge; see [agent hooks](../../internals/agents/hooks.md) for the adapter contract.
 
 Some agents add their own hook trust gate after installation. When an agent reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix, such as trusting Rimz hooks inside that agent's own hook UI.
 
@@ -307,4 +307,4 @@ rimz trust grant
 rimz trust revoke
 ```
 
-Project trust covers project-supplied command surfaces such as hook commands, resolver launch commands, agent launch commands, layout commands, and other executable fields. The hash and record format live in [project trust](../../internals/trust.md); the operator-facing safety model lives in [security and trust](../../guide/security.md).
+Project trust covers project-supplied command surfaces such as hook commands, resolver launch commands, agent launch commands, layout commands, and other executable fields. The hash and record format live in [project trust](../../internals/sidebar/trust.md); the operator-facing safety model lives in [security and trust](../../guide/security.md).

@@ -17,7 +17,7 @@
 //! truth itself. `cargo xtask invariants` pins the boundary: no ledger-writer,
 //! feed-store, bridge, or broker imports under `crates/rimz/src/sidebar/`.
 //! The consumer-side read lives in [`super::snapshot`]; performance model in
-//! [docs/internals/performance.md](../../../../../docs/internals/performance.md).
+//! [docs/internals/health/performance.md](../../../../../docs/internals/health/performance.md).
 
 mod git;
 mod metrics;

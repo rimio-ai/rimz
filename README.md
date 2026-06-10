@@ -68,7 +68,7 @@ That loop is the product; the sidebar carries everything from there.
 
 The provider dashboard pins your plan underneath: today's sessions, tokens, and dollars, the 5h and 7d budget bars draining in real time, and week and month totals priced from your full transcript history. One look and you know your pace.
 
-And when a run hits the 5-hour wall, its row parks as `⏸` while the dashboard counts down the reset. Enrol the bundled [resolver example](./docs/internals/resolvers.md) and it types the resume the moment `↻` hits zero, so overnight runs pick themselves back up. You care about the task; Rimz takes care of the noise.
+And when a run hits the 5-hour wall, its row parks as `⏸` while the dashboard counts down the reset. Enrol the bundled [resolver example](./docs/internals/agents/resolvers.md) and it types the resume the moment `↻` hits zero, so overnight runs pick themselves back up. You care about the task; Rimz takes care of the noise.
 
 **One binary, zero learning curve.** Rimz wraps the tools you already run — Claude Code, Codex, and Pi inside Zellij or tmux — and the agents run stock: your keybinds, your layouts, your terminal (Ghostty, Warp, the VS Code terminal), and the official web, desktop, and mobile apps all keep working. Underneath, it reads what the agents already emit (hooks, `.jsonl` session transcripts, the Claude statusline, the Codex app-server) into a directory of flat files you can read with `cat` — no daemon, nothing to relearn. Hooks install at `rimz start`, with your consent and a diff preview. It is still your tmux.
 
@@ -76,13 +76,13 @@ And when a run hits the 5-hour wall, its row parks as `⏸` while the dashboard 
 
 **Fix the 3 a.m. CI failure from your bed.** Your nightly job hits a failing migration, the question lands on the feed, your phone buzzes, you type the fix, and the run finishes while the script is still blocking. `rimz run "<prompt>"` gives scripts `claude -p` ergonomics — a blocking call, real exit codes, `--detach` and `--stream` for orchestration — over an agent in a real pane you can watch and steer the whole time. `rimz steer` types into a live agent now, `rimz queue --on done` delivers the next instruction when the turn finishes, and `rimz feed ask` puts any script's question on the sidebar with answer buttons. The full scenarios live in [the product tour](./docs/guide/product.md#put-your-pipeline-on-the-feed).
 
-**Your beloved `--worktree`, for every agent at once.** `rimz tab --layout peer --worktree feat/x` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements, the other reviews, in one tab. The layout DSL composes any grid (`claude,codex+term` is a Claude column beside a stacked Codex and shell), the sidebar groups every card by the worktree it lives in with per-tree diff churn, and cleanup is supervised: Rimz removes a worktree only after proving its work landed on the base branch ([worktrees](./docs/internals/worktrees.md)).
+**Your beloved `--worktree`, for every agent at once.** `rimz tab --layout peer --worktree feat/x` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements, the other reviews, in one tab. The layout DSL composes any grid (`claude,codex+term` is a Claude column beside a stacked Codex and shell), the sidebar groups every card by the worktree it lives in with per-tree diff churn, and cleanup is supervised: Rimz removes a worktree only after proving its work landed on the base branch ([worktrees](./docs/internals/agents/worktrees.md)).
 
 ## How it works
 
 One repo maps to one Rimz workspace and one multiplexer session, and the repo's git worktrees group inside it. Everything an agent reports through its hooks — sessions, tool calls, completions, failures, blocking questions — writes through one CLI to a durable file-backed ledger. The sidebar renders that ledger, and the room keeps its state whether or not anyone is attached.
 
-The design commitments and the operating paths a question can take live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
+The design commitments and the operating paths a question can take live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/sidebar/ledger.md](./docs/internals/sidebar/ledger.md).
 
 ## Development
 

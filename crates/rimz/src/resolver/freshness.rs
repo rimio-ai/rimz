@@ -27,7 +27,7 @@ use crate::schema::RESOLVER_PROTOCOL_VERSION;
 use crate::schema::heartbeat::ResolverHeartbeat;
 
 /// Maximum age of a resolver heartbeat. The doc-suggested cadence is 1s tick,
-/// 3s TTL (`docs/internals/resolvers.md`).
+/// 3s TTL (`docs/internals/agents/resolvers.md`).
 pub const RESOLVER_HEARTBEAT_TTL: Duration = Duration::from_secs(3);
 
 #[derive(Debug, thiserror::Error)]

@@ -5,7 +5,7 @@
 //! may run before the user attaches, such as native sidebar launch and wakeup
 //! fanout, carry the session name explicitly via `zellij --session <name>`.
 //!
-//! Caveats live in `docs/internals/multiplexers.md` under
+//! Caveats live in `docs/internals/sidebar/multiplexers.md` under
 //! "Zellij backend caveats" — namely that raw Zellij pane IDs are
 //! integers, scoped per-session, and that the spike does not yet expose
 //! tab-level operations beyond what's needed to identify a pane.

@@ -34,7 +34,7 @@ That's the loop. Every other feature in Rimz is a variation on those primitives.
 
 ## How a question reaches you
 
-When an agent needs a decision, Rimz gets you to it. The two everyday paths (the schema names `native_ui` and `bridge`, with wire-level details in [ledger.md](../internals/ledger.md)) are:
+When an agent needs a decision, Rimz gets you to it. The two everyday paths (the schema names `native_ui` and `bridge`, with wire-level details in [ledger.md](../internals/sidebar/ledger.md)) are:
 
 1. The agent asks in its own UI. The everyday path, with nothing extra enrolled. Rimz writes the feed item, wakes the sidebar, and points you at the pane. You see "claude · waiting · permission", focus that pane, and answer Claude's prompt; the sidebar clears when the agent moves on.
 2. A resolver answers ahead of you. Enrol a resolver on this machine and Rimz holds the agent's hook open long enough for the resolver to take the routine items first; anything it passes on falls through to you, with the agent's own UI as the final fallback. This is the opt-in upgrade that keeps a fleet moving while you step away; see [resolvers](#resolvers-scale-your-attention) below.
@@ -49,7 +49,7 @@ Between questions, you steer. `rimz steer claude -- "focus on the failing parser
 
 ## Run it on a server
 
-Your dev box lives on a server. You start agents, close the laptop, and reopen from a tablet on the train: `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the ledger, with every agent where you left it and every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇅ 42ms 0%` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/remote.md)).
+Your dev box lives on a server. You start agents, close the laptop, and reopen from a tablet on the train: `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the ledger, with every agent where you left it and every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇅ 42ms 0%` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/reach/remote.md)).
 
 The room outlives the host too. The ledger is a directory of flat files under `~/.local/state/rimz/`, and when the session must be reborn after a reboot or a multiplexer crash, Rimz re-seeds every prior agent idle in its own pane (`claude --resume`, `codex resume`, `pi --session`), so the fleet is one prompt away from where it stopped. `--no-resume` starts a clean room instead.
 
@@ -82,7 +82,7 @@ The `hook_bridge_resolver.py` example answers routine permission requests agains
 
 The `pane_send_resolver.py` example captures well-known terminal prompts in the agent's own pane, matches a bounded pattern list, types the reply, and confirms. The same skeleton adapts into a rate-limit resumer that nudges a stalled run the moment the `↻` countdown on the provider dashboard resets, so long runs pick themselves back up overnight.
 
-Both are starting points you copy and edit. The chain mechanics, the heartbeat protocol, and the two examples live in [resolvers.md](../internals/resolvers.md); trust gates and the allowlist are in [security.md](./security.md).
+Both are starting points you copy and edit. The chain mechanics, the heartbeat protocol, and the two examples live in [resolvers.md](../internals/agents/resolvers.md); trust gates and the allowlist are in [security.md](./security.md).
 
 ## Two agents, one feature
 
@@ -90,7 +90,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
-Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktrees.md](../internals/worktrees.md)).
+Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktrees.md](../internals/agents/worktrees.md)).
 
 ## Many repos, one room
 
@@ -107,7 +107,7 @@ rimz run --worktree deps --timeout 4h "update dependencies, run the test suite, 
 
 Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — a resolver answers the routine ones, anything left pops to the cockpit and your notification channel — and you attach from anywhere, answer in the agent's own UI, and the run picks up and finishes while the script is still blocking. A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed over SSH, and a green pipeline by morning. The same shape runs while you watch: a PR-review job launched from CI joins your room as one more row, where you inspect the work as it happens and it asks its design questions right in your workspace.
 
-For orchestration, `--detach` prints the run id and returns immediately; `rimz run status <id>` reports the durable result with live phase while the run is active; `rimz run stream <id>` or `rimz run --stream` streams the turn as it happens; `rimz run send <id> --enter -- "continue"` is the first-class nudge for wrapper scripts; and `rimz pane send` / `rimz pane capture` remain the universal pane fallback. Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#run-one-supervised-agent-turn); the run record and completion mechanics live in [run.md](../internals/run.md).
+For orchestration, `--detach` prints the run id and returns immediately; `rimz run status <id>` reports the durable result with live phase while the run is active; `rimz run stream <id>` or `rimz run --stream` streams the turn as it happens; `rimz run send <id> --enter -- "continue"` is the first-class nudge for wrapper scripts; and `rimz pane send` / `rimz pane capture` remain the universal pane fallback. Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#run-one-supervised-agent-turn); the run record and completion mechanics live in [run.md](../internals/agents/run.md).
 
 Scripts join the feed directly too. A deploy pipeline that pauses at a staging-to-prod gate calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"`, and the question lands in the sidebar with answer buttons alongside everything the agents are doing; you or a resolver answers it from anywhere, and the script owns the question end to end. `rimz event emit` announces milestones to the same column. It is the same primitives an agent integration uses, reached from a shell script, so anything an agent can surface, a script can too.
 

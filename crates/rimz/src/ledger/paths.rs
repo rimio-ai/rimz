@@ -2,7 +2,7 @@
 //!
 //! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
 //! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
-//! `/tmp/rimz-<uid>/<id>/` at mode `0700` per `docs/internals/ledger.md`.
+//! `/tmp/rimz-<uid>/<id>/` at mode `0700` per `docs/internals/sidebar/ledger.md`.
 
 use std::env;
 use std::fs;

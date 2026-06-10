@@ -1,7 +1,7 @@
 //! Chain advancement integration tests. These exercise the M3.5 wiring
 //! that hands off the active resolver mid-hook when its per-step budget
 //! elapses or its heartbeat goes stale — the contract documented in
-//! `docs/internals/resolvers.md`.
+//! `docs/internals/agents/resolvers.md`.
 //!
 //! Each test spawns a real `rimz hooks feed` subprocess, then drives the
 //! ledger from the outside: emulate resolver heartbeats, watch the chain

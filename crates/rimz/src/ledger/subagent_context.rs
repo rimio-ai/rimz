@@ -7,7 +7,7 @@
 //! [`crate::ledger::snapshot::SidebarSnapshot::with_subagent_context`]. Like its
 //! [`crate::ledger::agent_context`] sibling it never touches the durable event
 //! log: this is display-only latency, not truth ("Ledger first",
-//! `docs/internals/ledger.md`).
+//! `docs/internals/sidebar/ledger.md`).
 //!
 //! Ownership: the WRITER is always the feed process (the `rimz` CLI). The
 //! sidebar renderer reads this data only through the snapshot JSON, never this

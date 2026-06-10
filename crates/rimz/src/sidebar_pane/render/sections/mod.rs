@@ -4,7 +4,7 @@
 //! The renderer expresses one *design grammar* for every meter — context-%,
 //! todo progress, diff stats — so the rows read as one polished card per
 //! agent, not a stack of one-off widgets. See the
-//! [grammar in docs/internals/sidebar.md](../../../../docs/internals/sidebar.md).
+//! [grammar in docs/internals/sidebar/sidebar.md](../../../../docs/internals/sidebar/sidebar.md).
 //!
 //! One module per section: [`cockpit`] (the summary + spend lines), [`fleet`]
 //! (the make-up line), [`worktree`] (group headers and the

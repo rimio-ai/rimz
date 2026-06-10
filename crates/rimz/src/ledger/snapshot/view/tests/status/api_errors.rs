@@ -74,7 +74,7 @@ fn api_error_self_clears_when_activity_resumes() {
 
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
-// docs/internals/agent.md commits to a strict order among the derived display
+// docs/internals/agents/agent.md commits to a strict order among the derived display
 // states: a human-blocked `waiting` outranks them all, then a paused-class
 // marker, then the live-subagent exemption, then a failed marker, then the
 // stalled-running fallback (paused when the kind's window is spent, failed

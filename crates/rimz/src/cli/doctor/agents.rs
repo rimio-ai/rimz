@@ -180,7 +180,7 @@ pub(super) fn report_trust(ws: &rimz::ResolvedWorkspace) {
 
 /// Walk the workspace's heartbeat dir and warn for any resolver-shaped
 /// heartbeat whose id is not on the per-machine allowlist. These are
-/// dropped by the bridge per `docs/internals/resolvers.md:35` but kept for
+/// dropped by the bridge per `docs/internals/agents/resolvers.md:35` but kept for
 /// diagnostics so a user installing a resolver wrong sees why it's not
 /// engaging.
 #[expect(

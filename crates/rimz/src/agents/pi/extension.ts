@@ -9,7 +9,7 @@
 // handler awaits the child and reads the decision from stdout — `{"block":
 // true, "reason": …}` blocks the tool, anything else (including an absent or
 // broken rimz) lets it run. Rimz authors this wire; the event mapping it
-// feeds is docs/internals/hooks.md → Appendix Pi and the upstream surface is
+// feeds is docs/internals/agents/hooks.md → Appendix Pi and the upstream surface is
 // docs/internals/adapter/pi-reference.md.
 import { spawn } from "node:child_process";
 

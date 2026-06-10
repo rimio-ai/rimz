@@ -1,10 +1,10 @@
 # Sidebar Observer
 
-> The node model the observer instruments lives in [state.md](./state.md); presence, ranking, and the render loop live in [sidebar.md](./sidebar.md). This doc owns the observer: what it watches and what counts as an anomaly. The durable channel its records land in — envelope, file, retention, rate limiting, inspection — lives in [diagnostics.md](./diagnostics.md).
+> The node model the observer instruments lives in [state.md](../sidebar/state.md); presence, ranking, and the render loop live in [sidebar.md](../sidebar/sidebar.md). This doc owns the observer: what it watches and what counts as an anomaly. The durable channel its records land in — envelope, file, retention, rate limiting, inspection — lives in [diagnostics.md](./diagnostics.md).
 
 Every sidebar renderer carries an observer that watches its own committed frame stream — the fused, gated `SidebarSnapshot` sequence the renderer actually paints — and records an evidence-rich `frame_anomaly` diagnostic when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone. The observer is a diagnostic instrument beside the render path: it reads the stream and emits records, and the rendered frame is byte-identical with the observer present or absent.
 
-The observer exists because this bug class is transient and self-healing — a flap visible for two seconds in a live room leaves nothing to debug an hour later. Each anomaly caught live becomes a synthetic regression test over recorded signatures ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable graduates into a prevention guard — renderer-side in the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation — detection first, prevention once trusted. The pane carry-forward guard ([sidebar.md → honest reads](./sidebar.md#honest-reads-across-a-mux-hiccup)) is such a graduation: the observer recorded the partial-read flap, the episode became a recorded-signature test, and the producer now repairs that fault before publication.
+The observer exists because this bug class is transient and self-healing — a flap visible for two seconds in a live room leaves nothing to debug an hour later. Each anomaly caught live becomes a synthetic regression test over recorded signatures ([below](#from-anomaly-to-regression-test)), and a detection that proves reliable graduates into a prevention guard — renderer-side in the [commit gate](../../../crates/rimz/src/sidebar_pane/app/gate.rs) or at the source in producer frame validation — detection first, prevention once trusted. The pane carry-forward guard ([sidebar.md → honest reads](../sidebar/sidebar.md#honest-reads-across-a-mux-hiccup)) is such a graduation: the observer recorded the partial-read flap, the episode became a recorded-signature test, and the producer now repairs that fault before publication.
 
 ## The commit-point contract
 
@@ -14,7 +14,7 @@ Every mutation of the rendered snapshot flows through one fold chokepoint in the
 - Each signature carries two scalars from the un-fused pulled snapshot (`pulled_rows` and the pulled frame stamp), so every record shows whether the producer's published truth already held the anomaly or fusion/gating introduced it — the first question of any investigation, answered inside the record.
 - Detection emits small anomaly drafts over a bounded channel to one background writer thread; a full channel drops the draft and stamps the drop count on the next record that gets through. The render thread proceeds without waiting on the observer.
 
-[`sidebar/observe`](../../crates/rimz/src/sidebar/observe.rs) owns the signature, the detectors, and the writer thread; the anomaly vocabulary is the `frame_anomaly` arm of the [diagnostic record schema](./diagnostics.md), and the windows and cadences live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
+[`sidebar/observe`](../../../crates/rimz/src/sidebar/observe.rs) owns the signature, the detectors, and the writer thread; the anomaly vocabulary is the `frame_anomaly` arm of the [diagnostic record schema](./diagnostics.md), and the windows and cadences live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
 
 ## Windowed detectors
 
@@ -24,7 +24,7 @@ In tmux poll mode, a row born late in warmup can still look short-lived on the f
 
 | Detector | Window | Fires on | Stays quiet when |
 | --- | --- | --- | --- |
-| Roster flap | `OBSERVE_ROSTER_FLAP_WINDOW` | a populated roster empties while `own_view` still counts working siblings, then refills inside the window | active `PaneClosed` events cover every vanished row's pane (a genuinely emptied tab is [self-close](./sidebar.md#self-close) territory) |
+| Roster flap | `OBSERVE_ROSTER_FLAP_WINDOW` | a populated roster empties while `own_view` still counts working siblings, then refills inside the window | active `PaneClosed` events cover every vanished row's pane (a genuinely emptied tab is [self-close](../sidebar/sidebar.md#self-close) territory) |
 | Row presence flap | `OBSERVE_ROW_FLAP_WINDOW` | one row (keyed by row id) disappears and returns inside the window; or a row is born and vanishes inside it (the phantom-card case, group key recorded) | a `PaneClosed` event justifies the absence, or the row's group had its idle/process tail at the visible cap at either edge — ranking churn legitimately rotates rows through `WORKTREE_ROW_CAP` |
 | Value oscillation | `OBSERVE_VALUE_OSC_WINDOW` | a watched per-row value returns to its exact prior figure after differing, inside the window — status, context %, token total, todo progress, group key (the worktree↔`external` bounce), model | the field's first appearance (enrichment warm-up is `None`→value, never an oscillation) |
 | Status churn | `OBSERVE_STATUS_CHURN_WINDOW` | four or more status transitions on one row inside the window — a rate verdict, deliberately wider than the oscillation window | a quick `running → idle → running` turn boundary, which is normal pace |
@@ -41,7 +41,7 @@ The consistency family checks each committed frame alone — detect and log imme
 
 ## Real-world cross-checks
 
-The writer thread re-verifies the latest roster against the world on its own cadence (`OBSERVE_CROSSCHECK_TTL`), reading only what the producer already published — the workspace `snapshot.json` pane frame through the stat-gated cache read — and `/proc`. The observer adds no mux call of its own; the producer remains the only external puller ([state.md → The Node Model](./state.md#the-node-model)).
+The writer thread re-verifies the latest roster against the world on its own cadence (`OBSERVE_CROSSCHECK_TTL`), reading only what the producer already published — the workspace `snapshot.json` pane frame through the stat-gated cache read — and `/proc`. The observer adds no mux call of its own; the producer remains the only external puller ([state.md → The Node Model](../sidebar/state.md#the-node-model)).
 
 - **Cards fit the frame.** Every roster pane id appears in the published frame, and the roster never exceeds the frame's pane count. The comparison runs only when the roster's fold stamp equals the published frame's `produced_at_ms` — a producer republish between fold and read is normal skew.
 - **PIDs are alive.** A row's pane pid is checked through `/proc` with the start-time pid-reuse guard; a pid must stay dead across `OBSERVE_DEADPID_CONFIRMATIONS` consecutive passes before it logs, so a just-exited process the next frame removes leaves no record. Platforms without `/proc` skip the check.
@@ -56,7 +56,7 @@ Per-kind cooldown (`OBSERVE_COOLDOWN`) keeps a persistent condition from floodin
 
 ## From anomaly to regression test
 
-A `frame_anomaly` record carries enough to rebuild the stream that produced it: the frame stamp and pulled-truth scalars, row and pane identities, edge timestamps, the event summary, and the judging window. A confirmed anomaly becomes a test in [`detect/tests.rs`](../../crates/rimz/src/sidebar/observe/detect/tests.rs) under `mod recorded_episodes`: a signature builder reconstructs the minimal committed sequence from the record's evidence — a warm frame, the offending frame, the restoring frame — and the assertion pins the exact recorded verdict down to its evidence values, alongside the verdicts that must stay absent. Encode the fixture from the log record rather than the frame capture: records survive rotation, captures churn through the eight-pair ring ([diagnostics.md](./diagnostics.md)). The module comment cites the source workspace and date, so a failing replay points back at its originating episode.
+A `frame_anomaly` record carries enough to rebuild the stream that produced it: the frame stamp and pulled-truth scalars, row and pane identities, edge timestamps, the event summary, and the judging window. A confirmed anomaly becomes a test in [`detect/tests.rs`](../../../crates/rimz/src/sidebar/observe/detect/tests.rs) under `mod recorded_episodes`: a signature builder reconstructs the minimal committed sequence from the record's evidence — a warm frame, the offending frame, the restoring frame — and the assertion pins the exact recorded verdict down to its evidence values, alongside the verdicts that must stay absent. Encode the fixture from the log record rather than the frame capture: records survive rotation, captures churn through the eight-pair ring ([diagnostics.md](./diagnostics.md)). The module comment cites the source workspace and date, so a failing replay points back at its originating episode.
 
 ## Roles and cost
 

@@ -35,7 +35,7 @@ Stdout is the protocol surface. The crate root of every binary enforces this wit
 #![deny(clippy::print_stdout)]
 ```
 
-The only legal `println!` sites are `--json` event emitters and the final user-facing message, each annotated `#[expect(clippy::print_stdout)]` with a one-line reason. The hook subcommand (`rimz hooks <agent> ...`) is a third allowed site — its stdout is the agent-native decision channel, per [hooks.md → Hook stdout is the decision channel](../internals/hooks.md#hook-stdout-is-the-decision-channel) and the rule of the same name in [AGENTS.md](../../AGENTS.md).
+The only legal `println!` sites are `--json` event emitters and the final user-facing message, each annotated `#[expect(clippy::print_stdout)]` with a one-line reason. The hook subcommand (`rimz hooks <agent> ...`) is a third allowed site — its stdout is the agent-native decision channel, per [hooks.md → Hook stdout is the decision channel](../internals/agents/hooks.md#hook-stdout-is-the-decision-channel) and the rule of the same name in [AGENTS.md](../../AGENTS.md).
 
 All other output flows through `tracing` to stderr:
 
@@ -103,7 +103,7 @@ Conventions:
 
 - Inner value is **never** `pub`. Use `pub(crate)` only if the same crate needs the unwrapped form for an FFI seam.
 - Identifiers minted by Rimz (`RequestId`, `SidebarInstanceId`, and other internal correlation IDs) use **UUIDv7** for monotonic ordering — filenames named after the ID sort chronologically without an external index.
-- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
+- Identifiers derived from external truth use their natural shape: `WorkspaceId` is the SHA-256 of `project_root`; `PaneId` is `"<mux>:<raw_pane_id>"` per [multiplexers.md](../internals/sidebar/multiplexers.md). These types still go through a newtype and a parser — never assembled inline.
 
 ## State machines as types
 
@@ -124,7 +124,7 @@ impl FeedStatus {
 }
 ```
 
-The CAS rules from [ledger.md](../internals/ledger.md) — first valid writer wins — live at the file boundary (`ledger/feed_store.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
+The CAS rules from [ledger.md](../internals/sidebar/ledger.md) — first valid writer wins — live at the file boundary (`ledger/feed_store.rs`), not inside the status enum. The enum carries the *vocabulary*; the boundary carries the *rule*.
 
 `AgentStatus`, `PermissionPosture`, surfaces, resolution methods — same shape.
 
@@ -169,7 +169,7 @@ Two write shapes in `ledger/atomic.rs` cover every disk write in the project:
 - `write_temp_then_rename(path, value)` for cold-path durable state (trust grants, workspace records, hook installs, the rotation carryover); `write_temp_then_rename_cache` — rename-atomic, no fsync — for feed files, liveness files, and rebuilt-on-next-read caches.
 - `append_record_bytes(path, line) -> Result<()>` — the event-log append discipline (one `write()` per record, no fsync — appended frames become durable through the write tail's debounced group fdatasync and rotation's pre-rename sync); the frame encoding itself lives beside its decoder in `ledger/event_log.rs`.
 
-Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `ledger/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [ledger.md](../internals/ledger.md) for the frame format, torn-record recovery, and rotation rules.
+Both helpers live next to the durability contract they enforce. No module hand-rolls its own temp-file dance, and every fsync syscall lives in `ledger/atomic.rs` (CI grep), counted through its `testkit` seam so the performance tier can assert fsync budgets from the integration binary. See [ledger.md](../internals/sidebar/ledger.md) for the frame format, torn-record recovery, and rotation rules.
 
 ## Tests
 
@@ -238,4 +238,4 @@ Inside `ci` the gates are ordered for speed, not listed order: the instant text 
 1. [AGENTS.md](../../AGENTS.md) — engineering principles and implementation rules.
 2. This file — module shape and idioms.
 3. [ARCHITECTURE.md](../../ARCHITECTURE.md) — where the modules live.
-4. [ledger.md](../internals/ledger.md) and the [quality gates](#quality-gates) — the contracts that touch every module.
+4. [ledger.md](../internals/sidebar/ledger.md) and the [quality gates](#quality-gates) — the contracts that touch every module.

@@ -2,7 +2,7 @@
 """Reference hook-bridge resolver — a test/doc artifact, not product.
 
 Implements the public resolver protocol from
-``docs/internals/resolvers.md``:
+``docs/internals/agents/resolvers.md``:
 
 * Writes a heartbeat file at ``$XDG_RUNTIME_DIR/rimz/<ws>/heartbeat/
   resolver.<id>.json`` once per tick.

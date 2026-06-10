@@ -10,7 +10,7 @@
 //! the refresh loop is unhealthy it shows the reason and elapsed time, and
 //! after recovery it lingers as a dismissable "last alert" notice. This is the
 //! reload-recovery contract documented in
-//! [`docs/internals/sidebar.md`](../../docs/internals/sidebar.md).
+//! [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
 
 mod ansi;
 mod chrome;

@@ -3,7 +3,7 @@
 //!
 //! The wire format here is the product's contract. The three surfaces are
 //! `native_ui | bridge | script` per `DESIGN.md`; statuses follow the
-//! lifecycle documented in `docs/internals/ledger.md`. Do not rename
+//! lifecycle documented in `docs/internals/sidebar/ledger.md`. Do not rename
 //! serialized values without updating the docs.
 
 use jiff::Timestamp;
@@ -319,7 +319,7 @@ pub struct PaneRef {
     /// (Zellij `tab_15`, tmux `@3`). An opaque grouping key, never the view's
     /// on-screen label: a Zellij tab *named* "Tab #15" and the internal id
     /// `tab_15` are routinely different tabs — see
-    /// docs/internals/multiplexers.md → Pane and view IDs.
+    /// docs/internals/sidebar/multiplexers.md → Pane and view IDs.
     #[serde(default)]
     pub view_id: Option<String>,
     #[serde(default)]
@@ -686,7 +686,7 @@ impl ContextSeverity {
 /// snapshot already stamps ([`ContextSeverity`] on each row,
 /// [`AgentStatus::is_attention`] on the buckets); emission and handling are
 /// deliberately unbuilt — see the hook-readiness note in
-/// docs/internals/sidebar.md.
+/// docs/internals/sidebar/sidebar.md.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum AgentSignal {

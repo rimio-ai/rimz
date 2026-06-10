@@ -245,7 +245,7 @@ fn read_trust_record(path: &Path) -> Result<Option<TrustRecord>> {
 /// field order is fixed, `BTreeMap` keys sort, and `Option::None` serializes
 /// as `null`. The wire format is `sha256:<hex>`. Changing this projection is
 /// a product-invariant change that must land alongside a doc update in
-/// [`docs/internals/trust.md`](../../docs/internals/trust.md).
+/// [`docs/internals/sidebar/trust.md`](../../docs/internals/sidebar/trust.md).
 pub fn executable_surface_hash(config: &ProjectConfig) -> String {
     let surface = ExecutableSurface::from(config);
     let bytes = serde_json::to_vec(&surface).expect("ExecutableSurface serializes");

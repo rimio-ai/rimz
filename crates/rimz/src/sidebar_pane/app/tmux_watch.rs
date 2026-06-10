@@ -6,7 +6,7 @@
 //! *that* topology moved, not which pane, so the identity-free nudge is the
 //! honest event. Every renderer receives it; only the elected producer pays
 //! the fresh pane pull. Latency only, never truth: the poll remains the
-//! presence backstop (docs/internals/multiplexers.md), a dead watcher degrades
+//! presence backstop (docs/internals/sidebar/multiplexers.md), a dead watcher degrades
 //! to the poll, and this thread respawns the client with backoff.
 //! Zellij has the same producer-publication contract through its presence plugin.
 //!

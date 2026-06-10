@@ -10,9 +10,9 @@ The log is state-dir rather than runtime-dir because its job is investigation af
 
 ## Envelope
 
-Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, and a tagged event.
+Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, and a tagged event.
 
-The `build` id — also stamped on every published pane frame — is a digest prefix of the writing executable's bytes ([`build_id.rs`](../../crates/rimz/src/build_id.rs)), so records and frames written by overlapping old/new builds during an upgrade are distinguishable in place. A producer that reads a prior frame stamped by a different build additionally records a `mixed_build_writers` event, marking the overlap window itself.
+The `build` id — also stamped on every published pane frame — is a digest prefix of the writing executable's bytes ([`build_id.rs`](../../../crates/rimz/src/build_id.rs)), so records and frames written by overlapping old/new builds during an upgrade are distinguishable in place. A producer that reads a prior frame stamped by a different build additionally records a `mixed_build_writers` event, marking the overlap window itself.
 
 Records are anomaly-only. Routine fetch ticks, successful paints, and stable cache hits do not write records.
 
@@ -26,9 +26,9 @@ Records are anomaly-only. Routine fetch ticks, successful paints, and stable cac
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role ([observe.md](./observe.md)) |
 | `mixed_build_writers` | `sidebar::produce::panes` | a prior published frame stamped by a different build than the producing process — the upgrade-overlap window where stale writers regress fresh state |
 
-The emitter column is the triage pointer: producer kinds describe pane-source truth — held, verified, carried, or refuted reads ([sidebar.md → honest reads](./sidebar.md#honest-reads-across-a-mux-hiccup)); renderer kinds describe one node's hold and refresh behaviour; projection kinds describe binding and grouping; `frame_anomaly` is the rendered symptom as the [observer](./observe.md) judged it.
+The emitter column is the triage pointer: producer kinds describe pane-source truth — held, verified, carried, or refuted reads ([sidebar.md → honest reads](../sidebar/sidebar.md#honest-reads-across-a-mux-hiccup)); renderer kinds describe one node's hold and refresh behaviour; projection kinds describe binding and grouping; `frame_anomaly` is the rendered symptom as the [observer](./observe.md) judged it.
 
-The carry kinds attribute the pane-source fault precisely. `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while `/proc` proved the omitted panes alive — the source under-reported and the producer carried the panes. `pane_carry_refuted` marks an initial listing the forced re-pull corrected — the first read lied and the truth healed within one produce. `carry_forward_expired` marks liveness proof running out: a carried pane drops after `PANE_CARRY_TTL` ([`timing.rs`](../../crates/rimz/src/sidebar/timing.rs)).
+The carry kinds attribute the pane-source fault precisely. `pane_carry_forward` marks a mux omission that survived a forced direct re-pull while `/proc` proved the omitted panes alive — the source under-reported and the producer carried the panes. `pane_carry_refuted` marks an initial listing the forced re-pull corrected — the first read lied and the truth healed within one produce. `carry_forward_expired` marks liveness proof running out: a carried pane drops after `PANE_CARRY_TTL` ([`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs)).
 
 Pure projection layers return diagnostics as data. Impure callers append them through `DiagSink`, keeping ledger reducers and the renderer gate free of disk-write APIs. The observer's writer thread emits through the same sink, so every anomaly source shares one envelope, one file, and one rate limiter.
 
@@ -36,7 +36,7 @@ Pure projection layers return diagnostics as data. Impure callers append them th
 
 One condition can write several records and one record can stand for many occurrences; read counts through these rules:
 
-- The sink rate-limits per identity — the record's kind plus its salient evidence fields ([`identity_key`](../../crates/rimz/src/schema/diag.rs)) — over a five-second window, so a tight loop writes once per window while distinct evidence always passes.
+- The sink rate-limits per identity — the record's kind plus its salient evidence fields ([`identity_key`](../../../crates/rimz/src/schema/diag.rs)) — over a five-second window, so a tight loop writes once per window while distinct evidence always passes.
 - The observer adds a per-kind cooldown upstream (`OBSERVE_COOLDOWN`); repeats inside it increment a suppressed counter that flushes on the kind's next record, so one `frame_anomaly` line can stand for a long episode.
 - Every renderer instance records its own stream, so one published-frame problem records once per instance while a node-local problem records on one. The distinct `instance_id` count inside an episode separates the two.
 - The frame-capture ring churns within hours in a busy room; copy `diag-frames/` pairs out at the start of an investigation. The log records carry enough evidence to reconstruct an episode after its captures rotate.
@@ -73,6 +73,6 @@ A recorded partial-read episode reads like this — a pane source reports fourte
 | `pane_count_drop` with eight removed panes | the shrink published; the capture pair preserves both frames |
 | 5× `row_presence_flap`, gone→back 2.26s, no `pane_closed` events, `pulled_rows` back at full count | every instance painted the flap; pulled truth had already recovered, so the rendered gap was the published partial frame propagating |
 
-The carry-forward guard answers this shape before publication, so the same fault now records `pane_carry_forward` under a steady roster — `row_presence_flap` records beside carry records mean the guard missed. This episode persists as the recorded-episode regression test in [`observe/detect/tests.rs`](../../crates/rimz/src/sidebar/observe/detect/tests.rs).
+The carry-forward guard answers this shape before publication, so the same fault now records `pane_carry_forward` under a steady roster — `row_presence_flap` records beside carry records mean the guard missed. This episode persists as the recorded-episode regression test in [`observe/detect/tests.rs`](../../../crates/rimz/src/sidebar/observe/detect/tests.rs).
 
 Frame captures may contain command lines, cwd values, and other pane metadata. They receive the same local filesystem privacy boundary as the rest of the workspace state directory.

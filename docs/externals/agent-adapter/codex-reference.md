@@ -1,6 +1,6 @@
 # Codex protocol reference
 
-> The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../../internals/hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../../internals/transcript.md) maps the rollout transcript and app-server onto `AgentContext`, [account.md](../../internals/account.md) maps the auth surface onto account and balance.
+> The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../../internals/agents/hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../../internals/agents/transcript.md) maps the rollout transcript and app-server onto `AgentContext`, [account.md](../../internals/agents/account.md) maps the auth surface onto account and balance.
 
 This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
 
@@ -29,9 +29,9 @@ codex app-server generate-json-schema --out DIR  # JSON Schema bundle
 
 ## Hooks
 
-Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../../internals/hooks.md#appendix--codex).
+Codex hooks mirror Claude's shape: a command Codex runs at a lifecycle point, fed a JSON payload on **stdin**, returning a decision on **stdout**. They are wired in `~/.codex/config.toml` as `[[hooks.Event]]` tables. Rimz's [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) `INSTALLED_EVENTS` constant is the source of truth for the wired set; the native-event → Rimz status mapping is the [hooks.md Codex appendix](../../internals/agents/hooks.md#appendix--codex).
 
-**Execution.** A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and Rimz recovers it from the in-pane process instead ([hooks.md → Hooks resolve the room they live in](../../internals/hooks.md#hooks-resolve-the-room-they-live-in)).
+**Execution.** A hook command runs with the **session cwd** as working directory and the **spawning process's environment** (`command_runner.rs`: no `env_clear`, per-handler overlays only). Since 0.137 a plain TUI launch routes hooks through the shared per-user app-server daemon, so the hook child's parent — and its environment — is the daemon's, not the pane's; the mux-stamped identity pin never arrives via env, and Rimz recovers it from the in-pane process instead ([hooks.md → Hooks resolve the room they live in](../../internals/agents/hooks.md#hooks-resolve-the-room-they-live-in)).
 
 ### Config shape
 
@@ -58,7 +58,7 @@ Codex requires the user to review and trust each non-managed hook definition bef
 trusted_hash = "sha256:…"
 ```
 
-A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. Rimz detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([hooks.md → Appendix Codex](../../internals/hooks.md#appendix--codex)).
+A fresh `rimz hooks install` — or any change to the installed command — is therefore a wired-but-dead channel until the user trusts it inside Codex. Rimz detects the gap presence-only (`untrusted_hook_events_at` matches installed events against the state keys by token; the hash algorithm stays Codex's), and `rimz start`/`rimz doctor` surface the fix ([hooks.md → Appendix Codex](../../internals/agents/hooks.md#appendix--codex)).
 
 ### Common input
 
@@ -95,7 +95,7 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 
 Codex has **no `SessionEnd` or `Notification` hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
 
-**Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. Rimz's handling is in the [hooks.md Codex appendix](../../internals/hooks.md#appendix--codex); re-verify against the hooks reference URL above on each refresh.
+**Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. Rimz's handling is in the [hooks.md Codex appendix](../../internals/agents/hooks.md#appendix--codex); re-verify against the hooks reference URL above on each refresh.
 
 ### Decision and output schema
 
@@ -163,7 +163,7 @@ The protocol is organized around three primitives: an **Item** (atomic input/out
 
 The [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client speaks only **read-only, non-interfering** methods — it never calls `thread/resume`, `turn/start`, or any write, which would rejoin and own the user's live thread.
 
-**`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal Rimz reaps ghost sessions against ([sidebar.md → Presence model](../../internals/sidebar.md#presence-model)).
+**`thread/loaded/list`** → the thread ids the app-server currently holds in memory; the daemon-mode liveness signal Rimz reaps ghost sessions against ([sidebar.md → Presence model](../../internals/sidebar/sidebar.md#presence-model)).
 
 ```jsonc
 // result — a flat list of loaded thread ids
@@ -231,7 +231,7 @@ A non-exhaustive map of the broader surface, for future wiring. Generate the exa
 
 ### Connection ladder
 
-Client connection preference (broker → daemon → cold-spawn) and the refresh trigger are in [transcript.md → Appendix Codex](../../internals/transcript.md#appendix--codex).
+Client connection preference (broker → daemon → cold-spawn) and the refresh trigger are in [transcript.md → Appendix Codex](../../internals/agents/transcript.md#appendix--codex).
 
 ## Rollout transcript JSONL
 
@@ -251,7 +251,7 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
 { "type": "event_msg", "payload": { "type": "agent_message", "message": "..." } }
 ```
 
-Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. `agent_message.message` is the main-thread assistant text Rimz emits as `rimz run --stream` / `rimz run stream` progress; duplicate `response_item` rows are ignored for streaming. The field → internal mapping and the date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root) are in [transcript.md](../../internals/transcript.md#appendix--codex).
+Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. `agent_message.message` is the main-thread assistant text Rimz emits as `rimz run --stream` / `rimz run stream` progress; duplicate `response_item` rows are ignored for streaming. The field → internal mapping and the date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root) are in [transcript.md](../../internals/agents/transcript.md#appendix--codex).
 
 ## Auth file
 
@@ -262,4 +262,4 @@ Unlike Claude (raw tokens, window derived from the payload model), Codex carries
 | `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** (`∞`) |
 | `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled once a session reports it) |
 
-The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not the idle file. The semantics are in [account.md](../../internals/account.md#per-provider-mapping).
+The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not the idle file. The semantics are in [account.md](../../internals/agents/account.md#per-provider-mapping).

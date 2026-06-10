@@ -1,6 +1,6 @@
 # Web access
 
-> See [DESIGN.md](../../DESIGN.md) and [multiplexers.md](./multiplexers.md) for the commitments this doc extends.
+> See [DESIGN.md](../../../DESIGN.md) and [multiplexers.md](../sidebar/multiplexers.md) for the commitments this doc extends.
 
 This document defines the target shape for web access. The feature is Zellij-only in its first version. tmux remains first-class for core Rimz behaviour; web access is an attach convenience, not a correctness path.
 
@@ -53,7 +53,7 @@ The slug maps every character that is not ASCII alphanumeric or `_` to `-`, then
 
 Encoding the full path keeps the name URL-safe, shell-friendly, and collision-free: the project root is already unique, so the slug needs no extra hash. `/` collapses to a single `-`, so the name stays one URL path segment rather than several route segments. The tradeoff is that the name is longer and embeds the local path — including home directories and any private customer or branch names in the path — directly in `zellij list-sessions` output and web URLs.
 
-The derivation can change between releases, so the name is not the durable identity — the `workspace_id` (a hash of the project root) is. When a launch derives a name that differs from the one in `workspace.json` and a session still answers to the recorded name, launch retires the old session and rebirths the workspace under the new name. The rename takes effect without stranding the running session or its sidebar; see [`ledger.md`](./ledger.md).
+The derivation can change between releases, so the name is not the durable identity — the `workspace_id` (a hash of the project root) is. When a launch derives a name that differs from the one in `workspace.json` and a session still answers to the recorded name, launch retires the old session and rebirths the workspace under the new name. The rename takes effect without stranding the running session or its sidebar; see [`ledger.md`](../sidebar/ledger.md).
 
 ## Planned CLI
 

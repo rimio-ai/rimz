@@ -4,7 +4,7 @@
 //! `docs/guide/experience.md`. They drive the real `rimz sidebar serve`
 //! renderer through a `portable-pty` over a real ledger and assert on
 //! `vt100`-parsed screen text — what the column actually shows. Renderer
-//! mechanics stay in `docs/internals/sidebar.md`.
+//! mechanics stay in `docs/internals/sidebar/sidebar.md`.
 //!
 //! "Running an agent" is simulated faithfully: Rimz only ever observes agents
 //! through their hooks, and the work pane itself is opaque to it (resolvers own

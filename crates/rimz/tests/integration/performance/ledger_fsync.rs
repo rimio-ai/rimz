@@ -1,7 +1,7 @@
 //! Fsync discipline of the relaxed write path.
 //!
 //! Per-record event-log fsyncs were the write path's dominant latency, so
-//! the contract (docs/internals/ledger.md): an event append performs zero
+//! the contract (docs/internals/sidebar/ledger.md): an event append performs zero
 //! fsyncs of its own — durability rides the off-lock write tail's group
 //! fdatasync, debounced to at most one per [`LOG_SYNC_INTERVAL`], which one
 //! writer pays for the whole fleet. Every fsync syscall funnels through

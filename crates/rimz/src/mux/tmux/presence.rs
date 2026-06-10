@@ -5,7 +5,7 @@ use std::path::PathBuf;
 // ── Control-mode presence stream ──────────────────────────────────────────────
 
 /// A live tmux control-mode presence stream — the tmux fast path for pane
-/// topology (docs/internals/multiplexers.md). Attaches a read-only (`-r`),
+/// topology (docs/internals/sidebar/multiplexers.md). Attaches a read-only (`-r`),
 /// output-suppressed (`-f no-output`) control client to one session and
 /// surfaces a nudge per presence-relevant notification: a window opened or
 /// closed, a layout change (a split opened/closed inside a window). Poll stays

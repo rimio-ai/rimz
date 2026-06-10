@@ -23,13 +23,13 @@ The sidebar is a worktree-keyed presence and attention map: one row per live pan
 - A fixed cockpit make-up (`? 2  ! 1 …`) compresses the whole fleet to a single line: a row of zeros means nothing needs you, so you skip the scan entirely.
 - A row exists because a pane is running right now, read live from the multiplexer's pane list, while an agent's durable facts (status, task, enrichments) come from the ledger. An agent that exits is gone the moment its pane reverts to a shell; the row clears on its own.
 
-The full glyph vocabulary and every rendered frame live in [the interface reference](./docs/interface/sidebar.md); how presence, ranking, and recovery are computed lives in [docs/internals/sidebar.md](./docs/internals/sidebar.md).
+The full glyph vocabulary and every rendered frame live in [the interface reference](./docs/interface/sidebar.md); how presence, ranking, and recovery are computed lives in [docs/internals/sidebar/sidebar.md](./docs/internals/sidebar/sidebar.md).
 
 ### Realtime state and rich stats
 
 Routing attention is half the read; the other half is *how the work is going*. Rimz gives every agent a small, legible state and rides it with rich live stats, so progress and health read without ever leaving the sidebar.
 
-- Each agent rolls up to one of five states: `running`, `waiting`, `idle`, `success`, `failed`. Rimz observes that state and derives one of its own: `paused`, a display park for an agent that stopped mid-turn on a provider limit, lifted by provider recovery, window reset, or the next hook event. Short-lived heads ride the running state (a thinking sparkle, a compaction pulse) so the moment-to-moment phase shows without inventing new states ([docs/internals/agent.md](./docs/internals/agent.md)).
+- Each agent rolls up to one of five states: `running`, `waiting`, `idle`, `success`, `failed`. Rimz observes that state and derives one of its own: `paused`, a display park for an agent that stopped mid-turn on a provider limit, lifted by provider recovery, window reset, or the next hook event. Short-lived heads ride the running state (a thinking sparkle, a compaction pulse) so the moment-to-moment phase shows without inventing new states ([docs/internals/agents/agent.md](./docs/internals/agents/agent.md)).
 - A context meter, token totals, diff stats, todo progress, a last-activity age, and account-scoped usage budgets ride the rows and a per-provider dashboard, so how far along and how healthy read at a glance: which agent is burning toward a rate limit, which is one approval from done. These enrich display; the ledger and explicit events decide state and correctness.
 
 ### Stay light
@@ -46,7 +46,7 @@ Every event reaches the room through one CLI: `rimz event …` to announce, `rim
 
 ### Resolve when you opt in
 
-By default Rimz observes and routes: an agent asks in its own UI, Rimz writes the feed item, wakes the sidebar, and walks you to the pane. Fast, with the answer where the full context lives. Resolvers are how that loop keeps running when you step away. Enrol a **resolver** (an external process you trust on this machine) and it answers routine feed items ahead of you. Resolvers form an ordered chain that always ends with you: a fast policy first, then slower escalation, then you if nothing matched. Rimz ships the protocol and leaves the policy to you. Two reference resolvers ship as examples: **hook-bridge**, a permission policy that answers routine read-only tool calls, and **pane-send**, which answers well-known terminal prompts by reading and typing into the pane. The chain, the heartbeat, and the two examples live in [docs/internals/resolvers.md](./docs/internals/resolvers.md).
+By default Rimz observes and routes: an agent asks in its own UI, Rimz writes the feed item, wakes the sidebar, and walks you to the pane. Fast, with the answer where the full context lives. Resolvers are how that loop keeps running when you step away. Enrol a **resolver** (an external process you trust on this machine) and it answers routine feed items ahead of you. Resolvers form an ordered chain that always ends with you: a fast policy first, then slower escalation, then you if nothing matched. Rimz ships the protocol and leaves the policy to you. Two reference resolvers ship as examples: **hook-bridge**, a permission policy that answers routine read-only tool calls, and **pane-send**, which answers well-known terminal prompts by reading and typing into the pane. The chain, the heartbeat, and the two examples live in [docs/internals/agents/resolvers.md](./docs/internals/agents/resolvers.md).
 
 ## The three operating paths
 
@@ -58,7 +58,7 @@ Every actionable feed item is created with one `surface`, and the surface decide
 | `bridge` | Agent hook with a fresh enrolled resolver | yes | The hook writes the item, binds a per-request socket, and waits up to the agent's hook cap for a resolver answer, falling back to `native_ui` on timeout. |
 | `script` | A script that called `rimz feed ask` | yes | The script blocks until a human or resolver answers, or its own timeout fires. No agent involved. |
 
-These three are the whole contract. Unattended auto-approve is one of these paths made permissive: the agent's own bypass flag (`native_ui`) or a permissive resolver (`bridge`). Both leave a record in the ledger. The wire-level surfaces, sockets, and CAS rules are in [docs/internals/ledger.md](./docs/internals/ledger.md).
+These three are the whole contract. Unattended auto-approve is one of these paths made permissive: the agent's own bypass flag (`native_ui`) or a permissive resolver (`bridge`). Both leave a record in the ledger. The wire-level surfaces, sockets, and CAS rules are in [docs/internals/sidebar/ledger.md](./docs/internals/sidebar/ledger.md).
 
 ## Commitments
 
@@ -79,5 +79,5 @@ Each line is a decision a reader might challenge, with the reason on the same li
 
 - Not a cloud control plane or cross-workspace orchestrator: one root, one room.
 - The feed is open beyond agents: a script or a human can announce events and answer questions through the same CLI an agent's hooks use.
-- Resolver policy is yours to write. Two reference resolvers ship as examples (see [resolvers.md](./docs/internals/resolvers.md)).
+- Resolver policy is yours to write. Two reference resolvers ship as examples (see [resolvers.md](./docs/internals/agents/resolvers.md)).
 - Process resurrection across host restart is the host's job. The ledger survives a reboot; running sessions need tmux-resurrect, Zellij resurrect, systemd, or another supervisor.

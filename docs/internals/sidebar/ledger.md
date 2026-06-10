@@ -1,6 +1,6 @@
 # Ledger and bridge
 
-> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
 
 The ledger is the source of truth. The bridge is the optional blocking path that carries decisions back to a waiting hook or script. Correctness lives here; everything else (sidebar, notifications, agent UIs) reads through it.
 
@@ -31,7 +31,7 @@ The wire-level signal that distinguishes the three is the `surface` field on the
 
 ## Surfaces
 
-The `native_ui` / `bridge` / `script` vocabulary is defined in [DESIGN.md → The three operating paths](../../DESIGN.md#the-three-operating-paths). This doc describes how each path moves through the ledger; the table of which path holds the hook open and where the answer comes from lives there.
+The `native_ui` / `bridge` / `script` vocabulary is defined in [DESIGN.md → The three operating paths](../../../DESIGN.md#the-three-operating-paths). This doc describes how each path moves through the ledger; the table of which path holds the hook open and where the answer comes from lives there.
 
 `rimz feed resolve` is valid only for `bridge` and `script`. `rimz feed dismiss` is the local acknowledgement path for `native_ui` — it never reaches the agent.
 
@@ -75,7 +75,7 @@ Rules:
 - A feed item that reaches a terminal status (`resolved`, `timed_out`, `abandoned`) relocates into `feed/terminal/` with an atomic rename under the same lock, so decision-path scans stay O(pending). Audit reads (`feed list --audit`, `feed show`) span both directories.
 - `events.log.jsonl` uses length-plus-CRC framing (`<len> <crc32> <json>`), the CRC computed over the JSON payload; pre-CRC frames still decode, so old logs fold cleanly. The event log and the feed files are the crash-recoverable truth; everything under `snapshots/` is a reconstructible cache.
 - A torn trailing record at SIGKILL is skipped on rebuild and logged. A corrupt frame *behind* later frames hard-errors every read; the next write tail (or `rimz gc`) repairs by truncating at the first invalid frame and republishing from the surviving prefix.
-- The workspace flock makes the log single-writer-at-a-time, and recovery is built on that: only the *trailing* frame can ever be in flight, so a torn frame anywhere earlier is corruption and rebuild fails loudly rather than silently dropping the events behind it. This is load-bearing — lock-free appends (`O_APPEND` from concurrent writers) would let writeback reordering tear a *middle* frame after a crash, and are unsafe until the framing grows per-frame magic for resync (the CRC validates a frame; it cannot relocate the next boundary past a torn middle). See the rejected-candidates list in [performance.md](./performance.md#bottlenecks-and-deferred-work).
+- The workspace flock makes the log single-writer-at-a-time, and recovery is built on that: only the *trailing* frame can ever be in flight, so a torn frame anywhere earlier is corruption and rebuild fails loudly rather than silently dropping the events behind it. This is load-bearing — lock-free appends (`O_APPEND` from concurrent writers) would let writeback reordering tear a *middle* frame after a crash, and are unsafe until the framing grows per-frame magic for resync (the CRC validates a frame; it cannot relocate the next boundary past a torn middle). See the rejected-candidates list in [performance.md](../health/performance.md#bottlenecks-and-deferred-work).
 - Rollup reads are lock-free. The snapshot resumes from the persisted fold base in `snapshots/rollup.json` and folds only the log bytes appended since, so a writer's half-written trailing frame is simply not folded until it completes — it can never drop a previously-folded event. The write that completes the frame posts the wakeup that folds it.
 - `rimz workspace rotate-events` archives the active log into `events.log.archive/events.<uuidv7>.jsonl` once it exceeds the operator-supplied byte threshold (default `64MiB`); UUIDv7 filenames sort chronologically. The same command prunes archives older than `--archive-older-than`.
 - Before rename, the agent rollup of the rotating log is merged into `agents.carryover.json`. The snapshot reducer loads carryover and lets newer in-log observations override; this keeps the sidebar's agent panel correct across rotations without rescanning archives. Rotation also bumps the rollup generation and reseeds `snapshots/rollup.json` from the carryover, so incremental readers detect the boundary and never fold across it.
@@ -123,7 +123,7 @@ No fresh enrolled resolver heartbeat at hook fire time:
 5. Hook exits within milliseconds.
 6. Agent's own UI asks the human.
 
-No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a turn-boundary lifecycle event (a fresh prompt or a turn's end) clears it, and a session-end event clears every surface the session left pending (the adapter marks these events via `moves_on` / `ends_session` — see [hooks.md](./hooks.md)). Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad per-tool hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
+No per-request socket is bound, and the human answers in the agent's own UI — Rimz never learns the decision, so the item never reaches `resolved`. Instead the next ledger event that proves the session moved on expires it: a fresh ask supersedes it before being pushed, a turn-boundary lifecycle event (a fresh prompt or a turn's end) clears it, and a session-end event clears every surface the session left pending (the adapter marks these events via `moves_on` / `ends_session` — see [hooks.md](../agents/hooks.md)). Each match moves to `abandoned` with an `agent_moved_on` (or `agent_session_ended`) reason, so a session can never stack more than one native_ui row. The broad per-tool hook is silent on the ledger, so it is *not* a trigger; the read-side snapshot also collapses a session's pending asks to one row as a backstop.
 
 ## Bridge path
 
@@ -135,7 +135,7 @@ Fresh enrolled resolver heartbeat at hook fire time:
 4. CAS validates `status = pending`, active chain step, `workspace_id`, `request_id`, and nonce.
 5. The waiting hook unblocks and prints exactly one agent-native decision JSON.
 
-On hook-cap timeout (the per-agent ceiling — see [hooks.md](./hooks.md) for the value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
+On hook-cap timeout (the per-agent ceiling — see [hooks.md](../agents/hooks.md) for the value each adapter ships), the hook returns neutral, the feed item moves to `timed_out`, and the sidebar labels it **"Delegated to native prompt"** — the agent's own UI takes over, exactly as in the default path.
 
 ## Script path
 
@@ -146,7 +146,7 @@ On hook-cap timeout (the per-agent ceiling — see [hooks.md](./hooks.md) for th
 After every ledger write the CLI or hook subprocess:
 
 1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
-2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each `sock/sidebar.<instance_id>.sock`.
+2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each `sock/sidebar.<instance_id>.sock`.
 
 The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance. The `MuxBackend::wake_sidebar` pipe primitive (`zellij --session <name> pipe --name rimz::feed`) is dormant: it has no consumer until the opt-in Zellij plugin rail is built, so the walk spawns no `zellij` subprocess per write. When that rail lands it re-arms the pipe, gated on rail presence (see [multiplexers.md](./multiplexers.md)).
 

@@ -7,7 +7,7 @@
 //! [`feed_socket_path`] so there is one source of truth.
 //!
 //! Validation is by `(workspace_id, request_id, nonce)` — never by PID alone,
-//! per `docs/internals/ledger.md`. Frames that fail validation are logged at
+//! per `docs/internals/sidebar/ledger.md`. Frames that fail validation are logged at
 //! `debug` and dropped; the waiter keeps recving until the cap.
 //!
 //! The TOCTOU resolver-heartbeat re-stat described by the bridge path lives

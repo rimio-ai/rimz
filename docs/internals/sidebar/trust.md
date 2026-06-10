@@ -1,6 +1,6 @@
 # Project trust
 
-> See [`docs/guide/security.md`](../guide/security.md) for the user-facing threat model and [`docs/reference/cli.md`](../reference/cli.md) for the `rimz trust` surface.
+> See [`docs/guide/security.md`](../../guide/security.md) for the user-facing threat model and [`docs/reference/cli.md`](../../reference/cli.md) for the `rimz trust` surface.
 
 Project config at `<project_root>/.rimz/config.toml` is inert until the workspace is trusted. A grant pins a SHA-256 of every command-running field; later reads re-hash and demote to stale when the hash drifts.
 
@@ -17,7 +17,7 @@ Project config at `<project_root>/.rimz/config.toml` is inert until the workspac
 
 ## Executable surface
 
-Every field that can cause a process to run enters the hash. The current projection lives in [`crates/rimz/src/trust.rs::ExecutableSurface`](../../crates/rimz/src/trust.rs).
+Every field that can cause a process to run enters the hash. The current projection lives in [`crates/rimz/src/trust.rs::ExecutableSurface`](../../../crates/rimz/src/trust.rs).
 
 - `[[layout.initial_panes]]` — `name`, `command`, `cwd`, `env`.
 - `[layout.tmux]` — `status_left`, `status_right`, `popup_command`.
@@ -35,7 +35,7 @@ Adding a command-running field that isn't projected into `ExecutableSurface` is 
 ## Storage
 
 - **Project config.** `<project_root>/.rimz/config.toml`. Committed.
-- **Trust record.** `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`. Per-machine. Atomic temp+rename writes through [`ledger::atomic::write_bytes_atomically`](../../crates/rimz/src/ledger/atomic.rs).
+- **Trust record.** `$XDG_CONFIG_HOME/rimz/projects/<workspace_id>/trust.toml`. Per-machine. Atomic temp+rename writes through [`ledger::atomic::write_bytes_atomically`](../../../crates/rimz/src/ledger/atomic.rs).
 
 Record schema:
 

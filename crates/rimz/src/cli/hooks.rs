@@ -9,7 +9,7 @@
 //! for up to the agent descriptor's `hook_cap`. On resolver answer
 //! the hook prints the agent-native decision JSON; on cap or resolver loss
 //! it downgrades to `native_ui` and returns the agent-native no-op. See
-//! `docs/internals/ledger.md` for the wire-level contract.
+//! `docs/internals/sidebar/ledger.md` for the wire-level contract.
 
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};

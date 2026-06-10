@@ -1,7 +1,7 @@
 //! Wire schemas for everything Rimz puts on disk or on a socket.
 //!
 //! Protocol versions are pinned here as constants; bump them in lockstep with
-//! the corresponding schema change and update `docs/internals/ledger.md`.
+//! the corresponding schema change and update `docs/internals/sidebar/ledger.md`.
 
 pub mod diag;
 pub mod event;

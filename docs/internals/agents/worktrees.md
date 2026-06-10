@@ -1,6 +1,6 @@
 # Worktrees And Agent Tabs
 
-> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
 
 Rimz launches agent fleets by separating three choices: **agents** choose which tools run, **tab layout** chooses the shape on screen, and **worktree** chooses where they run.
 

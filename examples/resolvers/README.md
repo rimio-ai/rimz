@@ -2,7 +2,7 @@
 
 Reference resolver artifacts for tests and documentation. **Not shipped as
 product.** They exist to prove the resolver protocol from
-[`docs/internals/resolvers.md`](../../docs/internals/resolvers.md) is
+[`docs/internals/agents/resolvers.md`](../../docs/internals/agents/resolvers.md) is
 implementable from outside the workspace, using only the public CLI.
 
 The scripts are single-file Python 3 (stdlib only — no third-party deps). They write their own heartbeats and shell out to public Rimz commands: feed commands for bridge resolvers, pane commands for resolver-owned TTY inspection, and `steer` for human-authored recovery text.
@@ -68,7 +68,7 @@ Use `--mode replay` to send `pane send --key up --key enter` instead of `steer .
 ## Discipline
 
 Both scripts follow the resolver discipline documented in
-[`docs/internals/resolvers.md`](../../docs/internals/resolvers.md):
+[`docs/internals/agents/resolvers.md`](../../docs/internals/agents/resolvers.md):
 
 - **Heartbeat is a file the resolver owns.** Atomic temp-file + rename so
   partial writes don't leak.

@@ -2,7 +2,7 @@
 """Reference pane-send resolver — a test/doc artifact, not product.
 
 Demonstrates the *universal answer surface* from
-``docs/internals/resolvers.md`` — wrapping any TTY prompt by capturing the
+``docs/internals/agents/resolvers.md`` — wrapping any TTY prompt by capturing the
 pane, matching the captured text against a **bounded** policy regex, typing
 an answer through ``rimz pane send``, re-capturing to confirm, and finally
 calling ``rimz feed resolve --method pane-send`` so the ledger reflects what

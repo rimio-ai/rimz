@@ -1,4 +1,4 @@
-//! The enrichment cadence gates, end to end (docs/internals/performance.md,
+//! The enrichment cadence gates, end to end (docs/internals/health/performance.md,
 //! the 2026-06 enrichment cadence pass): each producer enrichment runs on its
 //! own TTL'd clock, gated by a persisted stamp, so a produce inside every
 //! window does stamp reads only — no git forks, no transcript IO. Reuses the

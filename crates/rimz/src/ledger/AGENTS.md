@@ -1,6 +1,6 @@
 # Ledger
 
-Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. The durability contract — surfaces, feed lifecycle, CAS rules, the decision bridge — lives in [docs/internals/ledger.md](../../../../docs/internals/ledger.md).
+Local contract for `crates/rimz/src/ledger/` — durable workspace state. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules. The durability contract — surfaces, feed lifecycle, CAS rules, the decision bridge — lives in [docs/internals/sidebar/ledger.md](../../../../docs/internals/sidebar/ledger.md).
 
 ## Write path
 

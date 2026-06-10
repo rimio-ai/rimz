@@ -1,10 +1,10 @@
 # Resolvers
 
-> See [DESIGN.md](../../DESIGN.md) for the commitments this doc operationalizes.
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
 
-A resolver is an external process that answers feed items on your behalf. Rimz ships no resolver as product, but two reference examples come in the box ([`examples/resolvers/`](../../examples/resolvers/README.md)) — ready to enrol and adapt. You enrol the ones you trust on the machine that runs the workspace, and the chain ends with you.
+A resolver is an external process that answers feed items on your behalf. Rimz ships no resolver as product, but two reference examples come in the box ([`examples/resolvers/`](../../../examples/resolvers/README.md)) — ready to enrol and adapt. You enrol the ones you trust on the machine that runs the workspace, and the chain ends with you.
 
-> Product invariant lives in [DESIGN.md](../../DESIGN.md). A resolver is the explicit, opt-in way to delegate routine answers.
+> Product invariant lives in [DESIGN.md](../../../DESIGN.md). A resolver is the explicit, opt-in way to delegate routine answers.
 
 ## Why you want one
 
@@ -119,4 +119,4 @@ Resolver discipline:
 - re-capture after sending to confirm,
 - always call `feed resolve` (so the ledger reflects what happened).
 
-For the human framing of resolver chains — why they matter, how a multi-step chain plays out overnight, what "the chain ends with you" means in practice — see [product.md](../guide/product.md).
+For the human framing of resolver chains — why they matter, how a multi-step chain plays out overnight, what "the chain ends with you" means in practice — see [product.md](../../guide/product.md).

@@ -3,7 +3,7 @@
 //!
 //! Every meter in the sidebar — context-window %, todo progress, diff stats —
 //! renders through the same vocabulary so they read as siblings, not as
-//! one-off widgets (see [the sidebar grammar](../../../docs/internals/sidebar.md)).
+//! one-off widgets (see [the sidebar grammar](../../../docs/internals/sidebar/sidebar.md)).
 
 use crate::agents::TurnPhase;
 use crate::config::{BudgetPaceConfig, BudgetZonesConfig};

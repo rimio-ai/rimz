@@ -60,7 +60,7 @@ rimz workspace rotate-events [--max-bytes <SIZE>] [--archive-older-than <DURATIO
 
 `--archive-older-than <DURATION>` prunes archived event logs older than the supplied duration. Rotation retention accepts `s`, `m`, `h`, and `d` units, such as `12h` or `30d`; omitting the flag keeps all archives.
 
-The ledger durability and event-log rotation contract lives in [internals/ledger.md](../../internals/ledger.md).
+The ledger durability and event-log rotation contract lives in [internals/sidebar/ledger.md](../../internals/sidebar/ledger.md).
 
 ## Reload, reset, and GC
 
@@ -94,7 +94,7 @@ rimz gc [--older-than <DURATION>]
 
 `--older-than <DURATION>` defaults to `24h` and accepts `s`, `m`, and `h` units, such as `30s`, `5m`, or `1h`.
 
-Sidebar reload behavior is described in [internals/sidebar.md](../../internals/sidebar.md), and reset and garbage-collection ledger effects are described in [internals/ledger.md](../../internals/ledger.md).
+Sidebar reload behavior is described in [internals/sidebar/sidebar.md](../../internals/sidebar/sidebar.md), and reset and garbage-collection ledger effects are described in [internals/sidebar/ledger.md](../../internals/sidebar/ledger.md).
 
 ## Ping
 

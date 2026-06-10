@@ -1,7 +1,7 @@
 //! Structured parser for Claude Code's statusline JSON.
 //!
 //! Claude `exec`s its configured `statusLine` command on every render and pipes
-//! a rich JSON blob to its stdin (see `docs/internals/hooks.md`). This module
+//! a rich JSON blob to its stdin (see `docs/internals/agents/hooks.md`). This module
 //! is a tolerant serde model of that blob plus the projection onto the
 //! agent-agnostic [`AgentContext`]. Every field is optional and unknown keys
 //! are ignored, so a newer Claude that adds or drops a field still parses —

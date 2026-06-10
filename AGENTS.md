@@ -19,7 +19,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Explicit Rust.** Typed IDs, typed state machines, structured parsers, explicit errors. Domain errors return `Result`; `unwrap`, `expect`, and panics belong in tests, build scripts, and provably-impossible states (with a comment).
 - **Strong types** for workspace, request, resolver, pane, agent-kind, and agent-session IDs, and for surfaces, statuses, and protocol versions.
 - **Structured parsers** for TOML, JSON, KDL, and agent payloads.
-- **Ledger durability.** File-state writes use temp-file plus rename. Event-log writes follow the durability contract in [docs/internals/ledger.md](./docs/internals/ledger.md).
+- **Ledger durability.** File-state writes use temp-file plus rename. Event-log writes follow the durability contract in [docs/internals/sidebar/ledger.md](./docs/internals/sidebar/ledger.md).
 - **Fail-fast as a precondition, not best-effort.** A configured capability that cannot work fails at the entry point with the fix — `rimz start` refuses rather than launching a degraded surface that errors downstream. Best-effort is for latency and enrichment (sidebar wakeups, app-server context), never for a precondition the user switched on.
 
 ## Product invariants
@@ -70,27 +70,32 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [cli.md](./docs/reference/cli.md) — CLI entry point and command map; grouped command details live under `docs/reference/cli/`.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 
-**Internals** — `docs/internals/`
-- [ledger.md](./docs/internals/ledger.md) — durable state and the blocking decision bridge.
-- [multiplexers.md](./docs/internals/multiplexers.md) — Zellij and tmux backend contracts.
-- [state.md](./docs/internals/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
-- [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
-- [diagnostics.md](./docs/internals/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow.
-- [notifications.md](./docs/internals/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
-- [remote.md](./docs/internals/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.
-- [observe.md](./docs/internals/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/diagnostics.md) channel.
-- [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
-- [messages.md](./docs/internals/messages.md) — state-aware `steer` and durable per-agent queued messages: target grammar, record layout, gates, delivery, attempts, and hazards.
-- [run.md](./docs/internals/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.
-- [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
-- [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.
-- [agent.md](./docs/internals/agent.md) — agent state model: the rollup, state machine, turn phase, and liveness.
-- [transcript.md](./docs/internals/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, the statusline / app-server rich-context transports, and the full-history cost/spending read-path.
-- [pricing.md](./docs/internals/pricing.md) — per-model token pricing: the three-layer table (embedded snapshot, remote refresh, builtins), model resolution, and how Codex token counts become dollars.
-- [account.md](./docs/internals/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
-- [web.md](./docs/internals/web.md) — Zellij-only browser access and session-route design.
-- [worktrees.md](./docs/internals/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
-- [performance.md](./docs/internals/performance.md) — render-thread budget, the cost map, the CPU/RAM/IO/storage/network overhead estimated for a 20-100 agent fleet, and the rules a performance change follows.
+**Internals** — `docs/internals/`, grouped into four leaves by subsystem.
+
+- **`agents/`** — integrate, operate, and house coding agents.
+  - [hooks.md](./docs/internals/agents/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.
+  - [agent.md](./docs/internals/agents/agent.md) — agent state model: the rollup, state machine, turn phase, and liveness.
+  - [transcript.md](./docs/internals/agents/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, the statusline / app-server rich-context transports, and the full-history cost/spending read-path.
+  - [account.md](./docs/internals/agents/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
+  - [pricing.md](./docs/internals/agents/pricing.md) — per-model token pricing: the three-layer table (embedded snapshot, remote refresh, builtins), model resolution, and how Codex token counts become dollars.
+  - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
+  - [messages.md](./docs/internals/agents/messages.md) — state-aware `steer` and durable per-agent queued messages: target grammar, record layout, gates, delivery, attempts, and hazards.
+  - [run.md](./docs/internals/agents/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.
+  - [worktrees.md](./docs/internals/agents/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
+- **`sidebar/`** — the room and the substrate beneath it.
+  - [sidebar.md](./docs/internals/sidebar/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
+  - [state.md](./docs/internals/sidebar/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.
+  - [notifications.md](./docs/internals/sidebar/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
+  - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state and the blocking decision bridge.
+  - [multiplexers.md](./docs/internals/sidebar/multiplexers.md) — Zellij and tmux backend contracts.
+  - [trust.md](./docs/internals/sidebar/trust.md) — executable-surface hash, trust states, auto-revoke.
+- **`health/`** — is the running system correct and within budget.
+  - [observe.md](./docs/internals/health/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/health/diagnostics.md) channel.
+  - [diagnostics.md](./docs/internals/health/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow.
+  - [performance.md](./docs/internals/health/performance.md) — render-thread budget, the cost map, the CPU/RAM/IO/storage/network overhead estimated for a 20-100 agent fleet, and the rules a performance change follows.
+- **`reach/`** — how clients reach the room.
+  - [remote.md](./docs/internals/reach/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.
+  - [web.md](./docs/internals/reach/web.md) — Zellij-only browser access and session-route design.
 
 **Externals** — `docs/externals/`
 - [claude-reference.md](./docs/externals/agent-adapter/claude-reference.md) — Claude Code upstream protocol reference: hook events and decision schema, the full statusline JSON schema, and the auth surface, each pinned to its source URL for refresh.

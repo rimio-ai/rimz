@@ -2,7 +2,7 @@
 //!
 //! A long-horizon agent session leaves a transcript far bigger than any one
 //! turn, and the spending walk runs on every producer data tick. The contract
-//! (docs/internals/performance.md): per-file IO is O(delta) — an unchanged
+//! (docs/internals/health/performance.md): per-file IO is O(delta) — an unchanged
 //! file is one stat, a grown file reads only its appended suffix from the
 //! stored cursor — so a turn's cost never scales with the session's history.
 //!

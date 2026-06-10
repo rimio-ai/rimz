@@ -68,7 +68,7 @@ rimz remote list [--json]   # alias: ls
 
 `remote connect` builds a guarded `ssh -t` command and runs the remote host's own `rimz`. A target after `:` is either a path (`dev-box:~/code/query-engine`) or a session name (`dev-box:query-engine`). Saved aliases live in `~/.config/rimz/remote.toml`; reconnect supervision is on by default and `--no-reconnect` hands the link to a single SSH process.
 
-Full remote examples and target grammar live in [Getting started](./cli/getting-started.md#remote-rooms). Link-health mechanics live in [remote.md](../internals/remote.md).
+Full remote examples and target grammar live in [Getting started](./cli/getting-started.md#remote-rooms). Link-health mechanics live in [remote.md](../internals/reach/remote.md).
 
 ## Run agents in tabs and worktrees
 
@@ -157,4 +157,4 @@ Many read commands accept `--json`; those outputs are the scripting surface. Hum
 
 Hidden helper commands are machinery for hooks, sidebars, statuslines, and agent wrappers. They are omitted from `rimz --help` and are not the user-facing CLI contract.
 
-Examples include `rimz sidebar snapshot`, `rimz sidebar serve`, `rimz statusline feed`, `rimz hooks feed`, `rimz queue deliver`, `rimz agents exec`, `rimz worktree cleanup`, and `rimz codex ...`. The owning internals docs describe the protocols: [ledger](../internals/ledger.md), [state](../internals/state.md), [hooks](../internals/hooks.md), [transcript](../internals/transcript.md), and [worktrees](../internals/worktrees.md).
+Examples include `rimz sidebar snapshot`, `rimz sidebar serve`, `rimz statusline feed`, `rimz hooks feed`, `rimz queue deliver`, `rimz agents exec`, `rimz worktree cleanup`, and `rimz codex ...`. The owning internals docs describe the protocols: [ledger](../internals/sidebar/ledger.md), [state](../internals/sidebar/state.md), [hooks](../internals/agents/hooks.md), [transcript](../internals/agents/transcript.md), and [worktrees](../internals/agents/worktrees.md).

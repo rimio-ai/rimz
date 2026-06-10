@@ -2,7 +2,7 @@
 //! `docs/guide/experience.md`).
 //!
 //! Backend-neutral: each test drives the renderer once over a real ledger and
-//! reads the parsed pane. Renderer mechanics live in `docs/internals/sidebar.md`;
+//! reads the parsed pane. Renderer mechanics live in `docs/internals/sidebar/sidebar.md`;
 //! layout/tabs/focus live in `backend/zellij.rs`; the actual mux-pane content
 //! smokes live in `journey/deep.rs`.
 

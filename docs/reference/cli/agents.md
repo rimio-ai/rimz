@@ -40,7 +40,7 @@ Streaming output is newline-delimited JSON. Consumers read `message` events for 
 
 Exit codes are `0` for `completed`, `1` for `failed`, `124` for `timed_out` or a stream watch timeout, and `130` for `canceled`.
 
-Supervised runs require installed and trusted hooks because hooks provide the completion signal. Details live in [run internals](../../internals/run.md).
+Supervised runs require installed and trusted hooks because hooks provide the completion signal. Details live in [run internals](../../internals/agents/run.md).
 
 ## Steer a live agent
 
@@ -66,7 +66,7 @@ rimz steer [OPTIONS] <TARGET> -- <TEXT>
 
 By default, `steer` appends Enter after the text. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
 
-Target resolution and pane-answering resolver behavior are covered in [resolver internals](../../internals/resolvers.md).
+Target resolution and pane-answering resolver behavior are covered in [resolver internals](../../internals/agents/resolvers.md).
 
 ## Queue the next message
 
@@ -96,7 +96,7 @@ Delivery is FIFO per agent and one message is attempted per unparked root turn e
 
 `queue list` prints durable records, with `--json` for automation. `queue remove` removes one open message. `queue clear` removes every open message for the resolved agent and prints the removal count.
 
-Queued delivery requires installed and trusted hooks because turn-end hooks trigger the delivery helper. Details live in [message internals](../../internals/messages.md).
+Queued delivery requires installed and trusted hooks because turn-end hooks trigger the delivery helper. Details live in [message internals](../../internals/agents/messages.md).
 
 ## Drive panes
 
@@ -126,7 +126,7 @@ rimz pane detach [--session-name <NAME>]
 
 `focus` moves attention to a pane. `--pane-process-start <TIMESTAMP>` refuses focus when a reused pane id no longer matches the sidebar snapshot; pair it with `--session-name` when focusing from cached UI state. `split` opens a new pane in the current view with Rimz workspace environment variables. `detach` detaches the attached client while leaving the session running; tmux and Zellij differ in exact client scope.
 
-Pane capture is untrusted terminal text. Scripts and resolvers match bounded patterns before sending text back, and `pane send` is treated as the same explicit input path as `steer` and queued delivery. Resolver patterns and pane-send discipline live in [resolver internals](../../internals/resolvers.md).
+Pane capture is untrusted terminal text. Scripts and resolvers match bounded patterns before sending text back, and `pane send` is treated as the same explicit input path as `steer` and queued delivery. Resolver patterns and pane-send discipline live in [resolver internals](../../internals/agents/resolvers.md).
 
 ## Open agent tabs
 
@@ -160,7 +160,7 @@ rimz agents [KIND]... [--worktree [NAME]] [--prompt <TEXT>] [--no-focus]
 
 Each positional `KIND` opens in its own tab or window. Repeating a kind opens a small fleet. A bare `--worktree` creates one fresh worktree per launched agent; a named worktree is shared by all launched agents. `--prompt` broadcasts to every launched agent, and `--no-focus` leaves focus unchanged.
 
-Worktree launchers require a git repository-backed room. Plain `tab` and `agents` run in the room root; `--worktree` fails in directory or marker rooms. Worktree launch and cleanup details live in [worktree internals](../../internals/worktrees.md).
+Worktree launchers require a git repository-backed room. Plain `tab` and `agents` run in the room root; `--worktree` fails in directory or marker rooms. Worktree launch and cleanup details live in [worktree internals](../../internals/agents/worktrees.md).
 
 ## Manage Rimz-owned worktrees
 

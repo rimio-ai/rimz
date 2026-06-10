@@ -80,7 +80,7 @@ pub fn write(feed_dir: &Path, item: &FeedItem) -> Result<()> {
     // renames, and after a power cut the dead-owner expel abandons any ask
     // whose waiter died with the machine. Trading "survives a power cut"
     // for a fsync-free decision path is the write-class contract
-    // (docs/internals/ledger.md); the event log keeps the audit trail.
+    // (docs/internals/sidebar/ledger.md); the event log keeps the audit trail.
     write_temp_then_rename_cache(&path, item)?;
     if item.status.is_terminal() {
         // Relocate the decided item out of the pending scan. The rename is

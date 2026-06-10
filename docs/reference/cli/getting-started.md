@@ -2,7 +2,7 @@
 
 Rimz starts one room for the workspace you are in, then keeps that room attachable from the local machine or over SSH. This page covers the bootstrap commands: start, attach, remote, list, setup, and doctor.
 
-For the product contract behind one root mapping to one room, see [DESIGN.md](../../../DESIGN.md#commitments). For generated config and setup, see [configuration.md](../configuration.md). For remote reconnect and link-health mechanics, see [remote.md](../../internals/remote.md).
+For the product contract behind one root mapping to one room, see [DESIGN.md](../../../DESIGN.md#commitments). For generated config and setup, see [configuration.md](../configuration.md). For remote reconnect and link-health mechanics, see [remote.md](../../internals/reach/remote.md).
 
 ## Quick examples
 
