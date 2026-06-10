@@ -438,9 +438,11 @@ pub(in crate::sidebar_pane::render) fn pace_ratio(
     Some((f64::from(used_percentage) / 100.0) / elapsed_share)
 }
 
-/// The reset countdown's tone at a burn-rate ratio. Each `[sidebar.budget.pace]`
-/// threshold names the exclusive upper bound of the calmer tier, checked
-/// worst-first so a misordered config degrades to the worse visible warning.
+/// The reset countdown marker's tone at a burn-rate ratio. Each
+/// `[sidebar.budget.pace]` threshold names the exclusive upper bound of the
+/// calmer tier, checked worst-first so a misordered config degrades to the
+/// worse visible warning. Sustainable pace stays unstyled; color starts only
+/// once the burn rate outruns the configured yellow threshold.
 pub(in crate::sidebar_pane::render) fn pace_style(
     theme: &Theme,
     ratio: f64,
@@ -454,9 +456,9 @@ pub(in crate::sidebar_pane::render) fn pace_style(
     } else if pace_pct > f64::from(pace.yellow) {
         theme.style(Color::Yellow, Modifier::empty())
     } else {
-        theme.style(Color::Green, Modifier::empty())
+        Style::default()
     };
-    if style.fg.is_none() {
+    if style.fg.is_none() && pace_pct > f64::from(pace.yellow) {
         theme.soft()
     } else {
         style

@@ -33,9 +33,9 @@ const PROVIDER_ART_MIN_WIDTH: usize = 34;
 /// The provider bar's label slot (`5h` / `7d` / `30d` / `∞`) and reset-value
 /// column, shared by every provider bar so they align front and back. The label
 /// fits three cells (`30d`); the value holds `↻ ` plus a two-unit reset countdown
-/// (up to `↻ 30d10h`).
+/// and a one-cell right gutter (up to `↻ 20h20m `).
 const PROVIDER_LABEL_WIDTH: usize = 3;
-const PROVIDER_VALUE_WIDTH: usize = 8;
+const PROVIDER_VALUE_WIDTH: usize = 9;
 
 /// How close to a full window-length a reset must read to count as "not started".
 /// A not-started window keeps its reset slid to `now + duration`, but a live
@@ -553,8 +553,7 @@ fn window_not_started(window: &RateLimitWindow, now: Timestamp) -> bool {
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
 /// the value column. The reset marker is toned by burn pace when the window
 /// carries enough timing data; the countdown text stays in the neutral soft
-/// tier. The label mirrors its bar's tone — the resting green, or the severity
-/// it heats to. `force_exhausted`
+/// tier. The label mirrors its bar's remaining-budget tone. `force_exhausted`
 /// paints the row as fully spent — red, no countdown — regardless of the window's
 /// own reading (a longer spent window gates it). A window with no usage
 /// percentage paints as an unknown dim track, preserving the label but claiming
@@ -643,8 +642,9 @@ fn metered_bar_row(
     Some(spans)
 }
 
-/// The right-aligned reset value column. Only the reset marker carries the
-/// pace tone; the countdown text stays at the neutral soft tier.
+/// The right-aligned reset value column. Only the reset marker carries a hot
+/// pace tone; the countdown text stays at the neutral soft tier, and one
+/// trailing gutter cell keeps six-cell hour countdowns off the chrome edge.
 fn reset_value_spans(
     theme: &Theme,
     countdown: Option<&str>,
@@ -653,12 +653,13 @@ fn reset_value_spans(
     let Some(countdown) = countdown.filter(|value| !value.is_empty()) else {
         return vec![Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH))];
     };
-    let value_width = 2 + countdown.chars().count();
+    let value_width = 3 + countdown.chars().count();
     let pad = PROVIDER_VALUE_WIDTH.saturating_sub(value_width);
     vec![
         Span::raw(" ".repeat(pad)),
         Span::styled("↻", marker_style),
         Span::styled(format!(" {countdown}"), theme.soft()),
+        Span::raw(" "),
     ]
 }
 

@@ -881,9 +881,9 @@ pub struct ContextBand {
 /// exclusive upper bound of *remaining* budget (in percent) where each tier
 /// applies, so the draining bar crosses into the tier as the remaining figure
 /// drops below the bound. At or above `yellow` the bar stays green. The nested
-/// pace fields color the reset countdown by burn rate against elapsed window
-/// time. A fully spent window's full-width red track is a shape rule
-/// independent of these zones.
+/// pace fields color the reset marker by burn rate against elapsed window time
+/// once pace crosses the yellow threshold. A fully spent window's full-width red
+/// track is a shape rule independent of these zones.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetZonesConfig {
@@ -893,7 +893,7 @@ pub struct BudgetZonesConfig {
     pub amber: u8,
     /// Remaining % below which the bar goes red.
     pub red: u8,
-    /// Pace thresholds for the reset countdown.
+    /// Pace thresholds for the reset marker.
     pub pace: BudgetPaceConfig,
 }
 
@@ -908,17 +908,17 @@ impl Default for BudgetZonesConfig {
     }
 }
 
-/// `[sidebar.budget.pace]`: reset-countdown color bands by burn rate. Values
-/// are percentages of even pace: `100` means budget use matches elapsed window
-/// time, `200` means it is burning twice as fast as the reset can sustain.
+/// `[sidebar.budget.pace]`: reset-marker color bands by burn rate. Values are
+/// percentages of even pace: `100` means budget use matches elapsed window time,
+/// `200` means it is burning twice as fast as the reset can sustain.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetPaceConfig {
-    /// Pace % above which the countdown leaves blue for yellow.
+    /// Pace % above which the marker leaves the default foreground for yellow.
     pub yellow: u16,
     /// Pace % above which yellow deepens to amber.
     pub amber: u16,
-    /// Pace % above which the countdown goes red.
+    /// Pace % above which the marker goes red.
     pub red: u16,
 }
 

@@ -56,9 +56,9 @@
 # red = 10                            # remaining percent below which the bar goes red
 
 [sidebar.budget.pace]
-# yellow = 100                        # pace percent above which the reset timer leaves blue
+# yellow = 100                        # pace percent above which the reset marker leaves default color
 # amber = 150                         # pace percent above which yellow deepens
-# red = 200                           # pace percent above which the reset timer goes red
+# red = 200                           # pace percent above which the reset marker goes red
 
 [sidebar.attention]
 # stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds

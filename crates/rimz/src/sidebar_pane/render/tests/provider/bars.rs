@@ -137,8 +137,9 @@ fn paced_reset_countdown_under_no_color_stays_soft() {
     assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 }
 
-/// Each window gets its own pace tone: a fresh short window can rest green while
-/// the weekly budget's reset reads red because its burn rate cannot last.
+/// Each window gets its own pace tone: a fresh short window keeps an uncolored
+/// reset marker while the weekly budget's reset reads red because its burn rate
+/// cannot last.
 #[test]
 fn reset_countdowns_tone_each_window_independently() {
     let theme = Theme::fixed(false);
@@ -160,9 +161,9 @@ fn reset_countdowns_tone_each_window_independently() {
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
     assert_eq!(
-        reset_marker_fg(&rows[0]),
-        theme.style(Color::Green, Modifier::empty()).fg,
-        "unused started 5h window rests green"
+        reset_marker_style(&rows[0]),
+        Some(Style::default()),
+        "unused started 5h window keeps the marker uncolored"
     );
     assert_eq!(
         reset_marker_fg(&rows[1]),
@@ -416,4 +417,38 @@ fn used_window_keeps_countdown_despite_near_full_reset() {
         has_reset,
         "usage above ~1% shows the countdown even with a near-full reset"
     );
+}
+
+/// Six-cell under-a-day reset values (`20h20m`) keep one trailing gutter cell,
+/// so the reset marker sits one cell left and the row remains exactly the
+/// provider region width.
+#[test]
+fn hour_reset_countdown_keeps_a_trailing_gutter() {
+    let theme = Theme::fixed(false);
+    let now = fixed_now();
+    let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
+    claude.windows = vec![RateLimitWindow {
+        used_percentage: Some(50),
+        resets_at: Some(now + Duration::from_secs(20 * 3_600 + 20 * 60)),
+        duration_mins: Some(7 * 24 * 60),
+    }];
+
+    let rows = metered_bar_rows(&theme, &claude);
+    assert_eq!(rows.len(), 1);
+    let text = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(text.chars().count(), 30, "row keeps the fixed region");
+    assert!(
+        text.ends_with(' '),
+        "the value column keeps a one-cell right gutter: {text:?}"
+    );
+    assert_eq!(
+        text.chars().position(|ch| ch == '↻'),
+        Some(21),
+        "the reset marker moves one cell left for the wide hour form: {text:?}"
+    );
+    assert!(text.contains("↻ 20h20m"), "{text:?}");
 }
