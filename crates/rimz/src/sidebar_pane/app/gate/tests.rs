@@ -1,5 +1,6 @@
 use super::*;
 use crate::WorkspaceId;
+use crate::schema::diag::GateRule;
 use crate::sidebar_pane::app::fixtures::{
     agent_snapshot, pane, snapshot, snapshot_with_panes, workspace,
 };
@@ -43,7 +44,7 @@ fn gate_holds_transient_agent_to_process_demotion() {
             &GateState::default(),
             gate_now()
         ),
-        CommitDecision::KeepPrior
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess)
     );
 }
 
@@ -59,8 +60,30 @@ fn gate_holds_frameless_snapshot_over_prior_frame() {
             &GateState::default(),
             gate_now()
         ),
-        CommitDecision::KeepPrior,
+        CommitDecision::KeepPrior(GateRule::FramelessOverFrame),
         "a no-frame fallback must not replace a jumpable frame-backed render"
+    );
+}
+
+#[test]
+fn gate_holds_empty_stamped_frame_over_populated_frame() {
+    let ws = workspace();
+    let mut empty_stamped = snapshot(&ws);
+    empty_stamped.panes_produced_at_ms = Some(
+        agent_snapshot(&ws)
+            .panes_produced_at_ms
+            .unwrap_or_default()
+            .saturating_add(1),
+    );
+
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &empty_stamped,
+            &GateState::default(),
+            gate_now()
+        ),
+        CommitDecision::KeepPrior(GateRule::EmptyStampedFrame),
     );
 }
 
@@ -85,6 +108,7 @@ fn gate_releases_demotion_after_reject_count() {
     let gate = GateState {
         reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
         rejecting_since: Some(gate_now()),
+        rule: Some(GateRule::AgentDemotedToProcess),
     };
     assert_eq!(
         gate_commit(
@@ -93,7 +117,7 @@ fn gate_releases_demotion_after_reject_count() {
             &gate,
             gate_now()
         ),
-        CommitDecision::Accept,
+        CommitDecision::AcceptViaEscapeHatch,
         "a stuck demotion must surface, not freeze forever"
     );
 }
@@ -105,6 +129,7 @@ fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
     let gate = GateState {
         reject_streak: 1,
         rejecting_since: Some(Timestamp::from_second(base).unwrap()),
+        rule: Some(GateRule::AgentDemotedToProcess),
     };
     let ceiling = ACCEPT_REGRESSION_AFTER.as_secs() as i64;
     // Still brief: held.
@@ -115,7 +140,7 @@ fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
             &gate,
             Timestamp::from_second(base + ceiling - 1).unwrap()
         ),
-        CommitDecision::KeepPrior
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess)
     );
     // Past the ceiling: released.
     assert_eq!(
@@ -125,7 +150,7 @@ fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
             &gate,
             Timestamp::from_second(base + ceiling).unwrap()
         ),
-        CommitDecision::Accept
+        CommitDecision::AcceptViaEscapeHatch
     );
 }
 
@@ -171,14 +196,10 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
         Some(prior.clone()),
         &Health::default(),
     );
-    let (state, gate, gate_reject) =
+    let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
-    let rejected = gate_reject.is_some();
     assert!(rejected);
-    assert_eq!(
-        gate_reject.unwrap().demoted_panes,
-        vec!["zellij:terminal_9".to_owned()]
-    );
+    assert!(!released_via_escape_hatch);
     // Both the rendered frame AND the next-tick baseline stay the good
     // frame, so the cache never advances onto the demotion.
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
@@ -204,18 +225,46 @@ fn reject_holds_prior_frame_over_frameless_fetch() {
         &Health::default(),
     );
 
-    let (state, gate, gate_reject) =
+    let (state, gate, rejected, released_via_escape_hatch) =
         apply_gate(computed, true, &prior, &GateState::default(), gate_now());
-    let rejected = gate_reject.is_some();
 
     assert!(rejected);
-    assert!(gate_reject.unwrap().frameless_incoming);
+    assert!(!released_via_escape_hatch);
     assert_eq!(
         state.snapshot.panes_produced_at_ms,
         prior.panes_produced_at_ms
     );
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
     assert_eq!(gate.reject_streak, 1);
+}
+
+#[test]
+fn failed_fetch_keeps_a_gate_episode_open() {
+    let ws = workspace();
+    let prior = agent_snapshot(&ws);
+    let computed = compute_next_state(
+        &ws,
+        None,
+        Err("pane discovery failed".to_owned()),
+        Some(prior.clone()),
+        &Health::default(),
+    );
+    let prev_gate = GateState {
+        reject_streak: 1,
+        rejecting_since: Some(gate_now()),
+        rule: Some(GateRule::EmptyStampedFrame),
+    };
+
+    let (state, gate, rejected, released_via_escape_hatch) =
+        apply_gate(computed, false, &prior, &prev_gate, gate_now());
+
+    assert!(!rejected);
+    assert!(!released_via_escape_hatch);
+    assert_eq!(
+        gate, prev_gate,
+        "a failed fetch is not an accepted frame and must not release the gate"
+    );
+    assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
 }
 
 #[test]
@@ -233,10 +282,39 @@ fn accept_resets_the_gate() {
     let prev_gate = GateState {
         reject_streak: 2,
         rejecting_since: Some(gate_now()),
+        rule: Some(GateRule::AgentDemotedToProcess),
     };
-    let (state, gate, gate_reject) = apply_gate(computed, true, &prior, &prev_gate, gate_now());
-    let rejected = gate_reject.is_some();
+    let (state, gate, rejected, released_via_escape_hatch) =
+        apply_gate(computed, true, &prior, &prev_gate, gate_now());
     assert!(!rejected);
+    assert!(!released_via_escape_hatch);
     assert_eq!(gate, GateState::default());
     assert!(state.snapshot.worktree_groups[0].rows[0].is_agent());
+}
+
+#[test]
+fn escape_release_reports_escape_hatch() {
+    let ws = workspace();
+    let prior = agent_snapshot(&ws);
+    let incoming = process_on(&ws, "terminal_9");
+    let computed = compute_next_state(
+        &ws,
+        None,
+        Ok(incoming),
+        Some(prior.clone()),
+        &Health::default(),
+    );
+    let prev_gate = GateState {
+        reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
+        rejecting_since: Some(gate_now()),
+        rule: Some(GateRule::AgentDemotedToProcess),
+    };
+
+    let (state, gate, rejected, released_via_escape_hatch) =
+        apply_gate(computed, true, &prior, &prev_gate, gate_now());
+
+    assert!(!rejected);
+    assert!(released_via_escape_hatch);
+    assert_eq!(gate, GateState::default());
+    assert!(state.snapshot.worktree_groups[0].rows[0].is_process());
 }

@@ -49,6 +49,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         pane_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
+        first_seen_at_ms: None,
     })
 }
 

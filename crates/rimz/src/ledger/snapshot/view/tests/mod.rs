@@ -25,7 +25,7 @@ use super::layout::is_within;
 use super::providers::{default_provider_style, stable_window, stable_windows};
 use super::reap::GHOST_SESSION_TTL_SECS;
 use super::rows::row_from_agent;
-use super::{SidebarSnapshot, SidebarWorktreeKind};
+use super::{SidebarSnapshot, SidebarWorktreeKind, row_identity_violations};
 use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::{LifecycleSignal, TurnPhase};
 use crate::agents::{AgentAccount, RateLimitWindow, SpendTally, SpendWindow};

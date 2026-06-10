@@ -358,6 +358,11 @@ pub struct PaneRef {
     /// can be relabelled without ever binding as a local agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub elevated_agent: Option<ElevatedAgent>,
+    /// Producer wall-clock millisecond when this pane id first appeared in a
+    /// repaired frame. `None` means an older producer/cache wrote the frame, so
+    /// newborn-specific guards stay disabled for wire compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_at_ms: Option<u64>,
 }
 
 impl PaneRef {
@@ -379,6 +384,7 @@ impl PaneRef {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         }
     }
 

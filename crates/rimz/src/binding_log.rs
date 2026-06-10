@@ -20,13 +20,18 @@ pub fn path(runtime: &RuntimePaths) -> PathBuf {
 
 pub fn append<T: Serialize>(runtime: &RuntimePaths, record: &T) {
     let path = path(runtime);
-    crate::diag_log::append(&path, BINDING_LOG_MAX_BYTES, record);
+    if let Err(err) =
+        crate::rotating_log::append_rotating_jsonl(&path, BINDING_LOG_MAX_BYTES, record)
+    {
+        tracing::debug!(path = %path.display(), error = %err, "binding log append failed");
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{WorkspaceId, diag_log};
+
+    use crate::ids::WorkspaceId;
 
     #[test]
     fn append_writes_jsonl_record() {
@@ -38,24 +43,5 @@ mod tests {
 
         let bytes = std::fs::read_to_string(path(&runtime)).unwrap();
         assert_eq!(bytes, "{\"event\":\"selected\"}\n");
-    }
-
-    #[test]
-    fn append_rotates_size_capped_log() {
-        let dir = tempfile::tempdir().unwrap();
-        let runtime = RuntimePaths::under(WorkspaceId::from_project_root(dir.path()), dir.path())
-            .expect("runtime");
-        runtime.ensure_dirs().expect("runtime dirs");
-        let log_path = path(&runtime);
-        std::fs::write(&log_path, vec![b'x'; BINDING_LOG_MAX_BYTES as usize]).unwrap();
-
-        diag_log::append(
-            &log_path,
-            BINDING_LOG_MAX_BYTES,
-            &serde_json::json!({ "n": 1 }),
-        );
-
-        assert!(runtime.root.join("binding.log.1.jsonl").exists());
-        assert_eq!(std::fs::read_to_string(log_path).unwrap(), "{\"n\":1}\n");
     }
 }

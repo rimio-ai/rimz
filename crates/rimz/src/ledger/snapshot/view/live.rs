@@ -4,6 +4,7 @@ use crate::ids::PaneId;
 use crate::ledger::snapshot::panes::{
     LazyAgentPairingResult, pane_admits_card, row_from_frame_pane,
 };
+use crate::schema::diag::DiagEvent;
 
 use super::SidebarSnapshot;
 use super::aggregate::build_worktree_groups_from_rows;
@@ -11,6 +12,9 @@ use super::layout::refresh_overlay_group;
 use projection::{LazyAgentPaneProjection, rows_from_panes};
 
 mod projection;
+
+#[cfg(test)]
+pub(crate) use projection::row_identity_violations;
 
 impl SidebarSnapshot {
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is
@@ -32,33 +36,35 @@ impl SidebarSnapshot {
             .collect()
     }
 
-    pub(crate) fn with_admitted_live_panes(
+    pub(crate) fn with_admitted_live_panes_and_diagnostics(
         mut self,
         panes: Vec<PaneRef>,
         lazy_pairings: &LazyAgentPairingResult,
-    ) -> Self {
-        self.fold_admitted_live_panes(&panes, Some(lazy_pairings));
-        self
+    ) -> (Self, Vec<DiagEvent>) {
+        let diagnostics = self.fold_admitted_live_panes(&panes, Some(lazy_pairings));
+        (self, diagnostics)
     }
 
     fn fold_admitted_live_panes(
         &mut self,
         panes: &[PaneRef],
         lazy_pairings: Option<&LazyAgentPairingResult>,
-    ) {
+    ) -> Vec<DiagEvent> {
+        let projection = rows_from_panes(
+            &self.agents,
+            &self.needs_attention,
+            &self.resolver_working,
+            panes,
+            LazyAgentPaneProjection {
+                wired_kinds: &self.wired_lazy_kinds,
+                default_models: &self.lazy_agent_default_models,
+                pairings: lazy_pairings,
+            },
+            self.panes_produced_at_ms,
+            self.now,
+        );
         self.worktree_groups = build_worktree_groups_from_rows(
-            rows_from_panes(
-                &self.agents,
-                &self.needs_attention,
-                &self.resolver_working,
-                panes,
-                LazyAgentPaneProjection {
-                    wired_kinds: &self.wired_lazy_kinds,
-                    default_models: &self.lazy_agent_default_models,
-                    pairings: lazy_pairings,
-                },
-                self.now,
-            ),
+            projection.rows,
             &self.agents,
             self.project_root.as_deref(),
             &self.worktree_roots,
@@ -66,6 +72,7 @@ impl SidebarSnapshot {
             self.now,
             self.sidebar.attention.stalled_after_secs.get(),
         );
+        projection.diagnostics
     }
 
     pub(crate) fn remove_pane_rows(&mut self, pane_id: &PaneId) -> bool {

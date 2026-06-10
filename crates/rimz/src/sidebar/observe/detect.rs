@@ -1,12 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use crate::sidebar::timing::{
-    HEALTH_ALERT_AFTER_FAILURES, OBSERVE_ROSTER_FLAP_WINDOW, OBSERVE_ROW_FLAP_WINDOW,
-    OBSERVE_STATUS_CHURN_WINDOW, OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
+    OBSERVE_ROSTER_FLAP_WINDOW, OBSERVE_ROW_FLAP_WINDOW, OBSERVE_STATUS_CHURN_WINDOW,
+    OBSERVE_VALUE_OSC_WINDOW, OBSERVE_WARMUP,
 };
 
 use super::sig::{FrameSig, RosterRowSig, RosterSig, RowSig, StatusCountSig};
-use super::{AnomalyDraft, AnomalyKind, GateRejectInfo, WatchedField, cap_vec};
+use super::{AnomalyDraft, AnomalyKind, WatchedField, cap_vec};
 
 #[derive(Debug, Default)]
 pub struct Observer {
@@ -17,7 +17,6 @@ pub struct Observer {
     values: BTreeMap<(String, WatchedField), ValueRing>,
     last_status: BTreeMap<String, String>,
     status_transitions: BTreeMap<String, VecDeque<u64>>,
-    prev_health_streak: u32,
     last_roster_rows: Vec<RosterRowSig>,
     last_roster_panes_produced_at_ms: Option<u64>,
     pending_roster: Option<RosterSig>,
@@ -25,11 +24,7 @@ pub struct Observer {
 }
 
 impl Observer {
-    pub fn observe(
-        &mut self,
-        sig: FrameSig,
-        gate_reject: Option<&GateRejectInfo>,
-    ) -> Vec<AnomalyDraft> {
+    pub fn observe(&mut self, sig: FrameSig) -> Vec<AnomalyDraft> {
         if sig.panes_produced_at_ms.is_some() && self.first_frame_at_ms.is_none() {
             self.first_frame_at_ms = Some(sig.at_ms);
         }
@@ -37,7 +32,6 @@ impl Observer {
         self.observe_roster_update(&sig);
 
         let mut drafts = Vec::new();
-        self.detect_cross_cutting(&sig, gate_reject, &mut drafts);
         self.detect_frame_checks(&sig, &mut drafts);
 
         if self.family_a_enabled(&sig) {
@@ -49,7 +43,6 @@ impl Observer {
             self.reset_transient_family_a_edges(&sig);
         }
 
-        self.prev_health_streak = sig.health_failure_streak;
         self.prev = Some(sig);
         if let Some(first) = drafts.first_mut() {
             first.dropped_msgs = std::mem::take(&mut self.dropped_msgs);
@@ -86,41 +79,6 @@ impl Observer {
         };
         sig.panes_produced_at_ms.is_some()
             && sig.at_ms.saturating_sub(first) >= millis(OBSERVE_WARMUP)
-    }
-
-    fn detect_cross_cutting(
-        &self,
-        sig: &FrameSig,
-        gate_reject: Option<&GateRejectInfo>,
-        drafts: &mut Vec<AnomalyDraft>,
-    ) {
-        if let Some(info) = gate_reject {
-            drafts.push(AnomalyDraft::from_sig(
-                sig,
-                AnomalyKind::GateReject {
-                    streak: sig.gate_reject_streak,
-                    frameless_incoming: info.frameless_incoming,
-                    demoted_panes: info.demoted_panes.clone(),
-                    incoming_rows: info.incoming_rows,
-                },
-                None,
-            ));
-        }
-        if self.prev_health_streak < HEALTH_ALERT_AFTER_FAILURES
-            && sig.health_failure_streak >= HEALTH_ALERT_AFTER_FAILURES
-        {
-            drafts.push(AnomalyDraft::from_sig(
-                sig,
-                AnomalyKind::HealthDegraded {
-                    streak: sig.health_failure_streak,
-                    reason: sig
-                        .health_reason
-                        .clone()
-                        .unwrap_or_else(|| "refresh failure".to_owned()),
-                },
-                None,
-            ));
-        }
     }
 
     fn detect_frame_checks(&self, sig: &FrameSig, drafts: &mut Vec<AnomalyDraft>) {

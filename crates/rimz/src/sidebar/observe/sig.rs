@@ -1,5 +1,6 @@
 use serde::Serialize;
 
+pub use crate::schema::diag::{EventPaneSig, EventsSig, StatusCountSig};
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::events::EventStore;
 use crate::{SidebarSnapshot, SidebarWorktreeKind};
@@ -18,7 +19,6 @@ pub struct FrameSig {
     pub pulled_panes_produced_at_ms: Option<u64>,
     pub gate_reject_streak: u32,
     pub health_failure_streak: u32,
-    pub health_reason: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -74,29 +74,11 @@ pub struct GroupSig {
     pub status_counts: Vec<StatusCountSig>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-pub struct StatusCountSig {
-    pub status: String,
-    pub count: usize,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OwnViewSig {
     pub sibling_count: usize,
     pub active_pane_id: Option<String>,
     pub working_pane_ids: Vec<String>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
-pub struct EventsSig {
-    pub pane_closed: Vec<EventPaneSig>,
-    pub pane_opened: Vec<EventPaneSig>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct EventPaneSig {
-    pub pane_id: String,
-    pub sent_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -120,7 +102,6 @@ pub fn extract_sig(
     event_store: &EventStore,
     gate_reject_streak: u32,
     health_failure_streak: u32,
-    health_reason: Option<String>,
     now_ms: u64,
 ) -> FrameSig {
     let mut rows = current
@@ -209,7 +190,6 @@ pub fn extract_sig(
         pulled_panes_produced_at_ms: last_pulled.panes_produced_at_ms,
         gate_reject_streak,
         health_failure_streak,
-        health_reason,
     }
 }
 

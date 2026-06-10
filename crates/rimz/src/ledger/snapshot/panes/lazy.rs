@@ -21,6 +21,12 @@ pub(crate) enum AgentPaneRow<'a> {
     Agent(&'a AgentState),
     /// A wired lazy-registering instance with no session bound yet.
     Idle(Box<SidebarRow>),
+    /// This pane resolves to a session already bound to another pane. It folds
+    /// no row; the projection emits the diagnostic.
+    SuppressedDuplicate {
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+    },
 }
 
 /// Resolve a live pane running a known agent command ([`AgentPaneRow`]) to its
@@ -39,12 +45,14 @@ pub(crate) fn agent_pane_for_pane<'a>(
         .pairings
         .get(&pane.pane_id)
         .and_then(|agent_index| agents.get(*agent_index))
-        .filter(|agent| {
-            !bound.contains(&(agent.kind.clone(), agent.agent_id.clone()))
-                && agent.kind == kind
-                && agent.worktree_path.as_deref() == Some(cwd)
-        })
+        .filter(|agent| agent.kind == kind && agent.worktree_path.as_deref() == Some(cwd))
     {
+        if bound.contains(&(agent.kind.clone(), agent.agent_id.clone())) {
+            return Some(AgentPaneRow::SuppressedDuplicate {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+            });
+        }
         return Some(AgentPaneRow::Agent(agent));
     }
     if !descriptor.capabilities.registers_lazily {

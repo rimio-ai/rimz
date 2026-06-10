@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use crate::config::NotificationsPrefs;
-use crate::ids::PaneId;
+use crate::ids::{PaneId, SidebarInstanceId};
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::notify::{Notification, NotificationState};
@@ -35,13 +35,29 @@ fn run_produce_guarded(
     cursor: &mut RollupCursor,
     produce: impl FnOnce(&mut RollupCursor) -> crate::sidebar::produce::Result<SidebarSnapshot>,
 ) -> std::result::Result<SidebarSnapshot, String> {
-    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(cursor))) {
+    let result = super::with_produce_panic_diagnostic_suppressed(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| produce(cursor)))
+    });
+    match result {
         Ok(Ok(snapshot)) => Ok(snapshot),
         Ok(Err(err)) => Err(err.to_string()),
-        Err(_) => {
+        Err(payload) => {
             *cursor = RollupCursor::new();
-            Err("sidebar produce panicked".to_owned())
+            Err(format!(
+                "sidebar produce panicked: {}",
+                panic_payload_message(&payload)
+            ))
         }
+    }
+}
+
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "unknown panic payload".to_owned()
     }
 }
 
@@ -102,6 +118,19 @@ struct FetchCycle<'a> {
     state: &'a StatePaths,
     notification_prefs: &'a NotificationsPrefs,
     notifications: &'a mut NotificationState,
+    diag: Option<&'a crate::diag::DiagSink>,
+    last_election: &'a mut Option<ProducerElection>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProducerElection {
+    elder: Option<SidebarInstanceId>,
+}
+
+impl ProducerElection {
+    fn is_producer(&self) -> bool {
+        self.elder.is_none()
+    }
 }
 
 fn run_fetch_cycle(
@@ -116,8 +145,14 @@ fn run_fetch_cycle(
         state,
         notification_prefs,
         notifications,
+        diag,
+        last_election,
     } = ctx;
-    let is_producer = !crate::sidebar::elder_sidebar_present(runtime, &config.instance_id);
+    let election = ProducerElection {
+        elder: crate::sidebar::elder_sidebar_instance(runtime, &config.instance_id),
+    };
+    let is_producer = election.is_producer();
+    emit_producer_transition(diag, last_election, election);
     let exclude = config.own_pane.clone();
     let now_ms = crate::sidebar::cache::unix_now_ms();
     let published_frame_produced_at_ms =
@@ -190,6 +225,7 @@ fn run_fetch_cycle(
             session_name: config.session_name.clone(),
             exclude,
             min_pane_cache_ms: request.min_pane_cache_ms,
+            diag: diag.cloned(),
         };
         let produced = run_produce_guarded(cursor, |cursor| {
             crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
@@ -208,6 +244,28 @@ fn run_fetch_cycle(
             final_for_request: true,
             fresh_pane_frame: request.mode.produces_fresh_panes(),
         });
+    }
+}
+
+fn emit_producer_transition(
+    diag: Option<&crate::diag::DiagSink>,
+    last_election: &mut Option<ProducerElection>,
+    election: ProducerElection,
+) {
+    let Some(prior) = last_election.replace(election.clone()) else {
+        return;
+    };
+    let Some(diag) = diag else {
+        return;
+    };
+    match (prior.elder, election.elder) {
+        (Some(prior_elder), None) => {
+            diag.emit_unlimited(crate::schema::diag::DiagEvent::ProducerElected { prior_elder })
+        }
+        (None, Some(new_elder)) => {
+            diag.emit_unlimited(crate::schema::diag::DiagEvent::ProducerDemoted { new_elder })
+        }
+        _ => {}
     }
 }
 
@@ -360,6 +418,7 @@ pub(super) fn spawn_fetch_worker(
     runtime: RuntimePaths,
     socket_path: PathBuf,
     notification_prefs: NotificationsPrefs,
+    diag: Option<crate::diag::DiagSink>,
     request_rx: std::sync::mpsc::Receiver<FetchRequest>,
     result_tx: std::sync::mpsc::Sender<FetchOutcome>,
 ) -> std::thread::JoinHandle<()> {
@@ -371,6 +430,7 @@ pub(super) fn spawn_fetch_worker(
         // delta — and promotion to producer inherits the warm base.
         let mut cursor = RollupCursor::new();
         let mut notifications = NotificationState::default();
+        let mut last_election = None;
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
             // strongest intent and the newest pane-freshness floor.
@@ -405,6 +465,8 @@ pub(super) fn spawn_fetch_worker(
                             state: &state,
                             notification_prefs: &notification_prefs,
                             notifications: &mut notifications,
+                            diag: diag.as_ref(),
+                            last_election: &mut last_election,
                         },
                         request,
                         &mut cursor,

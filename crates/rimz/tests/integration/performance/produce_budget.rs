@@ -83,6 +83,7 @@ fn pane(i: usize) -> rimz::feed::PaneRef {
         pane_process_start: None,
         resumed_session_id: None,
         elevated_agent: None,
+        first_seen_at_ms: None,
     }
 }
 
@@ -99,6 +100,7 @@ fn warm_produce_stays_inside_the_data_tick_at_fleet_scale() {
         session_name: "rimz-perf".to_owned(),
         exclude: None,
         min_pane_cache_ms: None,
+        diag: None,
     };
     let mut cursor = RollupCursor::new();
 

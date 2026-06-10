@@ -149,19 +149,13 @@ impl WakeEnv {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Seed the shared pane cache with an empty frame produced `age` ago —
-    /// fresh under the event-mode TTL, stale under the poll TTL.
+    /// Seed the shared pane cache with a publishable shell frame produced
+    /// `age` ago — fresh under the event-mode TTL, stale under the poll TTL.
     fn seed_pane_cache(&self, age: Duration) {
-        let cache = assemble_frame(
-            Vec::new(),
+        self.seed_pane_cache_with_shell(
+            "terminal_7",
             unix_now_ms().saturating_sub(age.as_millis() as u64),
-            SESSION_NAME,
         );
-        std::fs::write(
-            self.runtime.root.join("snapshot.json"),
-            serde_json::to_vec(&cache).expect("serialize pane cache"),
-        )
-        .expect("seed pane cache");
     }
 
     fn seed_pane_cache_with_shell(&self, pane_id: &str, produced_at_ms: u64) {
@@ -180,6 +174,7 @@ impl WakeEnv {
                 pane_process_start: None,
                 resumed_session_id: None,
                 elevated_agent: None,
+                first_seen_at_ms: None,
             }],
             produced_at_ms,
             SESSION_NAME,
@@ -206,6 +201,7 @@ impl WakeEnv {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         };
         let cache = assemble_frame(
             vec![

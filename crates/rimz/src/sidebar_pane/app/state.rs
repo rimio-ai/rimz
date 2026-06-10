@@ -4,7 +4,6 @@
 
 use std::time::Instant;
 
-use crate::sidebar::observe::GateRejectInfo;
 use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use tracing::{debug, warn};
@@ -12,7 +11,7 @@ use tracing::{debug, warn};
 use crate::sidebar_pane::render::{UiState, UnreadTracker};
 
 use super::fetch::FetchOutcome;
-use super::gate::{GateState, apply_gate};
+use super::gate::{GateState, apply_gate, gate_held_ms};
 use super::health::{Health, degraded_too_long, next_health};
 use super::lifecycle::{SelfCloseState, self_close_decision};
 use super::selection::{reconcile_selection, row_index_of_pane};
@@ -95,7 +94,6 @@ pub(super) struct ApplyOutcome {
     pub(super) should_exit: bool,
     pub(super) tab_emptied: bool,
     pub(super) rejected: bool,
-    pub(super) gate_reject: Option<GateRejectInfo>,
 }
 
 /// Fold one fetch outcome into the render state: gate it against the
@@ -115,12 +113,16 @@ pub(super) fn apply_fetch_outcome(
     self_close: &mut SelfCloseState,
     ui: &mut UiState,
     anim_start: Instant,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> Result<ApplyOutcome> {
     // The gate compares the incoming snapshot against the last frame we actually
     // committed; `current` still holds it until we overwrite it below.
     let fetch_was_ok = outcome.snapshot.is_ok();
+    let fetch_failure = outcome.snapshot.as_ref().err().cloned();
     let final_for_request = outcome.final_for_request;
     let prev_good = current.clone();
+    let prev_health = health.clone();
+    let prev_gate = gate.clone();
     let mut computed = compute_next_state(
         &config.workspace_id,
         None,
@@ -135,9 +137,24 @@ pub(super) fn apply_fetch_outcome(
         // frameless/status-only fast fold that precedes it.
         computed.health = health.clone();
     }
-    let (state, next_gate, gate_reject) =
-        apply_gate(computed, fetch_was_ok, &prev_good, gate, Timestamp::now());
-    let rejected = gate_reject.is_some();
+    let incoming_snapshot = computed.snapshot.clone();
+    let now = Timestamp::now();
+    let (state, next_gate, rejected, released_via_escape_hatch) =
+        apply_gate(computed, fetch_was_ok, &prev_good, gate, now);
+    emit_diagnostics(
+        diag,
+        &prev_good,
+        &incoming_snapshot,
+        &state.snapshot,
+        &prev_health,
+        &state.health,
+        &prev_gate,
+        &next_gate,
+        fetch_failure,
+        rejected,
+        released_via_escape_hatch,
+        now,
+    );
     *gate = next_gate;
     if let Some(alert) = state
         .health
@@ -226,7 +243,6 @@ pub(super) fn apply_fetch_outcome(
             should_exit: true,
             tab_emptied: false,
             rejected,
-            gate_reject,
         });
     }
 
@@ -246,15 +262,82 @@ pub(super) fn apply_fetch_outcome(
             should_exit: true,
             tab_emptied: true,
             rejected,
-            gate_reject,
         });
     }
     Ok(ApplyOutcome {
         should_exit: false,
         tab_emptied: false,
         rejected,
-        gate_reject,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_diagnostics(
+    diag: Option<&crate::diag::DiagSink>,
+    prev_snapshot: &SidebarSnapshot,
+    incoming_snapshot: &SidebarSnapshot,
+    next_snapshot: &SidebarSnapshot,
+    prev_health: &Health,
+    next_health: &Health,
+    prev_gate: &GateState,
+    next_gate: &GateState,
+    fetch_failure: Option<String>,
+    rejected: bool,
+    released_via_escape_hatch: bool,
+    now: Timestamp,
+) {
+    let Some(diag) = diag else {
+        return;
+    };
+    if let Some(reason) = fetch_failure {
+        diag.emit(crate::schema::diag::DiagEvent::FetchFailure {
+            reason,
+            failure_streak: next_health.failure_streak,
+        });
+    }
+    if rejected && let Some(rule) = next_gate.rule {
+        diag.emit(crate::schema::diag::DiagEvent::GateHold {
+            rule,
+            prev_produced_at_ms: prev_snapshot.panes_produced_at_ms,
+            incoming_produced_at_ms: incoming_snapshot.panes_produced_at_ms,
+            reject_streak: next_gate.reject_streak,
+        });
+    } else if next_gate.rule.is_none()
+        && let Some(rule) = prev_gate.rule
+    {
+        diag.emit(crate::schema::diag::DiagEvent::GateRelease {
+            rule,
+            held_ms: gate_held_ms(prev_gate, now),
+            via_escape_hatch: released_via_escape_hatch,
+        });
+    }
+    match (prev_health.alert.as_ref(), next_health.alert.as_ref()) {
+        (prev, Some(next)) if next.is_active() && !prev.is_some_and(|alert| alert.is_active()) => {
+            diag.emit_unlimited(crate::schema::diag::DiagEvent::HealthAlert {
+                reason: next.reason.clone(),
+                since_ms: next.since.as_millisecond().max(0) as u64,
+                recovered_after_ms: None,
+            });
+        }
+        (Some(prev), Some(next)) if prev.is_active() && !next.is_active() => {
+            let recovered_after_ms = next.recovered_at.and_then(|recovered| {
+                recovered
+                    .duration_since(next.since)
+                    .as_millis()
+                    .try_into()
+                    .ok()
+            });
+            diag.emit_unlimited(crate::schema::diag::DiagEvent::HealthAlert {
+                reason: next.reason.clone(),
+                since_ms: next.since.as_millisecond().max(0) as u64,
+                recovered_after_ms,
+            });
+        }
+        _ => {}
+    }
+    for event in crate::diag::diff_group_migrations(prev_snapshot, next_snapshot) {
+        diag.emit(event);
+    }
 }
 
 fn focused_working_pane(snapshot: &SidebarSnapshot) -> Option<crate::ids::PaneId> {

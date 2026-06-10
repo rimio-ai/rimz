@@ -62,7 +62,7 @@ rimz remote list [--json]   # alias: ls
 
 A dropped link reconnects by itself when reconnect is enabled. Keepalives (`ServerAliveInterval=5`, three strikes) detect a dead link in about fifteen seconds, and rimz reattaches with capped exponential backoff — the remote room survives the drop by design, so pickup is where you left it. A clean detach ends the session, a first connection that fails (auth, unknown host) surfaces immediately rather than looping a password prompt, and a remote failure that isn't a link drop reports the remote's own error.
 
-`rimz doctor` reports the backend, installed hooks, trust state, enrolled resolvers, and the machine's room tree — every recorded workspace with its root, root class, and liveness, the current directory's room starred and nesting live rooms flagged — and names the fix for anything misconfigured. Run it first when something looks wrong.
+`rimz doctor` reports the backend, installed hooks, trust state, enrolled resolvers, recent sidebar diagnostics, and the machine's room tree — every recorded workspace with its root, root class, and liveness, the current directory's room starred and nesting live rooms flagged — and names the fix for anything misconfigured. Run it first when something looks wrong.
 
 ## Configure your machine
 

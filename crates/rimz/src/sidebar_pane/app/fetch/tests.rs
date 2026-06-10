@@ -15,12 +15,41 @@ fn produce_guard_maps_failures_to_degraded_outcomes() {
     });
     assert!(result.unwrap_err().contains("injected failure"));
 
+    let _hook_guard = crate::sidebar_pane::app::PANIC_HOOK_TEST_LOCK
+        .lock()
+        .unwrap();
     let previous_hook = std::panic::take_hook();
     // Silence the default hook's backtrace spew; the guard catches the unwind.
     std::panic::set_hook(Box::new(|_| {}));
     let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
     std::panic::set_hook(previous_hook);
-    assert_eq!(result.unwrap_err(), "sidebar produce panicked");
+    assert_eq!(result.unwrap_err(), "sidebar produce panicked: boom");
+}
+
+#[test]
+fn produce_guard_suppresses_renderer_panic_diagnostics_for_caught_panics() {
+    let _hook_guard = crate::sidebar_pane::app::PANIC_HOOK_TEST_LOCK
+        .lock()
+        .unwrap();
+    let mut cursor = RollupCursor::new();
+    let observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let observed_hook = observed.clone();
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |_| {
+        observed_hook.store(
+            super::super::produce_panic_diagnostic_suppressed(),
+            std::sync::atomic::Ordering::SeqCst,
+        );
+    }));
+
+    let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
+    std::panic::set_hook(previous_hook);
+
+    assert_eq!(result.unwrap_err(), "sidebar produce panicked: boom");
+    assert!(
+        observed.load(std::sync::atomic::Ordering::SeqCst),
+        "caught producer panics run under the diagnostic-suppression guard"
+    );
 }
 
 #[test]
@@ -61,6 +90,45 @@ fn notification_panes_keeps_live_agent_panes() {
     };
 
     assert_eq!(notification_panes(&notification), vec![first, second]);
+}
+
+#[test]
+fn producer_transition_diagnostics_name_peer_instances() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
+    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+    let new_elder = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+
+    let mut last = None;
+    emit_producer_transition(
+        Some(&sink),
+        &mut last,
+        ProducerElection {
+            elder: Some(elder.clone()),
+        },
+    );
+    emit_producer_transition(Some(&sink), &mut last, ProducerElection { elder: None });
+    emit_producer_transition(
+        Some(&sink),
+        &mut last,
+        ProducerElection {
+            elder: Some(new_elder.clone()),
+        },
+    );
+
+    let events = diagnostic_events(&sink);
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0],
+        crate::schema::diag::DiagEvent::ProducerElected { prior_elder }
+            if prior_elder == &elder
+    ));
+    assert!(matches!(
+        &events[1],
+        crate::schema::diag::DiagEvent::ProducerDemoted { new_elder: observed }
+            if observed == &new_elder
+    ));
 }
 
 /// One forced cycle over a tempdir workspace, end to end and entirely in
@@ -115,6 +183,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
+    let mut last_election = None;
     run_fetch_cycle(
         FetchCycle {
             config: &config,
@@ -122,6 +191,8 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            diag: None,
+            last_election: &mut last_election,
         },
         request,
         &mut cursor,
@@ -254,6 +325,18 @@ fn test_config(workspace_id: WorkspaceId, instance_id: SidebarInstanceId) -> Ser
     }
 }
 
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
+    std::fs::read_to_string(sink.log_path())
+        .expect("diagnostic log")
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<crate::schema::diag::DiagEnvelope>(line)
+                .expect("diagnostic envelope")
+                .event
+        })
+        .collect()
+}
+
 #[test]
 fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let dir = tempfile::tempdir().unwrap();
@@ -294,6 +377,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
+    let mut last_election = None;
     run_fetch_cycle(
         FetchCycle {
             config: &config,
@@ -301,6 +385,8 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            diag: None,
+            last_election: &mut last_election,
         },
         FetchRequest::default(),
         &mut cursor,
@@ -351,6 +437,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
+    let mut last_election = None;
     run_fetch_cycle(
         FetchCycle {
             config: &config,
@@ -358,6 +445,8 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            diag: None,
+            last_election: &mut last_election,
         },
         FetchRequest::default(),
         &mut cursor,
@@ -466,6 +555,7 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
     let mut outcomes = Vec::new();
+    let mut last_election = None;
     run_fetch_cycle(
         FetchCycle {
             config: &config,
@@ -473,6 +563,8 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            diag: None,
+            last_election: &mut last_election,
         },
         FetchRequest::pane_frame_published(),
         &mut cursor,

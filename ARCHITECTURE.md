@@ -29,6 +29,7 @@ rimz CLI and hook subprocesses
 workspace ledger (~/.local/state/rimz/workspaces/<id>/)
   events.log.jsonl   snapshots/latest.json
   feed/<request_id>.json   runs/<run_id>.json   locks/workspace.lock
+  diag.log.jsonl   diag-frames/
 
 runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   sock/feed.<short_id>.sock         per-request decision socket
@@ -38,7 +39,7 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/)
   heartbeat/resolver.<resolver_id>.json
   snapshot.json  pane-topology.json  presence.stamp    runtime caches
   diff-stats.json  metrics-sample.json  live-spend-baselines.json
-  binding.log.jsonl  observe.log.jsonl
+  binding.log.jsonl
   agent_context/  subagent_context/  agent-activity/   per-session sidecars
 
 shared runtime directory ($XDG_RUNTIME_DIR/rimz/shared/)
@@ -48,7 +49,7 @@ shared runtime directory ($XDG_RUNTIME_DIR/rimz/shared/)
   pricing-cache.json  rate-limit-probe.codex*
 ```
 
-The CLI and hook subprocesses are the only durable-state writers. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes producer runtime caches through `sidebar::produce`, refreshes its room's `live-spend-baselines.json` display sidecar when the shared spending walk advances, and refreshes the disposable context sidecars from its producer-side triggers (the produce backstop and the transcript watcher — [state.md](./docs/internals/state.md#push-channels)). `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
+The CLI and hook subprocesses are the only durable-state writers for product truth. The sidebar reads ledger state in process, read-only; the elder renderer additionally writes producer runtime caches through `sidebar::produce`, refreshes its room's `live-spend-baselines.json` display sidecar when the shared spending walk advances, refreshes the disposable context sidecars from its producer-side triggers (the produce backstop and the transcript watcher — [state.md](./docs/internals/state.md#push-channels)), and appends diagnostic-only anomaly records through `diag`. `rimz sidebar snapshot` is the same pipeline's one-shot inspection surface. There is no Rimz daemon. The per-instance sidebar socket is the wakeup channel of record; backend-specific fast paths are latency hints layered over it ([multiplexers.md](./docs/internals/multiplexers.md)).
 
 ## State ownership
 
@@ -98,9 +99,10 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [hooks.md](./docs/internals/hooks.md) |
 | `src/resolver/` | per-machine allowlist, heartbeat freshness, TOCTOU restat | [resolvers.md](./docs/internals/resolvers.md) |
 | `src/remote/` | pure SSH remote target grammar, guarded ssh command builder, reconnect policy, and the `remote.toml` alias store | [cli.md](./docs/reference/cli.md) |
-| `src/sidebar/` | sidebar data plane: producer election and heartbeats (`mod.rs`), timing constants and cadence registry (`timing.rs`), renderer event store (`events.rs`), typed pane topology (`frame.rs`), pure pulled-truth/event fusion (`fuse.rs`), notification policy (`notify.rs`), runtime cache formats and reads (`cache.rs`), the in-process no-fork consumer read (`consumer.rs`), the shared enrichment fold (`enrich.rs` plus `enrich/` account, Codex, rate-limit, and live-spend leaves), the producer pipeline (`produce/` — panes/process-starts, metrics/Zellij pid backfill, git/root enumeration, spending), and the rendered-stream anomaly observer (`observe.rs` plus `observe/` signature, detector, and log leaves) | [state.md](./docs/internals/state.md) · [sidebar.md](./docs/internals/sidebar.md) · [notifications.md](./docs/internals/notifications.md) · [observe.md](./docs/internals/observe.md) · [performance.md](./docs/internals/performance.md) |
+| `src/diag.rs`, `src/rotating_log.rs`, `src/binding_log.rs` | diagnostic-only JSONL append surfaces: typed sidebar anomaly records, shared rotating append helper, and pane-binding recovery logs | [diagnostics.md](./docs/internals/diagnostics.md) |
+| `src/sidebar/` | sidebar data plane: producer election and heartbeats (`mod.rs`), timing constants and cadence registry (`timing.rs`), renderer event store (`events.rs`), typed pane topology (`frame.rs`), pure pulled-truth/event fusion (`fuse.rs`), notification policy (`notify.rs`), runtime cache formats and reads (`cache.rs`), the in-process no-fork consumer read (`consumer.rs`), the shared enrichment fold (`enrich.rs` plus `enrich/` account, Codex, rate-limit, and live-spend leaves), the producer pipeline (`produce/` — panes/process-starts, metrics/Zellij pid backfill, git/root enumeration, spending), and the rendered-stream anomaly observer (`observe.rs` plus `observe/` signature, detector, and writer leaves, emitting through `diag`) | [state.md](./docs/internals/state.md) · [sidebar.md](./docs/internals/sidebar.md) · [notifications.md](./docs/internals/notifications.md) · [observe.md](./docs/internals/observe.md) · [performance.md](./docs/internals/performance.md) |
 | `src/sidebar_pane/` | native pane-resident sidebar process: the fixed-timestep serve loop and producer election (`app/`, split into loop state, socket/heartbeat, timing, notification, fetch/state/gate/health/lifecycle/reload/selection/watch leaves), terminal notification OSC/BEL emission (`osc.rs`), and frame composition over the snapshot view-model (`render/`, split into UI state, compose, chrome, ANSI serialization, effects, labels, and section leaves including `agent_card/`) | [sidebar.md](./docs/internals/sidebar.md) · [notifications.md](./docs/internals/notifications.md) · [interface/sidebar.md](./docs/interface/sidebar.md) |
-| `src/schema/` | durable event envelope, typed sidebar event envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) · [state.md](./docs/internals/state.md) |
+| `src/schema/` | durable event envelope, typed sidebar event envelope, diagnostic envelope, heartbeat shape, protocol-version constants | [ledger.md](./docs/internals/ledger.md) · [state.md](./docs/internals/state.md) · [diagnostics.md](./docs/internals/diagnostics.md) |
 
 Top-level domain modules are one file each, their `//!` headers carrying the detail: `workspace` (project identity), `worktree` (Rimz-owned Git worktrees and cleanup; [worktrees.md](./docs/internals/worktrees.md)), `tab_layout` (agent-tab layout DSL and IR; [worktrees.md](./docs/internals/worktrees.md)), `trust` (executable-surface hash and grant state; [trust.md](./docs/internals/trust.md)), `feed` (item lifecycle, surfaces, statuses), `run` (supervised one-shot run records and lifecycle completion; [run.md](./docs/internals/run.md)), `bridge` (per-request and per-run sockets, nonce validation), `ids` (typed identifier newtypes), `resume` (resume-on-rebirth planner), `remote_control` (agent remote-control launch), `config` (per-machine settings), `agent_activity` (liveness hints), `proc` (`/proc` reader), `reload` (binary-upgrade convergence).
 

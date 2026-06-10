@@ -68,5 +68,12 @@ pub fn read_published_snapshot(
 ) -> crate::ledger::snapshot::Result<SidebarSnapshot> {
     let base = rollup_snapshot(state, cursor)?;
     let cache = read_snapshot_cache(&runtime.root.join("snapshot.json"), session);
-    Ok(enrich(base, cache, runtime, exclude, EnrichMode::Cached))
+    Ok(enrich(
+        base,
+        cache,
+        runtime,
+        exclude,
+        EnrichMode::Cached,
+        None,
+    ))
 }

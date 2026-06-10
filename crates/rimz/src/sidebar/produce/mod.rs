@@ -42,6 +42,10 @@ pub enum ProduceErr {
     /// `list-panes` failed: no live session to enumerate, or the mux errored.
     #[error(transparent)]
     PaneDiscovery(#[from] crate::mux::MuxErr),
+    /// The mux returned an Ok-but-implausible pane frame and no prior frame was
+    /// available to hold.
+    #[error("pane frame rejected: {0:?}")]
+    FrameRejected(crate::schema::diag::FrameRejectReason),
     /// The ledger rollup could not be read or projected.
     #[error(transparent)]
     Rollup(#[from] crate::ledger::snapshot::SnapshotErr),
@@ -59,6 +63,7 @@ pub struct ProduceOptions {
     pub session_name: String,
     pub exclude: Option<PaneId>,
     pub min_pane_cache_ms: Option<u64>,
+    pub diag: Option<crate::diag::DiagSink>,
 }
 
 /// Produce the full sidebar snapshot: rollup base + live pane frame + every
@@ -81,6 +86,8 @@ pub fn produce_snapshot(
             opts.mux,
             &opts.session_name,
             opts.min_pane_cache_ms,
+            opts.exclude.as_ref(),
+            opts.diag.as_ref(),
         )?,
     };
     let snapshot = rollup_snapshot(state, cursor)?;
@@ -90,6 +97,7 @@ pub fn produce_snapshot(
         runtime,
         opts.exclude.as_ref(),
         opts.min_pane_cache_ms,
+        opts.diag.as_ref(),
     ))
 }
 
@@ -111,6 +119,7 @@ pub fn produce_rollup_snapshot(
         runtime,
         exclude,
         min_pane_cache_ms,
+        None,
     ))
 }
 
@@ -171,6 +180,7 @@ fn enrich_producing(
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
     min_pane_cache_ms: Option<u64>,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> SidebarSnapshot {
     let roots = snapshot.project_root.clone().map(|root| {
         git::project_group_roots(&root, snapshot.root_class, runtime, min_pane_cache_ms)
@@ -192,6 +202,7 @@ fn enrich_producing(
             config: Box::new(config),
             refresh_git: &refresh_git,
         },
+        diag,
     )
 }
 
@@ -215,6 +226,7 @@ pub(crate) mod test_support {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         }
     }
 }

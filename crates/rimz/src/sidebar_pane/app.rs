@@ -8,6 +8,7 @@
 //! classification), [`reload`] (binary resolution and re-exec), and
 //! [`selection`] (the identity-keyed highlight and input handlers).
 
+use std::cell::Cell;
 use std::io::{self, Write};
 use std::os::unix::net::UnixDatagram;
 use std::path::{Path, PathBuf};
@@ -64,6 +65,10 @@ pub use state::{RenderState, compute_next_state};
 
 const SIDEBAR_TERMINAL_TITLE: &str = "rimz-sidebar";
 
+thread_local! {
+    static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
+}
+
 #[derive(Clone, Debug)]
 pub struct ServeConfig {
     pub workspace_id: WorkspaceId,
@@ -107,6 +112,12 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;
+    let diag = crate::diag::DiagSink::for_workspace(
+        config.workspace_id.clone(),
+        config.session_name.clone(),
+        Some(config.instance_id.clone()),
+    );
+    install_panic_diagnostic_hook(diag.clone());
     let socket_path = sidebar_socket_path(&runtime, &config.instance_id);
     let socket = bind_socket(&socket_path)?;
     let _socket_cleanup = RuntimeFileGuard {
@@ -133,14 +144,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
     terminal.clear()?;
 
     let initial_width = terminal.size().map(|s| s.width).ok();
+    // Without a diagnostics sink there is nowhere to record anomalies, so the
+    // receiver drops here and the loop's sends simply count as dropped.
     let (observe_tx, observe_rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(64);
-    let _observe_handle = observe::log::spawn_writer(
-        runtime.clone(),
-        config.workspace_id.clone(),
-        config.session_name.clone(),
-        config.instance_id.clone(),
-        observe_rx,
-    );
+    let _observe_handle = diag.clone().map(|sink| {
+        observe::writer::spawn(
+            runtime.clone(),
+            sink,
+            config.instance_id.clone(),
+            observe_rx,
+        )
+    });
     let mut state = LoopState::new(config.workspace_id.clone(), initial_width, observe_tx);
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
@@ -161,6 +175,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         runtime.clone(),
         socket_path.clone(),
         config.notification_prefs.clone(),
+        diag.clone(),
         request_rx,
         result_tx,
     );
@@ -218,10 +233,17 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         socket.set_read_timeout(Some(timeout))?;
         match wait_for_wakeup(&socket)? {
             Wakeup::Snapshot => {
-                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start)?;
+                state.on_snapshot(&config, &mut fetch, &result_rx, anim_start, diag.as_ref())?;
             }
             Wakeup::Event(envelope) => {
-                match state.on_event(&config, &mut fetch, &mut terminal, envelope, anim_start)? {
+                match state.on_event(
+                    &config,
+                    &mut fetch,
+                    &mut terminal,
+                    envelope,
+                    anim_start,
+                    diag.as_ref(),
+                )? {
                     LoopFlow::Continue => {}
                     LoopFlow::Repoll => continue,
                     LoopFlow::Exit => break,
@@ -265,6 +287,56 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         return Err(reexec_self(&target));
     }
     Ok(())
+}
+
+fn install_panic_diagnostic_hook(diag: Option<crate::diag::DiagSink>) {
+    let Some(diag) = diag else {
+        return;
+    };
+    let prior = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        if produce_panic_diagnostic_suppressed() {
+            prior(info);
+            return;
+        }
+        diag.emit_unlimited(crate::schema::diag::DiagEvent::RendererPanic {
+            message: panic_message(info),
+            backtrace: Some(std::backtrace::Backtrace::force_capture().to_string()),
+        });
+        prior(info);
+    }));
+}
+
+fn panic_message(info: &std::panic::PanicHookInfo<'_>) -> String {
+    if let Some(message) = info.payload().downcast_ref::<&str>() {
+        (*message).to_owned()
+    } else if let Some(message) = info.payload().downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "renderer panicked".to_owned()
+    }
+}
+
+fn with_produce_panic_diagnostic_suppressed<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED.with(|suppressed| suppressed.set(self.0));
+        }
+    }
+
+    let previous = PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED.with(|suppressed| {
+        let previous = suppressed.get();
+        suppressed.set(true);
+        previous
+    });
+    let _reset = Reset(previous);
+    f()
+}
+
+fn produce_panic_diagnostic_suppressed() -> bool {
+    PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED.with(Cell::get)
 }
 
 fn close_self_closing_view_floating_panes(config: &ServeConfig) {
@@ -382,6 +454,9 @@ fn focus_stranded_target(
         .find(|pane| row_index_of_pane(snapshot, None, pane).is_some())
         .cloned()
 }
+
+#[cfg(test)]
+pub(crate) static PANIC_HOOK_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// Resolve a reload request — the `r` keypress and the typed `Reload` event
 /// share this. `Some(target)` means a differing on-disk binary: the caller

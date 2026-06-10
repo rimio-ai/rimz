@@ -11,15 +11,20 @@ use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
 use crate::mux::PaneListOptions;
+use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
     effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache, snapshot_cache_is_fresh,
     unix_now_ms,
 };
-use crate::sidebar::frame::{PaneFrame, PaneMetrics, assemble_frame};
+use crate::sidebar::frame::{
+    PaneFrame, PaneMetrics, assemble_frame, assemble_frame_with_diagnostics,
+};
 
 mod starts;
+mod validate;
 
 use starts::stamp_pane_process_starts;
+use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
 
 /// How a non-producing sidebar waits for the single producer's cache write
 /// before giving up and producing locally. ~200ms total (10 × 20ms).
@@ -141,6 +146,16 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_starts,
     );
     annotate_elevated_agents(frame, &crate::remote_control::elevated_in_pane_agent);
+    stamp_first_seen(frame);
+}
+
+fn stamp_first_seen(frame: &mut PaneFrame) {
+    let produced_at_ms = frame.produced_at_ms;
+    for pane in frame.pane_states_mut() {
+        if pane.first_seen_at_ms.is_none() {
+            pane.first_seen_at_ms = Some(produced_at_ms);
+        }
+    }
 }
 
 pub fn repaired_pane_frame_for_binding(
@@ -381,6 +396,8 @@ pub(super) fn cached_panes_or_produce(
     mux: MuxName,
     session: &str,
     min_pane_cache_ms: Option<u64>,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> Result<PaneFrame> {
     let cache_path = runtime.root.join("snapshot.json");
 
@@ -400,7 +417,14 @@ pub(super) fn cached_panes_or_produce(
     // Fast path: a fresh same-session entry needs no mux work. Metrics still
     // have their own cadence, so refresh them from the cached topology when
     // due instead of waiting for the pane cache to expire.
-    if let Some(cache) = fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl) {
+    if let Some(cache) = fresh_publishable_snapshot_cache(
+        &cache_path,
+        session,
+        min_pane_cache_ms,
+        pane_ttl,
+        own_pane,
+        diag,
+    ) {
         return Ok(refresh_cached_metrics(
             cache,
             runtime,
@@ -409,25 +433,44 @@ pub(super) fn cached_panes_or_produce(
             session,
             min_pane_cache_ms,
             pane_ttl,
+            own_pane,
+            diag,
         ));
     }
 
     // Slow path: elect one producer for this `(workspace, session)` refresh.
     // Losers read its write back; if it wedges, they fall back to an uncached
     // local produce rather than block.
-    let fresh = || fresh_snapshot_cache(&cache_path, session, min_pane_cache_ms, pane_ttl);
-    let produce_local = || -> Result<PaneFrame> {
-        Ok(assemble_frame(
-            list_session_panes(
-                mux,
-                session,
-                runtime.workspace_id.clone(),
-                min_pane_cache_ms,
-                None,
-            )?,
-            unix_now_ms(),
-            session.to_owned(),
-        ))
+    let fresh = || {
+        fresh_publishable_snapshot_cache(
+            &cache_path,
+            session,
+            min_pane_cache_ms,
+            pane_ttl,
+            own_pane,
+            diag,
+        )
+    };
+    let produce_candidate = |enrich_metrics: bool| -> Result<PaneFrame> {
+        let panes = match list_session_panes(
+            mux,
+            session,
+            runtime.workspace_id.clone(),
+            min_pane_cache_ms,
+            None,
+        ) {
+            Ok(panes) => panes,
+            Err(err) => {
+                emit_mux_error(diag, &cache_path, session, &err);
+                return Err(err);
+            }
+        };
+        let panes = filter_foreign_session_panes(panes, session, diag);
+        let (mut frame, diagnostics) =
+            assemble_frame_with_diagnostics(panes, unix_now_ms(), session.to_owned());
+        emit_frame_diagnostics(diag, diagnostics);
+        repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+        Ok(frame)
     };
     match single_flight::coalesce(
         &lock_path,
@@ -440,23 +483,254 @@ pub(super) fn cached_panes_or_produce(
         // The raced-read repair still applies — without it a dropped command/cwd
         // on this one path folds the anonymous row the winner path guards against.
         Coalesced::ProduceLocal => {
-            let mut frame = produce_local()?;
-            repair_pane_frame(&mut frame, runtime, &cache_path, session, false);
-            Ok(frame)
+            let prior = read_snapshot_cache(&cache_path, session);
+            let mut frame = produce_candidate(false)?;
+            if shrink_needs_verification(&frame, prior.as_ref()) {
+                frame = verify_shrink(frame, prior.as_ref(), &produce_candidate, diag, false)?;
+            }
+            validate_frame_for_publish(frame, prior, own_pane, diag, false, runtime, &cache_path)
         }
         // We won: fork `list-panes` and publish it. The guard holds the lock
         // until this arm returns.
         Coalesced::Produce(_guard) => {
-            let mut frame = produce_local()?;
+            let prior = read_snapshot_cache(&cache_path, session);
+            let mut frame = produce_candidate(true)?;
             // A mid-tick `list-panes` race can drop a live pane's command/cwd/
             // process-start; rather than fold an anonymous `external`/`process`
             // row that blinks out next tick, run the shared repaired-frame
             // ladder before publishing.
-            repair_pane_frame(&mut frame, runtime, &cache_path, session, true);
-            publish_frame(runtime, &cache_path, &frame);
-            Ok(frame)
+            if shrink_needs_verification(&frame, prior.as_ref()) {
+                frame = verify_shrink(frame, prior.as_ref(), &produce_candidate, diag, true)?;
+            }
+            validate_frame_for_publish(frame, prior, own_pane, diag, true, runtime, &cache_path)
         }
     }
+}
+
+fn filter_foreign_session_panes(
+    panes: Vec<crate::feed::PaneRef>,
+    session: &str,
+    diag: Option<&crate::diag::DiagSink>,
+) -> Vec<crate::feed::PaneRef> {
+    panes
+        .into_iter()
+        .filter_map(|pane| {
+            if pane.session_name == session {
+                Some(pane)
+            } else {
+                if let Some(diag) = diag {
+                    diag.emit(DiagEvent::ForeignSessionPane {
+                        pane_id: pane.pane_id,
+                        session: pane.session_name,
+                    });
+                }
+                None
+            }
+        })
+        .collect()
+}
+
+fn emit_frame_diagnostics(diag: Option<&crate::diag::DiagSink>, events: Vec<DiagEvent>) {
+    if let Some(diag) = diag {
+        for event in events {
+            diag.emit(event);
+        }
+    }
+}
+
+fn verify_shrink(
+    frame: PaneFrame,
+    prior: Option<&PaneFrame>,
+    produce_candidate: &dyn Fn(bool) -> Result<PaneFrame>,
+    diag: Option<&crate::diag::DiagSink>,
+    enrich_metrics: bool,
+) -> Result<PaneFrame> {
+    let prior_count = prior.map(pane_count).unwrap_or_default();
+    let fresh_count = pane_count(&frame);
+    let verified = produce_candidate(enrich_metrics)?;
+    if pane_count(&verified) == fresh_count
+        && let Some(diag) = diag
+    {
+        diag.emit(DiagEvent::FrameShrinkVerified {
+            prior: prior_count,
+            fresh: fresh_count,
+        });
+    }
+    Ok(verified)
+}
+
+fn validate_frame_for_publish(
+    frame: PaneFrame,
+    prior: Option<PaneFrame>,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
+    publish: bool,
+    runtime: &crate::RuntimePaths,
+    cache_path: &Path,
+) -> Result<PaneFrame> {
+    let now_ms = unix_now_ms();
+    let prior = prior.and_then(|prior| publishable_prior(prior, own_pane, diag));
+    match frame_publish_verdict(&frame, prior.as_ref(), own_pane, now_ms) {
+        PublishVerdict::Publish => {
+            if publish {
+                emit_pane_count_drop(diag, prior.as_ref(), &frame, now_ms);
+                publish_frame(runtime, cache_path, &frame);
+            }
+            Ok(frame)
+        }
+        PublishVerdict::Escape { held_ms } => {
+            if let Some(diag) = diag {
+                diag.emit(DiagEvent::FrameRejectEscape { held_ms });
+            }
+            if publish {
+                emit_pane_count_drop(diag, prior.as_ref(), &frame, now_ms);
+                publish_frame(runtime, cache_path, &frame);
+            }
+            Ok(frame)
+        }
+        PublishVerdict::Reject(reason) => {
+            emit_frame_rejected(diag, reason.clone(), prior.as_ref(), &frame, now_ms);
+            prior.ok_or(crate::sidebar::produce::ProduceErr::FrameRejected(reason))
+        }
+    }
+}
+
+fn fresh_publishable_snapshot_cache(
+    cache_path: &Path,
+    session: &str,
+    min_produced_at_ms: Option<u64>,
+    ttl: Duration,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
+) -> Option<PaneFrame> {
+    let cache = fresh_snapshot_cache(cache_path, session, min_produced_at_ms, ttl)?;
+    publishable_cached_frame(cache, own_pane, diag)
+}
+
+fn publishable_prior(
+    frame: PaneFrame,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
+) -> Option<PaneFrame> {
+    publishable_cached_frame(frame, own_pane, diag)
+}
+
+fn publishable_cached_frame(
+    frame: PaneFrame,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
+) -> Option<PaneFrame> {
+    match frame_publish_verdict(&frame, None, own_pane, unix_now_ms()) {
+        PublishVerdict::Publish => Some(frame),
+        PublishVerdict::Escape { .. } => Some(frame),
+        PublishVerdict::Reject(reason) => {
+            emit_frame_rejected(diag, reason, None, &frame, unix_now_ms());
+            None
+        }
+    }
+}
+
+fn emit_mux_error(
+    diag: Option<&crate::diag::DiagSink>,
+    cache_path: &Path,
+    session: &str,
+    err: &dyn std::fmt::Display,
+) {
+    let Some(diag) = diag else {
+        return;
+    };
+    let prior = read_snapshot_cache(cache_path, session);
+    diag.emit(DiagEvent::FrameRejected {
+        reason: FrameRejectReason::MuxError {
+            stderr_excerpt: excerpt(&err.to_string(), 512),
+        },
+        prior_pane_count: prior.as_ref().map(pane_count).unwrap_or_default(),
+        fresh_pane_count: 0,
+        frames_ref: None,
+    });
+}
+
+fn emit_frame_rejected(
+    diag: Option<&crate::diag::DiagSink>,
+    reason: FrameRejectReason,
+    prior: Option<&PaneFrame>,
+    fresh: &PaneFrame,
+    at_ms: u64,
+) {
+    if let Some(diag) = diag {
+        let frames_ref = if matches!(reason, FrameRejectReason::MissingOwnPane) {
+            prior.and_then(|prior| diag.capture_frame_pair("frame_rejected", prior, fresh, at_ms))
+        } else {
+            None
+        };
+        diag.emit(DiagEvent::FrameRejected {
+            reason,
+            prior_pane_count: prior.map(pane_count).unwrap_or_default(),
+            fresh_pane_count: pane_count(fresh),
+            frames_ref,
+        });
+    }
+}
+
+fn emit_pane_count_drop(
+    diag: Option<&crate::diag::DiagSink>,
+    prior: Option<&PaneFrame>,
+    fresh: &PaneFrame,
+    at_ms: u64,
+) {
+    let Some(diag) = diag else {
+        return;
+    };
+    let Some(prior) = prior else {
+        return;
+    };
+    let prior_count = pane_count(prior);
+    let fresh_count = pane_count(fresh);
+    if fresh_count != 0 && prior_count.saturating_sub(fresh_count) < 2 {
+        return;
+    }
+    let (removed, added) = pane_set_delta(prior, fresh);
+    let frames_ref = diag.capture_frame_pair("pane_count_drop", prior, fresh, at_ms);
+    diag.emit(DiagEvent::PaneCountDrop {
+        prior: prior_count,
+        new: fresh_count,
+        removed,
+        added,
+        frames_ref,
+    });
+}
+
+fn pane_set_delta(prior: &PaneFrame, fresh: &PaneFrame) -> (Vec<PaneId>, Vec<PaneId>) {
+    let prior_ids: HashSet<PaneId> = prior
+        .pane_states()
+        .map(|pane| pane.pane_id.clone())
+        .collect();
+    let fresh_ids: HashSet<PaneId> = fresh
+        .pane_states()
+        .map(|pane| pane.pane_id.clone())
+        .collect();
+    let mut removed = prior_ids
+        .difference(&fresh_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    let mut added = fresh_ids
+        .difference(&prior_ids)
+        .cloned()
+        .collect::<Vec<_>>();
+    removed.sort_by_key(|pane| pane.to_string());
+    added.sort_by_key(|pane| pane.to_string());
+    (removed, added)
+}
+
+fn excerpt(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_owned();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_owned()
 }
 
 /// The fast path's metrics arm: re-sample `/proc` over a topology-fresh cached
@@ -465,6 +739,7 @@ pub(super) fn cached_panes_or_produce(
 /// fresh pane listing; election rides the same snapshot lock as the full
 /// produce, so one process samples per window and a loser serves the shared
 /// write back.
+#[allow(clippy::too_many_arguments)]
 fn refresh_cached_metrics(
     frame: PaneFrame,
     runtime: &crate::RuntimePaths,
@@ -473,12 +748,21 @@ fn refresh_cached_metrics(
     session: &str,
     min_pane_cache_ms: Option<u64>,
     pane_ttl: Duration,
+    own_pane: Option<&PaneId>,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> PaneFrame {
     if !super::metrics::pane_metrics_due(&frame, runtime) {
         return frame;
     }
     let fresh = || {
-        let cache = fresh_snapshot_cache(cache_path, session, min_pane_cache_ms, pane_ttl)?;
+        let cache = fresh_publishable_snapshot_cache(
+            cache_path,
+            session,
+            min_pane_cache_ms,
+            pane_ttl,
+            own_pane,
+            diag,
+        )?;
         (!super::metrics::pane_metrics_due(&cache, runtime)).then_some(cache)
     };
     match single_flight::coalesce(
@@ -493,8 +777,15 @@ fn refresh_cached_metrics(
         // elected producer path.
         Coalesced::ProduceLocal => frame,
         Coalesced::Produce(_guard) => {
-            let mut latest = fresh_snapshot_cache(cache_path, session, min_pane_cache_ms, pane_ttl)
-                .unwrap_or(frame);
+            let mut latest = fresh_publishable_snapshot_cache(
+                cache_path,
+                session,
+                min_pane_cache_ms,
+                pane_ttl,
+                own_pane,
+                diag,
+            )
+            .unwrap_or(frame);
             if super::metrics::enrich_pane_metrics(&mut latest, session, runtime) {
                 annotate_elevated_agents(
                     &mut latest,

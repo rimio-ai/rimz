@@ -96,3 +96,107 @@ fn commandless_pane_keeps_known_process_rows() {
     assert_eq!(rows.len(), 1, "only the named pane is a row: {rows:?}");
     assert_eq!(rows[0].name, "zsh");
 }
+
+#[test]
+fn duplicate_live_pane_ids_project_one_row_identity() {
+    let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let duplicate = pane("%1", "claude", "/repo/main");
+    let snapshot =
+        room(Vec::new(), vec![claude]).with_live_panes(vec![duplicate.clone(), duplicate], None);
+
+    let projected = rows(&snapshot);
+    assert_eq!(projected.len(), 1, "duplicate pane ids fold once");
+    assert_eq!(projected[0].id, "sess-a");
+    assert_eq!(row_identity_violations(projected), Vec::<String>::new());
+}
+
+#[test]
+fn duplicate_stamped_agent_identity_suppresses_second_pane() {
+    let first = agent("claude", "sess-a", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1");
+    let duplicate = agent("claude", "sess-a", AgentStatus::Running, 999)
+        .worktree("/repo/main")
+        .in_pane("%2");
+    let snapshot = room(Vec::new(), vec![first, duplicate]).with_live_panes(
+        vec![
+            pane("%1", "claude", "/repo/main"),
+            pane("%2", "claude", "/repo/main"),
+        ],
+        None,
+    );
+
+    let projected = rows(&snapshot);
+    assert_eq!(
+        projected.len(),
+        1,
+        "the conflicting stamped pane is suppressed rather than rendered as process: {projected:?}"
+    );
+    assert_eq!(projected[0].id, "sess-a");
+    assert_eq!(row_identity_violations(projected), Vec::<String>::new());
+}
+
+#[test]
+fn newborn_unknown_cwd_pane_waits_one_frame_before_external() {
+    let mut first =
+        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+    first.panes_produced_at_ms = Some(10);
+    let newborn = PaneRef {
+        cwd: None,
+        first_seen_at_ms: Some(10),
+        ..pane("%1", "zsh", "")
+    };
+
+    let first = first.with_live_panes(vec![newborn.clone()], None);
+    assert!(
+        first.worktree_groups.is_empty(),
+        "newborn unknown-cwd pane is quarantined for its birth frame"
+    );
+
+    let mut second =
+        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+    second.panes_produced_at_ms = Some(11);
+    let second = second.with_live_panes(vec![newborn], None);
+    assert_eq!(second.worktree_groups.len(), 1);
+    assert_eq!(
+        second.worktree_groups[0].kind,
+        SidebarWorktreeKind::External
+    );
+}
+
+#[test]
+fn legacy_frame_without_first_seen_does_not_quarantine() {
+    let mut snapshot =
+        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+    snapshot.panes_produced_at_ms = Some(10);
+    let legacy = PaneRef {
+        cwd: None,
+        first_seen_at_ms: None,
+        ..pane("%1", "zsh", "")
+    };
+
+    let snapshot = snapshot.with_live_panes(vec![legacy], None);
+
+    assert_eq!(snapshot.worktree_groups.len(), 1);
+    assert_eq!(
+        snapshot.worktree_groups[0].kind,
+        SidebarWorktreeKind::External
+    );
+}
+
+#[test]
+fn newborn_known_cwd_pane_paints_immediately() {
+    let mut snapshot =
+        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+    snapshot.panes_produced_at_ms = Some(10);
+    let newborn = PaneRef {
+        first_seen_at_ms: Some(10),
+        ..pane("%1", "zsh", "/repo/main")
+    };
+
+    let snapshot = snapshot.with_live_panes(vec![newborn], None);
+    assert_eq!(snapshot.worktree_groups.len(), 1);
+    assert_eq!(snapshot.worktree_groups[0].label, "main");
+}

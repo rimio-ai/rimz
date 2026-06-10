@@ -211,6 +211,159 @@ pub(super) fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
     );
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+pub(super) fn report_recent_diagnostics(ws: &rimz::ResolvedWorkspace) {
+    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), 12) else {
+        println!("  diagnostics   : unavailable");
+        return;
+    };
+    if records.is_empty() {
+        println!("  diagnostics   : no recent records ({})", path.display());
+        return;
+    }
+    println!(
+        "  diagnostics   : {} recent records ({})",
+        records.len(),
+        path.display()
+    );
+    let now_ms = rimz::sidebar::cache::unix_now_ms();
+    for record in records {
+        println!(
+            "    {:<5} {:<24} {:>8}  {}",
+            severity_label(record.severity),
+            record.event.kind_name(),
+            age_ms_short(now_ms, record.at_ms),
+            diagnostic_summary(&record.event),
+        );
+    }
+}
+
+fn severity_label(severity: rimz::schema::diag::DiagSeverity) -> &'static str {
+    match severity {
+        rimz::schema::diag::DiagSeverity::Info => "info",
+        rimz::schema::diag::DiagSeverity::Warn => "warn",
+        rimz::schema::diag::DiagSeverity::Error => "error",
+    }
+}
+
+fn age_ms_short(now_ms: u64, then_ms: u64) -> String {
+    let secs = now_ms.saturating_sub(then_ms) / 1_000;
+    if secs < 60 {
+        format!("{secs}s ago")
+    } else if secs < 3_600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3_600)
+    } else {
+        format!("{}d ago", secs / 86_400)
+    }
+}
+
+fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
+    use rimz::schema::diag::DiagEvent;
+    match event {
+        DiagEvent::FrameRejected {
+            reason,
+            prior_pane_count,
+            fresh_pane_count,
+            frames_ref,
+        } => format!(
+            "rejected {reason:?}; panes {prior_pane_count}->{fresh_pane_count}{}",
+            frames_ref
+                .as_ref()
+                .map(|name| format!("; frames {name}"))
+                .unwrap_or_default()
+        ),
+        DiagEvent::FrameRejectEscape { held_ms } => {
+            format!("published after holding {held_ms}ms")
+        }
+        DiagEvent::FrameShrinkVerified { prior, fresh } => {
+            format!("verified shrink {prior}->{fresh}")
+        }
+        DiagEvent::PaneCountDrop {
+            prior,
+            new,
+            frames_ref,
+            ..
+        } => format!(
+            "pane count {prior}->{new}{}",
+            frames_ref
+                .as_ref()
+                .map(|name| format!("; frames {name}"))
+                .unwrap_or_default()
+        ),
+        DiagEvent::GateHold {
+            rule,
+            reject_streak,
+            ..
+        } => format!("held {rule:?}; streak {reject_streak}"),
+        DiagEvent::GateRelease {
+            rule,
+            held_ms,
+            via_escape_hatch,
+        } => format!("released {rule:?} after {held_ms}ms; escape={via_escape_hatch}"),
+        DiagEvent::FetchFailure {
+            reason,
+            failure_streak,
+        } => format!("{reason}; streak {failure_streak}"),
+        DiagEvent::HealthAlert {
+            reason,
+            recovered_after_ms,
+            ..
+        } => match recovered_after_ms {
+            Some(ms) => format!("recovered after {ms}ms: {reason}"),
+            None => reason.clone(),
+        },
+        DiagEvent::ProducerElected { prior_elder } => {
+            format!("this renderer became producer after {prior_elder} aged out")
+        }
+        DiagEvent::ProducerDemoted { new_elder } => {
+            format!("this renderer stopped producing; elder {new_elder}")
+        }
+        DiagEvent::RowConflict {
+            agent_kind,
+            agent_session_id,
+            bound_pane,
+            conflicting_pane,
+        } => format!(
+            "{agent_kind}/{agent_session_id} already on {bound_pane}; suppressed {conflicting_pane}"
+        ),
+        DiagEvent::DuplicatePaneId { pane_id } => format!("duplicate {pane_id} suppressed"),
+        DiagEvent::ForeignSessionPane { pane_id, session } => {
+            format!("dropped {pane_id} from session {session}")
+        }
+        DiagEvent::GroupMigration {
+            pane_id, from, to, ..
+        } => format!(
+            "{pane_id} moved {}:{} -> {}:{}",
+            from.kind, from.key, to.kind, to.key
+        ),
+        DiagEvent::NewbornQuarantined { pane_id } => {
+            format!("held newborn {pane_id} until cwd resolves")
+        }
+        DiagEvent::RendererPanic { message, .. } => message.clone(),
+        DiagEvent::FrameAnomaly {
+            anomaly,
+            suppressed_since_last,
+            ..
+        } => {
+            let subject = anomaly
+                .subject()
+                .map(|subject| format!(" on {subject}"))
+                .unwrap_or_default();
+            let suppressed = if *suppressed_since_last > 0 {
+                format!("; {suppressed_since_last} suppressed")
+            } else {
+                String::new()
+            };
+            format!("observed {}{subject}{suppressed}", anomaly.key())
+        }
+    }
+}
+
 /// The machine's room tree: every recorded workspace with its root, root
 /// class, and liveness, the current directory's room starred. Live rooms
 /// whose roots nest earn an overlap line — legal by design (an agent belongs
@@ -274,5 +427,40 @@ pub(super) fn report_room_tree(current: Option<&rimz::ResolvedWorkspace>) {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::schema::diag::{DiagEvent, FrameRejectReason};
+
+    fn sidebar(raw: &str) -> rimz::SidebarInstanceId {
+        rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
+    }
+
+    #[test]
+    fn diagnostic_summary_includes_frame_ref_and_producer_peer_ids() {
+        let rejected = diagnostic_summary(&DiagEvent::FrameRejected {
+            reason: FrameRejectReason::MissingOwnPane,
+            prior_pane_count: 3,
+            fresh_pane_count: 2,
+            frames_ref: Some("frame.42.0.frame_rejected.json".to_owned()),
+        });
+        assert!(rejected.contains("frame.42.0.frame_rejected.json"));
+
+        let elder = sidebar("sb_019e8c565bbd708097fce9514f79da04");
+        assert!(
+            diagnostic_summary(&DiagEvent::ProducerElected {
+                prior_elder: elder.clone(),
+            })
+            .contains(elder.as_str())
+        );
+        assert!(
+            diagnostic_summary(&DiagEvent::ProducerDemoted {
+                new_elder: elder.clone(),
+            })
+            .contains(elder.as_str())
+        );
     }
 }

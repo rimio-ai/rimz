@@ -3,6 +3,7 @@
 //! Protocol versions are pinned here as constants; bump them in lockstep with
 //! the corresponding schema change and update `docs/internals/ledger.md`.
 
+pub mod diag;
 pub mod event;
 pub mod heartbeat;
 pub mod pane_topology;

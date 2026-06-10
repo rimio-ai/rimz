@@ -17,8 +17,8 @@ use agents::{
 };
 use protocol::report_protocol_versions;
 use runtime::{
-    report_presence_channel, report_remote_control, report_room_tree, report_session_health,
-    report_sidebar_pane, report_socket_headroom, report_tmux_capabilities,
+    report_presence_channel, report_recent_diagnostics, report_remote_control, report_room_tree,
+    report_session_health, report_sidebar_pane, report_socket_headroom, report_tmux_capabilities,
     report_zellij_capabilities,
 };
 #[derive(Debug, Args)]
@@ -87,6 +87,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
             report_trust(ws);
             report_unauthorized_resolver_heartbeats(ws);
             report_agent_rollup(ws, args.audit);
+            report_recent_diagnostics(ws);
         }
     }
     Ok(())

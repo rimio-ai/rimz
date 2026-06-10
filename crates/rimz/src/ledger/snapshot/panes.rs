@@ -111,10 +111,20 @@ pub(super) fn agent_for_pane<'a>(
     agents: &'a [AgentState],
     bound: &BTreeSet<(AgentKind, AgentSessionId)>,
 ) -> Option<&'a AgentState> {
+    stamped_agent_for_pane(pane, agents)
+        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
+}
+
+/// The root agent stamped on this exact live pane id, regardless of whether
+/// another row already bound it.
+pub(super) fn stamped_agent_for_pane<'a>(
+    pane: &PaneRef,
+    agents: &'a [AgentState],
+) -> Option<&'a AgentState> {
     agents
         .iter()
         // Cheap pane match first: only agents stamped on this exact pane reach
-        // the allocating `bound` lookup, so the common miss costs no clones.
+        // the root-agent filters, so the common miss costs no clones.
         .filter(|agent| {
             agent
                 .pane
@@ -125,7 +135,6 @@ pub(super) fn agent_for_pane<'a>(
         // pane id; it nests under the parent via `attach_sub_agents` and must
         // never win the pane as a top-level row. Panes bind root agents only.
         .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| !bound.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .max_by_key(|agent| agent.last_activity)
 }
 
@@ -194,6 +203,7 @@ mod tests {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         }
     }
 

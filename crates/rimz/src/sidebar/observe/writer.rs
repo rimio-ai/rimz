@@ -1,40 +1,35 @@
+//! Observer writer thread: cooldown, elder-only real-world cross-checks, and
+//! emission of [`DiagEvent::FrameAnomaly`] records through the shared
+//! diagnostics sink — the render thread never does IO for the observer.
+
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, RecvTimeoutError};
 use std::time::Instant;
 
 use jiff::Timestamp;
 
-use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::diag::DiagSink;
+use crate::ids::SidebarInstanceId;
 use crate::ledger::paths::RuntimePaths;
+use crate::schema::diag::DiagEvent;
 use crate::sidebar::cache::{read_snapshot_cache, unix_now_ms};
 use crate::sidebar::frame::PaneFrame;
 use crate::sidebar::timing::{
-    OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS, OBSERVE_LOG_MAX_BYTES,
+    OBSERVE_COOLDOWN, OBSERVE_CROSSCHECK_TTL, OBSERVE_DEADPID_CONFIRMATIONS,
 };
 
-use super::{
-    AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRecord, ObserveRole, RosterSig, cap_vec,
-};
+use super::{AnomalyDraft, AnomalyKind, ObserveMsg, ObserveRole, RosterSig, cap_vec};
 
-const OBSERVE_LOG_NAME: &str = "observe.log.jsonl";
-
-pub fn path(runtime: &RuntimePaths) -> PathBuf {
-    runtime.root.join(OBSERVE_LOG_NAME)
-}
-
-pub fn spawn_writer(
+pub fn spawn(
     runtime: RuntimePaths,
-    workspace_id: WorkspaceId,
-    session: String,
+    sink: DiagSink,
     instance: SidebarInstanceId,
     rx: Receiver<ObserveMsg>,
 ) -> std::thread::JoinHandle<()> {
     std::thread::spawn(move || {
         Writer {
             runtime,
-            workspace_id,
-            session,
+            sink,
             instance,
             cooldowns: Cooldowns::default(),
             latest_roster: None,
@@ -52,8 +47,7 @@ pub fn crosscheck_enabled(role: ObserveRole) -> bool {
 
 struct Writer {
     runtime: RuntimePaths,
-    workspace_id: WorkspaceId,
-    session: String,
+    sink: DiagSink,
     instance: SidebarInstanceId,
     cooldowns: Cooldowns,
     latest_roster: Option<RosterSig>,
@@ -66,7 +60,7 @@ impl Writer {
     fn run(&mut self, rx: Receiver<ObserveMsg>) {
         loop {
             match rx.recv_timeout(OBSERVE_CROSSCHECK_TTL) {
-                Ok(ObserveMsg::Anomaly(draft)) => self.append_anomaly(*draft),
+                Ok(ObserveMsg::Anomaly(draft)) => self.emit_anomaly(*draft),
                 Ok(ObserveMsg::Roster(roster)) => self.latest_roster = Some(roster),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -78,27 +72,25 @@ impl Writer {
         }
     }
 
-    fn append_anomaly(&mut self, draft: AnomalyDraft) {
+    fn emit_anomaly(&mut self, draft: AnomalyDraft) {
         let Some(suppressed_since_last) = self.cooldowns.allow(&draft.kind, draft.at_ms) else {
             return;
         };
         let role = self.role.current(&self.runtime, &self.instance);
-        let record = ObserveRecord {
-            at_ms: draft.at_ms,
-            workspace_id: self.workspace_id.as_str().to_owned(),
-            session: self.session.clone(),
-            instance: self.instance.as_str().to_owned(),
-            role,
-            anomaly: draft.kind,
-            window_ms: draft.window_ms,
-            frame: draft.frame,
-            events_recent: draft.events_recent,
-            gate_reject_streak: draft.gate_reject_streak,
-            health_failure_streak: draft.health_failure_streak,
-            suppressed_since_last,
-            dropped_msgs: draft.dropped_msgs,
-        };
-        crate::diag_log::append(&path(&self.runtime), OBSERVE_LOG_MAX_BYTES, &record);
+        self.sink.emit_at_ms(
+            DiagEvent::FrameAnomaly {
+                role,
+                anomaly: draft.kind,
+                window_ms: draft.window_ms,
+                frame: draft.frame,
+                events_recent: draft.events_recent,
+                gate_reject_streak: draft.gate_reject_streak,
+                health_failure_streak: draft.health_failure_streak,
+                suppressed_since_last,
+                dropped_msgs: draft.dropped_msgs,
+            },
+            draft.at_ms,
+        );
     }
 
     fn run_crosschecks(&mut self) {
@@ -109,16 +101,17 @@ impl Writer {
         let Some(roster) = self.latest_roster.clone() else {
             return;
         };
-        if let Some(frame) =
-            read_snapshot_cache(&self.runtime.root.join("snapshot.json"), &self.session)
-        {
+        if let Some(frame) = read_snapshot_cache(
+            &self.runtime.root.join("snapshot.json"),
+            self.sink.session_name(),
+        ) {
             for kind in compare_roster_to_frame(&roster, &frame) {
-                self.append_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
+                self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }
         }
         if crate::proc::process_start(std::process::id()).is_some() {
             for kind in self.dead_pids.check(&roster, crate::proc::process_start) {
-                self.append_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
+                self.emit_anomaly(AnomalyDraft::from_roster(unix_now_ms(), &roster, kind));
             }
         }
     }
@@ -276,7 +269,8 @@ fn timestamp_diff_gt(left: Timestamp, right: Timestamp, secs: i64) -> bool {
 mod tests {
     use super::*;
     use crate::feed::PaneRef;
-    use crate::ids::{MuxName, PaneId, ViewKind};
+    use crate::ids::{MuxName, PaneId, ViewKind, WorkspaceId};
+    use crate::schema::diag::DiagEnvelope;
     use crate::sidebar::frame::assemble_frame;
     use crate::sidebar::observe::RosterRowSig;
 
@@ -334,6 +328,7 @@ mod tests {
             cwd: Some("/repo".to_owned()),
             pane_pid: None,
             pane_process_start: None,
+            first_seen_at_ms: None,
             resumed_session_id: None,
             elevated_agent: None,
         }
@@ -391,6 +386,43 @@ mod tests {
             anomalies.as_slice(),
             [AnomalyKind::DeadPid { row_id, pid: 123, reason }]
                 if row_id == "a" && reason == "gone"
+        ));
+    }
+
+    #[test]
+    fn writer_emits_frame_anomaly_records_into_the_diag_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime");
+        let sink =
+            crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace, "rimz-test", None);
+        let log_path = sink.log_path();
+        let instance = SidebarInstanceId::new();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
+
+        let handle = spawn(runtime, sink, instance, rx);
+        let sig_rows = roster(10, vec![("a", "terminal_1")]);
+        tx.send(ObserveMsg::Anomaly(Box::new(AnomalyDraft::from_roster(
+            42,
+            &sig_rows,
+            AnomalyKind::DuplicateRowId {
+                row_id: "a".to_owned(),
+                count: 2,
+            },
+        ))))
+        .unwrap();
+        drop(tx);
+        handle.join().unwrap();
+
+        let text = std::fs::read_to_string(log_path).unwrap();
+        let record: DiagEnvelope = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert_eq!(record.at_ms, 42);
+        assert!(matches!(
+            record.event,
+            crate::schema::diag::DiagEvent::FrameAnomaly {
+                anomaly: AnomalyKind::DuplicateRowId { .. },
+                ..
+            }
         ));
     }
 }

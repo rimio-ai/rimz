@@ -78,7 +78,14 @@ fn live_spend_baselines_are_written_only_by_producer_enrich() {
     );
     let baseline_path = runtime.live_spend_baselines_path();
 
-    let _ = enrich(build_snapshot(), None, &runtime, None, EnrichMode::Cached);
+    let _ = enrich(
+        build_snapshot(),
+        None,
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
     assert!(
         !baseline_path.exists(),
         "consumer folds read baselines but never create the sidecar"
@@ -89,7 +96,14 @@ fn live_spend_baselines_are_written_only_by_producer_enrich() {
         baselines: BTreeMap::from([("old".to_owned(), 0.50)]),
     };
     crate::agents::spending::write_live_spend_baselines(&baseline_path, &stale);
-    let _ = enrich(build_snapshot(), None, &runtime, None, EnrichMode::Cached);
+    let _ = enrich(
+        build_snapshot(),
+        None,
+        &runtime,
+        None,
+        EnrichMode::Cached,
+        None,
+    );
     assert_eq!(
         crate::agents::spending::read_live_spend_baselines(&baseline_path),
         stale,
@@ -112,6 +126,7 @@ fn live_spend_baselines_are_written_only_by_producer_enrich() {
             config: Box::new(crate::config::MachineConfig::default()),
             refresh_git: &refresh_git,
         },
+        None,
     );
     let advanced = crate::agents::spending::read_live_spend_baselines(&baseline_path);
     assert_eq!(advanced.observed_walk_ms, walk_ms);

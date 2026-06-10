@@ -112,6 +112,37 @@ fn heartbeat_write_due_on_first_or_aged_write_only() {
 }
 
 #[test]
+fn suppressed_produce_panic_hook_chains_without_renderer_diagnostic() {
+    let _hook_guard = PANIC_HOOK_TEST_LOCK.lock().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
+    let prior_called = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let prior_called_hook = prior_called.clone();
+    let original = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |_| {
+        prior_called_hook.store(true, std::sync::atomic::Ordering::SeqCst);
+    }));
+    install_panic_diagnostic_hook(Some(sink.clone()));
+
+    let result = with_produce_panic_diagnostic_suppressed(|| {
+        std::panic::catch_unwind(|| panic!("caught produce panic"))
+    });
+    let _installed = std::panic::take_hook();
+    std::panic::set_hook(original);
+
+    assert!(result.is_err());
+    assert!(
+        prior_called.load(std::sync::atomic::Ordering::SeqCst),
+        "the suppressed diagnostic branch still chains the previously installed panic hook"
+    );
+    assert!(
+        !sink.log_path().exists(),
+        "caught producer panics are converted to fetch failures, not renderer-panic diagnostics"
+    );
+}
+
+#[test]
 fn notification_targets_only_matching_own_view() {
     let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
     assert!(notification_targets_own_view(

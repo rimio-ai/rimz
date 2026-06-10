@@ -70,6 +70,7 @@ impl Fixture {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         };
         let panes_path = env.project_root.join("panes.json");
         std::fs::write(

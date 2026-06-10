@@ -43,7 +43,6 @@ fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
         pulled_panes_produced_at_ms: Some(1),
         gate_reject_streak: 0,
         health_failure_streak: 0,
-        health_reason: None,
     }
 }
 
@@ -112,17 +111,17 @@ fn roster_flap_fires_after_warmup() {
     let mut observer = Observer::default();
     assert!(
         observer
-            .observe(sig(0, vec![row("a", "p1", "main")]), None)
+            .observe(sig(0, vec![row("a", "p1", "main")]))
             .is_empty()
     );
     assert!(
         observer
-            .observe(sig(11_000, vec![row("a", "p1", "main")]), None)
+            .observe(sig(11_000, vec![row("a", "p1", "main")]))
             .is_empty()
     );
-    assert!(observer.observe(sig(12_000, Vec::new()), None).is_empty());
+    assert!(observer.observe(sig(12_000, Vec::new())).is_empty());
 
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]), None);
+    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
 
     assert!(drafts.iter().any(|draft| matches!(
         draft.kind,
@@ -138,10 +137,7 @@ fn roster_flap_fires_after_warmup() {
 fn duplicate_rows_fire_without_warmup() {
     let mut observer = Observer::default();
 
-    let drafts = observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]));
 
     assert!(kinds(&drafts).contains(&"duplicate_row_id"));
 }
@@ -150,10 +146,7 @@ fn duplicate_rows_fire_without_warmup() {
 fn duplicate_pane_rows_fire_without_warmup() {
     let mut observer = Observer::default();
 
-    let drafts = observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p1", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p1", "main")]));
 
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
@@ -165,16 +158,16 @@ fn duplicate_pane_rows_fire_without_warmup() {
 #[test]
 fn pane_close_suppresses_roster_flap_empty_edge() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]), None);
-    observer.observe(sig(11_000, vec![row("a", "p1", "main")]), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main")]));
+    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
     let mut empty = sig(12_000, Vec::new());
     empty.events.pane_closed.push(EventPaneSig {
         pane_id: "p1".to_owned(),
         sent_at_ms: 12_000,
     });
-    observer.observe(empty, None);
+    observer.observe(empty);
 
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]), None);
+    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
 
     assert!(!kinds(&drafts).contains(&"roster_flap"));
 }
@@ -182,20 +175,17 @@ fn pane_close_suppresses_roster_flap_empty_edge() {
 #[test]
 fn row_presence_flap_reports_single_row_disappearance() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(sig(12_000, vec![row("b", "p2", "main")]), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(sig(12_000, vec![row("b", "p2", "main")]));
 
-    let drafts = observer.observe(
-        sig(13_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
 
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
@@ -207,16 +197,16 @@ fn row_presence_flap_reports_single_row_disappearance() {
 #[test]
 fn pending_roster_tracks_subsecond_disappearance_until_cleared() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main")]));
     let first = observer.pending_roster_update().expect("initial roster");
     assert_eq!(first.rows.len(), 1);
     observer.clear_roster_update();
 
-    observer.observe(sig(500, Vec::new()), None);
+    observer.observe(sig(500, Vec::new()));
     let empty = observer.pending_roster_update().expect("empty roster");
     assert!(empty.rows.is_empty());
 
-    observer.observe(sig(750, Vec::new()), None);
+    observer.observe(sig(750, Vec::new()));
     assert!(
         observer
             .pending_roster_update()
@@ -229,12 +219,12 @@ fn pending_roster_tracks_subsecond_disappearance_until_cleared() {
 #[test]
 fn pending_roster_tracks_frame_stamp_advances() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main")]));
     observer.clear_roster_update();
 
     let mut republished = sig(500, vec![row("a", "p1", "main")]);
     republished.panes_produced_at_ms = Some(2);
-    observer.observe(republished, None);
+    observer.observe(republished);
 
     assert_eq!(
         observer
@@ -248,10 +238,10 @@ fn pending_roster_tracks_frame_stamp_advances() {
 #[test]
 fn short_lived_row_catches_phantom_external() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()), None);
-    observer.observe(sig(11_000, vec![row("p", "p9", "external")]), None);
+    observer.observe(sig(0, Vec::new()));
+    observer.observe(sig(11_000, vec![row("p", "p9", "external")]));
 
-    let drafts = observer.observe(sig(12_000, Vec::new()), None);
+    let drafts = observer.observe(sig(12_000, Vec::new()));
 
     assert!(matches!(
         drafts.as_slice(),
@@ -265,16 +255,13 @@ fn short_lived_row_catches_phantom_external() {
 #[test]
 fn windowed_detectors_are_suppressed_during_warmup() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    assert!(observer.observe(sig(1_000, Vec::new()), None).is_empty());
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    assert!(observer.observe(sig(1_000, Vec::new())).is_empty());
 
-    let drafts = observer.observe(
-        sig(2_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        2_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
 
     assert!(!kinds(&drafts).contains(&"roster_flap"));
     assert!(!kinds(&drafts).contains(&"row_presence_flap"));
@@ -283,11 +270,11 @@ fn windowed_detectors_are_suppressed_during_warmup() {
 #[test]
 fn roster_flap_stays_quiet_outside_window() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]), None);
-    observer.observe(sig(11_000, vec![row("a", "p1", "main")]), None);
-    observer.observe(sig(12_000, Vec::new()), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main")]));
+    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    observer.observe(sig(12_000, Vec::new()));
 
-    let drafts = observer.observe(sig(23_001, vec![row("a", "p1", "main")]), None);
+    let drafts = observer.observe(sig(23_001, vec![row("a", "p1", "main")]));
 
     assert!(!kinds(&drafts).contains(&"roster_flap"));
 }
@@ -295,20 +282,17 @@ fn roster_flap_stays_quiet_outside_window() {
 #[test]
 fn row_presence_flap_stays_quiet_outside_window() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(sig(12_000, vec![row("b", "p2", "main")]), None);
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(sig(12_000, vec![row("b", "p2", "main")]));
 
-    let drafts = observer.observe(
-        sig(20_001, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        20_001,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
 
     assert!(!kinds(&drafts).contains(&"row_presence_flap"));
 }
@@ -316,23 +300,21 @@ fn row_presence_flap_stays_quiet_outside_window() {
 #[test]
 fn hidden_group_suppresses_presence_flap() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        with_hidden_count(sig(12_000, vec![row("b", "p2", "main")]), "main", 1),
-        None,
-    );
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(with_hidden_count(
+        sig(12_000, vec![row("b", "p2", "main")]),
+        "main",
+        1,
+    ));
 
-    let drafts = observer.observe(
-        sig(13_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
 
     assert!(!kinds(&drafts).contains(&"row_presence_flap"));
 }
@@ -340,23 +322,20 @@ fn hidden_group_suppresses_presence_flap() {
 #[test]
 fn pane_closed_suppresses_row_presence_flap() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
-    observer.observe(
-        with_pane_closed(sig(12_000, vec![row("b", "p2", "main")]), "p1"),
-        None,
-    );
+    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    observer.observe(sig(
+        11_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
+    observer.observe(with_pane_closed(
+        sig(12_000, vec![row("b", "p2", "main")]),
+        "p1",
+    ));
 
-    let drafts = observer.observe(
-        sig(13_000, vec![row("a", "p1", "main"), row("b", "p2", "main")]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row("a", "p1", "main"), row("b", "p2", "main")],
+    ));
 
     assert!(!kinds(&drafts).contains(&"row_presence_flap"));
 }
@@ -364,10 +343,10 @@ fn pane_closed_suppresses_row_presence_flap() {
 #[test]
 fn pane_closed_suppresses_short_lived_row() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()), None);
-    observer.observe(sig(11_000, vec![row("p", "p9", "external")]), None);
+    observer.observe(sig(0, Vec::new()));
+    observer.observe(sig(11_000, vec![row("p", "p9", "external")]));
 
-    let drafts = observer.observe(with_pane_closed(sig(12_000, Vec::new()), "p9"), None);
+    let drafts = observer.observe(with_pane_closed(sig(12_000, Vec::new()), "p9"));
 
     assert!(!kinds(&drafts).contains(&"short_lived_row"));
 }
@@ -375,11 +354,11 @@ fn pane_closed_suppresses_short_lived_row() {
 #[test]
 fn group_key_oscillation_reports_worktree_external_bounce() {
     let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()), None);
-    observer.observe(sig(11_000, vec![row("a", "p1", "external")]), None);
-    observer.observe(sig(12_000, vec![row("a", "p1", "main")]), None);
+    observer.observe(sig(0, Vec::new()));
+    observer.observe(sig(11_000, vec![row("a", "p1", "external")]));
+    observer.observe(sig(12_000, vec![row("a", "p1", "main")]));
 
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "external")]), None);
+    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "external")]));
 
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
@@ -396,26 +375,20 @@ fn group_key_oscillation_reports_worktree_external_bounce() {
 #[test]
 fn first_enrichment_does_not_count_as_value_oscillation() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row_with_context_pct("a", "p1", "main", None)]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row_with_context_pct("a", "p1", "main", None)]),
-        None,
-    );
-    observer.observe(
-        sig(
-            12_000,
-            vec![row_with_context_pct("a", "p1", "main", Some(10))],
-        ),
-        None,
-    );
+    observer.observe(sig(0, vec![row_with_context_pct("a", "p1", "main", None)]));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_context_pct("a", "p1", "main", None)],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
 
-    let drafts = observer.observe(
-        sig(13_000, vec![row_with_context_pct("a", "p1", "main", None)]),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row_with_context_pct("a", "p1", "main", None)],
+    ));
 
     assert!(!drafts.iter().any(|draft| matches!(
         draft.kind,
@@ -429,29 +402,23 @@ fn first_enrichment_does_not_count_as_value_oscillation() {
 #[test]
 fn established_value_disappearance_and_return_counts_as_oscillation() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row_with_context_pct("a", "p1", "main", Some(10))]),
-        None,
-    );
-    observer.observe(
-        sig(
-            11_000,
-            vec![row_with_context_pct("a", "p1", "main", Some(10))],
-        ),
-        None,
-    );
-    observer.observe(
-        sig(12_000, vec![row_with_context_pct("a", "p1", "main", None)]),
-        None,
-    );
+    observer.observe(sig(
+        0,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_context_pct("a", "p1", "main", None)],
+    ));
 
-    let drafts = observer.observe(
-        sig(
-            13_000,
-            vec![row_with_context_pct("a", "p1", "main", Some(10))],
-        ),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
 
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
@@ -467,33 +434,30 @@ fn established_value_disappearance_and_return_counts_as_oscillation() {
 #[test]
 fn status_churn_counts_only_real_transitions() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
-    observer.observe(
-        sig(12_000, vec![row_with_status("a", "p1", "main", "waiting")]),
-        None,
-    );
-    observer.observe(
-        sig(13_000, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
+    observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_status("a", "p1", "main", "waiting")],
+    ));
+    observer.observe(sig(
+        13_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
 
-    let third_transition = observer.observe(
-        sig(14_000, vec![row_with_status("a", "p1", "main", "idle")]),
-        None,
-    );
+    let third_transition = observer.observe(sig(
+        14_000,
+        vec![row_with_status("a", "p1", "main", "idle")],
+    ));
     assert!(!kinds(&third_transition).contains(&"status_churn"));
 
-    let fourth_transition = observer.observe(
-        sig(15_000, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
+    let fourth_transition = observer.observe(sig(
+        15_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
     assert!(fourth_transition.iter().any(|draft| matches!(
         &draft.kind,
         AnomalyKind::StatusChurn {
@@ -514,7 +478,7 @@ fn hidden_group_allows_declared_status_count_to_exceed_visible_tally() {
         count: 3,
     }];
 
-    let drafts = observer.observe(frame, None);
+    let drafts = observer.observe(frame);
 
     assert!(!kinds(&drafts).contains(&"status_count_mismatch"));
 }
@@ -528,7 +492,7 @@ fn visible_group_requires_exact_status_counts() {
         count: 1,
     }];
 
-    let drafts = observer.observe(frame, None);
+    let drafts = observer.observe(frame);
 
     assert!(kinds(&drafts).contains(&"status_count_mismatch"));
 }
@@ -543,7 +507,7 @@ fn own_view_active_must_be_working_pane() {
         working_pane_ids: vec!["p1".to_owned()],
     });
 
-    let drafts = observer.observe(frame, None);
+    let drafts = observer.observe(frame);
 
     assert!(kinds(&drafts).contains(&"own_view_incoherent"));
 }
@@ -551,17 +515,14 @@ fn own_view_active_must_be_working_pane() {
 #[test]
 fn subagent_projection_errors_are_detected() {
     let mut observer = Observer::default();
-    let drafts = observer.observe(
-        sig(
-            0,
-            vec![
-                row_with_subagents("parent", "p1", "main", vec!["child"]),
-                row("child", "p2", "main"),
-                row_with_subagents("self-nested", "p3", "main", vec!["self-nested"]),
-            ],
-        ),
-        None,
-    );
+    let drafts = observer.observe(sig(
+        0,
+        vec![
+            row_with_subagents("parent", "p1", "main", vec!["child"]),
+            row("child", "p2", "main"),
+            row_with_subagents("self-nested", "p3", "main", vec!["self-nested"]),
+        ],
+    ));
 
     assert!(kinds(&drafts).contains(&"subagent_double_render"));
     assert!(kinds(&drafts).contains(&"subagent_top_level_leak"));
@@ -573,7 +534,7 @@ fn frameless_rows_are_detected_without_warmup() {
     let mut frame = sig(0, vec![row("a", "p1", "main")]);
     frame.panes_produced_at_ms = None;
 
-    let drafts = observer.observe(frame, None);
+    let drafts = observer.observe(frame);
 
     assert!(kinds(&drafts).contains(&"frameless_rows"));
 }
@@ -581,44 +542,23 @@ fn frameless_rows_are_detected_without_warmup() {
 #[test]
 fn historical_detector_maps_prune_after_row_absence_window() {
     let mut observer = Observer::default();
-    observer.observe(
-        sig(0, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
-    observer.observe(
-        sig(11_000, vec![row_with_status("a", "p1", "main", "running")]),
-        None,
-    );
-    observer.observe(
-        sig(12_000, vec![row_with_status("a", "p1", "main", "waiting")]),
-        None,
-    );
+    observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_status("a", "p1", "main", "running")],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_status("a", "p1", "main", "waiting")],
+    ));
     assert!(observer.values.keys().any(|(row_id, _)| row_id == "a"));
     assert!(observer.last_status.contains_key("a"));
     assert!(observer.status_transitions.contains_key("a"));
 
-    observer.observe(sig(13_000, Vec::new()), None);
-    observer.observe(sig(21_001, Vec::new()), None);
+    observer.observe(sig(13_000, Vec::new()));
+    observer.observe(sig(21_001, Vec::new()));
 
     assert!(!observer.values.keys().any(|(row_id, _)| row_id == "a"));
     assert!(!observer.last_status.contains_key("a"));
     assert!(!observer.status_transitions.contains_key("a"));
-}
-
-#[test]
-fn gate_reject_and_health_degraded_are_cross_cutting() {
-    let mut observer = Observer::default();
-    let mut frame = sig(0, Vec::new());
-    frame.gate_reject_streak = 1;
-    frame.health_failure_streak = HEALTH_ALERT_AFTER_FAILURES;
-    frame.health_reason = Some("snapshot failed: boom".to_owned());
-    let gate = GateRejectInfo {
-        frameless_incoming: true,
-        demoted_panes: vec!["p1".to_owned()],
-        incoming_rows: 0,
-    };
-
-    let drafts = observer.observe(frame, Some(&gate));
-
-    assert_eq!(kinds(&drafts), vec!["gate_reject", "health_degraded"]);
 }

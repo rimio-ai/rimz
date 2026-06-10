@@ -78,6 +78,7 @@ impl LoopState {
         fetch: &mut FetchDispatcher,
         result_rx: &Receiver<FetchOutcome>,
         anim_start: Instant,
+        diag: Option<&crate::diag::DiagSink>,
     ) -> Result<()> {
         let mut latest = None;
         let mut saw_final = false;
@@ -99,7 +100,7 @@ impl LoopState {
                 outcome.snapshot = Ok(fuse(&self.last_pulled, &self.event_store, now_ms));
             }
             self.fetched_at = Instant::now();
-            rejected = self.fold_outcome(config, outcome, anim_start)?;
+            rejected = self.fold_outcome(config, outcome, anim_start, diag)?;
             if snapshot_ok {
                 self.last_self_close_check = Instant::now();
             }
@@ -133,6 +134,7 @@ impl LoopState {
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         envelope: SidebarEventEnvelope,
         anim_start: Instant,
+        diag: Option<&crate::diag::DiagSink>,
     ) -> Result<LoopFlow> {
         if !event_targets_this_renderer(&envelope, config) {
             return Ok(LoopFlow::Repoll);
@@ -196,6 +198,7 @@ impl LoopState {
                         fresh_pane_frame: false,
                     },
                     anim_start,
+                    diag,
                 )?;
                 // Snap the frame deadline so this turn's frame phase paints
                 // the fused frame now instead of waiting out a previously armed
@@ -369,6 +372,7 @@ impl LoopState {
         config: &ServeConfig,
         outcome: FetchOutcome,
         anim_start: Instant,
+        diag: Option<&crate::diag::DiagSink>,
     ) -> Result<bool> {
         let applied = apply_fetch_outcome(
             config,
@@ -380,32 +384,26 @@ impl LoopState {
             &mut self.self_close,
             &mut self.ui,
             anim_start,
+            diag,
         )?;
         self.should_exit = applied.should_exit;
         self.tab_emptied |= applied.tab_emptied;
-        self.observe_commit(applied.gate_reject.as_ref());
+        self.observe_commit();
         self.dirty = true;
         Ok(applied.rejected)
     }
 
-    fn observe_commit(&mut self, gate_reject: Option<&observe::GateRejectInfo>) {
+    fn observe_commit(&mut self) {
         let now_ms = crate::sidebar::cache::unix_now_ms();
-        let health_reason = self
-            .health
-            .alert
-            .as_ref()
-            .filter(|alert| alert.is_active())
-            .map(|alert| alert.reason.clone());
         let sig = observe::extract_sig(
             &self.current,
             &self.last_pulled,
             &self.event_store,
             self.gate.reject_streak,
             self.health.failure_streak,
-            health_reason,
             now_ms,
         );
-        for draft in self.observer.observe(sig, gate_reject) {
+        for draft in self.observer.observe(sig) {
             let carried_drops = draft.dropped_msgs;
             if self
                 .observe_tx
@@ -450,7 +448,7 @@ mod tests {
         state.current = current;
         state.observer.dropped_msgs = 3;
 
-        state.observe_commit(None);
+        state.observe_commit();
 
         assert!(
             state.observer.dropped_msgs >= 4,

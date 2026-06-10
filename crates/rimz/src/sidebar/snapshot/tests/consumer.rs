@@ -330,6 +330,7 @@ fn no_frame_enrich_preserves_rollup_metadata_but_emits_no_groups() {
         &runtime,
         None,
         EnrichMode::Cached,
+        None,
     );
 
     assert_eq!(snapshot.panes_produced_at_ms, None);

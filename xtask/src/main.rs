@@ -1635,6 +1635,7 @@ fn invariants(root: &Path) -> Result<()> {
     ensure_spend_parser_boundaries(root, &files)?;
     ensure_sidebar_library_boundaries(root, &files)?;
     ensure_snapshot_json_writes_stay_in_produce(root, &files)?;
+    ensure_diag_writes_stay_in_diag(root, &files)?;
     ensure_sidebar_enrich_folds_before_live_panes(root)?;
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
@@ -1915,6 +1916,7 @@ fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let Some(live_fold) = text
         .find("with_admitted_live_panes(")
+        .or_else(|| text.find("with_admitted_live_panes_and_diagnostics("))
         .or_else(|| text.find("with_live_panes("))
     else {
         bail!("sidebar enrich spine must fold a live pane frame through with_live_panes");
@@ -2091,6 +2093,19 @@ fn ensure_snapshot_json_writes_stay_in_produce(root: &Path, files: &[PathBuf]) -
         "published pane-frame writes belong in sidebar::produce; realtime events must not patch snapshot.json\n{}",
         violations.join("\n")
     );
+}
+
+fn ensure_diag_writes_stay_in_diag(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let diag_module = root.join("crates/rimz/src/diag.rs");
+    for needle in [concat!("diag.log", ".jsonl"), concat!("diag", "-frames")] {
+        ensure_no_match(
+            files,
+            needle,
+            |path| path == diag_module.as_path() || is_docs_or_xtask(root, path),
+            "diagnostic log paths belong in crates/rimz/src/diag.rs",
+        )?;
+    }
+    Ok(())
 }
 
 struct FunctionBlock<'a> {

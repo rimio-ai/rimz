@@ -1,8 +1,8 @@
-//! Shared size-capped JSONL diagnostic log appends.
+//! Small rotating JSONL append helper for diagnostic logs.
 //!
-//! Diagnostic logs are cache-class runtime evidence: each append is one JSON
-//! line, rotation keeps one previous generation, and correctness code never
-//! reads them.
+//! The caller owns the record schema and path. This module owns the shared
+//! rotation lock and append discipline so diagnostic files do not grow separate
+//! implementations.
 
 use std::fs::OpenOptions;
 use std::path::{Path, PathBuf};
@@ -14,21 +14,15 @@ use crate::ledger::atomic;
 
 const ROTATE_LOCK_STALE: Duration = Duration::from_secs(60);
 
-pub fn append<T: Serialize>(path: &Path, max_bytes: u64, record: &T) {
-    if let Err(err) = rotate_if_needed(path, max_bytes) {
-        tracing::debug!(path = %path.display(), error = %err, "diagnostic log rotation skipped");
-    }
-    let mut line = match serde_json::to_vec(record) {
-        Ok(line) => line,
-        Err(err) => {
-            tracing::debug!(error = %err, "diagnostic log record serialization failed");
-            return;
-        }
-    };
+pub fn append_rotating_jsonl<T: Serialize>(
+    path: &Path,
+    max_bytes: u64,
+    record: &T,
+) -> std::io::Result<()> {
+    rotate_if_needed(path, max_bytes)?;
+    let mut line = serde_json::to_vec(record).map_err(std::io::Error::other)?;
     line.push(b'\n');
-    if let Err(err) = atomic::append_record_bytes(path, &line) {
-        tracing::debug!(path = %path.display(), error = %err, "diagnostic log append failed");
-    }
+    atomic::append_record_bytes(path, &line).map_err(std::io::Error::other)
 }
 
 fn rotate_if_needed(path: &Path, max_bytes: u64) -> std::io::Result<()> {
@@ -57,18 +51,23 @@ fn rotate_if_needed(path: &Path, max_bytes: u64) -> std::io::Result<()> {
 }
 
 fn rotated_path(path: &Path) -> PathBuf {
-    path.with_file_name(format!("{}.1.jsonl", log_stem(path)))
+    path.with_file_name(rotated_file_name(path))
 }
 
 fn lock_path(path: &Path) -> PathBuf {
     path.with_file_name(format!("{}.rotate.lock", log_stem(path)))
 }
 
+fn rotated_file_name(path: &Path) -> String {
+    format!("{}.1.jsonl", log_stem(path))
+}
+
 fn log_stem(path: &Path) -> String {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return "diagnostic.log".to_owned();
-    };
-    name.strip_suffix(".jsonl").unwrap_or(name).to_owned()
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.strip_suffix(".jsonl"))
+        .unwrap_or("log")
+        .to_owned()
 }
 
 struct RotationLock {
@@ -140,32 +139,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn append_writes_jsonl_record() {
+    fn appends_jsonl_and_rotates_one_generation() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("observe.log.jsonl");
+        let path = dir.path().join("binding.log.jsonl");
+        let cap = b"{\"n\":1}\n".len() as u64;
 
-        append(
-            &path,
-            1_048_576,
-            &serde_json::json!({ "event": "selected" }),
-        );
+        append_rotating_jsonl(&path, cap, &serde_json::json!({ "n": 1 })).unwrap();
+        append_rotating_jsonl(&path, cap, &serde_json::json!({ "n": 2 })).unwrap();
 
-        let bytes = std::fs::read_to_string(path).unwrap();
-        assert_eq!(bytes, "{\"event\":\"selected\"}\n");
-    }
-
-    #[test]
-    fn rotated_and_lock_paths_follow_log_name() {
-        let path = Path::new("/tmp/rimz/observe.log.jsonl");
-
-        assert_eq!(
-            rotated_path(path),
-            PathBuf::from("/tmp/rimz/observe.log.1.jsonl")
-        );
-        assert_eq!(
-            lock_path(path),
-            PathBuf::from("/tmp/rimz/observe.log.rotate.lock")
-        );
+        assert!(path.exists());
+        assert!(dir.path().join("binding.log.1.jsonl").exists());
     }
 
     #[test]

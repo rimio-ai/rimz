@@ -308,6 +308,7 @@ fn emit_producer_snapshot(
         session_name,
         exclude: context.exclude.clone(),
         min_pane_cache_ms: context.min_pane_cache_ms,
+        diag: None,
     };
     match produce_snapshot(
         &mut RollupCursor::new(),

@@ -172,10 +172,18 @@ pub fn fresh_sidebar_present(rt: &RuntimePaths) -> bool {
 /// [`crate::sidebar`] module docs). The election trusts the same heartbeat TTL
 /// as the launch gate, so a just-SIGKILLed elder is honoured for at most one
 /// TTL before the next-eldest renderer takes over production.
-pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
+pub fn elder_sidebar_instance(
+    rt: &RuntimePaths,
+    own_id: &SidebarInstanceId,
+) -> Option<SidebarInstanceId> {
     fresh_sidebar_instances(rt)
-        .iter()
-        .any(|id| id.as_str() < own_id.as_str())
+        .into_iter()
+        .filter(|id| id.as_str() < own_id.as_str())
+        .min_by(|left, right| left.as_str().cmp(right.as_str()))
+}
+
+pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> bool {
+    elder_sidebar_instance(rt, own_id).is_some()
 }
 
 /// Remove runtime files left by sidebars that exited without their RAII cleanup
@@ -518,12 +526,18 @@ mod tests {
     fn younger_yields_to_live_elder_eldest_survives() {
         let h = Harness::new();
         let elder = instance("01");
-        let younger = instance("02");
+        let middle = instance("02");
+        let younger = instance("03");
         h.write_sidebar_for(&elder);
+        h.write_sidebar_for(&middle);
         h.write_sidebar_for(&younger);
         // The younger sees an older live instance and yields; the eldest finds no
         // elder and stays, so exactly one survives.
         assert!(elder_sidebar_present(&h.runtime, &younger));
+        assert_eq!(
+            elder_sidebar_instance(&h.runtime, &younger),
+            Some(elder.clone())
+        );
         assert!(!elder_sidebar_present(&h.runtime, &elder));
     }
 

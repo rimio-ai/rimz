@@ -38,6 +38,22 @@ fn snapshot_with_sibling_count(ws: &WorkspaceId, sibling_count: usize) -> Sideba
     snapshot
 }
 
+fn fixed_time(second: i64) -> jiff::Timestamp {
+    jiff::Timestamp::from_second(second).expect("fixed timestamp")
+}
+
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
+    std::fs::read_to_string(sink.log_path())
+        .expect("diagnostic log")
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<crate::schema::diag::DiagEnvelope>(line)
+                .expect("diagnostic envelope")
+                .event
+        })
+        .collect()
+}
+
 fn row_snapshot(
     ws: &WorkspaceId,
     status: crate::feed::AgentStatus,
@@ -108,6 +124,7 @@ fn apply_ok(
         &mut self_close,
         ui,
         std::time::Instant::now(),
+        None,
     )
     .expect("apply ok fetch");
 }
@@ -297,6 +314,7 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
         &mut self_close,
         &mut ui,
         std::time::Instant::now(),
+        None,
     )
     .expect("apply non-final fast frame");
 
@@ -336,6 +354,7 @@ fn self_close_outcome_marks_tab_emptied() {
         &mut self_close,
         &mut ui,
         anim_start,
+        None,
     )
     .expect("apply sibling frame");
 
@@ -356,10 +375,216 @@ fn self_close_outcome_marks_tab_emptied() {
         &mut self_close,
         &mut ui,
         anim_start,
+        None,
     )
     .expect("apply empty-tab frame");
 
     assert!(second.should_exit);
     assert!(second.tab_emptied);
     assert!(!second.rejected);
+}
+
+#[test]
+fn diagnostics_do_not_release_gate_on_fetch_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
+    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
+    let gate = GateState {
+        reject_streak: 1,
+        rejecting_since: Some(jiff::Timestamp::now()),
+        rule: Some(crate::schema::diag::GateRule::EmptyStampedFrame),
+    };
+
+    emit_diagnostics(
+        Some(&sink),
+        &snapshot,
+        &snapshot,
+        &snapshot,
+        &Health::default(),
+        &Health::default(),
+        &gate,
+        &gate,
+        Some("pane discovery failed".to_owned()),
+        false,
+        false,
+        jiff::Timestamp::now(),
+    );
+
+    let text = std::fs::read_to_string(sink.log_path()).expect("diagnostic log");
+    assert!(text.contains("\"kind\":\"fetch_failure\""));
+    assert!(
+        !text.contains("\"kind\":\"gate_release\""),
+        "a fetch failure does not mean a held regression was released: {text}"
+    );
+}
+
+#[test]
+fn diagnostics_record_gate_hold_and_release_details() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
+    let mut prev = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
+    prev.panes_produced_at_ms = Some(10);
+    let mut incoming = prev.clone();
+    incoming.panes_produced_at_ms = Some(11);
+    let next_gate = GateState {
+        reject_streak: 2,
+        rejecting_since: Some(fixed_time(1_700_000_000)),
+        rule: Some(crate::schema::diag::GateRule::EmptyStampedFrame),
+    };
+
+    emit_diagnostics(
+        Some(&sink),
+        &prev,
+        &incoming,
+        &prev,
+        &Health::default(),
+        &Health::default(),
+        &GateState::default(),
+        &next_gate,
+        None,
+        true,
+        false,
+        fixed_time(1_700_000_001),
+    );
+
+    let events = diagnostic_events(&sink);
+    assert!(matches!(
+        &events[..],
+        [crate::schema::diag::DiagEvent::GateHold {
+            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
+            prev_produced_at_ms: Some(10),
+            incoming_produced_at_ms: Some(11),
+            reject_streak: 2,
+        }]
+    ));
+
+    emit_diagnostics(
+        Some(&sink),
+        &prev,
+        &prev,
+        &prev,
+        &Health::default(),
+        &Health::default(),
+        &next_gate,
+        &GateState::default(),
+        None,
+        false,
+        true,
+        fixed_time(1_700_000_003),
+    );
+
+    let events = diagnostic_events(&sink);
+    assert!(matches!(
+        &events[1],
+        crate::schema::diag::DiagEvent::GateRelease {
+            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
+            held_ms: 3_000,
+            via_escape_hatch: true,
+        }
+    ));
+}
+
+#[test]
+fn diagnostics_record_health_alert_recovery_inside_rate_limit_window() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
+    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
+    let since = fixed_time(1_700_000_000);
+    let active = Health {
+        failure_streak: crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES,
+        alert: Some(Alert::active("snapshot failed: pane discovery", since)),
+    };
+    let recovered = Health {
+        failure_streak: 0,
+        alert: Some(Alert {
+            reason: "snapshot failed: pane discovery".to_owned(),
+            since,
+            recovered_at: Some(fixed_time(1_700_000_001)),
+        }),
+    };
+
+    emit_diagnostics(
+        Some(&sink),
+        &snapshot,
+        &snapshot,
+        &snapshot,
+        &Health::default(),
+        &active,
+        &GateState::default(),
+        &GateState::default(),
+        None,
+        false,
+        false,
+        fixed_time(1_700_000_000),
+    );
+    emit_diagnostics(
+        Some(&sink),
+        &snapshot,
+        &snapshot,
+        &snapshot,
+        &active,
+        &recovered,
+        &GateState::default(),
+        &GateState::default(),
+        None,
+        false,
+        false,
+        fixed_time(1_700_000_001),
+    );
+
+    let events = diagnostic_events(&sink);
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        &events[0],
+        crate::schema::diag::DiagEvent::HealthAlert {
+            reason,
+            since_ms,
+            recovered_after_ms: None,
+        } if reason == "snapshot failed: pane discovery"
+            && *since_ms == since.as_millisecond() as u64
+    ));
+    assert!(matches!(
+        &events[1],
+        crate::schema::diag::DiagEvent::HealthAlert {
+            reason,
+            since_ms,
+            recovered_after_ms: Some(1_000),
+        } if reason == "snapshot failed: pane discovery"
+            && *since_ms == since.as_millisecond() as u64
+    ));
+}
+
+#[test]
+fn diagnostics_stay_silent_for_stable_group_location() {
+    let dir = tempfile::tempdir().unwrap();
+    let ws = workspace();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
+    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
+
+    emit_diagnostics(
+        Some(&sink),
+        &snapshot,
+        &snapshot,
+        &snapshot,
+        &Health::default(),
+        &Health::default(),
+        &GateState::default(),
+        &GateState::default(),
+        None,
+        false,
+        false,
+        fixed_time(1_700_000_000),
+    );
+
+    assert!(
+        !sink.log_path().exists(),
+        "stable snapshots should not emit a group-migration diagnostic"
+    );
 }

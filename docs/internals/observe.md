@@ -1,8 +1,8 @@
 # Sidebar Observer
 
-> The node model the observer instruments lives in [state.md](./state.md); presence, ranking, and the render loop live in [sidebar.md](./sidebar.md). This doc owns the observer: what it watches, what counts as an anomaly, and the diagnostic log it writes.
+> The node model the observer instruments lives in [state.md](./state.md); presence, ranking, and the render loop live in [sidebar.md](./sidebar.md). This doc owns the observer: what it watches and what counts as an anomaly. The durable channel its records land in — envelope, file, retention, rate limiting, inspection — lives in [diagnostics.md](./diagnostics.md).
 
-Every sidebar renderer carries an observer that watches its own committed frame stream — the fused, gated `SidebarSnapshot` sequence the renderer actually paints — and appends an evidence-rich JSONL record when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone. The observer is a diagnostic instrument beside the render path: it reads the stream and writes its log, and the rendered frame is byte-identical with the observer present or absent.
+Every sidebar renderer carries an observer that watches its own committed frame stream — the fused, gated `SidebarSnapshot` sequence the renderer actually paints — and records an evidence-rich `frame_anomaly` diagnostic when the stream misbehaves: a roster that empties and refills, a duplicated card, a phantom row, a value that bounces between two figures, a card whose pane or process is gone. The observer is a diagnostic instrument beside the render path: it reads the stream and emits records, and the rendered frame is byte-identical with the observer present or absent.
 
 The observer exists because this bug class is transient and self-healing — a flap visible for two seconds in a live room leaves nothing to debug an hour later. Each anomaly caught live becomes a synthetic regression test over recorded signatures, and a detector that proves reliable can graduate into the [commit gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) — detection first, prevention once trusted.
 
@@ -14,11 +14,11 @@ Every mutation of the rendered snapshot flows through one fold chokepoint in the
 - Each signature carries two scalars from the un-fused pulled snapshot (`pulled_rows` and the pulled frame stamp), so every record shows whether the producer's published truth already held the anomaly or fusion/gating introduced it — the first question of any investigation, answered inside the record.
 - Detection emits small anomaly drafts over a bounded channel to one background writer thread; a full channel drops the draft and stamps the drop count on the next record that gets through. The render thread proceeds without waiting on the observer.
 
-[`sidebar/observe`](../../crates/rimz/src/sidebar/observe.rs) owns the signature, the detectors, the record schema, and the writer thread; the windows and cadences live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
+[`sidebar/observe`](../../crates/rimz/src/sidebar/observe.rs) owns the signature, the detectors, and the writer thread; the anomaly vocabulary is the `frame_anomaly` arm of the [diagnostic record schema](./diagnostics.md), and the windows and cadences live in [`timing.rs`](../../crates/rimz/src/sidebar/timing.rs) under the `OBSERVE_*` prefix.
 
 ## Windowed detectors
 
-The windowed family recognizes back-and-forth motion a user would describe — rendered, gone, rendered again — with a window per detector class. Windowed detection holds during `OBSERVE_WARMUP` after the first frame-backed commit (startup and reload transients are expected, and a re-exec re-arms the grace) and while a fold is frameless (the gate owns that case and the observer reports it as a gate edge instead). Windows measure receiver-clock time, like the event store's TTLs.
+The windowed family recognizes back-and-forth motion a user would describe — rendered, gone, rendered again — with a window per detector class. Windowed detection holds during `OBSERVE_WARMUP` after the first frame-backed commit (startup and reload transients are expected, and a re-exec re-arms the grace) and while a fold is frameless (the gate owns that case and records it as a `gate_hold`). Windows measure receiver-clock time, like the event store's TTLs.
 
 In tmux poll mode, a row born late in warmup can still look short-lived on the first post-warmup frame if it closes before any pane-close event reaches the renderer; that is the same accepted diagnostic ambiguity as any sub-window poll-only close.
 
@@ -46,17 +46,13 @@ The writer thread re-verifies the latest roster against the world on its own cad
 - **Cards fit the frame.** Every roster pane id appears in the published frame, and the roster never exceeds the frame's pane count. The comparison runs only when the roster's fold stamp equals the published frame's `produced_at_ms` — a producer republish between fold and read is normal skew.
 - **PIDs are alive.** A row's pane pid is checked through `/proc` with the start-time pid-reuse guard; a pid must stay dead across `OBSERVE_DEADPID_CONFIRMATIONS` consecutive passes before it logs, so a just-exited process the next frame removes leaves no record. Platforms without `/proc` skip the check.
 
-## Gate and health edges
+## The records
 
-Two existing recovery mechanisms get a paper trail. Every [commit-gate](../../crates/rimz/src/sidebar_pane/app/gate.rs) rejection logs a `gate_reject` record carrying the regression class (frameless fallback or agent→process demotion) and the demoted pane ids — the moments the gate today absorbs silently are exactly the producer-published regressive frames worth studying. A health `failure_streak` crossing `HEALTH_ALERT_AFTER_FAILURES` logs the rising edge with the alert reason, tying the degraded banner to the stream state around it.
+Observer findings land in the workspace's one durable diagnostics channel — typed `frame_anomaly` records in the state-dir `diag.log.jsonl`, emitted through the shared sink ([diagnostics.md](./diagnostics.md)). The gate's own holds and the health alert edges are first-party records in the same file (`gate_hold`, `gate_release`, `health_alert`), written by the guards themselves; the observer records only what it derives — the windowed and per-frame detections above — so each fact is recorded once and a single `tail` shows the whole episode in order.
 
-## The log
+Each record carries the detector verdict and its evidence (row and pane ids, before/after values, counts, edge timestamps), the window that judged it, the frame stamp (`panes_produced_at_ms`, row/agent/process counts, and the pulled-truth scalars), the active event summary, the gate and health streaks at fold time, and the instance's elder-or-consumer role at write time; the envelope adds the workspace, session, and instance identity.
 
-The observer appends to `observe.log.jsonl` in the workspace runtime directory, beside `binding.log.jsonl`, through the shared rotating diagnostic-log helper (`diag_log`): single-`write()` appends, `OBSERVE_LOG_MAX_BYTES` per generation, the current log plus one rotated generation. Diagnostic only — correctness code never reads it.
-
-Each record is one JSON line: the anomaly kind and its evidence (row and pane ids, before/after values, counts, edge timestamps), the window that judged it, the frame stamp (`panes_produced_at_ms`, row/agent/process counts, and the pulled-truth scalars), the active event summary, the gate and health streaks, and the writer identity — workspace, session, instance id, and the instance's elder-or-consumer role at write time.
-
-Per-kind cooldown (`OBSERVE_COOLDOWN`) keeps a persistent condition from flooding the log: repeats inside the cooldown increment a suppressed counter that flushes on the kind's next record, so the volume stays bounded while the episode's extent stays visible.
+Per-kind cooldown (`OBSERVE_COOLDOWN`) keeps a persistent condition from flooding the channel: repeats inside the cooldown increment a suppressed counter that flushes on the kind's next record, so the volume stays bounded while the episode's extent stays visible. The sink's per-identity rate limit backstops it.
 
 ## Roles and cost
 

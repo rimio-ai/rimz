@@ -272,6 +272,7 @@ pub fn enrich(
     runtime: &RuntimePaths,
     exclude: Option<&PaneId>,
     mut mode: EnrichMode<'_>,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> SidebarSnapshot {
     let producing = matches!(mode, EnrichMode::Producing { .. });
     let machine_config = match &mode {
@@ -365,7 +366,14 @@ pub fn enrich(
         // (`produce` stamps before the publish), so the cwd-fallback guard
         // fires identically on every path.
         snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
-        snapshot = snapshot.with_admitted_live_panes(admitted_panes, &lazy_pairings);
+        let (next_snapshot, diagnostics) =
+            snapshot.with_admitted_live_panes_and_diagnostics(admitted_panes, &lazy_pairings);
+        snapshot = next_snapshot;
+        for event in diagnostics {
+            if let Some(diag) = diag {
+                diag.emit(event);
+            }
+        }
         apply_pane_metrics(&mut snapshot, metrics);
     }
     // Per-machine display preferences and the per-provider dashboard are

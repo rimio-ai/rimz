@@ -64,6 +64,28 @@ fn registered_observation(slot: usize) -> AgentLifecycleObservation {
     }
 }
 
+/// A live session pane, as `list-panes` would report it. No cwd, so the
+/// produce path stays off the per-worktree git probes this fold guard does not
+/// own.
+fn pane() -> rimz::feed::PaneRef {
+    rimz::feed::PaneRef {
+        pane_id: rimz::ids::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_1"),
+        session_name: "rimz-perf".to_owned(),
+        view_id: Some("tab_0".to_owned()),
+        view_kind: Some(rimz::ids::ViewKind::Tab),
+        view_name: None,
+        is_focused: false,
+        command: Some("zsh".to_owned()),
+        spawn_command: None,
+        cwd: None,
+        pane_pid: None,
+        pane_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }
+}
+
 #[test]
 fn delta_fold_is_o_new_bytes() {
     let h = Harness::new();
@@ -127,10 +149,11 @@ fn warm_produce_folds_o_new_bytes() {
         session_name: "rimz-perf".to_owned(),
         exclude: None,
         min_pane_cache_ms: None,
+        diag: None,
     };
     let mut cursor = RollupCursor::new();
 
-    h.publish_fresh_produce_inputs("rimz-perf", Vec::new());
+    h.publish_fresh_produce_inputs("rimz-perf", vec![pane()]);
     let cold_before = bytes_read();
     let cold =
         rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)
@@ -149,7 +172,7 @@ fn warm_produce_folds_o_new_bytes() {
         .len()
         - log_len;
 
-    h.publish_fresh_produce_inputs("rimz-perf", Vec::new());
+    h.publish_fresh_produce_inputs("rimz-perf", vec![pane()]);
     let warm_before = bytes_read();
     let warm =
         rimz::sidebar::produce::produce_snapshot(&mut cursor, paths, &h.runtime_paths, &opts)

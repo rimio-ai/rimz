@@ -42,6 +42,11 @@ pub const SNAPSHOT_CACHE_TTL: Duration = Duration::from_millis(750);
 /// it, so lifecycle/resize floors still pull a fresh pane list in event mode.
 pub const EVENT_PANE_TTL: Duration = Duration::from_secs(10);
 
+/// Wall-clock ceiling for holding a frame whose producer cannot see its own
+/// pane. A sidebar process runs inside the session it lists, so a missing own
+/// pane is a failed pull unless every reader would otherwise stay frameless.
+pub const FRAME_REJECT_ESCAPE: Duration = Duration::from_secs(5);
+
 /// How young the presence stamp must be for the producer to trust the push
 /// channel and use [`EVENT_PANE_TTL`]. 2.5× the plugin's 60s keepalive — two
 /// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps
@@ -160,7 +165,11 @@ pub const ACCEPT_REGRESSION_AFTER_REJECTS: u32 = 2;
 pub const ACCEPT_REGRESSION_AFTER: Duration = Duration::from_secs(1);
 
 /// Consecutive refresh failures before the renderer surfaces a degraded
-/// health alert. The observer reads the same threshold to log the rising edge.
+/// health alert. A single transient fetch hiccup must not flash a scary
+/// banner: the loop already holds the last good frame, so the first failures
+/// absorb silently while a sustained failure still surfaces promptly (~one
+/// tick apart). The alert edges land in the diagnostics channel as
+/// `health_alert` records.
 pub const HEALTH_ALERT_AFTER_FAILURES: u32 = 2;
 
 /// Observer window for a populated roster that empties and refills.
@@ -188,9 +197,6 @@ pub const OBSERVE_DEADPID_CONFIRMATIONS: u32 = 2;
 
 /// Per-kind diagnostic cooldown window.
 pub const OBSERVE_COOLDOWN: Duration = Duration::from_secs(30);
-
-/// Maximum size of one observer diagnostic log generation.
-pub const OBSERVE_LOG_MAX_BYTES: u64 = 1_048_576;
 
 /// Default render base grid: 100ms, or 10Hz.
 pub const DEFAULT_REFRESH_MS: u16 = 100;

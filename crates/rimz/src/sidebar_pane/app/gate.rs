@@ -1,13 +1,14 @@
-//! The last-known-good commit gate: hold a fetched frame that *succeeded but
-//! regressed transiently* — a frameless fallback over a frame-backed render, or
-//! the phantom Agent→Process flicker — so a transient read glitch never reaches
-//! the screen. The Agent→Process hold is bounded by a count and wall-clock
-//! escape hatch so a genuine exit still surfaces promptly; frameless reads stay
-//! held until a verified pane frame returns.
+//! Renderer-side last-resort commit gate.
+//!
+//! Frame plausibility belongs in the producer and row identity belongs in the
+//! projection. This gate only absorbs residual mixed-version or rollup races
+//! after a fetch succeeded: frameless fallback over a frame-backed render, an
+//! old producer's empty stamped frame over populated rows, and the transient
+//! Agent→Process demotion.
 
 use crate::SidebarSnapshot;
 use crate::ids::PaneId;
-use crate::sidebar::observe::GateRejectInfo;
+use crate::schema::diag::GateRule;
 use jiff::Timestamp;
 use std::collections::HashSet;
 
@@ -26,14 +27,17 @@ use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_RE
 pub struct GateState {
     pub reject_streak: u32,
     pub rejecting_since: Option<Timestamp>,
+    pub rule: Option<GateRule>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum CommitDecision {
     /// Replace the cache with the incoming snapshot.
     Accept,
+    /// Replace the cache because a held regression reached the release ceiling.
+    AcceptViaEscapeHatch,
     /// Keep the prior good snapshot; the incoming one is a transient regression.
-    KeepPrior,
+    KeepPrior(GateRule),
 }
 
 /// Decide whether `incoming` may replace the last-known-good `prev`. Pure: the
@@ -52,7 +56,17 @@ fn gate_commit(
     now: Timestamp,
 ) -> CommitDecision {
     if prev.panes_produced_at_ms.is_some() && incoming.panes_produced_at_ms.is_none() {
-        return CommitDecision::KeepPrior;
+        return CommitDecision::KeepPrior(GateRule::FramelessOverFrame);
+    }
+    if prev.panes_produced_at_ms.is_some()
+        && incoming.panes_produced_at_ms.is_some()
+        && !pane_id_set(prev).is_empty()
+        && pane_id_set(incoming).is_empty()
+    {
+        if escape_hatch_open(gate, now) {
+            return CommitDecision::AcceptViaEscapeHatch;
+        }
+        return CommitDecision::KeepPrior(GateRule::EmptyStampedFrame);
     }
     if pane_id_set(prev) != pane_id_set(incoming) {
         // The room genuinely changed (a pane opened or closed); never hold.
@@ -62,9 +76,9 @@ fn gate_commit(
         return CommitDecision::Accept;
     }
     if escape_hatch_open(gate, now) {
-        return CommitDecision::Accept;
+        return CommitDecision::AcceptViaEscapeHatch;
     }
-    CommitDecision::KeepPrior
+    CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess)
 }
 
 /// The set of live pane ids a snapshot renders a row for.
@@ -107,6 +121,12 @@ fn escape_hatch_open(gate: &GateState, now: Timestamp) -> bool {
         })
 }
 
+pub(super) fn gate_held_ms(gate: &GateState, now: Timestamp) -> u64 {
+    gate.rejecting_since
+        .and_then(|since| now.duration_since(since).as_millis().try_into().ok())
+        .unwrap_or(0)
+}
+
 /// Overlay the last-known-good gate on a freshly computed [`RenderState`].
 ///
 /// A *failed* fetch already fell back to the prior snapshot inside
@@ -115,28 +135,32 @@ fn escape_hatch_open(gate: &GateState, now: Timestamp) -> bool {
 /// regression is held: the prior good frame becomes both the rendered snapshot
 /// and the next-tick baseline (`last_snapshot`), so the cache never advances
 /// onto bad data and the next comparison is still against the last good frame.
-/// Returns the possibly-held state, the next gate state, and whether this fetch
-/// was rejected (the loop fires one self-heal refetch on a reject).
+/// Returns the possibly-held state, the next gate state, whether this fetch was
+/// rejected (the loop fires one self-heal refetch on a reject), and whether a
+/// held regression was accepted by the escape hatch.
 pub(super) fn apply_gate(
     mut state: RenderState,
     fetch_was_ok: bool,
     prev_good: &SidebarSnapshot,
     gate: &GateState,
     now: Timestamp,
-) -> (RenderState, GateState, Option<GateRejectInfo>) {
-    if fetch_was_ok
-        && gate_commit(prev_good, &state.snapshot, gate, now) == CommitDecision::KeepPrior
-    {
-        let reject_info = GateRejectInfo::from_snapshots(prev_good, &state.snapshot);
-        state.snapshot = prev_good.clone();
-        state.last_snapshot = Some(prev_good.clone());
-        let next = GateState {
-            reject_streak: gate.reject_streak.saturating_add(1),
-            rejecting_since: gate.rejecting_since.or(Some(now)),
-        };
-        (state, next, Some(reject_info))
-    } else {
-        (state, GateState::default(), None)
+) -> (RenderState, GateState, bool, bool) {
+    if !fetch_was_ok {
+        return (state, gate.clone(), false, false);
+    }
+    match gate_commit(prev_good, &state.snapshot, gate, now) {
+        CommitDecision::KeepPrior(rule) => {
+            state.snapshot = prev_good.clone();
+            state.last_snapshot = Some(prev_good.clone());
+            let next = GateState {
+                reject_streak: gate.reject_streak.saturating_add(1),
+                rejecting_since: gate.rejecting_since.or(Some(now)),
+                rule: Some(rule),
+            };
+            (state, next, true, false)
+        }
+        CommitDecision::AcceptViaEscapeHatch => (state, GateState::default(), false, true),
+        CommitDecision::Accept => (state, GateState::default(), false, false),
     }
 }
 

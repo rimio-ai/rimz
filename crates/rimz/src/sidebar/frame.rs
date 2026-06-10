@@ -7,7 +7,7 @@
 //! card; ledger, sidecars, and realtime events only enrich cards whose pane is
 //! present here.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 use crate::feed::{ElevatedAgent, PaneRef};
 use crate::ids::{AgentSessionId, MuxName, PaneId, ViewId, ViewKind};
 use crate::ledger::snapshot::SidebarOwnView;
+use crate::schema::diag::DiagEvent;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {
@@ -37,6 +38,8 @@ pub struct TabFrame {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneState {
     pub pane_id: PaneId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_seen_at_ms: Option<u64>,
     pub current: PaneProcess,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<PaneProcess>,
@@ -142,6 +145,7 @@ impl PaneFrame {
             pane_process_start: pane.current.started_at,
             resumed_session_id: pane.current.resumed_session_id.clone(),
             elevated_agent: pane.current.elevated_agent.clone(),
+            first_seen_at_ms: pane.first_seen_at_ms,
         }
     }
 }
@@ -184,6 +188,7 @@ impl PaneState {
             return;
         }
 
+        self.first_seen_at_ms = prior.first_seen_at_ms;
         self.previous = prior.previous.clone();
         if self.current.command.is_none() {
             let prior_is_idle = prior
@@ -266,8 +271,24 @@ pub fn assemble_frame(
     produced_at_ms: u64,
     session_name: impl Into<String>,
 ) -> PaneFrame {
+    assemble_frame_with_diagnostics(panes, produced_at_ms, session_name).0
+}
+
+pub fn assemble_frame_with_diagnostics(
+    panes: Vec<PaneRef>,
+    produced_at_ms: u64,
+    session_name: impl Into<String>,
+) -> (PaneFrame, Vec<DiagEvent>) {
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
+    let mut seen_panes = HashSet::new();
+    let mut diagnostics = Vec::new();
     for pane in panes {
+        if !seen_panes.insert(pane.pane_id.clone()) {
+            diagnostics.push(DiagEvent::DuplicatePaneId {
+                pane_id: pane.pane_id,
+            });
+            continue;
+        }
         let view_id = pane
             .view_id
             .clone()
@@ -304,6 +325,7 @@ pub fn assemble_frame(
         });
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,
+            first_seen_at_ms: pane.first_seen_at_ms,
             current: PaneProcess {
                 pid: pane.pane_pid,
                 command: pane.command,
@@ -318,11 +340,14 @@ pub fn assemble_frame(
             metrics: PaneMetrics::default(),
         });
     }
-    PaneFrame {
-        produced_at_ms,
-        session_name: session_name.into(),
-        tabs: tabs.into_values().collect(),
-    }
+    (
+        PaneFrame {
+            produced_at_ms,
+            session_name: session_name.into(),
+            tabs: tabs.into_values().collect(),
+        },
+        diagnostics,
+    )
 }
 
 fn default_view_kind(mux: MuxName) -> ViewKind {
@@ -359,6 +384,7 @@ mod tests {
             pane_process_start: None,
             resumed_session_id: None,
             elevated_agent: None,
+            first_seen_at_ms: None,
         }
     }
 
@@ -386,6 +412,28 @@ mod tests {
         assert!(projected[0].is_focused);
         assert!(!projected[1].is_focused);
         assert!(projected[2].is_focused);
+    }
+
+    #[test]
+    fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
+        let (frame, diagnostics) = assemble_frame_with_diagnostics(
+            vec![
+                pane("terminal_1", "tab_0", Some("zsh"), false),
+                pane("terminal_1", "tab_0", Some("cargo build"), true),
+            ],
+            7,
+            "rimz-test",
+        );
+
+        assert_eq!(frame.pane_states().count(), 1);
+        assert_eq!(
+            frame.tabs[0].panes[0].current.command.as_deref(),
+            Some("zsh")
+        );
+        assert!(matches!(
+            diagnostics.as_slice(),
+            [DiagEvent::DuplicatePaneId { pane_id }] if pane_id.raw() == "terminal_1"
+        ));
     }
 
     #[test]
