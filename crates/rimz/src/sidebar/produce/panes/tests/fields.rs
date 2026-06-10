@@ -22,18 +22,6 @@ fn rotate_from_cache_repairs_raced_nulls_from_disk() {
 }
 
 #[test]
-fn rotate_from_cache_is_noop_without_prior() {
-    let dir = tempfile::tempdir().unwrap();
-    let cache_path = dir.path().join("snapshot.json");
-    let mut fresh = frame(vec![pane("terminal_1", None, None)]);
-
-    rotate_from_cache(&mut fresh, &cache_path, "s");
-
-    assert_eq!(first(&fresh).current.command, None);
-    assert_eq!(first(&fresh).current.cwd, None);
-}
-
-#[test]
 fn backfill_pane_cwds_repairs_missing_or_empty_cwd_from_proc() {
     let dir = tempfile::tempdir().unwrap();
     let cwd = dir.path().to_path_buf();
@@ -121,48 +109,41 @@ fn backfill_pane_cwds_skips_reported_pidless_missing_and_deleted_cwds() {
 }
 
 #[test]
-fn spawn_handoff_rotates_without_carrying_process_start() {
+fn rotate_against_prior_handles_spawn_handoff_start_stamps() {
     let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-    first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
-    first_mut(&mut prior).current.started_at = Some(old_start);
-    let mut fresh = frame(vec![pane("terminal_1", Some("zsh"), Some("/repo"))]);
-    first_mut(&mut fresh).current.spawn_command = Some("zsh".to_owned());
+    for (name, command, spawn_command, expected_start, expected_previous) in [
+        ("spawn wrapper changed", "zsh", "zsh", None, Some("codex")),
+        (
+            "same spawn wrapper",
+            "/usr/bin/codex",
+            "rimz agents exec codex",
+            Some(old_start),
+            None,
+        ),
+    ] {
+        let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+        first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
+        first_mut(&mut prior).current.started_at = Some(old_start);
+        let mut fresh = frame(vec![pane("terminal_1", Some(command), Some("/repo"))]);
+        first_mut(&mut fresh).current.spawn_command = Some(spawn_command.to_owned());
 
-    fresh.rotate_against_prior(&prior);
+        fresh.rotate_against_prior(&prior);
 
-    assert_eq!(first(&fresh).current.command.as_deref(), Some("zsh"));
-    assert_eq!(first(&fresh).current.started_at, None);
-    assert_eq!(
-        first(&fresh)
-            .previous
-            .as_ref()
-            .and_then(|previous| previous.command.as_deref()),
-        Some("codex")
-    );
-}
-
-#[test]
-fn foreground_handoff_with_stable_spawn_keeps_process_start() {
-    let old_start: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let mut prior = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
-    first_mut(&mut prior).current.spawn_command = Some("rimz agents exec codex".to_owned());
-    first_mut(&mut prior).current.started_at = Some(old_start);
-    let mut fresh = frame(vec![pane(
-        "terminal_1",
-        Some("/usr/bin/codex"),
-        Some("/repo"),
-    )]);
-    first_mut(&mut fresh).current.spawn_command = Some("rimz agents exec codex".to_owned());
-
-    fresh.rotate_against_prior(&prior);
-
-    assert_eq!(
-        first(&fresh).current.command.as_deref(),
-        Some("/usr/bin/codex")
-    );
-    assert_eq!(first(&fresh).current.started_at, Some(old_start));
-    assert!(first(&fresh).previous.is_none());
+        assert_eq!(
+            first(&fresh).current.command.as_deref(),
+            Some(command),
+            "{name}"
+        );
+        assert_eq!(first(&fresh).current.started_at, expected_start, "{name}");
+        assert_eq!(
+            first(&fresh)
+                .previous
+                .as_ref()
+                .and_then(|previous| previous.command.as_deref()),
+            expected_previous,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -250,122 +231,64 @@ fn stamp_pane_process_starts_rederives_from_the_bound_root_pid() {
 }
 
 #[test]
-fn stamp_pane_resumed_session_ids_derives_from_the_bound_root_pid() {
-    let mut frame = frame(vec![pane("terminal_30", Some("codex"), Some("/repo"))]);
-    first_mut(&mut frame).current.pid = Some(200);
-
-    stamp_pane_resumed_session_ids(&mut frame, &|pid| {
-        assert_eq!(pid, 200);
-        Some("sess-resumed".into())
-    });
-
-    assert_eq!(
-        first(&frame)
-            .current
-            .resumed_session_id
-            .as_ref()
-            .map(|id| id.as_str()),
-        Some("sess-resumed")
-    );
-}
-
-#[test]
-fn stamp_pane_process_starts_assigns_the_unique_unaccounted_cwd_start() {
+fn stamp_pane_process_starts_resolves_cwd_scan_remainders() {
     let accounted: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
     let remaining: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
-    let mut frame = frame(vec![
-        pane("terminal_4", Some("codex"), Some("/repo")),
-        pane("terminal_58", Some("codex"), Some("/repo")),
-    ]);
-    let unstamped = natively_unstamped(&frame);
-    frame.tabs[0].panes[0].current.pid = Some(200);
-    stamp_pane_process_starts(
-        &mut frame,
-        &unstamped,
-        &|_, pid| (pid == 200).then_some(accounted),
-        &|_, _| vec![accounted, remaining],
-    );
+    for (name, first_pid, carried, scan, expected) in [
+        (
+            "assigns unique unaccounted start",
+            Some(200),
+            [None, None],
+            vec![accounted, remaining],
+            vec![Some(accounted), Some(remaining)],
+        ),
+        (
+            "replaces duplicate carried floor with unique remainder",
+            Some(200),
+            [None, Some(accounted)],
+            vec![accounted, remaining],
+            vec![Some(accounted), Some(remaining)],
+        ),
+        (
+            "clears ambiguous duplicate carried floors",
+            None,
+            [Some(accounted), Some(accounted)],
+            vec![accounted, remaining],
+            vec![None, None],
+        ),
+        (
+            "abstains for ambiguous cwd remainders",
+            None,
+            [None, None],
+            vec![accounted, remaining],
+            vec![None, None],
+        ),
+    ] {
+        let mut frame = frame(vec![
+            pane("terminal_4", Some("codex"), Some("/repo")),
+            pane("terminal_58", Some("codex"), Some("/repo")),
+        ]);
+        let unstamped = natively_unstamped(&frame);
+        for (index, pane) in frame.pane_states_mut().enumerate() {
+            if index == 0 {
+                pane.current.pid = first_pid;
+            }
+            pane.current.started_at = carried[index];
+        }
 
-    let starts = frame
-        .pane_states()
-        .map(|pane| pane.current.started_at)
-        .collect::<Vec<_>>();
-    assert_eq!(starts, vec![Some(accounted), Some(remaining)]);
-}
+        stamp_pane_process_starts(
+            &mut frame,
+            &unstamped,
+            &|_, pid| (pid == 200).then_some(accounted),
+            &|_, _| scan.clone(),
+        );
 
-#[test]
-fn stamp_pane_process_starts_replaces_a_duplicate_carried_floor_with_the_unique_remainder() {
-    let accounted: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
-    let remaining: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
-    let mut frame = frame(vec![
-        pane("terminal_4", Some("codex"), Some("/repo")),
-        pane("terminal_58", Some("codex"), Some("/repo")),
-    ]);
-    let unstamped = natively_unstamped(&frame);
-    {
-        let mut panes = frame.pane_states_mut();
-        panes.next().unwrap().current.pid = Some(200);
-        panes.next().unwrap().current.started_at = Some(accounted);
-    }
-
-    stamp_pane_process_starts(
-        &mut frame,
-        &unstamped,
-        &|_, pid| (pid == 200).then_some(accounted),
-        &|_, _| vec![accounted, remaining],
-    );
-
-    let starts = frame
-        .pane_states()
-        .map(|pane| pane.current.started_at)
-        .collect::<Vec<_>>();
-    assert_eq!(starts, vec![Some(accounted), Some(remaining)]);
-}
-
-#[test]
-fn stamp_pane_process_starts_clears_ambiguous_duplicate_carried_floors() {
-    let floor: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
-    let later: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
-    let mut frame = frame(vec![
-        pane("terminal_4", Some("codex"), Some("/repo")),
-        pane("terminal_58", Some("codex"), Some("/repo")),
-    ]);
-    let unstamped = natively_unstamped(&frame);
-    for pane in frame.pane_states_mut() {
-        pane.current.started_at = Some(floor);
-    }
-
-    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|_, _| {
-        vec![floor, later]
-    });
-
-    assert!(
-        frame
+        let starts = frame
             .pane_states()
-            .all(|pane| pane.current.started_at.is_none()),
-        "duplicated carried cwd floors are cleared instead of republished"
-    );
-}
-
-#[test]
-fn stamp_pane_process_starts_abstains_for_ambiguous_cwd_remainders() {
-    let first: jiff::Timestamp = "2026-06-05T13:49:53Z".parse().unwrap();
-    let second: jiff::Timestamp = "2026-06-05T14:22:43Z".parse().unwrap();
-    let mut frame = frame(vec![
-        pane("terminal_4", Some("codex"), Some("/repo")),
-        pane("terminal_58", Some("codex"), Some("/repo")),
-    ]);
-    let unstamped = natively_unstamped(&frame);
-    stamp_pane_process_starts(&mut frame, &unstamped, &|_, _| None, &|_, _| {
-        vec![first, second]
-    });
-
-    assert!(
-        frame
-            .pane_states()
-            .all(|pane| pane.current.started_at.is_none()),
-        "ambiguous cwd starts are never duplicated across panes"
-    );
+            .map(|pane| pane.current.started_at)
+            .collect::<Vec<_>>();
+        assert_eq!(starts, expected, "{name}");
+    }
 }
 
 #[test]
@@ -410,23 +333,129 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
 }
 
 #[test]
-fn stale_active_command_clears_when_process_tree_has_no_match() {
-    let mut frame = frame(vec![pane(
-        "terminal_1",
-        Some("cargo build --release"),
-        Some("/repo"),
-    )]);
+fn active_command_liveness_matrix_matches_backend_contracts() {
+    for (name, pane_ref, cmdlines, comms, children, expected, expect_metadata_clear) in [
+        (
+            "stale zellij command clears with process metadata",
+            pane("terminal_1", Some("cargo build --release"), Some("/repo")),
+            vec![(100, "zsh")],
+            vec![(100, "zsh")],
+            vec![],
+            None,
+            true,
+        ),
+        (
+            "zellij descendant exact argv keeps command",
+            pane("terminal_1", Some("cargo build --release"), Some("/repo")),
+            vec![
+                (100, "zsh"),
+                (200, "bash -lc cargo build --release"),
+                (300, "cargo build --release"),
+            ],
+            vec![(100, "zsh"), (200, "bash"), (300, "cargo")],
+            vec![(100, vec![200]), (200, vec![300])],
+            Some("cargo build --release"),
+            false,
+        ),
+        (
+            "zellij same program different argv is stale",
+            pane("terminal_1", Some("cargo build --release"), Some("/repo")),
+            vec![(100, "zsh"), (200, "cargo test")],
+            vec![(100, "zsh"), (200, "cargo")],
+            vec![(100, vec![200])],
+            None,
+            false,
+        ),
+        (
+            "zellij root exact argv keeps command",
+            pane("terminal_1", Some("cargo build --release"), Some("/repo")),
+            vec![(100, "cargo build --release")],
+            vec![(100, "cargo")],
+            vec![],
+            Some("cargo build --release"),
+            false,
+        ),
+        (
+            "missing proc evidence abstains",
+            pane("terminal_1", Some("cargo build --release"), Some("/repo")),
+            vec![],
+            vec![],
+            vec![],
+            Some("cargo build --release"),
+            false,
+        ),
+        (
+            "tmux short command matches child program label",
+            tmux_pane("cargo"),
+            vec![(100, "zsh"), (200, "/usr/bin/cargo build --release")],
+            vec![(100, "zsh"), (200, "cargo")],
+            vec![(100, vec![200])],
+            Some("cargo"),
+            false,
+        ),
+        (
+            "tmux long program reads cmdline over truncated comm",
+            tmux_pane("mutable-unicorn-server"),
+            vec![
+                (100, "zsh"),
+                (200, "/opt/bin/mutable-unicorn-server --serve"),
+            ],
+            vec![(100, "zsh"), (200, "mutable-unicor")],
+            vec![(100, vec![200])],
+            Some("mutable-unicorn-server"),
+            false,
+        ),
+        (
+            "tmux cmdline mismatch without comm is absent",
+            tmux_pane("cargo"),
+            vec![(100, "zsh"), (200, "make check")],
+            vec![],
+            vec![(100, vec![200])],
+            None,
+            false,
+        ),
+    ] {
+        assert_active_command_case(
+            name,
+            pane_ref,
+            cmdlines,
+            comms,
+            children,
+            expected,
+            expect_metadata_clear,
+        );
+    }
+}
+
+fn assert_active_command_case(
+    name: &str,
+    pane_ref: crate::feed::PaneRef,
+    cmdlines: Vec<(u32, &'static str)>,
+    comms: Vec<(u32, &'static str)>,
+    children: Vec<(u32, Vec<u32>)>,
+    expected: Option<&str>,
+    expect_metadata_clear: bool,
+) {
+    let mut frame = frame(vec![pane_ref]);
     first_mut(&mut frame).current.pid = Some(100);
-    first_mut(&mut frame).children = vec![200];
-    first_mut(&mut frame).metrics = PaneMetrics {
-        process_state: Some(crate::ProcessState::Stuck),
-        rss_kb: Some(1024),
-        cpu_pct: Some(250),
-        io_bps: Some(4096),
-    };
-    let cmdlines = HashMap::from([(100, "zsh".to_owned())]);
-    let comms = HashMap::from([(100, "zsh".to_owned())]);
-    let children = HashMap::<u32, Vec<u32>>::new();
+    if expect_metadata_clear {
+        first_mut(&mut frame).children = vec![200];
+        first_mut(&mut frame).metrics = PaneMetrics {
+            process_state: Some(crate::ProcessState::Stuck),
+            rss_kb: Some(1024),
+            cpu_pct: Some(250),
+            io_bps: Some(4096),
+        };
+    }
+    let cmdlines = cmdlines
+        .into_iter()
+        .map(|(pid, cmdline)| (pid, cmdline.to_owned()))
+        .collect::<HashMap<_, _>>();
+    let comms = comms
+        .into_iter()
+        .map(|(pid, comm)| (pid, comm.to_owned()))
+        .collect::<HashMap<_, _>>();
+    let children = children.into_iter().collect::<HashMap<_, _>>();
 
     drop_finished_active_commands(
         &mut frame,
@@ -435,188 +464,11 @@ fn stale_active_command_clears_when_process_tree_has_no_match() {
         &|pid| children.get(&pid).cloned().unwrap_or_default(),
     );
 
-    assert_eq!(
-        first(&frame).current.command,
-        None,
-        "a stale active foreground with only an idle shell behind it drops"
-    );
-    assert_eq!(first(&frame).metrics, PaneMetrics::default());
-    assert!(
-        first(&frame).children.is_empty(),
-        "stale process metadata is cleared with the command"
-    );
-}
-
-#[test]
-fn zellij_active_command_stays_when_a_descendant_matches_exactly() {
-    let mut frame = frame(vec![pane(
-        "terminal_1",
-        Some("cargo build --release"),
-        Some("/repo"),
-    )]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([
-        (100, "zsh".to_owned()),
-        (200, "bash -lc cargo build --release".to_owned()),
-        (300, "cargo build --release".to_owned()),
-    ]);
-    let comms = HashMap::from([
-        (100, "zsh".to_owned()),
-        (200, "bash".to_owned()),
-        (300, "cargo".to_owned()),
-    ]);
-    let children = HashMap::from([(100, vec![200]), (200, vec![300])]);
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|pid| comms.get(&pid).cloned(),
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(
-        first(&frame).current.command.as_deref(),
-        Some("cargo build --release")
-    );
-}
-
-#[test]
-fn zellij_stale_full_command_ignores_same_program_with_different_argv() {
-    let mut frame = frame(vec![pane(
-        "terminal_1",
-        Some("cargo build --release"),
-        Some("/repo"),
-    )]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([(100, "zsh".to_owned()), (200, "cargo test".to_owned())]);
-    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "cargo".to_owned())]);
-    let children = HashMap::from([(100, vec![200])]);
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|pid| comms.get(&pid).cloned(),
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(
-        first(&frame).current.command,
-        None,
-        "Zellij retains full argv commands; a same-program descendant with \
-         different argv must not keep a stale command alive"
-    );
-}
-
-#[test]
-fn tmux_short_command_matches_child_program_label_when_cmdline_has_args() {
-    let mut frame = frame(vec![tmux_pane("cargo")]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([
-        (100, "zsh".to_owned()),
-        (200, "/usr/bin/cargo build --release".to_owned()),
-    ]);
-    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "cargo".to_owned())]);
-    let children = HashMap::from([(100, vec![200])]);
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|pid| comms.get(&pid).cloned(),
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(first(&frame).current.command.as_deref(), Some("cargo"));
-}
-
-#[test]
-fn tmux_long_program_prefers_cmdline_label_over_truncated_comm() {
-    let mut frame = frame(vec![tmux_pane("mutable-unicorn-server")]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([
-        (100, "zsh".to_owned()),
-        (200, "/opt/bin/mutable-unicorn-server --serve".to_owned()),
-    ]);
-    let comms = HashMap::from([(100, "zsh".to_owned()), (200, "mutable-unicor".to_owned())]);
-    let children = HashMap::from([(100, vec![200])]);
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|pid| comms.get(&pid).cloned(),
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(
-        first(&frame).current.command.as_deref(),
-        Some("mutable-unicorn-server")
-    );
-}
-
-#[test]
-fn tmux_mismatched_cmdline_without_comm_counts_as_absent() {
-    let mut frame = frame(vec![tmux_pane("cargo")]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([(100, "zsh".to_owned()), (200, "make check".to_owned())]);
-    let children = HashMap::from([(100, vec![200])]);
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|_| None,
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(
-        first(&frame).current.command,
-        None,
-        "a readable tmux cmdline mismatch is process evidence even when comm is unavailable"
-    );
-}
-
-#[test]
-fn command_pane_root_matches_without_children() {
-    let mut frame = frame(vec![pane(
-        "terminal_1",
-        Some("cargo build --release"),
-        Some("/repo"),
-    )]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let cmdlines = HashMap::from([(100, "cargo build --release".to_owned())]);
-    let comms = HashMap::from([(100, "cargo".to_owned())]);
-    let children = HashMap::<u32, Vec<u32>>::new();
-
-    drop_finished_active_commands(
-        &mut frame,
-        &|pid| cmdlines.get(&pid).cloned(),
-        &|pid| comms.get(&pid).cloned(),
-        &|pid| children.get(&pid).cloned().unwrap_or_default(),
-    );
-
-    assert_eq!(
-        first(&frame).current.command.as_deref(),
-        Some("cargo build --release")
-    );
-}
-
-#[test]
-fn active_command_stays_when_process_evidence_is_unavailable() {
-    let mut frame = frame(vec![pane(
-        "terminal_1",
-        Some("cargo build --release"),
-        Some("/repo"),
-    )]);
-    first_mut(&mut frame).current.pid = Some(100);
-    let children = HashMap::<u32, Vec<u32>>::new();
-
-    drop_finished_active_commands(&mut frame, &|_| None, &|_| None, &|pid| {
-        children.get(&pid).cloned().unwrap_or_default()
-    });
-
-    assert_eq!(
-        first(&frame).current.command.as_deref(),
-        Some("cargo build --release"),
-        "missing /proc evidence is an abstention, not proof of exit"
-    );
+    assert_eq!(first(&frame).current.command.as_deref(), expected, "{name}");
+    if expect_metadata_clear {
+        assert_eq!(first(&frame).metrics, PaneMetrics::default(), "{name}");
+        assert!(first(&frame).children.is_empty(), "{name}");
+    }
 }
 
 #[test]

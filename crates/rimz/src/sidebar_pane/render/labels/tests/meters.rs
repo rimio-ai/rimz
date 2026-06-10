@@ -1,80 +1,55 @@
 use super::*;
 use jiff::SignedDuration;
 
+fn text(spans: &[Span<'_>]) -> String {
+    spans.iter().map(|s| s.content.as_ref()).collect()
+}
+
 /// The commit delta spells only what's there: zero components drop rather
 /// than printing `⇡0`, and a fully-zero delta is no spans at all — the
 /// header's landed markers own that state.
 #[test]
 fn branch_delta_omits_zero_components() {
     let theme = Theme::fixed(true);
-    let text = |spans: Vec<Span<'static>>| -> String {
-        spans.iter().map(|s| s.content.as_ref()).collect()
-    };
-    assert_eq!(text(branch_delta_spans(&theme, 3, 1)), "⇡3 ⇣1");
-    assert_eq!(text(branch_delta_spans(&theme, 3, 0)), "⇡3");
-    assert_eq!(text(branch_delta_spans(&theme, 0, 5)), "⇣5");
-    assert_eq!(text(branch_delta_spans(&theme, 0, 0)), "");
-    assert_eq!(text(trunk_equal_spans(&theme, "main")), "≡ main");
-    assert_eq!(text(trunk_clear_spans(&theme, "main")), "✓ main");
-}
-/// `NO_COLOR` strips the green→amber→red ramp, but the heavy/light weight
-/// split still spells the meter — the `━`/`─` shape carries the reading by
-/// itself, without any label.
-#[test]
-fn gauge_under_no_color_reads_by_shape() {
-    let theme = Theme::fixed(true);
-    let spans = gauge_spans(&theme, Color::Green, 60, 5);
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "━━━──");
-    for span in &spans {
-        assert!(
-            span.style.fg.is_none(),
-            "NO_COLOR theme must not emit fg color: {span:?}"
-        );
-    }
+    assert_eq!(text(&branch_delta_spans(&theme, 3, 1)), "⇡3 ⇣1");
+    assert_eq!(text(&branch_delta_spans(&theme, 3, 0)), "⇡3");
+    assert_eq!(text(&branch_delta_spans(&theme, 0, 5)), "⇣5");
+    assert_eq!(text(&branch_delta_spans(&theme, 0, 0)), "");
+    assert_eq!(text(&trunk_equal_spans(&theme, "main")), "≡ main");
+    assert_eq!(text(&trunk_clear_spans(&theme, "main")), "✓ main");
 }
 /// Fill rounds to whole cells and keeps the edge states explicit: 0% is a
-/// full track, 100% is a full fill, and fractional percentages round to the
-/// nearest cell.
+/// full track, 100% is a full fill, segmented bars apportion that fill, and
+/// `NO_COLOR` leaves the shape readable without emitting foreground colors.
 #[test]
-fn gauge_fill_math_handles_rounding_and_edges() {
+fn gauge_bars_handle_fill_segments_and_no_color_shape() {
     let theme = Theme::fixed(true);
     for (color, percent, width, expected) in [
+        (Color::Green, 60, 5, "━━━──"),
         (Color::Green, 38, 10, "━━━━──────"),
         (Color::Green, 0, 5, "─────"),
         (Color::Red, 100, 5, "━━━━━"),
     ] {
         let spans = gauge_spans(&theme, color, percent, width);
-        let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(text, expected, "{percent}% over width {width}");
+        assert_eq!(text(&spans), expected, "{percent}% over width {width}");
+        assert!(
+            spans.iter().all(|span| span.style.fg.is_none()),
+            "NO_COLOR theme must not emit fg color: {spans:?}"
+        );
     }
-}
-/// The segmented bar fills the same run as the plain gauge, split into
-/// colored sub-runs whose cell counts sum to the filled total. Under
-/// `NO_COLOR` the segments merge into one heavy run — the shape still reads.
-#[test]
-fn segmented_gauge_sums_to_filled_and_merges_under_no_color() {
-    let theme = Theme::fixed(true);
+
     let segments = [
         (8_000_u64, Color::Green),
         (5_000, Color::Cyan),
         (2_000, Color::Blue),
     ];
     let spans = segmented_gauge_spans(&theme, &segments, Color::Green, 60, 10);
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
     // 60% of 10 = 6 filled; segments apportion 6 → 3/2/1; then a 4-cell track.
-    assert_eq!(text, "━━━━━━────");
-    let filled = text.chars().filter(|c| *c == '━').count();
+    assert_eq!(text(&spans), "━━━━━━────");
+    let filled = text(&spans).chars().filter(|c| *c == '━').count();
     assert_eq!(filled, 6);
-    for span in &spans {
-        assert!(span.style.fg.is_none());
-    }
-}
-/// With nothing to break down (all-zero weights) the segmented bar is just
-/// the plain single-color gauge.
-#[test]
-fn segmented_gauge_falls_back_with_zero_weights() {
-    let theme = Theme::fixed(true);
+    assert!(spans.iter().all(|span| span.style.fg.is_none()));
+
     let spans = segmented_gauge_spans(
         &theme,
         &[(0, Color::Green), (0, Color::Cyan)],
@@ -82,8 +57,7 @@ fn segmented_gauge_falls_back_with_zero_weights() {
         50,
         4,
     );
-    let text: String = spans.iter().map(|s| s.content.as_ref()).collect();
-    assert_eq!(text, "━━──");
+    assert_eq!(text(&spans), "━━──");
 }
 /// The renderer's one job on severity: map the domain's tier to its tone —
 /// calm blue, yellow, amber clay, red. The classification itself (the

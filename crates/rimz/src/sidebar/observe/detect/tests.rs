@@ -406,27 +406,6 @@ fn pane_closed_suppresses_short_lived_row() {
 }
 
 #[test]
-fn group_key_oscillation_reports_worktree_external_bounce() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, Vec::new()));
-    observer.observe(sig(11_000, vec![row("a", "p1", "external")]));
-    observer.observe(sig(12_000, vec![row("a", "p1", "main")]));
-
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "external")]));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::ValueOscillation {
-            row_id,
-            field: WatchedField::GroupKey,
-            from,
-            via,
-            ..
-        } if row_id == "a" && from == "external" && via == "main"
-    )));
-}
-
-#[test]
 fn first_enrichment_does_not_count_as_value_oscillation() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row_with_context_pct("a", "p1", "main", None)]));
@@ -454,131 +433,73 @@ fn first_enrichment_does_not_count_as_value_oscillation() {
 }
 
 #[test]
-fn established_value_disappearance_and_return_counts_as_oscillation() {
-    let mut observer = Observer::default();
-    observer.observe(sig(
-        0,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_context_pct("a", "p1", "main", None)],
-    ));
+fn value_oscillation_reports_established_value_bounces() {
+    for (field, initial, via, back, expected_from, expected_via) in [
+        (
+            WatchedField::GroupKey,
+            row("a", "p1", "external"),
+            row("a", "p1", "main"),
+            row("a", "p1", "external"),
+            "external",
+            "main",
+        ),
+        (
+            WatchedField::ContextPct,
+            row_with_context_pct("a", "p1", "main", Some(10)),
+            row_with_context_pct("a", "p1", "main", None),
+            row_with_context_pct("a", "p1", "main", Some(10)),
+            "10",
+            "<none>",
+        ),
+        (
+            WatchedField::ContextPct,
+            row_with_context_pct("a", "p1", "main", Some(10)),
+            row_with_context_pct("a", "p1", "main", Some(20)),
+            row_with_context_pct("a", "p1", "main", Some(10)),
+            "10",
+            "20",
+        ),
+        (
+            WatchedField::TotalTokens,
+            row_with_total_tokens("a", "p1", "main", Some(100)),
+            row_with_total_tokens("a", "p1", "main", Some(200)),
+            row_with_total_tokens("a", "p1", "main", Some(100)),
+            "100",
+            "200",
+        ),
+        (
+            WatchedField::Model,
+            row_with_model("a", "p1", "main", Some("sonnet")),
+            row_with_model("a", "p1", "main", Some("opus")),
+            row_with_model("a", "p1", "main", Some("sonnet")),
+            "sonnet",
+            "opus",
+        ),
+    ] {
+        let mut observer = Observer::default();
+        observer.observe(sig(0, vec![initial.clone()]));
+        observer.observe(sig(11_000, vec![initial]));
+        observer.observe(sig(12_000, vec![via]));
 
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
+        let drafts = observer.observe(sig(13_000, vec![back]));
 
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::ValueOscillation {
-            field: WatchedField::ContextPct,
-            from,
-            via,
-            ..
-        } if from == "10" && via == "<none>"
-    )));
-}
-
-#[test]
-fn total_token_value_bounce_counts_as_oscillation() {
-    let mut observer = Observer::default();
-    observer.observe(sig(
-        0,
-        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
-    ));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_total_tokens("a", "p1", "main", Some(200))],
-    ));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
-    ));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::ValueOscillation {
-            field: WatchedField::TotalTokens,
-            from,
-            via,
-            ..
-        } if from == "100" && via == "200"
-    )));
-}
-
-#[test]
-fn model_value_bounce_counts_as_oscillation() {
-    let mut observer = Observer::default();
-    observer.observe(sig(
-        0,
-        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
-    ));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_model("a", "p1", "main", Some("opus"))],
-    ));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
-    ));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::ValueOscillation {
-            field: WatchedField::Model,
-            from,
-            via,
-            ..
-        } if from == "sonnet" && via == "opus"
-    )));
-}
-
-#[test]
-fn context_pct_value_bounce_counts_as_oscillation() {
-    let mut observer = Observer::default();
-    observer.observe(sig(
-        0,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-    observer.observe(sig(
-        11_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-    observer.observe(sig(
-        12_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(20))],
-    ));
-
-    let drafts = observer.observe(sig(
-        13_000,
-        vec![row_with_context_pct("a", "p1", "main", Some(10))],
-    ));
-
-    assert!(drafts.iter().any(|draft| matches!(
-        &draft.kind,
-        AnomalyKind::ValueOscillation {
-            field: WatchedField::ContextPct,
-            from,
-            via,
-            ..
-        } if from == "10" && via == "20"
-    )));
+        assert!(
+            drafts.iter().any(|draft| matches!(
+                &draft.kind,
+                AnomalyKind::ValueOscillation {
+                    row_id,
+                    field: observed,
+                    from,
+                    via,
+                    ..
+                } if row_id == "a"
+                    && *observed == field
+                    && from == expected_from
+                    && via == expected_via
+            )),
+            "missing {field:?} oscillation"
+        );
+    }
 }
 
 #[test]

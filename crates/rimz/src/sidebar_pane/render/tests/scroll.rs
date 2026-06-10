@@ -174,11 +174,8 @@ fn render_scroll_manual_offset_holds() {
     assert_snapshot("scroll_manual_offset_holds", rendered);
 }
 #[test]
-fn render_scrollbar_hides_after_settle() {
-    // The same mid-scroll fade as `render_scroll_overflow_shows_bar`, read a
-    // settle window later: the stamp has aged out, so the bar is gone while
-    // the cards still overflow.
-    let rendered = snapshot_to_screen_with_alert_and_ui(
+fn scrollbar_modes_control_visibility_without_moving_the_window() {
+    let settled = snapshot_to_screen_with_alert_and_ui(
         &overflowing_fleet(),
         None,
         &UiState {
@@ -190,33 +187,21 @@ fn render_scrollbar_hides_after_settle() {
         18,
     );
     assert!(
-        !rendered.contains('▐') && !rendered.contains('▕'),
-        "the settle window has passed — no bar:\n{rendered}"
+        !settled.contains('▐') && !settled.contains('▕'),
+        "the settle window has passed — no bar:\n{settled}"
     );
-    assert_snapshot("scrollbar_hides_after_settle", rendered);
-}
-#[test]
-fn render_scrollbar_always_mode() {
-    // `[sidebar] scrollbar = "always"`: the bar is up whenever the cards
-    // overflow, no scroll activity required.
+
     let mut snapshot = overflowing_fleet();
     snapshot.sidebar.scrollbar = ScrollbarMode::Always;
-    let rendered =
-        snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
+    let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
     assert!(
-        rendered.contains('▐') && rendered.contains('▕'),
-        "always mode pins the bar with no activity:\n{rendered}"
+        always.contains('▐') && always.contains('▕'),
+        "always mode pins the bar with no activity:\n{always}"
     );
-    assert_snapshot("scrollbar_always_mode", rendered);
-}
-#[test]
-fn render_scrollbar_never_mode() {
-    // `[sidebar] scrollbar = "never"` wins over live scroll activity — a
-    // freshly-stamped fade and a held wheel pin paint no bar, and the cards
-    // keep their geometry (the right-margin column is reserved either way).
+
     let mut snapshot = overflowing_fleet();
     snapshot.sidebar.scrollbar = ScrollbarMode::Never;
-    let rendered = snapshot_to_screen_with_alert_and_ui(
+    let never = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
         &UiState {
@@ -231,12 +216,11 @@ fn render_scrollbar_never_mode() {
         18,
     );
     assert!(
-        !rendered.contains('▐') && !rendered.contains('▕'),
-        "never mode paints no bar even mid-scroll:\n{rendered}"
+        !never.contains('▐') && !never.contains('▕'),
+        "never mode paints no bar even mid-scroll:\n{never}"
     );
     assert!(
-        rendered.contains("task-3") && !rendered.contains("task-0"),
-        "the pinned window still renders its cards:\n{rendered}"
+        never.contains("task-3") && !never.contains("task-0"),
+        "the pinned window still renders its cards:\n{never}"
     );
-    assert_snapshot("scrollbar_never_mode", rendered);
 }

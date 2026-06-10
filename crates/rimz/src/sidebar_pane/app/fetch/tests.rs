@@ -77,7 +77,7 @@ fn refresh_override_stamps_folded_snapshot() {
 }
 
 #[test]
-fn notification_panes_keeps_live_agent_panes() {
+fn notification_panes_target_agents_or_the_current_view() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let notification = Notification {
@@ -96,10 +96,7 @@ fn notification_panes_keeps_live_agent_panes() {
         notification_panes(&snapshot, &notification),
         vec![first, second]
     );
-}
 
-#[test]
-fn link_notification_panes_target_the_current_view() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let mut snapshot = super::super::state::placeholder_snapshot(workspace());
@@ -290,78 +287,81 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
 }
 
 #[test]
-fn producer_skips_produce_while_its_frame_is_within_one_tick() {
-    // The two-speed contract: a ledger-delta storm paints per delta off the
-    // in-process fast lane, producing at most once per data tick.
-    assert!(!produce_this_cycle(
-        true,
-        FetchMode::Normal,
-        Some(100),
-        1000
-    ));
-    assert!(produce_this_cycle(
-        true,
-        FetchMode::Normal,
-        Some(1000),
-        1000
-    ));
-    assert!(
-        produce_this_cycle(true, FetchMode::Normal, None, 1000),
-        "no usable frame (cold start) always produces"
-    );
-}
-
-#[test]
-fn hard_refresh_requests_always_produce() {
-    assert!(produce_this_cycle(
-        true,
-        FetchMode::HardRefresh,
-        Some(0),
-        1000
-    ));
-    assert!(
-        produce_this_cycle(false, FetchMode::HardRefresh, Some(0), 1000),
-        "a consumer reload/manual recovery produces regardless of election"
-    );
-}
-
-#[test]
-fn producer_only_fresh_panes_produces_only_on_the_producer() {
-    assert!(produce_this_cycle(
-        true,
-        FetchMode::ProducerFreshPanes,
-        Some(0),
-        1000
-    ));
-    assert!(
-        !produce_this_cycle(false, FetchMode::ProducerFreshPanes, Some(0), 1000),
-        "consumers wait for the producer publication instead of local-producing"
-    );
-}
-
-#[test]
-fn consumer_never_produces_unforced_however_stale_the_frame() {
-    // The storm-removal contract: staleness recovery belongs to the election
-    // (the next-eldest becomes the producer within one heartbeat TTL), so a
-    // wedged producer never turns every consumer into its own uncached
-    // `list-panes` + git produce. The consumer keeps folding the held panes
-    // with the event-fresh rollup — status stays live, only pane presence ages.
-    assert!(!produce_this_cycle(
-        false,
-        FetchMode::Normal,
-        Some(5_000),
-        1000
-    ));
-    assert!(!produce_this_cycle(
-        false,
-        FetchMode::Normal,
-        Some(60_000),
-        1000
-    ));
-    assert!(
-        !produce_this_cycle(false, FetchMode::Normal, None, 1000),
-        "even a missing frame waits for the elected producer"
-    );
+fn produce_gate_keeps_consumers_read_only_except_hard_refresh() {
+    // The two-speed/storm-removal contract: the elected producer pays topology
+    // produce at most once per data tick; consumers fold held panes unless the
+    // user asks for a hard recovery refresh.
+    for (name, is_producer, mode, frame_age_ms, expected) in [
+        (
+            "fresh producer frame skips produce",
+            true,
+            FetchMode::Normal,
+            Some(100),
+            false,
+        ),
+        (
+            "stale producer frame produces",
+            true,
+            FetchMode::Normal,
+            Some(1000),
+            true,
+        ),
+        (
+            "cold producer produces",
+            true,
+            FetchMode::Normal,
+            None,
+            true,
+        ),
+        (
+            "producer-only freshness stays producer-only",
+            true,
+            FetchMode::ProducerFreshPanes,
+            Some(0),
+            true,
+        ),
+        (
+            "consumer skips producer-only freshness",
+            false,
+            FetchMode::ProducerFreshPanes,
+            Some(0),
+            false,
+        ),
+        (
+            "producer hard refresh produces",
+            true,
+            FetchMode::HardRefresh,
+            Some(0),
+            true,
+        ),
+        (
+            "consumer hard refresh produces",
+            false,
+            FetchMode::HardRefresh,
+            Some(0),
+            true,
+        ),
+        (
+            "stale consumer frame waits for election",
+            false,
+            FetchMode::Normal,
+            Some(60_000),
+            false,
+        ),
+        (
+            "cold consumer waits for election",
+            false,
+            FetchMode::Normal,
+            None,
+            false,
+        ),
+    ] {
+        assert_eq!(
+            produce_this_cycle(is_producer, mode, frame_age_ms, 1000),
+            expected,
+            "{name}"
+        );
+    }
 }
 
 fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {

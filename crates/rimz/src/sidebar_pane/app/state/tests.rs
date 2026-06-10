@@ -429,52 +429,34 @@ fn a_new_episode_outruns_an_old_receipt() {
 }
 
 #[test]
-fn single_failure_is_absorbed_without_an_alert() {
-    // One flaky tick must not flash a banner: the streak climbs but no
-    // alert arms yet, and the last good frame is reused.
+fn refresh_health_debounces_failures_and_keeps_renderable_state() {
     let ws = workspace();
     let previous = snapshot(&ws);
-    let state = compute_next_state(
+    let single = compute_next_state(
         &ws,
         None,
         Err("ledger not found".to_owned()),
         Some(previous.clone()),
         &Health::default(),
     );
-    assert!(state.health.alert.is_none(), "one blip must not alarm");
-    assert_eq!(state.health.failure_streak, 1);
-    assert!(state.last_snapshot.is_some());
-    assert_eq!(state.snapshot.workspace_id, previous.workspace_id);
-}
+    assert!(single.health.alert.is_none(), "one blip must not alarm");
+    assert_eq!(single.health.failure_streak, 1);
+    assert!(single.last_snapshot.is_some());
+    assert_eq!(single.snapshot.workspace_id, previous.workspace_id);
 
-#[test]
-fn sustained_failure_raises_active_alert_after_threshold() {
-    let ws = workspace();
-    let previous = snapshot(&ws);
-    let first = compute_next_state(
-        &ws,
-        None,
-        Err("ledger not found".to_owned()),
-        Some(previous.clone()),
-        &Health::default(),
-    );
     let second = compute_next_state(
         &ws,
         None,
         Err("ledger not found".to_owned()),
-        first.last_snapshot,
-        &first.health,
+        single.last_snapshot,
+        &single.health,
     );
     let alert = second.health.alert.expect("a sustained failure alerts");
     assert!(alert.is_active());
     assert!(alert.reason.contains("snapshot failed"));
     assert!(alert.reason.contains("ledger not found"));
     assert!(second.last_snapshot.is_some());
-}
 
-#[test]
-fn sustained_failure_without_previous_snapshot_uses_placeholder() {
-    let ws = workspace();
     let err = || Err::<SidebarSnapshot, String>("ledger not found".to_owned());
     let first = compute_next_state(&ws, None, err(), None, &Health::default());
     let second = compute_next_state(&ws, None, err(), None, &first.health);
@@ -482,11 +464,7 @@ fn sustained_failure_without_previous_snapshot_uses_placeholder() {
     assert!(second.last_snapshot.is_none());
     assert_eq!(second.snapshot.workspace_id, ws);
     assert!(second.snapshot.needs_attention.is_empty());
-}
 
-#[test]
-fn sustained_heartbeat_failure_alerts_but_keeps_fresh_snapshot() {
-    let ws = workspace();
     let snap = snapshot(&ws);
     let first = compute_next_state(
         &ws,
@@ -507,12 +485,11 @@ fn sustained_heartbeat_failure_alerts_but_keeps_fresh_snapshot() {
         .alert
         .expect("sustained heartbeat failure alerts");
     assert!(alert.reason.contains("heartbeat failed"));
-    // Heartbeat failing does not invalidate a fresh snapshot.
     assert!(second.last_snapshot.is_some());
 }
 
 #[test]
-fn active_alert_since_stays_pinned_across_the_episode() {
+fn active_alert_pins_since_and_lingers_after_recovery() {
     let ws = workspace();
     let armed = degraded_health("snapshot failed: first");
     let first_since = armed.alert.as_ref().unwrap().since;
@@ -526,14 +503,7 @@ fn active_alert_since_stays_pinned_across_the_episode() {
     let alert = next.health.alert.expect("still degraded");
     assert_eq!(alert.since, first_since, "since must remain pinned");
     assert!(alert.reason.contains("second"));
-}
 
-#[test]
-fn recovery_marks_alert_recovered_and_keeps_it_sticky() {
-    // Recovery does not erase the alert: it lingers, recovered, until the
-    // user dismisses it.
-    let ws = workspace();
-    let armed = degraded_health("snapshot failed: x");
     let recovered = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &armed);
     let alert = recovered.health.alert.expect("recovered alert lingers");
     assert!(!alert.is_active());
