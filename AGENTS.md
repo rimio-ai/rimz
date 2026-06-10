@@ -67,7 +67,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [sidebar.md](./docs/interface/sidebar.md) — the sidebar on screen: the cockpit, the agent cards, and the provider dashboard, with rendered frames and the glyph legend.
 
 **Reference** — `docs/reference/`
-- [cli.md](./docs/reference/cli.md) — every command, grouped by intent.
+- [cli.md](./docs/reference/cli.md) — CLI entry point and command map; grouped command details live under `docs/reference/cli/`.
 - [configuration.md](./docs/reference/configuration.md) — config tiers, generated per-machine template, project trust shape, privacy.
 
 **Internals** — `docs/internals/`

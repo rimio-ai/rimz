@@ -97,7 +97,7 @@ Pre-release. The ledger, sidebar, multiplexer backends, and Claude/Codex/Pi adap
 
 - [docs/guide/product.md](./docs/guide/product.md) is the five-minute tour of the sidebar, the fleet, and how a blocked agent reaches you.
 - [docs/interface/sidebar.md](./docs/interface/sidebar.md) walks the sidebar on screen, zone by zone, with the frames it draws.
-- [docs/reference/cli.md](./docs/reference/cli.md) lists every command, grouped by intent.
+- [docs/reference/cli.md](./docs/reference/cli.md) maps every command to grouped references and examples.
 - [DESIGN.md](./DESIGN.md) lays out the attention problem and the design choices that answer it.
 - [AGENTS.md](./AGENTS.md) holds the engineering rules and the docs map; contributor commands and the gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 ```
