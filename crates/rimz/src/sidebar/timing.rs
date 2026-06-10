@@ -131,6 +131,17 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 /// data tick, but budget windows move on the scale of minutes.
 pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Link stats are stale after three missed two-second publishes plus slack.
+/// Stale renders as unknown amber (`⇅ ?`) rather than red: during a hard drop
+/// the remote-rendered sidebar cannot reach the user, and a second local viewer
+/// of the same room should not see a false hard failure.
+pub const LINK_STATS_STALE: Duration = Duration::from_secs(10);
+
+/// Link stats older than this are ignored entirely. This lets an old
+/// `rimz remote connect` publisher disappear without leaving a permanent
+/// "remote room" badge behind.
+pub const LINK_STATS_EXPIRE: Duration = Duration::from_secs(120);
+
 /// Maximum age of a sidebar heartbeat before launch, election, and wakeup
 /// fanout treat the instance as dead and skip it.
 pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
@@ -301,6 +312,12 @@ pub const PULL_CADENCES: &[PullCadence] = &[
         idle_ttl: None,
         retry_ttl: None,
     },
+    PullCadence {
+        name: "link.stats",
+        ttl: LINK_STATS_STALE,
+        idle_ttl: None,
+        retry_ttl: None,
+    },
 ];
 
 /// Configured base render frame.
@@ -339,5 +356,11 @@ mod tests {
             .expect("pane cadence is registered");
         assert_eq!(panes.ttl, SNAPSHOT_CACHE_TTL);
         assert_eq!(panes.idle_ttl, Some(EVENT_PANE_TTL));
+
+        let link = PULL_CADENCES
+            .iter()
+            .find(|cadence| cadence.name == "link.stats")
+            .expect("link stats cadence is registered");
+        assert_eq!(link.ttl, LINK_STATS_STALE);
     }
 }

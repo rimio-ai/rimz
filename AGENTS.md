@@ -77,6 +77,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [sidebar.md](./docs/internals/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
 - [diagnostics.md](./docs/internals/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow.
 - [notifications.md](./docs/internals/notifications.md) — best-effort desktop, bell, and command notifications layered over the sidebar attention model.
+- [remote.md](./docs/internals/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.
 - [observe.md](./docs/internals/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/diagnostics.md) channel.
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
 - [run.md](./docs/internals/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.

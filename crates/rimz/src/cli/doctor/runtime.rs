@@ -355,6 +355,21 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
             Some(ms) => format!("recovered after {ms}ms: {reason}"),
             None => reason.clone(),
         },
+        DiagEvent::LinkAlert {
+            tier,
+            rtt_ms,
+            miss_pct,
+            recovered_after_ms,
+            ..
+        } => {
+            let rtt = rtt_ms
+                .map(|ms| format!("{ms}ms"))
+                .unwrap_or_else(|| "?".to_owned());
+            match recovered_after_ms {
+                Some(ms) => format!("link recovered after {ms}ms; rtt {rtt}; loss {miss_pct}%"),
+                None => format!("link {tier:?}; rtt {rtt}; loss {miss_pct}%"),
+            }
+        }
         DiagEvent::ProducerElected { prior_elder } => {
             format!("this renderer became producer after {prior_elder} aged out")
         }

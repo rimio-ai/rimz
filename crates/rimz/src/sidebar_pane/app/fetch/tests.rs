@@ -1,8 +1,10 @@
 use super::*;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
+use crate::sidebar::notify::{
+    LinkAlert, LinkNotificationState, Notification, NotificationAgent, NotificationKind,
+};
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
-use crate::{MuxName, SidebarInstanceId, WorkspaceId};
+use crate::{MuxName, SidebarInstanceId, SidebarOwnView, WorkspaceId};
 
 #[test]
 fn produce_guard_maps_failures_to_degraded_outcomes() {
@@ -89,7 +91,36 @@ fn notification_panes_keeps_live_agent_panes() {
         body: "a1: waiting | a2: failed | a3: waiting".to_owned(),
     };
 
-    assert_eq!(notification_panes(&notification), vec![first, second]);
+    let snapshot = super::super::state::placeholder_snapshot(workspace());
+    assert_eq!(
+        notification_panes(&snapshot, &notification),
+        vec![first, second]
+    );
+}
+
+#[test]
+fn link_notification_panes_target_the_current_view() {
+    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let mut snapshot = super::super::state::placeholder_snapshot(workspace());
+    snapshot.own_view = Some(SidebarOwnView {
+        sibling_count: 2,
+        own_is_active: false,
+        active_pane_id: Some(first.clone()),
+        working_pane_ids: vec![first.clone(), second.clone()],
+        own_view_is_daemon: false,
+    });
+    let notification = Notification {
+        agents: Vec::new(),
+        notification_kind: NotificationKind::LinkDegraded,
+        title: "Rimz: remote link degraded".to_owned(),
+        body: "RTT 230ms, 4% loss.".to_owned(),
+    };
+
+    assert_eq!(
+        notification_panes(&snapshot, &notification),
+        vec![first, second]
+    );
 }
 
 #[test]
@@ -128,6 +159,36 @@ fn producer_transition_diagnostics_name_peer_instances() {
         &events[1],
         crate::schema::diag::DiagEvent::ProducerDemoted { new_elder: observed }
             if observed == &new_elder
+    ));
+}
+
+#[test]
+fn link_alert_diagnostics_are_typed() {
+    let dir = tempfile::tempdir().unwrap();
+    let sink =
+        crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
+
+    emit_link_alert(
+        Some(&sink),
+        LinkAlert {
+            tier: crate::remote::link::LinkTier::Degraded,
+            rtt_ms: Some(230),
+            miss_pct: 4,
+            since_ms: 10,
+            recovered_after_ms: None,
+        },
+    );
+
+    let events = diagnostic_events(&sink);
+    assert!(matches!(
+        &events[..],
+        [crate::schema::diag::DiagEvent::LinkAlert {
+            tier: crate::remote::link::LinkTier::Degraded,
+            rtt_ms: Some(230),
+            miss_pct: 4,
+            since_ms: 10,
+            recovered_after_ms: None,
+        }]
     ));
 }
 
@@ -182,6 +243,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
     };
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
+    let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
     let mut last_election = None;
     run_fetch_cycle(
@@ -191,6 +253,7 @@ fn forced_cycle_posts_fast_then_inprocess_produce() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            link_notifications: &mut link_notifications,
             diag: None,
             last_election: &mut last_election,
         },
@@ -376,6 +439,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
     let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
+    let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
     let mut last_election = None;
     run_fetch_cycle(
@@ -385,6 +449,7 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            link_notifications: &mut link_notifications,
             diag: None,
             last_election: &mut last_election,
         },
@@ -436,6 +501,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
     let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
+    let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
     let mut last_election = None;
     run_fetch_cycle(
@@ -445,6 +511,7 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            link_notifications: &mut link_notifications,
             diag: None,
             last_election: &mut last_election,
         },
@@ -554,6 +621,7 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
     let config = test_config(workspace_id, younger);
     let mut cursor = RollupCursor::new();
     let mut notifications = NotificationState::default();
+    let mut link_notifications = LinkNotificationState::default();
     let mut outcomes = Vec::new();
     let mut last_election = None;
     run_fetch_cycle(
@@ -563,6 +631,7 @@ fn pane_frame_published_refolds_a_consumer_from_cache() {
             state: &state,
             notification_prefs: &NotificationsPrefs::default(),
             notifications: &mut notifications,
+            link_notifications: &mut link_notifications,
             diag: None,
             last_election: &mut last_election,
         },

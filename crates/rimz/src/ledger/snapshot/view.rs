@@ -28,7 +28,8 @@ mod reap;
 mod rows;
 
 pub use model::{
-    SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarStatusCount,
+    SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 
@@ -190,6 +191,11 @@ pub struct SidebarSnapshot {
     /// tally.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub today_spend_live_usd: Option<f64>,
+    /// Remote SSH link health published by `rimz remote connect` through the
+    /// remote-side `link-stats.json` sidecar. Local rooms and old remotes carry
+    /// `None`, keeping the footer byte-identical to the pre-link-health render.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<SidebarLinkHealth>,
     /// The active event-log extent this rollup reflects — the freshness stamp
     /// `read_fresh_latest` compares against the live log. Stamped by
     /// `build_from` under the producing fold; `None` on the pure-reducer
@@ -281,6 +287,7 @@ impl SidebarSnapshot {
             providers: Vec::new(),
             value_tally: None,
             today_spend_live_usd: None,
+            link: None,
             reflects_log: None,
         }
     }

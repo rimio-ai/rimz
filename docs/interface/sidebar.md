@@ -120,6 +120,9 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin while the overflowing viewport is moving, settling away about a second after the scroll stops (`[sidebar] scrollbar` pins or removes it, [configuration](../reference/configuration.md#scrollbar)) |
 | `┤ Tab ├`       | an active tab or make-up bucket under `NO_COLOR` — the caps carry the pick by shape when the fill drops; with color the padded chip marks it |
 | `⇅ rc`          | remote control is on for that provider |
+| `⇅ 42ms 0%`     | remote SSH link badge in the footer — RTT EWMA and probe-miss rate; `⇅ ?` means the last stats are stale |
+
+Remote-link tiers are color-only: green for good, yellow for degraded, red bold for bad. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge and the `? for help` hint stays centered only when there is room.
 
 ## Zone 1 — the cockpit
 

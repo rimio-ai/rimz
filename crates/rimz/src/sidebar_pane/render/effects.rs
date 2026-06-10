@@ -552,6 +552,7 @@ mod tests {
             providers: Vec::new(),
             value_tally: None,
             today_spend_live_usd: None,
+            link: None,
             reflects_log: None,
         }
     }

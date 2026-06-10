@@ -13,7 +13,11 @@ use std::process::{Command, Stdio};
 use crate::config::NotificationsPrefs;
 use crate::feed::{AgentState, AgentStatus};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::{SidebarSnapshot, child_process};
+use crate::remote::link::LinkTier;
+use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
+
+const LINK_DEGRADED_HOLD_MS: u64 = 10_000;
+const LINK_RECOVERY_HOLD_MS: u64 = 30_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notification {
@@ -52,6 +56,10 @@ pub enum NotificationKind {
     Paused,
     Success,
     Coalesced,
+    LinkLost,
+    LinkRestored,
+    LinkDegraded,
+    LinkRecovered,
 }
 
 impl NotificationKind {
@@ -62,7 +70,197 @@ impl NotificationKind {
             Self::Paused => "paused",
             Self::Success => "success",
             Self::Coalesced => "coalesced",
+            Self::LinkLost => "link_lost",
+            Self::LinkRestored => "link_restored",
+            Self::LinkDegraded => "link_degraded",
+            Self::LinkRecovered => "link_recovered",
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LinkAlert {
+    pub tier: LinkTier,
+    pub rtt_ms: Option<u32>,
+    pub miss_pct: u16,
+    pub since_ms: u64,
+    pub recovered_after_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkNotificationState {
+    seeded: bool,
+    degraded_since_ms: Option<u64>,
+    active_since_ms: Option<u64>,
+    good_since_ms: Option<u64>,
+    paused_at_ms: Option<u64>,
+    last_notified_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LinkNotificationEvaluation {
+    pub notification: Option<Notification>,
+    pub alert: Option<LinkAlert>,
+}
+
+impl LinkNotificationState {
+    pub fn evaluate(
+        &mut self,
+        snapshot: &SidebarSnapshot,
+        prefs: &NotificationsPrefs,
+        now_ms: u64,
+    ) -> LinkNotificationEvaluation {
+        let link = match snapshot.link.as_ref() {
+            Some(link) if link.freshness == SidebarLinkFreshness::Fresh => {
+                self.resume_timers(now_ms);
+                link
+            }
+            Some(_) => {
+                self.seeded = true;
+                self.pause_timers(now_ms);
+                return LinkNotificationEvaluation::default();
+            }
+            None => {
+                let evaluation = self.expire_episode(now_ms);
+                self.seeded = true;
+                return evaluation;
+            }
+        };
+        if !self.seeded {
+            self.seeded = true;
+            if link.tier >= LinkTier::Degraded {
+                self.degraded_since_ms = Some(now_ms);
+            }
+            return LinkNotificationEvaluation::default();
+        }
+
+        if link.tier >= LinkTier::Degraded {
+            self.observe_degraded(link, prefs, now_ms)
+        } else {
+            self.observe_good(link, prefs, now_ms)
+        }
+    }
+
+    fn pause_timers(&mut self, now_ms: u64) {
+        if self.degraded_since_ms.is_some()
+            || self.active_since_ms.is_some()
+            || self.good_since_ms.is_some()
+        {
+            self.paused_at_ms.get_or_insert(now_ms);
+        }
+    }
+
+    fn resume_timers(&mut self, now_ms: u64) {
+        let Some(paused_at_ms) = self.paused_at_ms.take() else {
+            return;
+        };
+        let paused_ms = now_ms.saturating_sub(paused_at_ms);
+        shift_timer(&mut self.degraded_since_ms, paused_ms);
+        shift_timer(&mut self.active_since_ms, paused_ms);
+        shift_timer(&mut self.good_since_ms, paused_ms);
+    }
+
+    fn reset_episode(&mut self) {
+        self.degraded_since_ms = None;
+        self.active_since_ms = None;
+        self.good_since_ms = None;
+        self.paused_at_ms = None;
+    }
+
+    fn expire_episode(&mut self, now_ms: u64) -> LinkNotificationEvaluation {
+        let alert = self.active_since_ms.map(|active_since_ms| LinkAlert {
+            tier: LinkTier::Good,
+            rtt_ms: None,
+            miss_pct: 0,
+            since_ms: active_since_ms,
+            recovered_after_ms: Some(now_ms.saturating_sub(active_since_ms)),
+        });
+        self.reset_episode();
+        LinkNotificationEvaluation {
+            notification: None,
+            alert,
+        }
+    }
+
+    fn observe_degraded(
+        &mut self,
+        link: &SidebarLinkHealth,
+        prefs: &NotificationsPrefs,
+        now_ms: u64,
+    ) -> LinkNotificationEvaluation {
+        self.good_since_ms = None;
+        self.paused_at_ms = None;
+        let since_ms = *self.degraded_since_ms.get_or_insert(now_ms);
+        if self.active_since_ms.is_some() || now_ms.saturating_sub(since_ms) < LINK_DEGRADED_HOLD_MS
+        {
+            return LinkNotificationEvaluation::default();
+        }
+        self.active_since_ms = Some(since_ms);
+        let alert = LinkAlert {
+            tier: link.tier,
+            rtt_ms: link.rtt_ms,
+            miss_pct: link.miss_pct,
+            since_ms,
+            recovered_after_ms: None,
+        };
+        LinkNotificationEvaluation {
+            notification: self.notify_if_enabled(prefs, now_ms, link_degraded_notification(link)),
+            alert: Some(alert),
+        }
+    }
+
+    fn observe_good(
+        &mut self,
+        link: &SidebarLinkHealth,
+        prefs: &NotificationsPrefs,
+        now_ms: u64,
+    ) -> LinkNotificationEvaluation {
+        self.degraded_since_ms = None;
+        self.paused_at_ms = None;
+        let Some(active_since_ms) = self.active_since_ms else {
+            self.good_since_ms = None;
+            return LinkNotificationEvaluation::default();
+        };
+        let good_since_ms = *self.good_since_ms.get_or_insert(now_ms);
+        if now_ms.saturating_sub(good_since_ms) < LINK_RECOVERY_HOLD_MS {
+            return LinkNotificationEvaluation::default();
+        }
+        self.active_since_ms = None;
+        self.good_since_ms = None;
+        let alert = LinkAlert {
+            tier: link.tier,
+            rtt_ms: link.rtt_ms,
+            miss_pct: link.miss_pct,
+            since_ms: active_since_ms,
+            recovered_after_ms: Some(now_ms.saturating_sub(active_since_ms)),
+        };
+        LinkNotificationEvaluation {
+            notification: self.notify_if_enabled(prefs, now_ms, link_recovered_notification(link)),
+            alert: Some(alert),
+        }
+    }
+
+    fn notify_if_enabled(
+        &mut self,
+        prefs: &NotificationsPrefs,
+        now_ms: u64,
+        notification: Notification,
+    ) -> Option<Notification> {
+        if !prefs.enabled
+            || self
+                .last_notified_at_ms
+                .is_some_and(|last| now_ms.saturating_sub(last) < prefs.debounce_ms)
+        {
+            return None;
+        }
+        self.last_notified_at_ms = Some(now_ms);
+        Some(notification)
+    }
+}
+
+fn shift_timer(timer: &mut Option<u64>, by_ms: u64) {
+    if let Some(value) = timer {
+        *value = value.saturating_add(by_ms);
     }
 }
 
@@ -324,6 +522,32 @@ fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {
     }
 }
 
+fn link_degraded_notification(link: &SidebarLinkHealth) -> Notification {
+    Notification {
+        agents: Vec::new(),
+        notification_kind: NotificationKind::LinkDegraded,
+        title: "Rimz: remote link degraded".to_owned(),
+        body: link_notification_body(link),
+    }
+}
+
+fn link_recovered_notification(link: &SidebarLinkHealth) -> Notification {
+    Notification {
+        agents: Vec::new(),
+        notification_kind: NotificationKind::LinkRecovered,
+        title: "Rimz: remote link recovered".to_owned(),
+        body: link_notification_body(link),
+    }
+}
+
+fn link_notification_body(link: &SidebarLinkHealth) -> String {
+    let rtt = link
+        .rtt_ms
+        .map(|rtt| format!("RTT {rtt}ms"))
+        .unwrap_or_else(|| "RTT unknown".to_owned());
+    format!("{rtt}, {}% loss.", link.miss_pct)
+}
+
 fn agent_label(agent: &AgentState) -> String {
     agent
         .task
@@ -354,293 +578,4 @@ fn short_agent_id(id: &AgentSessionId) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::time::{Duration, Instant};
-
-    use jiff::Timestamp;
-
-    use super::*;
-    use crate::agents::lifecycle::TurnPhase;
-    use crate::feed::PaneRef;
-    use crate::ids::{MuxName, PaneId, WorkspaceId};
-
-    fn prefs() -> NotificationsPrefs {
-        NotificationsPrefs {
-            coalesce_ms: 0,
-            ..NotificationsPrefs::default()
-        }
-    }
-
-    fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
-        SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-notify")),
-            Vec::new(),
-            agents,
-            Timestamp::now(),
-        )
-    }
-
-    fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
-        let now = Timestamp::now();
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked("claude"),
-            status,
-            phase: TurnPhase::Idle,
-            pane: Some(PaneRef {
-                pane_id: PaneId::from_parts(MuxName::Tmux, format!("%{id}")),
-                session_name: "rimz-test".to_owned(),
-                view_id: Some("view-1".to_owned()),
-                view_kind: None,
-                view_name: None,
-                is_focused: focused,
-                command: Some("claude".to_owned()),
-                spawn_command: None,
-                cwd: Some("/tmp/rimz-notify".to_owned()),
-                pane_pid: None,
-                pane_process_start: None,
-                resumed_session_id: None,
-                elevated_agent: None,
-                first_seen_at_ms: None,
-            }),
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: None,
-            worktree_branch: None,
-            task: None,
-            prompt: None,
-            transcript_path: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            todo_done: None,
-            todo_total: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
-        }
-    }
-
-    #[test]
-    fn first_observation_seeds_without_notifications() {
-        let mut state = NotificationState::default();
-        let out = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-            &prefs(),
-            1,
-        );
-
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn configured_transition_edges_fire() {
-        let mut state = NotificationState::default();
-        let prefs = NotificationsPrefs {
-            triggers: vec![crate::config::NotificationTrigger::Failed],
-            ..prefs()
-        };
-        state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-            &prefs,
-            1,
-        );
-
-        let waiting = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-            &prefs,
-            2,
-        );
-        assert!(waiting.is_empty(), "waiting is not configured");
-
-        let failed = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Failed, false)]),
-            &prefs,
-            3,
-        );
-        assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0].notification_kind, NotificationKind::Failed);
-    }
-
-    #[test]
-    fn same_agent_is_debounced_within_window() {
-        let mut state = NotificationState::default();
-        let prefs = NotificationsPrefs {
-            debounce_ms: 1_000,
-            ..prefs()
-        };
-        state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-            &prefs,
-            0,
-        );
-        assert_eq!(
-            state
-                .evaluate(
-                    &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-                    &prefs,
-                    100,
-                )
-                .len(),
-            1
-        );
-        state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-            &prefs,
-            200,
-        );
-
-        let debounced = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-            &prefs,
-            500,
-        );
-        assert!(debounced.is_empty());
-    }
-
-    #[test]
-    fn focused_agent_is_suppressed() {
-        let mut state = NotificationState::default();
-        state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-            &prefs(),
-            0,
-        );
-
-        let out = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Waiting, true)]),
-            &prefs(),
-            100,
-        );
-        assert!(out.is_empty());
-    }
-
-    #[test]
-    fn burst_coalesces_after_window() {
-        let mut state = NotificationState::default();
-        let prefs = NotificationsPrefs {
-            coalesce_ms: 1_000,
-            ..NotificationsPrefs::default()
-        };
-        state.evaluate(
-            &snapshot(vec![
-                agent("a1", AgentStatus::Running, false),
-                agent("a2", AgentStatus::Running, false),
-            ]),
-            &prefs,
-            0,
-        );
-        assert!(
-            state
-                .evaluate(
-                    &snapshot(vec![
-                        agent("a1", AgentStatus::Waiting, false),
-                        agent("a2", AgentStatus::Running, false),
-                    ]),
-                    &prefs,
-                    100,
-                )
-                .is_empty(),
-            "the first edge waits for the coalesce window"
-        );
-        assert!(
-            state
-                .evaluate(
-                    &snapshot(vec![
-                        agent("a1", AgentStatus::Waiting, false),
-                        agent("a2", AgentStatus::Failed, false),
-                    ]),
-                    &prefs,
-                    500,
-                )
-                .is_empty(),
-            "the second edge joins the same burst"
-        );
-
-        let out = state.evaluate(
-            &snapshot(vec![
-                agent("a1", AgentStatus::Waiting, false),
-                agent("a2", AgentStatus::Failed, false),
-            ]),
-            &prefs,
-            1_100,
-        );
-        assert_eq!(out.len(), 1);
-        assert_eq!(out[0].notification_kind, NotificationKind::Coalesced);
-        assert_eq!(out[0].agents.len(), 2);
-    }
-
-    #[test]
-    fn notified_agents_are_pruned_when_they_disappear() {
-        let mut state = NotificationState::default();
-        state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-            &prefs(),
-            0,
-        );
-
-        let out = state.evaluate(
-            &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-            &prefs(),
-            100,
-        );
-        assert_eq!(out.len(), 1);
-        assert_eq!(state.last_notified_at_ms.len(), 1);
-
-        state.evaluate(&snapshot(Vec::new()), &prefs(), 200);
-        assert!(state.last_notified_at_ms.is_empty());
-    }
-
-    #[test]
-    fn command_spawn_receives_notification_env() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let out = dir.path().join("env.txt");
-        let command = format!(
-            "printf '%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" > {}",
-            sh_quote(&out)
-        );
-        let notification = Notification {
-            agents: vec![NotificationAgent {
-                kind: AgentKind::new_unchecked("claude"),
-                agent_id: AgentSessionId::from("sess-1"),
-                label: "claude sess-1".to_owned(),
-                pane_id: None,
-            }],
-            notification_kind: NotificationKind::Waiting,
-            title: "Rimz: claude needs you".to_owned(),
-            body: "claude sess-1 is waiting for input.".to_owned(),
-        };
-
-        let pid = spawn_notify_command(&command, &notification).expect("spawn command");
-        assert!(pid > 0);
-
-        let deadline = Instant::now() + Duration::from_secs(2);
-        while !out.exists() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(10));
-        }
-        let text = std::fs::read_to_string(&out).expect("command wrote env file");
-        assert_eq!(
-            text,
-            "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\n"
-        );
-    }
-
-    fn sh_quote(path: &std::path::Path) -> String {
-        let raw = path.to_string_lossy();
-        format!("'{}'", raw.replace('\'', "'\\''"))
-    }
-}
+mod tests;

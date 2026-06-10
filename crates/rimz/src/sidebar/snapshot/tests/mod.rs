@@ -8,6 +8,7 @@ use std::io::Write;
 mod codex_refresh;
 mod consumer;
 mod git_freshness;
+mod link;
 mod presence;
 mod rate_limits;
 mod spending;

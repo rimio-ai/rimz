@@ -12,7 +12,7 @@ use crate::config::NotificationsPrefs;
 use crate::ids::{PaneId, SidebarInstanceId};
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
-use crate::sidebar::notify::{Notification, NotificationState};
+use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -118,6 +118,7 @@ struct FetchCycle<'a> {
     state: &'a StatePaths,
     notification_prefs: &'a NotificationsPrefs,
     notifications: &'a mut NotificationState,
+    link_notifications: &'a mut LinkNotificationState,
     diag: Option<&'a crate::diag::DiagSink>,
     last_election: &'a mut Option<ProducerElection>,
 }
@@ -145,6 +146,7 @@ fn run_fetch_cycle(
         state,
         notification_prefs,
         notifications,
+        link_notifications,
         diag,
         last_election,
     } = ctx;
@@ -197,6 +199,8 @@ fn run_fetch_cycle(
                     runtime,
                     notification_prefs,
                     notifications,
+                    link_notifications,
+                    diag,
                     &snapshot,
                 );
             }
@@ -236,6 +240,8 @@ fn run_fetch_cycle(
                 runtime,
                 notification_prefs,
                 notifications,
+                link_notifications,
+                diag,
                 snapshot,
             );
         }
@@ -274,15 +280,26 @@ fn evaluate_and_deliver_notifications(
     runtime: &RuntimePaths,
     prefs: &NotificationsPrefs,
     state: &mut NotificationState,
+    link_state: &mut LinkNotificationState,
+    diag: Option<&crate::diag::DiagSink>,
     snapshot: &SidebarSnapshot,
 ) {
-    for notification in state.evaluate(snapshot, prefs, crate::sidebar::cache::unix_now_ms()) {
+    let now_ms = crate::sidebar::cache::unix_now_ms();
+    let mut notifications = state.evaluate(snapshot, prefs, now_ms);
+    let link = link_state.evaluate(snapshot, prefs, now_ms);
+    if let Some(alert) = link.alert {
+        emit_link_alert(diag, alert);
+    }
+    if let Some(notification) = link.notification {
+        notifications.push(notification);
+    }
+    for notification in notifications {
         if let Some(command) = prefs.command()
             && let Err(err) = crate::sidebar::notify::spawn_notify_command(command, &notification)
         {
             tracing::debug!(error = %err, "notify-command spawn failed");
         }
-        let panes = notification_panes(&notification);
+        let panes = notification_panes(snapshot, &notification);
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
@@ -297,12 +314,40 @@ fn evaluate_and_deliver_notifications(
     }
 }
 
-fn notification_panes(notification: &Notification) -> Vec<PaneId> {
-    notification
+fn emit_link_alert(diag: Option<&crate::diag::DiagSink>, alert: LinkAlert) {
+    let Some(diag) = diag else {
+        return;
+    };
+    diag.emit(crate::schema::diag::DiagEvent::LinkAlert {
+        tier: alert.tier,
+        rtt_ms: alert.rtt_ms,
+        miss_pct: alert.miss_pct,
+        since_ms: alert.since_ms,
+        recovered_after_ms: alert.recovered_after_ms,
+    });
+}
+
+fn notification_panes(snapshot: &SidebarSnapshot, notification: &Notification) -> Vec<PaneId> {
+    let panes = notification
         .agents
         .iter()
         .filter_map(|agent| agent.pane_id.clone())
-        .collect()
+        .collect::<Vec<_>>();
+    if !panes.is_empty() {
+        return panes;
+    }
+    if matches!(
+        notification.notification_kind,
+        crate::sidebar::notify::NotificationKind::LinkDegraded
+            | crate::sidebar::notify::NotificationKind::LinkRecovered
+    ) {
+        return snapshot
+            .own_view
+            .as_ref()
+            .map(|view| view.working_pane_ids.clone())
+            .unwrap_or_default();
+    }
+    Vec::new()
 }
 
 /// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so
@@ -430,6 +475,7 @@ pub(super) fn spawn_fetch_worker(
         // delta — and promotion to producer inherits the warm base.
         let mut cursor = RollupCursor::new();
         let mut notifications = NotificationState::default();
+        let mut link_notifications = LinkNotificationState::default();
         let mut last_election = None;
         while let Ok(first) = request_rx.recv() {
             // Coalesce any requests that piled up into one run, keeping the
@@ -465,6 +511,7 @@ pub(super) fn spawn_fetch_worker(
                             state: &state,
                             notification_prefs: &notification_prefs,
                             notifications: &mut notifications,
+                            link_notifications: &mut link_notifications,
                             diag: diag.as_ref(),
                             last_election: &mut last_election,
                         },

@@ -32,6 +32,7 @@ Consumers never produce for freshness on their own. They fold the published pane
 | workspace `diff-stats.json` | producer ([`sidebar::produce::git`](../../crates/rimz/src/sidebar/produce/git.rs)), single-flighted on `diff-stats.lock` | every node | per-root stamps on activity-tiered TTLs; carries the cached group-root enumeration |
 | workspace `metrics-sample.json` | producer ([`sidebar::produce::metrics`](../../crates/rimz/src/sidebar/produce/metrics.rs)) | producer only | per-pane sample stamps plus the pane→root-pid bindings; the displayed values reach consumers on the pane frame |
 | workspace `live-spend-baselines.json` | producer | every node in the room | per-row live cost baselines captured when the shared provider-spending walk stamp advances; keeps the cockpit count-up room-local |
+| workspace `link-stats.json` | remote-link ingest ([remote.md](./remote.md)) | every node in the room | latest remote SSH probe stats; fresh for 10s, stale until 120s, then ignored |
 | shared `provider-spending.json` | producer ([`sidebar::produce::spending`](../../crates/rimz/src/sidebar/produce/spending.rs)), single-flighted on shared `spending.lock` | every node in every room | user-global walk stamp and fleet/provider totals; a fresh stamp skips transcript discovery, cursor reads, and pricing-cache loads |
 | shared `spending.json` | elected spending producer | elected spending producer | incremental `(mtime,len,cursor)` transcript parse cache, read and written only while holding shared `spending.lock` |
 | shared `pricing-cache.json` | elected spending producer's TTL-gated remote refresh ([pricing.md](./pricing.md)) | elected spending producer | remote-refresh layer over the embedded snapshot, daily TTL with failure backoff |
@@ -100,6 +101,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 | Spending walk | `SPENDING_TTL` | Fleet ledger and the walked floor under the live cockpit spend overlay |
 | Accounts | `ACCOUNTS_TTL` success, `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |
+| Remote link stats | `LINK_STATS_STALE`, expiring at `LINK_STATS_EXPIRE` | Footer link badge for `rimz remote connect` rooms |
 
 ## Render Cadences
 

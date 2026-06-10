@@ -22,6 +22,7 @@ mod ansi;
 mod budget;
 mod fleet;
 mod fold;
+mod link;
 mod process;
 mod provider;
 mod scroll;

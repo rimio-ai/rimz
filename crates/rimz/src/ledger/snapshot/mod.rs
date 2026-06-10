@@ -47,8 +47,8 @@ pub use row::{
     SidebarSubAgent,
 };
 pub use view::{
-    SidebarProviderPanel, SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice,
+    SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarSnapshot,
+    SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
 };
 
 #[derive(Debug, thiserror::Error)]

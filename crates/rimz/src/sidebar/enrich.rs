@@ -12,13 +12,15 @@ use crate::feed::AgentStatus;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
 use crate::{
-    RuntimePaths, SidebarOwnView, SidebarSnapshot, SidebarWorktreeGroup, SidebarWorktreeKind,
+    RuntimePaths, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView, SidebarSnapshot,
+    SidebarWorktreeGroup, SidebarWorktreeKind,
 };
 use jiff::{SignedDuration, Timestamp};
 use serde::Serialize;
 
 use super::cache::{DiffStatsCache, GIT_ACTIVITY_WINDOW, read_diff_stats_cache};
 use super::frame::{PaneFrame, PaneMetrics};
+use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 #[cfg(test)]
 pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
@@ -134,6 +136,42 @@ pub fn hot_worktree_paths(snapshot: &SidebarSnapshot) -> BTreeSet<String> {
         }
     }
     hot
+}
+
+/// Fold the remote-link stats sidecar onto the snapshot. Local rooms never have
+/// this file; corrupt, unknown-version, and expired files erase the badge.
+pub fn fold_link_stats(snapshot: &mut SidebarSnapshot, runtime: &RuntimePaths, now_ms: u64) {
+    let path = crate::remote::link::stats_path(runtime);
+    let Ok(bytes) = std::fs::read(path) else {
+        snapshot.link = None;
+        return;
+    };
+    let Ok(file) = serde_json::from_slice::<crate::remote::link::LinkStatsFile>(&bytes) else {
+        snapshot.link = None;
+        return;
+    };
+    if !file.version_ok() {
+        snapshot.link = None;
+        return;
+    }
+    let age_ms = now_ms.saturating_sub(file.received_at_ms);
+    if age_ms > LINK_STATS_EXPIRE.as_millis() as u64 {
+        snapshot.link = None;
+        return;
+    }
+    let freshness = if age_ms > LINK_STATS_STALE.as_millis() as u64 {
+        SidebarLinkFreshness::Stale
+    } else {
+        SidebarLinkFreshness::Fresh
+    };
+    let stats = file.stats;
+    snapshot.link = Some(SidebarLinkHealth {
+        rtt_ms: stats.rtt_ms,
+        miss_pct: stats.miss_pct,
+        tier: crate::remote::link::link_tier(stats.rtt_ms, stats.miss_pct),
+        freshness,
+        sampled_at_ms: file.received_at_ms,
+    });
 }
 
 /// Project the cached git facts onto each worktree group: the diff stats shown
@@ -282,6 +320,7 @@ pub fn enrich(
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();
+    fold_link_stats(&mut snapshot, runtime, crate::sidebar::cache::unix_now_ms());
 
     // The room's group roots — a repo room's worktree checkouts (so one parked
     // outside the project root still earns its own pod instead of folding into

@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use crate::agents::{RateLimitWindow, SpendTally};
 use crate::feed::AgentStatus;
 use crate::ledger::snapshot::row::SidebarRow;
+use crate::remote::link::LinkTier;
 
 /// One provider's aggregate dashboard block, pinned to the bottom of the
 /// sidebar. Account-scoped: every session of one agent kind folds into one
@@ -88,4 +89,21 @@ pub struct SidebarWorktreeGroup {
 pub struct SidebarStatusCount {
     pub status: AgentStatus,
     pub count: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SidebarLinkFreshness {
+    Fresh,
+    Stale,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SidebarLinkHealth {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rtt_ms: Option<u32>,
+    pub miss_pct: u16,
+    pub tier: LinkTier,
+    pub freshness: SidebarLinkFreshness,
+    pub sampled_at_ms: u64,
 }

@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::remote::link::LinkTier;
 
 pub const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
 
@@ -128,6 +129,15 @@ pub enum DiagEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         recovered_after_ms: Option<u64>,
     },
+    LinkAlert {
+        tier: LinkTier,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rtt_ms: Option<u32>,
+        miss_pct: u16,
+        since_ms: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        recovered_after_ms: Option<u64>,
+    },
     ProducerElected {
         prior_elder: SidebarInstanceId,
     },
@@ -196,6 +206,10 @@ impl DiagEvent {
                 recovered_after_ms: None,
                 ..
             }
+            | Self::LinkAlert {
+                recovered_after_ms: None,
+                ..
+            }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
@@ -210,6 +224,10 @@ impl DiagEvent {
             | Self::NewbornQuarantined { .. }
             | Self::MixedBuildWriters { .. }
             | Self::HealthAlert {
+                recovered_after_ms: Some(_),
+                ..
+            } => DiagSeverity::Info,
+            Self::LinkAlert {
                 recovered_after_ms: Some(_),
                 ..
             } => DiagSeverity::Info,
@@ -229,6 +247,7 @@ impl DiagEvent {
             Self::GateRelease { .. } => "gate_release",
             Self::FetchFailure { .. } => "fetch_failure",
             Self::HealthAlert { .. } => "health_alert",
+            Self::LinkAlert { .. } => "link_alert",
             Self::ProducerElected { .. } => "producer_elected",
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
@@ -272,6 +291,19 @@ impl DiagEvent {
                     "active"
                 };
                 format!("{}:{reason}:{phase}:{since_ms}", self.kind_name())
+            }
+            Self::LinkAlert {
+                tier,
+                since_ms,
+                recovered_after_ms,
+                ..
+            } => {
+                let phase = if recovered_after_ms.is_some() {
+                    "recovered"
+                } else {
+                    "active"
+                };
+                format!("{}:{tier:?}:{phase}:{since_ms}", self.kind_name())
             }
             Self::RowConflict {
                 agent_kind,
@@ -590,6 +622,13 @@ mod tests {
                 since_ms: 10,
                 recovered_after_ms: Some(20),
             },
+            DiagEvent::LinkAlert {
+                tier: LinkTier::Degraded,
+                rtt_ms: Some(230),
+                miss_pct: 4,
+                since_ms: 10,
+                recovered_after_ms: None,
+            },
             DiagEvent::ProducerElected {
                 prior_elder: sidebar("sb_019e8c565bbd708097fce9514f79da04"),
             },
@@ -722,6 +761,36 @@ mod tests {
             recovered_after_ms: None,
         };
 
+        assert_ne!(active.identity_key(), recovered.identity_key());
+        assert_ne!(active.identity_key(), next_episode.identity_key());
+    }
+
+    #[test]
+    fn link_alert_identity_distinguishes_phase_and_episode() {
+        let active = DiagEvent::LinkAlert {
+            tier: LinkTier::Bad,
+            rtt_ms: Some(800),
+            miss_pct: 40,
+            since_ms: 10,
+            recovered_after_ms: None,
+        };
+        let recovered = DiagEvent::LinkAlert {
+            tier: LinkTier::Good,
+            rtt_ms: Some(42),
+            miss_pct: 0,
+            since_ms: 10,
+            recovered_after_ms: Some(40_000),
+        };
+        let next_episode = DiagEvent::LinkAlert {
+            tier: LinkTier::Bad,
+            rtt_ms: Some(900),
+            miss_pct: 50,
+            since_ms: 20,
+            recovered_after_ms: None,
+        };
+
+        assert_eq!(active.severity(), DiagSeverity::Warn);
+        assert_eq!(recovered.severity(), DiagSeverity::Info);
         assert_ne!(active.identity_key(), recovered.identity_key());
         assert_ne!(active.identity_key(), next_episode.identity_key());
     }

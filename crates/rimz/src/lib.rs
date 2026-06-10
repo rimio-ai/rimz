@@ -20,6 +20,7 @@ pub mod feed;
 pub mod ids;
 pub mod ledger;
 pub mod mux;
+pub mod osc;
 pub mod proc;
 pub mod reload;
 pub mod remote;
@@ -49,9 +50,10 @@ pub use crate::ids::{
 };
 pub use crate::ledger::{
     AgentCard, Ledger, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,
-    RuntimeProjection, RuntimeScope, SidebarOwnView, SidebarProviderPanel, SidebarResolverState,
-    SidebarRow, SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, StatePaths, TruthNotice, WorkspaceRecord,
+    RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
+    SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount,
+    SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, TruthNotice,
+    WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

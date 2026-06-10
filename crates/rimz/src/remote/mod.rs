@@ -10,7 +10,9 @@
 //! owns process I/O.
 
 pub mod aliases;
+pub mod link;
 
+use std::path::Path;
 use std::time::Duration;
 
 use crate::ids::MuxName;
@@ -180,6 +182,17 @@ pub fn ssh_attach_spec(
     no_resume: bool,
     mux: Option<MuxName>,
 ) -> CommandSpec {
+    ssh_attach_spec_with_control(target, no_resume, mux, None)
+}
+
+/// [`ssh_attach_spec`] plus optional ControlMaster setup for the supervised
+/// remote path. `None` is byte-identical to the legacy invocation.
+pub fn ssh_attach_spec_with_control(
+    target: &RemoteTarget,
+    no_resume: bool,
+    mux: Option<MuxName>,
+    control: Option<&Path>,
+) -> CommandSpec {
     CommandSpec::new(ssh_program())
         .args([
             "-o",
@@ -188,9 +201,9 @@ pub fn ssh_attach_spec(
             "ServerAliveCountMax=3",
             "-o",
             "ConnectTimeout=10",
-            "-t",
-            "--",
         ])
+        .args(control.into_iter().flat_map(link::control_options))
+        .args(["-t", "--"])
         .arg(target.destination.clone())
         .arg(guarded_snippet(target, no_resume, mux))
 }
@@ -214,16 +227,21 @@ fn guarded_snippet(target: &RemoteTarget, no_resume: bool, mux: Option<MuxName>)
         target.host,
     ));
     format!(
-        "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\"; \
+        "{}; \
          command -v rimz >/dev/null 2>&1 || {{ echo {not_found} >&2; exit {code}; }}; \
          exec {rimz} -- {arg}",
+        remote_path_prefix(),
         code = REMOTE_RIMZ_MISSING_EXIT,
     )
 }
 
+pub(crate) fn remote_path_prefix() -> &'static str {
+    "PATH=\"$HOME/.cargo/bin:$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$PATH\""
+}
+
 /// POSIX single-quote: wrap in `'…'`, escaping each embedded `'` with the
 /// classic `'\''` close-reopen. Safe for any string a shell word can hold.
-fn sh_quote(s: &str) -> String {
+pub(crate) fn sh_quote(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('\'');
     for ch in s.chars() {
@@ -253,7 +271,7 @@ fn normalize_tilde(target: &str) -> String {
 /// Quote a normalized remote path, keeping a leading `$HOME` outside the
 /// single quotes (double-quoted) so the remote shell expands it while the
 /// tail stays literal.
-fn quote_remote_path(path: &str) -> String {
+pub(crate) fn quote_remote_path(path: &str) -> String {
     match path.strip_prefix("$HOME") {
         Some("") => "\"$HOME\"".to_owned(),
         Some(rest) => format!("\"$HOME\"{}", sh_quote(rest)),
@@ -546,6 +564,28 @@ mod tests {
         assert!(snippet.contains("rimz not found on dev-box"));
         assert!(snippet.contains("exit 127"));
         assert!(snippet.ends_with("exec rimz attach --attach -- 'query-engine'"));
+    }
+
+    #[test]
+    fn supervised_spec_adds_controlmaster_without_changing_the_plain_spec() {
+        let target = parse("dev-box:query-engine");
+        let plain = ssh_attach_spec(&target, false, None);
+        let control =
+            ssh_attach_spec_with_control(&target, false, None, Some(Path::new("/tmp/rimz.sock")));
+
+        assert_eq!(plain.args[..6], control.args[..6]);
+        assert_eq!(
+            control.args[6..10],
+            [
+                "-o",
+                "ControlMaster=auto",
+                "-o",
+                "ControlPath=/tmp/rimz.sock",
+            ]
+        );
+        assert_eq!(control.args[10], "-t");
+        assert_eq!(control.args[11], "--");
+        assert_eq!(control.args[12], "dev-box");
     }
 
     #[test]

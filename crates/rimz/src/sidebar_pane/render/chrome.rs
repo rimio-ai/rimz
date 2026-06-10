@@ -1,4 +1,4 @@
-use crate::SidebarSnapshot;
+use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
@@ -160,10 +160,62 @@ pub(super) fn footer_lines(
     } else {
         "? for help"
     };
+    if let Some(link) = snapshot.link.as_ref() {
+        return vec![link_footer_line(link, text, theme, width)];
+    }
     vec![center_line(
         Line::styled(text.to_owned(), theme.faint()),
         width,
     )]
+}
+
+fn link_footer_line(
+    link: &SidebarLinkHealth,
+    help_text: &str,
+    theme: &Theme,
+    width: usize,
+) -> Line<'static> {
+    let badge = link_badge(link, theme, width);
+    let badge_width = badge.content.chars().count();
+    if badge_width == 0 {
+        return center_line(Line::styled(help_text.to_owned(), theme.faint()), width);
+    }
+    let help_width = help_text.chars().count();
+    let help_start = width.saturating_sub(help_width) / 2;
+    if help_width == 0 || help_start <= badge_width {
+        return Line::from(vec![badge]);
+    }
+    Line::from(vec![
+        badge,
+        Span::raw(" ".repeat(help_start - badge_width)),
+        Span::styled(help_text.to_owned(), theme.faint()),
+    ])
+}
+
+fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'static> {
+    let text = match link.freshness {
+        SidebarLinkFreshness::Stale => "⇅ ?".to_owned(),
+        SidebarLinkFreshness::Fresh => match link.rtt_ms {
+            Some(rtt) => format!("⇅ {rtt}ms {}%", link.miss_pct),
+            None => format!("⇅ ? {}%", link.miss_pct),
+        },
+    };
+    let text = if text.chars().count() > width {
+        text.chars().take(width).collect()
+    } else {
+        text
+    };
+    let style = match link.freshness {
+        SidebarLinkFreshness::Stale => theme.style(Color::Yellow, Modifier::DIM),
+        SidebarLinkFreshness::Fresh => match link.tier {
+            crate::remote::link::LinkTier::Good => theme.style(Color::Green, Modifier::empty()),
+            crate::remote::link::LinkTier::Degraded => {
+                theme.style(Color::Yellow, Modifier::empty())
+            }
+            crate::remote::link::LinkTier::Bad => theme.style(Color::Red, Modifier::BOLD),
+        },
+    };
+    Span::styled(text, style)
 }
 
 /// Center a single line within `width` by prepending padding — used to pin the

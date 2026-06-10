@@ -176,6 +176,7 @@ fn fleet(groups: usize, per_group: usize, providers: usize) -> SidebarSnapshot {
         providers: (0..providers).map(provider_panel).collect(),
         value_tally: None,
         today_spend_live_usd: None,
+        link: None,
         reflects_log: None,
     }
 }
