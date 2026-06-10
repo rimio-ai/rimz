@@ -106,9 +106,14 @@ fn reset_countdown_reddens_when_pace_outruns_green_bar() {
     );
     assert_eq!(glyph_fg, label_fg, "the label still mirrors the bar");
     assert_eq!(
-        reset_span_fg(&rows[0]),
+        reset_marker_fg(&rows[0]),
         theme.style(Color::Red, Modifier::empty()).fg,
-        "2.5x pace colors only the reset countdown"
+        "2.5x pace colors only the reset marker"
+    );
+    assert_eq!(
+        reset_time_style(&rows[0]),
+        Some(theme.soft()),
+        "the reset time stays neutral"
     );
 }
 
@@ -128,10 +133,11 @@ fn paced_reset_countdown_under_no_color_stays_soft() {
 
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 1);
-    assert_eq!(reset_span_style(&rows[0]), Some(theme.soft()));
+    assert_eq!(reset_marker_style(&rows[0]), Some(theme.soft()));
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 }
 
-/// Each window gets its own pace tone: a fresh short window can rest blue while
+/// Each window gets its own pace tone: a fresh short window can rest green while
 /// the weekly budget's reset reads red because its burn rate cannot last.
 #[test]
 fn reset_countdowns_tone_each_window_independently() {
@@ -154,12 +160,12 @@ fn reset_countdowns_tone_each_window_independently() {
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
     assert_eq!(
-        reset_span_fg(&rows[0]),
-        theme.style(Color::Blue, Modifier::empty()).fg,
-        "unused started 5h window rests blue"
+        reset_marker_fg(&rows[0]),
+        theme.style(Color::Green, Modifier::empty()).fg,
+        "unused started 5h window rests green"
     );
     assert_eq!(
-        reset_span_fg(&rows[1]),
+        reset_marker_fg(&rows[1]),
         theme.style(Color::Red, Modifier::empty()).fg,
         "half the 7d budget after one day burns at 3.5x pace"
     );
@@ -179,7 +185,8 @@ fn reset_countdown_with_unknown_duration_stays_soft() {
 
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 1);
-    assert_eq!(reset_span_fg(&rows[0]), theme.soft().fg);
+    assert_eq!(reset_marker_fg(&rows[0]), theme.soft().fg);
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 }
 /// A spent window still owns its reset countdown unless a longer spent window
 /// gates it; the red empty track says exhausted, while the reset countdown
@@ -201,10 +208,11 @@ fn spent_window_keeps_its_pace_toned_countdown() {
     assert!(has_reset, "the spent window keeps its own countdown");
     assert_eq!(label_fg, theme.style(Color::Red, Modifier::empty()).fg);
     assert_eq!(
-        reset_span_fg(&rows[0]),
+        reset_marker_fg(&rows[0]),
         theme.style(theme::ORANGE, Modifier::empty()).fg,
         "spent exactly halfway through the window reads as 2x amber pace"
     );
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 }
 /// A spent weekly cap gates the short window: with 7d exhausted the 5h row is
 /// painted exhausted — red, a full empty track, and no reset countdown —

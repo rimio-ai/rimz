@@ -542,19 +542,28 @@ fn bar_row_facts(line: &Line<'static>) -> (Option<Color>, Option<Color>, bool) {
     (label_fg, glyph_fg, has_reset)
 }
 
-/// The foreground color of the reset countdown value span.
-fn reset_span_fg(line: &Line<'static>) -> Option<Color> {
+/// The foreground color of the reset marker.
+fn reset_marker_fg(line: &Line<'static>) -> Option<Color> {
     line.spans
         .iter()
         .find(|span| span.content.contains('↻'))
         .and_then(|span| span.style.fg)
 }
 
-/// The full style of the reset countdown value span.
-fn reset_span_style(line: &Line<'static>) -> Option<Style> {
+/// The full style of the reset marker.
+fn reset_marker_style(line: &Line<'static>) -> Option<Style> {
     line.spans
         .iter()
         .find(|span| span.content.contains('↻'))
+        .map(|span| span.style)
+}
+
+/// The full style of the reset countdown time immediately after the marker.
+fn reset_time_style(line: &Line<'static>) -> Option<Style> {
+    line.spans
+        .iter()
+        .position(|span| span.content.contains('↻'))
+        .and_then(|index| line.spans.get(index + 1))
         .map(|span| span.style)
 }
 

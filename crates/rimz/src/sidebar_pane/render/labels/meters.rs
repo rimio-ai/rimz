@@ -454,7 +454,7 @@ pub(in crate::sidebar_pane::render) fn pace_style(
     } else if pace_pct > f64::from(pace.yellow) {
         theme.style(Color::Yellow, Modifier::empty())
     } else {
-        theme.style(Color::Blue, Modifier::empty())
+        theme.style(Color::Green, Modifier::empty())
     };
     if style.fg.is_none() {
         theme.soft()

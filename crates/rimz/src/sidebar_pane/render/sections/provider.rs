@@ -5,7 +5,7 @@ use crate::agents::RateLimitWindow;
 use crate::config::BudgetZonesConfig;
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{
@@ -551,8 +551,9 @@ fn window_not_started(window: &RateLimitWindow, now: Timestamp) -> bool {
 
 /// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
-/// the value column, toned by burn pace when the window carries enough timing
-/// data. The label mirrors its bar's tone — the resting green, or the severity
+/// the value column. The reset marker is toned by burn pace when the window
+/// carries enough timing data; the countdown text stays in the neutral soft
+/// tier. The label mirrors its bar's tone — the resting green, or the severity
 /// it heats to. `force_exhausted`
 /// paints the row as fully spent — red, no countdown — regardless of the window's
 /// own reading (a longer spent window gates it). A window with no usage
@@ -603,15 +604,12 @@ fn metered_bar_row(
             raw
         }
     };
-    let value = if force_exhausted || not_started {
-        String::new()
+    let reset = if force_exhausted || not_started {
+        None
     } else {
-        window
-            .resets_at
-            .map(|at| format!("↻ {}", reset_countdown(at, now)))
-            .unwrap_or_default()
+        window.resets_at.map(|at| reset_countdown(at, now))
     };
-    let value_style = if value.is_empty() {
+    let reset_marker_style = if reset.is_none() {
         theme.soft()
     } else {
         window
@@ -637,11 +635,31 @@ fn metered_bar_row(
     ];
     spans.extend(mana_bar_spans(theme, remaining, bar_width, zones));
     spans.push(Span::raw(" "));
-    spans.push(Span::styled(
-        format!("{value:>PROVIDER_VALUE_WIDTH$}"),
-        value_style,
+    spans.extend(reset_value_spans(
+        theme,
+        reset.as_deref(),
+        reset_marker_style,
     ));
     Some(spans)
+}
+
+/// The right-aligned reset value column. Only the reset marker carries the
+/// pace tone; the countdown text stays at the neutral soft tier.
+fn reset_value_spans(
+    theme: &Theme,
+    countdown: Option<&str>,
+    marker_style: Style,
+) -> Vec<Span<'static>> {
+    let Some(countdown) = countdown.filter(|value| !value.is_empty()) else {
+        return vec![Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH))];
+    };
+    let value_width = 2 + countdown.chars().count();
+    let pad = PROVIDER_VALUE_WIDTH.saturating_sub(value_width);
+    vec![
+        Span::raw(" ".repeat(pad)),
+        Span::styled("↻", marker_style),
+        Span::styled(format!(" {countdown}"), theme.soft()),
+    ]
 }
 
 /// The unmetered `∞` bar row: the infinity icon rides the label slot (aligned

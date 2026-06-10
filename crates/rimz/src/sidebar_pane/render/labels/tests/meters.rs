@@ -222,13 +222,13 @@ fn pace_ratio_handles_edges() {
     );
 }
 /// The pace color ramp is configurable and exclusive above each bound: even
-/// burn rests blue, then yellow, amber, and red as burn rate outruns the reset.
+/// burn rests green, then yellow, amber, and red as burn rate outruns the reset.
 #[test]
 fn pace_style_honours_boundaries_custom_zones_and_no_color() {
     let lit = Theme::fixed(false);
     let defaults = BudgetPaceConfig::default();
     let tone = |color| lit.style(color, Modifier::empty());
-    assert_eq!(pace_style(&lit, 1.0, &defaults), tone(Color::Blue));
+    assert_eq!(pace_style(&lit, 1.0, &defaults), tone(Color::Green));
     assert_eq!(pace_style(&lit, 1.01, &defaults), tone(Color::Yellow));
     assert_eq!(pace_style(&lit, 1.5, &defaults), tone(Color::Yellow));
     assert_eq!(pace_style(&lit, 1.51, &defaults), tone(ORANGE));
@@ -250,7 +250,7 @@ fn pace_style_honours_boundaries_custom_zones_and_no_color() {
         red: 100,
     };
     assert_eq!(pace_style(&lit, 1.2, &misordered), tone(Color::Red));
-    assert_eq!(pace_style(&lit, 0.9, &misordered), tone(Color::Blue));
+    assert_eq!(pace_style(&lit, 0.9, &misordered), tone(Color::Green));
 
     let plain = Theme::fixed(true);
     assert_eq!(pace_style(&plain, 2.5, &defaults), plain.soft());
