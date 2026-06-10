@@ -3,9 +3,9 @@
 //! Two channels:
 //!
 //! * **Per-request feed socket** — the waiting hook or script bound a socket
-//!   via [`crate::bridge::bind`]; when a resolver writes the new feed state,
-//!   the writer sends a small `feed_resolved` datagram so the waiter can
-//!   exit before its polling tick fires.
+//!   via [`crate::bridge::bind`]; when a resolver writes a decision, or reset
+//!   closes the request without one, the writer sends a small datagram so the
+//!   waiter can exit before its polling tick fires.
 //! * **Sidebar wakeup sockets** — each live sidebar instance writes a
 //!   heartbeat JSON under `runtime/heartbeat/sidebar.*.json` carrying the
 //!   path of a datagram socket it owns. After every mutation we walk the
@@ -27,7 +27,7 @@ use jiff::Timestamp;
 use tracing::debug;
 
 use crate::bridge::{WakeupFrame, feed_socket_path, run_socket_path};
-use crate::feed::FeedItem;
+use crate::feed::{FeedItem, FeedStatus};
 use crate::ledger::RuntimePaths;
 use crate::run::RunRecord;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
@@ -52,8 +52,8 @@ pub enum WakeupErr {
 
 pub type Result<T> = std::result::Result<T, WakeupErr>;
 
-/// Send a `feed_resolved` datagram to the per-request socket bound by the
-/// waiting hook or script. No-op for `native_ui` items (no waiter exists).
+/// Send a terminal datagram to the per-request socket bound by the waiting hook
+/// or script. No-op for `native_ui` and still-pending items.
 pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
     if !item.surface.hook_blocks() {
         return Ok(());
@@ -65,10 +65,19 @@ pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
         // very-fast race. The feed file on disk is still authoritative.
         return Ok(());
     }
-    let frame = WakeupFrame::FeedResolved {
-        workspace_id: item.workspace_id.clone(),
-        request_id: item.request_id.clone(),
-        nonce: item.nonce.clone(),
+    let frame = match item.status {
+        FeedStatus::Resolved => WakeupFrame::FeedResolved {
+            workspace_id: item.workspace_id.clone(),
+            request_id: item.request_id.clone(),
+            nonce: item.nonce.clone(),
+        },
+        FeedStatus::TimedOut | FeedStatus::Abandoned => WakeupFrame::FeedTerminal {
+            workspace_id: item.workspace_id.clone(),
+            request_id: item.request_id.clone(),
+            nonce: item.nonce.clone(),
+            status: item.status,
+        },
+        FeedStatus::Pending => return Ok(()),
     };
     let payload = serde_json::to_vec(&frame)?;
     send_datagram(&payload, &target);

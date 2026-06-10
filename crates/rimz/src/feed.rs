@@ -195,6 +195,7 @@ pub enum ResolutionMethod {
     Dismiss,
     AgentMovedOn,
     OwnerExited,
+    WorkspaceReset,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -253,6 +254,9 @@ pub enum AbandonReason {
     /// The process that owned a pending runtime record exited before the item
     /// reached a terminal state.
     OwnerProcessExited,
+    /// The workspace room was reset, killing panes and closing any surviving
+    /// waiters that could have answered the pending record.
+    WorkspaceReset,
 }
 
 impl AbandonReason {
@@ -267,6 +271,7 @@ impl AbandonReason {
             Self::AgentSessionEnded => "agent_session_ended",
             Self::AgentMovedOn => "agent_moved_on",
             Self::OwnerProcessExited => "owner_process_exited",
+            Self::WorkspaceReset => "workspace_reset",
         }
     }
 }

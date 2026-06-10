@@ -7,6 +7,7 @@
 //! ledger from the outside: emulate resolver heartbeats, watch the chain
 //! advance, resolve from the second link, and assert the audit trail.
 
+use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -205,6 +206,36 @@ fn chain_advances_on_heartbeat_stale() {
 }
 
 #[test]
+fn hook_bridge_missing_feed_file_falls_back_to_neutral() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let mut cmd = env.hook_command("claude");
+    cmd.env("RIMZ_HOOK_CAP_MILLIS", "200");
+    let child = env.spawn_payload(cmd, &permission_payload("Bash"));
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
+        .expect("bridge item should appear in feed");
+
+    remove_feed_files(&env, &request_id);
+
+    let output = child.wait_with_output().expect("wait hook");
+    assert!(
+        output.status.success(),
+        "missing feed item should fall back to neutral, stderr:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "neutral Claude hook output should be empty"
+    );
+}
+
+#[test]
 fn chain_exhausted_falls_back_to_neutral() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
@@ -250,5 +281,16 @@ fn chain_exhausted_falls_back_to_neutral() {
     assert!(
         timeout_reasons.iter().any(|r| r == "chain_exhausted"),
         "expected feed.timeout with reason=chain_exhausted, got {timeout_reasons:?}"
+    );
+}
+
+fn remove_feed_files(env: &Env, request_id: &str) {
+    let paths = env.state_path_for(&env.project_root);
+    let _ = fs::remove_file(paths.feed_dir.join(format!("{request_id}.json")));
+    let _ = fs::remove_file(
+        paths
+            .feed_dir
+            .join("terminal")
+            .join(format!("{request_id}.json")),
     );
 }

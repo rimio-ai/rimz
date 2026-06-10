@@ -4,6 +4,7 @@ use tracing::warn;
 
 use crate::feed::FeedItem;
 use crate::ids::RequestId;
+use crate::run::RunRecord;
 use crate::schema::event::EventEnvelope;
 
 use super::super::{Ledger, LedgerErr, Result, StatePaths, event_log, lock, snapshot, wakeup};
@@ -161,6 +162,16 @@ impl Ledger {
                 request_id = %item.request_id,
                 error = %err,
                 "per-request wakeup failed after ledger commit"
+            );
+        }
+    }
+
+    pub(super) fn wake_run_best_effort(&self, record: &RunRecord) {
+        if let Err(err) = wakeup::wake_run(&self.inner.runtime, record) {
+            warn!(
+                run_id = %record.run_id,
+                error = %err,
+                "run wakeup failed after ledger commit"
             );
         }
     }

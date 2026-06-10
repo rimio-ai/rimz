@@ -5,7 +5,10 @@ use std::time::Duration;
 
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, WakeupFrame};
 use rimz::schema::heartbeat::SidebarHeartbeat;
-use rimz::{FeedItem, FeedKind, MuxName, Resolution, ResolutionMethod, SidebarInstanceId, Surface};
+use rimz::{
+    FeedItem, FeedKind, FeedStatus, MuxName, Resolution, ResolutionMethod, SidebarInstanceId,
+    Surface,
+};
 use serde_json::json;
 
 fn fresh_script_item(workspace_id: rimz::WorkspaceId) -> FeedItem {
@@ -90,6 +93,38 @@ async fn cap_timeout_returns_neutral() {
         "pending",
         "the ledger entry is unchanged by a bridge timeout — caller decides next steps",
     );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn terminal_feed_wakeup_returns_terminal() {
+    use tokio::net::UnixDatagram;
+
+    let h = crate::common::Harness::new();
+    if h.skip_if_sandboxed() {
+        return;
+    }
+    let item = fresh_script_item(h.workspace_id.clone());
+    let request_id = item.request_id.clone();
+    let expected = expected_from(&item);
+
+    let (sock, sock_path) = bridge::bind(&h.runtime_paths, &request_id).expect("bind");
+    let frame = WakeupFrame::FeedTerminal {
+        workspace_id: item.workspace_id.clone(),
+        request_id,
+        nonce: item.nonce.clone(),
+        status: FeedStatus::Abandoned,
+    };
+    let bytes = serde_json::to_vec(&frame).expect("serialize terminal frame");
+    UnixDatagram::unbound()
+        .expect("sender")
+        .send_to(&bytes, &sock_path)
+        .await
+        .expect("send terminal frame");
+
+    let outcome = bridge::wait_for_resolution_owning(sock, expected, Some(Duration::from_secs(5)))
+        .await
+        .expect("wait_for_resolution_owning");
+    assert_eq!(outcome, BridgeOutcome::Terminal);
 }
 
 #[tokio::test(flavor = "current_thread")]

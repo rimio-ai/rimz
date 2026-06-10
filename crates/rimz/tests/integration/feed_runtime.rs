@@ -1,5 +1,6 @@
 //! Runtime/audit split for `rimz feed` CLI views.
 
+use std::fs;
 use std::io::{BufRead, BufReader};
 use std::process::Stdio;
 use std::time::{Duration, Instant};
@@ -97,6 +98,49 @@ fn blocking_feed_ask_is_runtime_only_while_waiter_lives_and_gc_abandons_it() {
 }
 
 #[test]
+fn blocking_feed_ask_reports_closed_when_item_file_disappears() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+
+    let child = env
+        .rimz()
+        .args([
+            "feed",
+            "ask",
+            "--title",
+            "approve deploy?",
+            "--options",
+            "yes,no",
+            "--timeout",
+            "1s",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn blocking feed ask");
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
+        .expect("blocking ask should reach pending state");
+
+    remove_feed_files(&env, &request_id);
+
+    let output = child.wait_with_output().expect("wait feed ask");
+    assert!(
+        !output.status.success(),
+        "missing feed item should close the ask without a decision"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "request {request_id} closed before a decision was delivered"
+        )),
+        "feed ask should map missing item files to the closed-request message, stderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn blocking_feed_ask_in_a_pane_renders_a_frame_admitted_card() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
@@ -162,6 +206,17 @@ fn blocking_feed_ask_in_a_pane_renders_a_frame_admitted_card() {
 
     let _ = child.kill();
     let _ = child.wait();
+}
+
+fn remove_feed_files(env: &Env, request_id: &str) {
+    let paths = env.state_path_for(&env.project_root);
+    let _ = fs::remove_file(paths.feed_dir.join(format!("{request_id}.json")));
+    let _ = fs::remove_file(
+        paths
+            .feed_dir
+            .join("terminal")
+            .join(format!("{request_id}.json")),
+    );
 }
 
 fn poll_until(timeout: Duration, mut predicate: impl FnMut() -> bool) -> bool {

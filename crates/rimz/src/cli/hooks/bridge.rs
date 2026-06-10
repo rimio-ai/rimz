@@ -138,7 +138,14 @@ async fn run_bridge_poll(
     let started = std::time::Instant::now();
 
     loop {
-        let live = ledger.load_feed_item(request_id)?;
+        let live = match ledger.load_feed_item(request_id) {
+            Ok(live) => live,
+            Err(err) if is_feed_item_not_found(&err, request_id) => {
+                emit_neutral(agent, event_name)?;
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
         if let Some(done) = handle_terminal_status(&live, agent, event_name)? {
             return done;
         }
@@ -150,11 +157,15 @@ async fn run_bridge_poll(
         let hook_remaining = cap - elapsed;
 
         let Some(active) = live.chain_active_resolver.clone() else {
-            let _ = ledger.mark_feed_item_timed_out(
+            match ledger.mark_feed_item_timed_out(
                 request_id,
                 session_name,
                 AbandonReason::ChainExhausted,
-            )?;
+            ) {
+                Ok(_) => {}
+                Err(err) if is_feed_item_not_found(&err, request_id) => {}
+                Err(err) => return Err(err.into()),
+            }
             emit_neutral(agent, event_name)?;
             return Ok(());
         };
@@ -165,6 +176,10 @@ async fn run_bridge_poll(
 
         match bridge_api::wait_for_resolution(sock, expected, Some(inner_cap)).await? {
             BridgeOutcome::Resolved => continue,
+            BridgeOutcome::Terminal => {
+                emit_neutral(agent, event_name)?;
+                return Ok(());
+            }
             BridgeOutcome::Neutral => {
                 if started.elapsed() < cap {
                     advance_chain_if_step_lapsed(
@@ -214,13 +229,27 @@ fn finish_on_cap(
     request_id: &rimz::ids::RequestId,
     session_name: &str,
 ) -> Result<()> {
-    let timeout = ledger.mark_feed_item_timed_out(
+    let timeout = match ledger.mark_feed_item_timed_out(
         request_id,
         session_name,
         AbandonReason::BridgeCapElapsed,
-    )?;
+    ) {
+        Ok(timeout) => timeout,
+        Err(err) if is_feed_item_not_found(&err, request_id) => {
+            emit_neutral(agent, event_name)?;
+            return Ok(());
+        }
+        Err(err) => return Err(err.into()),
+    };
     if timeout.status == FeedStatus::Resolved {
-        let resolved = ledger.load_feed_item(request_id)?;
+        let resolved = match ledger.load_feed_item(request_id) {
+            Ok(resolved) => resolved,
+            Err(err) if is_feed_item_not_found(&err, request_id) => {
+                emit_neutral(agent, event_name)?;
+                return Ok(());
+            }
+            Err(err) => return Err(err.into()),
+        };
         if let Some(resolution) = resolved.resolution.as_ref() {
             return print_decision(agent, &resolved, resolution);
         }
@@ -243,7 +272,11 @@ fn advance_chain_if_step_lapsed(
     active: &rimz::ids::ResolverId,
     session_name: &str,
 ) -> Result<()> {
-    let post = ledger.load_feed_item(request_id)?;
+    let post = match ledger.load_feed_item(request_id) {
+        Ok(post) => post,
+        Err(err) if is_feed_item_not_found(&err, request_id) => return Ok(()),
+        Err(err) => return Err(err.into()),
+    };
     if !post.status.allows_resolution() || post.chain_active_resolver.as_ref() != Some(active) {
         return Ok(());
     }
@@ -265,6 +298,17 @@ fn advance_chain_if_step_lapsed(
         debug!(error = %err, ?reason, "elapse_chain_step failed; reloading");
     }
     Ok(())
+}
+
+fn is_feed_item_not_found(
+    err: &rimz::ledger::LedgerErr,
+    request_id: &rimz::ids::RequestId,
+) -> bool {
+    matches!(
+        err,
+        rimz::ledger::LedgerErr::FeedStore(rimz::ledger::FeedStoreErr::NotFound(missing))
+            if missing.as_str() == request_id.as_str()
+    )
 }
 
 fn print_decision(

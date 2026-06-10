@@ -3,6 +3,7 @@
 //! commit. The read side (snapshots, projections) stays in `mod.rs`; nothing
 //! here is imported outside the ledger module.
 
+use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
@@ -10,15 +11,44 @@ use crate::schema::event::EventEnvelope;
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    AskExpiry, EventLogRotationOutcome, Ledger, Result, WorkspaceRewriteOutcome, event_log,
-    feed_store, lock, message_store, snapshot, workspace_record,
+    AskExpiry, EventLogRotationOutcome, Ledger, Result, StatePaths, WorkspaceRewriteOutcome,
+    event_log, feed_store, lock, message_store, snapshot, workspace_record,
 };
 
 mod debounce;
 mod expiry;
 mod publish;
 mod queue;
+mod reset;
 mod resolve;
+
+fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Result<(bool, usize)> {
+    let current_bytes = match std::fs::metadata(&paths.events_log) {
+        Ok(meta) => meta.len(),
+        Err(source) if source.kind() == std::io::ErrorKind::NotFound => 0,
+        Err(source) => {
+            return Err(event_log::EventLogErr::Io {
+                path: paths.events_log.clone(),
+                source,
+            }
+            .into());
+        }
+    };
+    if current_bytes == 0 || current_bytes < min_bytes {
+        let existing = snapshot::read_carryover(&paths.agents_carryover)?;
+        return Ok((false, existing.agents.len()));
+    }
+
+    let (_cache, merged_agents) = snapshot::catch_up_rollup(paths)?;
+    let carryover_agents = merged_agents.len();
+    snapshot::write_carryover(
+        &paths.agents_carryover,
+        &snapshot::EventCarryover {
+            agents: merged_agents,
+        },
+    )?;
+    Ok((true, carryover_agents))
+}
 
 impl Ledger {
     /// Persist the project-root index used by maintenance commands. This does
@@ -205,17 +235,28 @@ impl Ledger {
         min_bytes: u64,
         archive_older_than: Option<Duration>,
     ) -> Result<EventLogRotationOutcome> {
+        self.rotate_event_log_with(min_bytes, archive_older_than, event_log::rotate)
+    }
+
+    fn rotate_event_log_with<F>(
+        &self,
+        min_bytes: u64,
+        archive_older_than: Option<Duration>,
+        rotate: F,
+    ) -> Result<EventLogRotationOutcome>
+    where
+        F: FnOnce(&Path, &Path, u64) -> event_log::Result<event_log::RotationOutcome>,
+    {
         let outcome = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             // Fence the snapshot publishers across the rename + reseed, same
             // workspace → publish ordering as the identity rewrite.
             let _publish_guard = lock::WorkspaceLock::acquire(&self.inner.paths.publish_lock)?;
 
-            let events = event_log::read_all(&self.inner.paths.events_log)?;
-            let existing = snapshot::read_carryover(&self.inner.paths.agents_carryover)?;
-            let merged = snapshot::agent_rollup_with_carryover(&events, existing.agents.clone());
+            let (_will_rotate, carryover_agents) =
+                stage_agent_carryover_for_rotation(&self.inner.paths, min_bytes)?;
 
-            let rotation = event_log::rotate(
+            let rotation = rotate(
                 &self.inner.paths.events_log,
                 &self.inner.paths.events_archive_dir,
                 min_bytes,
@@ -239,8 +280,6 @@ impl Ledger {
                         .into());
                     }
                 }
-                let carryover = snapshot::EventCarryover { agents: merged };
-                snapshot::write_carryover(&self.inner.paths.agents_carryover, &carryover)?;
                 // The fresh log is a new generation: reseed the fold base at
                 // offset zero with the generation bumped, so a reader's
                 // pre-rotation extent can never alias into the new log.
@@ -253,15 +292,6 @@ impl Ledger {
                 event_log::prune_archive(&self.inner.paths.events_archive_dir, older_than)?
             } else {
                 event_log::PruneOutcome::default()
-            };
-
-            let carryover_agents = match &rotation {
-                event_log::RotationOutcome::Rotated { .. } => {
-                    snapshot::read_carryover(&self.inner.paths.agents_carryover)?
-                        .agents
-                        .len()
-                }
-                event_log::RotationOutcome::Skipped { .. } => existing.agents.len(),
             };
 
             EventLogRotationOutcome {
@@ -313,5 +343,51 @@ impl Ledger {
             snapshot::rebuild(&self.inner.paths)?;
         }
         Ok(outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use serde_json::json;
+
+    use super::*;
+    use crate::ids::WorkspaceId;
+    use crate::ledger::paths::{RuntimePaths, StatePaths};
+
+    #[test]
+    fn rotate_event_log_writes_carryover_before_archiving_active_log() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        let ledger = Ledger::open(paths.clone(), runtime).expect("open ledger");
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::new(
+                workspace_id,
+                "rimz-test",
+                "rimz",
+                "cli",
+                "test.event",
+                json!({}),
+            ),
+        )
+        .expect("seed event");
+
+        let rotate_called = Cell::new(false);
+        ledger
+            .rotate_event_log_with(1, None, |events_log, archive_dir, min_bytes| {
+                rotate_called.set(true);
+                assert!(
+                    paths.agents_carryover.exists(),
+                    "rotation must persist carryover before archiving the only active-log copy"
+                );
+                event_log::rotate(events_log, archive_dir, min_bytes)
+            })
+            .expect("rotate event log");
+
+        assert!(rotate_called.get(), "test rotate hook should run");
     }
 }

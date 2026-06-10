@@ -21,6 +21,9 @@ pub struct ResetArgs {
     /// Tear the room down but do not rebuild or attach — just print the rerun hint.
     #[arg(long)]
     pub no_start: bool,
+    /// Archive the current room records but do not seed prior agents on rebirth.
+    #[arg(long)]
+    pub hard: bool,
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
     pub path: PathBuf,
@@ -38,8 +41,9 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
             );
         }
         if !super::confirm(&format!(
-            "Reset the '{}' room? This deletes the Zellij session, purges its \
-             resurrection cache, and signals its orphaned processes.",
+            "Reset the '{}' room? This deletes the mux session, purges its \
+             resurrection cache, archives its records, clears live coordination \
+             state, and signals its orphaned processes.",
             workspace.session_name
         ))? {
             writeln!(std::io::stderr().lock(), "Reset aborted; nothing changed.")?;
@@ -56,7 +60,11 @@ pub fn run(args: ResetArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace.session_name,
         &runtime,
     );
-    super::print_reset_report(&report)?;
+    let ledger = super::open_ledger(&workspace)?;
+    let records = ledger
+        .reset_records(&workspace.session_name, args.hard)
+        .context("resetting workspace records")?;
+    super::print_reset_report(&report, Some(&records))?;
 
     if args.no_start {
         writeln!(

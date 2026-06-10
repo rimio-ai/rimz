@@ -21,6 +21,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 
+use crate::feed::FeedStatus;
 use crate::ids::{RequestId, RunId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::run::RunStatus;
@@ -66,11 +67,12 @@ pub enum BridgeErr {
 pub type Result<T> = std::result::Result<T, BridgeErr>;
 
 /// Outcome from a single bridge wait. The caller reloads the feed item from
-/// disk on `Resolved` — the ledger is the source of truth, this datagram is
-/// the latency hint.
+/// disk on `Resolved`; `Terminal` means the ledger closed the request without a
+/// decision and the frame itself is the durable exit signal.
 #[derive(Debug, PartialEq, Eq)]
 pub enum BridgeOutcome {
     Resolved,
+    Terminal,
     Neutral,
 }
 
@@ -95,8 +97,9 @@ pub struct ExpectedRunFrame {
 }
 
 /// Wakeup frame the ledger writer sends to a per-request socket when a
-/// resolution lands, or to a per-run socket when `rimz run` reaches a
-/// terminal state. Intentionally small: disk files carry the payload.
+/// resolution lands, when a request is closed without a decision, or to a
+/// per-run socket when `rimz run` reaches a terminal state. Intentionally small:
+/// disk files carry decision payloads.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum WakeupFrame {
@@ -104,6 +107,12 @@ pub enum WakeupFrame {
         workspace_id: WorkspaceId,
         request_id: RequestId,
         nonce: String,
+    },
+    FeedTerminal {
+        workspace_id: WorkspaceId,
+        request_id: RequestId,
+        nonce: String,
+        status: FeedStatus,
     },
     RunCompleted {
         workspace_id: WorkspaceId,
@@ -232,6 +241,25 @@ pub async fn wait_for_resolution(
                     }
                     return Ok::<BridgeOutcome, BridgeErr>(BridgeOutcome::Resolved);
                 }
+                Ok(WakeupFrame::FeedTerminal {
+                    workspace_id,
+                    request_id,
+                    nonce,
+                    ..
+                }) => {
+                    if workspace_id != expected.workspace_id
+                        || request_id != expected.request_id
+                        || nonce != expected.nonce
+                    {
+                        debug!(
+                            ?workspace_id,
+                            ?request_id,
+                            "bridge: dropping terminal wakeup frame failing (workspace_id, request_id, nonce) check"
+                        );
+                        continue;
+                    }
+                    return Ok::<BridgeOutcome, BridgeErr>(BridgeOutcome::Terminal);
+                }
                 Ok(WakeupFrame::RunCompleted { .. }) => {}
                 Err(e) => {
                     debug!(error = %e, "bridge: dropping unparseable wakeup frame");
@@ -286,7 +314,7 @@ pub async fn wait_for_run_completion(
                     }
                     return Ok::<RunWakeOutcome, BridgeErr>(RunWakeOutcome::Completed(status));
                 }
-                Ok(WakeupFrame::FeedResolved { .. }) => {}
+                Ok(WakeupFrame::FeedResolved { .. } | WakeupFrame::FeedTerminal { .. }) => {}
                 Err(e) => {
                     debug!(error = %e, "bridge: dropping unparseable wakeup frame");
                 }

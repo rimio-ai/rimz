@@ -70,6 +70,10 @@ impl DiagSink {
         self.state_root.join(DIAG_LOG_NAME)
     }
 
+    pub fn frames_dir(&self) -> PathBuf {
+        frames_dir_under(&self.state_root)
+    }
+
     pub fn session_name(&self) -> &str {
         &self.session_name
     }
@@ -101,7 +105,7 @@ impl DiagSink {
         offending: &T,
         at_ms: u64,
     ) -> Option<String> {
-        let dir = self.state_root.join(DIAG_FRAMES_DIR);
+        let dir = self.frames_dir();
         if let Err(err) = ensure_private_dir(&dir) {
             tracing::debug!(path = %dir.display(), error = %err, "diagnostic frame dir unavailable");
             return None;
@@ -159,6 +163,10 @@ pub fn path_for_workspace(workspace_id: WorkspaceId) -> Option<PathBuf> {
     crate::StatePaths::for_workspace(workspace_id)
         .ok()
         .map(|state| state.root.join(DIAG_LOG_NAME))
+}
+
+pub fn frames_dir_under(state_root: &Path) -> PathBuf {
+    state_root.join(DIAG_FRAMES_DIR)
 }
 
 pub fn recent_records(

@@ -199,14 +199,14 @@ Resolvers form an ordered chain that ends with you. Each entry carries its own `
 ## Maintain the room
 
 ```sh
-rimz reset [--yes] [--no-start] [PATH]   # destroy a wedged room and rebuild it clean
+rimz reset [--yes] [--no-start] [--hard] [PATH]   # archive a wedged room and rebuild it clean
 rimz reload                              # converge every running sidebar to a healthy set
 rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, orphan queued messages, landed marked worktrees
 rimz workspace migrate <old-root> <new-root>
 rimz workspace rotate-events [--max-bytes <size>] [--archive-older-than <duration>]
 ```
 
-`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it signals each to pick up the freshly-installed build, verifies build-stamped heartbeats, and re-adds any sidebar pane that cannot reload in place, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats, sockets, and read-mark receipts whose owner heartbeats have expired, abandons pending items whose owner process has exited, abandons queued messages for sessions no longer in the rollup, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed on their base in the current repo when no live user pane is inside them.
+`reset` tears a stuck room down — the session, its resurrection cache, orphaned processes, live coordination files, and runtime caches — then rebuilds and reattaches it. The active event log is archived first, pending feed items are abandoned with reason `workspace_reset`, active runs are marked `canceled`, and prior agent rollup is kept so the reborn room can resume remembered agents; `--hard` clears that rollup for a blank rebirth. `--no-start` stops after teardown, and `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it signals each to pick up the freshly-installed build, verifies build-stamped heartbeats, and re-adds any sidebar pane that cannot reload in place, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats, sockets, and read-mark receipts whose owner heartbeats have expired, abandons pending items whose owner process has exited, abandons queued messages for sessions no longer in the rollup, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed on their base in the current repo when no live user pane is inside them.
 
 `workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, queued message record, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
 

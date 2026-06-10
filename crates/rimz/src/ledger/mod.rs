@@ -50,6 +50,7 @@ pub mod workspace_record;
 
 mod writer;
 
+use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -123,6 +124,8 @@ pub enum LedgerErr {
     #[error(transparent)]
     MessageStore(#[from] message_store::MessageStoreErr),
     #[error(transparent)]
+    RunStore(#[from] run_store::RunStoreErr),
+    #[error(transparent)]
     Lock(#[from] lock::LockErr),
     #[error(transparent)]
     Snapshot(#[from] snapshot::SnapshotErr),
@@ -130,6 +133,12 @@ pub enum LedgerErr {
     Wakeup(#[from] wakeup::WakeupErr),
     #[error(transparent)]
     WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
+    #[error("io error on {path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: io::Error,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, LedgerErr>;
@@ -173,6 +182,18 @@ pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
     pub pruned: event_log::PruneOutcome,
     pub carryover_agents: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ResetRecordsOutcome {
+    pub abandoned_pending: usize,
+    pub feed_items_cleared: usize,
+    pub runs_canceled: usize,
+    pub state_entries_removed: usize,
+    pub runtime_removed: bool,
+    pub rotation: event_log::RotationOutcome,
+    pub carryover_agents: usize,
+    pub hard: bool,
 }
 
 impl Ledger {

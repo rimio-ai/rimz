@@ -15,6 +15,7 @@ use rimz::feed::{
 };
 use rimz::ids::{RequestId, ResolverId};
 use rimz::ledger::runtime::{RuntimeScope, current_process_owner};
+use rimz::ledger::{FeedStoreErr, LedgerErr};
 use rimz::workspace::WorkspaceResolver;
 use rimz::{Ledger, ResolvedWorkspace};
 
@@ -255,6 +256,9 @@ fn emit_bridge_outcome(
             request_id,
             "bridge signalled resolved but no resolution on disk",
         ),
+        BridgeOutcome::Terminal => {
+            bail!("request {request_id} closed before a decision was delivered")
+        }
         BridgeOutcome::Neutral => emit_neutral_outcome(ledger, workspace, request_id),
     }
 }
@@ -264,11 +268,17 @@ fn emit_neutral_outcome(
     workspace: &ResolvedWorkspace,
     request_id: &RequestId,
 ) -> Result<()> {
-    let timeout = ledger.mark_feed_item_timed_out(
+    let timeout = match ledger.mark_feed_item_timed_out(
         request_id,
         &workspace.session_name,
         AbandonReason::ScriptWaitTimeout,
-    )?;
+    ) {
+        Ok(timeout) => timeout,
+        Err(err) if is_feed_item_not_found(&err, request_id) => {
+            bail!("request {request_id} closed before a decision was delivered")
+        }
+        Err(err) => return Err(err.into()),
+    };
     if timeout.status == FeedStatus::Resolved {
         return emit_resolved_decision(
             ledger,
@@ -280,7 +290,13 @@ fn emit_neutral_outcome(
 }
 
 fn emit_resolved_decision(ledger: &Ledger, request_id: &RequestId, missing: &str) -> Result<()> {
-    let resolved = ledger.load_feed_item(request_id)?;
+    let resolved = match ledger.load_feed_item(request_id) {
+        Ok(resolved) => resolved,
+        Err(err) if is_feed_item_not_found(&err, request_id) => {
+            bail!("request {request_id} closed before a decision was delivered")
+        }
+        Err(err) => return Err(err.into()),
+    };
     let decision = resolved
         .resolution
         .as_ref()
@@ -292,6 +308,14 @@ fn emit_resolved_decision(ledger: &Ledger, request_id: &RequestId, missing: &str
         println!("{rendered}");
     }
     Ok(())
+}
+
+fn is_feed_item_not_found(err: &LedgerErr, request_id: &RequestId) -> bool {
+    matches!(
+        err,
+        LedgerErr::FeedStore(FeedStoreErr::NotFound(missing))
+            if missing.as_str() == request_id.as_str()
+    )
 }
 
 fn list(ledger: &Ledger, json: bool, audit: bool) -> Result<()> {
