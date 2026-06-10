@@ -166,15 +166,18 @@ mod tests {
     }
 
     #[test]
-    fn views_with_sidebars_groups_by_window_and_flags_working() {
+    fn views_with_sidebars_classifies_working_orphan_and_daemon_windows() {
+        let mut host = tmux_pane("%5", "@2", "rimz");
+        host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
         let panes = vec![
             tmux_pane("%1", "@0", "sh"),               // working pane
             tmux_pane("%2", "@0", SIDEBAR_PANE_TITLE), // its sidebar
             tmux_pane("%3", "@0", SIDEBAR_PANE_TITLE), // a duplicate sidebar
             tmux_pane("%4", "@1", SIDEBAR_PANE_TITLE), // a sidebar-only window
+            host,                                      // managed daemon host
         ];
         let views = tmux_views_with_sidebars(&panes);
-        assert_eq!(views.len(), 2, "two windows, in first-seen order");
+        assert_eq!(views.len(), 3, "windows stay in first-seen order");
 
         assert_eq!(views[0].view, "@0");
         assert!(views[0].has_working);
@@ -195,23 +198,14 @@ mod tests {
         );
         assert!(!views[1].has_daemon_host);
         assert_eq!(views[1].sidebar_panes.len(), 1);
-    }
 
-    #[test]
-    fn views_with_sidebars_ignores_daemon_hosts_as_working_panes() {
-        let mut host = tmux_pane("%1", "@0", "rimz");
-        host.view_name = Some(crate::remote_control::VIEW_NAME.to_owned());
-        let panes = vec![host];
-        let views = tmux_views_with_sidebars(&panes);
-
-        assert_eq!(views.len(), 1);
-        assert_eq!(views[0].view, "@0");
-        assert!(!views[0].has_working);
+        assert_eq!(views[2].view, "@2");
+        assert!(!views[2].has_working);
         assert!(
-            views[0].has_daemon_host,
+            views[2].has_daemon_host,
             "a daemon host marks the view so reload never collapses it as an orphan",
         );
-        assert!(views[0].sidebar_panes.is_empty());
+        assert!(views[2].sidebar_panes.is_empty());
     }
 
     #[test]

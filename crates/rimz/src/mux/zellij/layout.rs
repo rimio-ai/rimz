@@ -387,114 +387,87 @@ fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ids::WorkspaceId;
     use crate::mux::SidebarWidth;
 
-    #[test]
-    fn sidebar_layout_carries_a_bottom_bar() {
-        use crate::ids::WorkspaceId;
-        let opts = SidebarPaneOptions {
-            session_name: "rimz-bar".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bar")),
-            project_root: PathBuf::from("/tmp/rimz-bar"),
-            cwd: PathBuf::from("/tmp/rimz-bar"),
-            width: SidebarWidth::default(),
-            birth_size: SidebarWidth::default().birth_size(None),
+    fn sidebar_opts(
+        session_name: &str,
+        refresh_ms: Option<u16>,
+        detected_cols: Option<u16>,
+    ) -> SidebarPaneOptions {
+        let width = SidebarWidth::default();
+        SidebarPaneOptions {
+            session_name: session_name.to_owned(),
+            workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
+            project_root: PathBuf::from("/proj/root"),
+            cwd: PathBuf::from("/proj/worktree"),
+            width,
+            birth_size: width.birth_size(detected_cols),
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
             resume_panes: Vec::new(),
-            refresh_ms: None,
-        };
-        let layout = render_sidebar_layout(&opts).expect("render layout");
-        assert!(
-            layout.contains("compact-bar"),
-            "the sidebar layout overrides Zellij's default tab template, so it must \
-             re-add a bottom bar plugin or the tab/status bar vanishes:\n{layout}",
-        );
+            refresh_ms,
+        }
+    }
+
+    fn host(argv: &[&str], cwd: &str) -> HostPane {
+        HostPane {
+            argv: argv.iter().map(|arg| arg.to_string()).collect(),
+            cwd: PathBuf::from(cwd),
+        }
+    }
+
+    fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
+        BackgroundViewOptions {
+            name: "rimzd".to_owned(),
+            hosts,
+            sidebar: sidebar_opts("rimz-bg", None, None),
+        }
+    }
+
+    fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
+        DaemonView {
+            name: "rimzd".to_owned(),
+            hosts,
+        }
+    }
+
+    fn resume_pane(label: &str, argv: &[&str], cwd: &str) -> ResumePane {
+        ResumePane {
+            command: argv.iter().map(|arg| arg.to_string()).collect(),
+            cwd: PathBuf::from(cwd),
+            label: label.to_owned(),
+        }
     }
 
     #[test]
-    fn sidebar_layout_focuses_an_explicit_terminal_in_every_tab() {
-        use crate::ids::WorkspaceId;
-        let opts = SidebarPaneOptions {
-            session_name: "rimz-focus".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focus")),
-            project_root: PathBuf::from("/tmp/rimz-focus"),
-            cwd: PathBuf::from("/tmp/rimz-focus"),
-            width: SidebarWidth::default(),
-            birth_size: SidebarWidth::default().birth_size(None),
-            rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
-            config: crate::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
-            refresh_ms: None,
-        };
-        let layout = render_sidebar_layout(&opts).expect("render layout");
-        // The template must spell out the focused terminal instead of relying
-        // on a nested `children` placeholder: every template-born tab needs a
-        // right pane with focus, never a bare or focused sidebar.
-        assert!(
-            layout.contains("pane focus=true"),
-            "the layout must focus an explicit terminal pane:\n{layout}",
-        );
-        assert!(
-            !layout.contains("children"),
-            "the layout must not depend on `children`: placeholder semantics \
-             can misplace focus or omit the right terminal in template-born tabs:\n{layout}",
-        );
-        // The bare `tab` node is load-bearing: with a `new_tab_template`
-        // present and no tab node, Zellij 0.44.3 kills the background session
-        // instead of creating the implicit first tab.
-        assert!(
-            layout.contains("tab focus=true"),
-            "the layout must carry an explicit birth tab alongside the \
-             templates or the detached session dies:\n{layout}",
-        );
+    fn sidebar_layout_renders_terminal_template_bar_and_runtime_args() {
+        let layout = render_sidebar_layout(&sidebar_opts("rimz-contract", Some(50), None)).unwrap();
+        assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(layout.contains("pane focus=true"), "{layout}");
+        assert!(layout.contains("tab focus=true"), "{layout}");
+        assert!(!layout.contains("children"), "{layout}");
+        assert!(layout.contains("start_suspended false"), "{layout}");
+        assert!(!layout.contains("start_suspended true"), "{layout}");
+        assert!(layout.contains(r#""--refresh-ms" "50""#), "{layout}");
     }
 
     #[test]
     fn sidebar_layout_pins_fixed_cols_attached_and_percent_detached() {
-        use crate::ids::WorkspaceId;
-        let opts = SidebarPaneOptions {
-            session_name: "rimz-width".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-width")),
-            project_root: PathBuf::from("/tmp/rimz-width"),
-            cwd: PathBuf::from("/tmp/rimz-width"),
-            width: SidebarWidth::default(),
-            // 30% of 120 is 36 ≤ the 72 cap — the under-cap verdict.
-            birth_size: SidebarWidth::default().birth_size(Some(120)),
-            rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
-            config: crate::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
-            refresh_ms: None,
-        };
+        let opts = sidebar_opts("rimz-width", None, Some(120));
         let layout = render_sidebar_layout(&opts).expect("render layout");
-        // The birth tab spells the verdict's percentage share — a fixed size
-        // wider than the detached session's default geometry kills the
-        // session — and lands on the verdict when the launching client
-        // attaches.
         assert!(
             layout.contains(r#"pane size="30%" name="rimz-sidebar""#),
             "the default_tab_template births detached, so the verdict is its \
              percentage share:\n{layout}",
         );
-        // Tabs the user opens later instantiate at live geometry, so the
-        // new_tab_template pins the verdict exactly, as a bare KDL integer —
-        // even under the cap. A raw percentage here re-evaluates against
-        // whatever geometry instantiates the tab, which is exactly how the
-        // cap used to vanish from a session.
         assert!(
             layout.contains(r#"pane size=36 name="rimz-sidebar""#),
             "the new_tab_template instantiates attached, so it pins the fixed \
              verdict:\n{layout}",
         );
-        // Past the cap the same split holds: ⌊72·100/340⌋ = 21% detached,
-        // the fixed cap attached.
-        let capped = SidebarPaneOptions {
-            birth_size: SidebarWidth::default().birth_size(Some(340)),
-            ..opts
-        };
+        let capped = sidebar_opts("rimz-width", None, Some(340));
         let layout = render_sidebar_layout(&capped).expect("render layout");
         assert!(
             layout.contains(r#"pane size="21%" name="rimz-sidebar""#),
@@ -516,91 +489,43 @@ mod tests {
         );
     }
 
-    fn host(argv: &[&str], cwd: &str) -> HostPane {
-        HostPane {
-            argv: argv.iter().map(|arg| arg.to_string()).collect(),
-            cwd: PathBuf::from(cwd),
-        }
-    }
-
-    fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
-        use crate::ids::WorkspaceId;
-        BackgroundViewOptions {
-            name: "rimzd".to_owned(),
-            hosts,
-            sidebar: SidebarPaneOptions {
-                session_name: "rimz-bg".to_owned(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/proj/root")),
-                project_root: PathBuf::from("/proj/root"),
-                cwd: PathBuf::from("/proj/worktree"),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(None),
-                rimz_bin: PathBuf::from("/usr/bin/rimz"),
-                replace_existing: false,
-                config: crate::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
-                refresh_ms: None,
-            },
-        }
-    }
-
     #[test]
-    fn background_view_layout_runs_the_host_beside_the_sidebar() {
-        let layout = render_background_view_layout(&background_view_opts(vec![host(
-            &["claude", "remote-control", "--spawn", "worktree"],
-            "/proj/root",
-        )]))
-        .expect("render background view layout");
-        // The host is the focused right pane, born unsuspended, and closes with
-        // its process — an exit means the host is gone.
-        assert!(layout.contains(r#"command "claude""#), "{layout}");
-        assert!(
-            layout.contains(r#"args "remote-control" "--spawn" "worktree""#),
-            "{layout}",
-        );
-        assert!(layout.contains("pane focus=true"), "{layout}");
-        assert!(layout.contains("start_suspended false"), "{layout}");
-        assert!(layout.contains("close_on_exit true"), "{layout}");
-        // The global sidebar is docked on the left, running the renderer.
-        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
-        assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
-        // A bottom bar, mirroring the working-tab template.
-        assert!(layout.contains("compact-bar"), "{layout}");
-        // Each pane carries its own cwd: the sidebar from the worktree, the host
-        // from the project root.
-        assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
-        assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
-    }
-
-    #[test]
-    fn background_view_layout_stacks_two_hosts_focusing_the_first() {
+    fn background_view_layout_renders_hosts_and_rejects_empty() {
         let layout = render_background_view_layout(&background_view_opts(vec![
-            host(&["claude", "remote-control"], "/proj/root"),
+            host(
+                &["claude", "remote-control", "--spawn", "worktree"],
+                "/proj/root",
+            ),
             host(
                 &["/usr/bin/rimz", "codex", "app-server", "serve"],
                 "/proj/worktree",
             ),
         ]))
         .expect("render background view layout");
-        // Both hosts are present beside the sidebar.
         assert!(layout.contains(r#"command "claude""#), "{layout}");
+        assert!(
+            layout.contains(r#"args "remote-control" "--spawn" "worktree""#),
+            "{layout}",
+        );
         assert!(layout.contains(r#"command "/usr/bin/rimz""#), "{layout}");
         assert!(
             layout.contains(r#"args "codex" "app-server" "serve""#),
             "{layout}",
         );
-        // Exactly one pane takes focus — the first host (the interactive Claude
-        // host), never the broker.
+        assert!(layout.contains("pane focus=true"), "{layout}");
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
-    }
-
-    #[test]
-    fn background_view_layout_rejects_no_hosts() {
+        assert!(layout.contains("start_suspended false"), "{layout}");
+        assert!(layout.contains("close_on_exit true"), "{layout}");
+        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
+        assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
+        assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
         assert!(render_background_view_layout(&background_view_opts(vec![])).is_err());
     }
 
     #[test]
-    fn tab_layout_renders_sidebar_columns_rows_and_focus() {
+    fn tab_layout_renders_columns_and_can_mirror_template_width() {
         let sidebar = background_view_opts(vec![]).sidebar;
         let opts = TabOptions {
             session_name: sidebar.session_name.clone(),
@@ -642,23 +567,7 @@ mod tests {
         );
         assert!(layout.contains(r#"command "codex""#), "{layout}");
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
-    }
 
-    #[test]
-    fn tab_layout_can_mirror_the_new_tab_template_sidebar_width() {
-        let sidebar = background_view_opts(vec![]).sidebar;
-        let opts = TabOptions {
-            session_name: sidebar.session_name.clone(),
-            title: "review".to_owned(),
-            cwd: PathBuf::from("/proj/worktree"),
-            panes: crate::mux::LayoutPanes {
-                columns: vec![vec![PaneCmd {
-                    argv: vec!["/bin/sh".to_owned()],
-                }]],
-            },
-            focus: true,
-            sidebar,
-        };
         let layout = render_tab_layout(&opts, NonZeroU16::new(60)).expect("render tab layout");
         assert!(
             layout.contains(r#"pane size=60 name="rimz-sidebar""#),
@@ -667,23 +576,8 @@ mod tests {
         );
     }
 
-    fn daemon_view(hosts: Vec<HostPane>) -> DaemonView {
-        DaemonView {
-            name: "rimzd".to_owned(),
-            hosts,
-        }
-    }
-
-    fn resume_pane(label: &str, argv: &[&str], cwd: &str) -> ResumePane {
-        ResumePane {
-            command: argv.iter().map(|arg| arg.to_string()).collect(),
-            cwd: PathBuf::from(cwd),
-            label: label.to_owned(),
-        }
-    }
-
     #[test]
-    fn session_layout_seeds_resumed_agents_focusing_the_first() {
+    fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         let opts = background_view_opts(vec![]).sidebar;
         let resume = vec![
             resume_pane(
@@ -694,7 +588,6 @@ mod tests {
             resume_pane("codex:main", &["codex", "resume", "sess-2"], "/proj/main"),
         ];
         let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
-        // Each agent runs its resume CLI in its own worktree, born unsuspended.
         assert!(layout.contains(r#"command "claude""#), "{layout}");
         assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
         assert!(layout.contains(r#"command "codex""#), "{layout}");
@@ -702,7 +595,6 @@ mod tests {
         assert!(layout.contains(r#"cwd="/proj/feature""#), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/main""#), "{layout}");
         assert!(layout.contains("start_suspended false"), "{layout}");
-        // One tab per agent, named by label; the first (most-recent) takes focus.
         assert!(
             layout.contains(r#"tab name="claude:feature" focus=true"#),
             "the freshest resumed agent leads:\n{layout}",
@@ -711,22 +603,14 @@ mod tests {
             !layout.contains(r#"tab name="codex:main" focus=true"#),
             "only the first resumed tab is focused:\n{layout}",
         );
-        // A free working terminal tab still exists, unfocused (an agent has focus).
         assert!(
             layout.contains("    tab {"),
             "a bare working terminal tab remains:\n{layout}",
         );
-        // Future user tabs inherit the sidebar+terminal template, no `children`.
         assert!(layout.contains("new_tab_template"), "{layout}");
         assert!(!layout.contains("children"), "{layout}");
-    }
 
-    #[test]
-    fn session_layout_without_daemon_or_resume_focuses_the_working_tab() {
-        let opts = background_view_opts(vec![]).sidebar;
         let layout = render_session_layout(&opts, None, &[]).expect("render layout");
-        // No agents, no daemon: the working terminal tab takes focus and there
-        // are no named daemon/agent tabs to seed.
         assert!(layout.contains("tab focus=true"), "{layout}");
         assert!(
             !layout.contains("tab name="),
@@ -735,7 +619,7 @@ mod tests {
     }
 
     #[test]
-    fn session_layout_with_daemon_leads_with_the_daemon_tab() {
+    fn session_layout_leads_daemon_tab_and_rejects_empty_daemon() {
         let bg = background_view_opts(vec![
             host(&["claude", "remote-control"], "/proj/root"),
             host(
@@ -745,20 +629,14 @@ mod tests {
         ]);
         let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.hosts.clone())), &[])
             .expect("render session layout with daemon");
-        // The daemon tab is declared first — before the focused working tab — so
-        // it leads. Zellij fixes tab order at birth (it can't reorder later).
         let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
         let work_at = layout.find("tab focus=true").expect("working tab");
         assert!(
             daemon_at < work_at,
             "daemon tab must precede the working tab\n{layout}",
         );
-        // Future user tabs inherit a sidebar + focused terminal via the
-        // `new_tab_template`, which (unlike `default_tab_template` with explicit
-        // tabs) needs no `children` and so dodges the focus-strand bug.
         assert!(layout.contains("new_tab_template"), "{layout}");
         assert!(!layout.contains("children"), "{layout}");
-        // Both hosts and the sidebar are present beside each other.
         assert!(layout.contains(r#"command "claude""#), "{layout}");
         assert!(
             layout.contains(r#"args "codex" "app-server" "serve""#),
@@ -766,13 +644,8 @@ mod tests {
         );
         assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
         assert!(layout.contains("compact-bar"), "{layout}");
-        // The host that leads the daemon view runs from the project root; the
-        // sidebars inherit the session `--default-cwd`, so they carry no cwd.
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
-    }
 
-    #[test]
-    fn session_layout_with_daemon_rejects_no_hosts() {
         assert!(
             render_session_layout(
                 &background_view_opts(vec![]).sidebar,
@@ -780,57 +653,6 @@ mod tests {
                 &[],
             )
             .is_err()
-        );
-    }
-
-    #[test]
-    fn sidebar_layout_starts_the_sidebar_without_a_run_prompt() {
-        use crate::ids::WorkspaceId;
-        let opts = SidebarPaneOptions {
-            session_name: "rimz-run".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
-            project_root: PathBuf::from("/tmp/rimz-run"),
-            cwd: PathBuf::from("/tmp/rimz-run"),
-            width: SidebarWidth::default(),
-            birth_size: SidebarWidth::default().birth_size(None),
-            rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
-            config: crate::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
-            refresh_ms: None,
-        };
-        let layout = render_sidebar_layout(&opts).expect("render layout");
-        assert!(
-            layout.contains("start_suspended false"),
-            "Zellij command panes default to a run prompt unless the layout \
-             starts them explicitly:\n{layout}",
-        );
-        assert!(
-            !layout.contains("start_suspended true"),
-            "the sidebar pane must never be born suspended:\n{layout}",
-        );
-    }
-
-    #[test]
-    fn sidebar_layout_threads_refresh_override() {
-        use crate::ids::WorkspaceId;
-        let opts = SidebarPaneOptions {
-            session_name: "rimz-refresh".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-refresh")),
-            project_root: PathBuf::from("/tmp/rimz-refresh"),
-            cwd: PathBuf::from("/tmp/rimz-refresh"),
-            width: SidebarWidth::default(),
-            birth_size: SidebarWidth::default().birth_size(None),
-            rimz_bin: PathBuf::from("/usr/bin/rimz"),
-            replace_existing: false,
-            config: crate::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
-            refresh_ms: Some(50),
-        };
-        let layout = render_sidebar_layout(&opts).expect("render layout");
-        assert!(
-            layout.contains(r#""--refresh-ms" "50""#),
-            "the sidebar argv carries the one-shot refresh override:\n{layout}",
         );
     }
 }

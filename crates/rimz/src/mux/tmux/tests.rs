@@ -1,16 +1,13 @@
 use super::*;
 
 #[test]
-fn version_parser_strips_letter_suffix() {
+fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("tmux 3.5a"), Some((3, 5, 0)));
     assert_eq!(parse_version("tmux 3.2"), Some((3, 2, 0)));
     assert_eq!(parse_version("  tmux 3.4  \n"), Some((3, 4, 0)));
     assert_eq!(parse_version("tmux 2.9a"), Some((2, 9, 0)));
     assert_eq!(parse_version("garbage"), None);
-}
 
-#[test]
-fn min_version_threshold_holds() {
     assert!((3, 5, 0) >= MIN_TMUX_VERSION);
     assert!((3, 6, 0) >= MIN_TMUX_VERSION);
     // 3.4 lacks `extended-keys-format`, which the room options set

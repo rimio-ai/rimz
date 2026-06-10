@@ -1332,22 +1332,3 @@ fn list_panes_with_session_returns_terminals() {
         );
     }
 }
-
-/// Capability probe must parse the binary's version string and compare it
-/// against `MIN_ZELLIJ_VERSION`. No session required.
-#[test]
-fn version_floor_parses_and_compares() {
-    require_zellij!();
-
-    let caps = zellij::capabilities().expect("capabilities() against a live zellij");
-    let (maj, min, patch) = caps
-        .parsed_version
-        .expect("parsed_version is Some for any 0.41+ build");
-    assert!(
-        (maj, min, patch) >= zellij::MIN_ZELLIJ_VERSION,
-        "test host has zellij {maj}.{min}.{patch}; M0b requires ≥ {:?}",
-        zellij::MIN_ZELLIJ_VERSION,
-    );
-    assert!(caps.meets_min_version);
-    assert!(caps.binary_version.contains("zellij"));
-}

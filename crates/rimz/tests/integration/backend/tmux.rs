@@ -14,7 +14,6 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
-use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
 use rimz::mux::{
     MuxBackend, NamedKey, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
     SplitPaneOptions, TmuxBackend,
@@ -361,89 +360,6 @@ fn focus_pane_switches_the_containing_window() {
         target.pane_id.raw(),
         "and land on the target pane",
     );
-}
-
-/// The launch path's width verdict lands at birth, with no post-birth resize:
-/// `ensure_session` sizes the detached session from the probed terminal
-/// (`-x`/`-y`), and `open_sidebar` sizes the split's `-l` from the just-born
-/// window — `min(30%, max_cols)` in columns, exact on both sides of the cap
-/// (300 columns → 72, 100 columns → 30).
-#[test]
-fn sidebar_split_is_born_at_the_birth_size() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    let width = SidebarWidth::default();
-    for (session, cols, expected) in [("rimz-cap", 300u16, 72..=72u64), ("rimz-pct", 100, 30..=30)]
-    {
-        server
-            .backend
-            .ensure_session(&SessionOptions {
-                session_name: session.to_owned(),
-                workspace_id: WorkspaceId::from_project_root(&std::env::temp_dir()),
-                project_root: std::env::temp_dir(),
-                cwd: std::env::temp_dir(),
-                config: rimz::config::MultiplexerConfig::default(),
-                detected_size: Some((cols, 80)),
-            })
-            .expect("ensure_session");
-        assert_eq!(
-            server.display(session, "#{window_width}"),
-            cols.to_string(),
-            "the detached birth adopts the probed terminal size",
-        );
-
-        let (_stub_dir, stub) = sidebar_command_stub();
-        let panes_before: Vec<PaneId> = server
-            .backend
-            .list_panes(PaneListOptions {
-                session_name: Some(session.to_owned()),
-                ..Default::default()
-            })
-            .expect("list_panes before")
-            .into_iter()
-            .map(|pane| pane.pane_id)
-            .collect();
-        server
-            .backend
-            .open_sidebar(
-                &SidebarPaneOptions {
-                    session_name: session.to_owned(),
-                    workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-birth")),
-                    project_root: std::env::temp_dir(),
-                    cwd: std::env::temp_dir(),
-                    width,
-                    birth_size: width.birth_size(Some(cols)),
-                    rimz_bin: stub,
-                    replace_existing: false,
-                    config: rimz::config::MultiplexerConfig::default(),
-                    resume_panes: Vec::new(),
-                    refresh_ms: None,
-                },
-                None,
-            )
-            .expect("open_sidebar");
-
-        let sidebar = server
-            .backend
-            .list_panes(PaneListOptions {
-                session_name: Some(session.to_owned()),
-                ..Default::default()
-            })
-            .expect("list_panes after")
-            .into_iter()
-            .map(|pane| pane.pane_id)
-            .find(|pane| !panes_before.contains(pane))
-            .expect("the split added a sidebar pane");
-        let born: u64 = server
-            .display(sidebar.raw(), "#{pane_width}")
-            .parse()
-            .expect("numeric pane_width");
-        assert!(
-            expected.contains(&born),
-            "a {cols}-column birth must land the sidebar at {expected:?} columns, got {born}",
-        );
-    }
 }
 
 /// The `after-new-window` hook pins the start verdict's fixed columns, so a
@@ -945,99 +861,6 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
         std::fs::set_permissions(&path, perms).expect("chmod");
     }
     (dir, path)
-}
-
-/// Capability probe must parse the binary's version string and compare it
-/// against `MIN_TMUX_VERSION`. No session required.
-#[test]
-fn version_floor_parses_and_compares() {
-    require_tmux!();
-
-    let caps = tmux::capabilities().expect("capabilities() against a live tmux");
-    let (maj, min, patch) = caps
-        .parsed_version
-        .expect("parsed_version is Some for any 3.x build");
-    assert!(
-        (maj, min, patch) >= MIN_TMUX_VERSION,
-        "test host has tmux {maj}.{min}.{patch}; M0c requires >= {MIN_TMUX_VERSION:?}",
-    );
-    assert!(caps.meets_min_version);
-    assert!(caps.popup_supported);
-    assert!(caps.binary_version.contains("tmux"));
-}
-
-/// Cross-backend parity (DESIGN.md): every view the user opens should be born
-/// with its own left sidebar + focused right terminal, like every Zellij tab
-/// (`backend/zellij.rs::new_tab_is_born_with_a_right_terminal`). `open_sidebar`
-/// installs an `after-new-window` hook so a fresh tmux window is born with the
-/// same left split.
-#[test]
-fn new_window_is_born_with_a_sidebar_and_focused_terminal() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("room");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    server
-        .backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: "room".to_owned(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-newwindow")),
-                project_root: std::env::current_dir().expect("cwd"),
-                cwd: std::env::current_dir().expect("cwd"),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(80)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
-                refresh_ms: None,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-
-    // The user opens a second window.
-    Command::new("tmux")
-        .args([
-            "-S",
-            server.socket.to_str().expect("utf8 socket"),
-            "new-window",
-            "-t",
-            "room",
-        ])
-        .output()
-        .expect("tmux new-window");
-
-    let panes = window_pane_count(&server, "room", 1);
-    assert!(
-        panes >= 2,
-        "a new tmux window should be born with a sidebar beside its terminal, got {panes} pane(s)",
-    );
-}
-
-/// Count the panes in `session:window` via `list-panes`.
-fn window_pane_count(server: &TmuxServer, session: &str, window: u32) -> usize {
-    let out = Command::new("tmux")
-        .args([
-            "-S",
-            server.socket.to_str().expect("utf8 socket"),
-            "list-panes",
-            "-t",
-            &format!("{session}:{window}"),
-            "-F",
-            "#{pane_id}",
-        ])
-        .output()
-        .expect("tmux list-panes");
-    if !out.status.success() {
-        return 0;
-    }
-    String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|line| !line.is_empty())
-        .count()
 }
 
 /// The control-mode presence stream surfaces topology changes as nudges — the

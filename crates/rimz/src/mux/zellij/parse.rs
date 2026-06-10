@@ -366,11 +366,13 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
 
     #[test]
-    fn parse_focused_client_panes_reads_unique_terminal_ids() {
+    fn parse_focused_client_panes_reads_unique_terminals_and_skips_noise() {
         let output = b"CLIENT_ID ZELLIJ_PANE_ID RUNNING_COMMAND\n\
                        1         terminal_30    codex\n\
                        2         terminal_30    codex\n\
-                       3         terminal_4     claude\n";
+                       3         terminal_4     claude\n\
+                       4         plugin_2       rimz-presence-zellij\n\
+                       5         -              unknown\n";
         let panes = parse_focused_client_panes(output);
         assert_eq!(
             panes,
@@ -379,14 +381,12 @@ mod tests {
                 PaneId::from_parts(MuxName::Zellij, "terminal_4"),
             ]
         );
+
+        assert!(
+            parse_focused_client_panes(b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID\n").is_empty()
+        );
     }
-    #[test]
-    fn parse_focused_client_panes_ignores_headers_and_plugins() {
-        let output = b"\x1b[32;1mCLIENT_ID\x1b[m ZELLIJ_PANE_ID RUNNING_COMMAND\n\
-                       1 plugin_2 rimz-presence-zellij\n\
-                       2 - unknown\n";
-        assert!(parse_focused_client_panes(output).is_empty());
-    }
+
     #[test]
     fn transient_empty_detects_blank_list_panes_output() {
         assert!(is_transient_empty(b""));
@@ -395,17 +395,14 @@ mod tests {
         assert!(!is_transient_empty(b"[]"));
         assert!(!is_transient_empty(b"[{\"id\":0}]"));
     }
-    #[test]
-    fn ansi_strip_drops_color_codes() {
-        let stripped = strip_ansi("\x1b[32mfoo\x1b[0m bar");
-        assert_eq!(stripped, "foo bar");
-    }
+
     #[test]
     fn capture_trim_keeps_last_requested_lines() {
         let (raw, lines) = trim_capture("a\nb\nc\nd\n".to_owned(), Some(2));
         assert_eq!(lines, vec!["c", "d"]);
         assert_eq!(raw, "c\nd\n");
     }
+
     #[test]
     fn session_state_classifies_list_sessions_lines() {
         assert_eq!(
@@ -432,9 +429,6 @@ mod tests {
             session_state_from_line("other [Created 6m ago]", "rimz-query-engine"),
             None,
         );
-    }
-    #[test]
-    fn live_session_name_excludes_exited_rows() {
         assert_eq!(
             live_session_name_from_line("rimz-query-engine [Created 6m ago]"),
             Some("rimz-query-engine".to_owned()),
@@ -446,6 +440,7 @@ mod tests {
             None,
         );
     }
+
     #[test]
     fn new_tab_template_sidebar_cols_reads_fixed_width_only() {
         let fixed = r#"

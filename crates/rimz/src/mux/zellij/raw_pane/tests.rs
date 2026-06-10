@@ -1,34 +1,29 @@
 use super::*;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::SidebarWidth;
-use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
+use crate::schema::pane_topology::PaneTopologyCache;
 
 #[test]
-fn raw_pane_deserializes_minimal_shape() {
+fn raw_pane_position_metadata_accepts_live_and_topology_shapes() {
     let json = r#"[
-          {"id": 0, "is_plugin": false, "is_suppressed": false, "is_focused": true, "tab_id": 0},
-          {"id": 2, "is_plugin": true,  "is_suppressed": false, "tab_id": 0}
+          {
+            "id": 8, "is_plugin": false, "tab_id": 42, "tab_position": 1,
+            "tab_name": "rimzd", "pane_x": 60, "pane_columns": 118,
+            "title": "claude remote-control --spawn worktree",
+            "terminal_command": "claude remote-control --spawn worktree"
+          }
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    assert_eq!(parsed.len(), 2);
-    assert!(!parsed[0].is_plugin);
-    assert!(parsed[0].is_focused);
-    assert!(!parsed[0].is_floating);
-    assert!(parsed[1].is_plugin);
-    assert!(!parsed[1].is_focused);
-}
-#[test]
-fn raw_pane_view_position_prefers_list_panes_tab_position() {
-    let json = r#"[
-          {"id": 8, "is_plugin": false, "tab_id": 42, "tab_position": 1}
-        ]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-
     assert_eq!(parsed[0].tab_id, 42);
     assert_eq!(parsed[0].view_position(), 1);
-}
-#[test]
-fn topology_cache_accepts_legacy_tab_id_as_position() {
+    assert_eq!(parsed[0].tab_name.as_deref(), Some("rimzd"));
+    assert_eq!(parsed[0].pane_x, Some(60));
+    assert_eq!(parsed[0].pane_columns, Some(118));
+    assert_eq!(
+        parsed[0].terminal_command.as_deref(),
+        Some("claude remote-control --spawn worktree"),
+    );
+
     let json = r#"{
           "session_name": "rimz-test",
           "produced_at_ms": 1,
@@ -37,9 +32,12 @@ fn topology_cache_accepts_legacy_tab_id_as_position() {
           ]
         }"#;
     let cache: PaneTopologyCache = serde_json::from_str(json).unwrap();
-
     assert_eq!(cache.panes[0].tab_position, 3);
+    let panes = raw_panes_from_topology(cache);
+    assert_eq!(panes[0].tab_id, 3);
+    assert_eq!(panes[0].view_position(), 3);
 }
+
 #[test]
 fn raw_pane_splits_foreground_spawn_and_sidebar_title() {
     let json = r#"[
@@ -107,20 +105,32 @@ fn raw_pane_splits_foreground_spawn_and_sidebar_title() {
         Some("claude remote-control --spawn worktree")
     );
 }
+
 #[test]
-fn views_with_sidebars_groups_by_tab_and_normalizes_pane_ids() {
-    // tab 0: a working pane plus two sidebar panes (a duplicate); tab 1: a
-    // sidebar-only tab; the plugin pane never counts as working.
+fn views_with_sidebars_classifies_working_orphan_and_daemon_tabs() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
           {"id": 2, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
           {"id": 3, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
           {"id": 9, "is_plugin": true,  "tab_id": 0, "title": "zellij:status"},
-          {"id": 4, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
+          {"id": 4, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"},
+          {
+            "id": 5, "is_plugin": false, "tab_id": 2,
+            "title": "/home/me/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name room",
+            "pane_command": "/home/me/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name room"
+          },
+          {
+            "id": 6, "is_plugin": false, "tab_id": 3, "tab_name": "rimzd",
+            "title": "claude"
+          },
+          {
+            "id": 7, "is_plugin": false, "tab_id": 4, "tab_name": "Tab #5",
+            "title": "zsh"
+          }
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let views = views_with_sidebars(&panes);
-    assert_eq!(views.len(), 2);
+    assert_eq!(views.len(), 5);
 
     assert_eq!(views[0].view, "0");
     assert!(views[0].has_working);
@@ -133,46 +143,20 @@ fn views_with_sidebars_groups_by_tab_and_normalizes_pane_ids() {
         ],
     );
 
-    // tab 1 is a sidebar-only orphan: no working pane and no daemon host.
     assert_eq!(views[1].view, "1");
     assert!(!views[1].has_working);
     assert!(!views[1].has_daemon_host);
     assert_eq!(views[1].sidebar_panes.len(), 1);
-}
-#[test]
-fn views_with_sidebars_ignores_daemon_hosts_as_working_panes() {
-    let json = r#"[
-          {
-            "id": 2,
-            "is_plugin": false,
-            "tab_id": 0,
-            "title": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home",
-            "pane_command": "/home/marvin/.cargo/bin/rimz codex app-server serve --workspace-id ws_1 --session-name rimz-home"
-          },
-          {
-            "id": 3,
-            "is_plugin": false,
-            "tab_id": 1,
-            "title": "claude remote-control --spawn worktree",
-            "terminal_command": "claude remote-control --spawn worktree"
-          }
-        ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let views = views_with_sidebars(&panes);
 
-    assert_eq!(views.len(), 2);
-    assert_eq!(views[0].view, "0");
-    assert!(!views[0].has_working);
-    assert!(
-        views[0].has_daemon_host,
-        "a daemon host marks the view so reload never collapses it as an orphan",
-    );
-    assert!(views[0].sidebar_panes.is_empty());
-    assert!(
-        views[1].has_daemon_host && !views[1].has_working,
-        "a host reported only via terminal_command is still a daemon host, not user work",
-    );
+    for daemon in [&views[2], &views[3]] {
+        assert!(!daemon.has_working, "daemon view is not user work");
+        assert!(daemon.has_daemon_host, "daemon view must be retained");
+        assert!(daemon.sidebar_panes.is_empty(), "daemon host is not chrome");
+    }
+    assert!(views[4].has_working);
+    assert!(!views[4].has_daemon_host);
 }
+
 #[test]
 fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
     let json = r#"[
@@ -251,44 +235,26 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
 }
 #[test]
 fn topology_cache_panes_feed_the_existing_classifier() {
-    let cache = PaneTopologyCache {
-        session_name: "rimz-test".to_owned(),
-        produced_at_ms: 1,
-        panes: vec![
-            PaneTopologyPane {
-                id: 6,
-                is_plugin: false,
-                is_held: false,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: false,
-                tab_position: 0,
-                tab_name: Some("main".to_owned()),
-                pane_columns: Some(20),
-                pane_x: Some(0),
-                title: Some("rimz-sidebar".to_owned()),
-                pane_command: Some("rimz-sidebar".to_owned()),
-                terminal_command: Some("rimz sidebar serve".to_owned()),
+    let cache: PaneTopologyCache = serde_json::from_str(
+        r#"{
+          "session_name": "rimz-test",
+          "produced_at_ms": 1,
+          "panes": [
+            {
+              "id": 6, "tab_position": 0, "tab_name": "main",
+              "pane_x": 0, "pane_columns": 20, "title": "rimz-sidebar",
+              "pane_command": "rimz-sidebar", "terminal_command": "rimz sidebar serve"
             },
-            PaneTopologyPane {
-                id: 7,
-                is_plugin: false,
-                is_held: true,
-                exited: false,
-                is_suppressed: false,
-                is_floating: false,
-                is_focused: true,
-                tab_position: 0,
-                tab_name: Some("main".to_owned()),
-                pane_columns: Some(100),
-                pane_x: Some(20),
-                title: Some("claude".to_owned()),
-                pane_command: Some("claude".to_owned()),
-                terminal_command: Some("rimz agents exec claude".to_owned()),
-            },
-        ],
-    };
+            {
+              "id": 7, "tab_position": 0, "tab_name": "main",
+              "is_held": true, "is_focused": true, "pane_x": 20,
+              "pane_columns": 100, "title": "claude", "pane_command": "claude",
+              "terminal_command": "rimz agents exec claude"
+            }
+          ]
+        }"#,
+    )
+    .unwrap();
     let panes = raw_panes_from_topology(cache);
 
     assert_eq!(
@@ -299,45 +265,7 @@ fn topology_cache_panes_feed_the_existing_classifier() {
     assert_eq!(panes[1].foreground_command(), Some("claude"));
     assert_eq!(panes[1].spawn_command(), Some("rimz agents exec claude"));
 }
-#[test]
-fn raw_pane_deserializes_tab_name_and_geometry() {
-    // The identity and geometry fields Zellij 0.44 actually emits per terminal
-    // pane — no live command, cwd, or pid fields exist in its `list-panes -j`
-    // output.
-    let json = r#"[{
-          "id": 1, "is_plugin": false, "tab_id": 0, "tab_name": "rimzd",
-          "pane_x": 60, "pane_columns": 118,
-          "title": "claude remote-control --spawn worktree",
-          "terminal_command": "claude remote-control --spawn worktree"
-        }]"#;
-    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    assert_eq!(parsed[0].tab_name.as_deref(), Some("rimzd"));
-    assert_eq!(parsed[0].pane_x, Some(60));
-    assert_eq!(parsed[0].pane_columns, Some(118));
-    assert_eq!(
-        parsed[0].terminal_command.as_deref(),
-        Some("claude remote-control --spawn worktree"),
-    );
-}
-#[test]
-fn rimzd_tab_name_marks_the_daemon_view_without_command_fields() {
-    // Zellij 0.44 reports no command fields, and the Claude host re-execs
-    // into a bare versioned binary anyway — the tab name alone must carry
-    // the daemon classification so reload never treats `rimzd` as work.
-    let json = r#"[
-          {"id": 1, "is_plugin": false, "tab_id": 0, "tab_name": "rimzd",
-           "title": "claude"},
-          {"id": 5, "is_plugin": false, "tab_id": 1, "tab_name": "Tab #2",
-           "title": "zsh"}
-        ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let views = views_with_sidebars(&panes);
-    assert_eq!(views.len(), 2);
-    assert!(views[0].has_daemon_host, "rimzd tab is the daemon view");
-    assert!(!views[0].has_working);
-    assert!(views[1].has_working, "an ordinary tab still reads as work");
-    assert!(!views[1].has_daemon_host);
-}
+
 #[test]
 fn tab_extent_cols_takes_extents_not_the_sum() {
     // A left sidebar beside two vertically stacked panes: the sum (60 +
@@ -358,10 +286,7 @@ fn tab_extent_cols_takes_extents_not_the_sum() {
     assert_eq!(tab_extent_cols(&panes, 9), 0, "an absent tab has no width");
 }
 #[test]
-fn sidebar_geometry_off_spec_trips_on_the_mis_mounted_shape_only() {
-    // Tab 0: the mis-mounted shape — sidebar on the right at 50%.
-    // Tab 1: a healthy layout-born sidebar — left at ~21%.
-    // Tab 2: docked left but still half the tab (dock landed, resize lost).
+fn sidebar_geometry_detects_repairable_mismounts_only() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
            "pane_x": 0, "pane_columns": 149},
@@ -374,7 +299,9 @@ fn sidebar_geometry_off_spec_trips_on_the_mis_mounted_shape_only() {
           {"id": 5, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar",
            "pane_x": 0, "pane_columns": 149},
           {"id": 6, "is_plugin": false, "tab_id": 2, "title": "zsh",
-           "pane_x": 149, "pane_columns": 149}
+           "pane_x": 149, "pane_columns": 149},
+          {"id": 7, "is_plugin": false, "tab_id": 3, "title": "rimz-sidebar"},
+          {"id": 8, "is_plugin": false, "tab_id": 3, "title": "zsh"}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let width = SidebarWidth::default();
@@ -391,11 +318,11 @@ fn sidebar_geometry_off_spec_trips_on_the_mis_mounted_shape_only() {
         sidebar_geometry_off_spec(by_id(5), &panes, width),
         "left but 50%-wide still wants the resize",
     );
-}
-#[test]
-fn sidebar_width_at_the_cap_is_never_off_spec() {
-    // A pane born fixed at `max_cols` can exceed 45% of a narrow client's tab;
-    // the cap itself is the width verdict and never needs repair.
+    assert!(
+        !sidebar_geometry_off_spec(by_id(7), &panes, width),
+        "missing geometry leaves nothing safe to repair",
+    );
+
     let width = SidebarWidth::default();
     let cap = width.cap_cols();
     assert!(
@@ -415,20 +342,7 @@ fn sidebar_width_at_the_cap_is_never_off_spec() {
         "30% on a wide tab is still off-spec when it exceeds max_cols",
     );
 }
-#[test]
-fn sidebar_geometry_without_coordinates_is_never_off_spec() {
-    // Builds that omit geometry give convergence nothing to act on.
-    let json = r#"[
-          {"id": 1, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
-          {"id": 2, "is_plugin": false, "tab_id": 0, "title": "zsh"}
-        ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    assert!(!sidebar_geometry_off_spec(
-        &panes[0],
-        &panes,
-        SidebarWidth::default()
-    ));
-}
+
 #[test]
 fn new_pane_stdout_parses_only_a_bare_terminal_id() {
     assert_eq!(
@@ -449,30 +363,25 @@ fn new_pane_stdout_parses_only_a_bare_terminal_id() {
     assert_eq!(parse_new_pane_id("terminal_5 terminal_6"), None);
 }
 #[test]
-fn mounted_sidebar_discovery_prefers_the_hint_then_the_new_pane() {
+fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh"},
           {"id": 7, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
-          {"id": 9, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"}
+          {"id": 9, "is_plugin": false, "tab_id": 1, "title": "rimz-sidebar"},
+          {"id": 10, "is_plugin": false, "tab_id": 2, "title": "rimz-sidebar"},
+          {"id": 11, "is_plugin": false, "tab_id": 2, "title": "vim"}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let before: std::collections::HashSet<u64> = [1].into();
-    // The hint wins when it names a mounted sidebar pane in the tab.
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(7)), Some(7));
-    // Without a usable hint, the new (not-in-before) sidebar pane is it.
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(42)), Some(7));
-    // Another tab's sidebar never matches; a tab with none reports none.
-    assert_eq!(mounted_sidebar_pane(&panes, 2, &before, None), None);
-}
-#[test]
-fn mounted_sidebar_discovery_ignores_preexisting_and_non_sidebar_panes() {
-    let json = r#"[
-          {"id": 3, "is_plugin": false, "tab_id": 0, "title": "rimz-sidebar"},
-          {"id": 4, "is_plugin": false, "tab_id": 0, "title": "vim"}
-        ]"#;
-    let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    // The tab's only sidebar pane predates the add: the mount never landed.
-    let before: std::collections::HashSet<u64> = [3, 4].into();
-    assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), None);
+    assert_eq!(mounted_sidebar_pane(&panes, 3, &before, None), None);
+    assert_eq!(mounted_sidebar_pane(&panes, 1, &before, None), Some(9));
+    let before_existing: std::collections::HashSet<u64> = [10, 11].into();
+    assert_eq!(
+        mounted_sidebar_pane(&panes, 2, &before_existing, None),
+        None,
+        "the tab's only sidebar pane predates the add",
+    );
 }

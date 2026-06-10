@@ -440,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn is_sidebar_serve_matches_wrapper_and_renderer_only() {
+    fn is_sidebar_serve_matches_only_the_scoped_renderer_pair() {
         let wrapper =
             format!("rimz sidebar serve --mux zellij --workspace-id {WS} --session-name {SESSION}");
         let renderer = format!(
@@ -448,10 +448,7 @@ mod tests {
         );
         assert!(is_sidebar_serve(&wrapper, WS, SESSION));
         assert!(is_sidebar_serve(&renderer, WS, SESSION));
-    }
 
-    #[test]
-    fn is_sidebar_serve_excludes_server_and_app_server() {
         let app_server =
             format!("rimz codex app-server serve --workspace-id {WS} --session-name {SESSION}");
         let mux_server =
@@ -464,10 +461,7 @@ mod tests {
             !is_sidebar_serve(&mux_server, WS, SESSION),
             "the mux server is never reaped"
         );
-    }
 
-    #[test]
-    fn is_sidebar_serve_is_scoped_to_the_workspace_and_session() {
         let other_session = "rimz sidebar serve --workspace-id ws_other --session-name rimz-other";
         assert!(!is_sidebar_serve(other_session, WS, SESSION));
     }

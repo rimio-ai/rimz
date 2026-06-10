@@ -9,10 +9,13 @@ use std::time::Duration;
 use rimz::mux::{CommandSpec, MuxErr};
 
 #[test]
-fn run_returns_quickly_for_a_fast_command() {
+fn run_surfaces_success_and_nonzero_exit() {
     let output = CommandSpec::new("true").run().expect("`true` succeeds");
     assert!(output.status.success());
     assert!(output.stdout.is_empty());
+
+    let err = CommandSpec::new("false").run().expect_err("`false` fails");
+    assert!(matches!(err, MuxErr::Command { .. }), "got: {err}");
 }
 
 #[test]
@@ -29,10 +32,4 @@ fn run_with_timeout_kills_a_hung_child() {
         started.elapsed() < Duration::from_secs(5),
         "timeout path must not wait out the child",
     );
-}
-
-#[test]
-fn run_surfaces_a_nonzero_exit() {
-    let err = CommandSpec::new("false").run().expect_err("`false` fails");
-    assert!(matches!(err, MuxErr::Command { .. }), "got: {err}");
 }

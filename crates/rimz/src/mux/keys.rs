@@ -91,15 +91,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_aliases_case_insensitively() {
+    fn parses_aliases_and_maps_to_backend_shapes() {
         assert_eq!("Esc".parse::<NamedKey>().unwrap(), NamedKey::Escape);
         assert_eq!("ctrl_c".parse::<NamedKey>().unwrap(), NamedKey::CtrlC);
         assert_eq!("control+d".parse::<NamedKey>().unwrap(), NamedKey::CtrlD);
         assert!("page-down".parse::<NamedKey>().is_err());
-    }
 
-    #[test]
-    fn maps_to_backend_shapes() {
         assert_eq!(NamedKey::Up.tmux_name(), "Up");
         assert_eq!(NamedKey::CtrlC.tmux_name(), "C-c");
         assert_eq!(NamedKey::Enter.write_bytes(), b"\r");

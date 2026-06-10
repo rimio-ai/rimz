@@ -229,11 +229,9 @@ mod tests {
             "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         );
     }
+
     #[test]
-    fn presence_plugin_configuration_omits_an_inexpressible_rimz_path() {
-        // Zellij parses the configuration by splitting on `,` then `=`; a path
-        // containing either separator would mis-parse into a broken poke argv, so
-        // it is omitted and the plugin falls back to `rimz` on the host PATH.
+    fn presence_plugin_configuration_omits_inexpressible_fields() {
         for weird in ["/tmp/a,b/rimz", "/tmp/a=b/rimz"] {
             let configuration = presence_plugin_configuration(&presence_opts("rimz-test", weird));
             assert_eq!(
@@ -241,9 +239,6 @@ mod tests {
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
-    }
-    #[test]
-    fn presence_plugin_configuration_omits_an_inexpressible_session_name() {
         for weird in ["rimz,test", "rimz=test"] {
             let configuration =
                 presence_plugin_configuration(&presence_opts(weird, "/home/user/.cargo/bin/rimz"));
@@ -254,9 +249,16 @@ mod tests {
             );
         }
     }
+
     #[test]
-    fn materialize_presence_plugin_bytes_writes_stable_artifact() {
+    fn materialize_presence_plugin_bytes_writes_stable_artifact_or_nothing() {
         let dir = tempfile::tempdir().unwrap();
+        assert!(
+            materialize_presence_plugin_bytes(b"", dir.path())
+                .unwrap()
+                .is_none()
+        );
+
         let path = materialize_presence_plugin_bytes(b"wasm-bytes", dir.path())
             .unwrap()
             .unwrap();
@@ -270,14 +272,5 @@ mod tests {
 
         materialize_presence_plugin_bytes(b"new-bytes", dir.path()).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new-bytes");
-    }
-    #[test]
-    fn empty_presence_plugin_embed_materializes_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(
-            materialize_presence_plugin_bytes(b"", dir.path())
-                .unwrap()
-                .is_none()
-        );
     }
 }

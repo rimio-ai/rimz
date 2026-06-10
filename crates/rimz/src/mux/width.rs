@@ -117,27 +117,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn sidebar_width_is_the_default_percent_at_the_configured_cap() {
+    fn sidebar_width_uses_default_percent_and_configured_cap() {
         let mut sidebar = crate::config::SidebarConfig::default();
-        assert_eq!(
-            SidebarWidth::from_config(&sidebar),
-            SidebarWidth {
-                percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-                max_cols: NonZeroU16::new(72).expect("nonzero"),
-            },
-        );
-        assert_eq!(SidebarWidth::from_config(&sidebar), SidebarWidth::default());
+        let width = SidebarWidth::from_config(&sidebar);
+        assert_eq!(width.percent, DEFAULT_SIDEBAR_WIDTH_PERCENT);
+        assert_eq!(width.cap_cols(), 72);
+        assert_eq!(width.target_cols(120), 36);
+        assert_eq!(width.target_cols(300), 72);
+
         let max = NonZeroU16::new(100).expect("nonzero");
         sidebar.max_cols = max;
         assert_eq!(SidebarWidth::from_config(&sidebar).max_cols, max);
-    }
-
-    #[test]
-    fn width_targets_the_percent_below_the_cap_and_the_cap_above_it() {
-        let width = SidebarWidth::default();
-        assert_eq!(width.target_cols(120), 36);
-        assert_eq!(width.target_cols(300), 72);
-        assert_eq!(width.cap_cols(), 72);
     }
 
     #[test]
