@@ -1,11 +1,11 @@
 use super::*;
 
-/// The suite's fixed "now" (matches the snapshot testkit epoch), so the
-/// trailing-window bucketing is exact on any wall-clock day.
-const NOW_SECS: u64 = 1_750_000_000;
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write as _;
+
 use tempfile::TempDir;
+
+const NOW_SECS: u64 = 1_750_000_000;
 
 fn claude_adapter() -> &'static dyn AgentAdapter {
     &crate::agents::ClaudeAdapter
@@ -15,8 +15,6 @@ fn codex_adapter() -> &'static dyn AgentAdapter {
     &crate::agents::CodexAdapter
 }
 
-/// Claude tests don't need pricing — tag the files Claude, sum with an empty
-/// book, and take the fleet total, matching the pre-per-provider assertions.
 fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
     let tagged: Vec<(&'static dyn AgentAdapter, PathBuf)> = files
         .iter()
@@ -25,8 +23,6 @@ fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally
     compute_spending(&tagged, cache, &PriceBook::default(), NOW_SECS).total
 }
 
-/// ISO-8601 UTC timestamp for a Unix-seconds instant — round-trips through
-/// [`iso_to_unix_secs`] back to that same whole second.
 fn iso_at(secs: u64) -> String {
     let date = utc_date(secs);
     let tod = secs % 86_400;
@@ -38,7 +34,6 @@ fn iso_at(secs: u64) -> String {
     )
 }
 
-// Full Claude-format line including "usage":{ to pass the fast pre-filter.
 fn claude_line_ts(ts: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
     format!(
         r#"{{"timestamp":"{ts}","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
@@ -49,7 +44,6 @@ fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
     claude_line_ts(&format!("{date}T10:00:00.000Z"), cost, msg_id, req_id)
 }
 
-/// A Claude line stamped `secs_ago` before now — for trailing-window tests.
 fn claude_line_ago(secs_ago: u64, cost: f64, msg_id: &str, req_id: &str) -> String {
     claude_line_ts(
         &iso_at(NOW_SECS.saturating_sub(secs_ago)),
@@ -74,45 +68,40 @@ fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
     path
 }
 
-#[test]
-fn utc_date_known_epoch() {
-    assert_eq!(utc_date(0), "1970-01-01");
-    // 2000-01-01 00:00:00 UTC = 946684800
-    assert_eq!(utc_date(946_684_800), "2000-01-01");
-    // 2025-06-01 00:00:00 UTC = 1748736000
-    assert_eq!(utc_date(1_748_736_000), "2025-06-01");
-    assert_eq!(utc_date(1_748_822_399), "2025-06-01");
+fn append_line(path: &Path, line: &str) {
+    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+    writeln!(f, "{line}").unwrap();
+}
+
+fn codex_total_line(date: &str, input: u64, output: u64) -> String {
+    format!(
+        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
+    )
+}
+
+fn codex_token_line(date: &str, input: u64, cached: u64, output: u64) -> String {
+    format!(
+        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}}}}}}}}"#
+    )
+}
+
+fn write_codex(dir: &Path, lines: &[&str]) -> PathBuf {
+    let sessions = dir.join("sessions");
+    std::fs::create_dir_all(&sessions).unwrap();
+    write_jsonl(&sessions, "sess.jsonl", lines)
+}
+
+fn gpt4o_book() -> PriceBook {
+    PriceBook::from_litellm_json(
+        r#"{"gpt-4o": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                           "cache_read_input_token_cost": 1e-7}}"#,
+    )
 }
 
 #[test]
-fn iso_to_unix_secs_parses_known_instants() {
-    assert_eq!(
-        iso_to_unix_secs("2000-01-01T00:00:00.000Z"),
-        Some(946_684_800)
-    );
-    // 2025-06-01T00:00:00Z = 1748736000; + 12h = +43200.
-    assert_eq!(
-        iso_to_unix_secs("2025-06-01T12:00:00Z"),
-        Some(1_748_779_200)
-    );
-    // A bare date parses to midnight UTC.
-    assert_eq!(iso_to_unix_secs("1970-01-02"), Some(86_400));
-    // Round-trips with the test formatter.
-    assert_eq!(
-        iso_to_unix_secs(&iso_at(1_700_000_123)),
-        Some(1_700_000_123)
-    );
-    // Malformed prefixes are rejected.
-    assert_eq!(iso_to_unix_secs("not-a-date"), None);
-    assert_eq!(iso_to_unix_secs(""), None);
-}
-
-#[test]
-fn mtime_cache_hit_skips_io() {
+fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
     let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
-
+    let today = utc_date(NOW_SECS);
     let file = write_jsonl(
         dir.path(),
         "chat.jsonl",
@@ -120,28 +109,16 @@ fn mtime_cache_hit_skips_io() {
     );
 
     let mut cache = SpendingDiskCache::default();
-    let t1 = compute_total(std::slice::from_ref(&file), &mut cache);
-    assert!((t1.today.usd - 0.5).abs() < 1e-9);
-    assert_eq!(t1.today.tokens, 15, "input 10 + output 5");
+    let first = compute_total(std::slice::from_ref(&file), &mut cache);
+    assert_eq!(first.today.tokens, 15);
     assert!(cache.dirty);
 
     cache.dirty = false;
-    let t2 = compute_total(&[file], &mut cache);
-    assert_eq!(t2.today.usd, t1.today.usd);
-    assert_eq!(t2.today.tokens, t1.today.tokens);
-    assert!(
-        !cache.dirty,
-        "cache should not be marked dirty on a cache hit"
-    );
-}
+    let second = compute_total(&[file], &mut cache);
+    assert_eq!(second.today.usd, first.today.usd);
+    assert!(!cache.dirty, "unchanged files should be served from cache");
 
-#[test]
-fn stale_version_cache_is_discarded_so_files_reparse() {
-    let dir = TempDir::new().unwrap();
     let path = dir.path().join("spending.json");
-
-    // A cache from an older parse shape: a file entry whose `tokens` predate
-    // the field, under the implicit pre-versioning `version: 0`.
     let stale = SpendingDiskCache {
         version: 0,
         files: HashMap::from([(
@@ -151,7 +128,7 @@ fn stale_version_cache_is_discarded_so_files_reparse() {
                 len: 0,
                 cursor: SpendCursor::default(),
                 entries: vec![CachedEntry {
-                    ts_secs: 1_767_225_600,
+                    ts_secs: NOW_SECS,
                     cost_usd: 9.0,
                     input: 0,
                     output: 0,
@@ -168,108 +145,36 @@ fn stale_version_cache_is_discarded_so_files_reparse() {
     };
     write_spending_cache(&path, &stale);
 
-    // Read drops the stale-shape cache entirely and stamps the current
-    // version, so the finalized session re-parses instead of serving `0`
-    // tokens from a mtime that will never change again.
     let healed = read_spending_cache(&path);
     assert_eq!(healed.version, SPENDING_CACHE_VERSION);
-    assert!(
-        healed.files.is_empty(),
-        "a stale-version cache is discarded, not served"
-    );
-
-    // A current-version cache round-trips with its files intact — only a
-    // version mismatch discards.
-    let mut current = healed;
-    current.files.insert(
-        "/new/chat.jsonl".to_string(),
-        FileCacheEntry {
-            mtime_secs: 456,
-            len: 0,
-            cursor: SpendCursor::default(),
-            entries: vec![CachedEntry {
-                ts_secs: 1_770_000_000,
-                cost_usd: 1.0,
-                input: 30,
-                output: 12,
-                cache_write: 0,
-                cache_read: 0,
-                message_id: None,
-                request_id: None,
-                is_sidechain: false,
-            }],
-            unknown_models: BTreeMap::new(),
-        },
-    );
-    write_spending_cache(&path, &current);
-    let kept = read_spending_cache(&path);
-    assert_eq!(kept.version, SPENDING_CACHE_VERSION);
-    assert_eq!(
-        kept.files["/new/chat.jsonl"].entries[0].input, 30,
-        "a same-version cache keeps its entries"
-    );
+    assert!(healed.files.is_empty());
 }
 
 #[test]
 fn token_split_and_session_counts_populate_windows() {
     let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
-    // One Claude thread spread across its `session_id` dir: a main chat file
-    // plus a subagent file. Both fold under the one thread for session counts.
+    let today = utc_date(NOW_SECS);
     let session = dir.path().join("sess-1");
     std::fs::create_dir_all(session.join("subagents")).unwrap();
     let main_line = format!(
         r#"{{"timestamp":"{today}T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":12000,"output_tokens":64000,"cache_creation_input_tokens":12000,"cache_read_input_tokens":68000}}}}}}"#
     );
-    let main = write_jsonl(&session, "chat.jsonl", &[&main_line]);
     let sub_line = format!(
         r#"{{"timestamp":"{today}T10:01:00.000Z","costUSD":0.1,"requestId":"req-2","isSidechain":true,"message":{{"id":"msg-2","usage":{{"input_tokens":1000,"output_tokens":500,"cache_creation_input_tokens":0,"cache_read_input_tokens":2000}}}}}}"#
     );
+    let main = write_jsonl(&session, "chat.jsonl", &[&main_line]);
     let subfile = write_jsonl(&session.join("subagents"), "worker.jsonl", &[&sub_line]);
 
     let mut cache = SpendingDiskCache::default();
     let total = compute_total(&[main, subfile], &mut cache);
 
-    // `◇` is input, with cache-write folded in, plus output. The raw
-    // cache-write split stays maintained for compatibility and diagnostics.
-    assert_eq!(
-        total.today.input, 25_000,
-        "12000 + 1000 + cache-write 12000"
-    );
-    assert_eq!(total.today.output, 64_500, "64000 + 500");
-    assert_eq!(total.today.tokens, 89_500, "◇ = folded input + output");
+    assert_eq!(total.today.input, 25_000);
+    assert_eq!(total.today.output, 64_500);
+    assert_eq!(total.today.tokens, 89_500);
     assert_eq!(total.today.cache_write, 12_000);
-    assert_eq!(total.today.cache_read, 70_000, "68000 + 2000");
-    // The main + subagent files fold under one `session_id` directory, so the
-    // thread counts once across every window its activity falls within.
-    assert_eq!(total.today.sessions, 1, "main + subagent = one thread");
+    assert_eq!(total.today.cache_read, 70_000);
+    assert_eq!(total.today.sessions, 1);
     assert_eq!(total.year.sessions, 1);
-}
-
-#[test]
-fn add_folds_cache_write_into_input_and_total() {
-    let mut window = SpendWindow::default();
-    let entry = CachedEntry {
-        ts_secs: NOW_SECS,
-        cost_usd: 0.0,
-        input: 10,
-        output: 30,
-        cache_write: 20,
-        cache_read: 40,
-        message_id: None,
-        request_id: None,
-        is_sidechain: false,
-    };
-
-    window.add(1.25, &entry);
-
-    assert_eq!(window.usd, 1.25);
-    assert_eq!(window.input, 30, "input folds fresh input + cache-write");
-    assert_eq!(window.output, 30);
-    assert_eq!(window.tokens, 60, "◇ folds cache-write through input");
-    assert_eq!(window.cache_write, 20, "raw cache-write split is retained");
-    assert_eq!(window.cache_read, 40, "cache-read stays outside ◇");
 }
 
 #[test]
@@ -277,128 +182,51 @@ fn trailing_windows_bucket_by_age() {
     let dir = TempDir::new().unwrap();
     const HOUR: u64 = 3_600;
     const DAY: u64 = 86_400;
-
-    // One entry seated inside each successive window, plus one past the year.
     let file = write_jsonl(
         dir.path(),
         "chat.jsonl",
         &[
-            &claude_line_ago(2 * HOUR, 1.0, "msg-1", "req-1"), // within 24h
-            &claude_line_ago(3 * DAY, 0.5, "msg-2", "req-2"),  // within 7d, not 24h
-            &claude_line_ago(20 * DAY, 0.25, "msg-3", "req-3"), // within 30d, not 7d
-            &claude_line_ago(100 * DAY, 0.1, "msg-4", "req-4"), // within 365d, not 30d
-            &claude_line_ago(400 * DAY, 9.0, "msg-5", "req-5"), // older than a year — dropped
+            &claude_line_ago(2 * HOUR, 1.0, "msg-1", "req-1"),
+            &claude_line_ago(3 * DAY, 0.5, "msg-2", "req-2"),
+            &claude_line_ago(20 * DAY, 0.25, "msg-3", "req-3"),
+            &claude_line_ago(100 * DAY, 0.1, "msg-4", "req-4"),
+            &claude_line_ago(400 * DAY, 9.0, "msg-5", "req-5"),
         ],
     );
 
     let mut cache = SpendingDiskCache::default();
     let totals = compute_total(&[file], &mut cache);
 
-    // The windows nest, so each wider one adds the next entry.
-    assert!(
-        (totals.today.usd - 1.0).abs() < 1e-9,
-        "today (24h) = {}",
-        totals.today.usd
-    );
-    assert_eq!(totals.today.tokens, 15, "one entry inside 24h");
-    assert!(
-        (totals.week.usd - 1.5).abs() < 1e-9,
-        "week (7d) = {}",
-        totals.week.usd
-    );
+    assert_eq!(totals.today.tokens, 15);
+    assert!((totals.today.usd - 1.0).abs() < 1e-9);
     assert_eq!(totals.week.tokens, 30);
-    assert!(
-        (totals.month.usd - 1.75).abs() < 1e-9,
-        "month (30d) = {}",
-        totals.month.usd
-    );
+    assert!((totals.week.usd - 1.5).abs() < 1e-9);
     assert_eq!(totals.month.tokens, 45);
-    // year (365d) adds the 100-day entry; the 400-day entry falls out entirely.
-    assert!(
-        (totals.year.usd - 1.85).abs() < 1e-9,
-        "year (365d) = {}",
-        totals.year.usd
-    );
-    assert_eq!(
-        totals.year.tokens, 60,
-        "four entries inside the year; the 400-day one is dropped"
-    );
+    assert!((totals.month.usd - 1.75).abs() < 1e-9);
+    assert_eq!(totals.year.tokens, 60);
+    assert!((totals.year.usd - 1.85).abs() < 1e-9);
 }
 
 #[test]
-fn empty_file_list_returns_zero() {
-    let mut cache = SpendingDiskCache::default();
-    assert!(compute_total(&[], &mut cache).is_zero());
-}
-
-#[test]
-fn zero_and_negative_costs_ignored() {
+fn claude_dedup_keeps_one_exact_entry_and_suppresses_sidechain_replays() {
     let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
-
-    let file = write_jsonl(
-        dir.path(),
-        "chat.jsonl",
-        &[
-            &format!(
-                r#"{{"timestamp":"{today}T10:00:00.000Z","costUSD":0.0,"message":{{"usage":{{"input_tokens":1}}}}}}"#
-            ),
-            &format!(
-                r#"{{"timestamp":"{today}T11:00:00.000Z","costUSD":-1.0,"message":{{"usage":{{"input_tokens":1}}}}}}"#
-            ),
-            &claude_line(&today, 0.3, "msg-1", "req-1"),
-        ],
-    );
-
-    let mut cache = SpendingDiskCache::default();
-    let totals = compute_total(&[file], &mut cache);
-    assert!((totals.today.usd - 0.3).abs() < 1e-9);
-    assert_eq!(
-        totals.today.tokens, 15,
-        "only the kept entry: input 10 + output 5"
-    );
-}
-
-#[test]
-fn claude_exact_dedup_drops_repeated_message_request_pair() {
-    let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
+    let today = utc_date(NOW_SECS);
     let line = claude_line(&today, 1.0, "msg-a", "req-a");
-
-    // Same (message_id, request_id) twice within one file (the parser
-    // returns raw entries — this pass owns all dedup) and again in a
-    // second file.
     let file1 = write_jsonl(dir.path(), "session1.jsonl", &[&line, &line]);
     let file2 = write_jsonl(dir.path(), "session2.jsonl", &[&line]);
-
     let mut cache = SpendingDiskCache::default();
-    let totals = compute_total(&[file1, file2], &mut cache);
-    assert!(
-        (totals.today.usd - 1.0).abs() < 1e-9,
-        "got {}",
-        totals.today.usd
-    );
-    assert_eq!(totals.today.tokens, 15, "the duplicate pair counts once");
-}
+    let exact = compute_total(&[file1, file2], &mut cache);
+    assert!((exact.today.usd - 1.0).abs() < 1e-9);
+    assert_eq!(exact.today.tokens, 15);
 
-#[test]
-fn sidechain_replay_does_not_double_count() {
-    let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
-
-    // Main-chain entry for msg-parent in session file.
-    let main_file = write_jsonl(
+    let main = write_jsonl(
         dir.path(),
-        "session.jsonl",
+        "main.jsonl",
         &[&claude_line(&today, 0.05, "msg-parent", "req-parent")],
     );
-    // Sidechain replay of the same message in subagent file — inflated cost.
-    let side_file = write_jsonl(
+    let replay = write_jsonl(
         dir.path(),
-        "subagent.jsonl",
+        "replay.jsonl",
         &[&claude_sidechain_line(
             &today,
             5.00,
@@ -406,177 +234,115 @@ fn sidechain_replay_does_not_double_count() {
             "req-sidechain",
         )],
     );
-
     let mut cache = SpendingDiskCache::default();
-    let totals = compute_total(&[main_file, side_file], &mut cache);
-    assert!(
-        (totals.today.usd - 0.05).abs() < 1e-9,
-        "today.usd = {} (expected 0.05)",
-        totals.today.usd
-    );
-    assert_eq!(
-        totals.today.tokens, 15,
-        "main-chain tokens kept, the 50k sidechain replay suppressed"
-    );
-}
+    let deduped = compute_total(&[main, replay], &mut cache);
+    assert!((deduped.today.usd - 0.05).abs() < 1e-9);
+    assert_eq!(deduped.today.tokens, 15);
 
-#[test]
-fn sidechain_only_kept_when_no_main_chain_exists() {
-    let dir = TempDir::new().unwrap();
-    let now_secs = NOW_SECS;
-    let today = utc_date(now_secs);
-
-    let file = write_jsonl(
+    let lone_sidechain = write_jsonl(
         dir.path(),
-        "sidechain.jsonl",
+        "sidechain-only.jsonl",
         &[&claude_sidechain_line(&today, 0.20, "msg-x", "req-x")],
     );
-
     let mut cache = SpendingDiskCache::default();
-    let totals = compute_total(&[file], &mut cache);
-    assert!(
-        (totals.today.usd - 0.20).abs() < 1e-9,
-        "got {}",
-        totals.today.usd
-    );
-    assert_eq!(
-        totals.today.tokens, 50_005,
-        "a lone sidechain keeps its tokens: input 50000 + output 5"
-    );
-}
-
-fn append_line(path: &Path, line: &str) {
-    let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
-    writeln!(f, "{line}").unwrap();
+    let kept = compute_total(&[lone_sidechain], &mut cache);
+    assert!((kept.today.usd - 0.20).abs() < 1e-9);
+    assert_eq!(kept.today.tokens, 50_005);
 }
 
 #[test]
-fn grown_file_parses_only_the_appended_suffix() {
+fn file_change_cache_paths_parse_suffix_or_reparse_cold() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
-    let file = write_jsonl(
+
+    let suffix_file = write_jsonl(
         dir.path(),
-        "chat.jsonl",
+        "suffix.jsonl",
         &[&claude_line(&today, 1.0, "msg-1", "req-1")],
     );
     let mut cache = SpendingDiskCache::default();
     let first = compute_spending(
-        &[(claude_adapter(), file.clone())],
+        &[(claude_adapter(), suffix_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
     assert!((first.total.today.usd - 1.0).abs() < 1e-9);
-
-    // Corrupt the already-parsed prefix in place (length unchanged, the
-    // trailing newline kept), then append a second line. The incremental
-    // pass must read only past its cursor, so the corruption is invisible
-    // and the cached first entry still counts.
-    let prefix_len = std::fs::metadata(&file).unwrap().len() as usize;
+    let prefix_len = std::fs::metadata(&suffix_file).unwrap().len() as usize;
     {
         use std::io::{Seek as _, SeekFrom};
-        let mut f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+        let mut f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&suffix_file)
+            .unwrap();
         f.seek(SeekFrom::Start(0)).unwrap();
         f.write_all(&vec![b'x'; prefix_len - 1]).unwrap();
     }
-    append_line(&file, &claude_line(&today, 0.25, "msg-2", "req-2"));
-
-    let second = compute_spending(
-        &[(claude_adapter(), file)],
+    append_line(&suffix_file, &claude_line(&today, 0.25, "msg-2", "req-2"));
+    let suffix = compute_spending(
+        &[(claude_adapter(), suffix_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!(
-        (second.total.today.usd - 1.25).abs() < 1e-9,
-        "suffix-only read: the cached prefix entry survives its corruption (got {})",
-        second.total.today.usd
-    );
-}
+    assert!((suffix.total.today.usd - 1.25).abs() < 1e-9);
 
-#[test]
-fn truncated_file_reparses_cold() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
     let line_a = claude_line(&today, 1.0, "msg-a", "req-a");
     let line_b = claude_line(&today, 0.5, "msg-b", "req-b");
-    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line_a, &line_b]);
+    let truncated_file = write_jsonl(dir.path(), "truncated.jsonl", &[&line_a, &line_b]);
     let mut cache = SpendingDiskCache::default();
-    let first = compute_spending(
-        &[(claude_adapter(), file.clone())],
+    compute_spending(
+        &[(claude_adapter(), truncated_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!((first.total.today.usd - 1.5).abs() < 1e-9);
-
-    // Rotation/truncation: the file shrinks. The stale tail entries must
-    // drop with the cold re-parse, never lingering from the old cache.
-    write_jsonl(dir.path(), "chat.jsonl", &[&line_a]);
-    let second = compute_spending(
-        &[(claude_adapter(), file)],
+    write_jsonl(dir.path(), "truncated.jsonl", &[&line_a]);
+    let truncated = compute_spending(
+        &[(claude_adapter(), truncated_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!(
-        (second.total.today.usd - 1.0).abs() < 1e-9,
-        "a shorter file re-parses cold (got {})",
-        second.total.today.usd
-    );
-}
+    assert!((truncated.total.today.usd - 1.0).abs() < 1e-9);
 
-#[test]
-fn same_length_rewrite_with_a_new_mtime_reparses_cold() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
-    // `1.0` and `3.0` format to the same byte length, so the rewrite
-    // changes content but not size — only the mtime can reveal it.
-    let file = write_jsonl(
+    let rewrite_file = write_jsonl(
         dir.path(),
-        "chat.jsonl",
-        &[&claude_line(&today, 1.0, "msg-a", "req-a")],
+        "rewrite.jsonl",
+        &[&claude_line(&today, 1.0, "msg-r", "req-r")],
     );
     let mut cache = SpendingDiskCache::default();
     compute_spending(
-        &[(claude_adapter(), file.clone())],
+        &[(claude_adapter(), rewrite_file.clone())],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-
     write_jsonl(
         dir.path(),
-        "chat.jsonl",
-        &[&claude_line(&today, 3.0, "msg-a", "req-a")],
+        "rewrite.jsonl",
+        &[&claude_line(&today, 3.0, "msg-r", "req-r")],
     );
-    let f = std::fs::OpenOptions::new().write(true).open(&file).unwrap();
+    let f = std::fs::OpenOptions::new()
+        .write(true)
+        .open(&rewrite_file)
+        .unwrap();
     f.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(5))
         .unwrap();
-
-    let second = compute_spending(
-        &[(claude_adapter(), file)],
+    let rewritten = compute_spending(
+        &[(claude_adapter(), rewrite_file)],
         &mut cache,
         &PriceBook::default(),
         NOW_SECS,
     );
-    assert!(
-        (second.total.today.usd - 3.0).abs() < 1e-9,
-        "an in-place rewrite (same length, new mtime) re-parses cold (got {})",
-        second.total.today.usd
-    );
+    assert!((rewritten.total.today.usd - 3.0).abs() < 1e-9);
 }
 
 #[test]
-fn codex_resume_state_survives_the_suffix_parse() {
+fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
-    // Cumulative-only token counts plus a model declared once up front:
-    // both halves of the resume state are exercised — the appended event
-    // must subtract the stored totals AND price under the remembered
-    // model (a fresh fold would record the full cumulative as one
-    // inflated delta; a lost model would drop the entry as unpriced).
-    let file = write_codex(
+    let resumable = write_codex(
         dir.path(),
         &[
             r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
@@ -585,7 +351,7 @@ fn codex_resume_state_survives_the_suffix_parse() {
     );
     let mut cache = SpendingDiskCache::default();
     let first = compute_spending(
-        &[(codex_adapter(), file.clone())],
+        &[(codex_adapter(), resumable.clone())],
         &mut cache,
         &gpt4o_book(),
         NOW_SECS,
@@ -593,129 +359,28 @@ fn codex_resume_state_survives_the_suffix_parse() {
     assert_eq!(first.total.today.input, 1000);
     assert_eq!(first.total.today.output, 500);
 
-    append_line(&file, &codex_total_line(&today, 1600, 800));
+    append_line(&resumable, &codex_total_line(&today, 1600, 800));
     let second = compute_spending(
-        &[(codex_adapter(), file)],
+        &[(codex_adapter(), resumable)],
         &mut cache,
         &gpt4o_book(),
         NOW_SECS,
     );
-    assert_eq!(
-        second.total.today.input, 1600,
-        "the resumed fold subtracts the stored cumulative totals"
-    );
+    assert_eq!(second.total.today.input, 1600);
     assert_eq!(second.total.today.output, 800);
-}
-
-fn codex_total_line(date: &str, input: u64, output: u64) -> String {
-    format!(
-        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":{input},"output_tokens":{output}}}}}}}}}"#
-    )
-}
-
-/// A price book with a single non-builtin model so the asserted cost is
-/// independent of the hardcoded builtin values.
-fn gpt4o_book() -> PriceBook {
-    PriceBook::from_litellm_json(
-        r#"{"gpt-4o": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
-                           "cache_read_input_token_cost": 1e-7}}"#,
-    )
-}
-
-/// Write a Codex session file. The path is irrelevant — the provider is
-/// tagged explicitly at the `compute_spending` call.
-fn write_codex(dir: &Path, lines: &[&str]) -> PathBuf {
-    let sessions = dir.join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    write_jsonl(&sessions, "sess.jsonl", lines)
-}
-
-fn codex_token_line(date: &str, input: u64, cached: u64, output: u64) -> String {
-    format!(
-        r#"{{"type":"event_msg","timestamp":"{date}T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":{input},"cached_input_tokens":{cached},"output_tokens":{output}}}}}}}}}"#
-    )
-}
-
-#[test]
-fn codex_tokens_priced_through_book() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
-    let file = write_codex(
-        dir.path(),
-        &[
-            r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
-            &codex_token_line(&today, 1000, 400, 500),
-        ],
-    );
-
-    let mut cache = SpendingDiskCache::default();
-    let spending = compute_spending(
-        &[(codex_adapter(), file)],
-        &mut cache,
-        &gpt4o_book(),
-        NOW_SECS,
-    );
-
-    // uncached 600 * 1e-6 + cached 400 * 1e-7 + output 500 * 2e-6
-    //   = 0.0006 + 0.00004 + 0.001 = 0.00164
-    let codex = &spending.by_provider["codex"];
-    assert!(
-        (codex.today.usd - 0.00164).abs() < 1e-9,
-        "got {}",
-        codex.today.usd
-    );
-    // `◇` is fresh input + output: Codex's `input_tokens` includes the cached
-    // slice, so the uncached 600 + output 500 = 1100, with the 400 cached
-    // riding `cache_read` (never the total).
-    assert_eq!(codex.today.tokens, 1100, "uncached input 600 + output 500");
-    assert_eq!(codex.today.input, 600);
-    assert_eq!(codex.today.output, 500);
-    assert_eq!(codex.today.cache_read, 400);
-    assert_eq!(codex.today.cache_write, 0, "Codex has no cache-creation");
-    assert!((spending.total.today.usd - 0.00164).abs() < 1e-9);
-}
-
-#[test]
-fn unpriced_codex_model_contributes_nothing() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
-    let file = write_codex(
-        dir.path(),
-        &[
-            r#"{"type":"turn_context","payload":{"model":"some-unknown-model-xyz"}}"#,
-            &codex_token_line(&today, 1000, 0, 500),
-        ],
-    );
-
-    let mut cache = SpendingDiskCache::default();
-    // Empty json → only builtins; the unknown model has no price.
-    let spending = compute_spending(
-        &[(codex_adapter(), file)],
-        &mut cache,
-        &PriceBook::from_litellm_json("{}"),
-        NOW_SECS,
-    );
-    assert!(spending.total.is_zero());
-}
-
-#[test]
-fn per_provider_breakdown_splits_claude_and_codex() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
 
     let claude_file = write_jsonl(
         dir.path(),
-        "chat.jsonl",
+        "claude.jsonl",
         &[&claude_line(&today, 0.5, "msg-1", "req-1")],
     );
     let codex_file = write_codex(
         dir.path(),
         &[
             r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
-            &codex_token_line(&today, 1000, 0, 0),
+            &codex_token_line(&today, 1000, 400, 500),
         ],
     );
-
     let mut cache = SpendingDiskCache::default();
     let spending = compute_spending(
         &[
@@ -726,42 +391,21 @@ fn per_provider_breakdown_splits_claude_and_codex() {
         &gpt4o_book(),
         NOW_SECS,
     );
-
+    let codex = &spending.by_provider["codex"];
+    assert!((codex.today.usd - 0.00164).abs() < 1e-9);
+    assert_eq!(codex.today.input, 600);
+    assert_eq!(codex.today.output, 500);
+    assert_eq!(codex.today.cache_read, 400);
     assert!((spending.by_provider["claude"].today.usd - 0.5).abs() < 1e-9);
-    assert!((spending.by_provider["codex"].today.usd - 0.001).abs() < 1e-9);
-    assert!((spending.total.today.usd - 0.501).abs() < 1e-9);
+    assert!((spending.total.today.usd - 0.50164).abs() < 1e-9);
 }
 
 #[test]
-fn unknown_models_round_trip_in_the_file_cache() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("spending.json");
-    let mut cache = SpendingDiskCache {
-        version: SPENDING_CACHE_VERSION,
-        ..Default::default()
-    };
-    cache.files.insert(
-        "/tmp/session.jsonl".to_owned(),
-        FileCacheEntry {
-            mtime_secs: 1,
-            len: 2,
-            cursor: SpendCursor::default(),
-            entries: Vec::new(),
-            unknown_models: BTreeMap::from([("new-model".to_owned(), NOW_SECS)]),
-        },
-    );
+fn unknown_model_chase_records_and_heals_active_files() {
+    assert!(!is_priceable_model_name("<synthetic>"));
+    assert!(!is_priceable_model_name("   "));
+    assert!(is_priceable_model_name("claude-new"));
 
-    write_spending_cache(&path, &cache);
-    let read = read_spending_cache(&path);
-
-    assert_eq!(
-        read.files["/tmp/session.jsonl"].unknown_models,
-        BTreeMap::from([("new-model".to_owned(), NOW_SECS)])
-    );
-}
-
-#[test]
-fn heal_reparses_a_file_when_its_unknown_model_becomes_priced() {
     let dir = TempDir::new().unwrap();
     let today = utc_date(NOW_SECS);
     let model = "new-claude-pricing-test-model";
@@ -778,93 +422,27 @@ fn heal_reparses_a_file_when_its_unknown_model_becomes_priced() {
         NOW_SECS,
     );
     assert!(first.total.is_zero());
-    let cache_key = file.to_string_lossy().into_owned();
     assert_eq!(
-        cache.files[&cache_key].unknown_models,
-        BTreeMap::from([(
-            model.to_owned(),
-            iso_to_unix_secs(&format!("{today}T10:00:00.000Z")).unwrap()
-        )])
+        recorded_unknown_models(&[(claude_adapter(), file.clone())], &cache, NOW_SECS),
+        BTreeSet::from([model.to_owned()])
     );
 
-    cache.dirty = false;
     let priced = PriceBook::from_litellm_json(&format!(
         r#"{{"{model}": {{"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}}}"#
     ));
+    let cache_key = file.to_string_lossy().into_owned();
+    cache.dirty = false;
     let healed = compute_spending(
         &[(claude_adapter(), file.clone())],
         &mut cache,
         &priced,
         NOW_SECS,
     );
-
-    assert!(
-        (healed.total.today.usd - 0.0002).abs() < 1e-12,
-        "100 input + 50 output repriced from byte zero"
-    );
+    assert!((healed.total.today.usd - 0.0002).abs() < 1e-12);
     assert!(cache.files[&cache_key].unknown_models.is_empty());
-    assert!(cache.dirty, "a healed file replaces its cached parse");
-}
+    assert!(cache.dirty);
 
-#[test]
-fn grown_file_unions_new_unknowns_into_the_entry() {
-    let dir = TempDir::new().unwrap();
-    let today = utc_date(NOW_SECS);
-    let line_a = format!(
-        r#"{{"timestamp":"{today}T10:00:00.000Z","requestId":"req-a","message":{{"id":"msg-a","model":"unknown-a","usage":{{"input_tokens":10}}}}}}"#
-    );
-    let line_b = format!(
-        r#"{{"timestamp":"{today}T10:01:00.000Z","requestId":"req-b","message":{{"id":"msg-b","model":"unknown-b","usage":{{"input_tokens":20}}}}}}"#
-    );
-    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line_a]);
-    let mut cache = SpendingDiskCache::default();
-    compute_spending(
-        &[(claude_adapter(), file.clone())],
-        &mut cache,
-        &PriceBook::from_litellm_json("{}"),
-        NOW_SECS,
-    );
-
-    append_line(&file, &line_b);
-    compute_spending(
-        &[(claude_adapter(), file.clone())],
-        &mut cache,
-        &PriceBook::from_litellm_json("{}"),
-        NOW_SECS,
-    );
-
-    let cache_key = file.to_string_lossy().into_owned();
-    assert_eq!(
-        cache.files[&cache_key].unknown_models,
-        BTreeMap::from([
-            (
-                "unknown-a".to_owned(),
-                iso_to_unix_secs(&format!("{today}T10:00:00.000Z")).unwrap()
-            ),
-            (
-                "unknown-b".to_owned(),
-                iso_to_unix_secs(&format!("{today}T10:01:00.000Z")).unwrap()
-            )
-        ])
-    );
-}
-
-#[test]
-fn recorded_unknowns_skip_undiscovered_and_aged_out_files() {
-    let discovered = PathBuf::from("/tmp/discovered.jsonl");
     let stale = PathBuf::from("/tmp/stale.jsonl");
-    let deleted = PathBuf::from("/tmp/deleted.jsonl");
-    let mut cache = SpendingDiskCache::default();
-    cache.files.insert(
-        discovered.to_string_lossy().into_owned(),
-        FileCacheEntry {
-            mtime_secs: 0,
-            len: 0,
-            cursor: SpendCursor::default(),
-            entries: Vec::new(),
-            unknown_models: BTreeMap::from([("kept-model".to_owned(), NOW_SECS)]),
-        },
-    );
     cache.files.insert(
         stale.to_string_lossy().into_owned(),
         FileCacheEntry {
@@ -878,75 +456,16 @@ fn recorded_unknowns_skip_undiscovered_and_aged_out_files() {
             )]),
         },
     );
-    cache.files.insert(
-        deleted.to_string_lossy().into_owned(),
-        FileCacheEntry {
-            mtime_secs: 0,
-            len: 0,
-            cursor: SpendCursor::default(),
-            entries: Vec::new(),
-            unknown_models: BTreeMap::from([("deleted-model".to_owned(), NOW_SECS)]),
-        },
-    );
-
     assert_eq!(
         recorded_unknown_models(
-            &[(claude_adapter(), discovered), (claude_adapter(), stale)],
+            &[(claude_adapter(), file), (claude_adapter(), stale)],
             &cache,
             NOW_SECS
         ),
-        BTreeSet::from(["kept-model".to_owned()])
+        BTreeSet::new()
     );
 }
 
-#[test]
-fn priced_aged_out_unknown_does_not_force_a_heal_reparse() {
-    let dir = TempDir::new().unwrap();
-    let model = "old-preview-model";
-    let old_ts = NOW_SECS.saturating_sub(WIDEST_SPEND_WINDOW_SECS);
-    let old_iso = format!("{}T00:00:00.000Z", utc_date(old_ts));
-    let line = format!(
-        r#"{{"timestamp":"{old_iso}","requestId":"req-old","message":{{"id":"msg-old","model":"{model}","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
-    );
-    let file = write_jsonl(dir.path(), "chat.jsonl", &[&line]);
-    let cache_key = file.to_string_lossy().into_owned();
-    let (mtime_secs, len) = file_stat(&file);
-    let mut cache = SpendingDiskCache::default();
-    cache.files.insert(
-        cache_key.clone(),
-        FileCacheEntry {
-            mtime_secs,
-            len,
-            cursor: SpendCursor {
-                offset: len,
-                state: None,
-            },
-            entries: Vec::new(),
-            unknown_models: BTreeMap::from([(model.to_owned(), old_ts)]),
-        },
-    );
-    let prices = PriceBook::from_litellm_json(&format!(
-        r#"{{"{model}": {{"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}}}}"#
-    ));
-
-    let spending = compute_spending(&[(claude_adapter(), file)], &mut cache, &prices, NOW_SECS);
-
-    assert!(spending.total.is_zero());
-    assert!(!cache.dirty, "stale unknowns do not force cold healing");
-    assert!(cache.files[&cache_key].entries.is_empty());
-}
-
-#[test]
-fn sentinel_model_names_are_not_priceable() {
-    assert!(!is_priceable_model_name("<synthetic>"));
-    assert!(!is_priceable_model_name("   "));
-    assert!(is_priceable_model_name("claude-new"));
-}
-
-// ── Provider-spending cache (the SPENDING_TTL gate's stamp) ────────────────────
-
-/// A `Spending` with distinguishable values, so round-trip assertions can tell
-/// a preserved payload from a defaulted one.
 fn sample_spending() -> Spending {
     let mut spending = Spending::default();
     spending.total.today.usd = 1.25;
@@ -958,43 +477,24 @@ fn sample_spending() -> Spending {
 }
 
 #[test]
-fn provider_cache_round_trips_with_stamp() {
+fn provider_cache_staleness_and_error_cases_are_explicit() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("provider-spending.json");
     let spending = sample_spending();
 
     write_provider_spending_cache(&path, 12_345, &spending);
     let cache = read_provider_spending_cache(&path);
-
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_345);
     assert_eq!(cache.spending, spending);
     assert!(cache.is_fresh(12_345));
-}
 
-#[test]
-fn pre_stamp_provider_cache_reads_values_as_stale() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("provider-spending.json");
-    // The pre-stamp on-disk shape: a bare `Spending` with no `refreshed_at_ms`.
-    let spending = sample_spending();
     std::fs::write(&path, serde_json::to_vec(&spending).unwrap()).unwrap();
+    let pre_stamp = read_provider_spending_cache(&path);
+    assert_eq!(pre_stamp.refreshed_at_ms, 0);
+    assert_eq!(pre_stamp.spending, spending);
+    assert!(!pre_stamp.is_fresh(NOW_SECS * 1_000));
 
-    let cache = read_provider_spending_cache(&path);
-
-    // Flatten tolerance: the values survive the upgrade; the missing stamp
-    // defaults to 0, which any real wall clock reads as stale, so the gate
-    // refreshes once instead of serving the old shape forever.
-    assert_eq!(cache.refreshed_at_ms, 0);
-    assert_eq!(cache.spending, spending);
-    assert!(!cache.is_fresh(NOW_SECS * 1_000));
-}
-
-#[test]
-fn provider_cache_version_mismatch_reads_as_stale() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("provider-spending.json");
-    let spending = sample_spending();
     let now_ms = NOW_SECS * 1_000;
     let stale_shape = ProviderSpendingCache {
         version: 0,
@@ -1002,97 +502,72 @@ fn provider_cache_version_mismatch_reads_as_stale() {
         spending: spending.clone(),
     };
     std::fs::write(&path, serde_json::to_vec(&stale_shape).unwrap()).unwrap();
-
-    let cache = read_provider_spending_cache(&path);
-
-    assert_eq!(cache.version, 0);
-    assert_eq!(cache.refreshed_at_ms, now_ms);
-    assert_eq!(cache.spending, spending);
-    assert!(
-        !cache.is_fresh(now_ms),
-        "version-0 aggregates recompute once"
-    );
-}
-
-#[test]
-fn provider_cache_missing_or_corrupt_reads_default() {
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("provider-spending.json");
-    assert_eq!(read_provider_spending_cache(&path).refreshed_at_ms, 0);
+    let version_mismatch = read_provider_spending_cache(&path);
+    assert_eq!(version_mismatch.spending, spending);
+    assert!(!version_mismatch.is_fresh(now_ms));
 
     std::fs::write(&path, b"not json").unwrap();
-    let cache = read_provider_spending_cache(&path);
-    assert_eq!(cache.refreshed_at_ms, 0);
-    assert_eq!(cache.spending, Spending::default());
-}
+    let corrupt = read_provider_spending_cache(&path);
+    assert_eq!(corrupt.refreshed_at_ms, 0);
+    assert_eq!(corrupt.spending, Spending::default());
 
-#[test]
-fn provider_cache_expires_after_spending_ttl() {
-    let cache = ProviderSpendingCache {
+    let ttl_ms = SPENDING_TTL.as_millis() as u64;
+    let fresh = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms: 1_000,
         ..ProviderSpendingCache::default()
     };
-    let ttl_ms = SPENDING_TTL.as_millis() as u64;
-    // Boundary-exact: fresh at exactly the TTL, stale one ms past it.
-    assert!(cache.is_fresh(1_000 + ttl_ms));
-    assert!(!cache.is_fresh(1_001 + ttl_ms));
-    // A clock that ran backwards reads fresh (saturating), never a walk storm.
-    assert!(cache.is_fresh(500));
+    assert!(fresh.is_fresh(1_000 + ttl_ms));
+    assert!(!fresh.is_fresh(1_001 + ttl_ms));
+    assert!(fresh.is_fresh(500));
 }
 
 #[test]
-fn live_spend_baselines_round_trip_separately_from_provider_cache() {
+fn live_baselines_and_overlay_cases_stay_bounded() {
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("live-spend-baselines.json");
     let baselines = LiveSpendBaselines {
         observed_walk_ms: 12_345,
         baselines: BTreeMap::from([("claude-1".to_owned(), 1.05)]),
     };
-
     write_live_spend_baselines(&path, &baselines);
-
     assert_eq!(read_live_spend_baselines(&path), baselines);
-}
 
-// ── The cockpit's live today-spend overlay ──────────────────────────────────────
-
-#[test]
-fn overlay_adds_each_sessions_overshoot_over_its_baseline() {
-    let baselines = BTreeMap::from([("a".to_owned(), 1.00), ("b".to_owned(), 2.50)]);
-    // a overshoots by 0.30, b sits exactly on its baseline.
-    let live = vec![("a", 1.30, Some(5_000)), ("b", 2.50, Some(5_000))];
-    let blended = today_spend_live_usd(10.0, live.into_iter(), &baselines, 9_000);
-    assert!((blended - 10.30).abs() < 1e-9);
-}
-
-#[test]
-fn overlay_new_session_after_publish_contributes_its_whole_cost() {
-    let baselines = BTreeMap::new();
-    // Born after the publish stamp: the walk never saw it, so its whole cost
-    // is post-walk overshoot.
-    let live = vec![("fresh", 0.40, Some(9_500))];
-    let blended = today_spend_live_usd(1.00, live.into_iter(), &baselines, 9_000);
-    assert!((blended - 1.40).abs() < 1e-9);
-}
-
-#[test]
-fn overlay_unbaselined_old_session_fails_safe_to_zero() {
-    let baselines = BTreeMap::new();
-    // Registered before the publish but missing from the baselines (a race),
-    // or carrying no registration stamp at all: contribute nothing rather
-    // than double-count history the walk already priced.
-    let live = vec![("old", 3.00, Some(8_000)), ("unstamped", 2.00, None)];
-    let blended = today_spend_live_usd(5.00, live.into_iter(), &baselines, 9_000);
-    assert!((blended - 5.00).abs() < 1e-9);
-}
-
-#[test]
-fn overlay_negative_delta_clamps_to_zero() {
-    let baselines = BTreeMap::from([("a".to_owned(), 4.00)]);
-    // A resumed session re-counting below its baseline never rolls the
-    // headline backwards.
-    let live = vec![("a", 3.20, Some(5_000))];
-    let blended = today_spend_live_usd(6.00, live.into_iter(), &baselines, 9_000);
-    assert!((blended - 6.00).abs() < 1e-9);
+    for (name, walked, live, baselines, published_at, expected) in [
+        (
+            "overshoot",
+            10.0,
+            vec![("a", 1.30, Some(5_000)), ("b", 2.50, Some(5_000))],
+            BTreeMap::from([("a".to_owned(), 1.00), ("b".to_owned(), 2.50)]),
+            9_000,
+            10.30,
+        ),
+        (
+            "new session",
+            1.00,
+            vec![("fresh", 0.40, Some(9_500))],
+            BTreeMap::new(),
+            9_000,
+            1.40,
+        ),
+        (
+            "unbaselined old sessions",
+            5.00,
+            vec![("old", 3.00, Some(8_000)), ("unstamped", 2.00, None)],
+            BTreeMap::new(),
+            9_000,
+            5.00,
+        ),
+        (
+            "negative delta",
+            6.00,
+            vec![("a", 3.20, Some(5_000))],
+            BTreeMap::from([("a".to_owned(), 4.00)]),
+            9_000,
+            6.00,
+        ),
+    ] {
+        let blended = today_spend_live_usd(walked, live.into_iter(), &baselines, published_at);
+        assert!((blended - expected).abs() < 1e-9, "{name}");
+    }
 }

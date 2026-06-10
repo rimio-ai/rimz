@@ -1,46 +1,25 @@
 use super::*;
 
 #[test]
-fn session_start_observes_idle() {
-    let obs = CodexAdapter
-        .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
-        .unwrap();
-    assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-    // Wired in, nothing asked yet — a plain startup registers fresh (not a
-    // compaction), no task.
-    assert_eq!(obs.signal, LifecycleSignal::Registered);
-    assert_eq!(obs.task, None);
-}
-
-#[test]
-fn session_start_source_maps_to_registration_or_compaction_end() {
-    let compact = CodexAdapter
-        .observe_lifecycle(
-            "SessionStart",
-            &json!({ "session_id": "sess-1", "source": "compact" }),
-        )
-        .unwrap();
-    assert_eq!(
-        compact.signal,
-        LifecycleSignal::CompactionEnded { auto: None }
-    );
-    for source in ["startup", "resume", "clear", "future"] {
+fn session_sources_and_classification_cover_the_installed_surface() {
+    for (source, expected) in [
+        ("compact", LifecycleSignal::CompactionEnded { auto: None }),
+        ("startup", LifecycleSignal::Registered),
+        ("resume", LifecycleSignal::Registered),
+        ("clear", LifecycleSignal::Registered),
+        ("future", LifecycleSignal::Registered),
+    ] {
         let obs = CodexAdapter
             .observe_lifecycle(
                 "SessionStart",
                 &json!({ "session_id": "sess-1", "source": source }),
             )
             .unwrap();
-        assert_eq!(
-            obs.signal,
-            LifecycleSignal::Registered,
-            "{source} is not a compaction",
-        );
+        assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
+        assert_eq!(obs.signal, expected, "{source}");
+        assert_eq!(obs.task, None);
     }
-}
 
-#[test]
-fn lifecycle_classification_covers_installed_nonblocking_events() {
     let expected = INSTALLED_EVENTS
         .iter()
         .map(|(event, _)| *event)
@@ -51,10 +30,14 @@ fn lifecycle_classification_covers_installed_nonblocking_events() {
         .copied()
         .collect::<std::collections::BTreeSet<_>>();
     assert_eq!(actual, expected);
+
+    let c = CodexAdapter.classify_hook("WatItIs", &Value::Null);
+    assert_eq!(c.class, AgentHookClass::Unknown);
+    assert!(c.feed_kind.is_none());
 }
 
 #[test]
-fn compaction_pair_maps_to_lifecycle_signals() {
+fn compaction_pair_maps_trigger_to_lifecycle_signals() {
     for event in ["PreCompact", "PostCompact"] {
         let c = CodexAdapter.classify_hook(event, &json!({ "session_id": "sess-1" }));
         assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
@@ -69,59 +52,44 @@ fn compaction_pair_maps_to_lifecycle_signals() {
         .unwrap();
     assert_eq!(pre.signal, LifecycleSignal::Compacting);
 
-    let auto = CodexAdapter
-        .observe_lifecycle(
-            "PostCompact",
-            &json!({ "session_id": "sess-1", "trigger": "auto" }),
-        )
-        .unwrap();
-    assert_eq!(
-        auto.signal,
-        LifecycleSignal::CompactionEnded { auto: Some(true) }
-    );
-
-    let manual = CodexAdapter
-        .observe_lifecycle(
-            "PostCompact",
-            &json!({ "session_id": "sess-1", "trigger": "manual" }),
-        )
-        .unwrap();
-    assert_eq!(
-        manual.signal,
-        LifecycleSignal::CompactionEnded { auto: Some(false) }
-    );
-
-    for payload in [
-        json!({ "session_id": "sess-1", "trigger": "future" }),
-        json!({ "session_id": "sess-1" }),
+    for (payload, expected) in [
+        (
+            json!({ "session_id": "sess-1", "trigger": "auto" }),
+            LifecycleSignal::CompactionEnded { auto: Some(true) },
+        ),
+        (
+            json!({ "session_id": "sess-1", "trigger": "manual" }),
+            LifecycleSignal::CompactionEnded { auto: Some(false) },
+        ),
+        (
+            json!({ "session_id": "sess-1", "trigger": "future" }),
+            LifecycleSignal::CompactionEnded { auto: None },
+        ),
+        (
+            json!({ "session_id": "sess-1" }),
+            LifecycleSignal::CompactionEnded { auto: None },
+        ),
     ] {
         let obs = CodexAdapter
             .observe_lifecycle("PostCompact", &payload)
             .unwrap();
-        assert_eq!(
-            obs.signal,
-            LifecycleSignal::CompactionEnded { auto: None },
-            "{payload}"
-        );
+        assert_eq!(obs.signal, expected, "{payload}");
     }
 }
 
 #[test]
-fn user_prompt_submit_observes_running_with_prompt_task() {
-    let obs = CodexAdapter
+fn root_and_child_lifecycle_events_keep_identity_boundaries() {
+    let prompt = CodexAdapter
         .observe_lifecycle(
             "UserPromptSubmit",
             &json!({ "session_id": "sess-1", "prompt": "fix auth flow" }),
         )
         .unwrap();
-    assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-    assert_eq!(obs.signal, LifecycleSignal::TurnStarted);
-    assert_eq!(obs.task.as_deref(), Some("fix auth flow"));
-}
+    assert_eq!(prompt.agent_id.as_deref(), Some("sess-1"));
+    assert_eq!(prompt.signal, LifecycleSignal::TurnStarted);
+    assert_eq!(prompt.task.as_deref(), Some("fix auth flow"));
 
-#[test]
-fn subagent_start_observes_child_id_and_type() {
-    let obs = CodexAdapter
+    let start = CodexAdapter
         .observe_lifecycle(
             "SubagentStart",
             &json!({
@@ -131,18 +99,12 @@ fn subagent_start_observes_child_id_and_type() {
             }),
         )
         .unwrap();
+    assert_eq!(start.agent_id.as_deref(), Some("child-thread-1"));
+    assert_eq!(start.signal, LifecycleSignal::SubagentStarted);
+    assert_eq!(start.task.as_deref(), Some("review"));
+    assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
 
-    assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
-    assert_eq!(obs.signal, LifecycleSignal::SubagentStarted);
-    assert_eq!(obs.task.as_deref(), Some("review"));
-    // The child keys off `agent_id`; the payload's `session_id` is its parent
-    // root, captured so the sidebar can nest it.
-    assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
-}
-
-#[test]
-fn subagent_stop_resolves_success_child_id() {
-    let obs = CodexAdapter
+    let stop = CodexAdapter
         .observe_lifecycle(
             "SubagentStop",
             &json!({
@@ -152,26 +114,15 @@ fn subagent_stop_resolves_success_child_id() {
             }),
         )
         .unwrap();
-
-    assert_eq!(obs.agent_id.as_deref(), Some("child-thread-1"));
-    // Codex reports no subagent error signal, so a stop is always clean.
+    assert_eq!(stop.agent_id.as_deref(), Some("child-thread-1"));
     assert_eq!(
-        obs.signal,
+        stop.signal,
         LifecycleSignal::SubagentStopped { errored: false }
     );
-    // The type label persists across stop so a finished child stays labeled
-    // while it lingers in the parent's list.
-    assert_eq!(obs.task.as_deref(), Some("review"));
-    assert_eq!(obs.parent_agent_id.as_deref(), Some("sess-parent"));
-}
+    assert_eq!(stop.task.as_deref(), Some("review"));
+    assert_eq!(stop.parent_agent_id.as_deref(), Some("sess-parent"));
 
-#[test]
-fn foreign_child_root_lifecycle_events_are_dropped() {
-    // A non-Subagent* event carrying a distinct `agent_id` fired inside a
-    // subagent is dropped rather than keyed as a parentless phantom root.
-    // Latent today — Codex stamps `agent_id` only on Subagent* — but the root
-    // arm shares Claude's rule so the door stays closed.
-    for (event, payload, why) in [
+    for (event, payload) in [
         (
             "PostToolUse",
             json!({
@@ -179,7 +130,6 @@ fn foreign_child_root_lifecycle_events_are_dropped() {
                 "agent_id": "child-thread-1",
                 "tool_name": "shell",
             }),
-            "a foreign-id tool event never creates a parentless root row",
         ),
         (
             "PreToolUse",
@@ -188,7 +138,6 @@ fn foreign_child_root_lifecycle_events_are_dropped() {
                 "agent_id": "child-thread-1",
                 "tool_name": "shell",
             }),
-            "a foreign-id pre-tool event never creates a root row",
         ),
         (
             "PostCompact",
@@ -197,16 +146,14 @@ fn foreign_child_root_lifecycle_events_are_dropped() {
                 "agent_id": "child-thread-1",
                 "trigger": "auto",
             }),
-            "a foreign-id compaction end never creates a root row",
         ),
     ] {
-        let obs = CodexAdapter.observe_lifecycle(event, &payload);
-        assert!(obs.is_none(), "{event}: {why}");
+        assert!(
+            CodexAdapter.observe_lifecycle(event, &payload).is_none(),
+            "{event}"
+        );
     }
-}
 
-#[test]
-fn root_post_tool_use_without_foreign_id_is_observed() {
     let root = CodexAdapter
         .observe_lifecycle(
             "PostToolUse",
@@ -218,63 +165,62 @@ fn root_post_tool_use_without_foreign_id_is_observed() {
 }
 
 #[test]
-fn pre_tool_use_observes_proof_of_work() {
-    let obs = CodexAdapter
+fn tool_and_stop_events_map_to_progress_signals() {
+    let pre = CodexAdapter
         .observe_lifecycle(
             "PreToolUse",
             &json!({ "session_id": "sess-1", "tool_name": "shell" }),
         )
         .unwrap();
     assert_eq!(
-        obs.signal,
+        pre.signal,
         LifecycleSignal::ToolUsed {
             mutates: false,
             edits: false,
         }
     );
-}
 
-#[test]
-fn non_mutating_post_tool_use_stays_out_of_lifecycle() {
-    let obs = CodexAdapter.observe_lifecycle(
-        "PostToolUse",
-        &json!({ "session_id": "sess-1", "tool_name": "read" }),
-    );
-    assert!(
-        obs.is_none(),
-        "PostToolUse only emits ToolUsed from the mutating arm"
-    );
-}
-
-#[test]
-fn clean_stop_observes_success() {
-    let obs = CodexAdapter
-        .observe_lifecycle("Stop", &json!({ "session_id": "sess-1" }))
-        .unwrap();
-    assert_eq!(
-        obs.signal,
-        LifecycleSignal::TurnEnded {
-            errored: false,
-            parked_on_background: false,
-        }
-    );
-}
-
-#[test]
-fn errored_stop_observes_failed() {
-    let obs = CodexAdapter
+    let mutating = CodexAdapter
         .observe_lifecycle(
-            "Stop",
-            &json!({ "session_id": "sess-1", "status": "failed" }),
+            "PostToolUse",
+            &json!({ "session_id": "sess-1", "tool_name": "shell" }),
         )
         .unwrap();
     assert_eq!(
-        obs.signal,
-        LifecycleSignal::TurnEnded {
-            errored: true,
-            parked_on_background: false,
+        mutating.signal,
+        LifecycleSignal::ToolUsed {
+            mutates: true,
+            edits: false,
         }
     );
+    assert!(
+        CodexAdapter
+            .observe_lifecycle(
+                "PostToolUse",
+                &json!({ "session_id": "sess-1", "tool_name": "read" }),
+            )
+            .is_none()
+    );
+
+    for (payload, expected) in [
+        (
+            json!({ "session_id": "sess-1" }),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        ),
+        (
+            json!({ "session_id": "sess-1", "status": "failed" }),
+            LifecycleSignal::TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            },
+        ),
+    ] {
+        let obs = CodexAdapter.observe_lifecycle("Stop", &payload).unwrap();
+        assert_eq!(obs.signal, expected, "{payload}");
+    }
 }
 
 #[test]
@@ -315,14 +261,7 @@ fn expiry_predicates_match_observed_root_signals() {
 }
 
 #[test]
-fn classification_unchanged_for_unknown_event() {
-    let c = CodexAdapter.classify_hook("WatItIs", &Value::Null);
-    assert_eq!(c.class, AgentHookClass::Unknown);
-    assert!(c.feed_kind.is_none());
-}
-
-#[test]
-fn post_lifecycle_refresh_fires_on_turn_boundaries_only() {
+fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let ctx = crate::agents::LifecycleRefreshCtx {
         agent_id: "sess-1",
         workspace_id: "ws-1",
@@ -344,27 +283,25 @@ fn post_lifecycle_refresh_fires_on_turn_boundaries_only() {
             "gpt-5",
         ]
     );
-    // No model hint → no --model flag.
     let bare = crate::agents::LifecycleRefreshCtx {
         model_hint: None,
         ..ctx
     };
-    let spawn = CodexAdapter
-        .post_lifecycle_refresh("SessionStart", &bare)
-        .expect("SessionStart refreshes");
-    assert!(!spawn.args.iter().any(|arg| arg == "--model"));
-    // Per-tool events stay silent here — an app-server spawn per call is too frequent.
-    // The cheap local transcript refresh is a separate inline lane.
+    assert!(
+        !CodexAdapter
+            .post_lifecycle_refresh("SessionStart", &bare)
+            .unwrap()
+            .args
+            .iter()
+            .any(|arg| arg == "--model")
+    );
     for event in ["PreToolUse", "PostToolUse", "SubagentStop", "Notification"] {
         assert!(
             CodexAdapter.post_lifecycle_refresh(event, &ctx).is_none(),
             "{event}"
         );
     }
-}
 
-#[test]
-fn local_context_refresh_fires_for_progress_events_only() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");
     std::fs::write(
@@ -384,7 +321,6 @@ fn local_context_refresh_fires_for_progress_events_only() {
         prior_transcript_path: Some(&path),
         prior_transcript_stat: None,
     };
-
     let refresh = CodexAdapter
         .local_context_refresh("PostToolUse", &ctx)
         .expect("PostToolUse reads local transcript context");
@@ -405,10 +341,7 @@ fn local_context_refresh_fires_for_progress_events_only() {
             .local_context_refresh("PermissionRequest", &ctx)
             .is_none()
     );
-}
 
-#[test]
-fn codex_hook_cap_is_shorter_than_claude_default() {
     use crate::agents::ClaudeAdapter;
     assert!(CodexAdapter.descriptor().hook_cap < ClaudeAdapter.descriptor().hook_cap);
 }

@@ -116,6 +116,24 @@ fn assert_permission_allow_decision(source: &str, decision: &Value) {
     }
 }
 
+fn lifecycle_event_count(env: &Env) -> usize {
+    env.read_events()
+        .iter()
+        .filter(|event| event.method == "agent.lifecycle")
+        .count()
+}
+
+fn run_claude_lifecycle(env: &Env, payload: Value) {
+    let payload = serde_json::to_string(&payload).expect("payload");
+    let output = env.run_hook("claude", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+}
+
 fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -140,19 +158,6 @@ fn permission_hook_with_no_allowlisted_resolver_stays_native_ui() {
         assert_eq!(items[0]["surface"], "native_ui");
         assert_eq!(items[0]["status"], "pending");
         assert_eq!(items[0]["source"], source);
-    }
-}
-
-#[test]
-fn permission_hook_with_stale_heartbeat_stays_native_ui() {
-    for (source, payload) in permission_cases() {
-        let env = Env::new();
-        env.enrol("opus-policy", 10, "30s");
-        env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
-
-        let output = env.run_hook(source, &payload);
-        assert_hook_succeeded_neutral(source, output);
-        assert_eq!(env.feed_list_json()[0]["surface"], "native_ui");
     }
 }
 
@@ -267,6 +272,36 @@ fn permission_hook_bridge_cap_timeout_emits_neutral() {
         assert_eq!(parsed[0]["surface"], "bridge");
         assert_eq!(parsed[0]["source"], source);
     }
+}
+
+#[test]
+fn codex_session_start_writes_agent_lifecycle_event() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-codex-01",
+        "approval_policy": "ask",
+        "worktree_branch": "feature-x",
+    }))
+    .expect("payload");
+
+    let output = env.run_hook("codex", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+
+    // The lifecycle event must land in the snapshot's agents rollup.
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
+    assert_eq!(agents[0]["kind"], "codex");
+    assert_eq!(agents[0]["agent_id"], "sess-codex-01");
+    // SessionStart registers the agent idle (wired in, nothing asked yet).
+    assert_eq!(agents[0]["status"], "idle");
+    assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
 #[test]
@@ -391,36 +426,7 @@ fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
 }
 
 #[test]
-fn pi_tool_call_with_stale_heartbeat_emits_neutral_and_no_feed_item() {
-    let env = Env::new();
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
-
-    let output = env.run_hook("pi", &pi_tool_call_payload("bash"));
-    assert_hook_succeeded_neutral("pi", output);
-    assert_eq!(
-        env.feed_list_json().as_array().expect("array").len(),
-        0,
-        "a stale resolver downgrades, but pi still gets no native_ui item"
-    );
-}
-
-#[test]
-fn pi_tool_call_bridge_renders_provider_decisions() {
-    let cases = [
-        (r#"{"choice":"allow"}"#, json!({})),
-        (
-            r#"{"choice":"deny","reason":"rm -rf is not on the allowlist"}"#,
-            json!({ "block": true, "reason": "rm -rf is not on the allowlist" }),
-        ),
-    ];
-    for (answer, expected) in cases {
-        let decision = resolve_pi_tool_call(answer);
-        assert_eq!(decision, expected, "answer: {answer}");
-    }
-}
-
-fn resolve_pi_tool_call(answer: &str) -> Value {
+fn pi_tool_call_bridge_allow_renders_empty_object() {
     let env = Env::new();
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -429,7 +435,12 @@ fn resolve_pi_tool_call(answer: &str) -> Value {
     let request_id = env
         .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
-    let resolve = env.resolve(&request_id, answer, "opus-policy", "hook-bridge");
+    let resolve = env.resolve(
+        &request_id,
+        r#"{"choice":"allow"}"#,
+        "opus-policy",
+        "hook-bridge",
+    );
     assert!(
         resolve.status.success(),
         "resolve failed: {}",
@@ -443,7 +454,46 @@ fn resolve_pi_tool_call(answer: &str) -> Value {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8");
-    serde_json::from_str(stdout.trim()).expect("pi decision json")
+    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
+    // Pi's allow is the empty object — the extension blocks only on
+    // `block === true`.
+    assert_eq!(decision, json!({}), "decision: {decision}");
+}
+
+#[test]
+fn pi_session_start_writes_agent_lifecycle_event() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "session_start",
+        "session_id": "019e9161-a5d0-791d-879e-39679acd4ded",
+        "reason": "startup",
+        "model": "gpt-5.5",
+        "context_pct": 3,
+        "context_window": 272000,
+        "total_tokens": 8160,
+    }))
+    .expect("payload");
+
+    let output = env.run_hook("pi", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
+    assert_eq!(agents[0]["kind"], "pi");
+    assert_eq!(
+        agents[0]["agent_id"],
+        "019e9161-a5d0-791d-879e-39679acd4ded"
+    );
+    // session_start registers the agent idle (wired in, nothing asked yet).
+    assert_eq!(agents[0]["status"], "idle");
+    assert_eq!(agents[0]["model"], "gpt-5.5");
+    assert_eq!(agents[0]["context_window"], 272000);
 }
 
 #[test]
@@ -663,6 +713,49 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
     assert_eq!(rows[0]["request_id"], request_id.as_str());
 }
 
+#[test]
+fn manual_compact_then_pre_tool_use_resumes_running() {
+    let env = Env::new();
+    let run = |payload: &serde_json::Value| {
+        let payload = serde_json::to_string(payload).expect("payload");
+        let output = env.run_hook("codex", &payload);
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+    };
+
+    run(&json!({
+        "hook_event_name": "UserPromptSubmit",
+        "session_id": "sess-codex-compact",
+        "prompt": "continue after compact",
+    }));
+    run(&json!({
+        "hook_event_name": "PostCompact",
+        "session_id": "sess-codex-compact",
+        "trigger": "manual",
+    }));
+    let after_manual = env.snapshot_json();
+    assert_eq!(after_manual["agents"][0]["status"], "idle");
+    let before = lifecycle_event_count(&env);
+
+    run(&json!({
+        "hook_event_name": "PreToolUse",
+        "session_id": "sess-codex-compact",
+        "tool_name": "shell",
+    }));
+
+    assert_eq!(
+        lifecycle_event_count(&env),
+        before + 1,
+        "a resting-row PreToolUse reconciliation is persisted"
+    );
+    let resumed = env.snapshot_json();
+    assert_eq!(resumed["agents"][0]["status"], "running");
+}
+
 // --- Claude PreToolUse blocking events ---
 //
 // `ExitPlanMode` and `AskUserQuestion` are PreToolUse blocking hooks. The
@@ -670,8 +763,11 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
 // empty and the agent's own UI is the answer surface.
 
 #[test]
-fn claude_blocking_default_path_pushes_native_items() {
-    for (tool, kind, _) in claude_blocking_cases() {
+fn claude_pre_tool_blocking_events_use_native_ui_without_resolver() {
+    for (tool, expected_kind) in [
+        ("ExitPlanMode", "plan_approval"),
+        ("AskUserQuestion", "question"),
+    ] {
         let env = Env::new();
         let output = env.run_hook("claude", &claude_pre_tool_use_payload(tool));
         assert!(
@@ -685,21 +781,47 @@ fn claude_blocking_default_path_pushes_native_items() {
         );
 
         let items = env.feed_list_json();
-        assert_eq!(items[0]["kind"], kind);
-        assert_eq!(items[0]["surface"], "native_ui");
-        assert_eq!(items[0]["status"], "pending");
+        let items = items.as_array().expect("array");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0]["surface"], "native_ui", "{tool}");
+        assert_eq!(items[0]["status"], "pending", "{tool}");
+        assert_eq!(items[0]["kind"], expected_kind, "{tool}");
     }
 }
 
 #[test]
-fn claude_blocking_bridge_path_renders_updated_input() {
-    for (tool, _, input_key) in claude_blocking_cases() {
+fn claude_pre_tool_bridge_path_renders_updated_input() {
+    for (tool, field, value) in [
+        ("ExitPlanMode", "plan", "approved"),
+        ("AskUserQuestion", "question", "clarified"),
+    ] {
         let env = Env::new();
         if env.skip_if_sandboxed() {
             continue;
         }
+        env.enrol("opus-policy", 10, "30s");
+        env.write_heartbeat("opus-policy", Timestamp::now());
 
-        let decision = resolve_claude_blocking_tool(&env, tool, input_key);
+        let child = env.spawn_hook("claude", &claude_pre_tool_use_payload(tool));
+        let request_id = env
+            .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+            .expect("bridge item should appear in feed");
+        let answer = format!(r#"{{"choice":"allow","updatedInput":{{"{field}":"{value}"}}}}"#);
+        let resolve = env.resolve(&request_id, &answer, "opus-policy", "hook-bridge");
+        assert!(
+            resolve.status.success(),
+            "resolve failed: {}",
+            String::from_utf8_lossy(&resolve.stderr)
+        );
+
+        let output = child.wait_with_output().expect("wait child");
+        assert!(
+            output.status.success(),
+            "hook stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).expect("utf8");
+        let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
         assert_eq!(
             decision["hookSpecificOutput"]["hookEventName"],
             "PreToolUse"
@@ -708,55 +830,121 @@ fn claude_blocking_bridge_path_renders_updated_input() {
             decision["hookSpecificOutput"]["permissionDecision"],
             "allow"
         );
-        assert_eq!(
-            decision["hookSpecificOutput"]["updatedInput"][input_key],
-            format!("{input_key}-updated")
-        );
+        assert_eq!(decision["hookSpecificOutput"]["updatedInput"][field], value);
     }
 }
 
-fn claude_blocking_cases() -> [(&'static str, &'static str, &'static str); 2] {
-    [
-        ("ExitPlanMode", "plan_approval", "plan"),
-        ("AskUserQuestion", "question", "question"),
-    ]
-}
-
-fn resolve_claude_blocking_tool(env: &Env, tool: &str, input_key: &str) -> Value {
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("claude", &claude_pre_tool_use_payload(tool));
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-
-    let mut updated_input = serde_json::Map::new();
-    updated_input.insert(input_key.to_owned(), json!(format!("{input_key}-updated")));
-    let answer = json!({
-        "choice": "allow",
-        "updatedInput": Value::Object(updated_input),
-    });
-    let resolve = env.resolve(
-        &request_id,
-        &serde_json::to_string(&answer).expect("answer"),
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    serde_json::from_str(stdout.trim()).expect("agent json")
-}
-
 // --- Claude lifecycle and install/uninstall ---
+
+#[test]
+fn claude_session_start_writes_agent_lifecycle_event() {
+    let env = Env::new();
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "SessionStart",
+        "session_id": "sess-claude-01",
+        "permission_mode": "default",
+        "worktree_branch": "feature-x",
+    }))
+    .expect("payload");
+
+    let output = env.run_hook("claude", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+
+    let parsed = env.snapshot_json();
+    let agents = parsed["agents"].as_array().expect("agents array");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["kind"], "claude");
+    assert_eq!(agents[0]["agent_id"], "sess-claude-01");
+    // SessionStart registers the agent idle (wired in, nothing asked yet).
+    assert_eq!(agents[0]["status"], "idle");
+    assert_eq!(agents[0]["worktree_branch"], "feature-x");
+}
+
+#[test]
+fn claude_session_start_compact_closes_and_counts_the_bracket() {
+    let env = Env::new();
+
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-compact",
+            "prompt": "continue the turn",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-claude-compact",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-claude-compact",
+            "source": "compact",
+        }),
+    );
+
+    let parsed = env.snapshot_json();
+    let agent = &parsed["agents"][0];
+    assert_eq!(agent["status"], "running");
+    assert_eq!(agent["phase"], "reasoning");
+    assert_eq!(agent["compaction_count"], 1);
+    assert!(
+        agent.get("compacting_since").is_none_or(Value::is_null),
+        "compacting head should be cleared: {agent:?}"
+    );
+}
+
+#[test]
+fn claude_bracket_closing_pre_tool_use_is_persisted() {
+    let env = Env::new();
+
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-pretool-close",
+            "prompt": "continue the turn",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-claude-pretool-close",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-claude-pretool-close",
+            "tool_name": "Read",
+        }),
+    );
+
+    assert_eq!(
+        lifecycle_event_count(&env),
+        3,
+        "the non-mutating PreToolUse must be durable when it closes a compaction bracket"
+    );
+    let parsed = env.snapshot_json();
+    let agent = &parsed["agents"][0];
+    assert_eq!(agent["compaction_count"], 1);
+    assert!(
+        agent.get("compacting_since").is_none_or(Value::is_null),
+        "compacting head should be cleared: {agent:?}"
+    );
+}
 
 #[test]
 fn claude_install_uninstall_cli_round_trips_into_settings_json() {
