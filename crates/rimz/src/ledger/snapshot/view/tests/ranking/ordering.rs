@@ -188,11 +188,12 @@ fn attention_bucket_sorts_longest_overdue_first() {
 }
 
 #[test]
-fn unread_rows_form_the_primary_inbox_band() {
+fn status_leads_and_unread_breaks_status_ties() {
     let agents = vec![
         agent_in("seen-wait", "/repo/main", AgentStatus::Waiting, 1_000),
-        agent_in("new-done", "/repo/main", AgentStatus::Success, 2_000),
+        agent_in("new-done", "/repo/main", AgentStatus::Success, 9_000),
         agent_in("seen-fail", "/repo/main", AgentStatus::Failed, 3_000),
+        agent_in("seen-done", "/repo/main", AgentStatus::Success, 1_000),
     ];
     let mut snapshot = room_with_agent_panes(Vec::new(), agents);
     row_mut(&mut snapshot, "new-done").unread = true;
@@ -205,13 +206,13 @@ fn unread_rows_form_the_primary_inbox_band() {
         .collect::<Vec<_>>();
     assert_eq!(
         order,
-        vec!["new-done", "seen-wait", "seen-fail"],
-        "unread done work sits above already-seen actionable rows"
+        vec!["seen-wait", "seen-fail", "new-done", "seen-done"],
+        "status is primary; unread only lifts the success row inside its bucket"
     );
 }
 
 #[test]
-fn unread_topped_group_floats_above_seen_attention_group() {
+fn status_topped_group_floats_above_unread_calm_group() {
     let agents = vec![
         agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
         agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
@@ -227,8 +228,52 @@ fn unread_topped_group_floats_above_seen_attention_group() {
         .collect::<Vec<_>>();
     assert_eq!(
         groups,
+        vec!["a", "b"],
+        "a waiting-topped group stays above an unread calm group"
+    );
+}
+
+#[test]
+fn unread_breaks_a_calm_group_tie() {
+    let agents = vec![
+        agent_in("read-done", "/repo/a", AgentStatus::Success, 1_000),
+        agent_in("new-done", "/repo/b", AgentStatus::Success, 9_000),
+    ];
+    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
+    row_mut(&mut snapshot, "new-done").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let groups = snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.label.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        groups,
         vec!["b", "a"],
-        "a group with unread work enters the inbox band before read attention"
+        "unread breaks ties between same-tier calm groups"
+    );
+}
+
+#[test]
+fn unread_waiting_leads_read_waiting_despite_age() {
+    let agents = vec![
+        agent_in("read-old", "/repo/main", AgentStatus::Waiting, 1_000),
+        agent_in("new-wait", "/repo/main", AgentStatus::Waiting, 9_000),
+    ];
+    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
+    row_mut(&mut snapshot, "new-wait").unread = true;
+    snapshot.sort_groups_for_presentation();
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["new-wait", "read-old"],
+        "within a status bucket, unread leads older read attention"
     );
 }
 

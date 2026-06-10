@@ -20,6 +20,7 @@ pub mod fuse;
 pub mod notify;
 pub mod observe;
 pub mod produce;
+pub mod read_marks;
 pub mod snapshot;
 pub mod timing;
 
@@ -187,16 +188,16 @@ pub fn elder_sidebar_present(rt: &RuntimePaths, own_id: &SidebarInstanceId) -> b
 }
 
 /// Remove runtime files left by sidebars that exited without their RAII cleanup
-/// (a SIGKILL skips it): heartbeats aged past the liveness TTL, and sockets with
-/// no live owner. A live sidebar re-stamps its heartbeat every tick, so a stale
-/// mtime is an honest "owner is gone". A socket is kept while its owner is fresh
-/// (paired by short id) or still starting up (bound before the first heartbeat —
-/// guarded by its own fresh mtime). Best-effort: a removal race is ignored.
+/// (a SIGKILL skips it): heartbeats aged past the liveness TTL, sockets with no
+/// live owner, and stale read-mark receipts from dead renderers. A live sidebar
+/// re-stamps its heartbeat every tick, so a stale mtime is an honest "owner is
+/// gone". A socket is kept while its owner is fresh (paired by short id) or
+/// still starting up (bound before the first heartbeat — guarded by its own
+/// fresh mtime). Best-effort: a removal race is ignored.
 pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
-    let live: HashSet<String> = fresh_sidebar_instances(rt)
-        .iter()
-        .map(|id| id.short().to_owned())
-        .collect();
+    let instances = fresh_sidebar_instances(rt);
+    let live: HashSet<String> = instances.iter().map(|id| id.short().to_owned()).collect();
+    let live_full: HashSet<String> = instances.iter().map(|id| id.as_str().to_owned()).collect();
 
     if let Ok(entries) = fs::read_dir(&rt.heartbeat_dir) {
         for entry in entries.flatten() {
@@ -213,6 +214,17 @@ pub fn sweep_orphan_runtime(rt: &RuntimePaths) {
                 continue;
             };
             if !live.contains(&short) && !mtime_within_ttl(&path) {
+                remove_orphan(&path);
+            }
+        }
+    }
+    if let Ok(entries) = fs::read_dir(&rt.read_marks_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(instance_id) = read_marks::read_mark_file_instance_id(&path) else {
+                continue;
+            };
+            if !live_full.contains(instance_id.as_str()) && !mtime_within_ttl(&path) {
                 remove_orphan(&path);
             }
         }
@@ -603,5 +615,29 @@ mod tests {
         assert!(live_sock.exists(), "live owner's socket kept");
         assert!(starting_sock.exists(), "startup-window socket kept");
         assert!(!orphan_sock.exists(), "dead owner's socket swept");
+    }
+
+    #[test]
+    fn sweep_removes_orphan_read_marks_keeps_live_and_fresh() {
+        let h = Harness::new();
+        h.ensure_runtime();
+        let live = instance("0d");
+        h.write_sidebar_for(&live);
+        let dead = instance("0e");
+        let fresh = instance("0f");
+        let live_marks = h.runtime.sidebar_read_marks_path(&live);
+        let dead_marks = h.runtime.sidebar_read_marks_path(&dead);
+        let fresh_marks = h.runtime.sidebar_read_marks_path(&fresh);
+        for path in [&live_marks, &dead_marks, &fresh_marks] {
+            std::fs::write(path, br#"{"marks":{"row-a":1000}}"#).expect("write read marks");
+        }
+        make_stale(&live_marks);
+        make_stale(&dead_marks);
+
+        sweep_orphan_runtime(&h.runtime);
+
+        assert!(live_marks.exists(), "live owner's read marks kept");
+        assert!(fresh_marks.exists(), "fresh startup-window read marks kept");
+        assert!(!dead_marks.exists(), "dead owner's read marks swept");
     }
 }

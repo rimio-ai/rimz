@@ -22,6 +22,7 @@ use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
 use crate::sidebar::events::EventStore;
 use crate::sidebar::fuse::fuse;
 use crate::sidebar::observe::{self, ObserveMsg};
+use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
@@ -155,7 +156,13 @@ pub fn serve(config: ServeConfig) -> Result<()> {
             observe_rx,
         )
     });
-    let mut state = LoopState::new(config.workspace_id.clone(), initial_width, observe_tx);
+    let read_marks = ReadMarkStore::new(runtime.clone(), config.instance_id.clone());
+    let mut state = LoopState::new(
+        config.workspace_id.clone(),
+        initial_width,
+        observe_tx,
+        read_marks,
+    );
     // Monotonic base for the animation frame. Deriving the phase from elapsed
     // wall-clock (rather than a per-tick counter) keeps the spin continuous
     // across re-fetches and ledger deltas, so no redraw path can stall it.
@@ -516,9 +523,9 @@ fn spawn_pane_focus(pane_id: PaneId) {
     });
 }
 
-/// Removes a per-instance runtime file (wakeup socket, heartbeat) when the
-/// sidebar exits, so a later `rimz` launch sees an honest "no sidebar here" and
-/// rebirths one rather than trusting a stale artifact.
+/// Removes a per-instance runtime file (wakeup socket, heartbeat)
+/// when the sidebar exits, so a later `rimz` launch sees an honest "no sidebar
+/// here" and rebirths one rather than trusting a stale artifact.
 struct RuntimeFileGuard {
     path: PathBuf,
 }

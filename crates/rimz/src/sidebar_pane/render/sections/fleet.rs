@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat, agent_style, attention_breath, status_glyph, status_style,
+    age_heat, agent_style, hard_blink, status_glyph, status_style,
 };
 use crate::sidebar_pane::render::theme::{ORANGE, Theme};
 
@@ -335,12 +335,12 @@ fn unread_bucket_style(
         return base;
     };
     theme.style(
-        bucket_breath_color(status, oldest),
-        attention_breath(animation_phase, oldest),
+        unread_bucket_color(status, oldest),
+        hard_blink(animation_phase),
     )
 }
 
-fn bucket_breath_color(status: AgentStatus, age_secs: i64) -> Color {
+fn unread_bucket_color(status: AgentStatus, age_secs: i64) -> Color {
     match status {
         AgentStatus::Waiting | AgentStatus::Failed => age_heat(age_secs).unwrap_or(Color::Yellow),
         AgentStatus::Paused => Color::Yellow,

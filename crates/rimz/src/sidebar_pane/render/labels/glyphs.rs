@@ -86,29 +86,31 @@ pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'
 /// the middle, `BOLD` at the peak — so the marker swells and fades like a
 /// breath (~2.4s at the 100ms animation tick), pulling the eye back to an
 /// unanswered row without strobing. Amber doubles the tempo (~1.2s): the row
-/// sits past the half hour and the breath quickens with it. Red drops the
-/// swell for a hard `BOLD`↔`DIM` blink (~0.6s, flipping on the slow paint
-/// grid) — past the hour the glyph earns the strobe the young breath avoids.
-/// Every tier holds the glyph in its cell (never blanking, so the column never
-/// shifts) and is modifier-only, so the urgency cadence survives under
-/// `NO_COLOR`.
+/// sits past the half hour and the breath quickens with it. Red switches to
+/// [`hard_blink`] — past the hour the glyph earns the strobe the young breath
+/// avoids. Every tier holds the glyph in its cell (never blanking, so the
+/// column never shifts) and is modifier-only, so the urgency cadence survives
+/// under `NO_COLOR`.
 pub(in crate::sidebar_pane::render) fn attention_breath(
     animation_phase: u64,
     age_secs: i64,
 ) -> Modifier {
     match age_heat(age_secs) {
-        // Red: a hard square wave, flipping every third tick.
-        Some(Color::Red) => {
-            if animation_phase % 6 < 3 {
-                Modifier::BOLD
-            } else {
-                Modifier::DIM
-            }
-        }
+        Some(Color::Red) => hard_blink(animation_phase),
         // Amber: the same triangle at double-time.
         Some(color) if color == ORANGE => breath_wave(animation_phase.wrapping_mul(2)),
         // Yellow (including the fresh yellow floor): the resting cadence.
         _ => breath_wave(animation_phase),
+    }
+}
+
+/// A hard square-wave blink: `BOLD` for three phases, `DIM` for three, holding
+/// the glyph in place so the column stays fixed under color and `NO_COLOR`.
+pub(in crate::sidebar_pane::render) fn hard_blink(animation_phase: u64) -> Modifier {
+    if animation_phase % 6 < 3 {
+        Modifier::BOLD
+    } else {
+        Modifier::DIM
     }
 }
 
@@ -220,15 +222,15 @@ pub(in crate::sidebar_pane::render) fn agent_style(theme: &Theme, status: AgentS
     status_style(theme, status)
 }
 
-/// Style for an agent row's leading glyph. Both attention states — `?` waiting
-/// and `!` failed — breathe (a `DIM`↔`BOLD` brightness pulse, see
+/// Style for an agent row's leading glyph. Unread rows always hard-blink: an
+/// unread actionable row keeps its age-heated attention color, and an unread
+/// calm row keeps its resting [`agent_style`] tone. Read attention states — `?`
+/// waiting and `!` failed — breathe (a `DIM`↔`BOLD` brightness pulse, see
 /// [`attention_breath`]) and wear the shared [`age_heat`] over a yellow floor:
 /// a fresh ask reads calm-urgent yellow ("a human is needed here") and heats
 /// through amber to red on the same quarter-hour ramp as the age clock beside
-/// it, so the glyph and the clock never disagree while warm. The breath paces
-/// with the same heat — slow while yellow, double-time at amber, a hard blink
-/// at red. Every calm state keeps its resting [`agent_style`] tone,
-/// unbreathing.
+/// it, so the glyph and the clock never disagree while warm. Every read calm
+/// state keeps its resting tone, unbreathing.
 pub(in crate::sidebar_pane::render) fn attention_glyph_style(
     theme: &Theme,
     status: AgentStatus,
@@ -236,11 +238,14 @@ pub(in crate::sidebar_pane::render) fn attention_glyph_style(
     animation_phase: u64,
     unread: bool,
 ) -> Style {
-    if status.is_actionable() {
+    if unread && status.is_actionable() {
+        let color = age_heat(age_secs).unwrap_or(Color::Yellow);
+        theme.style(color, hard_blink(animation_phase))
+    } else if unread {
+        agent_style(theme, status).add_modifier(hard_blink(animation_phase))
+    } else if status.is_actionable() {
         let color = age_heat(age_secs).unwrap_or(Color::Yellow);
         theme.style(color, attention_breath(animation_phase, age_secs))
-    } else if unread {
-        agent_style(theme, status).add_modifier(attention_breath(animation_phase, age_secs))
     } else {
         agent_style(theme, status)
     }

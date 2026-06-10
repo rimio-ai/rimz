@@ -164,15 +164,18 @@ pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) 
     groups.sort_by(compare_groups);
 }
 
-/// Trim a group's calm tail to `WORKTREE_ROW_CAP`, always keeping the rows that
-/// need you (`waiting`/`failed`) and the focused pane. Because `idle` ranks
-/// last among agents, it is the first calm bucket trimmed behind `+K more` —
-/// by design: a parked, work-less agent is the least attention-hungry, and a
-/// finished or working agent stays visible longer.
+/// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping the
+/// agent rows whose current or next state needs renderer-side unread tracking
+/// plus the focused pane. Because `idle` ranks last among agents, it is the
+/// first bucket trimmed behind `+K more` — by design: a parked, work-less agent
+/// is the least attention-hungry, while active, blocked, paused, and finished
+/// work stays visible for triage and read receipt propagation.
 pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
-        if row.status().is_some_and(AgentStatus::is_actionable)
+        if row
+            .status()
+            .is_some_and(|status| status != AgentStatus::Idle)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || visible.len() < WORKTREE_ROW_CAP
         {
@@ -183,13 +186,15 @@ pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
 }
 
 pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    // The final tiebreak is the stable `id` alone — never `name`, which mutates
+    // Unread is a within-status tiebreak, not the primary inbox band: a seen `?`
+    // still outranks an unread `✓`. Within one attention bucket it deliberately
+    // beats oldest-first so a fresh unread `?` leads older read `?` rows. The
+    // final tiebreak is the stable `id` alone — never `name`, which mutates
     // through the session-name → task → prompt label ladder and would reshuffle
     // a bucket on every rename.
-    right
-        .unread
-        .cmp(&left.unread)
-        .then_with(|| row_rank(left).cmp(&row_rank(right)))
+    row_rank(left)
+        .cmp(&row_rank(right))
+        .then_with(|| right.unread.cmp(&left.unread))
         .then_with(|| within_bucket(left, right))
         .then_with(|| left.id.cmp(&right.id))
 }
@@ -259,16 +264,12 @@ pub(super) fn compare_groups(
 
 /// The most-urgent member's *group* tier. `rows` is already sorted by
 /// `compare_rows` and the cap never hides `waiting`/`failed`, so `rows.first()`
-/// is the true top; an empty group ranks last. Unlike `row_rank`, every calm
-/// status collapses to one tier: a calm group's position must not leapfrog a
-/// sibling just because its top row flipped success↔running↔idle — calm groups
-/// hold the stable earliest-pane order, and only genuine attention reorders.
+/// is the true top; an empty group ranks last. Unread breaks ties within that
+/// top row's status tier. Unlike `row_rank`, every calm status collapses to one
+/// tier: a calm group's position must not leapfrog a sibling just because its
+/// top row flipped success↔running↔idle — calm groups hold the stable
+/// earliest-pane order, and only genuine attention reorders.
 fn group_tier(group: &SidebarWorktreeGroup) -> (u8, u8) {
-    let unread_tier = if group.rows.first().is_some_and(|row| row.unread) {
-        0
-    } else {
-        1
-    };
     let status_tier = match group.rows.first().map(SidebarRow::status) {
         Some(Some(AgentStatus::Waiting)) => 0,
         Some(Some(AgentStatus::Failed)) => 1,
@@ -279,7 +280,12 @@ fn group_tier(group: &SidebarWorktreeGroup) -> (u8, u8) {
         Some(None) => 4,
         None => u8::MAX,
     };
-    (unread_tier, status_tier)
+    let unread_tier = if group.rows.first().is_some_and(|row| row.unread) {
+        0
+    } else {
+        1
+    };
+    (status_tier, unread_tier)
 }
 
 fn group_is_external(group: &SidebarWorktreeGroup) -> bool {

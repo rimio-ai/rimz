@@ -18,8 +18,8 @@ One human, many agents, finite attention. A fleet emits far more than one person
 
 The sidebar is a worktree-keyed presence and attention map: one row per live pane, each agent enriched from the ledger, grouped by the worktree it lives in. It answers four questions in a single glance (*what is working smoothly, what is blocked, what errored, and how much has been done*) and keeps answering them as the fleet grows.
 
-- The most overdue attention rises to the top, oldest first; calm work settles below. A per-worktree cap trims only the calm tail and never hides a row that needs you. You don't sort: the column arrives triaged.
-- Two symbols carry every call for attention: `?` (*needs your answer*) and `!` (*needs a look*). The signal survives `NO_COLOR` and color-blindness; color is a second, redundant channel. Only genuinely live work animates; a calm, blocked, or finished agent holds still.
+- Attention rises by status first, oldest first inside each read attention bucket; unread rows break ties inside their own status bucket, so a result you have not looked at leads read results without outranking a blocked pane. A per-worktree cap trims only the idle/process tail and keeps active, blocked, paused, finished, and focused rows visible. You don't sort: the column arrives triaged.
+- Two symbols carry every call for attention: `?` (*needs your answer*) and `!` (*needs a look*). The signal survives `NO_COLOR` and color-blindness; color is a second, redundant channel. Genuinely live work animates, and an unread row hard-blinks until you focus its pane; calm read rows hold still.
 - A fixed cockpit make-up (`? 2  ! 1 …`) compresses the whole fleet to a single line: a row of zeros means nothing needs you, so you skip the scan entirely.
 - A row exists because a pane is running right now, read live from the multiplexer's pane list, while an agent's durable facts (status, task, enrichments) come from the ledger. An agent that exits is gone the moment its pane reverts to a shell; the row clears on its own.
 

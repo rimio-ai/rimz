@@ -1,10 +1,10 @@
 //! Garbage collection — runtime liveness hints and provably-dead workspaces.
 //!
 //! [`collect_runtime`] removes runtime liveness hints older than an
-//! operator-supplied threshold: resolver/sidebar heartbeat JSON and sidebar
-//! wakeup sockets named by stale heartbeats. Per-request `feed.*.sock` files
-//! are deliberately left alone because a long-running `feed ask` may still own
-//! one.
+//! operator-supplied threshold: resolver/sidebar heartbeat JSON, sidebar wakeup
+//! sockets named by stale heartbeats, and sidebar read-mark receipts whose
+//! owner heartbeat has expired. Per-request `feed.*.sock` files are
+//! deliberately left alone because a long-running `feed ask` may still own one.
 //!
 //! [`prune_dead_workspaces`] reaps durable workspace ledgers that can hold no
 //! recoverable value: a recorded project root that no longer exists, or an

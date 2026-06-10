@@ -8,7 +8,8 @@ use super::*;
 /// falls to an em dash. A turn that died on a provider API error takes the line
 /// over the fall-through — the soft upstream error text (`turn_error_label`,
 /// quoted verbatim) is the row's most important fact while the `!` escalation
-/// holds, and the fall-through returns once it clears. At L2 the todo progress
+/// holds, and the fall-through returns once it clears. An unread descriptor
+/// renders bold while the row waits for a look. At L2 the todo progress
 /// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
 /// the dots read as a tidy gutter instead of floating after the text.
 pub(super) fn description_line(
@@ -22,6 +23,10 @@ pub(super) fn description_line(
         Span::styled(label.to_owned(), theme.soft())
     } else {
         match descriptor(row) {
+            Some(text) if row.unread => Span::styled(
+                text.to_owned(),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
             Some(text) => Span::raw(text.to_owned()),
             None if shows_loading_dots(row) => {
                 Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())

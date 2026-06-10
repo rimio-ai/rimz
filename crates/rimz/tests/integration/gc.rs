@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 use rimz::schema::heartbeat::ResolverHeartbeat;
-use rimz::{ResolverId, RuntimePaths, WorkspaceId};
+use rimz::{ResolverId, RuntimePaths, SidebarInstanceId, WorkspaceId};
 
 use crate::common::Env;
 
@@ -36,6 +36,33 @@ fn gc_removes_stale_runtime_heartbeat() {
     assert!(
         !heartbeat_path.exists(),
         "stale heartbeat should be removed"
+    );
+}
+
+#[test]
+fn gc_removes_stale_sidebar_read_marks() {
+    let env = Env::new();
+    let rt = RuntimePaths::under(env.workspace_id.clone(), &env.runtime_root).expect("runtime");
+    rt.ensure_dirs().expect("runtime dirs");
+
+    let read_marks_path = rt.sidebar_read_marks_path(&SidebarInstanceId::new());
+    std::fs::write(&read_marks_path, br#"{"marks":{"row-a":1000}}"#).expect("write read marks");
+    let old = SystemTime::now() - Duration::from_secs(7200);
+    std::fs::File::open(&read_marks_path)
+        .unwrap()
+        .set_modified(old)
+        .unwrap();
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("gc complete"))
+        .stdout(contains("sidecars      : 1"));
+
+    assert!(
+        !read_marks_path.exists(),
+        "stale read marks should be removed"
     );
 }
 

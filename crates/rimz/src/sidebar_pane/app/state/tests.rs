@@ -1,8 +1,12 @@
 use super::*;
+use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
 use crate::sidebar_pane::render::Alert;
-use crate::{AgentCard, PaneId, RowCard, SidebarStatusCount, SidebarWorktreeGroup};
+use crate::{
+    AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
+    SidebarWorktreeGroup,
+};
 
 /// Health seeded with a live alert, as if a failure already crossed the
 /// debounce threshold — the starting point for recovery/sticky tests.
@@ -59,6 +63,20 @@ fn row_snapshot(
     status: crate::feed::AgentStatus,
     focused: bool,
 ) -> SidebarSnapshot {
+    row_snapshot_at(
+        ws,
+        status,
+        focused,
+        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+    )
+}
+
+fn row_snapshot_at(
+    ws: &WorkspaceId,
+    status: crate::feed::AgentStatus,
+    focused: bool,
+    last_activity: jiff::Timestamp,
+) -> SidebarSnapshot {
     let pane_id = PaneId::from_parts(crate::MuxName::Tmux, "%1");
     let mut snap = snapshot(ws);
     snap.worktree_groups = vec![SidebarWorktreeGroup {
@@ -73,7 +91,7 @@ fn row_snapshot(
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             unread: false,
-            last_activity: jiff::Timestamp::from_second(1_700_000_000).unwrap(),
+            last_activity,
             card: RowCard::Agent(Box::new(AgentCard {
                 status: Some(status),
                 phase: crate::agents::TurnPhase::Idle,
@@ -100,12 +118,21 @@ fn row_snapshot(
     snap
 }
 
+fn read_mark_store(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let store = ReadMarkStore::new(runtime, SidebarInstanceId::new());
+    (dir, store)
+}
+
 fn apply_ok(
     config: &ServeConfig,
     snapshot: SidebarSnapshot,
     last_snapshot: &mut Option<SidebarSnapshot>,
     current: &mut SidebarSnapshot,
     ui: &mut UiState,
+    read_marks: &mut ReadMarkStore,
 ) {
     let mut health = Health::default();
     let mut gate = GateState::default();
@@ -123,6 +150,7 @@ fn apply_ok(
         &mut gate,
         &mut self_close,
         ui,
+        read_marks,
         std::time::Instant::now(),
         None,
     )
@@ -147,6 +175,7 @@ fn unread_marks_done_transition_and_focus_clears_it() {
     let mut last_snapshot = None;
     let mut current = snapshot(&ws);
     let mut ui = UiState::default();
+    let (_dir, mut read_marks) = read_mark_store(&ws);
 
     apply_ok(
         &config,
@@ -154,6 +183,7 @@ fn unread_marks_done_transition_and_focus_clears_it() {
         &mut last_snapshot,
         &mut current,
         &mut ui,
+        &mut read_marks,
     );
     assert!(!current.worktree_groups[0].rows[0].unread);
 
@@ -163,6 +193,7 @@ fn unread_marks_done_transition_and_focus_clears_it() {
         &mut last_snapshot,
         &mut current,
         &mut ui,
+        &mut read_marks,
     );
     assert!(current.worktree_groups[0].rows[0].unread);
 
@@ -172,8 +203,229 @@ fn unread_marks_done_transition_and_focus_clears_it() {
         &mut last_snapshot,
         &mut current,
         &mut ui,
+        &mut read_marks,
     );
     assert!(!current.worktree_groups[0].rows[0].unread);
+}
+
+#[test]
+fn focus_clear_in_one_instance_clears_every_instance() {
+    let ws = workspace();
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let instance_a = SidebarInstanceId::new();
+    let instance_b = SidebarInstanceId::new();
+    let mut config_a = serve_config(&ws);
+    config_a.instance_id = instance_a.clone();
+    let mut config_b = serve_config(&ws);
+    config_b.instance_id = instance_b.clone();
+    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a.clone());
+    let mut read_marks_b = ReadMarkStore::new(runtime.clone(), instance_b);
+    let mut last_a = None;
+    let mut current_a = snapshot(&ws);
+    let mut ui_a = UiState::default();
+    let mut last_b = None;
+    let mut current_b = snapshot(&ws);
+    let mut ui_b = UiState::default();
+
+    apply_ok(
+        &config_a,
+        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
+        &mut last_a,
+        &mut current_a,
+        &mut ui_a,
+        &mut read_marks_a,
+    );
+    apply_ok(
+        &config_b,
+        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    apply_ok(
+        &config_a,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
+        &mut last_a,
+        &mut current_a,
+        &mut ui_a,
+        &mut read_marks_a,
+    );
+    assert!(
+        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        "the focused renderer wrote its read receipt"
+    );
+    assert!(
+        !current_a.worktree_groups[0].rows[0].unread,
+        "the focused renderer clears immediately"
+    );
+
+    apply_ok(
+        &config_b,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    assert!(
+        !current_b.worktree_groups[0].rows[0].unread,
+        "the peer renderer consumes the receipt on its next fold"
+    );
+}
+
+#[test]
+fn focused_fresh_instance_clears_peer_unread_state() {
+    let ws = workspace();
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let instance_a = SidebarInstanceId::new();
+    let instance_b = SidebarInstanceId::new();
+    let mut config_a = serve_config(&ws);
+    config_a.instance_id = instance_a.clone();
+    let mut config_b = serve_config(&ws);
+    config_b.instance_id = instance_b.clone();
+    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a.clone());
+    let mut read_marks_b = ReadMarkStore::new(runtime.clone(), instance_b);
+    let mut last_a = None;
+    let mut current_a = snapshot(&ws);
+    let mut ui_a = UiState::default();
+    let mut last_b = None;
+    let mut current_b = snapshot(&ws);
+    let mut ui_b = UiState::default();
+
+    apply_ok(
+        &config_b,
+        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    apply_ok(
+        &config_b,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    assert!(
+        current_b.worktree_groups[0].rows[0].unread,
+        "the existing renderer has an unread result"
+    );
+
+    apply_ok(
+        &config_a,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
+        &mut last_a,
+        &mut current_a,
+        &mut ui_a,
+        &mut read_marks_a,
+    );
+    assert!(
+        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        "the fresh focused renderer writes a read receipt even without local unread memory"
+    );
+
+    apply_ok(
+        &config_b,
+        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    assert!(
+        !current_b.worktree_groups[0].rows[0].unread,
+        "the peer renderer consumes the fresh instance's receipt"
+    );
+}
+
+#[test]
+fn a_new_episode_outruns_an_old_receipt() {
+    let ws = workspace();
+    let dir = tempfile::TempDir::new().unwrap();
+    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    let instance_a = SidebarInstanceId::new();
+    let instance_b = SidebarInstanceId::new();
+    let mut config_a = serve_config(&ws);
+    config_a.instance_id = instance_a.clone();
+    let mut config_b = serve_config(&ws);
+    config_b.instance_id = instance_b.clone();
+    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a);
+    let mut read_marks_b = ReadMarkStore::new(runtime, instance_b);
+    let old_stamp = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+    let new_stamp = jiff::Timestamp::from_second(4_000_000_000).unwrap();
+    let mut last_a = None;
+    let mut current_a = snapshot(&ws);
+    let mut ui_a = UiState::default();
+    let mut last_b = None;
+    let mut current_b = snapshot(&ws);
+    let mut ui_b = UiState::default();
+
+    apply_ok(
+        &config_a,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, old_stamp),
+        &mut last_a,
+        &mut current_a,
+        &mut ui_a,
+        &mut read_marks_a,
+    );
+    apply_ok(
+        &config_a,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, true, old_stamp),
+        &mut last_a,
+        &mut current_a,
+        &mut ui_a,
+        &mut read_marks_a,
+    );
+
+    apply_ok(
+        &config_b,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, old_stamp),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    apply_ok(
+        &config_b,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, false, old_stamp),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    assert!(
+        !current_b.worktree_groups[0].rows[0].unread,
+        "the old receipt clears the old episode"
+    );
+
+    apply_ok(
+        &config_b,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, new_stamp),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    apply_ok(
+        &config_b,
+        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, false, new_stamp),
+        &mut last_b,
+        &mut current_b,
+        &mut ui_b,
+        &mut read_marks_b,
+    );
+    assert!(
+        current_b.worktree_groups[0].rows[0].unread,
+        "a later episode must not be cleared by the old receipt"
+    );
 }
 
 #[test]
@@ -299,6 +551,7 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
     let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
+    let (_dir, mut read_marks) = read_mark_store(&ws);
 
     let applied = apply_fetch_outcome(
         &config,
@@ -313,6 +566,7 @@ fn non_final_fast_success_does_not_recover_refresh_health() {
         &mut gate,
         &mut self_close,
         &mut ui,
+        &mut read_marks,
         std::time::Instant::now(),
         None,
     )
@@ -339,6 +593,7 @@ fn self_close_outcome_marks_tab_emptied() {
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
     let anim_start = std::time::Instant::now();
+    let (_dir, mut read_marks) = read_mark_store(&ws);
 
     let first = apply_fetch_outcome(
         &config,
@@ -353,6 +608,7 @@ fn self_close_outcome_marks_tab_emptied() {
         &mut gate,
         &mut self_close,
         &mut ui,
+        &mut read_marks,
         anim_start,
         None,
     )
@@ -374,6 +630,7 @@ fn self_close_outcome_marks_tab_emptied() {
         &mut gate,
         &mut self_close,
         &mut ui,
+        &mut read_marks,
         anim_start,
         None,
     )
@@ -499,6 +756,7 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
     let mut gate = GateState::default();
     let mut self_close = SelfCloseState::default();
     let mut ui = UiState::default();
+    let (_dir, mut read_marks) = read_mark_store(&ws);
     let mut empty = snapshot(&ws);
     empty.panes_produced_at_ms = Some(11);
 
@@ -515,6 +773,7 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
         &mut gate,
         &mut self_close,
         &mut ui,
+        &mut read_marks,
         std::time::Instant::now(),
         None,
     )
@@ -543,6 +802,7 @@ fn gate_hold_notice_arms_and_clears_with_gate_state() {
         &mut gate,
         &mut self_close,
         &mut ui,
+        &mut read_marks,
         std::time::Instant::now(),
         None,
     )

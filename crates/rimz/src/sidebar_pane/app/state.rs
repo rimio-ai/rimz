@@ -2,12 +2,14 @@
 //! [`compute_next_state`] reducer, the last-known-good gate overlay, the
 //! selection reconcile, and the exit verdict.
 
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crate::{SidebarSnapshot, WorkspaceId};
 use jiff::Timestamp;
 use tracing::{debug, warn};
 
+use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::render::{GateNotice, UiState, UnreadTracker};
 
 use super::fetch::FetchOutcome;
@@ -114,6 +116,7 @@ pub(super) fn apply_fetch_outcome(
     gate: &mut GateState,
     self_close: &mut SelfCloseState,
     ui: &mut UiState,
+    read_marks: &mut ReadMarkStore,
     anim_start: Instant,
     diag: Option<&crate::diag::DiagSink>,
 ) -> Result<ApplyOutcome> {
@@ -174,13 +177,22 @@ pub(super) fn apply_fetch_outcome(
     let focused_row_id = focused_pane
         .as_ref()
         .and_then(|pane| row_id_of_pane(current, pane));
-    ui.unread.observe(
+    let marks = read_marks.load_merged();
+    let cleared = ui.unread.observe(
         current
             .worktree_groups
             .iter()
             .flat_map(|group| group.rows.iter()),
         focused_row_id.as_deref(),
+        &marks,
     );
+    let live: HashSet<String> = current
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .map(|row| row.id.clone())
+        .collect();
+    read_marks.observe_fold(cleared, now.as_millisecond(), &live);
     stamp_unread(current, &ui.unread);
     // Presentation sort only reorders the producer's already-capped visible set.
     current.sort_groups_for_presentation();

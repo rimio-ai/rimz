@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
-use crate::ids::WorkspaceId;
+use crate::ids::{SidebarInstanceId, WorkspaceId};
 use crate::schema::heartbeat::SidebarHeartbeat;
 
 use super::{GcErr, GcReport, Result};
@@ -53,15 +54,18 @@ fn collect_workspace_runtime(
 ) -> Result<()> {
     let heartbeat_dir = workspace_root.join("heartbeat");
     let sock_dir = workspace_root.join("sock");
+    let read_marks_dir = workspace_root.join("read-marks");
     let activity_dir = workspace_root.join("agent-activity");
     let context_dir = workspace_root.join("agent_context");
     let subagent_context_dir = workspace_root.join("subagent_context");
     collect_heartbeats(&heartbeat_dir, &sock_dir, older_than, report)?;
+    collect_stale_read_marks(&read_marks_dir, &heartbeat_dir, older_than, report)?;
     collect_stale_sidecars(&activity_dir, older_than, report)?;
     collect_stale_sidecars(&context_dir, older_than, report)?;
     collect_stale_sidecars(&subagent_context_dir, older_than, report)?;
     remove_dir_if_empty(&heartbeat_dir, report)?;
     remove_dir_if_empty(&sock_dir, report)?;
+    remove_dir_if_empty(&read_marks_dir, report)?;
     remove_dir_if_empty(&activity_dir, report)?;
     remove_dir_if_empty(&context_dir, report)?;
     remove_dir_if_empty(&subagent_context_dir, report)?;
@@ -69,8 +73,8 @@ fn collect_workspace_runtime(
     Ok(())
 }
 
-/// Reap stale per-session sidecar files — the activity heartbeats, the
-/// statusline context sidecars, and the per-subagent context sidecars.
+/// Reap stale per-session sidecar files — activity heartbeats, statusline
+/// context sidecars, and per-subagent context sidecars.
 fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcReport) -> Result<()> {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
@@ -101,6 +105,79 @@ fn collect_stale_sidecars(dir: &Path, older_than: Duration, report: &mut GcRepor
         )?;
     }
     Ok(())
+}
+
+fn collect_stale_read_marks(
+    read_marks_dir: &Path,
+    heartbeat_dir: &Path,
+    older_than: Duration,
+    report: &mut GcReport,
+) -> Result<()> {
+    let live_instances = fresh_sidebar_instance_ids(heartbeat_dir, older_than)?;
+    let entries = match fs::read_dir(read_marks_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => {
+            return Err(GcErr::ReadDir {
+                path: read_marks_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    for entry in entries {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: read_marks_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        let Some(instance_id) = sidebar_instance_id_from_json_name(&path) else {
+            continue;
+        };
+        if live_instances.contains(instance_id.as_str()) || !is_older_than(&path, older_than)? {
+            continue;
+        }
+        remove_file_if_exists(
+            &path,
+            |report| {
+                report.sidecar_files_removed += 1;
+            },
+            report,
+        )?;
+    }
+    Ok(())
+}
+
+fn fresh_sidebar_instance_ids(
+    heartbeat_dir: &Path,
+    older_than: Duration,
+) -> Result<HashSet<String>> {
+    let entries = match fs::read_dir(heartbeat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => return Ok(HashSet::new()),
+        Err(source) => {
+            return Err(GcErr::ReadDir {
+                path: heartbeat_dir.to_path_buf(),
+                source,
+            });
+        }
+    };
+
+    let mut live_instances = HashSet::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| GcErr::ReadDir {
+            path: heartbeat_dir.to_path_buf(),
+            source,
+        })?;
+        let path = entry.path();
+        if !SidebarHeartbeat::is_heartbeat_file(&path) || is_older_than(&path, older_than)? {
+            continue;
+        }
+        if let Some(instance_id) = sidebar_instance_id_from_json_name(&path) {
+            live_instances.insert(instance_id.as_str().to_owned());
+        }
+    }
+    Ok(live_instances)
 }
 
 fn collect_heartbeats(
@@ -192,6 +269,12 @@ fn sidebar_socket_is_owned_by_workspace(socket: &Path, sock_dir: &Path) -> bool 
         .is_some_and(|name| name.starts_with("sidebar.") && name.ends_with(".sock"))
 }
 
+fn sidebar_instance_id_from_json_name(path: &Path) -> Option<SidebarInstanceId> {
+    let name = path.file_name()?.to_str()?;
+    let id = name.strip_prefix("sidebar.")?.strip_suffix(".json")?;
+    SidebarInstanceId::parse(id).ok()
+}
+
 fn remove_file_if_exists(
     path: &Path,
     increment: impl FnOnce(&mut GcReport),
@@ -281,6 +364,8 @@ mod tests {
         let rt = RuntimePaths::under(workspace_id, temp.path()).unwrap();
         rt.ensure_dirs().unwrap();
 
+        let stale_read_marks = rt.sidebar_read_marks_path(&SidebarInstanceId::new());
+        fs::write(&stale_read_marks, br#"{"marks":{"row-a":1000}}"#).unwrap();
         let stale_activity = rt.agent_activity_dir.join("deadbeefdeadbeef.json");
         fs::write(
             &stale_activity,
@@ -292,14 +377,23 @@ mod tests {
         let stale_subagent = rt.subagent_context_dir.join("sub.cafebabecafebabe.json");
         fs::write(&stale_subagent, b"{}").unwrap();
         let old = SystemTime::now() - Duration::from_secs(7200);
-        for path in [&stale_activity, &stale_context, &stale_subagent] {
+        for path in [
+            &stale_read_marks,
+            &stale_activity,
+            &stale_context,
+            &stale_subagent,
+        ] {
             fs::File::open(path).unwrap().set_modified(old).unwrap();
         }
 
         let report =
             collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
 
-        assert_eq!(report.sidecar_files_removed, 3);
+        assert_eq!(report.sidecar_files_removed, 4);
+        assert!(
+            !rt.read_marks_dir.exists(),
+            "the emptied read-marks dir is removed"
+        );
         assert!(
             !rt.agent_activity_dir.exists(),
             "the emptied activity dir is removed"
@@ -367,6 +461,41 @@ mod tests {
         assert!(!stale_socket.exists());
         assert!(fresh_resolver_path.exists());
         assert!(feed_socket.exists(), "feed sockets are not GC-owned");
+    }
+
+    #[test]
+    fn runtime_gc_keeps_stale_read_marks_while_owner_heartbeat_is_fresh() {
+        let temp = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(temp.path());
+        let rt = RuntimePaths::under(workspace_id.clone(), temp.path()).unwrap();
+        rt.ensure_dirs().unwrap();
+
+        let instance_id = SidebarInstanceId::new();
+        let read_marks = rt.sidebar_read_marks_path(&instance_id);
+        fs::write(&read_marks, br#"{"marks":{"row-a":1000}}"#).unwrap();
+        fs::File::open(&read_marks)
+            .unwrap()
+            .set_modified(SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+
+        let socket = rt
+            .sock_dir
+            .join(format!("sidebar.{}.sock", instance_id.short()));
+        let heartbeat = SidebarHeartbeat::new(
+            workspace_id,
+            instance_id.clone(),
+            MuxName::Tmux,
+            "rimz-test",
+            socket,
+            None,
+        );
+        write_json(&rt.sidebar_heartbeat_path(&instance_id), &heartbeat);
+
+        let report =
+            collect_runtime_under(&temp.path().join("rimz"), Duration::from_secs(3600)).unwrap();
+
+        assert_eq!(report.sidecar_files_removed, 0);
+        assert!(read_marks.exists(), "live owner's read marks are kept");
     }
 
     fn write_json<T: serde::Serialize>(path: &Path, value: &T) {

@@ -102,6 +102,10 @@ pub struct RuntimePaths {
     pub shared_root: PathBuf,
     pub sock_dir: PathBuf,
     pub heartbeat_dir: PathBuf,
+    /// Per-renderer read receipts for unread sidebar rows. Disposable runtime
+    /// sidecars merged by every renderer so focusing a pane in one tab clears it
+    /// everywhere in the workspace.
+    pub read_marks_dir: PathBuf,
     /// Holds one latest-wins agent-context sidecar per session. Written by CLI
     /// producer paths (statusline feed, hook/local transcript refresh, detached
     /// helpers, snapshot producer backstops) and folded by snapshot reads.
@@ -129,6 +133,7 @@ impl RuntimePaths {
         let shared_root = runtime_root.join("rimz").join("shared");
         let sock_dir = root.join("sock");
         let heartbeat_dir = root.join("heartbeat");
+        let read_marks_dir = root.join("read-marks");
         let agent_context_dir = root.join("agent_context");
         let subagent_context_dir = root.join("subagent_context");
         let agent_activity_dir = root.join("agent-activity");
@@ -138,6 +143,7 @@ impl RuntimePaths {
             shared_root,
             sock_dir,
             heartbeat_dir,
+            read_marks_dir,
             agent_context_dir,
             subagent_context_dir,
             agent_activity_dir,
@@ -176,6 +182,14 @@ impl RuntimePaths {
     /// later launch sees an honest "no sidebar here".
     pub fn sidebar_heartbeat_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
         self.heartbeat_dir
+            .join(format!("sidebar.{}.json", instance_id.as_str()))
+    }
+
+    /// Path of a sidebar instance's read-mark receipt file. Receipts outlive the
+    /// writer so peer renderers can consume them on their next fold; the orphan
+    /// sweep reaps stale files once the owning heartbeat has expired.
+    pub fn sidebar_read_marks_path(&self, instance_id: &SidebarInstanceId) -> PathBuf {
+        self.read_marks_dir
             .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
@@ -226,6 +240,7 @@ impl RuntimePaths {
     pub fn ensure_dirs(&self) -> Result<()> {
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
+        mkdir_p(&self.read_marks_dir)?;
         mkdir_p(&self.agent_context_dir)?;
         mkdir_p(&self.subagent_context_dir)?;
         mkdir_p(&self.agent_activity_dir)?;

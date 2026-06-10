@@ -80,7 +80,7 @@ fn render_group_cap_shows_overflow_indicator() {
             let mut agent = agent(
                 &format!("codex-{i}"),
                 "codex",
-                AgentStatus::Running,
+                AgentStatus::Idle,
                 Some("/repo/main"),
                 Some("main"),
                 Some(&format!("task-{i}")),
@@ -91,9 +91,8 @@ fn render_group_cap_shows_overflow_indicator() {
         .collect::<Vec<_>>();
     let snapshot = snapshot_with(Vec::new(), agents);
 
-    // Tall enough that the six capped rows (3 compact lines each, stacked
-    // with no inter-card gap) plus the `+3 more` overflow all fit, so the
-    // indicator the test is named for actually renders.
+    // Tall enough that the six capped idle rows plus the `+3 more` overflow
+    // all fit, so the indicator the test is named for actually renders.
     let rendered = snapshot_to_screen(&snapshot, 36, 38);
     assert!(rendered.contains("+3 more"), "{rendered}");
     assert_snapshot("group_cap_with_overflow", rendered);

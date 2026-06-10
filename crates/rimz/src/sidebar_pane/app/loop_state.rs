@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar::read_marks::ReadMarkStore;
 
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
@@ -11,6 +12,7 @@ pub(super) struct LoopState {
     gate: GateState,
     self_close: SelfCloseState,
     ui: UiState,
+    read_marks: ReadMarkStore,
     dirty: bool,
     paint_held: bool,
     next_frame: Instant,
@@ -28,6 +30,7 @@ impl LoopState {
         workspace_id: WorkspaceId,
         initial_width: Option<u16>,
         observe_tx: SyncSender<ObserveMsg>,
+        read_marks: ReadMarkStore,
     ) -> Self {
         let current = placeholder_snapshot(workspace_id);
         let now = Instant::now();
@@ -42,6 +45,7 @@ impl LoopState {
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
             ui: UiState::default(),
+            read_marks,
             dirty: true,
             paint_held: false,
             next_frame: now,
@@ -383,6 +387,7 @@ impl LoopState {
             &mut self.gate,
             &mut self.self_close,
             &mut self.ui,
+            &mut self.read_marks,
             anim_start,
             diag,
         )?;
@@ -432,11 +437,19 @@ mod tests {
     use super::*;
     use crate::sidebar_pane::app::fixtures::{agent_snapshot, workspace};
 
+    fn read_marks(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
+        let store = ReadMarkStore::new(runtime, SidebarInstanceId::new());
+        (dir, store)
+    }
+
     #[test]
     fn failed_anomaly_send_preserves_carried_drop_count() {
         let ws = workspace();
         let (tx, _rx) = std::sync::mpsc::sync_channel(0);
-        let mut state = LoopState::new(ws.clone(), None, tx);
+        let (_dir, store) = read_marks(&ws);
+        let mut state = LoopState::new(ws.clone(), None, tx, store);
         let mut current = agent_snapshot(&ws);
         let mut duplicate = current.worktree_groups[0].rows[0].clone();
         duplicate.pane = duplicate.pane.map(|mut pane| {

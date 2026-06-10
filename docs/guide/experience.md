@@ -187,7 +187,7 @@ The reader does what they came to do: spins up four more agents across two workt
            ␣ next ?!   ? for help
 ```
 
-The cockpit make-up is the first thing the eye lands on: `? 2   ! 1`, two waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: the most overdue waiting and failed rows rise, oldest first, calm agents settle below, and each worktree caps its calm tail with a dim `+K more` while always keeping its waiting and failed rows on screen.
+The cockpit make-up is the first thing the eye lands on: `? 2   ! 1`, two waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.
 
 The power move is going straight to the blocked pane. A single session-scoped keystroke (`␣`, shown as "next ?!" in the footer) focuses the next item that needs attention, in ranking order, without the reader ever focusing the sidebar. Twelve agents, one key, straight to the oldest blocked one; press it again for the next. Seeing the blocked pane and getting to it are different actions, and this key collapses them, so triage cost stays flat as the fleet grows. It is bound only inside the Rimz session, so the reader's global mux config is untouched.
 

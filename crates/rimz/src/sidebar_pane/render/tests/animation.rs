@@ -236,6 +236,47 @@ fn render_stalled_agent_reads_as_static_attention() {
         "stalled reads as attention:\n{first}"
     );
 }
+
+#[test]
+fn render_unread_success_hard_blinks_by_modifier() {
+    let done = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![done]);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    let glyph_attrs = |phase| {
+        let mut bytes = Vec::new();
+        let backend = CrosstermBackend::new(&mut bytes);
+        let viewport = Viewport::Fixed(Rect::new(0, 0, 40, 10));
+        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+        terminal.clear().unwrap();
+        let mut ui = ui_at_phase(phase);
+        draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
+        drop(terminal);
+        let mut parser = vt100::Parser::new(10, 40, 0);
+        parser.process(&bytes);
+        let screen = parser.screen();
+        let (row, col) = screen
+            .contents()
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.contains("✓ claude"))
+            .find_map(|(row, line)| Some((row, line.chars().position(|c| c == '✓')?)))
+            .expect("the unread success card renders its identity line");
+        let cell = screen.cell(row as u16, col as u16).unwrap();
+        (cell.bold(), cell.dim())
+    };
+
+    assert_eq!(glyph_attrs(0), (true, false));
+    assert_eq!(glyph_attrs(3), (false, true));
+    assert_eq!(glyph_attrs(6), (true, false));
+}
+
 /// A running agent animates: advancing the phase advances the working fill,
 /// regardless of how recently it last reported (the freshness freeze is
 /// gone — staleness escalates to `!` instead of stopping the spinner).

@@ -7,7 +7,7 @@ fn calm_tail_cap_never_hides_attention_rows() {
             agent_in(
                 &format!("sess-{i}"),
                 "/repo/main",
-                AgentStatus::Running,
+                AgentStatus::Idle,
                 1_000 + i,
             )
         })
@@ -33,7 +33,7 @@ fn calm_tail_cap_never_hides_focused_rows() {
             let mut agent = agent_in(
                 &format!("sess-{i}"),
                 "/repo/main",
-                AgentStatus::Running,
+                AgentStatus::Idle,
                 1_000 + i,
             );
             if i == 0 {
@@ -53,9 +53,58 @@ fn calm_tail_cap_never_hides_focused_rows() {
             .rows
             .iter()
             .any(|row| row.id == "sess-0"),
-        "the focused running pane remains visible even past the calm-row cap"
+        "the focused idle pane remains visible even past the calm-row cap"
     );
     assert!(snapshot.worktree_groups[0].hidden_count > 0);
+}
+
+#[test]
+fn cap_keeps_active_and_finished_rows_for_unread_tracking() {
+    let mut agents = Vec::new();
+    for i in 0..8 {
+        agents.push(agent_in(
+            &format!("run-{i}"),
+            "/repo/main",
+            AgentStatus::Running,
+            1_000 + i,
+        ));
+    }
+    for i in 0..8 {
+        agents.push(agent_in(
+            &format!("done-{i}"),
+            "/repo/main",
+            AgentStatus::Success,
+            2_000 + i,
+        ));
+    }
+    for i in 0..8 {
+        agents.push(agent_in(
+            &format!("idle-{i}"),
+            "/repo/main",
+            AgentStatus::Idle,
+            3_000 + i,
+        ));
+    }
+
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
+
+    let visible = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert!(
+        (0..8).all(|i| visible.contains(&format!("run-{i}"))),
+        "running rows stay visible so their eventual completion can be observed: {visible:?}"
+    );
+    assert!(
+        (0..8).all(|i| visible.contains(&format!("done-{i}"))),
+        "finished rows stay visible so unread result receipts can propagate: {visible:?}"
+    );
+    assert!(
+        snapshot.worktree_groups[0].hidden_count > 0,
+        "the idle tail still trims behind +K more"
+    );
 }
 
 #[test]

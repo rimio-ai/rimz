@@ -321,18 +321,18 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
     (target, fx)
 }
 
-/// The glow's lightness lift for `row` at `phase`, or `None` when the row
-/// holds no glow: unresolved actionable rows and unread calm rows breathe, the
-/// resolver spinner means the ask is being handled, and at red heat the hard
-/// modifier blink owns the cell — a smooth swell under a strobe would mush both.
-/// The wave is the breath's own triangle (same cycle, same amber double-time,
-/// see [`super::labels::attention_breath`]), so color and modifier swell as
-/// one motion.
+/// The glow's lightness lift for `row` at `phase`, or `None` when the row holds
+/// no glow: unresolved read actionable rows breathe, unread rows hard-blink
+/// without a smooth glow, the resolver spinner means the ask is being handled,
+/// and at red heat the hard modifier blink owns the cell — a smooth swell under
+/// a strobe would mush both. The wave is the breath's own triangle (same cycle,
+/// same amber double-time, see [`super::labels::attention_breath`]), so color
+/// and modifier swell as one motion.
 fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
-    if !row.is_agent() || row.resolver().is_some() {
+    if !row.is_agent() || row.resolver().is_some() || row.unread {
         return None;
     }
-    if !(row.unread || row.status().is_some_and(AgentStatus::is_actionable)) {
+    if !row.status().is_some_and(AgentStatus::is_actionable) {
         return None;
     }
     let heat = age_heat(age_secs(row.last_activity, now));
@@ -775,8 +775,16 @@ mod tests {
         unread_done.unread = true;
         assert_eq!(
             glow_delta(&unread_done, now, mid_breath),
-            Some(GLOW_MAX_LIGHTNESS / 2.0),
-            "unread calm rows ride the same breath swell"
+            None,
+            "unread calm rows blink instead of glowing"
+        );
+
+        let mut unread_waiting = row("a", AgentStatus::Waiting);
+        unread_waiting.unread = true;
+        assert_eq!(
+            glow_delta(&unread_waiting, now, mid_breath),
+            None,
+            "unread actionable rows blink instead of glowing"
         );
 
         let mut handled = row("a", AgentStatus::Waiting);

@@ -62,8 +62,8 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
 /// real work (a build, a test, a `sudo` install), or a row whose lead glyph
-/// breathes (`?`/`!`, plus unread calm results). The serve loop uses this as
-/// the broad "does anything move?" gate; [`animation_cadence`] decides whether
+/// animates (`?`/`!` breathe, unread rows hard-blink). The serve loop uses this
+/// as the broad "does anything move?" gate; [`animation_cadence`] decides whether
 /// the movement needs the fast frame grid or the slower cosmetic cadence. A
 /// fully settled sidebar (only quiet read idle/done rows) keeps idling on the
 /// slow data tick. A stalled agent is projected to `failed` upstream, so it
@@ -76,7 +76,7 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
 }
 
 // Deliberately unfiltered by the make-up filter: the cockpit's attention
-// buckets still breathe (and the counts still tick) for rows a filter hides,
+// buckets still animate (and the counts still tick) for rows a filter hides,
 // so the gate must track the whole room, not the narrowed body.
 pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
     let mut slow = false;
@@ -89,8 +89,8 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // `?`/`!` keep breathing until resolved. Unread calm completions
-            // breathe only until the pane is focused.
+            // `?`/`!` keep breathing until resolved. Unread rows hard-blink
+            // until the pane is focused.
             if row.unread || row.status().is_some_and(AgentStatus::is_actionable) {
                 slow = true;
             }

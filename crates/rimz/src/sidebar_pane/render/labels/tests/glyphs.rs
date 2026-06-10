@@ -88,13 +88,35 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
 }
 
 #[test]
-fn unread_calm_glyph_breathes_without_heating() {
+fn unread_glyph_hard_blinks_without_heating() {
     let theme = Theme::fixed(false);
     let read = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, false);
-    let unread = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, true);
+    let unread_on = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, true);
+    let unread_off = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 3, true);
+    let unread_wrap = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 6, true);
 
-    assert_eq!(unread.fg, agent_style(&theme, AgentStatus::Success).fg);
-    assert_ne!(read.add_modifier, unread.add_modifier);
+    assert_eq!(unread_on.fg, agent_style(&theme, AgentStatus::Success).fg);
+    assert_eq!(unread_on.add_modifier, Modifier::BOLD);
+    assert_eq!(unread_off.add_modifier, Modifier::DIM);
+    assert_eq!(unread_wrap.add_modifier, Modifier::BOLD);
+    assert_ne!(read.add_modifier, unread_on.add_modifier);
+}
+
+#[test]
+fn unread_actionable_glyph_blinks_and_keeps_heat_color() {
+    let theme = Theme::fixed(false);
+    let unread_waiting_on = attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60, 0, true);
+    let unread_waiting_off = attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60, 3, true);
+    assert_eq!(
+        unread_waiting_on.fg,
+        theme.style(Color::Yellow, Modifier::empty()).fg
+    );
+    assert_eq!(unread_waiting_on.add_modifier, Modifier::BOLD);
+    assert_eq!(unread_waiting_off.add_modifier, Modifier::DIM);
+
+    let red_read = attention_glyph_style(&theme, AgentStatus::Failed, 2 * 60 * 60, 0, false);
+    assert_eq!(red_read.fg, theme.style(Color::Red, Modifier::empty()).fg);
+    assert_eq!(red_read.add_modifier, hard_blink(0));
 }
 /// Each animation cycles through its frames and wraps, so the phase can grow
 /// without bound.

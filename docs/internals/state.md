@@ -40,6 +40,7 @@ Consumers never produce for freshness on their own. They fold the published pane
 | shared `rate_limits.json` | producer and the detached `rimz codex refresh-rate-limits` helper, guarded by shared `rate_limits.lock` on writes | every node in every room | account-scoped budget windows, throttled per target |
 | workspace `agent_context/`, `subagent_context/`, `agent-activity/` | CLI hook and statusline producers; the Codex transcript refresh from any of its [triggers](#push-channels) | every node | latest-wins per session, TTL-bound, stat-gated parse caches on the read side |
 | workspace `heartbeat/sidebar.<instance>.json` | each node | election, launch gate, wakeup fanout | written at startup, then throttled below the liveness TTL |
+| workspace `read-marks/sidebar.<instance>.json` | each node on a tab-local focus clear | every node's fold | max clear-time per row, kept past renderer exit for peer folds and swept after the owner heartbeat expires |
 | workspace `sock/sidebar.<instance>.sock` | bound by each node | wakeup senders | the per-instance datagram socket of record |
 
 The ledger's own caches (`snapshots/latest.json`, `snapshots/rollup.json`) are state-dir files owned by the ledger write tail; [ledger.md](./ledger.md) owns them.
@@ -107,7 +108,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 
 `[sidebar] refresh_ms` is the base render grid and defaults to `DEFAULT_REFRESH_MS`. It rides `snapshot.sidebar`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
 
-Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter. Cosmetic attention breath keeps its absolute `SLOW_ANIMATION_FRAME` floor and clamps to at least the configured base. Input paints synchronously off-grid; an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame.
+Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter. Cosmetic attention breath and unread hard-blink cues keep their absolute `SLOW_ANIMATION_FRAME` floor and clamp to at least the configured base. Input paints synchronously off-grid; an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame.
 
 The data backstop remains `rimz sidebar serve --tick-seconds`. Changing `refresh_ms` changes paint cadence, not pull cadence.
 
