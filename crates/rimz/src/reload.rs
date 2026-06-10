@@ -11,14 +11,18 @@
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::config::{MachineConfig, MultiplexerConfig};
 use crate::ids::{MuxName, PaneId};
 use crate::ledger::RuntimePaths;
 use crate::ledger::wakeup;
 use crate::mux::recovery;
-use crate::mux::{MuxBackend, PaneListOptions, SidebarPaneOptions, SidebarWidth, backend_for};
+use crate::mux::{
+    MuxBackend, PaneListOptions, SidebarLiveness, SidebarPaneOptions, SidebarWidth, backend_for,
+};
+use crate::schema::heartbeat::SidebarHeartbeat;
+use crate::sidebar::timing::{RELOAD_CONVERGE_POLL, RELOAD_CONVERGE_TIMEOUT};
 use crate::workspace::{self, KnownWorkspace};
 
 /// Resolve the on-disk binary that should be executed after the current image
@@ -68,8 +72,14 @@ fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
 pub struct ReloadOutcome {
     /// Live sessions reconciled.
     pub sessions: usize,
-    /// Live sidebars told to re-exec onto the current binary.
-    pub signaled: usize,
+    /// Located sidebars already publishing the on-disk build before reload.
+    pub already_current: usize,
+    /// Located sidebars that published the on-disk build after the reload signal.
+    pub reexeced: usize,
+    /// Sidebars closed and re-added because they did not reload in place.
+    pub restarted: usize,
+    /// Live sidebars whose build could not be verified.
+    pub unverified: usize,
     /// Sidebars added (a view had none, or its only one was unresponsive).
     pub recovered: usize,
     /// Duplicate or unresponsive sidebar panes closed.
@@ -101,10 +111,12 @@ pub fn reload_user_sidebars() -> ReloadOutcome {
         return outcome;
     }
 
-    let rimz_bin = std::env::current_exe().unwrap_or_else(|err| {
-        tracing::warn!(error = %err, "current executable unavailable; reload uses bare `rimz`");
-        PathBuf::from("rimz")
-    });
+    let rimz_bin = std::env::current_exe()
+        .map(|exe| crate::build_id::resolve_on_disk_binary(&exe).unwrap_or(exe))
+        .unwrap_or_else(|err| {
+            tracing::warn!(error = %err, "current executable unavailable; reload uses bare `rimz`");
+            PathBuf::from("rimz")
+        });
     let machine_config = MachineConfig::load().unwrap_or_else(|err| {
         tracing::warn!(error = %err, "reading per-machine config; using built-in defaults");
         MachineConfig::default()
@@ -180,14 +192,37 @@ fn reconcile_live(
 ) {
     outcome.sessions += 1;
     let backend = backend_for(mux);
+    let before_signal = session_heartbeats(runtime, mux, &ws.session_name);
+    let on_disk_build = on_disk_build(rimz_bin);
 
     // 1. Signal live sidebars to re-exec onto the freshly-installed binary.
     match wakeup::reload_sidebars(runtime) {
-        Ok(signaled) => outcome.signaled += signaled,
+        Ok(_) => {}
         Err(err) => {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: signaling sidebars");
         }
     }
+
+    let liveness = match on_disk_build.as_deref() {
+        Some(build) => {
+            outcome.already_current += current_located_count(&before_signal, build);
+            let awaiting = awaiting_panes(&before_signal, build);
+            outcome.unverified += unlocated_unverified_count(&before_signal, build);
+            let post_wait = if awaiting.is_empty() {
+                before_signal
+            } else {
+                wait_for_convergence(runtime, mux, &ws.session_name, &awaiting, build)
+            };
+            let current = current_build_claims(&post_wait, build);
+            outcome.reexeced += awaiting.intersection(&current).count();
+            let stale_panes = awaiting.difference(&current).cloned().collect();
+            current_build_liveness(&post_wait, build, stale_panes)
+        }
+        None => {
+            outcome.unverified += before_signal.len();
+            heartbeat_liveness(&before_signal)
+        }
+    };
 
     // 2. Reconcile panes: keep each view's live sidebar, close duplicates and
     //    unresponsive ones, add to any working view left without one.
@@ -209,10 +244,11 @@ fn reconcile_live(
         resume_panes: Vec::new(),
         refresh_ms: None,
     };
-    let mut liveness = crate::sidebar::sidebar_liveness(runtime);
+    let mut liveness = liveness;
     liveness.young_panes = young_sidebar_panes(mux, ws, jiff::Timestamp::now());
     match backend.reconcile_sidebars(&opts, &liveness) {
         Ok(report) => {
+            outcome.restarted += report.restarted;
             outcome.recovered += report.recovered;
             outcome.closed += report.closed;
             outcome.failed += report.failed;
@@ -251,6 +287,123 @@ fn reconcile_live(
     //    reaped renderer leaves a pair), and the sweep already spares anything
     //    fresh or still starting.
     crate::sidebar::sweep_orphan_runtime(runtime);
+}
+
+fn on_disk_build(rimz_bin: &Path) -> Option<String> {
+    let binary = crate::build_id::resolve_on_disk_binary(rimz_bin)?;
+    match crate::build_id::of_file(&binary) {
+        Ok(build) => Some(build),
+        Err(err) => {
+            tracing::warn!(
+                path = %binary.display(),
+                error = %err,
+                "reload: cannot digest on-disk binary; convergence is unverified",
+            );
+            None
+        }
+    }
+}
+
+fn session_heartbeats(
+    runtime: &RuntimePaths,
+    mux: MuxName,
+    session_name: &str,
+) -> Vec<SidebarHeartbeat> {
+    crate::sidebar::fresh_sidebar_heartbeats(runtime)
+        .into_iter()
+        .filter(|heartbeat| heartbeat.mux == mux && heartbeat.session_name == session_name)
+        .collect()
+}
+
+fn current_located_count(heartbeats: &[SidebarHeartbeat], build: &str) -> usize {
+    current_build_claims(heartbeats, build).len()
+}
+
+fn unlocated_unverified_count(heartbeats: &[SidebarHeartbeat], build: &str) -> usize {
+    heartbeats
+        .iter()
+        .filter(|hb| hb.pane_id.is_none() && hb.build.as_deref() != Some(build))
+        .count()
+}
+
+fn awaiting_panes(heartbeats: &[SidebarHeartbeat], build: &str) -> HashSet<PaneId> {
+    heartbeats
+        .iter()
+        .filter(|hb| hb.build.as_deref() != Some(build))
+        .filter_map(|hb| hb.pane_id.clone())
+        .collect()
+}
+
+fn wait_for_convergence(
+    runtime: &RuntimePaths,
+    mux: MuxName,
+    session_name: &str,
+    awaiting: &HashSet<PaneId>,
+    build: &str,
+) -> Vec<SidebarHeartbeat> {
+    wait_for_convergence_with(
+        awaiting,
+        build,
+        RELOAD_CONVERGE_TIMEOUT,
+        RELOAD_CONVERGE_POLL,
+        || session_heartbeats(runtime, mux, session_name),
+    )
+}
+
+fn wait_for_convergence_with(
+    awaiting: &HashSet<PaneId>,
+    build: &str,
+    timeout: Duration,
+    poll: Duration,
+    mut read_heartbeats: impl FnMut() -> Vec<SidebarHeartbeat>,
+) -> Vec<SidebarHeartbeat> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let heartbeats = read_heartbeats();
+        let current = current_build_claims(&heartbeats, build);
+        if awaiting.is_subset(&current) || Instant::now() >= deadline {
+            return heartbeats;
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        std::thread::sleep(remaining.min(poll));
+    }
+}
+
+fn current_build_claims(heartbeats: &[SidebarHeartbeat], build: &str) -> HashSet<PaneId> {
+    heartbeats
+        .iter()
+        .filter(|hb| hb.build.as_deref() == Some(build))
+        .filter_map(|hb| hb.pane_id.clone())
+        .collect()
+}
+
+fn current_build_liveness(
+    heartbeats: &[SidebarHeartbeat],
+    build: &str,
+    stale_panes: HashSet<PaneId>,
+) -> SidebarLiveness {
+    let mut live = heartbeat_liveness(
+        heartbeats
+            .iter()
+            .filter(|hb| hb.build.as_deref() == Some(build)),
+    );
+    live.stale_panes = stale_panes;
+    live
+}
+
+fn heartbeat_liveness<'a>(
+    heartbeats: impl IntoIterator<Item = &'a SidebarHeartbeat>,
+) -> SidebarLiveness {
+    let mut live = SidebarLiveness::default();
+    for heartbeat in heartbeats {
+        match heartbeat.pane_id.as_ref() {
+            Some(pane) => {
+                live.claimed_panes.insert(pane.clone());
+            }
+            None => live.has_unlocated = true,
+        }
+    }
+    live
 }
 
 /// SIGTERM→SIGKILL this user's sidebar *processes* for `ws` whose pane the mux no
@@ -423,5 +576,144 @@ mod tests {
             claim_live_session(&mut seen, MuxName::Tmux, "rimz-query-engine"),
             "the same name on a different mux is a different live session",
         );
+    }
+
+    fn heartbeat(raw: &str, build: Option<&str>) -> SidebarHeartbeat {
+        let pane = PaneId::from_parts(MuxName::Tmux, raw);
+        let mut hb = SidebarHeartbeat::new(
+            crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            crate::SidebarInstanceId::new(),
+            MuxName::Tmux,
+            "rimz-test",
+            std::path::PathBuf::from(format!("/tmp/{raw}.sock")),
+            Some(pane),
+        );
+        hb.build = build.map(str::to_owned);
+        hb
+    }
+
+    fn unlocated_heartbeat(build: Option<&str>) -> SidebarHeartbeat {
+        let mut hb = SidebarHeartbeat::new(
+            crate::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            crate::SidebarInstanceId::new(),
+            MuxName::Tmux,
+            "rimz-test",
+            std::path::PathBuf::from("/tmp/unlocated.sock"),
+            None,
+        );
+        hb.build = build.map(str::to_owned);
+        hb
+    }
+
+    #[test]
+    fn build_partition_marks_missing_or_stale_builds_as_awaiting() {
+        let heartbeats = vec![
+            heartbeat("%1", Some("current")),
+            heartbeat("%2", Some("old")),
+            heartbeat("%3", None),
+        ];
+
+        assert_eq!(current_located_count(&heartbeats, "current"), 1);
+        let awaiting = awaiting_panes(&heartbeats, "current");
+        assert!(!awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%1")));
+        assert!(awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%2")));
+        assert!(awaiting.contains(&PaneId::from_parts(MuxName::Tmux, "%3")));
+    }
+
+    #[test]
+    fn current_located_count_deduplicates_pane_claims() {
+        let heartbeats = vec![
+            heartbeat("%1", Some("current")),
+            heartbeat("%1", Some("current")),
+        ];
+
+        assert_eq!(current_located_count(&heartbeats, "current"), 1);
+    }
+
+    #[test]
+    fn current_build_liveness_excludes_stale_claims() {
+        let heartbeats = vec![
+            heartbeat("%1", Some("current")),
+            heartbeat("%2", Some("old")),
+            heartbeat("%3", None),
+        ];
+
+        let stale = [PaneId::from_parts(MuxName::Tmux, "%2")].into();
+        let live = current_build_liveness(&heartbeats, "current", stale);
+        assert!(
+            live.claimed_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%1"))
+        );
+        assert!(
+            !live
+                .claimed_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
+        );
+        assert!(
+            !live
+                .claimed_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%3"))
+        );
+        assert!(
+            live.stale_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
+        );
+    }
+
+    #[test]
+    fn current_build_liveness_keeps_unlocated_current_but_marks_stale_panes() {
+        let heartbeats = vec![
+            unlocated_heartbeat(Some("current")),
+            heartbeat("%2", Some("old")),
+        ];
+        let stale = [PaneId::from_parts(MuxName::Tmux, "%2")].into();
+
+        let live = current_build_liveness(&heartbeats, "current", stale);
+
+        assert!(live.has_unlocated);
+        assert!(
+            live.stale_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%2"))
+        );
+    }
+
+    #[test]
+    fn convergence_wait_settles_when_awaiting_pane_flips_current() {
+        let awaiting = [PaneId::from_parts(MuxName::Tmux, "%1")].into();
+        let mut reads = 0;
+
+        let heartbeats = wait_for_convergence_with(
+            &awaiting,
+            "current",
+            Duration::from_secs(1),
+            Duration::ZERO,
+            || {
+                reads += 1;
+                if reads == 1 {
+                    vec![heartbeat("%1", Some("old"))]
+                } else {
+                    vec![heartbeat("%1", Some("current"))]
+                }
+            },
+        );
+
+        assert_eq!(reads, 2);
+        assert_eq!(
+            current_build_claims(&heartbeats, "current"),
+            [PaneId::from_parts(MuxName::Tmux, "%1")].into(),
+        );
+    }
+
+    #[test]
+    fn convergence_wait_returns_latest_heartbeat_on_timeout() {
+        let awaiting = [PaneId::from_parts(MuxName::Tmux, "%1")].into();
+
+        let heartbeats =
+            wait_for_convergence_with(&awaiting, "current", Duration::ZERO, Duration::ZERO, || {
+                vec![heartbeat("%1", Some("old"))]
+            });
+
+        assert_eq!(heartbeats.len(), 1);
+        assert_eq!(heartbeats[0].build.as_deref(), Some("old"));
     }
 }

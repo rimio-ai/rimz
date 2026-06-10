@@ -80,7 +80,7 @@ pub fn write_heartbeat(
     wakeup_socket: &Path,
     pane_id: Option<PaneId>,
 ) -> Result<(), HeartbeatWriteErr> {
-    let heartbeat = SidebarHeartbeat::new(
+    let mut heartbeat = SidebarHeartbeat::new(
         workspace_id,
         instance_id.clone(),
         mux,
@@ -88,6 +88,7 @@ pub fn write_heartbeat(
         wakeup_socket.to_path_buf(),
         pane_id,
     );
+    heartbeat.build = crate::build_id::current_if_ready().map(str::to_owned);
     let path = runtime.sidebar_heartbeat_path(instance_id);
     // Cache-class: a heartbeat is disposable liveness, rewritten every beat
     // and gc-swept when stale — surviving a power cut buys nothing.
@@ -99,7 +100,7 @@ pub fn write_heartbeat(
 /// The shared scan behind the launch gate, the runtime election, and the reload
 /// liveness set: a stale mtime, unreadable JSON, or mismatched protocol is
 /// skipped (so an old-build sidebar drops out and reload replaces it).
-fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
+pub(crate) fn fresh_sidebar_heartbeats(rt: &RuntimePaths) -> Vec<SidebarHeartbeat> {
     let entries = match fs::read_dir(&rt.heartbeat_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Vec::new(),

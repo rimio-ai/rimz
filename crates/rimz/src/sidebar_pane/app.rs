@@ -110,6 +110,7 @@ pub enum SidebarAppErr {
 pub type Result<T> = std::result::Result<T, SidebarAppErr>;
 
 pub fn serve(config: ServeConfig) -> Result<()> {
+    crate::build_id::warm();
     set_terminal_title()?;
     let runtime = RuntimePaths::for_workspace(config.workspace_id.clone())?;
     runtime.ensure_dirs()?;

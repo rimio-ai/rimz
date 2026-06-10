@@ -26,6 +26,11 @@ pub struct SidebarHeartbeat {
     /// that reconcile never closes a pane for.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
+    /// Short digest of the renderer binary that wrote this heartbeat. Missing
+    /// means an older renderer or a startup beat before build-id warmup
+    /// completed; reload treats it as live but not build-verified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     pub last_seen: Timestamp,
 }
 
@@ -46,6 +51,7 @@ impl SidebarHeartbeat {
             session_name: session_name.into(),
             wakeup_socket,
             pane_id,
+            build: None,
             last_seen: Timestamp::now(),
         }
     }
@@ -102,5 +108,33 @@ impl ResolverHeartbeat {
             version: None,
             pid: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sidebar_heartbeat_build_is_backward_compatible() {
+        let json = serde_json::json!({
+            "protocol_version": SIDEBAR_PROTOCOL_VERSION,
+            "workspace_id": WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            "instance_id": SidebarInstanceId::new(),
+            "mux": "tmux",
+            "session_name": "rimz-test",
+            "wakeup_socket": "/tmp/sidebar.sock",
+            "last_seen": Timestamp::now(),
+        });
+
+        let heartbeat: SidebarHeartbeat =
+            serde_json::from_value(json).expect("missing build defaults to None");
+        assert_eq!(heartbeat.build, None);
+
+        let encoded = serde_json::to_string(&heartbeat).expect("serialize heartbeat");
+        assert!(
+            !encoded.contains("\"build\""),
+            "None build stays absent from heartbeat JSON",
+        );
     }
 }

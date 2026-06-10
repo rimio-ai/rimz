@@ -10,6 +10,10 @@ use crate::agents::LifecycleSignal;
 use crate::ids::{PaneId, WorkspaceId};
 
 pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v2";
+/// Version-stable renderer reload control word. Reload uses this bare datagram
+/// instead of the typed envelope so an older renderer can still receive the
+/// message that moves it onto the current build.
+pub const RELOAD_CONTROL_WORD: &str = "reload";
 const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
 const AGENT_REGISTERED_SIGNAL: &str = LifecycleSignal::Registered.tag();
 const AGENT_ENDED_SIGNAL: &str = LifecycleSignal::Ended.tag();
@@ -99,6 +103,8 @@ pub enum SidebarEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panes: Vec<PaneId>,
     },
+    /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
+    /// reload survives sidebar-event envelope version skew.
     Reload,
 }
 

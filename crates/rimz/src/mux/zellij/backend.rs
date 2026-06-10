@@ -332,7 +332,14 @@ impl MuxBackend for ZellijBackend {
         let mut report = SidebarRecovery::default();
         // Close duplicate / unresponsive sidebar panes first, so a view that lost
         // its only live sidebar reads as missing and gains exactly one fresh one.
-        close_planned_sidebars(self, &opts.session_name, &plan.close, &mut report);
+        let failed_stale_close_views = close_planned_sidebars(
+            self,
+            &opts.session_name,
+            &plan.close,
+            &live.stale_panes,
+            &plan.stale_close_views,
+            &mut report,
+        );
         // In-place adds and geometry moves both need an attached client: a
         // detached session's screen thread drops the mount while the spawned
         // serve pair keeps running, so adding there only leaks (the closes
@@ -356,7 +363,15 @@ impl MuxBackend for ZellijBackend {
                 "sidebar reconcile: no attached client; deferring in-place adds",
             );
         } else {
-            add_missing_sidebars(self, opts, &plan.add, &focused_in_tab, &mut report);
+            add_missing_sidebars(
+                self,
+                opts,
+                &plan.add,
+                &plan.restart_add,
+                &failed_stale_close_views,
+                &focused_in_tab,
+                &mut report,
+            );
         }
         if let Some(own) = own_zellij_pane_id() {
             let _ = self.focus_terminal(&opts.session_name, own);
@@ -510,25 +525,42 @@ fn close_planned_sidebars(
     backend: &ZellijBackend,
     session_name: &str,
     close: &[PaneId],
+    stale_panes: &std::collections::HashSet<PaneId>,
+    stale_close_views: &std::collections::HashMap<PaneId, String>,
     report: &mut SidebarRecovery,
-) {
+) -> std::collections::HashSet<String> {
+    let mut failed_stale_close_views = std::collections::HashSet::new();
     for pane in close {
         match backend.close_pane(session_name, pane) {
-            Ok(()) => report.closed += 1,
-            Err(err) => tracing::warn!(
-                session = %session_name,
-                pane = %pane.as_str(),
-                error = %err,
-                "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-            ),
+            Ok(()) => {
+                if stale_panes.contains(pane) {
+                    report.stale_closed += 1;
+                } else {
+                    report.closed += 1;
+                }
+            }
+            Err(err) => {
+                if let Some(view) = stale_close_views.get(pane) {
+                    failed_stale_close_views.insert(view.clone());
+                }
+                tracing::warn!(
+                    session = %session_name,
+                    pane = %pane.as_str(),
+                    error = %err,
+                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                );
+            }
         }
     }
+    failed_stale_close_views
 }
 
 fn add_missing_sidebars(
     backend: &ZellijBackend,
     opts: &SidebarPaneOptions,
     add: &[String],
+    restart_add: &std::collections::HashSet<String>,
+    failed_stale_close_views: &std::collections::HashSet<String>,
     focused_in_tab: &std::collections::HashMap<u64, u64>,
     report: &mut SidebarRecovery,
 ) {
@@ -542,6 +574,10 @@ fn add_missing_sidebars(
             report.failed += 1;
             continue;
         };
+        if restart_add.contains(tab) && failed_stale_close_views.contains(tab) {
+            report.failed += 1;
+            continue;
+        }
         if occupied_tabs.contains(tab) {
             warn_sidebar_add_skipped(&opts.session_name, tab_id);
             report.failed += 1;
@@ -550,8 +586,8 @@ fn add_missing_sidebars(
         add_sidebar_to_tab(
             backend,
             opts,
-            tab,
             tab_id,
+            restart_add.contains(tab),
             focused_in_tab,
             occupied_tabs,
             report,
@@ -583,16 +619,20 @@ fn existing_sidebar_tabs(
 fn add_sidebar_to_tab(
     backend: &ZellijBackend,
     opts: &SidebarPaneOptions,
-    tab: &str,
     tab_id: u64,
+    restart: bool,
     focused_in_tab: &std::collections::HashMap<u64, u64>,
     occupied_tabs: &mut std::collections::HashSet<String>,
     report: &mut SidebarRecovery,
 ) {
     match backend.add_sidebar_to_tab(opts, tab_id) {
         Ok(()) => {
-            report.recovered += 1;
-            occupied_tabs.insert(tab.to_owned());
+            if restart {
+                report.restarted += 1;
+            } else {
+                report.recovered += 1;
+            }
+            occupied_tabs.insert(tab_id.to_string());
             if let Some(work) = focused_in_tab.get(&tab_id) {
                 let _ = backend.focus_terminal(&opts.session_name, *work);
             }

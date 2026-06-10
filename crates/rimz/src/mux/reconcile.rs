@@ -3,7 +3,7 @@
 //! executes the [`ReconcilePlan`]; the rule itself lives here, in one place,
 //! unit-tested without a mux.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::ids::PaneId;
 
@@ -15,6 +15,11 @@ pub struct SidebarRecovery {
     /// because they had none, or their only sidebar was unresponsive and was
     /// closed first.
     pub recovered: usize,
+    /// Views whose stale-build sidebar was closed and successfully re-added.
+    pub restarted: usize,
+    /// Stale-build sidebar panes closed as part of reload fallback. Kept out of
+    /// `closed` so the user-facing duplicate/unresponsive bucket stays honest.
+    pub stale_closed: usize,
     /// Duplicate or unresponsive sidebar panes closed so each view keeps exactly
     /// one live sidebar.
     pub closed: usize,
@@ -41,6 +46,10 @@ pub struct SidebarRecovery {
 pub struct SidebarLiveness {
     pub claimed_panes: HashSet<PaneId>,
     pub has_unlocated: bool,
+    /// Panes known to be live sidebars on the wrong build after the reload
+    /// convergence wait. Even an unlocated current-build heartbeat must not
+    /// protect these panes from replacement.
+    pub stale_panes: HashSet<PaneId>,
     /// Panes whose sidebar serve process was born within
     /// [`crate::sidebar::FRESH_PANE_GRACE`] — too young for a first heartbeat,
     /// so the planner reads "unclaimed" as "still starting", never "wedged".
@@ -67,6 +76,8 @@ pub(crate) struct ViewSidebars {
 pub(crate) struct ReconcilePlan {
     pub close: Vec<PaneId>,
     pub add: Vec<String>,
+    pub restart_add: HashSet<String>,
+    pub stale_close_views: HashMap<PaneId, String>,
 }
 
 /// Plan the reconcile for one session, view by view:
@@ -97,19 +108,32 @@ pub(crate) fn plan_reconcile(views: &[ViewSidebars], live: &SidebarLiveness) -> 
     for view in views {
         if view.has_working || view.has_daemon_host {
             let keep = sidebar_to_keep(view, live, live.has_unlocated);
+            let close_from = plan.close.len();
             close_unkept_sidebars(view, keep, &mut plan.close);
+            record_stale_close_views(view, live, close_from, &mut plan);
             if keep.is_none() {
                 plan.add.push(view.view.clone());
+                if view
+                    .sidebar_panes
+                    .iter()
+                    .any(|pane| live.stale_panes.contains(pane))
+                {
+                    plan.restart_add.insert(view.view.clone());
+                }
             }
         } else if live.has_unlocated {
             // Orphan sidebar-only view: keep one possible owner for self-close,
             // but still collapse duplicates so a tab never accumulates chrome.
             let keep = sidebar_to_keep(view, live, !view.sidebar_panes.is_empty());
+            let close_from = plan.close.len();
             close_unkept_sidebars(view, keep, &mut plan.close);
+            record_stale_close_views(view, live, close_from, &mut plan);
         } else {
             // Orphan sidebar-only view: close every sidebar pane so the view
             // collapses. Without a wildcard there is no live owner to preserve.
+            let close_from = plan.close.len();
             plan.close.extend(view.sidebar_panes.iter().cloned());
+            record_stale_close_views(view, live, close_from, &mut plan);
         }
     }
     plan
@@ -126,13 +150,19 @@ fn sidebar_to_keep(
 ) -> Option<usize> {
     view.sidebar_panes
         .iter()
-        .position(|pane| live.claimed_panes.contains(pane))
+        .position(|pane| live.claimed_panes.contains(pane) && !live.stale_panes.contains(pane))
         .or_else(|| {
-            view.sidebar_panes
-                .iter()
-                .position(|pane| live.young_panes.contains(pane))
+            view.sidebar_panes.iter().position(|pane| {
+                live.young_panes.contains(pane) && !live.stale_panes.contains(pane)
+            })
         })
-        .or_else(|| (keep_unclaimed && !view.sidebar_panes.is_empty()).then_some(0))
+        .or_else(|| {
+            keep_unclaimed.then(|| {
+                view.sidebar_panes
+                    .iter()
+                    .position(|pane| !live.stale_panes.contains(pane))
+            })?
+        })
 }
 
 fn close_unkept_sidebars(view: &ViewSidebars, keep: Option<usize>, close: &mut Vec<PaneId>) {
@@ -143,6 +173,20 @@ fn close_unkept_sidebars(view: &ViewSidebars, keep: Option<usize>, close: &mut V
             .filter(|(index, _pane)| Some(*index) != keep)
             .map(|(_index, pane)| pane.clone()),
     );
+}
+
+fn record_stale_close_views(
+    view: &ViewSidebars,
+    live: &SidebarLiveness,
+    close_from: usize,
+    plan: &mut ReconcilePlan,
+) {
+    for pane in &plan.close[close_from..] {
+        if live.stale_panes.contains(pane) {
+            plan.stale_close_views
+                .insert(pane.clone(), view.view.clone());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -181,6 +225,14 @@ mod tests {
     fn unlocated() -> SidebarLiveness {
         SidebarLiveness {
             has_unlocated: true,
+            ..SidebarLiveness::default()
+        }
+    }
+
+    fn unlocated_with_stale(stale: &[&str]) -> SidebarLiveness {
+        SidebarLiveness {
+            has_unlocated: true,
+            stale_panes: stale.iter().map(|raw| pane(raw)).collect(),
             ..SidebarLiveness::default()
         }
     }
@@ -380,5 +432,34 @@ mod tests {
         let plan = plan_reconcile(&views, &unlocated());
         assert!(plan.close.is_empty(), "never close blind under a wildcard");
         assert_eq!(plan.add, vec!["12".to_owned()]);
+    }
+
+    #[test]
+    fn unlocated_wildcard_does_not_protect_a_known_stale_pane() {
+        // Reload can know a located pane is still on the old build while another
+        // current-build heartbeat has no pane id. The wildcard preserves only an
+        // unknown owner; it must not shield the known stale pane.
+        let views = vec![view("15", &["terminal_15"], true)];
+        let plan = plan_reconcile(&views, &unlocated_with_stale(&["terminal_15"]));
+        assert_eq!(plan.close, vec![pane("terminal_15")]);
+        assert_eq!(plan.add, vec!["15".to_owned()]);
+        assert!(plan.restart_add.contains("15"));
+        assert_eq!(
+            plan.stale_close_views.get(&pane("terminal_15")),
+            Some(&"15".to_owned()),
+        );
+    }
+
+    #[test]
+    fn unlocated_wildcard_keeps_a_non_stale_candidate_beside_a_stale_one() {
+        let views = vec![view("15", &["terminal_15", "terminal_16"], true)];
+        let plan = plan_reconcile(&views, &unlocated_with_stale(&["terminal_15"]));
+        assert_eq!(plan.close, vec![pane("terminal_15")]);
+        assert!(plan.add.is_empty(), "the non-stale possible owner remains");
+        assert!(plan.restart_add.is_empty());
+        assert_eq!(
+            plan.stale_close_views.get(&pane("terminal_15")),
+            Some(&"15".to_owned()),
+        );
     }
 }

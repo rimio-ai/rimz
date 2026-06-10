@@ -7,7 +7,7 @@ use std::io;
 use std::os::unix::net::UnixDatagram;
 
 use crate::feed::AgentStatus;
-use crate::schema::sidebar_event::SidebarEventEnvelope;
+use crate::schema::sidebar_event::{RELOAD_CONTROL_WORD, SidebarEventEnvelope};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -87,9 +87,9 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Char('d') => "key:filter:success",
         KeyCode::Char('x') => "key:dismiss",
         KeyCode::Char(c @ '1'..='9') => return Some(format!("key:digit:{c}")),
-        // `r` rides the very `reload` control word `rimz reload` posts, so a
+        // `r` rides the very reload control word `rimz reload` posts, so a
         // keypress and the CLI converge on the one re-exec path in `super`.
-        KeyCode::Char('r') => "reload",
+        KeyCode::Char('r') => RELOAD_CONTROL_WORD,
         _ => return None,
     };
     Some(wire.to_owned())
@@ -130,7 +130,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
     match raw {
         "snapshot" => Wakeup::Snapshot,
         "resize" => Wakeup::Resize,
-        "reload" => Wakeup::Reload,
+        RELOAD_CONTROL_WORD => Wakeup::Reload,
         "key:up" => Wakeup::Key(KeyAction::Up),
         "key:down" => Wakeup::Key(KeyAction::Down),
         "key:worktree_up" => Wakeup::Key(KeyAction::WorktreeUp),
@@ -368,7 +368,7 @@ mod tests {
         // only while no control or input wire word can begin with `{`.
         let mut words = vec![
             "resize".to_owned(),
-            "reload".to_owned(),
+            RELOAD_CONTROL_WORD.to_owned(),
             String::from_utf8(SNAPSHOT_WAKEUP.to_vec()).unwrap(),
         ];
         for code in [

@@ -30,11 +30,29 @@ fn report(outcome: &ReloadOutcome) {
         println!("Launch one with `rimz start` or `rimz attach`.");
         return;
     }
-    if outcome.signaled > 0 {
+    if outcome.reexeced > 0 {
         println!(
             "Reloaded {} across {}.",
-            count(outcome.signaled, "sidebar"),
+            count(outcome.reexeced, "sidebar"),
             count(outcome.sessions, "session"),
+        );
+    }
+    if outcome.already_current > 0 {
+        println!(
+            "{} already on the current build.",
+            count(outcome.already_current, "sidebar"),
+        );
+    }
+    if outcome.restarted > 0 {
+        println!(
+            "Restarted {} that could not reload in place.",
+            count(outcome.restarted, "sidebar"),
+        );
+    }
+    if outcome.unverified > 0 {
+        println!(
+            "{} could not be build-verified.",
+            count(outcome.unverified, "sidebar"),
         );
     }
     if outcome.recovered > 0 {

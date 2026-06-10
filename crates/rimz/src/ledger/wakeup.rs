@@ -33,7 +33,7 @@ use crate::run::RunRecord;
 use crate::schema::SIDEBAR_PROTOCOL_VERSION;
 use crate::schema::event::{EventEnvelope, EventKind};
 use crate::schema::heartbeat::SidebarHeartbeat;
-use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
+use crate::schema::sidebar_event::{RELOAD_CONTROL_WORD, SidebarEvent, SidebarEventEnvelope};
 pub use crate::sidebar::timing::SIDEBAR_HEARTBEAT_TTL;
 
 #[derive(Debug, thiserror::Error)]
@@ -136,15 +136,21 @@ fn agent_signal(event: &EventEnvelope) -> Option<String> {
     }
 }
 
-/// Tell every fresh sidebar of this workspace to re-exec its own binary, so it
-/// picks up a freshly-installed renderer in place — no session rebirth, no pane
-/// churn. One-shot `rimz sidebar snapshot` calls pick up the installed binary on
-/// every run; this covers the long-lived renderer process that now owns the
-/// in-process produce path. Returns how many sidebars were
-/// signaled. A wedged or already-dead sidebar receives nothing; relaunch it via
-/// `rimz start`/`rimz attach` instead.
+/// Tell every fresh sidebar of this workspace to re-exec its own binary. Reload
+/// uses the bare control word, not a typed event envelope, so it still reaches a
+/// renderer whose sidebar-event schema predates the current one.
 pub fn reload_sidebars(rt: &RuntimePaths) -> Result<usize> {
-    broadcast_sidebar_event(rt, None, SidebarEvent::Reload)
+    let sidebars = collect_fresh_sidebars(rt)?;
+    let signaled = sidebars.len();
+    let Some(sender) = sender_socket() else {
+        return Ok(signaled);
+    };
+    send_datagrams_with(
+        &sender,
+        RELOAD_CONTROL_WORD.as_bytes(),
+        sidebars.iter().map(|hb| hb.wakeup_socket.as_path()),
+    );
+    Ok(signaled)
 }
 
 /// Post one typed event envelope to every fresh, protocol-current sidebar of

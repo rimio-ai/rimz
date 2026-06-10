@@ -152,6 +152,13 @@ pub const SIDEBAR_HEARTBEAT_TTL: Duration = Duration::from_secs(5);
 /// atomic file write for every ledger-delta fetch in a busy fleet.
 pub const HEARTBEAT_WRITE_INTERVAL: Duration = Duration::from_secs(2);
 
+/// How long `rimz reload` waits for signaled renderers to publish a heartbeat
+/// stamped with the on-disk build before falling back to close-and-readd.
+pub const RELOAD_CONVERGE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Poll cadence while `rimz reload` waits for build-stamped heartbeats.
+pub const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);
+
 /// Watchdog interval for the self-close backstop: when no resize event arrives
 /// (e.g. background Zellij sessions that omit SIGWINCH after a pane closes),
 /// this asks the normal snapshot path for a fresh own-view count. Sized at 2s

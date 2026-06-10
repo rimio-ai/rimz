@@ -325,20 +325,42 @@ impl MuxBackend for TmuxBackend {
         let views = tmux_views_with_sidebars(&panes);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
+        let mut failed_stale_close_views = std::collections::HashSet::new();
         for pane in &plan.close {
             match self.kill_pane(pane) {
-                Ok(()) => report.closed += 1,
-                Err(err) => tracing::warn!(
-                    session = %opts.session_name,
-                    pane = %pane.as_str(),
-                    error = %err,
-                    "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
-                ),
+                Ok(()) => {
+                    if live.stale_panes.contains(pane) {
+                        report.stale_closed += 1;
+                    } else {
+                        report.closed += 1;
+                    }
+                }
+                Err(err) => {
+                    if let Some(view) = plan.stale_close_views.get(pane) {
+                        failed_stale_close_views.insert(view.clone());
+                    }
+                    tracing::warn!(
+                        session = %opts.session_name,
+                        pane = %pane.as_str(),
+                        error = %err,
+                        "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
+                    );
+                }
             }
         }
         for window in &plan.add {
+            if plan.restart_add.contains(window) && failed_stale_close_views.contains(window) {
+                report.failed += 1;
+                continue;
+            }
             match self.add_sidebar_to_window(opts, window) {
-                Ok(()) => report.recovered += 1,
+                Ok(()) => {
+                    if plan.restart_add.contains(window) {
+                        report.restarted += 1;
+                    } else {
+                        report.recovered += 1;
+                    }
+                }
                 Err(err) => {
                     tracing::warn!(
                         session = %opts.session_name,
