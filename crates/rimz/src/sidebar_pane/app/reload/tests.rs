@@ -1,48 +1,6 @@
 use super::*;
 
 #[test]
-fn strip_deleted_suffix_removes_only_the_kernel_annotation() {
-    assert_eq!(
-        strip_deleted_suffix(Path::new("/usr/bin/rimz (deleted)")),
-        Some(PathBuf::from("/usr/bin/rimz"))
-    );
-    // A path the kernel did not annotate is left alone.
-    assert_eq!(strip_deleted_suffix(Path::new("/usr/bin/rimz")), None);
-    // " (deleted)" only counts as a trailing suffix, never mid-path.
-    assert_eq!(
-        strip_deleted_suffix(Path::new("/opt/my (deleted)/rimz")),
-        None
-    );
-}
-
-#[test]
-fn reexec_target_resolves_the_replacement_after_an_install() {
-    // Post-`cargo install`: the inode behind our `current_exe()` was
-    // unlinked, so it reads "<path> (deleted)" while the freshly-installed
-    // binary now sits at the un-annotated path — that is what we re-exec.
-    let dir = tempfile::tempdir().unwrap();
-    let real = dir.path().join("rimz");
-    std::fs::write(&real, b"x").unwrap();
-    let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
-    assert!(!deleted.is_file(), "the annotated path must not exist");
-    assert_eq!(resolve_reexec_target(deleted), Some(real.clone()));
-    // The ordinary, not-replaced case uses the live path as-is.
-    assert_eq!(resolve_reexec_target(real.clone()), Some(real));
-}
-
-#[test]
-fn reexec_target_is_none_when_nothing_exists_on_disk() {
-    // A partial or in-flight install: neither the annotated nor the
-    // stripped path is a file, so the loop keeps serving the current build
-    // rather than re-execing into nothing and vanishing.
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("rimz");
-    let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
-    assert_eq!(resolve_reexec_target(deleted), None);
-    assert_eq!(resolve_reexec_target(missing), None);
-}
-
-#[test]
 fn decide_reload_reexecs_only_when_the_on_disk_binary_differs() {
     let target = PathBuf::from("/some/rimz");
     // Byte-identical to what we run: skip the re-exec churn.

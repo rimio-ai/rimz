@@ -224,8 +224,9 @@ rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin po
 rimz statusline feed --source <agent>              # captures statusline context
 rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
 rimz agents exec <agent> [--run-id <id>] [--worktree-path <p>] [--prompt <text>] # supervised agent pane wrapper
+rimz worktree cleanup <path> [--non-interactive]   # marked-worktree cleanup helper
 rimz codex ...                                     # Codex enrichment helpers
 rimz workspace resolve [PATH]                      # print the resolved workspace as JSON
 ```
 
-The installed hook command passes only `--source`; the event is read from the payload on stdin. `agents exec` is what `rimz tab`, `rimz agents`, and `rimz run` run inside agent panes: it launches the adapter's CLI, forwards `RIMZ_RUN_ID` when a supervised run owns the pane, and performs marked-worktree cleanup after exit. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md), [internals/transcript.md](../internals/transcript.md), and [internals/worktrees.md](../internals/worktrees.md).
+The installed hook command passes only `--source`; the event is read from the payload on stdin. `agents exec` is what `rimz tab`, `rimz agents`, and `rimz run` run inside agent panes: it launches the adapter's CLI, forwards `RIMZ_RUN_ID` when a supervised run owns the pane, and delegates marked-worktree cleanup after exit to `rimz worktree cleanup`. The Codex helpers and the daemon broker they back are documented in [internals/hooks.md](../internals/hooks.md), [internals/transcript.md](../internals/transcript.md), and [internals/worktrees.md](../internals/worktrees.md).

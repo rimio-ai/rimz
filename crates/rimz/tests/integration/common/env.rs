@@ -123,7 +123,12 @@ impl Env {
     /// cleared, cwd at the project root. The workspace resolves from cwd — no
     /// `--root`; tests targeting another project override `current_dir`.
     pub fn rimz(&self) -> Command {
-        let mut cmd = Command::cargo_bin("rimz").expect("cargo-bin");
+        self.rimz_at(&self.rimz_bin())
+    }
+
+    /// Base command using a caller-supplied rimz executable path.
+    pub fn rimz_at(&self, rimz_bin: &Path) -> Command {
+        let mut cmd = Command::new(rimz_bin);
         cmd.scrub_session_env()
             .env("XDG_STATE_HOME", self.state_root())
             .env("XDG_RUNTIME_DIR", &self.runtime_root)

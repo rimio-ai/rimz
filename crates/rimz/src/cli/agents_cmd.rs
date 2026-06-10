@@ -1,6 +1,6 @@
 //! `rimz agents` — launcher sugar plus the hidden supervised exec wrapper.
 
-use std::io::{IsTerminal, Write};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -16,7 +16,6 @@ use rimz::tab_layout::{Cell, LayoutSpec};
 use rimz::workspace::WorkspaceResolver;
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
-const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
 const RUN_MONITOR_POLL: Duration = Duration::from_millis(250);
 const RUN_EXIT_TERMINAL_GRACE: Duration = Duration::from_millis(500);
@@ -164,7 +163,7 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
 
     if let Some(path) = args.worktree_path.as_deref()
-        && let Err(err) = cleanup_worktree(path, globals, !outcome.signaled)
+        && let Err(err) = cleanup_worktree_via_ondisk(path, globals, !outcome.signaled)
     {
         let _ = writeln!(
             std::io::stderr().lock(),
@@ -177,6 +176,73 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         close_own_pane(globals, &context.session_name);
     }
     std::process::exit(outcome.status.code().unwrap_or(1));
+}
+
+fn cleanup_worktree_via_ondisk(
+    path: &Path,
+    globals: &GlobalFlags,
+    interactive: bool,
+) -> Result<()> {
+    let cleanup_path = cleanup_target_path(path);
+    let path = cleanup_path.as_path();
+    leave_worktree_before_cleanup(path);
+    let Some(bin) = rimz::reload::current_reexec_target() else {
+        return super::worktree::cleanup_worktree(path, globals, interactive);
+    };
+
+    let mut command = Command::new(&bin);
+    command.args(["worktree", "cleanup"]).arg(path);
+    if !interactive {
+        command.arg("--non-interactive");
+    }
+    if let Some(mux) = globals.mux {
+        command.args(["--mux", mux.as_str()]);
+    }
+
+    match command.status() {
+        Ok(status) => {
+            if !status.success() {
+                tracing::debug!(
+                    status = %status,
+                    "on-disk worktree cleanup exited non-zero",
+                );
+            }
+            Ok(())
+        }
+        Err(err) => {
+            tracing::debug!(
+                binary = %bin.display(),
+                error = %err,
+                "could not spawn on-disk worktree cleanup; falling back in-process",
+            );
+            super::worktree::cleanup_worktree(path, globals, interactive)
+        }
+    }
+}
+
+fn cleanup_target_path(path: &Path) -> std::path::PathBuf {
+    path.canonicalize().unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
+        }
+    })
+}
+
+fn leave_worktree_before_cleanup(path: &Path) {
+    let Some(parent) = path.parent() else {
+        return;
+    };
+    if let Err(err) = std::env::set_current_dir(parent) {
+        tracing::debug!(
+            path = %parent.display(),
+            error = %err,
+            "could not leave worktree before delegated cleanup",
+        );
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -386,80 +452,6 @@ fn signal_child(pid: u32, signal: ChildSignal) {
 #[cfg(not(unix))]
 fn signal_child(_pid: u32, _signal: ChildSignal) {}
 
-fn cleanup_worktree(path: &Path, globals: &GlobalFlags, interactive: bool) -> Result<()> {
-    let Some(marker) = rimz::worktree::read_marker_for_worktree(path)? else {
-        return Ok(());
-    };
-    let status = rimz::worktree::status(path, &marker)?;
-    if !interactive {
-        std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
-    }
-    let other_pane_inside = other_live_pane_inside(path, globals);
-    match rimz::worktree::cleanup_decision(status, true, other_pane_inside) {
-        rimz::worktree::CleanupDecision::RemoveClean => {
-            let branch = remove_after_leaving_worktree(path, &marker, false)?;
-            let _ = writeln!(
-                std::io::stderr().lock(),
-                "rimz: removed clean worktree {}",
-                path.display()
-            );
-            report_kept_branch(branch, &marker);
-        }
-        rimz::worktree::CleanupDecision::PromptDirty => {
-            if interactive {
-                match dirty_choice(path)? {
-                    DirtyChoice::Keep => {}
-                    DirtyChoice::Remove => {
-                        let branch = remove_after_leaving_worktree(path, &marker, true)?;
-                        report_kept_branch(branch, &marker);
-                    }
-                    DirtyChoice::Shell => exec_shell(path)?,
-                }
-            }
-        }
-        rimz::worktree::CleanupDecision::Skip => {}
-    }
-    Ok(())
-}
-
-fn remove_after_leaving_worktree(
-    path: &Path,
-    marker: &rimz::worktree::WorktreeMarker,
-    force: bool,
-) -> Result<rimz::worktree::BranchDeletion> {
-    std::env::set_current_dir(&marker.repo_root)
-        .with_context(|| format!("leaving worktree before removing {}", path.display()))?;
-    rimz::worktree::remove_marked_worktree(&marker.repo_root, path, marker, force)
-        .map_err(Into::into)
-}
-
-fn report_kept_branch(
-    branch: rimz::worktree::BranchDeletion,
-    marker: &rimz::worktree::WorktreeMarker,
-) {
-    if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
-        let _ = writeln!(
-            std::io::stderr().lock(),
-            "rimz: kept branch {} because its work was not proven merged into its base",
-            marker.branch
-        );
-    }
-}
-
-fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
-    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
-        return false;
-    };
-    let Some(own) = own_pane_id(mux) else {
-        return false;
-    };
-    let backend = rimz::mux::backend_for(mux);
-    let Ok(panes) = backend.list_panes(rimz::mux::PaneListOptions::default()) else {
-        return false;
-    };
-    other_live_user_pane_inside(&panes, &own, path)
-}
-
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
         return;
@@ -477,74 +469,6 @@ fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
     }
 }
 
-fn other_live_user_pane_inside<'a>(
-    panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>,
-    own: &rimz::PaneId,
-    path: &Path,
-) -> bool {
-    panes.into_iter().any(|pane| {
-        &pane.pane_id != own
-            && !pane.is_rimz_sidebar()
-            && pane
-                .cwd
-                .as_deref()
-                .map(Path::new)
-                .is_some_and(|cwd| rimz::worktree::path_inside(cwd, path))
-    })
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DirtyChoice {
-    Keep,
-    Remove,
-    Shell,
-}
-
-fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
-    if !std::io::stdin().is_terminal() {
-        return Ok(DirtyChoice::Keep);
-    }
-    let mut stderr = std::io::stderr().lock();
-    writeln!(
-        stderr,
-        "rimz: worktree {} has local changes or unmerged commits.",
-        path.display()
-    )?;
-    write!(stderr, "Choose keep/remove/shell [keep]: ")?;
-    stderr.flush()?;
-    drop(stderr);
-    let mut answer = String::new();
-    if std::io::stdin().read_line(&mut answer).is_err() {
-        return Ok(DirtyChoice::Keep);
-    }
-    Ok(match answer.trim() {
-        "remove" | "r" => DirtyChoice::Remove,
-        "shell" | "s" => DirtyChoice::Shell,
-        _ => DirtyChoice::Keep,
-    })
-}
-
-#[cfg(unix)]
-fn exec_shell(path: &Path) -> Result<()> {
-    use std::os::unix::process::CommandExt;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned());
-    let err = Command::new(&shell).current_dir(path).exec();
-    Err::<(), _>(err).with_context(|| format!("execing {shell}"))
-}
-
-#[cfg(not(unix))]
-fn exec_shell(path: &Path) -> Result<()> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned());
-    let status = Command::new(&shell)
-        .current_dir(path)
-        .status()
-        .with_context(|| format!("running {shell}"))?;
-    if !status.success() {
-        bail!("shell exited with {status}");
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -552,7 +476,6 @@ mod tests {
     use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
     use rimz::ids::{AgentKind, WorkspaceId};
     use rimz::run::{PermissionMode, RunRecord, RunStatus};
-    use rimz::{MuxName, PaneId};
 
     #[derive(Debug, Parser)]
     struct ExecHarness {
@@ -635,41 +558,5 @@ mod tests {
         .await
         .expect("run wait");
         assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
-    }
-
-    #[test]
-    fn other_live_user_pane_inside_ignores_sidebar_and_own_pane() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let panes = vec![
-            pane("terminal_side", Some("rimz-sidebar"), Some(worktree)),
-            pane("terminal_outside", Some("zsh"), Some(Path::new("/repo"))),
-            pane("terminal_own", Some("codex"), Some(worktree)),
-        ];
-
-        assert!(
-            !other_live_user_pane_inside(&panes, &own, worktree),
-            "sidebar, outside pane, and own pane do not pin cleanup"
-        );
-    }
-
-    #[test]
-    fn other_live_user_pane_inside_counts_agent_or_shell_under_worktree() {
-        let worktree = Path::new("/repo-worktrees/demo");
-        let shell_dir = worktree.join("src");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
-        let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
-        let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
-
-        assert!(other_live_user_pane_inside(&agent, &own, worktree));
-        assert!(other_live_user_pane_inside(&shell, &own, worktree));
-    }
-
-    fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::feed::PaneRef {
-        rimz::feed::PaneRef {
-            command: command.map(ToOwned::to_owned),
-            cwd: cwd.map(|path| path.display().to_string()),
-            ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
-        }
     }
 }

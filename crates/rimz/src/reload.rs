@@ -21,6 +21,48 @@ use crate::mux::recovery;
 use crate::mux::{MuxBackend, PaneListOptions, SidebarPaneOptions, SidebarWidth, backend_for};
 use crate::workspace::{self, KnownWorkspace};
 
+/// Resolve the on-disk binary that should be executed after the current image
+/// may have been replaced by an atomic install.
+pub fn current_reexec_target() -> Option<PathBuf> {
+    resolve_reexec_target(std::env::current_exe().ok()?)
+}
+
+/// Pick the live binary behind a `current_exe()` reading.
+///
+/// A fresh `cargo install` replaces our binary via atomic rename, which unlinks
+/// the inode the running process still holds. The kernel then annotates
+/// `/proc/self/exe` (what `current_exe()` reads) with a trailing " (deleted)",
+/// so the raw path no longer resolves on disk. The replacement now lives at the
+/// un-annotated path, so strip that marker and prefer whichever path is a real
+/// file. `None` means neither path exists, such as during a partial install.
+pub fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
+    if exe.is_file() {
+        return Some(exe);
+    }
+    strip_deleted_suffix(&exe).filter(|path| path.is_file())
+}
+
+/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
+/// `None` when the path carries no such suffix.
+#[cfg(unix)]
+fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    use std::os::unix::ffi::OsStrExt;
+
+    const DELETED_SUFFIX: &[u8] = b" (deleted)";
+    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
+    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
+}
+
+/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
+/// `None` when the path carries no such suffix.
+#[cfg(not(unix))]
+fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
+    path.as_os_str()
+        .to_str()
+        .and_then(|raw| raw.strip_suffix(" (deleted)"))
+        .map(PathBuf::from)
+}
+
 /// What a user-wide reload did, aggregated across workspaces, for the CLI report.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ReloadOutcome {
@@ -309,6 +351,39 @@ impl LiveSessions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn strip_deleted_suffix_removes_only_the_kernel_annotation() {
+        assert_eq!(
+            strip_deleted_suffix(Path::new("/usr/bin/rimz (deleted)")),
+            Some(PathBuf::from("/usr/bin/rimz"))
+        );
+        assert_eq!(strip_deleted_suffix(Path::new("/usr/bin/rimz")), None);
+        assert_eq!(
+            strip_deleted_suffix(Path::new("/opt/my (deleted)/rimz")),
+            None
+        );
+    }
+
+    #[test]
+    fn reexec_target_resolves_the_replacement_after_an_install() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("rimz");
+        std::fs::write(&real, b"x").unwrap();
+        let deleted = PathBuf::from(format!("{} (deleted)", real.display()));
+        assert!(!deleted.is_file(), "the annotated path must not exist");
+        assert_eq!(resolve_reexec_target(deleted), Some(real.clone()));
+        assert_eq!(resolve_reexec_target(real.clone()), Some(real));
+    }
+
+    #[test]
+    fn reexec_target_is_none_when_nothing_exists_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("rimz");
+        let deleted = PathBuf::from(format!("{} (deleted)", missing.display()));
+        assert_eq!(resolve_reexec_target(deleted), None);
+        assert_eq!(resolve_reexec_target(missing), None);
+    }
 
     #[test]
     fn born_recently_holds_inside_the_grace_and_for_clock_fuzz() {

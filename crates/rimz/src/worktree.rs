@@ -484,6 +484,9 @@ fn commits_unmerged_against(cwd: &Path, comparison_ref: &str, head_ref: &str) ->
     let Some(merge_base) = git_stdout(cwd, ["merge-base", comparison_ref, head_ref]).ok() else {
         return Some(ancestry_count);
     };
+    if final_tree_matches_after_branch_change(cwd, comparison_ref, head_ref, &merge_base) {
+        return Some(0);
+    }
     let upstream_count = rev_list_count(cwd, &format!("{merge_base}..{comparison_ref}"))
         .unwrap_or(PATCH_EQUIVALENCE_UPSTREAM_COMMIT_CAP.saturating_add(1));
     if upstream_count > PATCH_EQUIVALENCE_UPSTREAM_COMMIT_CAP {
@@ -506,6 +509,29 @@ fn commits_unmerged_against(cwd: &Path, comparison_ref: &str, head_ref: &str) ->
     } else {
         Some(patch_unmerged)
     }
+}
+
+fn final_tree_matches_after_branch_change(
+    cwd: &Path,
+    comparison_ref: &str,
+    head_ref: &str,
+    merge_base: &str,
+) -> bool {
+    let Some(comparison_tree) = tree_id(cwd, comparison_ref) else {
+        return false;
+    };
+    let Some(head_tree) = tree_id(cwd, head_ref) else {
+        return false;
+    };
+    let Some(merge_base_tree) = tree_id(cwd, merge_base) else {
+        return false;
+    };
+    comparison_tree == head_tree && merge_base_tree != head_tree
+}
+
+fn tree_id(cwd: &Path, ref_name: &str) -> Option<String> {
+    let tree_ref = format!("{ref_name}^{{tree}}");
+    git_stdout(cwd, ["rev-parse", tree_ref.as_str()]).ok()
 }
 
 fn branch_squash_equivalent(

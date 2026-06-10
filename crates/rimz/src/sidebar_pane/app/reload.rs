@@ -62,33 +62,7 @@ pub(super) fn reload_action() -> ReloadAction {
 /// be found — in which case the caller keeps serving the current build instead
 /// of vanishing.
 fn reexec_target() -> Option<PathBuf> {
-    resolve_reexec_target(std::env::current_exe().ok()?)
-}
-
-/// Pick the live binary behind a `current_exe()` reading.
-///
-/// A fresh `cargo install` replaces our binary via atomic rename, which unlinks
-/// the inode the running process still holds. The kernel then annotates
-/// `/proc/self/exe` (what `current_exe()` reads) with a trailing " (deleted)",
-/// so the raw path no longer resolves on disk. The replacement now lives at the
-/// un-annotated path — exactly the build `rimz reload` means to pick up — so we
-/// strip that marker and prefer whichever path is a real file. `None` (neither
-/// path exists, e.g. a partial install) tells the caller to keep the old build.
-fn resolve_reexec_target(exe: PathBuf) -> Option<PathBuf> {
-    if exe.is_file() {
-        return Some(exe);
-    }
-    strip_deleted_suffix(&exe).filter(|path| path.is_file())
-}
-
-/// Strip the kernel's " (deleted)" annotation from a `/proc/self/exe` path.
-/// `None` when the path carries no such suffix.
-fn strip_deleted_suffix(path: &Path) -> Option<PathBuf> {
-    use std::os::unix::ffi::OsStrExt;
-
-    const DELETED_SUFFIX: &[u8] = b" (deleted)";
-    let stripped = path.as_os_str().as_bytes().strip_suffix(DELETED_SUFFIX)?;
-    Some(PathBuf::from(std::ffi::OsStr::from_bytes(stripped)))
+    crate::reload::current_reexec_target()
 }
 
 /// Whether the binary at `target` is byte-identical to the image this process

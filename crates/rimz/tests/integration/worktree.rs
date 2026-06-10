@@ -1,9 +1,9 @@
 //! Integration coverage for `rimz worktree`.
 
 use std::path::Path;
-use std::process::Command;
 #[cfg(unix)]
-use std::process::{Child, ExitStatus, Stdio};
+use std::process::{Child, ExitStatus};
+use std::process::{Command, Stdio};
 #[cfg(unix)]
 use std::time::{Duration, Instant};
 
@@ -185,6 +185,35 @@ fn agents_exec_sighup_removes_clean_worktree() {
         !git_stdout(&env.project_root, &["worktree", "list", "--porcelain"])
             .contains(&path.display().to_string()),
         "git worktree list forgets the removed worktree"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_clean_worktree_with_relative_path() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let mut child = spawn_agent_exec_with_worktree_arg(&env, Path::new("."), &path, "relative");
+
+    wait_for_file(&env.home_root.join("relative.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("relative.pid"));
+
+    assert!(
+        !path.exists(),
+        "relative worktree path is normalized before cleanup leaves the cwd"
+    );
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "relative-path cleanup deletes the branch"
     );
 }
 
@@ -416,6 +445,320 @@ fn agents_exec_sighup_removes_cherry_picked_worktree() {
 }
 
 #[test]
+fn worktree_remove_split_landed_succeeds_without_force() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_two_files(
+        &path,
+        "feature a",
+        "feature-a.txt",
+        "a\n",
+        "feature-b.txt",
+        "b\n",
+    );
+    commit_file(&env.project_root, "feature-a.txt", "a\n", "feature a");
+    commit_file(&env.project_root, "feature-b.txt", "b\n", "feature b");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(0),
+        "identical trees count as landed even when one branch commit landed as multiple base commits"
+    );
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("removed demo"));
+
+    assert!(!path.exists(), "split-landed worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "split-landed branch deleted after proof"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_split_landed_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_two_files(
+        &path,
+        "feature",
+        "feature-a.txt",
+        "a\n",
+        "feature-b.txt",
+        "b\n",
+    );
+    commit_file(&env.project_root, "feature-a.txt", "a\n", "feature a");
+    commit_file(&env.project_root, "feature-b.txt", "b\n", "feature b");
+
+    let mut child = spawn_agent_exec(&env, &path, "split-landed");
+    wait_for_file(&env.home_root.join("split-landed.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("split-landed.pid"));
+
+    assert!(!path.exists(), "split-landed worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "split-landed branch deleted"
+    );
+}
+
+#[test]
+fn worktree_remove_reverted_work_requires_force() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    commit_reverted_file(&path);
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(2),
+        "committed-then-reverted history is still unmerged work"
+    );
+
+    env.rimz()
+        .args(["worktree", "remove", "demo"])
+        .assert()
+        .failure()
+        .stderr(contains("--force"));
+
+    assert!(path.exists(), "reverted worktree is kept");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "reverted branch is kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_keeps_reverted_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_reverted_file(&path);
+    let mut child = spawn_agent_exec(&env, &path, "reverted");
+
+    wait_for_file(&env.home_root.join("reverted.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("reverted.pid"));
+
+    assert!(path.exists(), "reverted worktree is kept after SIGHUP");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "reverted branch is kept"
+    );
+}
+
+#[test]
+fn worktree_cleanup_command_removes_clean_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .arg("--non-interactive")
+        .current_dir(&env.home_root)
+        .assert()
+        .success()
+        .stderr(contains("removed clean worktree"));
+
+    assert!(!path.exists(), "clean worktree removed by hidden cleanup");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "cleanup deleted clean branch"
+    );
+}
+
+#[test]
+fn worktree_cleanup_command_keeps_dirty_worktree_without_tty() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
+
+    env.rimz()
+        .args(["worktree", "cleanup"])
+        .arg(&path)
+        .current_dir(&env.home_root)
+        .stdin(Stdio::null())
+        .assert()
+        .success();
+
+    assert!(path.exists(), "dirty worktree is kept without a TTY");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "dirty branch is kept"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_cleanup_execs_the_on_disk_binary() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let rimz_copy = env.home_root.join("rimz-copy");
+    std::fs::copy(env.rimz_bin(), &rimz_copy).expect("copy rimz binary");
+    chmod_executable(&rimz_copy);
+
+    let argv_file = env.home_root.join("cleanup.argv");
+    let mut child = spawn_agent_exec_from(&env, &rimz_copy, &path, "delegated");
+    wait_for_file(&env.home_root.join("delegated.ready"));
+    write_cleanup_recorder(&rimz_copy, &argv_file);
+
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("delegated.pid"));
+
+    let recorded = std::fs::read_to_string(&argv_file).expect("read recorded argv");
+    assert_eq!(
+        recorded.lines().collect::<Vec<_>>(),
+        vec![
+            "worktree",
+            "cleanup",
+            path.to_str().expect("utf8 path"),
+            "--non-interactive",
+        ],
+        "stale supervisor invoked the replacement binary for cleanup"
+    );
+    assert!(
+        path.exists(),
+        "shim did not run in-process cleanup, so worktree remains"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_cleanup_falls_back_when_on_disk_binary_is_gone() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let rimz_copy = env.home_root.join("rimz-copy");
+    std::fs::copy(env.rimz_bin(), &rimz_copy).expect("copy rimz binary");
+    chmod_executable(&rimz_copy);
+
+    let mut child = spawn_agent_exec_from(&env, &rimz_copy, &path, "fallback");
+    wait_for_file(&env.home_root.join("fallback.ready"));
+    std::fs::remove_file(&rimz_copy).expect("delete copied rimz binary");
+
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("fallback.pid"));
+
+    assert!(
+        !path.exists(),
+        "missing on-disk binary falls back to in-process cleanup"
+    );
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "fallback cleanup deletes the clean branch"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_cleanup_falls_back_when_replacement_cannot_spawn() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let rimz_copy = env.home_root.join("rimz-copy");
+    std::fs::copy(env.rimz_bin(), &rimz_copy).expect("copy rimz binary");
+    chmod_executable(&rimz_copy);
+
+    let mut child = spawn_agent_exec_from(&env, &rimz_copy, &path, "spawn-fallback");
+    wait_for_file(&env.home_root.join("spawn-fallback.ready"));
+    write_unspawnable_file(&rimz_copy);
+
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("spawn-fallback.pid"));
+
+    assert!(
+        !path.exists(),
+        "unspawnable replacement binary falls back to in-process cleanup"
+    );
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "spawn-error fallback deletes the clean branch"
+    );
+}
+
+#[test]
 fn worktree_remove_merged_succeeds_without_force() {
     if git_missing() {
         return;
@@ -618,6 +961,25 @@ fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {
     git(repo, &["commit", "-m", message]);
 }
 
+fn commit_two_files(
+    repo: &Path,
+    message: &str,
+    first_name: &str,
+    first_contents: &str,
+    second_name: &str,
+    second_contents: &str,
+) {
+    std::fs::write(repo.join(first_name), first_contents).expect("write first committed file");
+    std::fs::write(repo.join(second_name), second_contents).expect("write second committed file");
+    git(repo, &["add", first_name, second_name]);
+    git(repo, &["commit", "-m", message]);
+}
+
+fn commit_reverted_file(repo: &Path) {
+    commit_file(repo, "attempt.txt", "attempt\n", "attempt");
+    git(repo, &["revert", "--no-edit", "HEAD"]);
+}
+
 fn git(cwd: &Path, args: &[&str]) {
     let output = Command::new("git")
         .args(args)
@@ -670,19 +1032,59 @@ fn spawn_agent_exec(env: &Env, worktree: &Path, label: &str) -> Child {
 }
 
 #[cfg(unix)]
+fn spawn_agent_exec_from(env: &Env, rimz_bin: &Path, worktree: &Path, label: &str) -> Child {
+    spawn_agent_exec_command(
+        env,
+        env.rimz_at(rimz_bin),
+        worktree,
+        worktree,
+        label,
+        AgentSignals::Trap,
+    )
+}
+
+#[cfg(unix)]
+fn spawn_agent_exec_with_worktree_arg(
+    env: &Env,
+    worktree_arg: &Path,
+    cwd: &Path,
+    label: &str,
+) -> Child {
+    spawn_agent_exec_command(
+        env,
+        env.rimz(),
+        worktree_arg,
+        cwd,
+        label,
+        AgentSignals::Trap,
+    )
+}
+
+#[cfg(unix)]
 fn spawn_agent_exec_with_signals(
     env: &Env,
     worktree: &Path,
     label: &str,
     signals: AgentSignals,
 ) -> Child {
+    spawn_agent_exec_command(env, env.rimz(), worktree, worktree, label, signals)
+}
+
+#[cfg(unix)]
+fn spawn_agent_exec_command(
+    env: &Env,
+    mut cmd: Command,
+    worktree_arg: &Path,
+    cwd: &Path,
+    label: &str,
+    signals: AgentSignals,
+) -> Child {
     let shim_dir = write_codex_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
     let pid_file = env.home_root.join(format!("{label}.pid"));
-    let mut cmd = env.rimz();
     cmd.args(["agents", "exec", "codex", "--worktree-path"])
-        .arg(worktree)
-        .current_dir(worktree)
+        .arg(worktree_arg)
+        .current_dir(cwd)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .env("RIMZ_TEST_AGENT_PID", &pid_file)
@@ -732,6 +1134,52 @@ fn write_codex_shim(env: &Env) -> std::path::PathBuf {
     perms.set_mode(0o755);
     std::fs::set_permissions(&shim, perms).expect("chmod codex shim");
     dir
+}
+
+#[cfg(unix)]
+fn write_cleanup_recorder(target: &Path, argv_file: &Path) {
+    let tmp = target.with_extension("tmp");
+    let script = format!(
+        "#!/bin/sh\n\
+         : > '{}'\n\
+         for arg do\n\
+           printf '%s\\n' \"$arg\" >> '{}'\n\
+         done\n\
+         exit 0\n",
+        shell_quote(argv_file),
+        shell_quote(argv_file)
+    );
+    std::fs::write(&tmp, script).expect("write cleanup recorder");
+    chmod_executable(&tmp);
+    std::fs::rename(&tmp, target).expect("publish cleanup recorder");
+}
+
+#[cfg(unix)]
+fn write_unspawnable_file(target: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let tmp = target.with_extension("tmp");
+    std::fs::write(&tmp, b"not an executable\n").expect("write unspawnable file");
+    let mut perms = std::fs::metadata(&tmp)
+        .expect("unspawnable metadata")
+        .permissions();
+    perms.set_mode(0o644);
+    std::fs::set_permissions(&tmp, perms).expect("chmod unspawnable file");
+    std::fs::rename(&tmp, target).expect("publish unspawnable file");
+}
+
+#[cfg(unix)]
+fn shell_quote(path: &Path) -> String {
+    path.display().to_string().replace('\'', "'\\''")
+}
+
+#[cfg(unix)]
+fn chmod_executable(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut perms = std::fs::metadata(path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(path, perms).expect("chmod executable");
 }
 
 #[cfg(unix)]
