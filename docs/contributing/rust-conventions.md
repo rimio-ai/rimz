@@ -221,17 +221,18 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 - `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` — lint.
 - `cargo nextest run --workspace --all-features --locked` — test runner (the `test` task; the standalone fast signal and the mux-backend job).
 - `cargo xtask doctest` — doctests.
+- `cargo xtask docs-links` — every relative markdown link target and `#anchor` resolves in the working tree (offline and deterministic; external URLs are out of scope).
 - `cargo deny check` — licence, advisory, and ban check.
 - `cargo machete` — unused dependency check.
 - `cargo vet` — supply-chain audit.
 - `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass.
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
 
-Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
+Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `pricing-refresh`, `screenshot`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `docs-links`, `pricing-refresh`, `screenshot`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.
 
 ## Reading order for new contributors
 
