@@ -260,16 +260,9 @@ pub(crate) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
 /// instead of walking back into an earlier turn.
 pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
     for line in tail.lines().rev() {
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        let Ok(value) = serde_json::from_str::<Value>(line) else {
+        let Some(value) = conversation_entry(line) else {
             continue;
         };
-        if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
-            continue;
-        }
         let entry_type = value.get("type").and_then(Value::as_str);
         if !matches!(entry_type, Some("assistant" | "user")) {
             continue;
@@ -283,6 +276,35 @@ pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
         return assistant_text(&value);
     }
     None
+}
+
+pub(crate) fn assistant_messages(lines: &str) -> Vec<String> {
+    lines
+        .lines()
+        .filter_map(|line| {
+            let value = conversation_entry(line)?;
+            if value.get("type").and_then(Value::as_str) != Some("assistant")
+                || value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
+            {
+                return None;
+            }
+            assistant_text(&value)
+        })
+        .collect()
+}
+
+fn conversation_entry(line: &str) -> Option<Value> {
+    let line = line.trim();
+    if line.is_empty() {
+        return None;
+    }
+    let Ok(value) = serde_json::from_str::<Value>(line) else {
+        return None;
+    };
+    if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
+        return None;
+    }
+    Some(value)
 }
 
 /// The error entry's text ("API Error: Overloaded"): the first text block of
@@ -661,6 +683,12 @@ mod tests {
             last_assistant_message(&tail).as_deref(),
             Some("hello\nworld")
         );
+    }
+
+    #[test]
+    fn stream_assistant_messages_reads_ordered_main_thread_text() {
+        let messages = assistant_messages(include_str!("tests/fixtures/stream-transcript.jsonl"));
+        assert_eq!(messages, vec!["first update", "second\nline"]);
     }
 
     #[test]

@@ -1,0 +1,5 @@
+{"type":"assistant","message":{"content":[{"type":"text","text":"first update"}]}}
+{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"child update"}]}}
+{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}
+{"type":"user","message":{"content":[{"type":"text","text":"next prompt"}]}}
+{"type":"assistant","message":{"content":[{"type":"text","text":"second"},{"type":"text","text":"line"}]}}

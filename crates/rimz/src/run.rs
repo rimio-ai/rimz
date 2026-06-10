@@ -5,11 +5,12 @@ use std::path::PathBuf;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentLifecycleObservation, LifecycleSignal};
-use crate::ids::{AgentKind, AgentSessionId, PaneId, RunId, WorkspaceId};
-use crate::ledger::StatePaths;
+use crate::agents::{AgentLifecycleObservation, LifecycleSignal, TurnPhase};
+use crate::feed::{AgentState, AgentStatus, FeedItem, Surface};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, RunId, WorkspaceId};
 use crate::ledger::lock::WorkspaceLock;
 use crate::ledger::run_store::{self, RunStoreErr};
+use crate::ledger::{SidebarSnapshot, StatePaths};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 
@@ -29,17 +30,22 @@ pub enum RunStatus {
     Completed,
     Failed,
     TimedOut,
+    Canceled,
 }
 
 impl RunStatus {
     pub const fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::TimedOut)
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::TimedOut | Self::Canceled
+        )
     }
 
     pub const fn exit_code(self) -> i32 {
         match self {
             Self::Completed => 0,
             Self::Failed => 1,
+            Self::Canceled => 130,
             Self::TimedOut | Self::Pending | Self::Running => 124,
         }
     }
@@ -54,6 +60,8 @@ pub struct RunRecord {
     pub agent_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transcript_path: Option<String>,
     pub status: RunStatus,
     pub permission_mode: PermissionMode,
     pub prompt: String,
@@ -81,6 +89,7 @@ impl RunRecord {
             kind,
             agent_id: None,
             pane_id: None,
+            transcript_path: None,
             status: RunStatus::Pending,
             permission_mode,
             prompt,
@@ -91,6 +100,24 @@ impl RunRecord {
             completed_at: None,
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RunPendingAsk {
+    pub request_id: RequestId,
+    pub surface: Surface,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct RunLiveStatus {
+    pub agent_status: AgentStatus,
+    pub phase: TurnPhase,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context_pct: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_ask: Option<RunPendingAsk>,
 }
 
 pub fn create(paths: &StatePaths, record: &RunRecord) -> Result<()> {
@@ -120,6 +147,10 @@ pub fn record_pane(paths: &StatePaths, run_id: &RunId, pane_id: PaneId) -> Resul
 
 pub fn timeout(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
     mark_terminal(paths, run_id, RunStatus::TimedOut).map(|(record, _wrote)| record)
+}
+
+pub fn cancel(paths: &StatePaths, run_id: &RunId) -> Result<(RunRecord, bool)> {
+    mark_terminal(paths, run_id, RunStatus::Canceled)
 }
 
 pub fn fail(paths: &StatePaths, run_id: &RunId) -> Result<RunRecord> {
@@ -186,19 +217,78 @@ pub fn record_lifecycle(
     let now = Timestamp::now();
     if let Some(status) = completion {
         record.status = status;
+        if let Some(path) = observation.transcript_path.as_ref() {
+            record.transcript_path = Some(path.clone());
+        }
         record.last_message = last_message.or(record.last_message);
         record.updated_at = now;
         record.completed_at = Some(now);
         run_store::write(&paths.runs_dir, &record)?;
         Ok(Some(record))
     } else {
-        if record.status == RunStatus::Pending {
+        let first_transcript_path =
+            record.transcript_path.is_none() && observation.transcript_path.is_some();
+        if record.status == RunStatus::Pending || first_transcript_path {
             record.status = RunStatus::Running;
+            if record.transcript_path.is_none()
+                && let Some(path) = observation.transcript_path.as_ref()
+            {
+                record.transcript_path = Some(path.clone());
+            }
             record.updated_at = now;
             run_store::write(&paths.runs_dir, &record)?;
         }
         Ok(None)
     }
+}
+
+pub fn live_status(record: &RunRecord, snapshot: &SidebarSnapshot) -> Option<RunLiveStatus> {
+    if record.status.is_terminal() {
+        return None;
+    }
+    let agent_id = record.agent_id.as_ref()?;
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind == record.kind && &agent.agent_id == agent_id)?;
+    Some(RunLiveStatus {
+        agent_status: agent.status,
+        phase: agent.phase,
+        pane_id: agent
+            .pane
+            .as_ref()
+            .map(|pane| pane.pane_id.clone())
+            .or_else(|| record.pane_id.clone()),
+        context_pct: agent_context_pct(agent),
+        pending_ask: pending_ask_for(agent, snapshot),
+    })
+}
+
+fn agent_context_pct(agent: &AgentState) -> Option<u8> {
+    agent
+        .context
+        .as_ref()
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.used_percentage)
+        .or(agent.context_pct)
+}
+
+fn pending_ask_for(agent: &AgentState, snapshot: &SidebarSnapshot) -> Option<RunPendingAsk> {
+    snapshot
+        .needs_attention
+        .iter()
+        .chain(snapshot.resolver_working.iter())
+        .find(|item| item_matches_agent(item, agent))
+        .map(|item| RunPendingAsk {
+            request_id: item.request_id.clone(),
+            surface: item.surface,
+        })
+}
+
+fn item_matches_agent(item: &FeedItem, agent: &AgentState) -> bool {
+    item.source_kind == "agent-hook"
+        && item.source == agent.kind.as_str()
+        && item.agent_session_id() == Some(agent.agent_id.as_str())
 }
 
 /// Terminal run status produced by one agent lifecycle signal.
@@ -228,7 +318,9 @@ mod tests {
     use std::path::Path;
 
     use crate::agents::LifecycleSignal;
+    use crate::feed::{AgentState, FeedKind, PaneRef};
     use crate::ids::MuxName;
+    use serde_json::json;
     use tempfile::tempdir;
 
     #[test]
@@ -236,6 +328,8 @@ mod tests {
         assert_eq!(RunStatus::Completed.exit_code(), 0);
         assert_eq!(RunStatus::Failed.exit_code(), 1);
         assert_eq!(RunStatus::TimedOut.exit_code(), 124);
+        assert_eq!(RunStatus::Canceled.exit_code(), 130);
+        assert!(RunStatus::Canceled.is_terminal());
     }
 
     #[test]
@@ -387,6 +481,213 @@ mod tests {
     }
 
     #[test]
+    fn cancel_marks_nonterminal_run_and_preserves_terminal_run() {
+        let dir = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let record = RunRecord::new(
+            workspace_id,
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        create(&paths, &record).unwrap();
+
+        let (canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
+        assert!(wrote);
+        assert_eq!(canceled.status, RunStatus::Canceled);
+        assert!(canceled.completed_at.is_some());
+
+        let (still_canceled, wrote) = cancel(&paths, &record.run_id).unwrap();
+        assert!(!wrote);
+        assert_eq!(still_canceled.status, RunStatus::Canceled);
+    }
+
+    #[test]
+    fn record_lifecycle_folds_transcript_path_on_run_writes() {
+        let dir = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let record = RunRecord::new(
+            workspace_id,
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        create(&paths, &record).unwrap();
+
+        let mut started = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnStarted,
+        );
+        started.transcript_path = Some("/tmp/first.jsonl".to_owned());
+        assert!(
+            record_lifecycle(&paths, &record.run_id, "claude", &started, None)
+                .unwrap()
+                .is_none()
+        );
+        let running = load(&paths, &record.run_id).unwrap();
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.transcript_path.as_deref(), Some("/tmp/first.jsonl"));
+
+        let mut tool = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: true,
+            },
+        );
+        tool.transcript_path = Some("/tmp/second.jsonl".to_owned());
+        record_lifecycle(&paths, &record.run_id, "claude", &tool, None).unwrap();
+        assert_eq!(
+            load(&paths, &record.run_id)
+                .unwrap()
+                .transcript_path
+                .as_deref(),
+            Some("/tmp/first.jsonl"),
+            "a non-terminal running observation does not add a run-store write"
+        );
+
+        let mut stopped = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+        );
+        stopped.transcript_path = Some("/tmp/second.jsonl".to_owned());
+        record_lifecycle(
+            &paths,
+            &record.run_id,
+            "claude",
+            &stopped,
+            Some("done".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(
+            load(&paths, &record.run_id)
+                .unwrap()
+                .transcript_path
+                .as_deref(),
+            Some("/tmp/second.jsonl")
+        );
+    }
+
+    #[test]
+    fn record_lifecycle_folds_first_late_transcript_path() {
+        let dir = tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        let record = RunRecord::new(
+            workspace_id,
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        create(&paths, &record).unwrap();
+
+        let started = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::TurnStarted,
+        );
+        record_lifecycle(&paths, &record.run_id, "codex", &started, None).unwrap();
+        let running = load(&paths, &record.run_id).unwrap();
+        assert_eq!(running.status, RunStatus::Running);
+        assert_eq!(running.transcript_path, None);
+
+        let mut tool = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("sess-1")),
+            LifecycleSignal::ToolUsed {
+                mutates: true,
+                edits: true,
+            },
+        );
+        tool.transcript_path = Some("/tmp/late.jsonl".to_owned());
+        record_lifecycle(&paths, &record.run_id, "codex", &tool, None).unwrap();
+        assert_eq!(
+            load(&paths, &record.run_id)
+                .unwrap()
+                .transcript_path
+                .as_deref(),
+            Some("/tmp/late.jsonl")
+        );
+    }
+
+    #[test]
+    fn live_status_joins_agent_state_and_pending_ask() {
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let mut record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = RunStatus::Running;
+        record.agent_id = Some(AgentSessionId::from("sess-1"));
+        let pane_id = PaneId::from_parts(MuxName::Tmux, "%7");
+        let mut pane = PaneRef::from_id(pane_id.clone());
+        pane.session_name = "rimz-test".to_owned();
+        let mut agent = agent_state("claude", "sess-1", AgentStatus::Running);
+        agent.phase = TurnPhase::Reasoning;
+        agent.pane = Some(pane);
+        agent.context_pct = Some(42);
+        let mut ask = FeedItem::new(
+            workspace_id.clone(),
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "Approve?",
+            "claude",
+            "agent-hook",
+        );
+        ask.payload = json!({ "session_id": "sess-1" });
+        let request_id = ask.request_id.clone();
+        let snapshot = SidebarSnapshot::build_with_agents(
+            workspace_id,
+            vec![ask],
+            vec![agent],
+            Timestamp::UNIX_EPOCH,
+        );
+
+        let live = live_status(&record, &snapshot).expect("live status");
+        assert_eq!(live.agent_status, AgentStatus::Running);
+        assert_eq!(live.phase, TurnPhase::Reasoning);
+        assert_eq!(live.pane_id.as_ref(), Some(&pane_id));
+        assert_eq!(live.context_pct, Some(42));
+        assert_eq!(live.pending_ask.unwrap().request_id, request_id);
+    }
+
+    #[test]
+    fn live_status_is_absent_for_unbound_or_terminal_runs() {
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let mut record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("claude"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = RunStatus::Running;
+        let snapshot = SidebarSnapshot::build_with_agents(
+            workspace_id,
+            vec![],
+            vec![agent_state("claude", "sess-1", AgentStatus::Running)],
+            Timestamp::UNIX_EPOCH,
+        );
+        assert!(live_status(&record, &snapshot).is_none());
+
+        record.agent_id = Some(AgentSessionId::from("sess-1"));
+        record.status = RunStatus::Completed;
+        assert!(live_status(&record, &snapshot).is_none());
+    }
+
+    #[test]
     fn record_pane_persists_launch_pane_id() {
         let dir = tempdir().unwrap();
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
@@ -408,5 +709,44 @@ mod tests {
             load(&paths, &record.run_id).unwrap().pane_id.as_ref(),
             Some(&pane_id)
         );
+    }
+
+    fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked(kind),
+            status,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: Timestamp::UNIX_EPOCH,
+            last_activity: Timestamp::UNIX_EPOCH,
+            registered_at: Some(Timestamp::UNIX_EPOCH),
+        }
     }
 }

@@ -64,7 +64,7 @@ One repo maps to one Rimz workspace and one multiplexer session, and the repo's 
 
 The design commitments and the operating paths a question can take (`native_ui`, `bridge`, `script`) live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
 
-Once you are running agents in the room, the same CLI lets a script post to the same sidebar. A long migration, a deploy gate, or a CI step can call `rimz event emit` to announce itself and `rimz feed ask` to put a yes/no question on the column with answer buttons, answered by you or a resolver just like an agent's prompt. It is the same feed seen from a script instead of an agent, with no UI to build.
+Once you are running agents in the room, the same CLI lets a script post to the same sidebar. A long migration, a deploy gate, or a CI step can call `rimz event emit` to announce itself and `rimz feed ask` to put a yes/no question on the column with answer buttons, answered by you or a resolver just like an agent's prompt. It is the same feed seen from a script instead of an agent, with no UI to build. And `rimz run "<prompt>"` lets a script launch a whole agent turn the same way: it blocks for the final message and an exit code while the agent works in a visible pane that you, a resolver, or a supervising script can inspect, nudge, stream, and stop.
 
 ## Development
 

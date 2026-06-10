@@ -80,7 +80,7 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
         } => capture(&*backend, pane_id, lines, json, ansi),
         PaneSubcmd::Send { pane_id, text } => {
             let pane = PaneId::parse(&pane_id)?;
-            backend.send_keys(&pane, &text).map_err(Into::into)
+            send_text(backend.as_ref(), &pane, &text)
         }
         PaneSubcmd::Focus {
             pane_id,
@@ -224,4 +224,8 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
         Some(name) => Ok(name),
         None => Ok(WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name),
     }
+}
+
+pub(super) fn send_text(backend: &dyn MuxBackend, pane: &PaneId, text: &str) -> Result<()> {
+    backend.send_keys(pane, text).map_err(Into::into)
 }

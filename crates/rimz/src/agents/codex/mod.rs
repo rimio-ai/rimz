@@ -330,6 +330,10 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
+    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
+        stream_agent_messages(new_lines)
+    }
+
     fn install_hooks(&self) -> Result<HookInstallReport> {
         let path = codex_config_path()?;
         install_into(&path)
@@ -620,6 +624,30 @@ pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
     let mut client = CodexAppServer::connect_daemon()?;
     let ids = client.loaded_threads().ok()?;
     Some(ids.into_iter().collect())
+}
+
+fn stream_agent_messages(new_lines: &str) -> Vec<String> {
+    new_lines
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() {
+                return None;
+            }
+            let value = serde_json::from_str::<Value>(line).ok()?;
+            if value.get("type").and_then(Value::as_str) != Some("event_msg") {
+                return None;
+            }
+            let payload = value.get("payload")?;
+            if payload.get("type").and_then(Value::as_str) != Some("agent_message") {
+                return None;
+            }
+            payload
+                .get("message")
+                .and_then(Value::as_str)
+                .and_then(non_empty_trimmed)
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -451,6 +451,10 @@ impl AgentAdapter for ClaudeAdapter {
             })
     }
 
+    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
+        statusline::assistant_messages(new_lines)
+    }
+
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {
         // Claude's transport is the `subagentStatusLine` tasks array. Tolerant
         // parse: a non-object payload yields no observations rather than an error.

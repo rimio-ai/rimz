@@ -25,6 +25,13 @@ fn transcript_tail_populates_context_gauge() {
 }
 
 #[test]
+fn stream_assistant_messages_reads_rollout_agent_messages_only() {
+    let messages =
+        CodexAdapter.stream_assistant_messages(include_str!("fixtures/stream-rollout.jsonl"));
+    assert_eq!(messages, vec!["first update", "second update"]);
+}
+
+#[test]
 fn fresh_transcript_reports_zero_context_not_unknown() {
     // A brand-new session has a rollout with no `token_count` event yet.
     // It must read as 0% (empty gauge), not `None` (no gauge), so a

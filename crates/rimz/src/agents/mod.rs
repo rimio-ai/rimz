@@ -340,6 +340,13 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Extract newly appended main-thread assistant messages from transcript
+    /// JSONL text. The CLI owns the cursor and output transport; adapters own
+    /// their native transcript event shapes. Defaults to no stream surface.
+    fn stream_assistant_messages(&self, _new_lines: &str) -> Vec<String> {
+        Vec::new()
+    }
+
     /// Harvest per-subagent enrichment from an out-of-band render payload —
     /// Claude's `subagentStatusLine` tasks today. One payload renders many child
     /// rows, so this returns one [`SubagentObservation`] per attributable task
@@ -597,6 +604,13 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
     let mut buf = Vec::new();
     file.read_to_end(&mut buf).ok()?;
     Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Read a torn-write-safe JSONL suffix from a transcript path, returning the
+/// consumed bytes and next cursor offset. Same cursor discipline as spending,
+/// exposed for `rimz run --stream` without making the helper module public.
+pub fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
+    transcript_fs::read_spend_lines(path, offset)
 }
 
 pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {

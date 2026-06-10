@@ -88,9 +88,12 @@ rimz worktree remove <name> [--force]
 
 rimz tab [--layout <name|spec>] [--worktree [NAME]] [--name <title>] [--prompt <text>] [--no-focus]
 rimz agents <KIND>... [--worktree [NAME]] [--prompt <text>] [--no-focus]
-rimz run [--agent <KIND>] [--worktree [NAME]] [--ask|--yolo] [--timeout <duration>] [--keep] [--detach] <prompt>
+rimz run [--agent <KIND>] [--worktree [NAME]] [--ask|--yolo] [--timeout <duration>] [--keep] [--detach|--json|--stream] <prompt>
 rimz run status <run-id> [--json]
 rimz run list [--json]
+rimz run stop <run-id>
+rimz run send <run-id> [--enter] -- <text>
+rimz run stream <run-id> [--from-start] [--timeout <duration>]
 ```
 
 `rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty or ahead worktrees unless `--force` is explicit.
@@ -103,7 +106,13 @@ Worktree launchers require a repo-backed room. In a marker or directory room, `r
 
 `rimz agents` is launcher sugar: each positional kind opens its own single-agent tab. Repeating a kind opens a fleet. Bare `--worktree` creates one fresh worktree per agent; a named worktree is shared by all launched agents. Details and cleanup state machine: [internals/worktrees.md](../internals/worktrees.md).
 
-`rimz run` launches one interactive agent in the room, waits for that agent's root turn to finish, prints the final assistant message, and exits with the run status code (`0` completed, `1` failed, `124` timed out). The command requires the selected agent's Rimz hooks to be installed and trusted, because hooks are the completion signal; it refuses an unwired explicit agent instead of guessing from pane exit. Omitting `--agent` selects the first registered agent whose hooks are installed, trusted, and whose binary is on PATH; `--agent <kind>` pins the choice. Default permissions accept edits where the adapter has that mode, `--ask` leaves the provider's prompts in place, and `--yolo` passes the adapter's explicit bypass flag. `--detach` prints the run id and returns; unless `--keep` is set, the launched wrapper closes its pane after the run record reaches a terminal status. `status` and `list` read the current workspace's retained run records and report durable status only. Detail: [internals/run.md](../internals/run.md).
+`rimz run` launches one interactive agent in the room, waits for that agent's root turn to finish, prints the final assistant message, and exits with the run status code (`0` completed, `1` failed, `124` timed out, `130` canceled). The command requires the selected agent's Rimz hooks to be installed and trusted, because hooks are the completion signal; it refuses an unwired explicit agent instead of guessing from pane exit. Omitting `--agent` selects the first registered agent whose hooks are installed, trusted, and whose binary is on PATH; `--agent <kind>` pins the choice. Default permissions accept edits where the adapter has that mode, `--ask` leaves the provider's prompts in place, and `--yolo` passes the adapter's explicit bypass flag. `--detach` prints the run id and returns; unless `--keep` is set, the launched wrapper closes its pane after the run record reaches a terminal status. `--json` on a blocking run prints the terminal run record instead of only `last_message`; `--stream` prints NDJSON events until the run ends. `status` and `list` read the current workspace's retained run records; `status` joins live agent phase and pending ask from the cached sidebar snapshot when the run is still active. A run that stops on a question stays a live agent in the room: the item takes the normal resolver-then-human path, and the blocked `rimz run` resumes the moment it is answered. `--timeout` accepts durations like `30s`, `5m`, `1h`, `1d`; without it the command waits as long as the run takes. The unattended pattern — cron launch, resolver chain, human fallback — is in [the product guide](../guide/product.md#unattended-runs). Detail: [internals/run.md](../internals/run.md).
+
+`rimz run stop <run-id>` marks an active run `canceled`, wakes any blocked waiter, and closes the run pane when it can, including runs launched with `--keep`; stopping an already-terminal run exits successfully and reports that prior status on stderr.
+
+`rimz run send <run-id> [--enter] -- <text>` sends text to the run's pane through the public pane-send primitive and appends Enter when `--enter` is present. It fails fast for terminal runs and for runs whose pane has not bound yet. For scripts that inspect before they type, use the capture-before-send discipline from [resolvers.md](../internals/resolvers.md#pane-send-resolver).
+
+`rimz run --stream "<prompt>"` and `rimz run stream <run-id>` emit NDJSON: `message` events for assistant progress, `status` events when the live state changes, and one `end` event with the terminal status and `last_message`. Message events are interim progress; `end.last_message` is the deliverable, and it may duplicate the final message event. Message events come from Claude and Codex transcript shapes today; adapters without a stream parser still emit status and terminal end events. `rimz run stream <run-id>` attaches by polling the retained run record and transcript file, so it does not steal a blocked producer's wakeup socket. Its `--timeout` stops watching and exits `124` without writing `timed_out` to the run record.
 
 ## Publish events and ask questions
 

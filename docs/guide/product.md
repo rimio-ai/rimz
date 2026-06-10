@@ -97,13 +97,24 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 ## Unattended runs
 
-To run agents unattended, overnight or on a sandboxed runner with no human to ask, two patterns work.
+`rimz run "<prompt>"` launches one supervised agent turn in the room: it opens a real agent pane, waits for the turn to finish, prints the final assistant message, and exits `0` on success, `1` on failure, `124` on timeout, `130` on cancel — script ergonomics over an agent you can still see and steer.
 
-The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through. Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
+```sh
+# cron, 02:00 — refresh the deps and open a PR
+rimz run --worktree deps --timeout 4h "update dependencies, run the test suite, open a PR"
+```
+
+Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — a resolver answers the routine ones, anything left pops to the cockpit — and you attach from anywhere, answer in the agent's own UI, and the run picks up and finishes while the script is still blocking. A run launched from cron while you work joins the room as one more row, triaged and jumpable like the agents you started by hand.
+
+How a run answers permissions on its own is a posture you choose, and two patterns work.
+
+The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through (`rimz run --yolo` passes the adapter's flag for you; `--ask` leaves the provider's prompts in place). Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
 
 The second is a permissive resolver. Enrol a resolver that answers `allow` to anything (or anything matching a policy); the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 
 The two patterns compose: a permissive resolver for routine cases, with the agent's bypass flag as the fallback for anything the resolver does not catch in time.
+
+For orchestration, `--detach` prints the run id and returns immediately; `rimz run status <id>` reports the durable result with live phase when the run is active; `rimz run stream <id>` or `rimz run --stream` streams the turn as it happens; `rimz run send <id> --enter -- "continue"` is the first-class nudge for wrapper scripts; and `rimz pane send` / `rimz pane capture` remain the universal pane fallback. Flags and selection rules live in [the CLI reference](../reference/cli.md#run-agents-in-tabs-and-worktrees); the run record and completion mechanics live in [run.md](../internals/run.md).
 
 ## Scripts on the same feed
 
