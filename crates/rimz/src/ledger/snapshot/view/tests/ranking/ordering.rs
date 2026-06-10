@@ -115,35 +115,19 @@ fn new_idle_agent_appends_below_calm_work() {
 }
 
 #[test]
-fn paneless_calm_rows_order_by_registration_not_label() {
-    // Zellij reports no pane process start, so calm rows there fall back to
-    // the durable `registered_at` spawn key — never a label: the older session
-    // leads even though its kind name sorts after its sibling's.
+fn paneless_calm_order_uses_registration_not_label() {
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
     older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
     newer.pane = Some(pane("%1", "claude", "/repo/main"));
-
     let snapshot = room_with_agent_panes(Vec::new(), vec![newer, older]);
-
-    let order = snapshot.worktree_groups[0]
+    let row_order = snapshot.worktree_groups[0]
         .rows
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        vec!["older", "newer"],
-        "spawn order holds without a pane start; the label never reorders calm rows"
-    );
-}
+    assert_eq!(row_order, vec!["older", "newer"]);
 
-#[test]
-fn paneless_calm_groups_order_by_registration_not_label() {
-    // Same fallback at the group tier as within a bucket: without a pane
-    // start (Zellij), same-tier groups key on their earliest member's
-    // `registered_at` — the worktree you opened first stays first, whatever
-    // its label.
     let mut older = agent_in("sess-b", "/repo/b", AgentStatus::Idle, 1_000);
     older.pane = Some(pane("%0", "node", "/repo/b"));
     let mut newer = agent_in("sess-a", "/repo/a", AgentStatus::Idle, 9_000);
@@ -159,7 +143,7 @@ fn paneless_calm_groups_order_by_registration_not_label() {
     assert_eq!(
         groups,
         vec!["b", "a"],
-        "group spawn order holds without pane starts; the label never reorders calm groups"
+        "row and group spawn order hold without pane starts; labels never decide calm order"
     );
 }
 
@@ -212,69 +196,44 @@ fn status_leads_and_unread_breaks_status_ties() {
 }
 
 #[test]
-fn status_topped_group_floats_above_unread_calm_group() {
-    let agents = vec![
-        agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
-        agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
-    ];
-    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
+fn unread_breaks_ties_but_not_status_buckets() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("seen-wait", "/repo/a", AgentStatus::Waiting, 1_000),
+            agent_in("new-done", "/repo/b", AgentStatus::Success, 2_000),
+        ],
+    );
     row_mut(&mut snapshot, "new-done").unread = true;
     snapshot.sort_groups_for_presentation();
+    assert_eq!(group_labels(&snapshot), vec!["a", "b"]);
 
-    let groups = snapshot
-        .worktree_groups
-        .iter()
-        .map(|group| group.label.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        groups,
-        vec!["a", "b"],
-        "a waiting-topped group stays above an unread calm group"
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("read-done", "/repo/a", AgentStatus::Success, 1_000),
+            agent_in("new-done", "/repo/b", AgentStatus::Success, 9_000),
+        ],
     );
-}
-
-#[test]
-fn unread_breaks_a_calm_group_tie() {
-    let agents = vec![
-        agent_in("read-done", "/repo/a", AgentStatus::Success, 1_000),
-        agent_in("new-done", "/repo/b", AgentStatus::Success, 9_000),
-    ];
-    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
     row_mut(&mut snapshot, "new-done").unread = true;
     snapshot.sort_groups_for_presentation();
+    assert_eq!(group_labels(&snapshot), vec!["b", "a"]);
 
-    let groups = snapshot
-        .worktree_groups
-        .iter()
-        .map(|group| group.label.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        groups,
-        vec!["b", "a"],
-        "unread breaks ties between same-tier calm groups"
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("read-old", "/repo/main", AgentStatus::Waiting, 1_000),
+            agent_in("new-wait", "/repo/main", AgentStatus::Waiting, 9_000),
+        ],
     );
-}
-
-#[test]
-fn unread_waiting_leads_read_waiting_despite_age() {
-    let agents = vec![
-        agent_in("read-old", "/repo/main", AgentStatus::Waiting, 1_000),
-        agent_in("new-wait", "/repo/main", AgentStatus::Waiting, 9_000),
-    ];
-    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
     row_mut(&mut snapshot, "new-wait").unread = true;
     snapshot.sort_groups_for_presentation();
-
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        vec!["new-wait", "read-old"],
-        "within a status bucket, unread leads older read attention"
-    );
+    assert_eq!(order, vec!["new-wait", "read-old"]);
 }
 
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
@@ -284,4 +243,12 @@ fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRo
         .flat_map(|group| group.rows.iter_mut())
         .find(|row| row.id == id)
         .unwrap_or_else(|| panic!("row {id} present"))
+}
+
+fn group_labels(snapshot: &SidebarSnapshot) -> Vec<String> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .map(|group| group.label.clone())
+        .collect()
 }

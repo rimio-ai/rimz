@@ -6,24 +6,15 @@ use tempfile::tempdir;
 use super::*;
 
 #[test]
-fn append_then_read_round_trip() {
+fn append_read_and_replace_round_trip() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("events.log.jsonl");
-    let event = test_event("event.emit");
-    append(&path, &event).unwrap();
-    let events = read_all(&path).unwrap();
-    assert_eq!(events.len(), 1);
-    assert_eq!(events[0].method, "event.emit");
-}
-
-#[test]
-fn replace_all_rewrites_framed_log() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    let old = test_event("event.old");
+    let old = test_event("event.emit");
     let new = test_event("event.new");
 
     append(&path, &old).unwrap();
+    assert_eq!(methods(&read_all(&path).unwrap()), ["event.emit"]);
+
     replace_all(&path, std::slice::from_ref(&new)).unwrap();
 
     let events = read_all(&path).unwrap();
@@ -60,44 +51,28 @@ fn read_from_offset_resume_cases() {
 }
 
 #[test]
-fn read_from_offset_stops_before_an_inflight_unterminated_tail() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    append(&path, &test_event("event.first")).unwrap();
-    append(&path, &test_event("event.second")).unwrap();
-    let committed = fs::metadata(&path).unwrap().len();
-    // A lock-free reader racing a writer mid-append: bytes present, no
-    // terminator yet.
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(b"47 {\"half\":")
-        .unwrap();
+fn read_from_offset_stops_before_inflight_or_torn_tail() {
+    for (label, tail) in [
+        ("in-flight unterminated tail", b"47 {\"half\":".as_slice()),
+        ("torn terminated tail", b"999 {\"oops\":true}\n".as_slice()),
+    ] {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("events.log.jsonl");
+        append(&path, &test_event("event.first")).unwrap();
+        append(&path, &test_event("event.second")).unwrap();
+        let committed = fs::metadata(&path).unwrap().len();
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(tail)
+            .unwrap();
 
-    let (events, end) = read_from_offset(&path, 0).unwrap();
-    assert_eq!(events.len(), 2, "the in-flight frame is not folded");
-    assert_eq!(
-        end, committed,
-        "the extent never claims bytes the fold skipped, so the completing append re-triggers the fold"
-    );
-}
-
-#[test]
-fn read_from_offset_reports_offset_before_a_torn_terminated_tail() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    append(&path, &test_event("event.first")).unwrap();
-    let committed = fs::metadata(&path).unwrap().len();
-    // A power-cut corpse: terminated frame whose claimed length is wrong.
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(b"999 {\"oops\":true}\n")
-        .unwrap();
-
-    let (events, end) = read_from_offset(&path, 0).unwrap();
-    assert_eq!(events.len(), 1, "torn trailing record skipped");
-    assert_eq!(end, committed, "extent stops at the last complete frame");
+        let (events, end) = read_from_offset(&path, 0).unwrap();
+        assert_eq!(events.len(), 2, "{label}: tail is not folded");
+        assert_eq!(
+            end, committed,
+            "{label}: extent stops at the last complete frame"
+        );
+    }
 }

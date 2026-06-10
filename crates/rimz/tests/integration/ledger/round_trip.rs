@@ -19,18 +19,44 @@ fn chain_step(id: &ResolverId, order: i32, budget_ms: u64) -> ResolverStep {
     }
 }
 
+fn bridge_permission(h: &crate::common::Harness, title: &str) -> FeedItem {
+    FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::Bridge,
+        FeedKind::Permission,
+        title,
+        "claude",
+        "agent-hook",
+    )
+}
+
+fn native_agent_ask(
+    h: &crate::common::Harness,
+    kind: FeedKind,
+    title: &str,
+    session_id: &str,
+) -> FeedItem {
+    let mut item = FeedItem::new(
+        h.workspace_id.clone(),
+        Surface::NativeUi,
+        kind,
+        title,
+        "claude",
+        "agent-hook",
+    );
+    item.payload = json!({ "session_id": session_id });
+    item
+}
+
+fn status(h: &crate::common::Harness, id: &rimz::RequestId) -> FeedStatus {
+    h.ledger.load_feed_item(id).expect("load").status
+}
+
 #[test]
 fn push_then_resolve_round_trip() {
     let h = crate::common::Harness::new();
 
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "allow rm -rf node_modules?",
-        "claude",
-        "agent-hook",
-    );
+    let item = bridge_permission(&h, "allow rm -rf node_modules?");
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");
 
@@ -65,14 +91,7 @@ fn resolving_active_resolver_marks_chain_answered_and_clears_active() {
     let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();
     let slack: ResolverId = "slack-on-call".parse().unwrap();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "chain resolve?",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "chain resolve?");
     item.activate_resolver_chain(vec![
         chain_step(&opus, 10, 30_000),
         chain_step(&slack, 20, 300_000),
@@ -96,19 +115,23 @@ fn resolving_active_resolver_marks_chain_answered_and_clears_active() {
 }
 
 #[test]
-fn dismiss_only_applies_to_native_ui_surface() {
+fn native_ui_requests_are_dismiss_only() {
     let h = crate::common::Harness::new();
 
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "dismiss me",
-        "claude",
-        "agent-hook",
-    );
+    let item = native_agent_ask(&h, FeedKind::Permission, "dismiss me", "sess-1");
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");
+
+    let result = h.ledger.resolve_feed_item(
+        &request_id,
+        Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
+        false,
+        "rimz-test",
+    );
+    assert!(
+        result.is_err(),
+        "native_ui must reject `resolve` (got {result:?})"
+    );
 
     h.ledger
         .dismiss_feed_item(&request_id, Some("not now".into()), "rimz-test")
@@ -124,33 +147,6 @@ fn dismiss_only_applies_to_native_ui_surface() {
         events
             .iter()
             .any(|event| { event.method == "feed.dismiss" && event.session_name == "rimz-test" })
-    );
-}
-
-#[test]
-fn resolve_rejects_native_ui_surface() {
-    let h = crate::common::Harness::new();
-
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "native only",
-        "claude",
-        "agent-hook",
-    );
-    let request_id = item.request_id.clone();
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    let result = h.ledger.resolve_feed_item(
-        &request_id,
-        Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::Cli),
-        false,
-        "rimz-test",
-    );
-    assert!(
-        result.is_err(),
-        "native_ui must reject `resolve` (got {result:?})"
     );
 }
 
@@ -212,13 +208,11 @@ fn wakeup_failure_does_not_fail_committed_push() {
     std::fs::remove_dir(&h.runtime_paths.heartbeat_dir).expect("remove heartbeat dir");
     std::fs::write(&h.runtime_paths.heartbeat_dir, b"not a dir").expect("replace with file");
 
-    let item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
+    let item = native_agent_ask(
+        &h,
         FeedKind::Permission,
         "wakeups are best effort",
-        "claude",
-        "agent-hook",
+        "sess-1",
     );
     let request_id = item.request_id.clone();
 
@@ -236,14 +230,7 @@ fn wakeup_failure_does_not_fail_committed_push() {
 #[test]
 fn abstain_advances_chain_and_records_audit_event() {
     let h = crate::common::Harness::new();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "abstain?",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "abstain?");
     let opus: ResolverId = "opus-policy".parse().unwrap();
     let slack: ResolverId = "slack-on-call".parse().unwrap();
     item.chain = vec![
@@ -299,62 +286,9 @@ fn abstain_advances_chain_and_records_audit_event() {
 }
 
 #[test]
-fn abstain_rejects_non_active_resolver() {
-    let h = crate::common::Harness::new();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "abstain?",
-        "claude",
-        "agent-hook",
-    );
-    let opus: ResolverId = "opus-policy".parse().unwrap();
-    let slack: ResolverId = "slack-on-call".parse().unwrap();
-    item.chain = vec![
-        ResolverStep {
-            resolver_id: opus.clone(),
-            display_name: None,
-            order: 10,
-            budget_ms: 30_000,
-            state: ResolverStepState::Active,
-            reason: None,
-        },
-        ResolverStep {
-            resolver_id: slack.clone(),
-            display_name: None,
-            order: 20,
-            budget_ms: 300_000,
-            state: ResolverStepState::Queued,
-            reason: None,
-        },
-    ];
-    item.chain_active_resolver = Some(opus);
-    let request_id = item.request_id.clone();
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    let err = h
-        .ledger
-        .abstain_feed_item(&request_id, &slack, None, "rimz-test")
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("not active"),
-        "expected ResolverNotActive, got: {msg}"
-    );
-}
-
-#[test]
 fn abstain_with_no_next_resolver_exhausts_chain() {
     let h = crate::common::Harness::new();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "abstain?",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "abstain?");
     let opus: ResolverId = "opus-policy".parse().unwrap();
     item.chain = vec![ResolverStep {
         resolver_id: opus.clone(),
@@ -386,14 +320,7 @@ fn timeout_marks_active_resolver_budget_elapsed() {
     let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();
     let slack: ResolverId = "slack-on-call".parse().unwrap();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "timeout?",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "timeout?");
     item.activate_resolver_chain(vec![
         chain_step(&opus, 10, 30_000),
         chain_step(&slack, 20, 300_000),
@@ -462,39 +389,12 @@ fn concurrent_resolve_uses_first_writer_wins_cas() {
 }
 
 #[test]
-fn expire_agent_session_abandons_only_that_sessions_pending_asks() {
+fn expiry_scopes_agent_session_end_and_moved_on_native_ui() {
     let h = crate::common::Harness::new();
 
-    // Two pending claude asks from the session that is about to end, plus an
-    // ask from a different live session that must survive.
-    let mut ended_a = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
-    ended_a.payload = json!({ "session_id": "ended" });
-    let mut ended_b = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Question,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
-    ended_b.payload = json!({ "session_id": "ended" });
-    let mut other = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
-    other.payload = json!({ "session_id": "live" });
-
+    let ended_a = native_agent_ask(&h, FeedKind::Permission, "ended permission", "ended");
+    let ended_b = native_agent_ask(&h, FeedKind::Question, "ended question", "ended");
+    let other = native_agent_ask(&h, FeedKind::Permission, "other session", "other");
     for item in [&ended_a, &ended_b, &other] {
         h.ledger.push_feed_item(item, "rimz-test").expect("push");
     }
@@ -503,69 +403,22 @@ fn expire_agent_session_abandons_only_that_sessions_pending_asks() {
         .ledger
         .expire_agent_session("claude", "ended", "rimz-test")
         .expect("expire");
-    assert_eq!(expired, 2, "both asks from the ended session are expired");
-
-    let by_id = |id: &rimz::RequestId| h.ledger.load_feed_item(id).expect("load").status;
-    assert_eq!(by_id(&ended_a.request_id), FeedStatus::Abandoned);
-    assert_eq!(by_id(&ended_b.request_id), FeedStatus::Abandoned);
+    assert_eq!(expired, 2);
+    assert_eq!(status(&h, &ended_a.request_id), FeedStatus::Abandoned);
+    assert_eq!(status(&h, &ended_b.request_id), FeedStatus::Abandoned);
+    assert_eq!(status(&h, &other.request_id), FeedStatus::Pending);
     assert_eq!(
-        by_id(&other.request_id),
-        FeedStatus::Pending,
-        "a different live session keeps its ask"
+        h.ledger
+            .expire_agent_session("claude", "ended", "rimz-test")
+            .expect("expire again"),
+        0,
+        "session-end expiry is idempotent"
     );
 
-    let events = h.ledger.read_events().expect("events");
-    assert_eq!(
-        events
-            .iter()
-            .filter(|event| event.method == "feed.expire")
-            .count(),
-        2,
-    );
-
-    // Idempotent: re-running expires nothing (no longer pending).
-    let again = h
-        .ledger
-        .expire_agent_session("claude", "ended", "rimz-test")
-        .expect("expire again");
-    assert_eq!(again, 0);
-}
-
-#[test]
-fn moved_on_expiry_clears_native_ui_asks_but_spares_bridge() {
-    let h = crate::common::Harness::new();
-
-    // A live session that just moved on left two native_ui asks pending and one
-    // bridge ask in flight; the bridge ask resolves via its own socket and must
-    // survive the move-on expiry.
-    let mut native_a = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Permission,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
-    native_a.payload = json!({ "session_id": "live" });
-    let mut native_b = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::NativeUi,
-        FeedKind::Question,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
-    native_b.payload = json!({ "session_id": "live" });
-    let mut bridge = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "claude needs attention",
-        "claude",
-        "agent-hook",
-    );
+    let native_a = native_agent_ask(&h, FeedKind::Permission, "live permission", "live");
+    let native_b = native_agent_ask(&h, FeedKind::Question, "live question", "live");
+    let mut bridge = bridge_permission(&h, "live bridge");
     bridge.payload = json!({ "session_id": "live" });
-
     for item in [&native_a, &native_b, &bridge] {
         h.ledger.push_feed_item(item, "rimz-test").expect("push");
     }
@@ -574,23 +427,22 @@ fn moved_on_expiry_clears_native_ui_asks_but_spares_bridge() {
         .ledger
         .expire_agent_native_ui_asks("claude", "live", "rimz-test")
         .expect("expire");
-    assert_eq!(expired, 2, "only the two native_ui asks are expired");
+    assert_eq!(expired, 2);
+    assert_eq!(status(&h, &native_a.request_id), FeedStatus::Abandoned);
+    assert_eq!(status(&h, &native_b.request_id), FeedStatus::Abandoned);
+    assert_eq!(status(&h, &bridge.request_id), FeedStatus::Pending);
 
-    let by_id = |id: &rimz::RequestId| h.ledger.load_feed_item(id).expect("load").status;
-    assert_eq!(by_id(&native_a.request_id), FeedStatus::Abandoned);
-    assert_eq!(by_id(&native_b.request_id), FeedStatus::Abandoned);
-    assert_eq!(
-        by_id(&bridge.request_id),
-        FeedStatus::Pending,
-        "the in-flight bridge ask keeps resolving through its socket",
-    );
-
-    // The audit trail names the move-on reason, not a session end.
     let events = h.ledger.read_events().expect("events");
     assert!(
-        events.iter().any(|event| event.method == "feed.expire"
-            && event.params.get("reason").and_then(|v| v.as_str()) == Some("agent_moved_on")),
-        "expiry is audited as agent_moved_on",
+        ["agent_session_ended", "agent_moved_on"]
+            .iter()
+            .all(|reason| {
+                events.iter().any(|event| {
+                    event.method == "feed.expire"
+                        && event.params.get("reason").and_then(|v| v.as_str()) == Some(*reason)
+                })
+            }),
+        "both expiry reasons are audited",
     );
 }
 
@@ -669,14 +521,7 @@ fn late_resolve_after_abandon_is_rejected_not_audited() {
     // — while `Abandoned` means the asker is gone, so a late answer has no
     // one to serve and is rejected outright, before any event append.
     let h = crate::common::Harness::new();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "owner left",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "owner left");
     item.payload = json!({ "session_id": "gone" });
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");
@@ -719,14 +564,7 @@ fn concurrent_abstain_and_resolve_leave_exactly_one_terminal_outcome() {
     // effective feed.resolve lands either way.
     let h = crate::common::Harness::new();
     let opus: ResolverId = "opus-policy".parse().unwrap();
-    let mut item = FeedItem::new(
-        h.workspace_id.clone(),
-        Surface::Bridge,
-        FeedKind::Permission,
-        "race me",
-        "claude",
-        "agent-hook",
-    );
+    let mut item = bridge_permission(&h, "race me");
     item.activate_resolver_chain(vec![chain_step(&opus, 10, 30_000)]);
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");

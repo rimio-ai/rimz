@@ -208,91 +208,109 @@ mod tests {
     }
 
     #[test]
-    fn only_daemon_view_true_when_only_the_daemon_view_remains() {
-        // rimzd view: sidebar + two managed hosts; no working view left.
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-            pane_cmd(
-                "terminal_1",
-                "tab_0",
-                "claude remote-control --spawn worktree",
-                None,
+    fn only_daemon_view_classifies_view_sets() {
+        for (label, panes, expected) in [
+            (
+                "daemon view only",
+                vec![
+                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
+                    pane_cmd(
+                        "terminal_1",
+                        "tab_0",
+                        "claude remote-control --spawn worktree",
+                        None,
+                    ),
+                    pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
+                ],
+                true,
             ),
-            pane_cmd("terminal_2", "tab_0", "rimz codex app-server serve", None),
-        ];
-        assert!(SidebarSnapshot::only_daemon_view(&panes));
-    }
-
-    #[test]
-    fn only_daemon_view_false_while_a_working_view_exists() {
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-            pane_cmd(
-                "terminal_1",
-                "tab_0",
-                "claude remote-control --spawn worktree",
-                None,
+            (
+                "working view exists",
+                vec![
+                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
+                    pane_cmd(
+                        "terminal_1",
+                        "tab_0",
+                        "claude remote-control --spawn worktree",
+                        None,
+                    ),
+                    pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
+                    pane_cmd("terminal_4", "tab_1", "zsh", None),
+                ],
+                false,
             ),
-            pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
-            pane_cmd("terminal_4", "tab_1", "zsh", None),
-        ];
-        assert!(!SidebarSnapshot::only_daemon_view(&panes));
+            (
+                "no daemon view",
+                vec![
+                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
+                    pane_cmd("terminal_1", "tab_0", "zsh", None),
+                ],
+                false,
+            ),
+            ("empty session", Vec::new(), false),
+            (
+                "sidebar-only limbo view ignored",
+                vec![
+                    pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
+                    pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None),
+                    pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
+                ],
+                true,
+            ),
+        ] {
+            assert_eq!(
+                SidebarSnapshot::only_daemon_view(&panes),
+                expected,
+                "{label}"
+            );
+        }
     }
 
     #[test]
-    fn only_daemon_view_false_when_no_daemon_view() {
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-            pane_cmd("terminal_1", "tab_0", "zsh", None),
-        ];
-        assert!(!SidebarSnapshot::only_daemon_view(&panes));
-    }
-
-    #[test]
-    fn only_daemon_view_false_on_empty_session() {
-        assert!(!SidebarSnapshot::only_daemon_view(&[]));
-    }
-
-    #[test]
-    fn card_admission_accepts_a_working_pane() {
-        let pane = pane_cmd("terminal_1", "tab_0", "zsh", None);
-        assert_eq!(pane_admits_card(&pane, None), CardAdmission::Admitted);
-    }
-
-    #[test]
-    fn card_admission_names_excluded_pane_id() {
-        let pane = pane_cmd("terminal_1", "tab_0", "zsh", None);
-        assert_eq!(
-            pane_admits_card(&pane, Some(&pane.pane_id)),
-            CardAdmission::ExcludedPaneId
-        );
-    }
-
-    #[test]
-    fn card_admission_names_sidebar_chrome() {
-        let pane = pane_cmd("terminal_1", "tab_0", "rimz-sidebar", None);
-        assert_eq!(pane_admits_card(&pane, None), CardAdmission::SidebarChrome);
-    }
-
-    #[test]
-    fn card_admission_names_remote_control_hosts() {
-        let pane = pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None);
-        assert_eq!(
-            pane_admits_card(&pane, None),
-            CardAdmission::RemoteControlOrAppServerHost
-        );
-    }
-
-    #[test]
-    fn card_admission_keeps_an_identityless_pane_in_the_fold() {
-        // A raced or mid-birth read with no command stays admitted: an agent
-        // stamp binds by pane id alone, so admission must not eat the row. The
-        // unbound no-row decision lives in the fold (`pane_command_is_known`).
-        let unreadable = crate::feed::PaneRef {
+    fn card_admission_names_card_blockers() {
+        let working = pane_cmd("terminal_1", "tab_0", "zsh", None);
+        let unreadable = PaneRef {
             command: None,
-            ..pane_cmd("terminal_1", "tab_0", "zsh", None)
+            ..pane_cmd("terminal_2", "tab_0", "zsh", None)
         };
-        assert_eq!(pane_admits_card(&unreadable, None), CardAdmission::Admitted);
+        for (label, pane, exclude, expected) in [
+            (
+                "working pane",
+                working.clone(),
+                None,
+                CardAdmission::Admitted,
+            ),
+            (
+                "excluded pane id",
+                working.clone(),
+                Some(working.pane_id.clone()),
+                CardAdmission::ExcludedPaneId,
+            ),
+            (
+                "sidebar chrome",
+                pane_cmd("terminal_3", "tab_0", "rimz-sidebar", None),
+                None,
+                CardAdmission::SidebarChrome,
+            ),
+            (
+                "remote-control host",
+                pane_cmd("terminal_4", "tab_0", "rimz codex app-server serve", None),
+                None,
+                CardAdmission::RemoteControlOrAppServerHost,
+            ),
+            (
+                "identityless pane",
+                unreadable,
+                None,
+                CardAdmission::Admitted,
+            ),
+        ] {
+            assert_eq!(
+                pane_admits_card(&pane, exclude.as_ref()),
+                expected,
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -316,17 +334,5 @@ mod tests {
             !pane_start_matches(&stamped, &live),
             "standalone item pane refs still require exact start identity"
         );
-    }
-
-    #[test]
-    fn only_daemon_view_ignores_a_sidebar_only_limbo_view() {
-        // The working tab's last working pane just exited; its sidebar is mid
-        // self-close. That sidebar-only view counts as neither, so detach fires.
-        let panes = vec![
-            pane_cmd("terminal_0", "tab_0", "rimz-sidebar", None),
-            pane_cmd("terminal_1", "tab_0", "rimz codex app-server serve", None),
-            pane_cmd("terminal_3", "tab_1", "rimz-sidebar", None),
-        ];
-        assert!(SidebarSnapshot::only_daemon_view(&panes));
     }
 }

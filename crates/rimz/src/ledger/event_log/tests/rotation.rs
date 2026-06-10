@@ -6,7 +6,13 @@ use super::*;
 use crate::ledger::atomic;
 
 #[test]
-fn rotate_skips_when_below_threshold() {
+fn rotate_skips_missing_or_below_threshold_logs() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("missing.log.jsonl");
+    let missing_archive = dir.path().join("missing.archive");
+    let outcome = rotate(&missing, &missing_archive, 1).unwrap();
+    assert_eq!(outcome, RotationOutcome::Skipped { current_bytes: 0 });
+
     let dir = tempdir().unwrap();
     let path = dir.path().join("events.log.jsonl");
     let archive_dir = dir.path().join("events.log.archive");
@@ -64,15 +70,6 @@ fn rotate_syncs_the_log_before_renaming() {
         3,
         "one log fdatasync before the rename plus the two directory syncs"
     );
-}
-
-#[test]
-fn rotate_missing_active_log_is_a_noop() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    let archive_dir = dir.path().join("events.log.archive");
-    let outcome = rotate(&path, &archive_dir, 1).unwrap();
-    assert_eq!(outcome, RotationOutcome::Skipped { current_bytes: 0 });
 }
 
 #[test]

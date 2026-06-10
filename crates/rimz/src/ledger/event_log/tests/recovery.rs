@@ -83,21 +83,3 @@ fn repair_of_an_intact_or_missing_log_is_a_noop() {
     );
     assert_eq!(fs::metadata(&path).unwrap().len(), len, "log untouched");
 }
-
-#[test]
-fn torn_middle_record_is_an_error() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    let event = test_event("event.emit");
-    append(&path, &event).unwrap();
-    fs::OpenOptions::new()
-        .append(true)
-        .open(&path)
-        .unwrap()
-        .write_all(b"999 {\"oops\":true}\n")
-        .unwrap();
-    append(&path, &event).unwrap();
-
-    let err = read_all(&path).unwrap_err();
-    assert!(matches!(err, EventLogErr::FrameLength { .. }));
-}

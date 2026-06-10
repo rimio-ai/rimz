@@ -1,61 +1,41 @@
 use super::*;
 
 #[test]
-fn calm_tail_cap_never_hides_attention_rows() {
-    let mut agents = (0..8)
-        .map(|i| {
-            agent_in(
-                &format!("sess-{i}"),
-                "/repo/main",
-                AgentStatus::Idle,
-                1_000 + i,
-            )
-        })
-        .collect::<Vec<_>>();
-    agents.push(agent_in("failed", "/repo/main", AgentStatus::Failed, 2_000));
-
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
-
-    assert!(
-        snapshot.worktree_groups[0]
-            .rows
-            .iter()
-            .any(|row| row.status() == Some(AgentStatus::Failed)),
-        "attention rows remain visible past the calm-row cap"
-    );
-    assert!(snapshot.worktree_groups[0].hidden_count > 0);
-}
-
-#[test]
-fn calm_tail_cap_never_hides_focused_rows() {
-    let agents = (0..8)
-        .map(|i| {
-            let mut agent = agent_in(
-                &format!("sess-{i}"),
-                "/repo/main",
-                AgentStatus::Idle,
-                1_000 + i,
-            );
-            if i == 0 {
-                agent.pane = Some(PaneRef {
-                    is_focused: true,
-                    ..pane("%99", "codex", "/repo/main")
-                });
-            }
-            agent
-        })
-        .collect::<Vec<_>>();
-
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
-
-    assert!(
-        snapshot.worktree_groups[0]
-            .rows
-            .iter()
-            .any(|row| row.id == "sess-0"),
-        "the focused idle pane remains visible even past the calm-row cap"
-    );
-    assert!(snapshot.worktree_groups[0].hidden_count > 0);
+fn calm_tail_cap_never_hides_attention_or_focused_rows() {
+    for (label, protected_id, agents) in [
+        ("attention", "failed", {
+            let mut agents = idle_agents(8);
+            agents.push(agent_in("failed", "/repo/main", AgentStatus::Failed, 2_000));
+            agents
+        }),
+        (
+            "focused",
+            "sess-0",
+            idle_agents(8)
+                .into_iter()
+                .enumerate()
+                .map(|(i, mut agent)| {
+                    if i == 0 {
+                        agent.pane = Some(PaneRef {
+                            is_focused: true,
+                            ..pane("%99", "codex", "/repo/main")
+                        });
+                    }
+                    agent
+                })
+                .collect(),
+        ),
+    ] {
+        let snapshot = room_with_agent_panes(Vec::new(), agents);
+        assert!(
+            snapshot.worktree_groups[0]
+                .rows
+                .iter()
+                .any(|row| row.id == protected_id),
+            "{label} row remains visible past the calm-row cap"
+        );
+        assert!(snapshot.worktree_groups[0].hidden_count > 0, "{label}");
+    }
 }
 
 #[test]
@@ -173,4 +153,17 @@ fn calm_groups_hold_order_through_member_status_churn() {
     // Genuine attention still floats its group to the top.
     let blocked = build(AgentStatus::Running, AgentStatus::Waiting);
     assert_eq!(groups(&blocked), vec!["b", "a"]);
+}
+
+fn idle_agents(count: i64) -> Vec<AgentState> {
+    (0..count)
+        .map(|i| {
+            agent_in(
+                &format!("sess-{i}"),
+                "/repo/main",
+                AgentStatus::Idle,
+                1_000 + i,
+            )
+        })
+        .collect()
 }

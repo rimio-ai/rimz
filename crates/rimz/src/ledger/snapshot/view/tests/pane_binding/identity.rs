@@ -1,100 +1,59 @@
 use super::*;
 
 #[test]
-fn commandless_unbound_pane_folds_no_row() {
-    // A pane whose command is still unknown after frame rotation — mid-birth,
-    // or a raced first read — is presence without identity: it folds no row
-    // rather than an anonymous `process` under `external`.
-    let raced = PaneRef {
+fn commandless_panes_require_an_agent_or_spawn_identity() {
+    let anonymous = PaneRef {
         command: None,
         cwd: None,
         ..pane("%1", "x", "/repo/main")
     };
-    let snapshot = room(Vec::new(), Vec::new()).with_live_panes(vec![raced], None);
-
-    let rows = rows(&snapshot);
     assert!(
-        rows.is_empty(),
-        "a command-less pane renders no row: {rows:?}"
+        rows(&room(Vec::new(), Vec::new()).with_live_panes(vec![anonymous], None)).is_empty(),
+        "presence without command, cwd, spawn, or agent identity folds no row"
     );
-}
 
-#[test]
-fn spawn_only_unbound_pane_still_renders() {
-    // Regression for Zellij topology/CLI source races: a frame with no
-    // foreground command but a stable spawn command remains a known pane.
-    let raced = PaneRef {
+    let spawn_only = PaneRef {
         command: None,
         spawn_command: Some("rimz agents exec codex --worktree-path /repo/main".to_owned()),
         cwd: None,
         ..pane("%1", "x", "/repo/main")
     };
-    let snapshot = room(Vec::new(), Vec::new()).with_live_panes(vec![raced], None);
+    let snapshot = room(Vec::new(), Vec::new()).with_live_panes(vec![spawn_only], None);
+    assert_eq!(rows(&snapshot)[0].name, "codex");
 
-    let rows = rows(&snapshot);
-    assert_eq!(
-        rows.len(),
-        1,
-        "spawn identity keeps the row visible: {rows:?}"
-    );
-    assert_eq!(rows[0].name, "codex");
-}
-
-#[test]
-fn commandless_pane_with_agent_still_renders_agent_row() {
-    // Agent rows bind by stamped pane id, never by command, so a raced read
-    // that drops the command never demotes or hides the agent's row.
     let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
-    let raced = PaneRef {
+    let commandless_agent_pane = PaneRef {
         command: None,
         ..pane("%1", "claude", "/repo/main")
     };
-    let snapshot = room(Vec::new(), vec![claude]).with_live_panes(vec![raced], None);
+    let snapshot =
+        room(Vec::new(), vec![claude]).with_live_panes(vec![commandless_agent_pane], None);
+    assert!(
+        rows(&snapshot)[0].is_agent(),
+        "agent stamp binds by pane id"
+    );
 
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 1, "the stamped agent row survives: {rows:?}");
-    assert!(rows[0].is_agent());
-}
+    let raced_sibling = PaneRef {
+        command: None,
+        ..pane("%2", "x", "/repo/main")
+    };
+    let snapshot = room(Vec::new(), Vec::new())
+        .with_live_panes(vec![pane("%1", "zsh", "/repo/main"), raced_sibling], None);
+    assert_eq!(rows(&snapshot)[0].name, "zsh", "guard is per-pane");
 
-#[test]
-fn commandless_pane_does_not_form_empty_external_group() {
-    // The raced read that drops a command usually drops the cwd too; the
-    // filtered pane must not mint a stray `external` header on its way out.
     let root = "/repo/rimz";
-    let raced = PaneRef {
+    let external_race = PaneRef {
         command: None,
         cwd: None,
         ..pane("%2", "x", "")
     };
     let snapshot = room(Vec::new(), Vec::new())
         .with_project_root(Some(PathBuf::from(root)))
-        .with_live_panes(vec![pane("%1", "zsh", root), raced], None);
-
-    assert_eq!(
-        snapshot.worktree_groups.len(),
-        1,
-        "no external group for the filtered pane: {:?}",
-        snapshot.worktree_groups,
-    );
+        .with_live_panes(vec![pane("%1", "zsh", root), external_race], None);
+    assert_eq!(snapshot.worktree_groups.len(), 1);
     assert_eq!(snapshot.worktree_groups[0].label, "rimz");
-}
-
-#[test]
-fn commandless_pane_keeps_known_process_rows() {
-    // The guard is per-pane: a sibling whose command read succeeded keeps
-    // its named process row.
-    let raced = PaneRef {
-        command: None,
-        ..pane("%2", "x", "/repo/main")
-    };
-    let snapshot = room(Vec::new(), Vec::new())
-        .with_live_panes(vec![pane("%1", "zsh", "/repo/main"), raced], None);
-
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 1, "only the named pane is a row: {rows:?}");
-    assert_eq!(rows[0].name, "zsh");
 }
 
 #[test]
@@ -139,64 +98,56 @@ fn duplicate_stamped_agent_identity_suppresses_second_pane() {
 }
 
 #[test]
-fn newborn_unknown_cwd_pane_waits_one_frame_before_external() {
-    let mut first =
-        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
-    first.panes_produced_at_ms = Some(10);
-    let newborn = PaneRef {
-        cwd: None,
-        first_seen_at_ms: Some(10),
-        ..pane("%1", "zsh", "")
-    };
-
-    let first = first.with_live_panes(vec![newborn.clone()], None);
-    assert!(
-        first.worktree_groups.is_empty(),
-        "newborn unknown-cwd pane is quarantined for its birth frame"
-    );
-
-    let mut second =
-        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
-    second.panes_produced_at_ms = Some(11);
-    let second = second.with_live_panes(vec![newborn], None);
-    assert_eq!(second.worktree_groups.len(), 1);
-    assert_eq!(
-        second.worktree_groups[0].kind,
-        SidebarWorktreeKind::External
-    );
-}
-
-#[test]
-fn legacy_frame_without_first_seen_does_not_quarantine() {
-    let mut snapshot =
-        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
-    snapshot.panes_produced_at_ms = Some(10);
-    let legacy = PaneRef {
-        cwd: None,
-        first_seen_at_ms: None,
-        ..pane("%1", "zsh", "")
-    };
-
-    let snapshot = snapshot.with_live_panes(vec![legacy], None);
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert_eq!(
-        snapshot.worktree_groups[0].kind,
-        SidebarWorktreeKind::External
-    );
-}
-
-#[test]
-fn newborn_known_cwd_pane_paints_immediately() {
-    let mut snapshot =
-        room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
-    snapshot.panes_produced_at_ms = Some(10);
-    let newborn = PaneRef {
-        first_seen_at_ms: Some(10),
-        ..pane("%1", "zsh", "/repo/main")
-    };
-
-    let snapshot = snapshot.with_live_panes(vec![newborn], None);
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert_eq!(snapshot.worktree_groups[0].label, "main");
+fn newborn_unknown_cwd_quarantine_only_applies_to_the_birth_frame() {
+    for (label, pane_ref, produced_at, expected) in [
+        (
+            "birth frame unknown cwd",
+            PaneRef {
+                cwd: None,
+                first_seen_at_ms: Some(10),
+                ..pane("%1", "zsh", "")
+            },
+            10,
+            None,
+        ),
+        (
+            "next frame unknown cwd",
+            PaneRef {
+                cwd: None,
+                first_seen_at_ms: Some(10),
+                ..pane("%1", "zsh", "")
+            },
+            11,
+            Some(SidebarWorktreeKind::External),
+        ),
+        (
+            "legacy frame",
+            PaneRef {
+                cwd: None,
+                first_seen_at_ms: None,
+                ..pane("%1", "zsh", "")
+            },
+            10,
+            Some(SidebarWorktreeKind::External),
+        ),
+        (
+            "known cwd",
+            PaneRef {
+                first_seen_at_ms: Some(10),
+                ..pane("%1", "zsh", "/repo/main")
+            },
+            10,
+            Some(SidebarWorktreeKind::Worktree),
+        ),
+    ] {
+        let mut snapshot =
+            room(Vec::new(), Vec::new()).with_project_root(Some(PathBuf::from("/repo/main")));
+        snapshot.panes_produced_at_ms = Some(produced_at);
+        let snapshot = snapshot.with_live_panes(vec![pane_ref], None);
+        assert_eq!(
+            snapshot.worktree_groups.first().map(|group| group.kind),
+            expected,
+            "{label}"
+        );
+    }
 }

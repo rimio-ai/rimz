@@ -1,63 +1,62 @@
 use super::*;
 
+fn lifecycle(source: &str, event_name: &str, signal: serde_json::Value) -> EventEnvelope {
+    raw_lifecycle(
+        source,
+        serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "sess-1",
+            "signal": signal,
+        }),
+    )
+}
+
+fn lifecycle_at(
+    source: &str,
+    secs_after_epoch: i64,
+    event_name: &str,
+    signal: serde_json::Value,
+) -> EventEnvelope {
+    raw_lifecycle_at(
+        source,
+        secs_after_epoch,
+        serde_json::json!({
+            "event_name": event_name,
+            "agent_id": "sess-1",
+            "signal": signal,
+        }),
+    )
+}
+
+fn signal(name: &str) -> serde_json::Value {
+    serde_json::json!({ "signal": name })
+}
+
+fn compaction_ended(auto: Option<bool>) -> serde_json::Value {
+    let mut signal = signal("compaction_ended");
+    if let Some(auto) = auto {
+        signal["auto"] = serde_json::Value::Bool(auto);
+    }
+    signal
+}
+
+fn tool_used() -> serde_json::Value {
+    serde_json::json!({ "signal": "tool_used", "mutates": true, "edits": true })
+}
+
 #[test]
 fn compaction_end_clears_marker_and_counts_completed_brackets() {
-    let prompt = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let compact = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let post = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PostCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended", "auto": false },
-        }),
-    );
-    let next_prompt = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let second_compact = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let second_post = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PostCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended", "auto": true },
-        }),
-    );
+    let prompt = lifecycle("claude", "UserPromptSubmit", signal("turn_started"));
+    let compact = lifecycle("claude", "PreCompact", signal("compacting"));
+    let post = lifecycle("claude", "PostCompact", compaction_ended(Some(false)));
+    let next_prompt = lifecycle("claude", "UserPromptSubmit", signal("turn_started"));
+    let second_compact = lifecycle("claude", "PreCompact", signal("compacting"));
+    let second_post = lifecycle("claude", "PostCompact", compaction_ended(Some(true)));
 
     let agents = reduce_agent_states(&[prompt.clone(), compact.clone(), post.clone()]);
     assert_eq!(agents[0].status, AgentStatus::Idle);
     assert_eq!(agents[0].phase, TurnPhase::Idle);
-    assert!(
-        agents[0].compacting_since.is_none(),
-        "a compaction-close signal clears the transient marker"
-    );
+    assert!(agents[0].compacting_since.is_none());
 
     for (label, events, expected_count) in [
         (
@@ -97,200 +96,94 @@ fn compaction_end_clears_marker_and_counts_completed_brackets() {
 }
 
 #[test]
-fn auto_compaction_ended_resumes_running_and_clears_marker() {
-    let prompt = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let edit = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "PostToolUse",
-            "agent_id": "sess-1",
-            "signal": { "signal": "tool_used", "mutates": true, "edits": true },
-        }),
-    );
-    let compact = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let post = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "PostCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended", "auto": true },
-        }),
-    );
+fn compaction_end_resumes_interrupted_turn_for_auto_or_unknown_edges() {
+    for (source, prompt_event, edit_event, compact_event, post_event, end_signal) in [
+        (
+            "codex",
+            "UserPromptSubmit",
+            "PostToolUse",
+            "PreCompact",
+            "PostCompact",
+            compaction_ended(Some(true)),
+        ),
+        (
+            "pi",
+            "before_agent_start",
+            "tool_execution_end",
+            "session_before_compact",
+            "session_compact",
+            compaction_ended(None),
+        ),
+    ] {
+        let prompt = lifecycle(source, prompt_event, signal("turn_started"));
+        let edit = lifecycle(source, edit_event, tool_used());
+        let compact = lifecycle(source, compact_event, signal("compacting"));
+        let post = lifecycle(source, post_event, end_signal);
 
-    let agents = reduce_agent_states(&[prompt, edit, compact, post]);
-    assert_eq!(agents[0].status, AgentStatus::Running);
-    assert_eq!(
-        agents[0].phase,
-        TurnPhase::Acting,
-        "auto compaction carries the interrupted turn phase"
-    );
-    assert!(agents[0].compacting_since.is_none());
+        let agents = reduce_agent_states(&[prompt, edit, compact, post]);
+        assert_eq!(agents[0].status, AgentStatus::Running, "{source}");
+        assert_eq!(agents[0].phase, TurnPhase::Acting, "{source}");
+        assert!(agents[0].compacting_since.is_none(), "{source}");
+    }
 }
 
 #[test]
-fn unknown_compaction_end_only_clears_marker() {
-    let prompt = raw_lifecycle(
-        "pi",
-        serde_json::json!({
-            "event_name": "before_agent_start",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let edit = raw_lifecycle(
-        "pi",
-        serde_json::json!({
-            "event_name": "tool_execution_end",
-            "agent_id": "sess-1",
-            "signal": { "signal": "tool_used", "mutates": true, "edits": true },
-        }),
-    );
-    let compact = raw_lifecycle(
-        "pi",
-        serde_json::json!({
-            "event_name": "session_before_compact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let post = raw_lifecycle(
-        "pi",
-        serde_json::json!({
-            "event_name": "session_compact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended" },
-        }),
-    );
+fn next_lifecycle_signal_closes_missed_compaction_bracket() {
+    for (label, next) in [
+        (
+            "next tool signal",
+            lifecycle(
+                "claude",
+                "PreToolUse",
+                serde_json::json!({ "signal": "tool_used", "mutates": false, "edits": false }),
+            ),
+        ),
+        (
+            "expired display marker",
+            lifecycle_at(
+                "claude",
+                crate::feed::COMPACTING_WINDOW_SECS + 5,
+                "Stop",
+                serde_json::json!({
+                    "signal": "turn_ended",
+                    "errored": false,
+                    "parked_on_background": false
+                }),
+            ),
+        ),
+    ] {
+        let prompt = lifecycle_at("claude", 0, "UserPromptSubmit", signal("turn_started"));
+        let compact = lifecycle_at("claude", 1, "PreCompact", signal("compacting"));
+        let agents = reduce_agent_states(&[prompt, compact, next]);
 
-    let agents = reduce_agent_states(&[prompt, edit, compact, post]);
-    assert_eq!(agents[0].status, AgentStatus::Running);
-    assert_eq!(agents[0].phase, TurnPhase::Acting);
-    assert!(agents[0].compacting_since.is_none());
-}
-
-#[test]
-fn missed_trailing_hook_counts_when_next_signal_closes_bracket() {
-    let prompt = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let compact = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let next = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PreToolUse",
-            "agent_id": "sess-1",
-            "signal": { "signal": "tool_used", "mutates": false, "edits": false },
-        }),
-    );
-
-    let agents = reduce_agent_states(&[prompt, compact, next]);
-    assert_eq!(agents[0].compaction_count, 1);
-    assert!(agents[0].compacting_since.is_none());
-    assert_eq!(agents[0].status, AgentStatus::Running);
+        assert_eq!(agents[0].compaction_count, 1, "{label}");
+        assert!(agents[0].compacting_since.is_none(), "{label}");
+    }
 }
 
 #[test]
 fn repeated_compacting_signal_refreshes_marker_without_counting() {
-    let prompt = raw_lifecycle_at(
-        "claude",
-        0,
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let compact = raw_lifecycle_at(
-        "claude",
-        1,
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let later_second_compact = raw_lifecycle_at(
-        "claude",
-        crate::feed::COMPACTING_WINDOW_SECS + 5,
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
+    let prompt = lifecycle_at("claude", 0, "UserPromptSubmit", signal("turn_started"));
+    let compact = lifecycle_at("claude", 1, "PreCompact", signal("compacting"));
+    let second_at = crate::feed::COMPACTING_WINDOW_SECS + 5;
+    let later_second_compact =
+        lifecycle_at("claude", second_at, "PreCompact", signal("compacting"));
 
     let agents = reduce_agent_states(&[prompt, compact, later_second_compact]);
     assert_eq!(agents[0].compaction_count, 0);
     assert_eq!(
         agents[0].compacting_since,
-        Some(
-            Timestamp::from_second(epoch().as_second() + crate::feed::COMPACTING_WINDOW_SECS + 5)
-                .unwrap()
-        )
+        Some(Timestamp::from_second(epoch().as_second() + second_at).unwrap())
     );
     assert_eq!(agents[0].status, AgentStatus::Running);
 }
 
 #[test]
 fn double_compaction_end_events_count_once_in_either_order() {
-    let prompt = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let compact = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let post = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "PostCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended", "auto": true },
-        }),
-    );
-    let session_compact = raw_lifecycle(
-        "codex",
-        serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended" },
-        }),
-    );
+    let prompt = lifecycle("codex", "UserPromptSubmit", signal("turn_started"));
+    let compact = lifecycle("codex", "PreCompact", signal("compacting"));
+    let post = lifecycle("codex", "PostCompact", compaction_ended(Some(true)));
+    let session_compact = lifecycle("codex", "SessionStart", compaction_ended(None));
 
     for events in [
         vec![
@@ -309,23 +202,9 @@ fn double_compaction_end_events_count_once_in_either_order() {
 }
 
 #[test]
-fn unbracketed_compaction_end_applies_edge_without_counting() {
-    let prompt = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let manual_end = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "PostCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compaction_ended", "auto": false },
-        }),
-    );
+fn unbracketed_manual_compaction_end_applies_edge_without_counting() {
+    let prompt = lifecycle("claude", "UserPromptSubmit", signal("turn_started"));
+    let manual_end = lifecycle("claude", "PostCompact", compaction_ended(Some(false)));
 
     let agents = reduce_agent_states(&[prompt, manual_end]);
     assert_eq!(agents[0].status, AgentStatus::Idle);
@@ -334,65 +213,9 @@ fn unbracketed_compaction_end_applies_edge_without_counting() {
 }
 
 #[test]
-fn display_expired_bracket_still_counts_on_next_signal() {
-    let prompt = raw_lifecycle_at(
-        "claude",
-        0,
-        serde_json::json!({
-            "event_name": "UserPromptSubmit",
-            "agent_id": "sess-1",
-            "signal": { "signal": "turn_started" },
-        }),
-    );
-    let compact = raw_lifecycle_at(
-        "claude",
-        1,
-        serde_json::json!({
-            "event_name": "PreCompact",
-            "agent_id": "sess-1",
-            "signal": { "signal": "compacting" },
-        }),
-    );
-    let later = raw_lifecycle_at(
-        "claude",
-        crate::feed::COMPACTING_WINDOW_SECS + 5,
-        serde_json::json!({
-            "event_name": "Stop",
-            "agent_id": "sess-1",
-            "signal": {
-                "signal": "turn_ended",
-                "errored": false,
-                "parked_on_background": false
-            },
-        }),
-    );
-
-    let agents = reduce_agent_states(&[prompt, compact, later]);
-    assert_eq!(agents[0].compaction_count, 1);
-    assert!(agents[0].compacting_since.is_none());
-    assert_eq!(agents[0].status, AgentStatus::Success);
-}
-
-#[test]
 fn turn_started_at_is_stamped_when_progress_reconciles_a_turn_open() {
-    let registered = raw_lifecycle_at(
-        "claude",
-        0,
-        serde_json::json!({
-            "event_name": "SessionStart",
-            "agent_id": "sess-1",
-            "signal": { "signal": "registered" },
-        }),
-    );
-    let tool = raw_lifecycle_at(
-        "claude",
-        5,
-        serde_json::json!({
-            "event_name": "PostToolUse",
-            "agent_id": "sess-1",
-            "signal": { "signal": "tool_used", "mutates": true, "edits": true },
-        }),
-    );
+    let registered = lifecycle_at("claude", 0, "SessionStart", signal("registered"));
+    let tool = lifecycle_at("claude", 5, "PostToolUse", tool_used());
 
     let agents = reduce_agent_states(&[registered, tool]);
     assert_eq!(
