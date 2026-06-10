@@ -1,6 +1,6 @@
 //! Build-time tier-1 pricing embed.
 //!
-//! Compacts the checked-in LiteLLM pricing snapshot
+//! Compacts the checked-in pricing snapshot
 //! (`pricing/litellm-pricing.json`) — or a `RIMZ_PRICING_JSON_PATH` override —
 //! down to the model prefixes and per-token fields the binary reads, and writes
 //! `$OUT_DIR/litellm-pricing.json` for `include_str!` (see
@@ -8,10 +8,10 @@
 //!
 //! The build never touches the network, so every build is reproducible and
 //! hermetic. The vendored snapshot is the embed source, kept current by `cargo
-//! xtask pricing-refresh` (which fetches upstream and rewrites a reviewable,
-//! committed snapshot); the runtime refresh (`src/agents/pricing/remote.rs`)
-//! keeps prices fresh between releases. The compaction here mirrors `cargo xtask
-//! pricing-refresh` — keep the two in step.
+//! xtask pricing-refresh` (which fetches LiteLLM plus authoritative models.dev
+//! fillers and rewrites a reviewable, committed snapshot); the runtime refresh
+//! (`src/agents/pricing/remote.rs`) keeps prices fresh between releases. The
+//! compaction here mirrors `cargo xtask pricing-refresh` — keep the two in step.
 
 use std::collections::BTreeMap;
 use std::env;
@@ -61,9 +61,9 @@ fn write_presence_plugin_embed(out_dir: &std::path::Path) {
     fs::write(&out_path, bytes).expect("write embedded presence plugin");
 }
 
-/// Resolve the raw LiteLLM document: a `RIMZ_PRICING_JSON_PATH` override, else
-/// the checked-in vendored snapshot. No network — the snapshot is the source of
-/// truth, refreshed deliberately by `cargo xtask pricing-refresh`.
+/// Resolve the raw LiteLLM-shaped document: a `RIMZ_PRICING_JSON_PATH` override,
+/// else the checked-in vendored snapshot. No network — the snapshot is the
+/// source of truth, refreshed deliberately by `cargo xtask pricing-refresh`.
 fn resolve_raw_json() -> String {
     if let Some(path) = env::var_os("RIMZ_PRICING_JSON_PATH") {
         let path = PathBuf::from(path);

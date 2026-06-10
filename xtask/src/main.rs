@@ -105,8 +105,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "pricing-refresh",
-        summary: "Refresh the vendored LiteLLM pricing snapshot.",
-        runs: "fetch LiteLLM pricing JSON, compact it, and rewrite the vendored snapshot",
+        summary: "Refresh the vendored pricing snapshot.",
+        runs: "fetch LiteLLM pricing JSON plus authoritative models.dev fillers, compact them, and rewrite the vendored snapshot atomically",
     },
     TaskInfo {
         name: "screenshot",
@@ -1357,6 +1357,7 @@ fn print_screenshot_path(path: &Path) {
 
 const LITELLM_URL: &str =
     "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const VENDORED_SNAPSHOT: &str = "crates/rimz/pricing/litellm-pricing.json";
 const KEPT_FIELDS: [&str; 4] = [
     "input_cost_per_token",
@@ -1365,33 +1366,62 @@ const KEPT_FIELDS: [&str; 4] = [
     "cache_creation_input_token_cost",
 ];
 
-/// Regenerate the checked-in LiteLLM pricing snapshot that `crates/rimz/build.rs`
+/// Regenerate the checked-in pricing snapshot that `crates/rimz/build.rs`
 /// embeds as the tier-1 table (and falls back to for offline builds). Fetches
-/// upstream, compacts to the kept prefixes/fields, and writes a sorted,
+/// LiteLLM first, fills missing models from authoritative models.dev provider
+/// catalogues, compacts to the kept prefixes/fields, and writes a sorted,
 /// pretty-printed JSON so the diff is reviewable. `RIMZ_PRICING_JSON_PATH`
-/// overrides the network fetch with a local raw document.
+/// overrides the LiteLLM network fetch with a local raw document;
+/// `RIMZ_PRICING_MODELS_DEV_JSON_PATH` supplies a local models.dev document.
+/// Without the models.dev override, a local LiteLLM override keeps the task
+/// network-free and skips models.dev.
 ///
 /// The compaction mirrors `crates/rimz/build.rs::compact`; keep the two in step.
 fn pricing_refresh(root: &Path) -> Result<()> {
-    let raw = if let Some(path) = env::var_os("RIMZ_PRICING_JSON_PATH") {
-        fs::read_to_string(&path).context("reading RIMZ_PRICING_JSON_PATH")?
+    let litellm_override = env::var_os("RIMZ_PRICING_JSON_PATH");
+    let raw = if let Some(path) = &litellm_override {
+        fs::read_to_string(PathBuf::from(path)).context("reading RIMZ_PRICING_JSON_PATH")?
     } else {
-        fetch_litellm().context("fetching LiteLLM pricing JSON")?
+        fetch_url(LITELLM_URL).context("fetching LiteLLM pricing JSON")?
     };
-    let snapshot = compact_pretty(&raw).context("compacting pricing JSON")?;
+    let mut snapshot = compact_litellm(&raw).context("compacting LiteLLM pricing JSON")?;
+    if let Some(models_dev) = resolve_models_dev_json(litellm_override.is_some())
+        .context("reading models.dev pricing JSON")?
+    {
+        for (model, pricing) in
+            compact_models_dev(&models_dev).context("compacting models.dev pricing JSON")?
+        {
+            snapshot.entry(model).or_insert(pricing);
+        }
+    }
+    let snapshot = compact_pretty(&snapshot).context("serializing pricing JSON")?;
     let dest = root.join(VENDORED_SNAPSHOT);
-    fs::write(&dest, snapshot).with_context(|| format!("writing {}", dest.display()))?;
+    write_atomically(&dest, snapshot.as_bytes())?;
     Ok(())
 }
 
-fn fetch_litellm() -> Result<String> {
+fn resolve_models_dev_json(skip_remote: bool) -> Result<Option<String>> {
+    if let Some(path) = env::var_os("RIMZ_PRICING_MODELS_DEV_JSON_PATH") {
+        return fs::read_to_string(PathBuf::from(path))
+            .map(Some)
+            .context("reading RIMZ_PRICING_MODELS_DEV_JSON_PATH");
+    }
+    if skip_remote {
+        return Ok(None);
+    }
+    fetch_url(MODELS_DEV_URL)
+        .map(Some)
+        .context("fetching models.dev pricing JSON")
+}
+
+fn fetch_url(url: &str) -> Result<String> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(30)))
         .build()
         .new_agent();
-    let mut response = agent.get(LITELLM_URL).call().context("HTTP GET")?;
+    let mut response = agent.get(url).call().context("HTTP GET")?;
     if response.status().as_u16() != 200 {
-        bail!("LiteLLM fetch returned HTTP {}", response.status().as_u16());
+        bail!("fetch returned HTTP {}", response.status().as_u16());
     }
     response
         .body_mut()
@@ -1401,7 +1431,7 @@ fn fetch_litellm() -> Result<String> {
         .context("reading response body")
 }
 
-fn compact_pretty(json: &str) -> Result<String> {
+fn compact_litellm(json: &str) -> Result<BTreeMap<String, Value>> {
     let Value::Object(raw) = serde_json::from_str::<Value>(json).context("parsing JSON")? else {
         bail!("pricing JSON is not an object");
     };
@@ -1425,6 +1455,64 @@ fn compact_pretty(json: &str) -> Result<String> {
             out.insert(model, Value::Object(kept));
         }
     }
+    Ok(out)
+}
+
+fn compact_models_dev(json: &str) -> Result<BTreeMap<String, Value>> {
+    let Value::Object(providers) = serde_json::from_str::<Value>(json).context("parsing JSON")?
+    else {
+        bail!("models.dev JSON is not an object");
+    };
+    let mut out = BTreeMap::new();
+    for (provider_id, provider) in providers {
+        if !is_kept_models_dev_provider(&provider_id) {
+            continue;
+        }
+        let Some(models) = provider.get("models").and_then(Value::as_object) else {
+            continue;
+        };
+        for (model, details) in models {
+            if !is_kept_model(model) {
+                continue;
+            }
+            let Some(cost) = details.get("cost").and_then(Value::as_object) else {
+                continue;
+            };
+            let per_million = |key: &str| cost.get(key).and_then(Value::as_f64);
+            let (Some(input), Some(output)) = (per_million("input"), per_million("output")) else {
+                continue;
+            };
+            let Some(input) = per_token_value(input) else {
+                continue;
+            };
+            let Some(output) = per_token_value(output) else {
+                continue;
+            };
+
+            let mut kept = Map::new();
+            kept.insert("input_cost_per_token".to_owned(), input);
+            kept.insert("output_cost_per_token".to_owned(), output);
+            if let Some(cache_read) = per_million("cache_read").and_then(per_token_value) {
+                kept.insert("cache_read_input_token_cost".to_owned(), cache_read);
+            }
+            if let Some(cache_write) = per_million("cache_write").and_then(per_token_value) {
+                kept.insert("cache_creation_input_token_cost".to_owned(), cache_write);
+            }
+            out.insert(model.clone(), Value::Object(kept));
+        }
+    }
+    Ok(out)
+}
+
+fn is_kept_models_dev_provider(provider_id: &str) -> bool {
+    matches!(provider_id, "anthropic" | "openai")
+}
+
+fn per_token_value(per_million: f64) -> Option<Value> {
+    serde_json::Number::from_f64(per_million / 1e6).map(Value::Number)
+}
+
+fn compact_pretty(out: &BTreeMap<String, Value>) -> Result<String> {
     let mut pretty = serde_json::to_string_pretty(&out).context("serializing snapshot")?;
     pretty.push('\n');
     Ok(pretty)
@@ -2103,6 +2191,46 @@ mod tests {
 
     fn pane_list(panes: Value) -> Vec<u8> {
         serde_json::to_vec(&panes).unwrap()
+    }
+
+    fn price_field(fields: &Map<String, Value>, name: &str) -> f64 {
+        fields.get(name).and_then(Value::as_f64).unwrap()
+    }
+
+    #[test]
+    fn models_dev_compaction_converts_per_million_costs() {
+        let table = compact_models_dev(
+            r#"{
+                "anthropic": {"models": {
+                    "claude-fable-5": {
+                        "cost": {
+                            "input": 10.0,
+                            "output": 50.0,
+                            "cache_read": 1.0,
+                            "cache_write": 12.5
+                        }
+                    },
+                    "ignored-missing-output": {"cost": {"input": 1.0}}
+                }},
+                "gateway": {"models": {
+                    "claude-fable-5": {
+                        "cost": {"input": 99.0, "output": 99.0}
+                    }
+                }},
+                "not-a-provider": {"id": "missing models"}
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(table.len(), 1);
+        let fields = table
+            .get("claude-fable-5")
+            .and_then(Value::as_object)
+            .unwrap();
+        assert!((price_field(fields, "input_cost_per_token") - 1e-5).abs() < 1e-18);
+        assert!((price_field(fields, "output_cost_per_token") - 5e-5).abs() < 1e-18);
+        assert!((price_field(fields, "cache_read_input_token_cost") - 1e-6).abs() < 1e-18);
+        assert!((price_field(fields, "cache_creation_input_token_cost") - 1.25e-5).abs() < 1e-18);
     }
 
     #[test]

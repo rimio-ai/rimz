@@ -1,11 +1,11 @@
 //! Tier 2 + 3b: the runtime fetches that keep the table fresh.
 //!
 //! [`fetch_litellm`] re-downloads the upstream LiteLLM table; [`fetch_models_dev`]
-//! pulls the models.dev catalogue used to fill models neither the embedded
-//! snapshot nor the LiteLLM refresh knows. Both are best-effort: a failure
-//! returns `None` and the caller keeps whatever it already had. The decision of
-//! *when* to fetch (TTL + back-off, on-disk cache) lives in the parent module —
-//! this file only knows how to GET and parse.
+//! pulls authoritative models.dev provider catalogues used to fill models neither
+//! the embedded snapshot nor the LiteLLM refresh knows. Both are best-effort: a
+//! failure returns `None` and the caller keeps whatever it already had. The
+//! decision of *when* to fetch (TTL + back-off, on-disk cache) lives in the
+//! parent module — this file only knows how to GET and parse.
 
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -81,14 +81,18 @@ fn fetch(url: &str) -> Option<String> {
 ///
 /// Shape: `{ provider: { models: { id: { cost: { input, output, cache_read,
 /// cache_write } } } } }`, with costs quoted **per 1M tokens** — divided here to
-/// per-token to match [`Pricing`]. Defensive: any entry missing input/output is
-/// skipped rather than failing the whole parse.
+/// per-token to match [`Pricing`]. Only authoritative provider IDs are read, so
+/// gateway markups cannot overwrite direct Anthropic/OpenAI prices. Defensive:
+/// any entry missing input/output is skipped rather than failing the whole parse.
 pub(super) fn parse_models_dev(json: &str) -> BTreeMap<String, Pricing> {
     let mut out = BTreeMap::new();
     let Ok(Value::Object(providers)) = serde_json::from_str::<Value>(json) else {
         return out;
     };
-    for provider in providers.values() {
+    for (provider_id, provider) in providers {
+        if !is_authoritative_provider(&provider_id) {
+            continue;
+        }
         let Some(models) = provider.get("models").and_then(Value::as_object) else {
             continue;
         };
@@ -114,6 +118,10 @@ pub(super) fn parse_models_dev(json: &str) -> BTreeMap<String, Pricing> {
     out
 }
 
+fn is_authoritative_provider(provider_id: &str) -> bool {
+    matches!(provider_id, "anthropic" | "openai")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -123,6 +131,9 @@ mod tests {
         let json = r#"{
             "openai": {"models": {
                 "gpt-x": {"cost": {"input": 1.25, "output": 10.0, "cache_read": 0.125}}
+            }},
+            "gateway": {"models": {
+                "gpt-x": {"cost": {"input": 99.0, "output": 99.0}}
             }},
             "bad": {"models": {"y": {"cost": {"input": 1.0}}}}
         }"#;

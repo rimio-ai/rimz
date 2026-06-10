@@ -1,10 +1,9 @@
-//! Tier 1: the build-time LiteLLM snapshot embedded into the binary.
+//! Tier 1: the build-time pricing snapshot embedded into the binary.
 //!
-//! `build.rs` fetches and compacts the upstream
-//! `model_prices_and_context_window.json` into `OUT_DIR/litellm-pricing.json`;
-//! it is included literally here. The same [`parse`] turns a LiteLLM-shaped
-//! document into a price table, so the runtime refresh and the embedded
-//! snapshot share one parser.
+//! `build.rs` compacts the checked-in, LiteLLM-shaped snapshot into
+//! `OUT_DIR/litellm-pricing.json`; it is included literally here. The same
+//! [`parse`] turns a LiteLLM-shaped document into a price table, so the runtime
+//! refresh and the embedded snapshot share one parser.
 
 use std::collections::HashMap;
 
@@ -68,6 +67,18 @@ mod tests {
             table.keys().any(|k| k.starts_with("gpt-5")),
             "embedded snapshot is missing the gpt-5 family"
         );
+    }
+
+    #[test]
+    fn embedded_snapshot_prices_claude_fable() {
+        let table = load();
+        let price = table
+            .get("claude-fable-5")
+            .expect("embedded snapshot is missing claude-fable-5");
+        assert!((price.input - 1e-5).abs() < 1e-18);
+        assert!((price.output - 5e-5).abs() < 1e-18);
+        assert!((price.cache_read - 1e-6).abs() < 1e-18);
+        assert!((price.cache_create - 1.25e-5).abs() < 1e-18);
     }
 
     #[test]

@@ -14,8 +14,8 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 | Layer | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM snapshot, compacted into the binary by [`build.rs`](../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../crates/rimz/src/agents/pricing/embedded.rs)) |
-| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus models.dev filling models the snapshot lacks ([`remote.rs`](../../crates/rimz/src/agents/pricing/remote.rs)) |
+| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM-shaped snapshot, generated from LiteLLM plus authoritative models.dev fillers, compacted into the binary by [`build.rs`](../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../crates/rimz/src/agents/pricing/embedded.rs)) |
+| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../crates/rimz/src/agents/pricing/remote.rs)) |
 | 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../crates/rimz/src/agents/pricing/builtins.rs)) |
 
 `gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
@@ -24,7 +24,7 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 `rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_RUNTIME_DIR/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared spending lock, and re-fetches only when the cache is older than a day. A failed fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips the fetch entirely.
 
-`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches upstream and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
+`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
 
 ## Resolving a model
 
