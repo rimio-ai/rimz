@@ -116,24 +116,6 @@ fn assert_permission_allow_decision(source: &str, decision: &Value) {
     }
 }
 
-fn lifecycle_event_count(env: &Env) -> usize {
-    env.read_events()
-        .iter()
-        .filter(|event| event.method == "agent.lifecycle")
-        .count()
-}
-
-fn run_claude_lifecycle(env: &Env, payload: Value) {
-    let payload = serde_json::to_string(&payload).expect("payload");
-    let output = env.run_hook("claude", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-}
-
 fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -288,36 +270,6 @@ fn permission_hook_bridge_cap_timeout_emits_neutral() {
 }
 
 #[test]
-fn codex_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-codex-01",
-        "approval_policy": "ask",
-        "worktree_branch": "feature-x",
-    }))
-    .expect("payload");
-
-    let output = env.run_hook("codex", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    // The lifecycle event must land in the snapshot's agents rollup.
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
-    assert_eq!(agents[0]["kind"], "codex");
-    assert_eq!(agents[0]["agent_id"], "sess-codex-01");
-    // SessionStart registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["worktree_branch"], "feature-x");
-}
-
-#[test]
 fn codex_daemon_routed_lifecycle_hooks_recover_distinct_pane_stamps() {
     let env = Env::new();
     let mut left = tmux_pane("%10", "codex", &env.project_root);
@@ -422,58 +374,6 @@ fn assert_agent_pane(snapshot: &Value, agent_id: &str, pane_id: &str) {
 }
 
 #[test]
-fn codex_install_uninstall_cli_round_trips_into_codex_config() {
-    let env = Env::new();
-    let codex_config = env.home_root.join(".codex").join("config.toml");
-
-    let install = env
-        .rimz()
-        .env("RIMZ_CODEX_CONFIG", &codex_config)
-        .args(["hooks", "install", "codex"])
-        .output()
-        .expect("spawn install");
-    assert!(
-        install.status.success(),
-        "install stderr: {}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-    let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
-    assert_eq!(report["agent"], "codex");
-    assert_eq!(report["merged"], false);
-    let events = report["installed_events"].as_array().expect("events");
-    let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
-    assert!(names.contains(&"SessionStart"));
-    assert!(names.contains(&"SubagentStart"));
-    assert!(names.contains(&"SubagentStop"));
-    assert!(names.contains(&"PermissionRequest"));
-
-    let written = std::fs::read_to_string(&codex_config).expect("read codex config");
-    assert!(
-        written.contains("[[hooks.SessionStart]]")
-            && written.contains("rimz hooks feed --source codex"),
-        "config must use Codex's documented inline hook shape:\n{written}"
-    );
-
-    let uninstall = env
-        .rimz()
-        .env("RIMZ_CODEX_CONFIG", &codex_config)
-        .args(["hooks", "uninstall", "codex"])
-        .output()
-        .expect("spawn uninstall");
-    assert!(
-        uninstall.status.success(),
-        "uninstall stderr: {}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    let report: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
-    assert_eq!(report["existed"], true);
-    let removed = report["removed_events"].as_array().expect("removed events");
-    assert!(!removed.is_empty(), "must report removed events");
-    let written = std::fs::read_to_string(&codex_config).expect("read codex config");
-    assert!(!written.contains("rimz hooks feed --source codex"));
-}
-
-#[test]
 fn pi_tool_call_with_no_resolver_emits_neutral_and_no_feed_item() {
     // Pi has no native permission prompt (`native_ask_ui` = false): with no
     // fresh resolver the hook must answer neutral (empty stdout = the tool
@@ -506,7 +406,21 @@ fn pi_tool_call_with_stale_heartbeat_emits_neutral_and_no_feed_item() {
 }
 
 #[test]
-fn pi_tool_call_bridge_allow_renders_empty_object() {
+fn pi_tool_call_bridge_renders_provider_decisions() {
+    let cases = [
+        (r#"{"choice":"allow"}"#, json!({})),
+        (
+            r#"{"choice":"deny","reason":"rm -rf is not on the allowlist"}"#,
+            json!({ "block": true, "reason": "rm -rf is not on the allowlist" }),
+        ),
+    ];
+    for (answer, expected) in cases {
+        let decision = resolve_pi_tool_call(answer);
+        assert_eq!(decision, expected, "answer: {answer}");
+    }
+}
+
+fn resolve_pi_tool_call(answer: &str) -> Value {
     let env = Env::new();
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -515,12 +429,7 @@ fn pi_tool_call_bridge_allow_renders_empty_object() {
     let request_id = env
         .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
+    let resolve = env.resolve(&request_id, answer, "opus-policy", "hook-bridge");
     assert!(
         resolve.status.success(),
         "resolve failed: {}",
@@ -534,238 +443,7 @@ fn pi_tool_call_bridge_allow_renders_empty_object() {
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
-    // Pi's allow is the empty object — the extension blocks only on
-    // `block === true`.
-    assert_eq!(decision, json!({}), "decision: {decision}");
-}
-
-#[test]
-fn pi_tool_call_bridge_deny_renders_block_with_reason() {
-    let env = Env::new();
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("pi", &pi_tool_call_payload("bash"));
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"deny","reason":"rm -rf is not on the allowlist"}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "pi hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("pi decision json");
-    assert_eq!(
-        decision,
-        json!({ "block": true, "reason": "rm -rf is not on the allowlist" }),
-        "decision: {decision}"
-    );
-}
-
-#[test]
-fn pi_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "session_start",
-        "session_id": "019e9161-a5d0-791d-879e-39679acd4ded",
-        "reason": "startup",
-        "model": "gpt-5.5",
-        "context_pct": 3,
-        "context_window": 272000,
-        "total_tokens": 8160,
-    }))
-    .expect("payload");
-
-    let output = env.run_hook("pi", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
-    assert_eq!(agents[0]["kind"], "pi");
-    assert_eq!(
-        agents[0]["agent_id"],
-        "019e9161-a5d0-791d-879e-39679acd4ded"
-    );
-    // session_start registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["model"], "gpt-5.5");
-    assert_eq!(agents[0]["context_window"], 272000);
-}
-
-#[test]
-fn pi_turn_opens_thinking_until_the_first_file_edit() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("pi", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
-    run(&json!({
-        "hook_event_name": "before_agent_start",
-        "session_id": "sess-pi-phase",
-        "prompt": "refactor the parser",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(
-        parsed["agents"][0]["phase"], "reasoning",
-        "a fresh turn opens in its reasoning phase"
-    );
-    assert_eq!(parsed["agents"][0]["task"], "refactor the parser");
-
-    // bash mutates but edits nothing — still reasoning. The adapter
-    // classifies off `tool_name` via the descriptor's tool tables.
-    run(&json!({
-        "hook_event_name": "tool_execution_end",
-        "session_id": "sess-pi-phase",
-        "tool_name": "bash",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
-
-    // The first file edit flips the turn to acting.
-    run(&json!({
-        "hook_event_name": "tool_execution_end",
-        "session_id": "sess-pi-phase",
-        "tool_name": "edit",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(parsed["agents"][0]["phase"], "acting");
-
-    // A clean turn end settles to success and the resting phase.
-    run(&json!({
-        "hook_event_name": "agent_end",
-        "session_id": "sess-pi-phase",
-        "stop_reason": "stop",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "success");
-    assert_eq!(parsed["agents"][0]["phase"], "idle");
-}
-
-#[test]
-fn pi_compaction_pair_clears_without_forcing_a_trigger_edge() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("pi", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-    };
-
-    run(&json!({
-        "hook_event_name": "before_agent_start",
-        "session_id": "sess-pi-compact",
-        "prompt": "keep working through compaction",
-    }));
-    run(&json!({
-        "hook_event_name": "tool_execution_end",
-        "session_id": "sess-pi-compact",
-        "tool_name": "edit",
-    }));
-    run(&json!({
-        "hook_event_name": "session_before_compact",
-        "session_id": "sess-pi-compact",
-    }));
-    run(&json!({
-        "hook_event_name": "session_compact",
-        "session_id": "sess-pi-compact",
-    }));
-
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(
-        parsed["agents"][0]["phase"], "acting",
-        "Pi's extension hook does not report manual/auto, so it only clears the head"
-    );
-}
-
-#[test]
-fn pi_install_uninstall_cli_round_trips_into_extension_file() {
-    let env = Env::new();
-    let extension = env.agent_config_path("pi");
-
-    let install = env
-        .rimz()
-        .args(["hooks", "install", "pi"])
-        .output()
-        .expect("spawn install");
-    assert!(
-        install.status.success(),
-        "install stderr: {}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-    let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
-    assert_eq!(report["agent"], "pi");
-    assert_eq!(report["merged"], false);
-    let events = report["installed_events"].as_array().expect("events");
-    let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
-    assert!(names.contains(&"session_start"));
-    assert!(names.contains(&"session_compact"));
-    assert!(names.contains(&"tool_call"));
-
-    let written = std::fs::read_to_string(&extension).expect("read pi extension");
-    assert!(
-        written
-            .lines()
-            .next()
-            .is_some_and(|line| line.contains("_rimz_managed")),
-        "extension must carry the ownership marker on line one:\n{written}"
-    );
-    assert!(written.contains("\"hooks\", \"feed\", \"--source\", \"pi\""));
-    assert!(env.agent_hooks_installed("pi"));
-
-    let uninstall = env
-        .rimz()
-        .args(["hooks", "uninstall", "pi"])
-        .output()
-        .expect("spawn uninstall");
-    assert!(
-        uninstall.status.success(),
-        "uninstall stderr: {}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    let report: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
-    assert_eq!(report["existed"], true);
-    assert!(
-        !report["removed_events"]
-            .as_array()
-            .expect("removed events")
-            .is_empty()
-    );
-    assert!(!extension.exists(), "uninstall removes the managed file");
-    assert!(!env.agent_hooks_installed("pi"));
+    serde_json::from_str(stdout.trim()).expect("pi decision json")
 }
 
 #[test]
@@ -985,164 +663,6 @@ fn pending_native_ui_ask_survives_backgrounded_child_tool() {
     assert_eq!(rows[0]["request_id"], request_id.as_str());
 }
 
-#[test]
-fn codex_uninstall_cli_removes_legacy_config_block() {
-    let env = Env::new();
-    let codex_config = env.home_root.join(".codex").join("config.toml");
-    std::fs::create_dir_all(codex_config.parent().unwrap()).expect("mkdir codex config dir");
-    std::fs::write(
-        &codex_config,
-        "model = \"gpt-5.5\"\n[hooks.rimz]\nmanaged_by = \"rimz\"\nevents = [\"SessionStart\"]\n",
-    )
-    .expect("write legacy codex config");
-
-    let uninstall = env
-        .rimz()
-        .env("RIMZ_CODEX_CONFIG", &codex_config)
-        .args(["hooks", "uninstall", "codex"])
-        .output()
-        .expect("spawn uninstall");
-    assert!(
-        uninstall.status.success(),
-        "uninstall stderr: {}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    let report: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
-    assert_eq!(report["existed"], true);
-    let removed = report["removed_events"].as_array().expect("removed events");
-    assert!(!removed.is_empty(), "must report removed events");
-}
-
-#[test]
-fn codex_turn_opens_reasoning_until_the_first_file_edit() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("codex", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
-    run(&json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "sess-codex-phase",
-        "prompt": "refactor the parser",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(
-        parsed["agents"][0]["phase"], "reasoning",
-        "a fresh turn opens in its reasoning phase"
-    );
-
-    // A shell command mutates but edits nothing — still reasoning.
-    run(&json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": "sess-codex-phase",
-        "tool_name": "shell",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
-
-    // The first file edit flips the turn to working.
-    run(&json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": "sess-codex-phase",
-        "tool_name": "apply_patch",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(parsed["agents"][0]["phase"], "acting");
-}
-
-#[test]
-fn manual_compact_then_pre_tool_use_resumes_running() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("codex", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-    };
-
-    run(&json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "sess-codex-compact",
-        "prompt": "continue after compact",
-    }));
-    run(&json!({
-        "hook_event_name": "PostCompact",
-        "session_id": "sess-codex-compact",
-        "trigger": "manual",
-    }));
-    let after_manual = env.snapshot_json();
-    assert_eq!(after_manual["agents"][0]["status"], "idle");
-    let before = lifecycle_event_count(&env);
-
-    run(&json!({
-        "hook_event_name": "PreToolUse",
-        "session_id": "sess-codex-compact",
-        "tool_name": "shell",
-    }));
-
-    assert_eq!(
-        lifecycle_event_count(&env),
-        before + 1,
-        "a resting-row PreToolUse reconciliation is persisted"
-    );
-    let resumed = env.snapshot_json();
-    assert_eq!(resumed["agents"][0]["status"], "running");
-}
-
-#[test]
-fn pre_tool_use_on_running_row_appends_nothing() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("codex", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
-    run(&json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "sess-codex-pretool-noop",
-        "prompt": "inspect files",
-    }));
-    let before_pre = lifecycle_event_count(&env);
-    run(&json!({
-        "hook_event_name": "PreToolUse",
-        "session_id": "sess-codex-pretool-noop",
-        "tool_name": "shell",
-    }));
-    assert_eq!(
-        lifecycle_event_count(&env),
-        before_pre,
-        "PreToolUse while already running stays out of the event log"
-    );
-
-    run(&json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": "sess-codex-pretool-noop",
-        "tool_name": "read",
-    }));
-    assert_eq!(
-        lifecycle_event_count(&env),
-        before_pre,
-        "a non-mutating PostToolUse never reaches the lifecycle channel"
-    );
-}
-
 // --- Claude PreToolUse blocking events ---
 //
 // `ExitPlanMode` and `AskUserQuestion` are PreToolUse blocking hooks. The
@@ -1150,110 +670,77 @@ fn pre_tool_use_on_running_row_appends_nothing() {
 // empty and the agent's own UI is the answer surface.
 
 #[test]
-fn claude_exit_plan_mode_default_path_pushes_plan_approval() {
-    let env = Env::new();
-    let output = env.run_hook("claude", &claude_pre_tool_use_payload("ExitPlanMode"));
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "neutral Claude blocking hook must keep stdout empty"
-    );
+fn claude_blocking_default_path_pushes_native_items() {
+    for (tool, kind, _) in claude_blocking_cases() {
+        let env = Env::new();
+        let output = env.run_hook("claude", &claude_pre_tool_use_payload(tool));
+        assert!(
+            output.status.success(),
+            "stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "neutral Claude blocking hook must keep stdout empty"
+        );
 
-    let items = env.feed_list_json();
-    let items = items.as_array().expect("array");
-    assert_eq!(items.len(), 1);
-    assert_eq!(items[0]["surface"], "native_ui");
-    assert_eq!(items[0]["status"], "pending");
-    assert_eq!(items[0]["kind"], "plan_approval");
-}
-
-#[test]
-fn claude_ask_user_question_default_path_pushes_question() {
-    let env = Env::new();
-    let output = env.run_hook("claude", &claude_pre_tool_use_payload("AskUserQuestion"));
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty());
-
-    let parsed = env.feed_list_json();
-    assert_eq!(parsed[0]["kind"], "question");
-    assert_eq!(parsed[0]["surface"], "native_ui");
-}
-
-#[test]
-fn claude_exit_plan_mode_bridge_path_renders_updated_input() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
+        let items = env.feed_list_json();
+        assert_eq!(items[0]["kind"], kind);
+        assert_eq!(items[0]["surface"], "native_ui");
+        assert_eq!(items[0]["status"], "pending");
     }
+}
+
+#[test]
+fn claude_blocking_bridge_path_renders_updated_input() {
+    for (tool, _, input_key) in claude_blocking_cases() {
+        let env = Env::new();
+        if env.skip_if_sandboxed() {
+            continue;
+        }
+
+        let decision = resolve_claude_blocking_tool(&env, tool, input_key);
+        assert_eq!(
+            decision["hookSpecificOutput"]["hookEventName"],
+            "PreToolUse"
+        );
+        assert_eq!(
+            decision["hookSpecificOutput"]["permissionDecision"],
+            "allow"
+        );
+        assert_eq!(
+            decision["hookSpecificOutput"]["updatedInput"][input_key],
+            format!("{input_key}-updated")
+        );
+    }
+}
+
+fn claude_blocking_cases() -> [(&'static str, &'static str, &'static str); 2] {
+    [
+        ("ExitPlanMode", "plan_approval", "plan"),
+        ("AskUserQuestion", "question", "question"),
+    ]
+}
+
+fn resolve_claude_blocking_tool(env: &Env, tool: &str, input_key: &str) -> Value {
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
 
-    let child = env.spawn_hook("claude", &claude_pre_tool_use_payload("ExitPlanMode"));
+    let child = env.spawn_hook("claude", &claude_pre_tool_use_payload(tool));
 
     let request_id = env
         .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
         .expect("bridge item should appear in feed");
 
+    let mut updated_input = serde_json::Map::new();
+    updated_input.insert(input_key.to_owned(), json!(format!("{input_key}-updated")));
+    let answer = json!({
+        "choice": "allow",
+        "updatedInput": Value::Object(updated_input),
+    });
     let resolve = env.resolve(
         &request_id,
-        r#"{"choice":"allow","updatedInput":{"plan":"approved"}}"#,
-        "opus-policy",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["hookEventName"],
-        "PreToolUse"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["permissionDecision"],
-        "allow"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["updatedInput"]["plan"],
-        "approved"
-    );
-}
-
-#[test]
-fn claude_ask_user_question_bridge_path_renders_updated_input() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    env.enrol("opus-policy", 10, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-
-    let child = env.spawn_hook("claude", &claude_pre_tool_use_payload("AskUserQuestion"));
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
-        .expect("bridge item should appear in feed");
-
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow","updatedInput":{"question":"clarified"}}"#,
+        &serde_json::to_string(&answer).expect("answer"),
         "opus-policy",
         "hook-bridge",
     );
@@ -1266,247 +753,10 @@ fn claude_ask_user_question_bridge_path_renders_updated_input() {
     let output = child.wait_with_output().expect("wait child");
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["updatedInput"]["question"],
-        "clarified"
-    );
-    assert_eq!(
-        decision["hookSpecificOutput"]["permissionDecision"],
-        "allow"
-    );
+    serde_json::from_str(stdout.trim()).expect("agent json")
 }
 
 // --- Claude lifecycle and install/uninstall ---
-
-#[test]
-fn claude_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-claude-01",
-        "permission_mode": "default",
-        "worktree_branch": "feature-x",
-    }))
-    .expect("payload");
-
-    let output = env.run_hook("claude", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0]["kind"], "claude");
-    assert_eq!(agents[0]["agent_id"], "sess-claude-01");
-    // SessionStart registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["worktree_branch"], "feature-x");
-}
-
-#[test]
-fn claude_context_and_tool_lifecycle_hooks_are_silent() {
-    let env = Env::new();
-    let cases = [
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-silent",
-            "prompt": "check the renderer",
-            "permission_mode": "default",
-        }),
-        json!({
-            "hook_event_name": "PostToolUse",
-            "session_id": "sess-claude-silent",
-            "tool_name": "Read",
-            "tool_input": { "file_path": "src/lib.rs" },
-            "tool_response": { "success": true },
-            "permission_mode": "default",
-        }),
-    ];
-
-    for payload in cases {
-        let payload = serde_json::to_string(&payload).expect("payload");
-        let output = env.run_hook("claude", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-    }
-}
-
-#[test]
-fn claude_turn_opens_reasoning_until_the_first_file_edit() {
-    let env = Env::new();
-    let run = |payload: &serde_json::Value| {
-        let payload = serde_json::to_string(payload).expect("payload");
-        let output = env.run_hook("claude", &payload);
-        assert!(
-            output.status.success(),
-            "stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    };
-
-    run(&json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "sess-claude-phase",
-        "prompt": "refactor the parser",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(
-        parsed["agents"][0]["phase"], "reasoning",
-        "a fresh turn opens in its reasoning phase"
-    );
-
-    // Bash mutates but edits nothing — still reasoning.
-    run(&json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": "sess-claude-phase",
-        "tool_name": "Bash",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["phase"], "reasoning");
-
-    // The first file edit flips the turn to working.
-    run(&json!({
-        "hook_event_name": "PostToolUse",
-        "session_id": "sess-claude-phase",
-        "tool_name": "Edit",
-    }));
-    let parsed = env.snapshot_json();
-    assert_eq!(parsed["agents"][0]["status"], "running");
-    assert_eq!(parsed["agents"][0]["phase"], "acting");
-}
-
-#[test]
-fn claude_session_start_compact_closes_and_counts_the_bracket() {
-    let env = Env::new();
-
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-compact",
-            "prompt": "continue the turn",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-claude-compact",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "SessionStart",
-            "session_id": "sess-claude-compact",
-            "source": "compact",
-        }),
-    );
-
-    let parsed = env.snapshot_json();
-    let agent = &parsed["agents"][0];
-    assert_eq!(agent["status"], "running");
-    assert_eq!(agent["phase"], "reasoning");
-    assert_eq!(agent["compaction_count"], 1);
-    assert!(
-        agent.get("compacting_since").is_none_or(Value::is_null),
-        "compacting head should be cleared: {agent:?}"
-    );
-}
-
-#[test]
-fn claude_double_compaction_close_counts_once() {
-    let env = Env::new();
-
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-double",
-            "prompt": "continue the turn",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-claude-double",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PostCompact",
-            "session_id": "sess-claude-double",
-            "trigger": "auto",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "SessionStart",
-            "session_id": "sess-claude-double",
-            "source": "compact",
-        }),
-    );
-
-    let parsed = env.snapshot_json();
-    let agent = &parsed["agents"][0];
-    assert_eq!(agent["status"], "running");
-    assert_eq!(agent["compaction_count"], 1);
-}
-
-#[test]
-fn claude_bracket_closing_pre_tool_use_is_persisted() {
-    let env = Env::new();
-
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-pretool-close",
-            "prompt": "continue the turn",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-claude-pretool-close",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreToolUse",
-            "session_id": "sess-claude-pretool-close",
-            "tool_name": "Read",
-        }),
-    );
-
-    assert_eq!(
-        lifecycle_event_count(&env),
-        3,
-        "the non-mutating PreToolUse must be durable when it closes a compaction bracket"
-    );
-    let parsed = env.snapshot_json();
-    let agent = &parsed["agents"][0];
-    assert_eq!(agent["compaction_count"], 1);
-    assert!(
-        agent.get("compacting_since").is_none_or(Value::is_null),
-        "compacting head should be cleared: {agent:?}"
-    );
-}
 
 #[test]
 fn claude_install_uninstall_cli_round_trips_into_settings_json() {

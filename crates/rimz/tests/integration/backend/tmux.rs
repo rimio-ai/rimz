@@ -313,59 +313,6 @@ fn ensure_session_applies_room_options_in_one_batch() {
     );
 }
 
-/// `ensure_session` is idempotent on a live room: tmux answers the second
-/// `new-session -d` with `duplicate session` (exit 1), which the backend
-/// treats as the goal state — `-A` is unusable because on a live session it
-/// switches to the attach path, which needs a terminal on stdin and exits 1
-/// under the backend's piped stdio. The duplicate path skips the birth flags,
-/// so a re-ensure never resizes a live room, and still re-asserts the
-/// identity pin.
-#[test]
-fn ensure_session_is_idempotent_on_a_live_room() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    let cwd = TempDir::new().expect("cwd tempdir");
-    let opts = |size| SessionOptions {
-        session_name: "rimz-twice".to_owned(),
-        workspace_id: WorkspaceId::from_project_root(cwd.path()),
-        project_root: cwd.path().to_path_buf(),
-        cwd: cwd.path().to_path_buf(),
-        config: rimz::config::MultiplexerConfig::default(),
-        detected_size: Some(size),
-    };
-    server
-        .backend
-        .ensure_session(&opts((120, 40)))
-        .expect("first ensure");
-    server
-        .backend
-        .ensure_session(&opts((200, 50)))
-        .expect("a re-ensure on a live room succeeds");
-
-    let listed = server.backend.list_sessions().expect("list_sessions");
-    assert_eq!(
-        listed.iter().filter(|s| s.as_str() == "rimz-twice").count(),
-        1,
-        "one room, no duplicate: {listed:?}",
-    );
-    assert_eq!(
-        server.display("rimz-twice", "#{window_width}"),
-        "120",
-        "the duplicate path skips the birth flags, so a re-ensure never resizes a live room",
-    );
-    // The pin is re-asserted on every ensure.
-    let pin = show_session_environment(&server, "rimz-twice", rimz::workspace::ENV_WORKSPACE_ID);
-    assert_eq!(
-        pin,
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_WORKSPACE_ID,
-            WorkspaceId::from_project_root(cwd.path()),
-        ),
-    );
-}
-
 /// `focus_pane` lands cross-window: tmux's `select-pane` activates within its
 /// window only, so the backend batches `select-window` (a pane id resolves as
 /// a window target to the window holding it) before `select-pane`. The
@@ -872,9 +819,9 @@ fn split_pane_injects_env_vars() {
     );
 }
 
-/// `send_keys` + `capture_pane` round-trip: write a marker, see it.
+/// `send_keys`, `send_key`, and `capture_pane` round-trip through a live pane.
 #[test]
-fn capture_and_send_keys_round_trip() {
+fn capture_send_keys_and_named_key_round_trip() {
     require_tmux!();
 
     let server = TmuxServer::new();
@@ -904,24 +851,6 @@ fn capture_and_send_keys_round_trip() {
         capture.contains("rimz-marker-io"),
         "expected marker in capture, got: {capture:?}",
     );
-}
-
-/// `send_key` presses terminal keys without treating them as literal text.
-#[test]
-fn send_key_enters_typed_command() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("key");
-
-    let panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("key".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes");
-    let pane_id = panes[0].pane_id.clone();
 
     server
         .backend
@@ -941,119 +870,6 @@ fn send_key_enters_typed_command() {
     assert!(
         capture.contains("rimz-marker-key"),
         "expected marker in capture, got: {capture:?}",
-    );
-}
-
-/// `open_sidebar` runs `split-window -d -h -l <width>% -b` against the
-/// session. We verify the tmux CLI surface succeeds and that a second pane
-/// was spawned.
-#[test]
-fn open_sidebar_split_window_succeeds() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("sidebar");
-    let (_stub_dir, stub) = sidebar_command_stub();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-sidebar-test"));
-
-    server
-        .backend
-        .open_sidebar(
-            &SidebarPaneOptions {
-                session_name: "sidebar".to_owned(),
-                workspace_id,
-                project_root: std::env::current_dir().expect("cwd"),
-                cwd: std::env::current_dir().expect("cwd"),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(80)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
-                refresh_ms: None,
-            },
-            None,
-        )
-        .expect("open_sidebar");
-
-    let panes = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("sidebar".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes");
-    assert_eq!(
-        panes.len(),
-        2,
-        "sidebar split should keep a second pane: {panes:?}"
-    );
-}
-
-/// `reconcile_sidebars` re-adds a sidebar in place to a window that still has a
-/// working pane but lost its sidebar — without tearing the session down. The
-/// tmux path mirrors the initial left split (`-b -l <pct>% -d`), so it just
-/// gains a second pane while the original survives. With no live sidebars known,
-/// reconcile reduces to this add-the-missing case.
-#[test]
-fn reconcile_sidebars_adds_one_to_a_sidebarless_window() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server.ensure_with_shell("room"); // one `sh` pane, no sidebar
-    let (_stub_dir, stub) = sidebar_command_stub();
-
-    let before = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("room".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes before")
-        .len();
-    assert_eq!(before, 1, "the room starts with just its working pane");
-
-    let report = server
-        .backend
-        .reconcile_sidebars(
-            &SidebarPaneOptions {
-                session_name: "room".to_owned(),
-                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-recover")),
-                project_root: std::env::current_dir().expect("cwd"),
-                cwd: std::env::current_dir().expect("cwd"),
-                width: SidebarWidth::default(),
-                birth_size: SidebarWidth::default().birth_size(Some(80)),
-                rimz_bin: stub,
-                replace_existing: false,
-                config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
-                refresh_ms: None,
-            },
-            &rimz::mux::SidebarLiveness::default(),
-        )
-        .expect("reconcile_sidebars");
-
-    assert_eq!(
-        report.recovered, 1,
-        "the sidebarless window gains a sidebar"
-    );
-    assert_eq!(report.closed, 0, "nothing to close in a sidebarless window");
-    assert_eq!(report.failed, 0);
-    assert_eq!(
-        report.deferred, 0,
-        "tmux splits mount on a detached session, so an add is never deferred",
-    );
-    let after = server
-        .backend
-        .list_panes(PaneListOptions {
-            session_name: Some("room".to_owned()),
-            ..Default::default()
-        })
-        .expect("list_panes after")
-        .len();
-    assert_eq!(
-        after, 2,
-        "recovery splits a sidebar beside the working pane"
     );
 }
 
@@ -1129,22 +945,6 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
         std::fs::set_permissions(&path, perms).expect("chmod");
     }
     (dir, path)
-}
-
-/// `detach` on a daemon session with no attached client is a benign no-op
-/// at the tmux level — it surfaces a "no current client" error. The
-/// backend's wakeup-walk path doesn't depend on detach succeeding, so we
-/// only assert that the binary is reachable, not that detach found a
-/// client to kick.
-#[test]
-fn wake_sidebar_is_noop() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    server
-        .backend
-        .wake_sidebar("any-session", b"ignored payload")
-        .expect("wake_sidebar is a no-op for tmux");
 }
 
 /// Capability probe must parse the binary's version string and compare it

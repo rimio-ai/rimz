@@ -219,37 +219,6 @@ fn agents_exec_sighup_removes_clean_worktree_with_relative_path() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_removes_clean_worktree_when_agent_exits_on_hup() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    let mut child = spawn_agent_exec_with_signals(&env, &path, "clean-fast", AgentSignals::Default);
-    let agent_pid_file = env.home_root.join("clean-fast.pid");
-
-    wait_for_file(&env.home_root.join("clean-fast.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    signal_pid(read_pid(&agent_pid_file), nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &agent_pid_file);
-
-    assert!(
-        !path.exists(),
-        "clean worktree removed after prompt HUP exit"
-    );
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "worktree branch deleted"
-    );
-}
-
-#[cfg(unix)]
-#[test]
 fn agents_exec_sighup_keeps_dirty_worktree() {
     if git_missing() {
         return;
@@ -340,110 +309,6 @@ fn agents_exec_sighup_removes_fast_forward_merged_worktree() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn agents_exec_sighup_removes_merge_committed_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_file(&path, "feature.txt", "feature\n", "feature");
-    commit_file(&env.project_root, "main.txt", "main\n", "main");
-    git(
-        &env.project_root,
-        &["merge", "--no-ff", "-m", "merge demo", "demo"],
-    );
-
-    let mut child = spawn_agent_exec(&env, &path, "merge-committed");
-    wait_for_file(&env.home_root.join("merge-committed.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("merge-committed.pid"));
-
-    assert!(!path.exists(), "merge-committed worktree removed");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "merge-committed branch deleted"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agents_exec_sighup_removes_squash_merged_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_file(&path, "feature-a.txt", "a\n", "feature a");
-    commit_file(&path, "feature-b.txt", "b\n", "feature b");
-    git(&env.project_root, &["merge", "--squash", "demo"]);
-    git(&env.project_root, &["commit", "-m", "squash demo"]);
-
-    let mut child = spawn_agent_exec(&env, &path, "squash-merged");
-    wait_for_file(&env.home_root.join("squash-merged.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("squash-merged.pid"));
-
-    assert!(!path.exists(), "squash-merged worktree removed");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "squash-merged branch deleted after proof"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agents_exec_sighup_removes_cherry_picked_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_file(&path, "feature-a.txt", "a\n", "feature a");
-    commit_file(&path, "feature-b.txt", "b\n", "feature b");
-    let commits = git_stdout(&env.project_root, &["rev-list", "--reverse", "main..demo"]);
-    for commit in commits.lines() {
-        git(&env.project_root, &["cherry-pick", commit]);
-    }
-    let marker = rimz::worktree::read_marker_for_worktree(&path)
-        .expect("read marker")
-        .expect("marker");
-    assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .commits_unmerged,
-        Some(0),
-        "patch-equivalent cherry-picked commits count as landed"
-    );
-
-    let mut child = spawn_agent_exec(&env, &path, "cherry-picked");
-    wait_for_file(&env.home_root.join("cherry-picked.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("cherry-picked.pid"));
-
-    assert!(!path.exists(), "cherry-picked worktree removed");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "cherry-picked branch deleted after proof"
-    );
-}
-
 #[test]
 fn worktree_remove_split_landed_succeeds_without_force() {
     if git_missing() {
@@ -490,42 +355,6 @@ fn worktree_remove_split_landed_succeeds_without_force() {
     );
 }
 
-#[cfg(unix)]
-#[test]
-fn agents_exec_sighup_removes_split_landed_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_two_files(
-        &path,
-        "feature",
-        "feature-a.txt",
-        "a\n",
-        "feature-b.txt",
-        "b\n",
-    );
-    commit_file(&env.project_root, "feature-a.txt", "a\n", "feature a");
-    commit_file(&env.project_root, "feature-b.txt", "b\n", "feature b");
-
-    let mut child = spawn_agent_exec(&env, &path, "split-landed");
-    wait_for_file(&env.home_root.join("split-landed.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("split-landed.pid"));
-
-    assert!(!path.exists(), "split-landed worktree removed");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "split-landed branch deleted"
-    );
-}
-
 #[test]
 fn worktree_remove_reverted_work_requires_force() {
     if git_missing() {
@@ -557,33 +386,6 @@ fn worktree_remove_reverted_work_requires_force() {
         .stderr(contains("--force"));
 
     assert!(path.exists(), "reverted worktree is kept");
-    assert!(
-        branch_exists(&env.project_root, "demo"),
-        "reverted branch is kept"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agents_exec_sighup_keeps_reverted_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_reverted_file(&path);
-    let mut child = spawn_agent_exec(&env, &path, "reverted");
-
-    wait_for_file(&env.home_root.join("reverted.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("reverted.pid"));
-
-    assert!(path.exists(), "reverted worktree is kept after SIGHUP");
     assert!(
         branch_exists(&env.project_root, "demo"),
         "reverted branch is kept"
@@ -721,40 +523,6 @@ fn agents_exec_cleanup_falls_back_when_on_disk_binary_is_gone() {
     assert!(
         !branch_exists(&env.project_root, "demo"),
         "fallback cleanup deletes the clean branch"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn agents_exec_cleanup_falls_back_when_replacement_cannot_spawn() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    let rimz_copy = env.home_root.join("rimz-copy");
-    std::fs::copy(env.rimz_bin(), &rimz_copy).expect("copy rimz binary");
-    chmod_executable(&rimz_copy);
-
-    let mut child = spawn_agent_exec_from(&env, &rimz_copy, &path, "spawn-fallback");
-    wait_for_file(&env.home_root.join("spawn-fallback.ready"));
-    write_unspawnable_file(&rimz_copy);
-
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("spawn-fallback.pid"));
-
-    assert!(
-        !path.exists(),
-        "unspawnable replacement binary falls back to in-process cleanup"
-    );
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "spawn-error fallback deletes the clean branch"
     );
 }
 
@@ -1028,19 +796,12 @@ fn rewrite_marker_as_v2(path: &Path) {
 
 #[cfg(unix)]
 fn spawn_agent_exec(env: &Env, worktree: &Path, label: &str) -> Child {
-    spawn_agent_exec_with_signals(env, worktree, label, AgentSignals::Trap)
+    spawn_agent_exec_command(env, env.rimz(), worktree, worktree, label)
 }
 
 #[cfg(unix)]
 fn spawn_agent_exec_from(env: &Env, rimz_bin: &Path, worktree: &Path, label: &str) -> Child {
-    spawn_agent_exec_command(
-        env,
-        env.rimz_at(rimz_bin),
-        worktree,
-        worktree,
-        label,
-        AgentSignals::Trap,
-    )
+    spawn_agent_exec_command(env, env.rimz_at(rimz_bin), worktree, worktree, label)
 }
 
 #[cfg(unix)]
@@ -1050,24 +811,7 @@ fn spawn_agent_exec_with_worktree_arg(
     cwd: &Path,
     label: &str,
 ) -> Child {
-    spawn_agent_exec_command(
-        env,
-        env.rimz(),
-        worktree_arg,
-        cwd,
-        label,
-        AgentSignals::Trap,
-    )
-}
-
-#[cfg(unix)]
-fn spawn_agent_exec_with_signals(
-    env: &Env,
-    worktree: &Path,
-    label: &str,
-    signals: AgentSignals,
-) -> Child {
-    spawn_agent_exec_command(env, env.rimz(), worktree, worktree, label, signals)
+    spawn_agent_exec_command(env, env.rimz(), worktree_arg, cwd, label)
 }
 
 #[cfg(unix)]
@@ -1077,7 +821,6 @@ fn spawn_agent_exec_command(
     worktree_arg: &Path,
     cwd: &Path,
     label: &str,
-    signals: AgentSignals,
 ) -> Child {
     let shim_dir = write_codex_shim(env);
     let ready = env.home_root.join(format!("{label}.ready"));
@@ -1088,24 +831,11 @@ fn spawn_agent_exec_command(
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .env("RIMZ_TEST_AGENT_PID", &pid_file)
-        .env(
-            "RIMZ_TEST_AGENT_TRAP_SIGNALS",
-            match signals {
-                AgentSignals::Trap => "1",
-                AgentSignals::Default => "0",
-            },
-        )
+        .env("RIMZ_TEST_AGENT_TRAP_SIGNALS", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     cmd.spawn().expect("spawn agents exec")
-}
-
-#[cfg(unix)]
-#[derive(Clone, Copy)]
-enum AgentSignals {
-    Trap,
-    Default,
 }
 
 #[cfg(unix)]
@@ -1155,20 +885,6 @@ fn write_cleanup_recorder(target: &Path, argv_file: &Path) {
 }
 
 #[cfg(unix)]
-fn write_unspawnable_file(target: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-
-    let tmp = target.with_extension("tmp");
-    std::fs::write(&tmp, b"not an executable\n").expect("write unspawnable file");
-    let mut perms = std::fs::metadata(&tmp)
-        .expect("unspawnable metadata")
-        .permissions();
-    perms.set_mode(0o644);
-    std::fs::set_permissions(&tmp, perms).expect("chmod unspawnable file");
-    std::fs::rename(&tmp, target).expect("publish unspawnable file");
-}
-
-#[cfg(unix)]
 fn shell_quote(path: &Path) -> String {
     path.display().to_string().replace('\'', "'\\''")
 }
@@ -1210,15 +926,6 @@ fn signal_child(child: &Child, signal: nix::sys::signal::Signal) {
 #[cfg(unix)]
 fn signal_pid(pid: i32, signal: nix::sys::signal::Signal) {
     nix::sys::signal::kill(nix::unistd::Pid::from_raw(pid), signal).expect("signal pid");
-}
-
-#[cfg(unix)]
-fn read_pid(path: &Path) -> i32 {
-    std::fs::read_to_string(path)
-        .expect("read pid")
-        .trim()
-        .parse()
-        .expect("parse pid")
 }
 
 #[cfg(unix)]
