@@ -82,7 +82,7 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 
 | Event | Fires | Event-specific input | Wired |
 | --- | --- | --- | :---: |
-| `SessionStart` | session starts / resumes / clears / compacts | `source` (`startup`\|`resume`\|`clear`\|`compact`; `compact` is a legacy echo no-op in Rimz) | ✓ |
+| `SessionStart` | session starts / resumes / clears / compacts | `source` (`startup`\|`resume`\|`clear`\|`compact`; `compact` is triggerless close evidence in Rimz) | ✓ |
 | `UserPromptSubmit` | user submits a prompt | `turn_id`, `prompt` | ✓ |
 | `SubagentStart` | a subagent launches | `turn_id`, `agent_id`, `agent_type`, `permission_mode` | ✓ |
 | `PreToolUse` | before Bash / `apply_patch` / MCP tools | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` | ✓ |
@@ -93,7 +93,7 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 | `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | ✓ |
 | `PostCompact` | after compaction | `turn_id`, `trigger` | ✓ |
 
-Codex has **no `SessionEnd` or `Notification` hook**. Compaction now uses the dedicated `PreCompact` / `PostCompact` pair; a `SessionStart` with `source = "compact"` can still arrive as a legacy echo and Rimz ignores it.
+Codex has **no `SessionEnd` or `Notification` hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
 
 **Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. Rimz's handling is in the [hooks.md Codex appendix](../../internals/hooks.md#appendix--codex); re-verify against the hooks reference URL above on each refresh.
 

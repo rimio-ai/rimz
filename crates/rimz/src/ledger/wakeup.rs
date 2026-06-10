@@ -105,7 +105,7 @@ pub fn wake_sidebars(rt: &RuntimePaths) -> Result<()> {
         None,
         SidebarEvent::LedgerDelta {
             event_method: None,
-            agent_event_name: None,
+            agent_signal: None,
         },
     )?;
     Ok(())
@@ -117,17 +117,17 @@ pub fn wake_sidebars_for_event(rt: &RuntimePaths, event: &EventEnvelope) -> Resu
         None,
         SidebarEvent::LedgerDelta {
             event_method: Some(event.method.clone()),
-            agent_event_name: agent_event_name(event),
+            agent_signal: agent_signal(event),
         },
     )?;
     Ok(())
 }
 
-fn agent_event_name(event: &EventEnvelope) -> Option<String> {
+fn agent_signal(event: &EventEnvelope) -> Option<String> {
     match event.kind() {
         EventKind::AgentLifecycle(payload) => {
             let payload = *payload;
-            payload.event_name
+            Some(payload.observation.signal.tag().to_owned())
         }
         EventKind::SessionRebirth | EventKind::Other { .. } => None,
     }

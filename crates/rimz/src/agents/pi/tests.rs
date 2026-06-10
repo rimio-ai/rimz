@@ -261,6 +261,39 @@ fn session_boundaries_end_and_move_on() {
 }
 
 #[test]
+fn expiry_predicates_match_observed_root_signals() {
+    for (event, payload) in [
+        ("session_start", json!({ "session_id": "sess-1" })),
+        ("before_agent_start", json!({ "session_id": "sess-1" })),
+        ("agent_end", json!({ "session_id": "sess-1" })),
+        (
+            "tool_execution_end",
+            json!({ "session_id": "sess-1", "tool_name": "bash" }),
+        ),
+        ("session_before_compact", json!({ "session_id": "sess-1" })),
+        ("session_compact", json!({ "session_id": "sess-1" })),
+        ("session_shutdown", json!({ "session_id": "sess-1" })),
+    ] {
+        let obs = PiAdapter
+            .observe_lifecycle(event, &payload)
+            .unwrap_or_else(|| panic!("{event} should be observed"));
+        assert_eq!(
+            PiAdapter.ends_session(event),
+            matches!(obs.signal, LifecycleSignal::Ended),
+            "{event} session-end predicate"
+        );
+        assert_eq!(
+            PiAdapter.moves_on(event),
+            matches!(
+                obs.signal,
+                LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. }
+            ),
+            "{event} moved-on predicate",
+        );
+    }
+}
+
+#[test]
 fn progress_events_touch_the_activity_heartbeat() {
     let descriptor = PiAdapter.descriptor();
     for event in [

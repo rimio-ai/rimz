@@ -140,10 +140,7 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         }
-        let establishes_identity = matches!(
-            signal,
-            lifecycle::LifecycleSignal::Registered | lifecycle::LifecycleSignal::SubagentStarted
-        );
+        let establishes_identity = signal.establishes_identity();
         if prior.is_none() && !establishes_identity {
             debug!(
                 target: "rimz::agent::binding",
@@ -256,18 +253,19 @@ fn lifecycle_projection(
     signal: lifecycle::LifecycleSignal,
 ) -> LifecycleProjection {
     let prev_state = prior.map(AgentState::lifecycle);
-    let Transition { next, .. } = lifecycle::step(prev_state.as_ref(), &signal);
+    let Transition {
+        next,
+        compaction_closed,
+        opened_turn,
+        ..
+    } = lifecycle::step(prev_state.as_ref(), &signal);
     let compacting_since = if next.compacting {
-        prior.and_then(|p| p.compacting_since).or(Some(timestamp))
+        Some(timestamp)
     } else {
         None
     };
-    let compaction_count = prior.map_or(0, |p| p.compaction_count)
-        + u32::from(matches!(
-            signal,
-            lifecycle::LifecycleSignal::CompactionEnded { .. }
-        ));
-    let turn_started_at = if matches!(signal, lifecycle::LifecycleSignal::TurnStarted) {
+    let compaction_count = prior.map_or(0, |p| p.compaction_count) + u32::from(compaction_closed);
+    let turn_started_at = if opened_turn {
         Some(timestamp)
     } else {
         prior.and_then(|p| p.turn_started_at)

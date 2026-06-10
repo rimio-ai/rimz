@@ -123,6 +123,17 @@ fn lifecycle_event_count(env: &Env) -> usize {
         .count()
 }
 
+fn run_claude_lifecycle(env: &Env, payload: Value) {
+    let payload = serde_json::to_string(&payload).expect("payload");
+    let output = env.run_hook("claude", &payload);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
+}
+
 fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
     env.enrol("opus-policy", 10, "30s");
     env.write_heartbeat("opus-policy", Timestamp::now());
@@ -1372,6 +1383,129 @@ fn claude_turn_opens_reasoning_until_the_first_file_edit() {
     let parsed = env.snapshot_json();
     assert_eq!(parsed["agents"][0]["status"], "running");
     assert_eq!(parsed["agents"][0]["phase"], "acting");
+}
+
+#[test]
+fn claude_session_start_compact_closes_and_counts_the_bracket() {
+    let env = Env::new();
+
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-compact",
+            "prompt": "continue the turn",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-claude-compact",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-claude-compact",
+            "source": "compact",
+        }),
+    );
+
+    let parsed = env.snapshot_json();
+    let agent = &parsed["agents"][0];
+    assert_eq!(agent["status"], "running");
+    assert_eq!(agent["phase"], "reasoning");
+    assert_eq!(agent["compaction_count"], 1);
+    assert!(
+        agent.get("compacting_since").is_none_or(Value::is_null),
+        "compacting head should be cleared: {agent:?}"
+    );
+}
+
+#[test]
+fn claude_double_compaction_close_counts_once() {
+    let env = Env::new();
+
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-double",
+            "prompt": "continue the turn",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-claude-double",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PostCompact",
+            "session_id": "sess-claude-double",
+            "trigger": "auto",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "SessionStart",
+            "session_id": "sess-claude-double",
+            "source": "compact",
+        }),
+    );
+
+    let parsed = env.snapshot_json();
+    let agent = &parsed["agents"][0];
+    assert_eq!(agent["status"], "running");
+    assert_eq!(agent["compaction_count"], 1);
+}
+
+#[test]
+fn claude_bracket_closing_pre_tool_use_is_persisted() {
+    let env = Env::new();
+
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "sess-claude-pretool-close",
+            "prompt": "continue the turn",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreCompact",
+            "session_id": "sess-claude-pretool-close",
+        }),
+    );
+    run_claude_lifecycle(
+        &env,
+        json!({
+            "hook_event_name": "PreToolUse",
+            "session_id": "sess-claude-pretool-close",
+            "tool_name": "Read",
+        }),
+    );
+
+    assert_eq!(
+        lifecycle_event_count(&env),
+        3,
+        "the non-mutating PreToolUse must be durable when it closes a compaction bracket"
+    );
+    let parsed = env.snapshot_json();
+    let agent = &parsed["agents"][0];
+    assert_eq!(agent["compaction_count"], 1);
+    assert!(
+        agent.get("compacting_since").is_none_or(Value::is_null),
+        "compacting head should be cleared: {agent:?}"
+    );
 }
 
 #[test]

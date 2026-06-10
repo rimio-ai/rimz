@@ -61,7 +61,7 @@ use super::context::AgentContext;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
-use super::hook_types::{CompactTrigger, SessionSource};
+use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
@@ -168,6 +168,18 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     ("PostCompact", Some(".*")),
 ];
 
+const LIFECYCLE_EVENTS: &[&str] = &[
+    "SessionStart",
+    "UserPromptSubmit",
+    "SubagentStart",
+    "SubagentStop",
+    "Stop",
+    "PreToolUse",
+    "PostToolUse",
+    "PreCompact",
+    "PostCompact",
+];
+
 /// Legacy config block written by older Rimz builds. Codex ignores this block;
 /// uninstall still removes it so users can clean up stale config.
 const RIMZ_BLOCK: &str = "rimz";
@@ -232,21 +244,7 @@ impl AgentAdapter for CodexAdapter {
 
     fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
         let feed_kind = (event_name == "PermissionRequest").then_some(FeedKind::Permission);
-        classify_agent_hook(
-            event_name,
-            feed_kind,
-            &[
-                "SessionStart",
-                "SubagentStart",
-                "SubagentStop",
-                "Stop",
-                "UserPromptSubmit",
-                "PreToolUse",
-                "PostToolUse",
-                "PreCompact",
-                "PostCompact",
-            ],
-        )
+        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
@@ -472,7 +470,10 @@ fn map_codex_lifecycle_signal(
     match event_name {
         "SessionStart" => {
             let p = parts.session_start.as_ref()?;
-            (p.source != SessionSource::Compact).then_some(LifecycleSignal::Registered)
+            Some(match p.source {
+                SessionSource::Compact => LifecycleSignal::CompactionEnded { auto: None },
+                _ => LifecycleSignal::Registered,
+            })
         }
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
@@ -491,12 +492,10 @@ fn map_codex_lifecycle_signal(
         }),
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
-            auto: Some(
-                parts
-                    .post_compact
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
-            ),
+            auto: parts
+                .post_compact
+                .as_ref()
+                .and_then(|p| p.trigger.auto_flag()),
         }),
         _ => None,
     }

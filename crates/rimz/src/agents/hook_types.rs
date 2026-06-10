@@ -23,11 +23,21 @@ pub enum SessionSource {
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum CompactTrigger {
-    #[default]
     Manual,
     Auto,
+    #[default]
     #[serde(other)]
     Unknown,
+}
+
+impl CompactTrigger {
+    pub const fn auto_flag(&self) -> Option<bool> {
+        match self {
+            Self::Manual => Some(false),
+            Self::Auto => Some(true),
+            Self::Unknown => None,
+        }
+    }
 }
 
 /// Universal fields present on every hook event from both adapters. Embedded
@@ -77,6 +87,7 @@ mod tests {
         assert_eq!(auto, CompactTrigger::Auto);
         let unknown: CompactTrigger = serde_json::from_str(r#""future""#).unwrap();
         assert_eq!(unknown, CompactTrigger::Unknown);
+        assert_eq!(CompactTrigger::default(), CompactTrigger::Unknown);
     }
 
     #[test]

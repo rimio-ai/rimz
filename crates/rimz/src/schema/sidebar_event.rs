@@ -6,9 +6,13 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::LifecycleSignal;
 use crate::ids::{PaneId, WorkspaceId};
 
-pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v1";
+pub const SIDEBAR_EVENT_VERSION: &str = "rimz.sidebar-event.v2";
+const AGENT_LIFECYCLE_METHOD: &str = "agent.lifecycle";
+const AGENT_REGISTERED_SIGNAL: &str = LifecycleSignal::Registered.tag();
+const AGENT_ENDED_SIGNAL: &str = LifecycleSignal::Ended.tag();
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SidebarEventEnvelope {
@@ -86,7 +90,7 @@ pub enum SidebarEvent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         event_method: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        agent_event_name: Option<String>,
+        agent_signal: Option<String>,
     },
     PaneFramePublished,
     Notify {
@@ -123,8 +127,10 @@ impl SidebarEvent {
             self,
             Self::LedgerDelta {
                 event_method: Some(method),
-                agent_event_name: Some(name)
-            } if method == "agent.lifecycle" && matches!(name.as_str(), "SessionStart" | "SessionEnd")
+                agent_signal: Some(signal)
+            } if method == AGENT_LIFECYCLE_METHOD
+                && (signal.as_str() == AGENT_REGISTERED_SIGNAL
+                    || signal.as_str() == AGENT_ENDED_SIGNAL)
         )
     }
 }
@@ -166,8 +172,8 @@ mod tests {
             },
             SidebarEvent::PanesChanged,
             SidebarEvent::LedgerDelta {
-                event_method: Some("agent.lifecycle".to_owned()),
-                agent_event_name: Some("SessionStart".to_owned()),
+                event_method: Some(AGENT_LIFECYCLE_METHOD.to_owned()),
+                agent_signal: Some(LifecycleSignal::Registered.tag().to_owned()),
             },
             SidebarEvent::PaneFramePublished,
             SidebarEvent::Notify {

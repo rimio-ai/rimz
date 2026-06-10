@@ -750,11 +750,12 @@ pub fn is_turn_dead(
             .is_some_and(|error| error.at > last_activity)
 }
 
-/// How long after its last compaction hook an agent still reads as
-/// "compacting". Compaction is bracketed — the provider's trailing compaction
-/// hook clears [`AgentState::compacting_since`] — but a crash mid-compact would
-/// otherwise leave the head pulsing forever, so the projection also expires it
-/// past this window. Generous: a large context can take a while to condense.
+/// How long after its last compaction-start signal an agent still reads as
+/// "compacting". The session's next lifecycle signal clears
+/// [`AgentState::compacting_since`], but a crash mid-compact with no next
+/// signal would otherwise leave the head pulsing forever, so the projection
+/// also expires it past this window. Generous: a large context can take a while
+/// to condense.
 pub const COMPACTING_WINDOW_SECS: i64 = 90;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -854,26 +855,26 @@ pub struct AgentState {
     /// `None` for a root agent or before the first render.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subagent_started_at: Option<Timestamp>,
-    /// When this agent's current turn began — the timestamp of its latest
-    /// `UserPromptSubmit` (carried forward; `None` until the first prompt).
-    /// Unlike `last_seen` it does *not* advance on `Stop`, so it marks the
-    /// "next prompt" boundary the sidebar uses to clear a finished subagent:
+    /// When this agent's current turn began, stamped from the lifecycle state
+    /// machine's `opened_turn` fact (carried forward; `None` until the first
+    /// turn boundary). Unlike `last_seen` it does *not* advance on `Stop`, so it
+    /// marks the "next prompt" boundary the sidebar uses to clear a finished subagent:
     /// a completed child older than its parent's `turn_started_at` belongs to a
     /// past turn and drops from the parent's expanded list.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// When this agent last began compacting its context window — the timestamp
-    /// of its most-recent compaction-start hook (`PreCompact` or Pi
-    /// `session_before_compact`). Set by the rollup, cleared by the trailing
-    /// compaction hook; the sidebar renders a transient "compacting" head while
-    /// it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
+    /// of its most-recent compaction-start signal (`PreCompact` or Pi
+    /// `session_before_compact`). Set by the rollup, cleared by the session's
+    /// next lifecycle signal; the sidebar renders a transient "compacting" head
+    /// while it is recent (see [`COMPACTING_WINDOW_SECS`]). Display-only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compacting_since: Option<Timestamp>,
     /// How many times this session has condensed its context window — the count
-    /// of completed compaction brackets. Derived by the rollup from trailing
-    /// compaction hooks, carried forward unchanged on every other event, and
-    /// rendered by the card as `↻ N` from the first completed compaction.
-    /// Display-only.
+    /// of completed compaction brackets. Derived by the rollup from the state
+    /// machine's bracket-close fact, carried forward unchanged on every other
+    /// event, and rendered by the card as `↻ N` from the first completed
+    /// compaction. Display-only.
     #[serde(default, skip_serializing_if = "is_zero_u32")]
     pub compaction_count: u32,
     pub last_seen: Timestamp,

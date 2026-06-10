@@ -191,7 +191,7 @@ mod tests {
         store.append(
             SidebarEvent::LedgerDelta {
                 event_method: None,
-                agent_event_name: None,
+                agent_signal: None,
             },
             12,
             102,

@@ -54,9 +54,9 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
 }
 
 /// Whether the agent is mid-compaction: it stamped `compacting_since` and the
-/// marker is still fresh. The trailing compaction hook clears the stamp; this
-/// window is the crash backstop so a missed terminator can't pulse the head
-/// forever.
+/// marker is still fresh. The rollup's next lifecycle signal clears the stamp;
+/// this window is the display backstop for a session that dies mid-compact and
+/// never produces another signal.
 fn is_compacting(agent: &AgentState, now: Timestamp) -> bool {
     agent.compacting_since.is_some_and(|since| {
         now.duration_since(since).as_secs() < crate::feed::COMPACTING_WINDOW_SECS

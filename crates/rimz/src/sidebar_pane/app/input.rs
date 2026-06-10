@@ -272,7 +272,7 @@ mod tests {
             42,
             crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
                 event_method: None,
-                agent_event_name: None,
+                agent_signal: None,
             },
         );
         let encoded = serde_json::to_vec(&envelope).unwrap();
@@ -284,13 +284,13 @@ mod tests {
     fn agent_session_boundary_event_requests_fresh_panes() {
         let start = crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
             event_method: Some("agent.lifecycle".to_owned()),
-            agent_event_name: Some("SessionStart".to_owned()),
+            agent_signal: Some(crate::agents::LifecycleSignal::Registered.tag().to_owned()),
         };
         assert!(start.requests_producer_verification());
 
         let status = crate::schema::sidebar_event::SidebarEvent::LedgerDelta {
             event_method: Some("agent.lifecycle".to_owned()),
-            agent_event_name: Some("UserPromptSubmit".to_owned()),
+            agent_signal: Some(crate::agents::LifecycleSignal::TurnStarted.tag().to_owned()),
         };
         assert!(!status.requests_producer_verification());
     }

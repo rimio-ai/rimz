@@ -79,6 +79,10 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
         "a later lifecycle event clears a missed terminator"
     );
     assert_eq!(after_stop[0].status, AgentStatus::Success);
+    assert_eq!(
+        after_stop[0].compaction_count, 1,
+        "the display head can expire, but the next signal still closes and counts the bracket"
+    );
 }
 
 #[test]
@@ -109,7 +113,7 @@ fn compacting_head_clears_on_post_compact() {
     let after_post = reduce_agent_states(&[prompt, compact, post]);
     assert!(
         after_post[0].compacting_since.is_none(),
-        "the explicit trailing hook clears the marker"
+        "an explicit close signal clears the marker"
     );
     let snapshot = room_with_agent_panes(Vec::new(), after_post);
     assert!(

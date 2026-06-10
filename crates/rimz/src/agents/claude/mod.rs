@@ -51,7 +51,7 @@ use super::StatusLineChange;
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
 };
-use super::hook_types::{BackgroundTask, CompactTrigger};
+use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
@@ -153,11 +153,26 @@ const INSTALLED_EVENTS: &[(&str, Option<&str>)] = &[
     // `SubagentStop` returns it to idle. Both carry the parent root `session_id`.
     ("SubagentStart", None),
     ("SubagentStop", None),
-    // Fires before the agent compacts its context window (manual `/compact` or
-    // auto): the sidebar shows a transient "compacting" head while it condenses.
-    // `PostCompact` clears it explicitly.
+    // Fires around context compaction (manual `/compact` or auto). Pre opens
+    // the transient compacting head; Post carries the trigger bit when present,
+    // while SessionStart(source=compact) is the reliable triggerless closer.
     ("PreCompact", None),
     ("PostCompact", None),
+];
+
+const LIFECYCLE_EVENTS: &[&str] = &[
+    "SessionStart",
+    "SessionEnd",
+    "UserPromptSubmit",
+    "Stop",
+    "StopFailure",
+    "Notification",
+    "PreToolUse",
+    "PostToolUse",
+    "SubagentStart",
+    "SubagentStop",
+    "PreCompact",
+    "PostCompact",
 ];
 
 /// Events that hold the agent open while the bridge waits for an answer.
@@ -271,24 +286,7 @@ impl AgentAdapter for ClaudeAdapter {
             _ => None,
         };
 
-        classify_agent_hook(
-            event_name,
-            feed_kind,
-            &[
-                "SessionStart",
-                "SessionEnd",
-                "Stop",
-                "StopFailure",
-                "Notification",
-                "UserPromptSubmit",
-                "PreToolUse",
-                "PostToolUse",
-                "SubagentStart",
-                "SubagentStop",
-                "PreCompact",
-                "PostCompact",
-            ],
-        )
+        classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
@@ -568,7 +566,13 @@ fn map_claude_lifecycle_signal(
     parts: &ClaudeLifecycleParts,
 ) -> Option<LifecycleSignal> {
     match event_name {
-        "SessionStart" => Some(LifecycleSignal::Registered),
+        "SessionStart" => {
+            let p = parts.session_start.as_ref()?;
+            Some(match p.source {
+                SessionSource::Compact => LifecycleSignal::CompactionEnded { auto: None },
+                _ => LifecycleSignal::Registered,
+            })
+        }
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStart" => Some(LifecycleSignal::SubagentStarted),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped {
@@ -592,12 +596,10 @@ fn map_claude_lifecycle_signal(
         }),
         "PreCompact" => Some(LifecycleSignal::Compacting),
         "PostCompact" => Some(LifecycleSignal::CompactionEnded {
-            auto: Some(
-                parts
-                    .post_compact
-                    .as_ref()
-                    .is_some_and(|p| matches!(p.trigger, CompactTrigger::Auto)),
-            ),
+            auto: parts
+                .post_compact
+                .as_ref()
+                .and_then(|p| p.trigger.auto_flag()),
         }),
         "SessionEnd" => Some(LifecycleSignal::Ended),
         _ => None,

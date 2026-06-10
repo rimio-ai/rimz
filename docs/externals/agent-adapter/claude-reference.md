@@ -94,6 +94,8 @@ These are the events the [`ClaudeAdapter`](../../../crates/rimz/src/agents/claud
 
 `ExitPlanMode` and `AskUserQuestion` have no dedicated install entry — they self-classify off `tool_name` on the broad `PreToolUse` hook.
 
+Compaction uses `PreCompact` as the opener. `PostCompact` closes with a known trigger when it arrives, and `SessionStart` with `source = "compact"` is triggerless close evidence so Rimz still closes and counts the bracket when `PostCompact` is missed.
+
 **Model field format.** The `model` field on `SessionStart` (and hook payloads generally) may carry an extended-context capability marker: `claude-opus-4-8[1m]` signals a 1,000,000-token context window. Later events in the same session carry the bare id. Rimz strips the marker at reduce time ([agent.md → The rollup](../../internals/agent.md#the-rollup)) and uses it to derive the window divisor ([transcript.md → Appendix Claude Code](../../internals/transcript.md#appendix--claude-code)).
 
 **Decision shapes Rimz renders.** A `PermissionRequest` answer:

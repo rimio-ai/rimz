@@ -13,16 +13,18 @@ fn session_start_observes_idle() {
 }
 
 #[test]
-fn session_start_compact_source_is_ignored() {
-    // The dedicated PreCompact/PostCompact pair owns the head. Codex can still
-    // re-fire SessionStart(compact) alongside it; Rimz treats that legacy
-    // echo as a no-op so it cannot re-light the head after PostCompact.
-    let compact = CodexAdapter.observe_lifecycle(
-        "SessionStart",
-        &json!({ "session_id": "sess-1", "source": "compact" }),
+fn session_start_source_maps_to_registration_or_compaction_end() {
+    let compact = CodexAdapter
+        .observe_lifecycle(
+            "SessionStart",
+            &json!({ "session_id": "sess-1", "source": "compact" }),
+        )
+        .unwrap();
+    assert_eq!(
+        compact.signal,
+        LifecycleSignal::CompactionEnded { auto: None }
     );
-    assert!(compact.is_none());
-    for source in ["startup", "resume", "clear"] {
+    for source in ["startup", "resume", "clear", "future"] {
         let obs = CodexAdapter
             .observe_lifecycle(
                 "SessionStart",
@@ -35,6 +37,20 @@ fn session_start_compact_source_is_ignored() {
             "{source} is not a compaction",
         );
     }
+}
+
+#[test]
+fn lifecycle_classification_covers_installed_nonblocking_events() {
+    let expected = INSTALLED_EVENTS
+        .iter()
+        .map(|(event, _)| *event)
+        .filter(|event| *event != "PermissionRequest")
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = LIFECYCLE_EVENTS
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(actual, expected);
 }
 
 #[test]
@@ -64,8 +80,18 @@ fn compaction_pair_maps_to_lifecycle_signals() {
         LifecycleSignal::CompactionEnded { auto: Some(true) }
     );
 
+    let manual = CodexAdapter
+        .observe_lifecycle(
+            "PostCompact",
+            &json!({ "session_id": "sess-1", "trigger": "manual" }),
+        )
+        .unwrap();
+    assert_eq!(
+        manual.signal,
+        LifecycleSignal::CompactionEnded { auto: Some(false) }
+    );
+
     for payload in [
-        json!({ "session_id": "sess-1", "trigger": "manual" }),
         json!({ "session_id": "sess-1", "trigger": "future" }),
         json!({ "session_id": "sess-1" }),
     ] {
@@ -74,7 +100,7 @@ fn compaction_pair_maps_to_lifecycle_signals() {
             .unwrap();
         assert_eq!(
             obs.signal,
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            LifecycleSignal::CompactionEnded { auto: None },
             "{payload}"
         );
     }
@@ -249,6 +275,43 @@ fn errored_stop_observes_failed() {
             parked_on_background: false,
         }
     );
+}
+
+#[test]
+fn expiry_predicates_match_observed_root_signals() {
+    for (event, payload) in [
+        ("SessionStart", json!({ "session_id": "sess-1" })),
+        (
+            "SessionStart",
+            json!({ "session_id": "sess-1", "source": "compact" }),
+        ),
+        ("UserPromptSubmit", json!({ "session_id": "sess-1" })),
+        ("Stop", json!({ "session_id": "sess-1" })),
+        (
+            "PostToolUse",
+            json!({ "session_id": "sess-1", "tool_name": "shell" }),
+        ),
+        ("PreToolUse", json!({ "session_id": "sess-1" })),
+        ("PreCompact", json!({ "session_id": "sess-1" })),
+        ("PostCompact", json!({ "session_id": "sess-1" })),
+    ] {
+        let obs = CodexAdapter
+            .observe_lifecycle(event, &payload)
+            .unwrap_or_else(|| panic!("{event} should be observed"));
+        assert_eq!(
+            CodexAdapter.ends_session(event),
+            matches!(obs.signal, LifecycleSignal::Ended),
+            "{event} session-end predicate"
+        );
+        assert_eq!(
+            CodexAdapter.moves_on(event),
+            matches!(
+                obs.signal,
+                LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. }
+            ),
+            "{event} moved-on predicate",
+        );
+    }
 }
 
 #[test]

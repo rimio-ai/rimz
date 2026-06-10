@@ -280,6 +280,39 @@ fn hooks_installed_at_detects_managed_matcher() {
 }
 
 #[test]
+fn hooks_installed_at_requires_every_installed_event() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    install_into(&path).unwrap();
+    let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    parsed["hooks"]
+        .as_object_mut()
+        .unwrap()
+        .remove("PostCompact");
+    std::fs::write(&path, serde_json::to_string(&parsed).unwrap()).unwrap();
+
+    assert!(
+        !hooks_installed_at(&path),
+        "a partial managed hook set must re-offer install"
+    );
+}
+
+#[test]
+fn hooks_installed_at_rejects_async_blocking_marker() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    install_into(&path).unwrap();
+    let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    parsed["hooks"]["PermissionRequest"][0]["_rimz_sync"] = Value::Bool(false);
+    std::fs::write(&path, serde_json::to_string(&parsed).unwrap()).unwrap();
+
+    assert!(
+        !hooks_installed_at(&path),
+        "a blocking Rimz hook marked async is not a usable install"
+    );
+}
+
+#[test]
 fn hooks_installed_at_ignores_user_only_hooks() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
@@ -302,19 +335,55 @@ fn hooks_installed_at_detects_by_command_marker_without_rimz_managed() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
-    let payload = serde_json::json!({
-        "hooks": {
-            "SessionStart": [
+    let mut hooks = serde_json::Map::new();
+    for (event, _) in INSTALLED_EVENTS {
+        hooks.insert(
+            (*event).to_owned(),
+            serde_json::json!([
                 {
-                    "hooks": [{"type": "command", "command": command}]
+                    "hooks": [{"type": "command", "command": command.clone()}]
                 }
-            ]
-        }
-    });
+            ]),
+        );
+    }
+    let payload = serde_json::json!({ "hooks": hooks });
     std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
     assert!(
         hooks_installed_at(&path),
         "a hook entry whose command contains the rimz marker reads as installed even without _rimz_managed"
+    );
+}
+
+#[test]
+fn hooks_installed_at_requires_canonical_matcher() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("settings.json");
+    let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
+    let mut hooks = serde_json::Map::new();
+    for (event, matcher) in INSTALLED_EVENTS {
+        let mut entry = serde_json::json!({
+            "_rimz_managed": true,
+            "hooks": [{"type": "command", "command": command.clone()}],
+        });
+        let on_disk_matcher = if *event == "PreToolUse" {
+            Some("ExitPlanMode")
+        } else {
+            *matcher
+        };
+        if let Some(matcher) = on_disk_matcher {
+            entry
+                .as_object_mut()
+                .unwrap()
+                .insert("matcher".to_owned(), Value::String(matcher.to_owned()));
+        }
+        hooks.insert((*event).to_owned(), serde_json::json!([entry]));
+    }
+    let payload = serde_json::json!({ "hooks": hooks });
+    std::fs::write(&path, serde_json::to_string(&payload).unwrap()).unwrap();
+
+    assert!(
+        !hooks_installed_at(&path),
+        "a legacy managed PreToolUse matcher must not satisfy the broad canonical hook"
     );
 }
 

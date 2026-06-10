@@ -112,25 +112,60 @@ pub(super) fn uninstall_from(path: &Path) -> Result<HookUninstallReport> {
     })
 }
 
-/// Whether `path` carries any Rimz-owned hook entry. Best-effort: a missing
-/// file or parse error reads as "not installed". Uses [`entry_is_rimz_owned`]
-/// (the same ownership predicate as install/uninstall) so that entries whose
-/// `_rimz_managed` marker was stripped by an external tool but whose command is
-/// still the rimz feed command are still detected as installed.
+/// Whether `path` carries a usable Rimz-owned hook entry for every canonical
+/// event. Best-effort: a missing file or parse error reads as "not installed".
+/// Uses [`entry_is_rimz_owned`] (the same ownership predicate as
+/// install/uninstall) so entries whose `_rimz_managed` marker was stripped by an
+/// external tool but whose command is still the rimz feed command are still
+/// detected. Blocking entries marked async are not usable.
 pub(super) fn hooks_installed_at(path: &Path) -> bool {
     let Ok(root) = read_existing_json(path) else {
         return false;
     };
-    root.get(HOOKS_KEY)
-        .and_then(Value::as_object)
-        .is_some_and(|hooks| {
-            hooks.values().any(|entries| {
-                entries.as_array().is_some_and(|arr| {
-                    arr.iter()
-                        .any(|entry| entry.as_object().is_some_and(entry_is_rimz_owned))
+    let Some(hooks) = root.get(HOOKS_KEY).and_then(Value::as_object) else {
+        return false;
+    };
+    INSTALLED_EVENTS.iter().all(|(event, matcher)| {
+        hooks
+            .get(*event)
+            .and_then(Value::as_array)
+            .is_some_and(|arr| {
+                arr.iter().any(|entry| {
+                    entry
+                        .as_object()
+                        .is_some_and(|obj| canonical_entry_is_installed(obj, event, *matcher))
                 })
             })
-        })
+    })
+}
+
+fn canonical_entry_is_installed(
+    obj: &Map<String, Value>,
+    event: &str,
+    matcher: Option<&str>,
+) -> bool {
+    let actual_matcher = obj.get("matcher").and_then(Value::as_str);
+    matcher_matches(matcher, actual_matcher)
+        && entry_is_rimz_owned(obj)
+        && blocking_sync_marker_is_usable(obj, event, matcher)
+}
+
+fn blocking_sync_marker_is_usable(
+    obj: &Map<String, Value>,
+    event: &str,
+    matcher: Option<&str>,
+) -> bool {
+    let blocking = BLOCKING_EVENTS
+        .iter()
+        .any(|&(e, m)| e == event && matcher_matches(m, matcher));
+    if !blocking {
+        return true;
+    }
+    match obj.get(RIMZ_SYNC_KEY).and_then(Value::as_bool) {
+        Some(true) => true,
+        Some(false) => false,
+        None => !is_rimz_managed_object(obj),
+    }
 }
 
 pub(super) fn read_existing_json(path: &Path) -> Result<Map<String, Value>> {

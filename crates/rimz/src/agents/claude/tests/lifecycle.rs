@@ -24,6 +24,24 @@ fn classify_subagent_events_are_lifecycle() {
 }
 
 #[test]
+fn lifecycle_classification_covers_installed_nonblocking_events() {
+    let blocking = BLOCKING_EVENTS
+        .iter()
+        .map(|(event, _)| *event)
+        .collect::<std::collections::BTreeSet<_>>();
+    let expected = INSTALLED_EVENTS
+        .iter()
+        .map(|(event, _)| *event)
+        .filter(|event| !blocking.contains(event))
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = LIFECYCLE_EVENTS
+        .iter()
+        .copied()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(actual, expected);
+}
+
+#[test]
 fn pre_compact_is_a_lifecycle_compaction_marker() {
     let c = ClaudeAdapter.classify_hook("PreCompact", &json!({ "session_id": "sess-1" }));
     assert_eq!(c.class, AgentHookClass::Lifecycle);
@@ -54,8 +72,18 @@ fn post_compact_maps_trigger_to_compaction_end() {
         LifecycleSignal::CompactionEnded { auto: Some(true) }
     );
 
+    let manual = ClaudeAdapter
+        .observe_lifecycle(
+            "PostCompact",
+            &json!({ "session_id": "sess-1", "trigger": "manual" }),
+        )
+        .unwrap();
+    assert_eq!(
+        manual.signal,
+        LifecycleSignal::CompactionEnded { auto: Some(false) }
+    );
+
     for payload in [
-        json!({ "session_id": "sess-1", "trigger": "manual" }),
         json!({ "session_id": "sess-1", "trigger": "future" }),
         json!({ "session_id": "sess-1" }),
     ] {
@@ -64,7 +92,7 @@ fn post_compact_maps_trigger_to_compaction_end() {
             .unwrap();
         assert_eq!(
             obs.signal,
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
+            LifecycleSignal::CompactionEnded { auto: None },
             "{payload}"
         );
     }
@@ -316,6 +344,30 @@ fn session_start_observes_idle_status() {
 }
 
 #[test]
+fn session_start_source_maps_to_registration_or_compaction_end() {
+    for (source, expected) in [
+        ("compact", LifecycleSignal::CompactionEnded { auto: None }),
+        ("startup", LifecycleSignal::Registered),
+        ("resume", LifecycleSignal::Registered),
+        ("clear", LifecycleSignal::Registered),
+        ("future", LifecycleSignal::Registered),
+    ] {
+        let obs = ClaudeAdapter
+            .observe_lifecycle(
+                "SessionStart",
+                &json!({ "session_id": "sess-1", "source": source }),
+            )
+            .unwrap();
+        assert_eq!(obs.signal, expected, "{source}");
+    }
+
+    let absent = ClaudeAdapter
+        .observe_lifecycle("SessionStart", &json!({ "session_id": "sess-1" }))
+        .unwrap();
+    assert_eq!(absent.signal, LifecycleSignal::Registered);
+}
+
+#[test]
 fn user_prompt_submit_observes_running_with_prompt_task() {
     let obs = ClaudeAdapter
         .observe_lifecycle(
@@ -474,4 +526,42 @@ fn turn_boundaries_move_the_session_on() {
     assert!(!ClaudeAdapter.moves_on("SessionStart"));
     assert!(!ClaudeAdapter.moves_on("SessionEnd"));
     assert!(!ClaudeAdapter.moves_on("PostToolUse"));
+}
+
+#[test]
+fn expiry_predicates_match_observed_root_signals() {
+    for (event, payload) in [
+        ("SessionStart", json!({ "session_id": "sess-1" })),
+        (
+            "SessionStart",
+            json!({ "session_id": "sess-1", "source": "compact" }),
+        ),
+        ("UserPromptSubmit", json!({ "session_id": "sess-1" })),
+        ("Stop", json!({ "session_id": "sess-1" })),
+        ("SessionEnd", json!({ "session_id": "sess-1" })),
+        (
+            "PostToolUse",
+            json!({ "session_id": "sess-1", "tool_name": "Edit" }),
+        ),
+        ("PreToolUse", json!({ "session_id": "sess-1" })),
+        ("PreCompact", json!({ "session_id": "sess-1" })),
+        ("PostCompact", json!({ "session_id": "sess-1" })),
+    ] {
+        let obs = ClaudeAdapter
+            .observe_lifecycle(event, &payload)
+            .unwrap_or_else(|| panic!("{event} should be observed"));
+        assert_eq!(
+            ClaudeAdapter.ends_session(event),
+            matches!(obs.signal, LifecycleSignal::Ended),
+            "{event} session-end predicate"
+        );
+        assert_eq!(
+            ClaudeAdapter.moves_on(event),
+            matches!(
+                obs.signal,
+                LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. }
+            ),
+            "{event} moved-on predicate",
+        );
+    }
 }

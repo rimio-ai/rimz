@@ -8,25 +8,20 @@ pub(super) fn handle_lifecycle_hook(
     payload: &Value,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    // A lifecycle boundary can strand the session's pending native_ui asks:
-    // the agent answers those in its own UI and never reports back, so they
-    // pile up as duplicate attention. Session end expires every surface; a
-    // live session moving on expires only native_ui asks so an in-flight bridge
-    // ask keeps resolving.
-    let expiry_scope = if agent.ends_session(event_name) {
-        Some(AskExpiry::SessionEnded)
-    } else if agent.moves_on(event_name) {
-        Some(AskExpiry::MovedOn)
-    } else {
-        None
-    };
     let agent_id = payload_agent_id(payload);
-    let expiry = match (agent_id, expiry_scope) {
+    let fallback_expiry_scope = expiry_scope_for_event_name(agent, event_name);
+    let fallback_expiry = match (agent_id, fallback_expiry_scope) {
         (Some(agent_id), Some(scope)) => Some((agent_id, scope)),
         _ => None,
     };
     let recorded = record_lifecycle_observation(
-        workspace, ledger, agent, event_name, payload, globals, expiry,
+        workspace,
+        ledger,
+        agent,
+        event_name,
+        payload,
+        globals,
+        fallback_expiry,
     );
     let model_hint = recorded
         .as_ref()
@@ -56,7 +51,7 @@ fn record_lifecycle_observation(
     event_name: &str,
     payload: &Value,
     globals: &GlobalFlags,
-    expiry: Option<(&str, AskExpiry)>,
+    fallback_expiry: Option<(&str, AskExpiry)>,
 ) -> Option<RecordedLifecycle> {
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
         attach_agent_owner(agent.descriptor().kind, &mut observation);
@@ -80,6 +75,18 @@ fn record_lifecycle_observation(
         // and log any anomaly once, here at ingestion. Replay re-derives the
         // same state silently.
         let transition = log_lifecycle_transition(ledger, agent.descriptor().kind, &observation);
+        if transition.is_some_and(|transition| {
+            transition.compaction_closed
+                && !matches!(observation.signal, LifecycleSignal::CompactionEnded { .. })
+        }) {
+            debug!(
+                target: "rimz::agent::lifecycle",
+                kind = agent.descriptor().kind,
+                agent_id = observation.agent_id.as_deref().unwrap_or(""),
+                signal = ?observation.signal,
+                "closed compaction bracket on a non-compaction signal",
+            );
+        }
         let envelope = EventEnvelope::agent_lifecycle(
             workspace.workspace_id.clone(),
             &workspace.session_name,
@@ -90,14 +97,22 @@ fn record_lifecycle_observation(
         // `ToolUsed { false, false }` is reserved for non-blocking PreToolUse
         // proof-of-work. PostToolUse observations are emitted only from the
         // `tool_mutates` arm, so they always carry `mutates: true`; this gate
-        // keeps PreToolUse out of the durable log unless it reconciles a
-        // resting row to running.
+        // keeps PreToolUse out of the durable log unless a fresh snapshot shows
+        // it reconciling a resting row or closing a compaction bracket. If the
+        // transition read fails, the proof-of-work signal drops and the bracket
+        // closes on the next durable lifecycle signal.
         let append_lifecycle = !proof_of_work_pre_tool(&observation.signal)
             || transition.is_some_and(|transition| {
-                matches!(transition.kind, TransitionKind::Reconciled { .. })
+                transition.compaction_closed
+                    || matches!(transition.kind, TransitionKind::Reconciled { .. })
             });
-        let append_expiry =
-            expiry.map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
+        let append_expiry = observation
+            .agent_id
+            .as_deref()
+            .and_then(|agent_id| {
+                expiry_scope_for_signal(&observation.signal).map(|scope| (agent_id, scope))
+            })
+            .map(|(agent_id, scope)| (agent.descriptor().kind, agent_id, scope));
         if append_lifecycle
             && let Err(err) = ledger.append_event_and_expire(&envelope, append_expiry)
         {
@@ -114,7 +129,7 @@ fn record_lifecycle_observation(
         });
     }
 
-    if let Some((agent_id, scope)) = expiry {
+    if let Some((agent_id, scope)) = fallback_expiry {
         // A boundary event the adapter doesn't observe still expires the
         // session's superseded asks through the standalone path.
         let result = match scope {
@@ -139,6 +154,33 @@ fn record_lifecycle_observation(
         }
     }
     None
+}
+
+fn expiry_scope_for_event_name(agent: &dyn AgentAdapter, event_name: &str) -> Option<AskExpiry> {
+    // Fallback for boundary events the adapter intentionally does not observe:
+    // the adapter's native predicates still carry the answer for these paths.
+    if agent.ends_session(event_name) {
+        Some(AskExpiry::SessionEnded)
+    } else if agent.moves_on(event_name) {
+        Some(AskExpiry::MovedOn)
+    } else {
+        None
+    }
+}
+
+fn expiry_scope_for_signal(signal: &LifecycleSignal) -> Option<AskExpiry> {
+    // A lifecycle boundary can strand the session's pending native_ui asks:
+    // the agent answers those in its own UI and never reports back, so they
+    // pile up as duplicate attention. Session end expires every surface; a
+    // live session moving on expires only native_ui asks so an in-flight bridge
+    // ask keeps resolving.
+    match signal {
+        LifecycleSignal::Ended => Some(AskExpiry::SessionEnded),
+        LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. } => {
+            Some(AskExpiry::MovedOn)
+        }
+        _ => None,
+    }
 }
 
 fn record_run_lifecycle(
@@ -377,12 +419,7 @@ pub(super) fn log_lifecycle_transition(
         .into_iter()
         .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
         .map(|agent| agent.lifecycle());
-    if prev.is_none()
-        && !matches!(
-            observation.signal,
-            LifecycleSignal::Registered | LifecycleSignal::SubagentStarted
-        )
-    {
+    if prev.is_none() && !observation.signal.establishes_identity() {
         warn!(
             target: "rimz::agent::binding",
             kind,
