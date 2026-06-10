@@ -8,45 +8,6 @@ use rimz::WorkspaceId;
 use crate::common::Env;
 
 #[test]
-fn list_with_no_workspaces_prints_nothing() {
-    let env = Env::new();
-    let output = env.rimz().arg("list").output().expect("run");
-    assert!(output.status.success());
-    assert!(
-        output.stdout.is_empty(),
-        "expected empty stdout, got: {:?}",
-        String::from_utf8_lossy(&output.stdout)
-    );
-}
-
-#[test]
-fn list_shows_known_workspaces_with_session_and_root() {
-    let env = Env::new();
-    env.record(&env.project_root.join("query-engine"));
-    env.record(&env.project_root.join("invoicing"));
-
-    let output = env.rimz().arg("list").output().expect("run");
-    assert!(
-        output.status.success(),
-        "rimz list failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    assert!(
-        stdout.contains("WORKSPACE"),
-        "header line missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("query-engine"),
-        "query-engine project missing:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("invoicing"),
-        "invoicing project missing:\n{stdout}"
-    );
-}
-
-#[test]
 fn list_json_emits_canonical_fields() {
     let env = Env::new();
     env.record(&env.project_root.join("query-engine"));

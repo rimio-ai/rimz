@@ -1,0 +1,495 @@
+use super::*;
+use std::num::NonZeroU16;
+use tempfile::tempdir;
+
+fn write(dir: &tempfile::TempDir, text: &str) -> PathBuf {
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, text).expect("write config");
+    path
+}
+
+#[test]
+fn missing_or_empty_file_is_default_off() {
+    let dir = tempdir().expect("tempdir");
+    for path in [dir.path().join("absent.toml"), write(&dir, "")] {
+        let config = MachineConfig::load_from(&path).expect("load");
+        assert_eq!(config, MachineConfig::default());
+        assert!(!config.remote_control.claude);
+        assert!(!config.remote_control.codex);
+    }
+}
+
+#[test]
+fn worktree_config_defaults_and_parses() {
+    let dir = tempdir().expect("tempdir");
+    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(defaults.worktree.dir, "../{repo}-worktrees");
+    assert_eq!(defaults.worktree.base, WorktreeBase::Head);
+
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[worktree]\n\
+             dir = \"../wt-{repo}\"\n\
+             base = \"fresh\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.worktree.dir, "../wt-{repo}");
+    assert_eq!(config.worktree.base, WorktreeBase::Fresh);
+
+    let explicit =
+        MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"main\"\n")).expect("load");
+    assert_eq!(
+        explicit.worktree.base,
+        WorktreeBase::Explicit("main".to_owned())
+    );
+    assert!(MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"\"\n")).is_err());
+}
+
+#[test]
+fn agents_layouts_parse_shape_and_detailed_entries() {
+    const CODEX_FLAGS: &str = "--model gpt-5-codex -c model_reasoning_effort=high";
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[agents.layouts]\n\
+             stacked = \"claude,codex+term\"\n\
+             [agents.layouts.peer]\n\
+             shape = \"claude,codex\"\n\
+             [agents.layouts.peer.flags]\n\
+             claude = \"--permission-mode plan\"\n\
+             codex = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n",
+    ))
+    .expect("load");
+    let layouts = &config.agents.layouts.0;
+    assert_eq!(
+        layouts.get("stacked").map(LayoutEntry::shape),
+        Some("claude,codex+term")
+    );
+    let peer = layouts.get("peer").expect("peer layout");
+    assert_eq!(peer.shape(), "claude,codex");
+    let flags = peer.flags().expect("peer flags");
+    assert_eq!(
+        flags.get("claude").map(String::as_str),
+        Some("--permission-mode plan")
+    );
+    assert_eq!(flags.get("codex").map(String::as_str), Some(CODEX_FLAGS));
+    let err = MachineConfig::load_from(&write(
+        &dir,
+        "[agents.layouts.peer]\n[agents.layouts.peer.flags]\ncodex = \"--model x\"\n",
+    ))
+    .unwrap_err();
+    assert!(err.to_string().contains("missing field `shape`"));
+}
+
+#[test]
+fn per_agent_toggles_parse_independently() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = true\n")).expect("load");
+    assert!(config.remote_control.claude);
+    assert!(!config.remote_control.codex, "codex stays off when unset");
+
+    let both = MachineConfig::load_from(&write(
+        &dir,
+        "[remote_control]\nclaude = true\ncodex = true\n",
+    ))
+    .expect("load");
+    assert!(both.remote_control.claude);
+    assert!(both.remote_control.codex);
+}
+
+#[test]
+fn unknown_keys_are_ignored() {
+    let dir = tempdir().expect("tempdir");
+    let text = "sound_profile = \"chime\"\n\n[remote_control]\ncodex = true\ncapacity = 16\n";
+    let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
+    assert!(config.remote_control.codex);
+    assert!(!config.remote_control.claude);
+}
+
+#[test]
+fn notification_defaults_cover_attention_transitions() {
+    let config = MachineConfig::default();
+    assert!(config.notifications.enabled);
+    assert_eq!(
+        config.notifications.triggers,
+        NotificationTrigger::all().to_vec()
+    );
+    assert_eq!(config.notifications.desktop, DesktopNotificationMode::Auto);
+    assert_eq!(config.notifications.sound, NotificationSoundMode::Bell);
+    assert!(config.notifications.suppress_focused);
+    assert_eq!(config.notifications.debounce_ms, 5_000);
+    assert_eq!(config.notifications.coalesce_ms, 1_000);
+    assert!(config.notifications.command().is_none());
+}
+
+#[test]
+fn notifications_parse_per_machine_preferences() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[notifications]\n\
+             enabled = false\n\
+             triggers = [\"waiting\", \"failed\"]\n\
+             desktop = \"osc\"\n\
+             sound = \"off\"\n\
+             suppress_focused = false\n\
+             debounce_ms = 2500\n\
+             coalesce_ms = 0\n\
+             command = \"ntfy publish rimz\"\n",
+    ))
+    .expect("load");
+    assert!(!config.notifications.enabled);
+    assert_eq!(
+        config.notifications.triggers,
+        vec![NotificationTrigger::Waiting, NotificationTrigger::Failed]
+    );
+    assert_eq!(config.notifications.desktop, DesktopNotificationMode::Osc);
+    assert_eq!(config.notifications.sound, NotificationSoundMode::Off);
+    assert!(!config.notifications.suppress_focused);
+    assert_eq!(config.notifications.debounce_ms, 2_500);
+    assert_eq!(config.notifications.coalesce_ms, 0);
+    assert_eq!(config.notifications.command(), Some("ntfy publish rimz"));
+}
+
+#[test]
+fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 100\n")).expect("load");
+    assert_eq!(
+        config.sidebar.max_cols,
+        NonZeroU16::new(100).expect("nonzero")
+    );
+    assert_eq!(
+        MachineConfig::default().sidebar.max_cols.get(),
+        72,
+        "unset caps the percentage split at the 72-column default",
+    );
+    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
+}
+
+#[test]
+fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 80\n")).expect("load");
+    assert_eq!(config.sidebar.refresh_ms, 80);
+    assert_eq!(config.sidebar.resolved_refresh_ms(), 80);
+    assert_eq!(
+        MachineConfig::default().sidebar.refresh_ms,
+        crate::sidebar::timing::DEFAULT_REFRESH_MS
+    );
+
+    let too_low =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 1\n")).expect("load");
+    assert_eq!(
+        too_low.sidebar.resolved_refresh_ms(),
+        crate::sidebar::timing::MIN_REFRESH_MS
+    );
+
+    let too_high =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 5000\n")).expect("load");
+    assert_eq!(
+        too_high.sidebar.resolved_refresh_ms(),
+        crate::sidebar::timing::MAX_REFRESH_MS
+    );
+}
+
+#[test]
+fn sidebar_trunk_parses_and_defaults_unset() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\ntrunk = \"develop\"\n")).expect("load");
+    assert_eq!(config.sidebar.trunk.as_deref(), Some("develop"));
+    assert_eq!(
+        MachineConfig::default().sidebar.trunk,
+        None,
+        "unset leaves the trunk ladder to detection alone",
+    );
+}
+
+#[test]
+fn sidebar_scrollbar_parses_and_defaults_auto() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"never\"\n")).expect("load");
+    assert_eq!(config.sidebar.scrollbar, ScrollbarMode::Never);
+    assert_eq!(
+        MachineConfig::default().sidebar.scrollbar,
+        ScrollbarMode::Auto,
+        "unset auto-hides: the bar shows only while the viewport moves",
+    );
+    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"bogus\"\n")).is_err());
+}
+
+#[test]
+fn attention_config_defaults_parses_and_rejects_zero() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(
+        config.sidebar.attention.stalled_after_secs.get(),
+        crate::feed::DEFAULT_STALL_AFTER_SECS,
+        "unset uses the shipped 30-minute stall window",
+    );
+
+    let tuned = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.attention]\nstalled_after_secs = 2700\n",
+    ))
+    .expect("load");
+    assert_eq!(tuned.sidebar.attention.stalled_after_secs.get(), 2700);
+
+    let partial = MachineConfig::load_from(&write(&dir, "[sidebar.attention]\n")).expect("load");
+    assert_eq!(partial.sidebar.attention, AttentionConfig::default());
+
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.attention]\nstalled_after_secs = 0\n",
+        ))
+        .is_err()
+    );
+}
+
+#[test]
+fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
+    let dir = tempdir().expect("tempdir");
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 34\nselection = 25\n"))
+            .expect("load");
+    assert_eq!(config.sidebar.theme.good, Some(34));
+    assert_eq!(config.sidebar.theme.selection, Some(25));
+    assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");
+    assert!(MachineConfig::default().sidebar.theme.is_unset());
+    assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
+}
+
+#[test]
+fn sidebar_glow_parses_and_defaults_auto() {
+    let dir = tempdir().expect("tempdir");
+    assert_eq!(
+        MachineConfig::default().sidebar.glow,
+        GlowMode::Auto,
+        "the glow tier ships following the terminal's advertisement",
+    );
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"always\"\n")).expect("load");
+    assert_eq!(config.sidebar.glow, GlowMode::Always);
+    let config =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"never\"\n")).expect("load");
+    assert_eq!(config.sidebar.glow, GlowMode::Never);
+    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).is_err());
+}
+
+#[test]
+fn zellij_room_defaults_are_agent_friendly() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert!(config.zellij.mouse_mode);
+    assert!(config.zellij.mouse_click_through);
+    assert!(!config.zellij.advanced_mouse_actions);
+    assert!(!config.zellij.mouse_hover_effects);
+    assert!(!config.zellij.focus_follows_mouse);
+    assert!(!config.zellij.pane_frames);
+    assert_eq!(config.zellij.on_force_close, ZellijForceClose::Detach);
+    assert_eq!(config.zellij.scroll_buffer_size, 100_000);
+    assert!(!config.zellij.show_startup_tips);
+    assert!(!config.zellij.show_release_notes);
+    assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::System);
+    assert!(config.zellij.copy_on_select);
+    assert!(config.zellij.support_kitty_keyboard_protocol);
+    assert!(config.zellij.osc8_hyperlinks);
+    assert!(!config.zellij.session_serialization);
+}
+
+#[test]
+fn zellij_room_options_parse() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[zellij]\n\
+             pane_frames = true\n\
+             advanced_mouse_actions = true\n\
+             mouse_hover_effects = true\n\
+             focus_follows_mouse = false\n\
+             copy_clipboard = \"primary\"\n\
+             on_force_close = \"quit\"\n",
+    ))
+    .expect("load");
+    assert!(config.zellij.pane_frames);
+    assert!(config.zellij.advanced_mouse_actions);
+    assert!(config.zellij.mouse_hover_effects);
+    assert!(!config.zellij.focus_follows_mouse);
+    assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::Primary);
+    assert_eq!(config.zellij.on_force_close, ZellijForceClose::Quit);
+}
+
+#[test]
+fn zellij_default_mode_config_is_legacy_noop() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "[zellij]\ndefault_mode = \"normal\"\n"))
+        .expect("legacy default_mode key is ignored");
+    assert_eq!(config.zellij, ZellijConfig::default());
+}
+
+#[test]
+fn tmux_room_defaults_are_agent_friendly() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert!(config.tmux.mouse);
+    assert!(config.tmux.focus_events);
+    assert_eq!(config.tmux.history_limit, 100_000);
+    assert!(config.tmux.allow_passthrough);
+    assert_eq!(config.tmux.set_clipboard, TmuxSetClipboard::On);
+    assert!(config.tmux.extended_keys);
+    assert_eq!(
+        config.tmux.extended_keys_format,
+        TmuxExtendedKeysFormat::CsiU,
+    );
+    assert_eq!(config.tmux.escape_time_ms, 0);
+    assert!(config.tmux.renumber_windows);
+    assert!(config.tmux.aggressive_resize);
+    assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Off);
+    assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Simple);
+}
+
+#[test]
+fn tmux_room_options_parse() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[tmux]\n\
+             set_clipboard = \"external\"\n\
+             extended_keys_format = \"xterm\"\n\
+             pane_border_status = \"top\"\n\
+             pane_border_lines = \"heavy\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.tmux.set_clipboard, TmuxSetClipboard::External);
+    assert_eq!(
+        config.tmux.extended_keys_format,
+        TmuxExtendedKeysFormat::Xterm,
+    );
+    assert_eq!(config.tmux.pane_border_status, TmuxPaneBorderStatus::Top);
+    assert_eq!(config.tmux.pane_border_lines, TmuxPaneBorderLines::Heavy);
+}
+
+#[test]
+fn malformed_toml_surfaces_an_error() {
+    let dir = tempdir().expect("tempdir");
+    let err = MachineConfig::load_from(&write(&dir, "[remote_control]\nclaude = \"yes\"\n"))
+        .expect_err("type mismatch should fail");
+    assert!(matches!(err, ConfigErr::Parse { .. }));
+}
+
+#[test]
+fn provider_block_cap_defaults_to_three() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(config.sidebar.max_provider_blocks, 3);
+    assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Auto);
+    assert!(config.sidebar.provider_list.is_empty());
+    let partial =
+        MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 60\n")).expect("load");
+    assert_eq!(partial.sidebar.max_provider_blocks, 3);
+    assert_eq!(partial.sidebar.provider_tabs, ProviderTabsMode::Auto);
+    assert!(partial.sidebar.provider_list.is_empty());
+}
+
+#[test]
+fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar]\nprovider_tabs = \"always\"\nprovider_list = [\"codex\", \"all\"]\n",
+    ))
+    .expect("load");
+    assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Always);
+    assert_eq!(config.sidebar.provider_list, vec!["codex", "all"]);
+
+    let encoded = toml::to_string(&config.sidebar).expect("serialize sidebar");
+    let round_tripped: SidebarConfig = toml::from_str(&encoded).expect("parse sidebar");
+    assert_eq!(round_tripped.provider_tabs, ProviderTabsMode::Always);
+    assert_eq!(round_tripped.provider_list, vec!["codex", "all"]);
+}
+
+#[test]
+fn context_severity_bands_default_and_parse() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let defaults = ContextSeverityConfig::default();
+    assert_eq!(config.sidebar.context, defaults);
+    assert_eq!(
+        (defaults.yellow.percent, defaults.yellow.tokens),
+        (60, 160_000)
+    );
+    assert_eq!(
+        (defaults.amber.percent, defaults.amber.tokens),
+        (80, 258_000)
+    );
+    assert_eq!((defaults.red.percent, defaults.red.tokens), (95, 420_000));
+    let tuned = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.context]\nred = { percent = 50, tokens = 100000 }\n",
+    ))
+    .expect("load");
+    assert_eq!(
+        tuned.sidebar.context.red,
+        ContextBand {
+            percent: 50,
+            tokens: 100_000
+        }
+    );
+    assert_eq!(tuned.sidebar.context.yellow, defaults.yellow);
+    assert_eq!(tuned.sidebar.context.amber, defaults.amber);
+}
+
+#[test]
+fn budget_zones_default_and_parse() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    let defaults = BudgetZonesConfig::default();
+    assert_eq!(config.sidebar.budget, defaults);
+    assert_eq!(
+        (defaults.yellow, defaults.amber, defaults.red),
+        (50, 25, 10)
+    );
+    assert_eq!(
+        (defaults.pace.yellow, defaults.pace.amber, defaults.pace.red),
+        (100, 150, 200)
+    );
+
+    let tuned = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.budget]\nred = 20\n[sidebar.budget.pace]\nred = 300\n",
+    ))
+    .expect("load");
+    let budget = tuned.sidebar.budget;
+    assert_eq!(
+        (budget.yellow, budget.amber, budget.red),
+        (defaults.yellow, defaults.amber, 20)
+    );
+    assert_eq!(
+        (budget.pace.yellow, budget.pace.amber, budget.pace.red),
+        (defaults.pace.yellow, defaults.pace.amber, 300)
+    );
+    let reparsed: MachineConfig =
+        toml::from_str(&toml::to_string(&tuned).expect("serialize")).expect("reparse");
+    assert_eq!(reparsed.sidebar.budget, tuned.sidebar.budget);
+}
+
+#[test]
+fn provider_style_parses_art_and_color() {
+    let dir = tempdir().expect("tempdir");
+    let text = "[sidebar.providers.claude]\ncolor = 173\nascii_art = \" ▐▛███▜▌\"\n";
+    let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
+    let claude = config
+        .sidebar
+        .providers
+        .get("claude")
+        .expect("claude provider style");
+    assert_eq!(claude.color, Some(173));
+    assert_eq!(claude.ascii_art.as_deref(), Some(" ▐▛███▜▌"));
+    assert_eq!(claude.product_name, None);
+}

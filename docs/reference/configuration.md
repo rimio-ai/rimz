@@ -139,7 +139,7 @@ The agent card context meter ramps by the worse of two axes: fill percentage and
 
 The provider dashboard budget zones work in the opposite direction: they bound remaining budget from above. At or above `yellow` the bar stays green; below each threshold it moves through yellow, amber, and red. The template carries the shipped numbers.
 
-Budget pace colors only the provider reset marker. `100` is even burn, where the used share matches the elapsed share of that window; thresholds apply above each bound, moving the marker from the default foreground through yellow, amber, and red while the bar keeps using the remaining-budget zones.
+Budget pace colors only the provider reset marker. `100` is even burn, where the used share matches the elapsed share of that window; thresholds apply above each bound, moving the marker from the countdown's soft tier through yellow, amber, and red while the bar keeps using the remaining-budget zones.
 
 ### Sidebar Rendering
 

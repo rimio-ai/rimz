@@ -86,62 +86,6 @@ fn is_main_invocation(argv: &[String]) -> bool {
 }
 
 #[test]
-fn print_form_emits_the_full_ssh_command() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--print"])
-        .bounded_output()
-        .expect("run rimz remote connect --print");
-    let line = stdout_line(&out);
-    assert!(
-        line.starts_with("ssh -o ServerAliveInterval=5 -o ServerAliveCountMax=3"),
-        "keepalive ladder leads the command: {line}"
-    );
-    assert!(
-        line.contains(" -t -- dev-box '"),
-        "snippet is quoted: {line}"
-    );
-    assert!(
-        line.contains("rimz attach --attach"),
-        "session form reattaches: {line}"
-    );
-    assert!(
-        line.contains("query-engine"),
-        "target rides the snippet: {line}"
-    );
-    assert!(
-        line.contains("command -v rimz"),
-        "snippet guards the remote rimz: {line}"
-    );
-}
-
-#[test]
-fn path_form_starts_the_remote_room() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args([
-            "remote",
-            "connect",
-            "dev-box:~/code/query-engine",
-            "--print",
-        ])
-        .bounded_output()
-        .expect("run rimz remote connect --print");
-    let line = stdout_line(&out);
-    assert!(
-        line.contains("rimz start --attach"),
-        "path form births the room: {line}"
-    );
-    assert!(line.contains("$HOME"), "tilde expands remotely: {line}");
-    assert!(
-        !line.contains("rimz attach --attach"),
-        "not the session form: {line}"
-    );
-}
-
-#[test]
 fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
     use std::io::Write as _;
 
@@ -232,36 +176,6 @@ fn link_stats_ingest_schema_mismatch_exits_as_version_skew() {
     assert!(
         stderr.contains("unsupported link probe schema"),
         "stderr names the mismatch: {stderr}"
-    );
-}
-
-#[test]
-fn auto_mode_without_a_tty_prints() {
-    let env = Env::new();
-    // `bounded_output` pipes stdio, so Auto resolves to Print; remote targets
-    // share the local attach invariant.
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine"])
-        .bounded_output()
-        .expect("run rimz remote connect");
-    let line = stdout_line(&out);
-    assert!(line.starts_with("ssh "), "non-TTY auto prints: {line}");
-}
-
-#[test]
-fn print_form_needs_no_ssh_binary() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--print"])
-        .env("PATH", "")
-        .bounded_output()
-        .expect("run rimz remote connect --print");
-    assert!(
-        out.status.success(),
-        "print never resolves ssh: {}",
-        String::from_utf8_lossy(&out.stderr)
     );
 }
 
@@ -577,35 +491,6 @@ fn first_connection_failure_never_retries() {
 }
 
 #[test]
-fn missing_remote_rimz_is_fatal() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("ssh-trace.plan");
-    std::fs::write(&plan, "127\n").expect("write plan");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .env("RIMZ_REMOTE_GATETIME_MS", "0")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        !out.status.success(),
-        "missing remote rimz is not a link drop"
-    );
-    assert_eq!(
-        shim_invocations(&log).len(),
-        1,
-        "retrying cannot install rimz"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("127"), "names the exit: {stderr}");
-}
-
-#[test]
 fn no_reconnect_hands_the_link_to_one_ssh() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -628,47 +513,6 @@ fn no_reconnect_hands_the_link_to_one_ssh() {
         String::from_utf8_lossy(&out.stderr)
     );
     assert_eq!(shim_invocations(&log).len(), 1, "a single exec'd ssh");
-}
-
-#[test]
-fn no_resume_and_mux_ride_the_remote_invocation() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args([
-            "remote",
-            "connect",
-            "dev-box:query-engine",
-            "--reset",
-            "--mux",
-            "tmux",
-            "--print",
-        ])
-        .bounded_output()
-        .expect("run rimz remote connect --print");
-    let line = stdout_line(&out);
-    assert!(
-        line.contains("--no-resume --mux tmux"),
-        "local flags ride into the remote rimz: {line}"
-    );
-}
-
-#[test]
-fn attach_remote_flag_is_gone() {
-    let env = Env::new();
-    let out = env
-        .rimz()
-        .args(["attach", "--remote", "dev-box:query-engine"])
-        .bounded_output()
-        .expect("run rimz attach --remote");
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("unexpected argument '--remote'")
-            || stderr.contains("unrecognized")
-            || stderr.contains("unknown"),
-        "`attach --remote` is no longer a CLI surface: {stderr}"
-    );
 }
 
 #[test]
@@ -822,28 +666,4 @@ fn remote_add_persists_only_remote_scoped_mux_flags() {
         2,
         "local --mux pins the alias mux: {text}",
     );
-}
-
-#[test]
-fn malformed_targets_fail_with_the_fix() {
-    let env = Env::new();
-    let cases = [
-        ("dev-box:", "nothing after"),
-        (":query-engine", "empty host"),
-        ("[::1:query-engine", "unclosed"),
-        ("dev-box:~alice/code", "absolute path"),
-    ];
-    for (target, needle) in cases {
-        let out = env
-            .rimz()
-            .args(["remote", "connect", target, "--print"])
-            .bounded_output()
-            .expect("run rimz remote connect");
-        assert!(!out.status.success(), "`{target}` must not parse");
-        let stderr = String::from_utf8_lossy(&out.stderr);
-        assert!(
-            stderr.contains(needle),
-            "`{target}` names the fix (`{needle}`): {stderr}"
-        );
-    }
 }

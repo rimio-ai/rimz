@@ -137,9 +137,9 @@ fn paced_reset_countdown_under_no_color_stays_soft() {
     assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 }
 
-/// Each window gets its own pace tone: a fresh short window keeps an uncolored
-/// reset marker while the weekly budget's reset reads red because its burn rate
-/// cannot last.
+/// Each window gets its own pace tone: a fresh short window keeps the reset
+/// marker at the same soft tier as its countdown, while the weekly budget's
+/// reset reads red because its burn rate cannot last.
 #[test]
 fn reset_countdowns_tone_each_window_independently() {
     let theme = Theme::fixed(false);
@@ -162,8 +162,8 @@ fn reset_countdowns_tone_each_window_independently() {
     assert_eq!(rows.len(), 2);
     assert_eq!(
         reset_marker_style(&rows[0]),
-        Some(Style::default()),
-        "unused started 5h window keeps the marker uncolored"
+        Some(theme.soft()),
+        "unused started 5h window keeps the marker soft like its countdown"
     );
     assert_eq!(
         reset_marker_fg(&rows[1]),

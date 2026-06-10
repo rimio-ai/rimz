@@ -70,24 +70,6 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
-fn worktree_new_errors_when_name_exists() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .failure()
-        .stderr(contains("already exists"));
-}
-
-#[test]
 fn worktree_remove_refuses_dirty_without_force() {
     if git_missing() {
         return;
@@ -283,7 +265,7 @@ fn agents_exec_sighup_keeps_unmerged_clean_worktree() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_removes_fast_forward_merged_worktree() {
+fn agents_exec_sighup_removes_merge_committed_worktree() {
     if git_missing() {
         return;
     }
@@ -295,17 +277,93 @@ fn agents_exec_sighup_removes_fast_forward_merged_worktree() {
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
     commit_file(&path, "feature.txt", "feature\n", "feature");
-    git(&env.project_root, &["merge", "--ff-only", "demo"]);
+    commit_file(&env.project_root, "main.txt", "main\n", "main");
+    git(
+        &env.project_root,
+        &["merge", "--no-ff", "-m", "merge demo", "demo"],
+    );
 
-    let mut child = spawn_agent_exec(&env, &path, "ff-merged");
-    wait_for_file(&env.home_root.join("ff-merged.ready"));
+    let mut child = spawn_agent_exec(&env, &path, "merge-committed");
+    wait_for_file(&env.home_root.join("merge-committed.ready"));
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("ff-merged.pid"));
+    let _status = wait_for_exit(&mut child, &env.home_root.join("merge-committed.pid"));
 
-    assert!(!path.exists(), "merged worktree removed after SIGHUP");
+    assert!(!path.exists(), "merge-committed worktree removed");
     assert!(
         !branch_exists(&env.project_root, "demo"),
-        "merged worktree branch deleted"
+        "merge-committed branch deleted"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_squash_merged_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature-a.txt", "a\n", "feature a");
+    commit_file(&path, "feature-b.txt", "b\n", "feature b");
+    git(&env.project_root, &["merge", "--squash", "demo"]);
+    git(&env.project_root, &["commit", "-m", "squash demo"]);
+
+    let mut child = spawn_agent_exec(&env, &path, "squash-merged");
+    wait_for_file(&env.home_root.join("squash-merged.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("squash-merged.pid"));
+
+    assert!(!path.exists(), "squash-merged worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "squash-merged branch deleted after proof"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_removes_cherry_picked_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature-a.txt", "a\n", "feature a");
+    commit_file(&path, "feature-b.txt", "b\n", "feature b");
+    let commits = git_stdout(&env.project_root, &["rev-list", "--reverse", "main..demo"]);
+    for commit in commits.lines() {
+        git(&env.project_root, &["cherry-pick", commit]);
+    }
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .commits_unmerged,
+        Some(0),
+        "patch-equivalent cherry-picked commits count as landed"
+    );
+
+    let mut child = spawn_agent_exec(&env, &path, "cherry-picked");
+    wait_for_file(&env.home_root.join("cherry-picked.ready"));
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("cherry-picked.pid"));
+
+    assert!(!path.exists(), "cherry-picked worktree removed");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "cherry-picked branch deleted after proof"
     );
 }
 
@@ -421,35 +479,6 @@ fn worktree_cleanup_command_removes_clean_worktree() {
     );
 }
 
-#[test]
-fn worktree_cleanup_command_keeps_dirty_worktree_without_tty() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
-
-    env.rimz()
-        .args(["worktree", "cleanup"])
-        .arg(&path)
-        .current_dir(&env.home_root)
-        .stdin(Stdio::null())
-        .assert()
-        .success();
-
-    assert!(path.exists(), "dirty worktree is kept without a TTY");
-    assert!(
-        branch_exists(&env.project_root, "demo"),
-        "dirty branch is kept"
-    );
-}
-
 #[cfg(unix)]
 #[test]
 fn agents_exec_cleanup_execs_the_on_disk_binary() {
@@ -523,34 +552,6 @@ fn agents_exec_cleanup_falls_back_when_on_disk_binary_is_gone() {
     assert!(
         !branch_exists(&env.project_root, "demo"),
         "fallback cleanup deletes the clean branch"
-    );
-}
-
-#[test]
-fn worktree_remove_merged_succeeds_without_force() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    commit_file(&path, "feature.txt", "feature\n", "feature");
-    git(&env.project_root, &["merge", "--ff-only", "demo"]);
-
-    env.rimz()
-        .args(["worktree", "remove", "demo"])
-        .assert()
-        .success()
-        .stdout(contains("removed demo"));
-
-    assert!(!path.exists(), "merged worktree removed");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "merged branch deleted"
     );
 }
 

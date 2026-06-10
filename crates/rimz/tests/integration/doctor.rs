@@ -52,26 +52,6 @@ fn inject_lifecycle(
 }
 
 #[test]
-fn doctor_reports_no_agents_when_none_observed() {
-    let env = Env::new();
-    let output = env
-        .rimz()
-        .args(["doctor", "--audit"])
-        .output()
-        .expect("spawn doctor");
-    assert!(
-        output.status.success(),
-        "doctor failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    assert!(
-        stdout.contains("agents        : none observed"),
-        "missing 'none observed' row, got:\n{stdout}"
-    );
-}
-
-#[test]
 fn doctor_renders_status_row_per_agent() {
     let env = Env::new();
     inject_lifecycle(

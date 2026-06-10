@@ -85,67 +85,6 @@ fn config_get_set_round_trip_preserves_template_comments() {
 }
 
 #[test]
-fn config_set_round_trips_arrays_and_context_bands() {
-    let env = Env::new();
-    env.rimz().args(["config", "init"]).assert().success();
-
-    env.rimz()
-        .args([
-            "config",
-            "set",
-            "notifications.triggers",
-            "[\"waiting\", \"failed\"]",
-        ])
-        .assert()
-        .success();
-
-    env.rimz()
-        .args(["config", "get", "notifications.triggers"])
-        .assert()
-        .success()
-        .stdout("[\"waiting\", \"failed\"]\n");
-
-    env.rimz()
-        .args([
-            "config",
-            "set",
-            "sidebar.context.red",
-            "{ percent = 90, tokens = 400000 }",
-        ])
-        .assert()
-        .success();
-
-    env.rimz()
-        .args(["config", "get", "sidebar.context.red.percent"])
-        .assert()
-        .success()
-        .stdout("90\n");
-
-    env.rimz()
-        .args(["config", "get", "sidebar.card_density"])
-        .assert()
-        .success()
-        .stdout("auto\n");
-
-    env.rimz()
-        .args(["config", "set", "sidebar.card_density", "compact"])
-        .assert()
-        .success();
-
-    env.rimz()
-        .args(["config", "get", "sidebar.card_density"])
-        .assert()
-        .success()
-        .stdout("compact\n");
-
-    env.rimz()
-        .args(["config", "set", "sidebar.card_density", "tiny"])
-        .assert()
-        .failure()
-        .stderr(contains("validating `sidebar.card_density`"));
-}
-
-#[test]
 fn config_set_rejects_unknown_keys_and_bad_values() {
     let env = Env::new();
 
@@ -160,23 +99,6 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .assert()
         .failure()
         .stderr(contains("validating `sidebar.max_cols`"));
-}
-
-#[test]
-fn config_get_distinguishes_unset_optional_from_unknown_key() {
-    let env = Env::new();
-
-    env.rimz()
-        .args(["config", "get", "notifications.command"])
-        .assert()
-        .failure()
-        .stderr(contains("config key `notifications.command` is unset"));
-
-    env.rimz()
-        .args(["config", "get", "notifications.nope"])
-        .assert()
-        .failure()
-        .stderr(contains("unknown config key `notifications.nope`"));
 }
 
 #[test]

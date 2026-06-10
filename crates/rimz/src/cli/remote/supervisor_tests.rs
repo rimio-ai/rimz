@@ -1,0 +1,222 @@
+use std::time::{Duration, Instant};
+
+use super::*;
+
+#[test]
+fn disconnected_link_event_channel_keeps_poll_cadence() {
+    let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
+    drop(tx);
+    let poll = Duration::from_millis(20);
+    let started = Instant::now();
+
+    assert!(recv_link_event(&rx, poll).is_none());
+
+    assert!(
+        started.elapsed() >= Duration::from_millis(15),
+        "a disconnected probe channel must not hot-poll the ssh child"
+    );
+}
+
+#[test]
+fn gatetime_restore_only_reports_preexisting_outage() {
+    assert!(
+        should_report_gatetime_restored(true, true),
+        "a post-retry session passing gatetime reports recovery"
+    );
+    assert!(
+        !should_report_gatetime_restored(false, true),
+        "a blackout that began inside this session is not recovered by gatetime"
+    );
+    assert!(
+        !should_report_gatetime_restored(true, false),
+        "no active outage means no recovery edge"
+    );
+}
+
+#[test]
+fn probe_respawn_backoff_is_capped_and_resettable() {
+    let mut backoff = ProbeRespawnBackoff::default();
+
+    assert_eq!(backoff.next_delay(), Duration::from_secs(1));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(2));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(4));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(8));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(16));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(30));
+    assert_eq!(backoff.next_delay(), Duration::from_secs(30));
+
+    backoff.reset();
+    assert_eq!(backoff.next_delay(), Duration::from_secs(1));
+}
+
+#[test]
+fn finish_probe_stream_drains_tail_ack() {
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel::<u64>();
+    let (event_tx, event_rx) = std::sync::mpsc::channel::<LinkEvent>();
+    let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+    let mut blackout_latched = false;
+    let mut seen_ack = false;
+    let sent_at_ms = rimz::sidebar::cache::unix_now_ms().saturating_sub(10);
+
+    window.record_sent(7, sent_at_ms);
+    ack_tx.send(7).expect("send tail ack");
+    drop(ack_tx);
+
+    assert!(finish_probe_stream(
+        &ack_rx,
+        &event_tx,
+        &mut window,
+        &mut blackout_latched,
+        &mut seen_ack,
+        false,
+    ));
+    assert!(seen_ack);
+    assert!(!blackout_latched);
+    match event_rx.try_recv().expect("first ack event") {
+        LinkEvent::FirstAck => {}
+        other => panic!("expected first ack event, got {other:?}"),
+    }
+    let stats = window.stats();
+    assert_eq!(stats.window, 1);
+    assert_eq!(stats.miss_pct, 0);
+    assert!(stats.rtt_ms.is_some());
+}
+
+#[test]
+fn ended_probe_stream_waits_for_blackout_threshold() {
+    let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
+    let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+    let mut blackout_latched = false;
+    let seen_ack = true;
+    let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
+
+    window.record_sent(1, 1_000);
+    assert!(window.record_ack(1, 1_020));
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        seen_ack,
+        1_020 + blackout_after_ms - 1,
+    );
+    assert!(rx.try_recv().is_err());
+    assert!(!blackout_latched);
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        seen_ack,
+        1_020 + blackout_after_ms,
+    );
+    match rx.try_recv().expect("blackout event") {
+        LinkEvent::Blackout(duration) => assert_eq!(duration, LINK_BLACKOUT_AFTER),
+        other => panic!("expected blackout event, got {other:?}"),
+    }
+    assert!(blackout_latched);
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        seen_ack,
+        1_020 + blackout_after_ms + 1_000,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "latched blackout events are not repeated"
+    );
+}
+
+#[test]
+fn probe_blackout_requires_prior_ack() {
+    let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
+    let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+    let mut blackout_latched = false;
+    let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
+
+    window.record_sent(1, 1_000);
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        false,
+        1_000 + blackout_after_ms,
+    );
+
+    assert!(rx.try_recv().is_err());
+    assert!(!blackout_latched);
+}
+
+#[test]
+fn blackout_delivery_suppresses_notify_command() {
+    let prefs = rimz::config::NotificationsPrefs {
+        enabled: true,
+        command: Some("notify-send rimz".to_owned()),
+        ..rimz::config::NotificationsPrefs::default()
+    };
+
+    assert!(
+        local_link_command_notification(
+            rimz::sidebar::notify::NotificationKind::LinkLost,
+            "Rimz: remote link stalled",
+            "No probe ack from dev for 8s.",
+            LocalLinkNotificationDelivery::TerminalOnly,
+            &prefs,
+        )
+        .is_none(),
+        "blackout delivery is terminal-only"
+    );
+
+    let notification = local_link_command_notification(
+        rimz::sidebar::notify::NotificationKind::LinkLost,
+        "Rimz: remote link lost",
+        "SSH to dev dropped; reconnecting.",
+        LocalLinkNotificationDelivery::TerminalAndCommand,
+        &prefs,
+    )
+    .expect("lost-link delivery spawns the configured command");
+    assert_eq!(notification.kind_env(), "link_lost");
+}
+
+#[test]
+fn redirected_stderr_suppresses_terminal_notification_bytes() {
+    let prefs = rimz::config::NotificationsPrefs::default();
+
+    assert!(
+        local_link_terminal_notification_bytes("Title", "Body", &prefs, false).is_empty(),
+        "redirected stderr must not collect OSC or BEL bytes"
+    );
+    assert!(
+        !local_link_terminal_notification_bytes("Title", "Body", &prefs, true).is_empty(),
+        "terminal stderr keeps the configured terminal notification bytes"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn prepare_control_path_hardens_control_directories() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let runtime = dir.path().join("runtime");
+    let rimz_dir = runtime.join("rimz");
+    let link_dir = rimz_dir.join("link");
+    std::fs::create_dir_all(&link_dir).expect("mkdir link dir");
+    for path in [&runtime, &rimz_dir, &link_dir] {
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o777))
+            .expect("make dir world-accessible");
+    }
+    let control = link_dir.join("link.sock");
+
+    prepare_control_path(&control).expect("prepare control path");
+
+    for path in [&runtime, &rimz_dir, &link_dir] {
+        let mode = std::fs::metadata(path)
+            .expect("metadata")
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o077, 0, "{} is private", path.display());
+    }
+}

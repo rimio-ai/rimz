@@ -56,7 +56,7 @@
 # red = 10                            # remaining percent below which the bar goes red
 
 [sidebar.budget.pace]
-# yellow = 100                        # pace percent above which the reset marker leaves default color
+# yellow = 100                        # pace percent above which the reset marker leaves countdown style
 # amber = 150                         # pace percent above which yellow deepens
 # red = 200                           # pace percent above which the reset marker goes red
 
