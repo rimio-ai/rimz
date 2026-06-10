@@ -1,8 +1,12 @@
 # Rimz
 
-Run one coding agent and you flip tabs. Run ten and you lose track of which one is blocked, which errored, and which is quietly burning your rate limit.
+**A control room for your coding agents, inside the terminal you already use.**
 
-Rimz pins every project to one room: a Zellij or tmux session with a sidebar that tells you which agent needs you and takes you straight to its pane. Agents keep working while you are away, locally or over SSH from a laptop, tablet, or phone, and the room comes back exactly as you left it.
+Run one Claude Code session and you flip tabs. Run ten and you lose track of which one is blocked, which one errored, and which one is quietly draining your 5-hour window.
+
+Rimz gives every project one room: a Zellij or tmux session with a live sidebar of every coding agent in it. Each card shows what the agent is doing, what it costs, and how much context it has left. One key drops you into the pane that needs you, and you answer in the agent's own UI.
+
+Agents keep working while you are away. Attach from a laptop, a tablet, or a phone over SSH, and the room comes back exactly as you left it — even after a reboot.
 
 ```
  ⌘ query-engine                    ~/code/query-engine
@@ -36,39 +40,53 @@ Rimz pins every project to one room: a Zellij or tmux session with a sidebar tha
                       ? for help
 ```
 
-> Rimz shows you which agent needs you and takes you straight to its pane, where you answer in the agent's own UI. Enrol a resolver, a small process you trust on this machine, to handle routine answers ahead of you so agents keep moving while you are gone; the chain still ends with you. The full invariant lives in [DESIGN.md](./DESIGN.md).
-
-Every glyph, meter, and frame above is broken down in the [interface reference](./docs/interface/sidebar.md).
+Every glyph and meter in this frame is live, and the [interface reference](./docs/interface/sidebar.md) breaks down each one.
 
 ## Quickstart
 
 ```sh
-cd ~/code/query-engine
-rimz                                       # open or reattach the room
+cargo install rimz   # or: brew install rimz
 
-rimz pane split && claude                  # start an agent in a new pane
-rimz remote connect dev-box:query-engine   # reattach from anywhere; the link reconnects itself
+cd ~/code/query-engine
+rimz                                          # open or reattach the room
+
+rimz tab --layout peer --worktree feat/x      # Claude + Codex side by side in a fresh worktree
+rimz remote connect dev-box:query-engine      # the same room, from any machine
 ```
 
 That loop is the product; the sidebar carries everything from there.
 
-## Why Rimz
+**Your attention, routed.** The cockpit line reads the whole fleet in one glance — `? 3` waiting on you, `! 0` failed, `⏸ 0` paused, `✓ 8` done — and a row of zeros means nothing needs you. The column underneath is already triaged: the agent that has waited longest rises to the top, a result you have not read blinks until you look, and one keypress lands you in its pane, where you answer in Claude's or Codex's own prompt. When the routine questions start repeating, [enrol a resolver](./docs/guide/product.md#resolvers-scale-your-attention) to answer them ahead of you, in a chain that always ends with you.
 
-If you run several Claude Code or Codex sessions at once, the hard part is no longer any single agent. It is knowing which of them needs you. Rimz watches every agent in the room and surfaces the one that is blocked, the one that errored, and the one burning toward a rate limit, then takes you straight to its pane in one keystroke so you answer in the agent's own UI. Triage goes from staring at five terminals to answering the questions that actually need you, when they need you.
+**A beautiful realtime card for every agent**, carrying the details you care about when you run a team of them in parallel:
 
-Rimz also lets agents keep working while you are not there. Start the room on a host or container, detach, and reattach later from a laptop, a tablet, or an SSH client on a phone: the sidebar rebuilds from the ledger with every agent where you left it and every pending question still waiting. Enrol a resolver, a small local process you trust, and routine prompts get answered ahead of you in an ordered chain that always ends with you, so an overnight or unattended run does not stall the moment it hits a permission prompt.
+- working state and the task it is on, animated while the agent thinks, edits, or compacts
+- model and effort level, with the context window it is running in
+- context-window health: a meter that ramps toward red as it fills, plus the compaction count
+- token mix, down to cache reads and writes, and the live dollar cost of the session
+- the subagent tree: each child's task, status, model, tokens, and elapsed time
+
+The provider dashboard pins your plan underneath: today's sessions, tokens, and dollars, the 5h and 7d budget bars draining in real time, and week and month totals priced from your full transcript history. One look and you know your pace.
+
+And when a run hits the 5-hour wall, its row parks as `⏸` while the dashboard counts down the reset. Enrol the bundled [resolver example](./docs/internals/resolvers.md) and it types the resume the moment `↻` hits zero, so overnight runs pick themselves back up. You care about the task; Rimz takes care of the noise.
+
+**One binary, zero learning curve.** Rimz wraps the tools you already run — Claude Code, Codex, and Pi inside Zellij or tmux — and the agents run stock: your keybinds, your layouts, your terminal (Ghostty, Warp, the VS Code terminal), and the official web, desktop, and mobile apps all keep working. Underneath, it reads what the agents already emit (hooks, `.jsonl` session transcripts, the Claude statusline, the Codex app-server) into a directory of flat files you can read with `cat` — no daemon, nothing to relearn. Hooks install at `rimz start`, with your consent and a diff preview. It is still your tmux.
+
+**Close the laptop.** Start the room on a server, detach, and reattach from anywhere: `rimz remote connect dev-box:query-engine` rebuilds the sidebar from the ledger — every agent where you left it, every pending question still waiting — over a link that reconnects itself and reports its health (`⇅ 42ms 0%`). The room even survives a reboot: it comes back populated, every prior agent re-seeded idle in its own pane via `claude --resume`, `codex resume`, or `pi --session`, one prompt from where it stopped.
+
+**Fix the 3 a.m. CI failure from your bed.** Your nightly job hits a failing migration, the question lands on the feed, your phone buzzes, you type the fix, and the run finishes while the script is still blocking. `rimz run "<prompt>"` gives scripts `claude -p` ergonomics — a blocking call, real exit codes, `--detach` and `--stream` for orchestration — over an agent in a real pane you can watch and steer the whole time. `rimz steer` types into a live agent now, `rimz queue --on done` delivers the next instruction when the turn finishes, and `rimz feed ask` puts any script's question on the sidebar with answer buttons. The full scenarios live in [the product tour](./docs/guide/product.md#put-your-pipeline-on-the-feed).
+
+**Your beloved `--worktree`, for every agent at once.** `rimz tab --layout peer --worktree feat/x` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements, the other reviews, in one tab. The layout DSL composes any grid (`claude,codex+term` is a Claude column beside a stacked Codex and shell), the sidebar groups every card by the worktree it lives in with per-tree diff churn, and cleanup is supervised: Rimz removes a worktree only after proving its work landed on the base branch ([worktrees](./docs/internals/worktrees.md)).
 
 ## How it works
 
-One repo maps to one Rimz workspace and one multiplexer session, and the repo's git worktrees group inside it. Everything an agent reports through its hooks (sessions, tool calls, completions, failures, blocking questions) writes through one CLI to a durable file-backed ledger. The sidebar renders that ledger, and the room keeps its state whether or not anyone is attached.
+One repo maps to one Rimz workspace and one multiplexer session, and the repo's git worktrees group inside it. Everything an agent reports through its hooks — sessions, tool calls, completions, failures, blocking questions — writes through one CLI to a durable file-backed ledger. The sidebar renders that ledger, and the room keeps its state whether or not anyone is attached.
 
-The design commitments and the operating paths a question can take (`native_ui`, `bridge`, `script`) live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
-
-Once you are running agents in the room, the same CLI lets a script post to the same sidebar. A long migration, a deploy gate, or a CI step can call `rimz event emit` to announce itself and `rimz feed ask` to put a yes/no question on the column with answer buttons, answered by you or a resolver just like an agent's prompt. It is the same feed seen from a script instead of an agent, with no UI to build. And `rimz run "<prompt>"` lets a script launch a whole agent turn the same way: it blocks for the final message and an exit code while the agent works in a visible pane that you, a resolver, or a supervising script can inspect, nudge, stream, and stop.
+The design commitments and the operating paths a question can take live in [DESIGN.md](./DESIGN.md). The wire-level state machine, surfaces, and CAS rules live in [docs/internals/ledger.md](./docs/internals/ledger.md).
 
 ## Development
 
-The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Zellij or tmux is needed to try the room and pane flows.
+The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Zellij or tmux runs the room.
 
 ```sh
 cargo xtask build      # build rimz and the Zellij presence plugin
@@ -77,27 +95,16 @@ cargo xtask test       # run the nextest suite
 cargo xtask ci         # full CI gate
 ```
 
-`cargo xtask <task>` is the source of truth for automation. Use focused tasks for routine validation and the full CI gate when the change calls for it. `cargo xtask install` writes `rimz` to `${CARGO_INSTALL_ROOT:-${CARGO_HOME:-$HOME/.cargo}}/bin`, so that directory must be on `PATH`.
-
-After installing, smoke-test the CLI:
-
-```sh
-rimz ping
-rimz doctor
-rimz start --print .
-```
-
-Contributor rules, gate details, and task names live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+`cargo xtask <task>` is the entry point for every quality gate; contributor rules and task names live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
 
 ## Status
 
-Pre-release. The ledger, sidebar, multiplexer backends, and Claude/Codex/Pi adapters are implemented in-tree; upcoming adapter and renderer work is documented beside the owning internals pages.
+Claude Code, Codex, and Pi adapters, the Zellij and tmux backends, the ledger, and the sidebar are implemented in-tree. Rimz is pre-release; upcoming adapter and renderer work is documented beside the owning internals pages.
 
 ## Read next
 
-- [docs/guide/product.md](./docs/guide/product.md) is the five-minute tour of the sidebar, the fleet, and how a blocked agent reaches you.
+- [docs/guide/product.md](./docs/guide/product.md) tours the room and the four ways people run it: a local fleet, a server room, two agents on one feature, and a pipeline on the feed.
+- [docs/guide/experience.md](./docs/guide/experience.md) walks the first run to a ten-agent fleet, moment by moment.
 - [docs/interface/sidebar.md](./docs/interface/sidebar.md) walks the sidebar on screen, zone by zone, with the frames it draws.
 - [docs/reference/cli.md](./docs/reference/cli.md) maps every command to grouped references and examples.
 - [DESIGN.md](./DESIGN.md) lays out the attention problem and the design choices that answer it.
-- [AGENTS.md](./AGENTS.md) holds the engineering rules and the docs map; contributor commands and the gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
-```
