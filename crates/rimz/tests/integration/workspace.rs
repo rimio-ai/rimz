@@ -8,8 +8,9 @@ use predicates::str::contains;
 use rimz::WorkspaceId;
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
-use rimz::feed::{FeedItem, FeedKind, Surface};
-use rimz::ids::AgentSessionId;
+use rimz::feed::{AgentState, AgentStatus, FeedItem, FeedKind, Surface};
+use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
 use rimz::schema::event::EventEnvelope;
 
 use crate::common::{Env, canonical};
@@ -36,9 +37,42 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         "cli",
     );
     let request_id = item.request_id.clone();
-    env.ledger_for(&old_root)
+    let old_ledger = env.ledger_for(&old_root);
+    old_ledger
         .push_feed_item(&item, "old-session")
         .expect("push old item");
+
+    let agent = message_agent();
+    let pending_message = MessageRecord::new(
+        old_id.clone(),
+        &agent,
+        "pending message".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let pending_message_id = pending_message.message_id.clone();
+    old_ledger
+        .queue_message(&pending_message, "old-session")
+        .expect("queue pending message");
+    let delivered_message = MessageRecord::new(
+        old_id.clone(),
+        &agent,
+        "delivered message".to_owned(),
+        true,
+        DeliveryGate::Done,
+    );
+    let delivered_message_id = delivered_message.message_id.clone();
+    old_ledger
+        .queue_message(&delivered_message, "old-session")
+        .expect("queue delivered message");
+    old_ledger
+        .settle_message(
+            &delivered_message_id,
+            MessageStatus::Delivered,
+            "old-session",
+            None,
+        )
+        .expect("settle delivered message");
 
     std::fs::remove_dir_all(&old_root).expect("simulate moved project");
 
@@ -60,6 +94,20 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
     let loaded = migrated.load_feed_item(&request_id).expect("load item");
     assert_eq!(loaded.workspace_id, new_id);
 
+    let messages = migrated.list_messages().expect("list messages");
+    let pending = messages
+        .iter()
+        .find(|message| message.message_id == pending_message_id)
+        .expect("pending message");
+    assert_eq!(pending.workspace_id, new_id);
+    assert_eq!(pending.status, MessageStatus::Pending);
+    let delivered = messages
+        .iter()
+        .find(|message| message.message_id == delivered_message_id)
+        .expect("delivered message");
+    assert_eq!(delivered.workspace_id, new_id);
+    assert_eq!(delivered.status, MessageStatus::Delivered);
+
     let events = migrated.read_events().expect("read events");
     assert!(!events.is_empty());
     assert!(events.iter().all(|event| event.workspace_id == new_id));
@@ -68,6 +116,46 @@ fn workspace_migrate_moves_ledger_and_rewrites_workspace_ids() {
         .expect("workspace record");
     assert_eq!(record.workspace_id, new_id);
     assert_eq!(record.project_root, canonical(&new_root));
+}
+
+fn message_agent() -> AgentState {
+    let now = jiff::Timestamp::now();
+    AgentState {
+        agent_id: AgentSessionId::from("claude-migrate"),
+        kind: AgentKind::new_unchecked("claude"),
+        status: AgentStatus::Idle,
+        phase: rimz::agents::TurnPhase::Idle,
+        pane: None,
+        agent_pid: None,
+        agent_process_start: None,
+        runtime_owner: None,
+        parent_agent_id: None,
+        worktree_path: None,
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        recent_prompts: Vec::new(),
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        context: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: None,
+        compacting_since: None,
+        compaction_count: 0,
+        last_seen: now,
+        last_activity: now,
+        registered_at: Some(now),
+    }
 }
 
 #[test]

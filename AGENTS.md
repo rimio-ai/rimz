@@ -27,7 +27,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - **Ledger first.** Correctness lives in the ledger, CAS rules, nonces, and per-request sockets. Sidebar wakeups are latency, not truth.
 - **Hook stdout is the decision channel.** Logs go to stderr or Rimz state logs. Hook helper children get fresh stdio.
 - **Cross-backend parity.** Zellij and tmux are first-class. Core behaviour never depends on a backend-only feature.
-- **Resolvers own pane I/O.** `pane capture` and `pane send` are public resolver primitives; core treats panes as opaque.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives; `steer` and `queue` route human-authored text through the same send path, while pane reads stay in rendering and resolver-owned inspection.
 - **Sidebar is read-only on the ledger.** Sidebar code reads via `rimz sidebar snapshot`; ledger-write modules stay out of the sidebar's import graph.
 - **Trust is product behaviour.** Every command-executing config field is in the trust hash, with a test that proves it.
 - **Security surfaces stay visible.** Project trust, resolver allowlists, hook install diffs, and privacy settings are product behaviour, not implementation details.
@@ -80,6 +80,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [remote.md](./docs/internals/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.
 - [observe.md](./docs/internals/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/diagnostics.md) channel.
 - [resolvers.md](./docs/internals/resolvers.md) — resolver protocol, chain, pane primitives.
+- [messages.md](./docs/internals/messages.md) — state-aware `steer` and durable per-agent queued messages: target grammar, record layout, gates, delivery, attempts, and hazards.
 - [run.md](./docs/internals/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.
 - [trust.md](./docs/internals/trust.md) — executable-surface hash, trust states, auto-revoke.
 - [hooks.md](./docs/internals/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.

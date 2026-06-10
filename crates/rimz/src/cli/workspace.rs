@@ -120,6 +120,7 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         println!("  old root      : {}", old_project_root.display());
         println!("  new root      : {}", new_workspace.project_root.display());
         println!("  feed items    : {}", outcome.feed_items_rewritten);
+        println!("  messages      : {}", outcome.messages_rewritten);
         println!("  events        : {}", outcome.events_rewritten);
     }
     Ok(())

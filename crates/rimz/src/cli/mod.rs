@@ -16,6 +16,7 @@ mod hooks;
 mod list;
 mod pane;
 mod parse;
+mod queue;
 mod reload;
 mod remote;
 mod reset;
@@ -28,6 +29,7 @@ mod setup;
 mod sidebar;
 mod start_notice;
 mod statusline;
+mod steer;
 mod tab;
 mod trust;
 mod workspace;
@@ -78,6 +80,8 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
+        Some(Subcmd::Steer(args)) => steer::run(args, &globals),
+        Some(Subcmd::Queue(args)) => queue::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
         Some(Subcmd::Run(args)) => run::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
@@ -176,6 +180,10 @@ enum Subcmd {
     Reset(reset::ResetArgs),
     /// Pane primitives backed by the selected mux backend.
     Pane(pane::PaneArgs),
+    /// Send state-gated text to a live agent pane.
+    Steer(steer::SteerArgs),
+    /// Queue text for delivery when an agent finishes a turn.
+    Queue(queue::QueueArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),
     /// Run one supervised agent prompt and print its final answer.

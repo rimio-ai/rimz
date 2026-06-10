@@ -8,7 +8,8 @@ use serde_json::{Value, json};
 use crate::agents::AgentLifecycleObservation;
 use crate::feed::FeedItem;
 use crate::feed::RuntimeOwner;
-use crate::ids::{AgentSessionId, EventId, MuxName, PaneId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, WorkspaceId};
+use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::schema::EVENT_SCHEMA_VERSION;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -17,6 +18,102 @@ pub struct AgentLifecyclePayload {
     pub event_name: Option<String>,
     #[serde(flatten)]
     pub observation: AgentLifecycleObservation,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentSteeredPayload {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub pane_id: PaneId,
+    pub forced: bool,
+    pub text_len: usize,
+}
+
+impl AgentSteeredPayload {
+    pub fn new(
+        kind: AgentKind,
+        agent_id: AgentSessionId,
+        pane_id: PaneId,
+        forced: bool,
+        text_len: usize,
+    ) -> Self {
+        Self {
+            kind,
+            agent_id,
+            pane_id,
+            forced,
+            text_len,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageEventMethod {
+    Queued,
+    Delivered,
+    Removed,
+    Abandoned,
+}
+
+impl MessageEventMethod {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "message.queued",
+            Self::Delivered => "message.delivered",
+            Self::Removed => "message.removed",
+            Self::Abandoned => "message.abandoned",
+        }
+    }
+
+    pub const fn for_terminal_status(status: MessageStatus) -> Option<Self> {
+        match status {
+            MessageStatus::Pending => None,
+            MessageStatus::Claimed => None,
+            MessageStatus::Delivered => Some(Self::Delivered),
+            MessageStatus::Removed => Some(Self::Removed),
+            MessageStatus::Abandoned => Some(Self::Abandoned),
+        }
+    }
+
+    fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "message.queued" => Some(Self::Queued),
+            "message.delivered" => Some(Self::Delivered),
+            "message.removed" => Some(Self::Removed),
+            "message.abandoned" => Some(Self::Abandoned),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MessageEventPayload {
+    pub message_id: MessageId,
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub gate: DeliveryGate,
+    pub status: MessageStatus,
+    pub text_len: usize,
+    pub enter: bool,
+    pub attempts: u32,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+impl MessageEventPayload {
+    pub fn from_record(message: &MessageRecord, reason: Option<&str>) -> Self {
+        Self {
+            message_id: message.message_id.clone(),
+            kind: message.kind.clone(),
+            agent_id: message.agent_id.clone(),
+            gate: message.gate,
+            status: message.status,
+            text_len: message.text.len(),
+            enter: message.enter,
+            attempts: message.attempts,
+            reason: reason.map(ToOwned::to_owned),
+        }
+    }
 }
 
 impl AgentLifecyclePayload {
@@ -66,6 +163,11 @@ impl AgentLifecyclePayload {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
+    AgentSteered(AgentSteeredPayload),
+    Message {
+        method: MessageEventMethod,
+        payload: MessageEventPayload,
+    },
     SessionRebirth,
     /// Deliberate carrier for audit/user events that have not graduated to a
     /// folded typed variant yet, including `feed.*`, `event.emit`, and unknown
@@ -140,11 +242,23 @@ impl EventEnvelope {
                     method: self.method.as_str(),
                     params: &self.params,
                 }),
+            "agent.steered" => serde_json::from_value(self.params.clone())
+                .map(EventKind::AgentSteered)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
             "session.rebirth" => EventKind::SessionRebirth,
-            _ => EventKind::Other {
-                method: self.method.as_str(),
-                params: &self.params,
-            },
+            method => MessageEventMethod::parse(method)
+                .and_then(|method| {
+                    serde_json::from_value(self.params.clone())
+                        .ok()
+                        .map(|payload| EventKind::Message { method, payload })
+                })
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
         }
     }
 
@@ -184,6 +298,41 @@ impl EventEnvelope {
             agent_kind.clone(),
             "agent-hook",
             "agent.lifecycle",
+            params,
+        )
+    }
+
+    pub fn agent_steered(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        payload: AgentSteeredPayload,
+    ) -> Self {
+        let params = serde_json::to_value(&payload)
+            .expect("AgentSteeredPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            "rimz",
+            "cli",
+            "agent.steered",
+            params,
+        )
+    }
+
+    pub fn message_event(
+        message: &MessageRecord,
+        session_name: impl Into<String>,
+        method: MessageEventMethod,
+        reason: Option<&str>,
+    ) -> Self {
+        let params = serde_json::to_value(MessageEventPayload::from_record(message, reason))
+            .expect("MessageEventPayload contains only JSON-serializable fields");
+        Self::new(
+            message.workspace_id.clone(),
+            session_name,
+            "rimz",
+            "cli",
+            method.as_str(),
             params,
         )
     }
@@ -389,6 +538,104 @@ mod tests {
             serde_json::to_vec(&legacy).unwrap()
         );
         assert!(matches!(typed.kind(), EventKind::SessionRebirth));
+    }
+
+    #[test]
+    fn agent_steered_constructor_keeps_the_existing_wire_shape() {
+        let workspace = workspace();
+        let payload = AgentSteeredPayload::new(
+            AgentKind::new_unchecked("claude"),
+            AgentSessionId::from("sess-1"),
+            PaneId::from_parts(MuxName::Tmux, "%1"),
+            true,
+            8,
+        );
+        let typed = EventEnvelope::agent_steered(workspace.clone(), "session", payload.clone());
+        let mut legacy = EventEnvelope::new(
+            workspace,
+            "session",
+            "rimz",
+            "cli",
+            "agent.steered",
+            json!({
+                "kind": "claude",
+                "agent_id": "sess-1",
+                "pane_id": "tmux:%1",
+                "forced": true,
+                "text_len": 8,
+            }),
+        );
+        legacy.event_id = typed.event_id.clone();
+        legacy.timestamp = typed.timestamp;
+
+        assert_eq!(
+            serde_json::to_vec(&typed).unwrap(),
+            serde_json::to_vec(&legacy).unwrap()
+        );
+        let EventKind::AgentSteered(decoded) = typed.kind() else {
+            panic!("agent.steered decodes to its typed kind");
+        };
+        assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn message_event_constructor_keeps_text_out_of_the_wire_shape() {
+        let now = Timestamp::now();
+        let message = MessageRecord {
+            message_id: MessageId::new(),
+            workspace_id: workspace(),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("sess-1"),
+            text: "secret prompt body".to_owned(),
+            enter: true,
+            gate: DeliveryGate::Done,
+            status: MessageStatus::Pending,
+            enqueued_at: now,
+            updated_at: now,
+            attempts: 0,
+            last_attempt_at: None,
+            last_error: None,
+            delivered_at: None,
+        };
+        let typed =
+            EventEnvelope::message_event(&message, "session", MessageEventMethod::Queued, None);
+        let mut legacy = EventEnvelope::new(
+            message.workspace_id.clone(),
+            "session",
+            "rimz",
+            "cli",
+            "message.queued",
+            json!({
+                "message_id": message.message_id.as_str(),
+                "kind": "claude",
+                "agent_id": "sess-1",
+                "gate": "done",
+                "status": "pending",
+                "text_len": "secret prompt body".len(),
+                "enter": true,
+                "attempts": 0,
+                "reason": null,
+            }),
+        );
+        legacy.event_id = typed.event_id.clone();
+        legacy.timestamp = typed.timestamp;
+
+        assert_eq!(
+            serde_json::to_vec(&typed).unwrap(),
+            serde_json::to_vec(&legacy).unwrap()
+        );
+        assert!(
+            !serde_json::to_string(&typed.params)
+                .unwrap()
+                .contains("secret prompt body")
+        );
+        let EventKind::Message { method, payload } = typed.kind() else {
+            panic!("message.queued decodes to its typed kind");
+        };
+        assert_eq!(method, MessageEventMethod::Queued);
+        assert_eq!(payload.message_id, message.message_id);
+        assert_eq!(payload.text_len, "secret prompt body".len());
+        assert_eq!(payload.reason, None);
     }
 
     #[test]

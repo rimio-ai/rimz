@@ -20,6 +20,7 @@ mod hooks;
 mod journey;
 mod ledger;
 mod list;
+mod message_queue;
 mod performance;
 mod presence_wake;
 mod property;

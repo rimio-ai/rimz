@@ -8,7 +8,7 @@ use clap::{Args, Subcommand};
 use super::GlobalFlags;
 use rimz::ResolvedWorkspace;
 use rimz::ids::PaneId;
-use rimz::mux::{MuxBackend, PaneListOptions, SplitPaneOptions};
+use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -37,8 +37,18 @@ enum PaneSubcmd {
         #[arg(long)]
         ansi: bool,
     },
-    /// Send text to a pane as if it were typed.
-    Send { pane_id: String, text: String },
+    /// Send text or named keys to a pane as if typed.
+    Send {
+        pane_id: String,
+        /// Press Enter after text and explicit keys.
+        #[arg(long)]
+        enter: bool,
+        /// Press a named key. Repeat to press several keys in order.
+        #[arg(long, value_parser = parse_key)]
+        key: Vec<NamedKey>,
+        /// Literal text to type. Use `--` before text that begins with `-`.
+        text: Option<String>,
+    },
     /// Focus a pane.
     Focus {
         pane_id: String,
@@ -78,9 +88,14 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
             json,
             ansi,
         } => capture(&*backend, pane_id, lines, json, ansi),
-        PaneSubcmd::Send { pane_id, text } => {
+        PaneSubcmd::Send {
+            pane_id,
+            enter,
+            key,
+            text,
+        } => {
             let pane = PaneId::parse(&pane_id)?;
-            send_text(backend.as_ref(), &pane, &text)
+            send(backend.as_ref(), &pane, text.as_deref(), &key, enter)
         }
         PaneSubcmd::Focus {
             pane_id,
@@ -228,4 +243,34 @@ fn resolve_session_name(globals: &GlobalFlags, session_name: Option<String>) -> 
 
 pub(super) fn send_text(backend: &dyn MuxBackend, pane: &PaneId, text: &str) -> Result<()> {
     backend.send_keys(pane, text).map_err(Into::into)
+}
+
+pub(super) fn send_key(backend: &dyn MuxBackend, pane: &PaneId, key: NamedKey) -> Result<()> {
+    backend.send_key(pane, key).map_err(Into::into)
+}
+
+fn send(
+    backend: &dyn MuxBackend,
+    pane: &PaneId,
+    text: Option<&str>,
+    keys: &[NamedKey],
+    enter: bool,
+) -> Result<()> {
+    if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
+        bail!("expected text, --key, or --enter");
+    }
+    if let Some(text) = text.filter(|text| !text.is_empty()) {
+        send_text(backend, pane, text)?;
+    }
+    for key in keys {
+        send_key(backend, pane, *key)?;
+    }
+    if enter {
+        send_key(backend, pane, NamedKey::Enter)?;
+    }
+    Ok(())
+}
+
+fn parse_key(raw: &str) -> std::result::Result<NamedKey, String> {
+    raw.parse::<NamedKey>().map_err(|err| err.to_string())
 }

@@ -23,11 +23,11 @@ pub(super) fn build_item(
     item
 }
 
-/// Spawn an adapter-requested `rimz` helper detached, with all stdio nulled
-/// (the fresh-stdio invariant for hook helper children). The hook drops the
-/// child into the shared reaper, so it returns before the helper runs and never
-/// adds latency to the agent's turn. Best-effort: a spawn failure is logged and
-/// ignored — out-of-band enrichment is never correctness.
+/// Spawn a hook-triggered `rimz` helper detached, with all stdio nulled (the
+/// fresh-stdio invariant for hook helper children). The hook drops the child
+/// into the shared reaper, so it returns before the helper runs and never adds
+/// latency to the agent's turn. Best-effort: a spawn failure is logged and
+/// ignored; durable queue work remains pending for a later transition.
 pub(super) fn spawn_refresh_detached(spawn: &rimz::agents::RefreshSpawn) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,

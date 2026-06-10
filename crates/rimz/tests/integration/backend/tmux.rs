@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::tmux::{self, MIN_TMUX_VERSION};
 use rimz::mux::{
-    MuxBackend, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
+    MuxBackend, NamedKey, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
     SplitPaneOptions, TmuxBackend,
 };
 use tempfile::TempDir;
@@ -902,6 +902,44 @@ fn capture_and_send_keys_round_trip() {
     );
     assert!(
         capture.contains("rimz-marker-io"),
+        "expected marker in capture, got: {capture:?}",
+    );
+}
+
+/// `send_key` presses terminal keys without treating them as literal text.
+#[test]
+fn send_key_enters_typed_command() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("key");
+
+    let panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("key".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes");
+    let pane_id = panes[0].pane_id.clone();
+
+    server
+        .backend
+        .send_keys(&pane_id, "printf rimz-marker-key")
+        .expect("send_keys");
+    server
+        .backend
+        .send_key(&pane_id, NamedKey::Enter)
+        .expect("send_key");
+
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-marker-key",
+        Duration::from_secs(2),
+    );
+    assert!(
+        capture.contains("rimz-marker-key"),
         "expected marker in capture, got: {capture:?}",
     );
 }

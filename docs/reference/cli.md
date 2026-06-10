@@ -94,6 +94,11 @@ rimz run list [--json]
 rimz run stop <run-id>
 rimz run send <run-id> [--enter] -- <text>
 rimz run stream <run-id> [--from-start] [--timeout <duration>]
+rimz steer <target> [--worktree <name>] [--no-enter] [--force] -- <text>
+rimz queue <target> [--worktree <name>] [--on done|any] [--no-enter] -- <text>
+rimz queue list [--json] [target]
+rimz queue remove <message-id>
+rimz queue clear <target> [--worktree <name>]
 ```
 
 `rimz worktree` manages only Rimz-marked Git worktrees. New worktrees live under `[worktree] dir` (default `../{repo}-worktrees/<name>`), branch from `[worktree] base`, and carry their marker in the worktree's Git admin directory so the checkout stays untouched. `remove` refuses dirty worktrees or commits not yet merged into their base unless `--force` is explicit.
@@ -113,6 +118,16 @@ Worktree launchers require a repo-backed room. In a marker or directory room, `r
 `rimz run send <run-id> [--enter] -- <text>` sends text to the run's pane through the public pane-send primitive and appends Enter when `--enter` is present. It fails fast for terminal runs and for runs whose pane has not bound yet. For scripts that inspect before they type, use the capture-before-send discipline from [resolvers.md](../internals/resolvers.md#pane-send-resolver).
 
 `rimz run --stream "<prompt>"` and `rimz run stream <run-id>` emit NDJSON: `message` events for assistant progress, `status` events when the live state changes, and one `end` event with the terminal status and `last_message`. Message events are interim progress; `end.last_message` is the deliverable, and it may duplicate the final message event. Message events come from Claude and Codex transcript shapes today; adapters without a stream parser still emit status and terminal end events. `rimz run stream <run-id>` attaches by polling the retained run record and transcript file, so it does not steal a blocked producer's wakeup socket. Its `--timeout` stops watching and exits `124` without writing `timed_out` to the run record.
+
+## Steer and queue agent messages
+
+`TARGET` is a normalized pane id (`tmux:%1`, `zellij:terminal_3`), a known agent kind (`claude`, `codex`, `pi`), or an agent session id or unique session-id prefix. Kind and session targets must resolve to one root agent; ambiguity and misses print candidate sessions. `--worktree <name>` filters kind/session matches by worktree branch, basename, or path.
+
+`rimz steer` types human-authored text into a live agent pane immediately and appends Enter unless `--no-enter` is present. It refuses when a pending ask is attached to the agent, because the next input belongs to that ask; `--force` records the override and sends anyway. The audit event records kind, session id, pane id, force flag, and text length, never message content.
+
+`rimz queue` stores text durably for one agent and delivers FIFO when the agent reaches the gate. `--on done` delivers after `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Hooks are the delivery signal, so `queue add` requires that agent's hooks to be installed and trusted before accepting a message.
+
+Delivery happens one message per unparked turn end. The helper waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the pending head, then sends through the pane primitive and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap; a helper crash leaves a visible `claimed` record rather than auto-redelivering. `queue list` shows durable records, `remove` moves one open record to `removed`, and `clear` removes every open record for the resolved agent. Detail: [internals/messages.md](../internals/messages.md).
 
 ## Publish events and ask questions
 
@@ -163,11 +178,11 @@ rimz pane split                                  # split the current view; inher
 rimz pane focus <pane-id> [--session-name <name>] [--pane-process-start <ts>]
 rimz pane list [--json] [--session-name <name>]
 rimz pane capture <pane-id> [--lines N] [--json] [--ansi]
-rimz pane send <pane-id> -- <keys-or-text>
+rimz pane send <pane-id> [--enter] [--key <key>]... [--] [text]
 rimz pane detach [--session-name <name>]
 ```
 
-`capture` and `send` are the universal answer surface: resolvers use them to answer prompts on tools that expose no hook protocol. Captured pane text is untrusted data — a resolver matches it against its own bounded patterns, never replaying it as an instruction. Detail in [resolvers.md](../internals/resolvers.md). `detach` drops the attached client and leaves the session running; client semantics differ per backend ([multiplexers.md](../internals/multiplexers.md)).
+`capture` and `send` are the universal answer surface: resolvers use them to answer prompts on tools that expose no hook protocol, and humans use them for direct pane control. `--key` accepts `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; repeat it to press several keys. `--enter` appends an Enter key after text and explicit keys. Captured pane text is untrusted data — a resolver matches it against its own bounded patterns, never replaying it as an instruction. Detail in [resolvers.md](../internals/resolvers.md). `detach` drops the attached client and leaves the session running; client semantics differ per backend ([multiplexers.md](../internals/multiplexers.md)).
 
 ## Enrol resolvers
 
@@ -186,14 +201,14 @@ Resolvers form an ordered chain that ends with you. Each entry carries its own `
 ```sh
 rimz reset [--yes] [--no-start] [PATH]   # destroy a wedged room and rebuild it clean
 rimz reload                              # converge every running sidebar to a healthy set
-rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, landed marked worktrees
+rimz gc [--older-than <duration>]        # sweep stale liveness hints, dead-owner items, orphan queued messages, landed marked worktrees
 rimz workspace migrate <old-root> <new-root>
 rimz workspace rotate-events [--max-bytes <size>] [--archive-older-than <duration>]
 ```
 
-`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats, sockets, and read-mark receipts whose owner heartbeats have expired, abandons pending items whose owner process has exited, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed on their base in the current repo when no live user pane is inside them.
+`reset` tears a stuck room down — the session, its resurrection cache, and orphaned processes — then rebuilds and reattaches it; `--no-start` stops after teardown, `--yes` skips the confirmation. `reload` runs from anywhere and reconciles sidebars across all of your workspaces: it re-execs each to a freshly-installed build and re-adds any view that lost its sidebar, never rebirthing a session ([internals/sidebar.md](../internals/sidebar.md)). `gc` is the global janitor: it removes stale resolver/sidebar heartbeats, sockets, and read-mark receipts whose owner heartbeats have expired, abandons pending items whose owner process has exited, abandons queued messages for sessions no longer in the rollup, reaps provably-dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed on their base in the current repo when no live user pane is inside them.
 
-`workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
+`workspace migrate` rewires the ledger after a repo moves on disk, rewriting every feed item, queued message record, event, and snapshot to the new workspace ID. `workspace rotate-events` archives the active event log past `--max-bytes` (default `64MiB`), preserving the agent rollup, and prunes archives older than `--archive-older-than`. The durability rules behind both live in [internals/ledger.md](../internals/ledger.md).
 
 ## Manage trust
 
@@ -223,6 +238,7 @@ rimz sidebar serve ...                             # the terminal sidebar render
 rimz sidebar wake --reason <r> [--workspace-id <id>] # Zellij presence-plugin poke (stamp + eldest nudge)
 rimz statusline feed --source <agent>              # captures statusline context
 rimz hooks feed --source <agent> [--event <e>]     # routes a hook payload (--event is a debug override)
+rimz queue deliver --message-id <id>               # hook-spawned queued-message delivery helper
 rimz agents exec <agent> [--run-id <id>] [--worktree-path <p>] [--prompt <text>] # supervised agent pane wrapper
 rimz worktree cleanup <path> [--non-interactive]   # marked-worktree cleanup helper
 rimz codex ...                                     # Codex enrichment helpers

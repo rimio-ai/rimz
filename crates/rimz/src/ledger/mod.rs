@@ -37,6 +37,7 @@ pub mod event_log;
 pub mod feed_store;
 pub mod gc;
 pub mod lock;
+pub mod message_store;
 pub(crate) mod parse_cache;
 pub mod paths;
 pub mod run_store;
@@ -120,6 +121,8 @@ pub enum LedgerErr {
     #[error(transparent)]
     FeedStore(#[from] feed_store::FeedStoreErr),
     #[error(transparent)]
+    MessageStore(#[from] message_store::MessageStoreErr),
+    #[error(transparent)]
     Lock(#[from] lock::LockErr),
     #[error(transparent)]
     Snapshot(#[from] snapshot::SnapshotErr),
@@ -161,6 +164,7 @@ pub struct ElapseOutcome {
 pub struct WorkspaceRewriteOutcome {
     pub workspace_id: WorkspaceId,
     pub feed_items_rewritten: usize,
+    pub messages_rewritten: usize,
     pub events_rewritten: usize,
 }
 

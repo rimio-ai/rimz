@@ -19,6 +19,7 @@ pub mod diag;
 pub mod feed;
 pub mod ids;
 pub mod ledger;
+pub mod message;
 pub mod mux;
 pub mod osc;
 pub mod proc;
@@ -33,6 +34,7 @@ pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod tab_layout;
+pub mod target;
 pub mod trust;
 pub mod tui;
 pub mod workspace;
@@ -45,7 +47,7 @@ pub use crate::feed::{
     ResolverStep, ResolverStepState, RuntimeOwner, RuntimeOwnerKind, Surface,
 };
 pub use crate::ids::{
-    EventId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
+    EventId, MessageId, MuxName, PaneId, RequestId, ResolverId, RunId, SidebarInstanceId, ViewKind,
     WorkspaceId,
 };
 pub use crate::ledger::{
@@ -56,4 +58,5 @@ pub use crate::ledger::{
     WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
+pub use crate::target::{AgentTarget, TargetErr};
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

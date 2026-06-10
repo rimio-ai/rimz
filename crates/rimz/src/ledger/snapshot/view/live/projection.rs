@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use jiff::Timestamp;
 
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef};
+use crate::feed::{AgentState, AgentStatus, FeedItem, PaneRef, pending_ask_for};
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::ledger::snapshot::panes::{
     AgentPaneRow, LazyAgentPairingResult, agent_for_pane, agent_pane_for_pane,
@@ -15,9 +15,7 @@ use crate::ledger::snapshot::process::{
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::schema::diag::DiagEvent;
 
-use super::super::rows::{
-    active_resolver_state, agent_id_from_item, row_from_agent, row_from_standalone_item,
-};
+use super::super::rows::{active_resolver_state, row_from_agent, row_from_standalone_item};
 
 pub(super) struct LazyAgentPaneProjection<'a> {
     pub(super) wired_kinds: &'a [String],
@@ -231,19 +229,7 @@ fn most_relevant_ask<'a>(
     needs_attention: &'a [FeedItem],
     resolver_working: &'a [FeedItem],
 ) -> Option<&'a FeedItem> {
-    needs_attention
-        .iter()
-        .chain(resolver_working.iter())
-        .find(|item| {
-            item.source_kind == "agent-hook"
-                && item.source == agent.kind
-                && agent_id_from_item(item).as_deref() == Some(agent.agent_id.as_str())
-                && !agent_moved_past_ask(agent, item)
-        })
-}
-
-fn agent_moved_past_ask(agent: &AgentState, ask: &FeedItem) -> bool {
-    agent.last_activity > ask.updated_at
+    pending_ask_for(agent, needs_attention.iter().chain(resolver_working.iter()))
 }
 
 fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {

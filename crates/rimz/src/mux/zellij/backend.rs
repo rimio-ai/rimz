@@ -15,9 +15,9 @@ use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionHealth, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions,
-    TabOptions, ensure_pane_backend,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, Result, SessionHealth,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth,
+    SplitPaneOptions, TabOptions, ensure_pane_backend,
 };
 
 impl MuxBackend for ZellijBackend {
@@ -175,6 +175,16 @@ impl MuxBackend for ZellijBackend {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         self.cmd()
             .args(["action", "write-chars", "--pane-id", pane.raw(), text])
+            .run()
+            .map(|_| ())
+    }
+
+    fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        let bytes = key.write_bytes().iter().map(u8::to_string);
+        self.cmd()
+            .args(["action", "write", "--pane-id", pane.raw()])
+            .args(bytes)
             .run()
             .map(|_| ())
     }

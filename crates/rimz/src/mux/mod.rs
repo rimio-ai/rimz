@@ -6,6 +6,7 @@
 //! form that travels everywhere else.
 
 mod command;
+mod keys;
 mod reconcile;
 pub mod recovery;
 mod selection;
@@ -15,6 +16,7 @@ pub mod zellij;
 
 pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
+pub use keys::{NamedKey, UnknownKey};
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub(crate) use reconcile::{ViewSidebars, plan_reconcile};
 pub use selection::auto_detect_backend;
@@ -349,6 +351,7 @@ pub trait MuxBackend: Send + Sync {
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
+    fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
     /// is `Some`, the session is born with that view leading and the working view
     /// focused second — on Zellij the lead order is fixed here, at birth, since

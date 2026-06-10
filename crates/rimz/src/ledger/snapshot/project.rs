@@ -74,6 +74,7 @@ pub(super) fn reduce_agent_states_seeded(
                 continue;
             }
             EventKind::AgentLifecycle(payload) => *payload,
+            EventKind::AgentSteered(_) | EventKind::Message { .. } => continue,
             EventKind::Other {
                 method: "agent.lifecycle",
                 ..

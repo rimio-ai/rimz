@@ -129,7 +129,10 @@ fn agent_signal(event: &EventEnvelope) -> Option<String> {
             let payload = *payload;
             Some(payload.observation.signal.tag().to_owned())
         }
-        EventKind::SessionRebirth | EventKind::Other { .. } => None,
+        EventKind::AgentSteered(_)
+        | EventKind::Message { .. }
+        | EventKind::SessionRebirth
+        | EventKind::Other { .. } => None,
     }
 }
 

@@ -6,8 +6,8 @@ use std::sync::Mutex;
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
-    CommandSpec, DaemonView, MuxBackend, MuxErr, PaneCapture, PaneListOptions, SessionOptions,
-    SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
+    CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions,
+    SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions,
 };
 use rimz::schema::SIDEBAR_PROTOCOL_VERSION;
 use rimz::schema::heartbeat::SidebarHeartbeat;
@@ -224,6 +224,10 @@ impl MuxBackend for FakeBackend {
     }
 
     fn send_keys(&self, _pane: &PaneId, _text: &str) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
+    fn send_key(&self, _pane: &PaneId, _key: NamedKey) -> rimz::mux::Result<()> {
         Ok(())
     }
 

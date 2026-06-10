@@ -253,6 +253,7 @@ fn validate_uuid_id(
 }
 
 uuid_v7_id!(RequestId, "req", "Per-feed-item request identifier.");
+uuid_v7_id!(MessageId, "msg", "Per-agent queued message identifier.");
 uuid_v7_id!(RunId, "run", "Per-supervised-run identifier.");
 uuid_v7_id!(EventId, "evt", "Per-event identifier in the event log.");
 uuid_v7_id!(
@@ -609,6 +610,7 @@ mod tests {
         assert!(RequestId::parse("req_short").is_err());
         assert!(RequestId::parse("req_0123456789abcdef0123456789abcdeg").is_err());
         assert!(RequestId::parse("req_0123456789abcdef0123456789ABCDEF").is_err());
+        assert!(MessageId::parse("msg_0123456789abcdef0123456789abcdef").is_ok());
         assert!(EventId::parse("evt_0123456789abcdef0123456789abcdef").is_ok());
         assert!(SidebarInstanceId::parse("sb_0123456789abcdef0123456789abcdef").is_ok());
     }

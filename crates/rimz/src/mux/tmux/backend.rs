@@ -7,8 +7,9 @@ use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, PaneCapture, PaneListOptions, Result, SessionOptions, SidebarLiveness,
-    SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, Result, SessionOptions,
+    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
+    ensure_pane_backend,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -230,7 +231,15 @@ impl MuxBackend for TmuxBackend {
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         self.cmd()
-            .args(["send-keys", "-t", pane.raw(), "--", text])
+            .args(["send-keys", "-l", "-t", pane.raw(), "--", text])
+            .run()
+            .map(|_| ())
+    }
+
+    fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        self.cmd()
+            .args(["send-keys", "-t", pane.raw(), key.tmux_name()])
             .run()
             .map(|_| ())
     }

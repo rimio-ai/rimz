@@ -2032,7 +2032,11 @@ fn ensure_no_core_pane_auto_use(root: &Path, files: &[PathBuf]) -> Result<()> {
         root.join("docs"),
         root.join("xtask"),
     ];
-    for needle in [concat!("capture", "_pane("), concat!("send", "_keys(")] {
+    for needle in [
+        concat!("capture", "_pane("),
+        concat!("send", "_keys("),
+        concat!("send", "_key("),
+    ] {
         ensure_no_match(
             files,
             needle,

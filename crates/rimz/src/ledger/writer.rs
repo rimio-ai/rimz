@@ -11,12 +11,13 @@ use crate::workspace::ResolvedWorkspace;
 
 use super::{
     AskExpiry, EventLogRotationOutcome, Ledger, Result, WorkspaceRewriteOutcome, event_log,
-    feed_store, lock, snapshot, workspace_record,
+    feed_store, lock, message_store, snapshot, workspace_record,
 };
 
 mod debounce;
 mod expiry;
 mod publish;
+mod queue;
 mod resolve;
 
 impl Ledger {
@@ -41,7 +42,7 @@ impl Ledger {
         &self,
         workspace: &ResolvedWorkspace,
     ) -> Result<WorkspaceRewriteOutcome> {
-        let (feed_items_rewritten, events_rewritten) = {
+        let (feed_items_rewritten, messages_rewritten, events_rewritten) = {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             // Also fence the snapshot publishers: this rewrite replaces the
             // caches in place, and a publisher mid-fold must not clobber
@@ -54,6 +55,13 @@ impl Ledger {
             for item in &mut items {
                 item.workspace_id = workspace.workspace_id.clone();
                 feed_store::write(&self.inner.paths.feed_dir, item)?;
+            }
+
+            let mut messages = message_store::list(&self.inner.paths.queue_dir)?;
+            let messages_rewritten = messages.len();
+            for message in &mut messages {
+                message.workspace_id = workspace.workspace_id.clone();
+                message_store::write(&self.inner.paths.queue_dir, message)?;
             }
 
             let mut events = event_log::read_all(&self.inner.paths.events_log)?;
@@ -71,12 +79,13 @@ impl Ledger {
             snapshot::reseed_rollup_cache_for_rotation(&self.inner.paths)?;
             snapshot::rebuild(&self.inner.paths)?;
 
-            (feed_items_rewritten, events_rewritten)
+            (feed_items_rewritten, messages_rewritten, events_rewritten)
         };
 
         Ok(WorkspaceRewriteOutcome {
             workspace_id: workspace.workspace_id.clone(),
             feed_items_rewritten,
+            messages_rewritten,
             events_rewritten,
         })
     }

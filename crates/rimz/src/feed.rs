@@ -907,6 +907,25 @@ impl AgentState {
     }
 }
 
+/// The pending ask currently blocking `agent`, if any.
+///
+/// This is the shared authority behind the sidebar's displayed `waiting`
+/// projection and the message-sending gates. A newer agent activity timestamp
+/// means the agent moved past the ask in its own UI, so the stale item no
+/// longer blocks pane input.
+pub fn pending_ask_for<'a>(
+    agent: &AgentState,
+    items: impl IntoIterator<Item = &'a FeedItem>,
+) -> Option<&'a FeedItem> {
+    items.into_iter().find(|item| {
+        item.source_kind == "agent-hook"
+            && item.status == FeedStatus::Pending
+            && item.source == agent.kind
+            && item.agent_session_id() == Some(agent.agent_id.as_str())
+            && agent.last_activity <= item.updated_at
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,6 +995,65 @@ mod tests {
         assert!(!FeedStatus::Resolved.allows_resolution());
         assert!(FeedStatus::Resolved.is_terminal());
         assert!(!FeedStatus::Pending.is_terminal());
+    }
+
+    #[test]
+    fn pending_ask_matches_agent_hook_session_until_agent_moves_on() {
+        let now = Timestamp::now();
+        let workspace = WorkspaceId::from_project_root(std::path::Path::new("/tmp/x"));
+        let mut agent = AgentState {
+            agent_id: AgentSessionId::from("sess-1"),
+            kind: AgentKind::new_unchecked("claude"),
+            status: AgentStatus::Running,
+            phase: TurnPhase::Reasoning,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
+        };
+        let mut item = FeedItem::new(
+            workspace,
+            Surface::NativeUi,
+            FeedKind::Permission,
+            "approve?",
+            "claude",
+            "agent-hook",
+        );
+        item.payload = serde_json::json!({ "session_id": "sess-1" });
+        item.updated_at = now + std::time::Duration::from_secs(1);
+
+        assert_eq!(
+            pending_ask_for(&agent, [&item]).map(|ask| &ask.request_id),
+            Some(&item.request_id),
+        );
+        agent.last_activity = item.updated_at + std::time::Duration::from_secs(1);
+        assert!(pending_ask_for(&agent, [&item]).is_none());
     }
 
     /// The context tier climbs calm → yellow → amber → red, taking the worse

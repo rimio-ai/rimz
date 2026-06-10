@@ -72,7 +72,7 @@ Each line is a decision a reader might challenge, with the reason on the same li
 - **Interactive attach is opportunistic.** `rimz` enters the selected mux only when stdin/stdout are TTYs and the caller is not already inside it; non-interactive callers get a printed attach command, and explicit flags override.
 - **Resolvers are explicit and per-machine.** A resolver engages the bridge when it is on the local allowlist *and* heartbeating freshly. The allowlist plus a fresh heartbeat is the trust boundary; same-UID file access alone never grants it.
 - **Transcripts and panes enrich display.** Pane contents and transcripts decorate rows; the ledger and explicit events decide permissions, state, and correctness. Core reads a pane only to render it.
-- **Pane I/O is a resolver primitive.** `pane capture` and `pane send` are public primitives for humans and resolvers; core treats panes as opaque.
+- **Pane I/O is explicit.** `pane capture` and `pane send` are public primitives for humans and resolvers. `steer` and `queue` route human-authored text through the same send primitive; deferred delivery types only at done transitions and pending asks hold delivery. State decisions come from the ledger, hooks, and sidecars, while pane reads stay in rendering and resolver-owned inspection.
 - **Headless works.** Hooks, the bridge, `rimz feed ask`, and `rimz run` run with no sidebar and no attached client. The sidebar is a UI over a workspace that runs fine without one.
 
 ## Non-goals

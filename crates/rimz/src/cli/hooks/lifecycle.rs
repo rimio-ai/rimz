@@ -33,6 +33,7 @@ pub(super) fn handle_lifecycle_hook(
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
+        spawn_queue_delivery_if_checkpoint(workspace, ledger, agent, recorded);
     }
     Ok(())
 }
@@ -224,6 +225,46 @@ fn record_run_lifecycle(
             );
         }
     }
+}
+
+fn spawn_queue_delivery_if_checkpoint(
+    workspace: &ResolvedWorkspace,
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    recorded: &RecordedLifecycle,
+) {
+    if !rimz::message::delivery_checkpoint(&recorded.observation.signal) {
+        return;
+    }
+    let Some(agent_id) = recorded.observation.agent_id.as_ref() else {
+        return;
+    };
+    let pending = match ledger.list_pending_messages() {
+        Ok(messages) => messages,
+        Err(err) => {
+            debug!(
+                agent = agent.descriptor().kind,
+                agent_id = %agent_id,
+                error = %err,
+                "queue delivery skipped; pending messages unreadable",
+            );
+            return;
+        }
+    };
+    let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
+    let Some(head) = rimz::message::queue_head(pending.iter(), &kind, agent_id) else {
+        return;
+    };
+    spawn_refresh_detached(&rimz::agents::RefreshSpawn {
+        args: vec![
+            "--root".to_owned(),
+            workspace.project_root.display().to_string(),
+            "queue".to_owned(),
+            "deliver".to_owned(),
+            "--message-id".to_owned(),
+            head.message_id.to_string(),
+        ],
+    });
 }
 
 fn env_run_id() -> Option<rimz::RunId> {
