@@ -10,7 +10,9 @@ The log is state-dir rather than runtime-dir because its job is investigation af
 
 ## Envelope
 
-Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, and a tagged event.
+Every line is a `rimz.diag.v1` JSON object from [`schema/diag.rs`](../../crates/rimz/src/schema/diag.rs): workspace id, session name, optional sidebar instance id, Unix milliseconds, severity, the writer's `build` id, and a tagged event.
+
+The `build` id — also stamped on every published pane frame — is a digest prefix of the writing executable's bytes ([`build_id.rs`](../../crates/rimz/src/build_id.rs)), so records and frames written by overlapping old/new builds during an upgrade are distinguishable in place. A producer that reads a prior frame stamped by a different build additionally records a `mixed_build_writers` event, marking the overlap window itself.
 
 Records are anomaly-only. Routine fetch ticks, successful paints, and stable cache hits do not write records.
 
@@ -22,6 +24,7 @@ Records are anomaly-only. Routine fetch ticks, successful paints, and stable cac
 | `gate_hold`, `gate_release`, `fetch_failure`, `health_alert`, `producer_elected`, `producer_demoted`, `renderer_panic` | `sidebar_pane::app` | Renderer-side holds, degraded refresh episodes, producer handoff, panics that would otherwise disappear with the pane |
 | `row_conflict`, `newborn_quarantined`, `group_migration` | `ledger::snapshot::view` via `sidebar::enrich` and renderer state diffing | duplicate agent identity suppression, newborn known-command unknown-cwd quarantine, rows moving between groups |
 | `frame_anomaly` | `sidebar::observe` writer thread | rendered-stream detector verdicts — flaps, oscillations, per-frame consistency violations, elder cross-checks — each carrying its detector key, evidence, frame stamp, and the writer's elder/consumer role ([observe.md](./observe.md)) |
+| `mixed_build_writers` | `sidebar::produce::panes` | a prior published frame stamped by a different build than the producing process — the upgrade-overlap window where stale writers regress fresh state |
 
 Pure projection layers return diagnostics as data. Impure callers append them through `DiagSink`, keeping ledger reducers and the renderer gate free of disk-write APIs. The observer's writer thread emits through the same sink, so every anomaly source shares one envelope, one file, and one rate limiter.
 

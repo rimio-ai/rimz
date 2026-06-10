@@ -344,6 +344,10 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
         DiagEvent::NewbornQuarantined { pane_id } => {
             format!("held newborn {pane_id} until cwd resolves")
         }
+        DiagEvent::MixedBuildWriters {
+            prior_build,
+            own_build,
+        } => format!("prior frame from build {prior_build}; this producer is {own_build}"),
         DiagEvent::RendererPanic { message, .. } => message.clone(),
         DiagEvent::FrameAnomaly {
             anomaly,

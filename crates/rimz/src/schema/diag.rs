@@ -12,6 +12,10 @@ pub const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DiagEnvelope {
     pub v: String,
+    /// Build id of the writing process ([`crate::build_id`]), so overlapping
+    /// old/new builds are distinguishable in the evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     pub workspace_id: WorkspaceId,
     pub session_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -31,6 +35,7 @@ impl DiagEnvelope {
     ) -> Self {
         Self {
             v: DIAG_SCHEMA_VERSION.to_owned(),
+            build: crate::build_id::current().map(str::to_owned),
             workspace_id,
             session_name,
             instance_id,
@@ -130,6 +135,10 @@ pub enum DiagEvent {
     NewbornQuarantined {
         pane_id: PaneId,
     },
+    MixedBuildWriters {
+        prior_build: String,
+        own_build: String,
+    },
     RendererPanic {
         message: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -172,6 +181,7 @@ impl DiagEvent {
             | Self::ProducerDemoted { .. }
             | Self::GroupMigration { .. }
             | Self::NewbornQuarantined { .. }
+            | Self::MixedBuildWriters { .. }
             | Self::HealthAlert {
                 recovered_after_ms: Some(_),
                 ..
@@ -196,6 +206,7 @@ impl DiagEvent {
             Self::ForeignSessionPane { .. } => "foreign_session_pane",
             Self::GroupMigration { .. } => "group_migration",
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
+            Self::MixedBuildWriters { .. } => "mixed_build_writers",
             Self::RendererPanic { .. } => "renderer_panic",
             Self::FrameAnomaly { .. } => "frame_anomaly",
         }
@@ -256,6 +267,10 @@ impl DiagEvent {
                 anomaly.key(),
                 anomaly.subject().unwrap_or_default()
             ),
+            Self::MixedBuildWriters {
+                prior_build,
+                own_build,
+            } => format!("{}:{prior_build}:{own_build}", self.kind_name()),
             Self::ProducerElected { .. }
             | Self::ProducerDemoted { .. }
             | Self::FrameRejectEscape { .. }
@@ -550,6 +565,10 @@ mod tests {
             DiagEvent::NewbornQuarantined {
                 pane_id: pane("terminal_1"),
             },
+            DiagEvent::MixedBuildWriters {
+                prior_build: "0f3a9c21d4be".to_owned(),
+                own_build: "8e7d6c5b4a39".to_owned(),
+            },
             DiagEvent::RendererPanic {
                 message: "boom".to_owned(),
                 backtrace: None,
@@ -591,6 +610,38 @@ mod tests {
             assert_eq!(decoded, envelope);
             assert!(decoded.is_current_version());
         }
+    }
+
+    #[test]
+    fn new_envelopes_carry_the_writer_build() {
+        let envelope = DiagEnvelope::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            "rimz-test".to_owned(),
+            None,
+            42,
+            DiagEvent::FrameRejectEscape { held_ms: 5_001 },
+        );
+
+        assert_eq!(envelope.build.as_deref(), crate::build_id::current());
+        assert!(envelope.build.is_some());
+    }
+
+    #[test]
+    fn legacy_record_without_build_decodes() {
+        let envelope = DiagEnvelope::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/repo")),
+            "rimz-test".to_owned(),
+            None,
+            42,
+            DiagEvent::FrameRejectEscape { held_ms: 5_001 },
+        );
+        let mut value = serde_json::to_value(&envelope).expect("encode");
+        value.as_object_mut().expect("object").remove("build");
+
+        let decoded: DiagEnvelope = serde_json::from_value(value).expect("decode");
+
+        assert_eq!(decoded.build, None);
+        assert!(decoded.is_current_version());
     }
 
     #[test]

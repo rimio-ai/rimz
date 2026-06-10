@@ -570,6 +570,7 @@ fn validate_frame_for_publish(
 ) -> Result<PaneFrame> {
     let now_ms = unix_now_ms();
     let prior = prior.and_then(|prior| publishable_prior(prior, own_pane, diag));
+    emit_mixed_build_writers(diag, prior.as_ref());
     match frame_publish_verdict(&frame, prior.as_ref(), own_pane, now_ms) {
         PublishVerdict::Publish => {
             if publish {
@@ -613,6 +614,27 @@ fn publishable_prior(
     diag: Option<&crate::diag::DiagSink>,
 ) -> Option<PaneFrame> {
     publishable_cached_frame(frame, own_pane, diag)
+}
+
+/// A prior frame assembled by a different build means two rimz versions are
+/// writing this workspace's snapshot — the upgrade-overlap window where stale
+/// producers cause the subtlest regressions. Info evidence, rate-limited per
+/// build pair; legacy frames without a stamp stay silent.
+fn emit_mixed_build_writers(diag: Option<&crate::diag::DiagSink>, prior: Option<&PaneFrame>) {
+    let (Some(diag), Some(prior)) = (diag, prior) else {
+        return;
+    };
+    let (Some(prior_build), Some(own_build)) = (prior.build.as_deref(), crate::build_id::current())
+    else {
+        return;
+    };
+    if prior_build == own_build {
+        return;
+    }
+    diag.emit(DiagEvent::MixedBuildWriters {
+        prior_build: prior_build.to_owned(),
+        own_build: own_build.to_owned(),
+    });
 }
 
 fn publishable_cached_frame(

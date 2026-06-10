@@ -20,6 +20,11 @@ use crate::schema::diag::DiagEvent;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {
     pub produced_at_ms: u64,
+    /// Build id of the producer that assembled this frame
+    /// ([`crate::build_id`]); absent on frames written by builds that predate
+    /// the stamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<String>,
     pub session_name: String,
     pub tabs: Vec<TabFrame>,
 }
@@ -343,6 +348,7 @@ pub fn assemble_frame_with_diagnostics(
     (
         PaneFrame {
             produced_at_ms,
+            build: crate::build_id::current().map(str::to_owned),
             session_name: session_name.into(),
             tabs: tabs.into_values().collect(),
         },

@@ -304,6 +304,72 @@ fn read_only_consumer_serves_a_stale_same_session_base() {
     );
 }
 
+#[test]
+fn prior_frame_from_another_build_records_mixed_writers() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace_id =
+        crate::ids::WorkspaceId::from_project_root(std::path::Path::new("/tmp/mixed-builds"));
+    let runtime = crate::RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let cache_path = runtime.root.join("snapshot.json");
+    let sink = crate::diag::DiagSink::under(dir.path().join("state"), workspace_id, "s", None);
+    let own = crate::ids::PaneId::from_parts(crate::ids::MuxName::Zellij, "terminal_1");
+    let now = unix_now_ms();
+    let mut prior = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
+        now,
+        "s",
+    );
+    prior.build = Some("0000aaaa0000".to_owned());
+    let fresh = crate::sidebar::frame::assemble_frame(
+        vec![pane("terminal_1", Some("zsh"), Some("/repo"))],
+        now.saturating_add(1),
+        "s",
+    );
+
+    validate_frame_for_publish(
+        fresh.clone(),
+        Some(prior),
+        Some(&own),
+        Some(&sink),
+        false,
+        &runtime,
+        &cache_path,
+    )
+    .expect("a valid fresh frame publishes despite the build mismatch");
+    // A prior frame from this very build stays silent.
+    validate_frame_for_publish(
+        fresh.clone(),
+        Some(fresh),
+        Some(&own),
+        Some(&sink),
+        false,
+        &runtime,
+        &cache_path,
+    )
+    .expect("same-build prior publishes");
+
+    let mixed = diagnostic_events(&sink)
+        .into_iter()
+        .filter_map(|event| match event {
+            crate::schema::diag::DiagEvent::MixedBuildWriters {
+                prior_build,
+                own_build,
+            } => Some((prior_build, own_build)),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        mixed,
+        vec![(
+            "0000aaaa0000".to_owned(),
+            crate::build_id::current()
+                .expect("test binary build id")
+                .to_owned()
+        )]
+    );
+}
+
 fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
     std::fs::read_to_string(sink.log_path())
         .expect("diagnostic log")
