@@ -14,6 +14,7 @@ pub mod binding_log;
 pub mod bridge;
 pub mod child_process;
 pub mod config;
+pub mod diag_log;
 pub mod feed;
 pub mod ids;
 pub mod ledger;
