@@ -18,7 +18,7 @@ Every mutation of the rendered snapshot flows through one fold chokepoint in the
 
 ## Windowed detectors
 
-The windowed family recognizes back-and-forth motion a user would describe — rendered, gone, rendered again — with a window per detector class. Windowed detection holds during `OBSERVE_WARMUP` after the first frame-backed commit (startup and reload transients are expected, and a re-exec re-arms the grace) and while a fold is frameless (the gate owns that case and records it as a `gate_hold`). Windows measure receiver-clock time, like the event store's TTLs.
+The windowed family recognizes back-and-forth motion a user would describe — rendered, gone, rendered again — with a window per detector class. Windowed detection holds during `OBSERVE_WARMUP` after the first frame-backed commit (startup and reload transients are expected, and a re-exec re-arms the grace) and while the committed fold is frameless before the first pane frame. A frameless incoming fold over a frame-backed render is gate-held, records `gate_hold`, and the observer keeps observing the committed prior frame; a committed frameless fold that still carries rows fires `FramelessRows` immediately. Windows measure receiver-clock time, like the event store's TTLs.
 
 In tmux poll mode, a row born late in warmup can still look short-lived on the first post-warmup frame if it closes before any pane-close event reaches the renderer; that is the same accepted diagnostic ambiguity as any sub-window poll-only close.
 

@@ -450,9 +450,14 @@ mod tests {
 
         state.observe_commit();
 
-        assert!(
-            state.observer.dropped_msgs >= 4,
-            "the prior drop count must be retained when its carrier draft fails to queue"
+        assert_eq!(
+            state.observer.dropped_msgs, 5,
+            "the failed anomaly send carries the prior drop count, then the failed roster send adds one"
+        );
+        state.observe_commit();
+        assert_eq!(
+            state.observer.dropped_msgs, 7,
+            "a consecutive full-channel commit keeps accumulating without losing the carried count or pending roster retry"
         );
     }
 }

@@ -425,4 +425,41 @@ mod tests {
             }
         ));
     }
+
+    #[test]
+    fn writer_records_dropped_message_count_on_frame_anomaly() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime");
+        let sink =
+            crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace, "rimz-test", None);
+        let log_path = sink.log_path();
+        let instance = SidebarInstanceId::new();
+        let (tx, rx) = std::sync::mpsc::sync_channel::<ObserveMsg>(4);
+
+        let handle = spawn(runtime, sink, instance, rx);
+        let sig_rows = roster(10, vec![("a", "terminal_1")]);
+        let mut draft = AnomalyDraft::from_roster(
+            42,
+            &sig_rows,
+            AnomalyKind::DuplicateRowId {
+                row_id: "a".to_owned(),
+                count: 2,
+            },
+        );
+        draft.dropped_msgs = 7;
+        tx.send(ObserveMsg::Anomaly(Box::new(draft))).unwrap();
+        drop(tx);
+        handle.join().unwrap();
+
+        let text = std::fs::read_to_string(log_path).unwrap();
+        let record: DiagEnvelope = serde_json::from_str(text.lines().next().unwrap()).unwrap();
+        assert!(matches!(
+            record.event,
+            crate::schema::diag::DiagEvent::FrameAnomaly {
+                dropped_msgs: 7,
+                ..
+            }
+        ));
+    }
 }

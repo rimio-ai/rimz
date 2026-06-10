@@ -1,6 +1,7 @@
 use super::super::sig::{EventPaneSig, EventsSig, GroupSig, OwnViewSig, WatchedValues};
 use super::*;
 use crate::SidebarWorktreeKind;
+use crate::sidebar::timing::OBSERVE_WARMUP;
 
 fn sig(at_ms: u64, rows: Vec<RowSig>) -> FrameSig {
     let mut by_group = BTreeMap::<String, (Vec<String>, BTreeMap<String, usize>)>::new();
@@ -76,6 +77,18 @@ fn row_with_context_pct(id: &str, pane: &str, group: &str, context_pct: Option<u
     row
 }
 
+fn row_with_total_tokens(id: &str, pane: &str, group: &str, total_tokens: Option<u64>) -> RowSig {
+    let mut row = row(id, pane, group);
+    row.watched.total_tokens = total_tokens;
+    row
+}
+
+fn row_with_model(id: &str, pane: &str, group: &str, model: Option<&str>) -> RowSig {
+    let mut row = row(id, pane, group);
+    row.watched.model = model.map(str::to_owned);
+    row
+}
+
 fn row_with_subagents(id: &str, pane: &str, group: &str, sub_agent_ids: Vec<&str>) -> RowSig {
     let mut row = row(id, pane, group);
     row.sub_agent_ids = sub_agent_ids
@@ -99,6 +112,13 @@ fn with_pane_closed(mut frame: FrameSig, pane_id: &str) -> FrameSig {
         pane_id: pane_id.to_owned(),
         sent_at_ms: frame.at_ms,
     });
+    frame
+}
+
+fn with_sibling_count(mut frame: FrameSig, sibling_count: usize) -> FrameSig {
+    if let Some(view) = &mut frame.own_view {
+        view.sibling_count = sibling_count;
+    }
     frame
 }
 
@@ -170,6 +190,40 @@ fn pane_close_suppresses_roster_flap_empty_edge() {
     let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
 
     assert!(!kinds(&drafts).contains(&"roster_flap"));
+}
+
+#[test]
+fn roster_flap_stays_quiet_with_zero_siblings() {
+    let mut observer = Observer::default();
+    observer.observe(with_sibling_count(sig(0, vec![row("a", "p1", "main")]), 1));
+    observer.observe(with_sibling_count(
+        sig(11_000, vec![row("a", "p1", "main")]),
+        1,
+    ));
+    observer.observe(with_sibling_count(sig(12_000, Vec::new()), 0));
+
+    let drafts = observer.observe(with_sibling_count(
+        sig(13_000, vec![row("a", "p1", "main")]),
+        0,
+    ));
+
+    assert!(!kinds(&drafts).contains(&"roster_flap"));
+}
+
+#[test]
+fn windowed_detectors_arm_exactly_at_warmup_expiry() {
+    let warmup_ms = OBSERVE_WARMUP.as_millis() as u64;
+    let mut before = Observer::default();
+    before.observe(sig(0, vec![row("a", "p1", "main")]));
+    assert!(before.observe(sig(warmup_ms - 1, Vec::new())).is_empty());
+    let drafts = before.observe(sig(warmup_ms, vec![row("a", "p1", "main")]));
+    assert!(!kinds(&drafts).contains(&"roster_flap"));
+
+    let mut at = Observer::default();
+    at.observe(sig(0, vec![row("a", "p1", "main")]));
+    at.observe(sig(warmup_ms, Vec::new()));
+    let drafts = at.observe(sig(warmup_ms + 1, vec![row("a", "p1", "main")]));
+    assert!(kinds(&drafts).contains(&"roster_flap"));
 }
 
 #[test]
@@ -432,6 +486,115 @@ fn established_value_disappearance_and_return_counts_as_oscillation() {
 }
 
 #[test]
+fn total_token_value_bounce_counts_as_oscillation() {
+    let mut observer = Observer::default();
+    observer.observe(sig(
+        0,
+        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
+    ));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_total_tokens("a", "p1", "main", Some(200))],
+    ));
+
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row_with_total_tokens("a", "p1", "main", Some(100))],
+    ));
+
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::ValueOscillation {
+            field: WatchedField::TotalTokens,
+            from,
+            via,
+            ..
+        } if from == "100" && via == "200"
+    )));
+}
+
+#[test]
+fn model_value_bounce_counts_as_oscillation() {
+    let mut observer = Observer::default();
+    observer.observe(sig(
+        0,
+        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
+    ));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_model("a", "p1", "main", Some("opus"))],
+    ));
+
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row_with_model("a", "p1", "main", Some("sonnet"))],
+    ));
+
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::ValueOscillation {
+            field: WatchedField::Model,
+            from,
+            via,
+            ..
+        } if from == "sonnet" && via == "opus"
+    )));
+}
+
+#[test]
+fn context_pct_value_bounce_counts_as_oscillation() {
+    let mut observer = Observer::default();
+    observer.observe(sig(
+        0,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+    observer.observe(sig(
+        11_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+    observer.observe(sig(
+        12_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(20))],
+    ));
+
+    let drafts = observer.observe(sig(
+        13_000,
+        vec![row_with_context_pct("a", "p1", "main", Some(10))],
+    ));
+
+    assert!(drafts.iter().any(|draft| matches!(
+        &draft.kind,
+        AnomalyKind::ValueOscillation {
+            field: WatchedField::ContextPct,
+            from,
+            via,
+            ..
+        } if from == "10" && via == "20"
+    )));
+}
+
+#[test]
+fn first_anomaly_carries_and_resets_dropped_message_count() {
+    let mut observer = Observer {
+        dropped_msgs: 4,
+        ..Observer::default()
+    };
+
+    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]));
+
+    assert_eq!(drafts.first().map(|draft| draft.dropped_msgs), Some(4));
+    assert_eq!(observer.dropped_msgs, 0);
+}
+
+#[test]
 fn status_churn_counts_only_real_transitions() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row_with_status("a", "p1", "main", "running")]));
@@ -561,4 +724,89 @@ fn historical_detector_maps_prune_after_row_absence_window() {
     assert!(!observer.values.keys().any(|(row_id, _)| row_id == "a"));
     assert!(!observer.last_status.contains_key("a"));
     assert!(!observer.status_transitions.contains_key("a"));
+}
+
+mod recorded_episodes {
+    use super::*;
+
+    const WORKSPACE: &str = "ws_f89e49906df0621ad2765112";
+    const TARGET_ROW: &str = "019eaffe-738a-7f11-b845-98a437e58b39";
+    const TARGET_PANE: &str = "zellij:terminal_39";
+    const WARM_AT_MS: u64 = 1_781_070_530_000;
+    const PARTIAL_AT_MS: u64 = 1_781_070_542_122;
+    const RESTORE_AT_MS: u64 = 1_781_070_544_381;
+    const RESTORE_PRODUCED_AT_MS: u64 = 1_781_070_544_378;
+
+    fn process_row(id: &str, pane: &str) -> RowSig {
+        let mut row = row(id, pane, "main");
+        row.is_agent = false;
+        row.watched.status = None;
+        row
+    }
+
+    fn episode_rows(include_target: bool) -> Vec<RowSig> {
+        let mut rows = vec![
+            row("reload", "zellij:terminal_37", "worktree-sidebar_reload"),
+            row("group", "zellij:terminal_47", "worktree-sidebar_group"),
+            row("pane-lock", "zellij:terminal_51", "worktree-pane_lock"),
+            row("side-task", "zellij:terminal_44", "worktree-side-task"),
+            process_row("shell-55", "zellij:terminal_55"),
+            process_row("shell-57", "zellij:terminal_57"),
+        ];
+        if include_target {
+            rows.push(row(TARGET_ROW, TARGET_PANE, "worktree-sidebar_reload"));
+        }
+        rows
+    }
+
+    fn episode_sig(at_ms: u64, produced_at_ms: u64, include_target: bool) -> FrameSig {
+        let mut sig = sig(at_ms, episode_rows(include_target));
+        sig.panes_produced_at_ms = Some(produced_at_ms);
+        sig.pulled_rows = 7;
+        sig.pulled_panes_produced_at_ms = Some(produced_at_ms);
+        sig
+    }
+
+    #[test]
+    fn june_10_partial_pane_episode_reports_row_presence_not_roster_flap() {
+        // Captured from workspace ws_f89e49906df0621ad2765112 on June 10:
+        // a 14->6 pane-source partial read omitted zellij:terminal_39 with no
+        // PaneClosed event, then restored the row 2.259s later.
+        assert!(WORKSPACE.starts_with("ws_"));
+        let mut observer = Observer::default();
+        observer.observe(episode_sig(WARM_AT_MS, WARM_AT_MS, true));
+        observer.observe(episode_sig(PARTIAL_AT_MS, PARTIAL_AT_MS, false));
+
+        let drafts = observer.observe(episode_sig(RESTORE_AT_MS, RESTORE_PRODUCED_AT_MS, true));
+
+        assert!(
+            drafts
+                .iter()
+                .all(|draft| !matches!(draft.kind, AnomalyKind::RosterFlap { .. }))
+        );
+        assert!(drafts.iter().any(|draft| matches!(
+            &draft.kind,
+            AnomalyKind::RowPresenceFlap {
+                row_id,
+                pane_id,
+                gone_at_ms: PARTIAL_AT_MS,
+                back_at_ms: RESTORE_AT_MS,
+            } if row_id == TARGET_ROW && pane_id.as_deref() == Some(TARGET_PANE)
+        )));
+        let draft = drafts
+            .iter()
+            .find(|draft| {
+                matches!(
+                    &draft.kind,
+                    AnomalyKind::RowPresenceFlap { row_id, .. } if row_id == TARGET_ROW
+                )
+            })
+            .expect("recorded row flap");
+        assert_eq!(draft.window_ms, Some(7_000));
+        assert_eq!(draft.frame.produced_at_ms, Some(RESTORE_PRODUCED_AT_MS));
+        assert_eq!(draft.frame.rows, 7);
+        assert_eq!(draft.frame.agents, 5);
+        assert_eq!(draft.frame.processes, 2);
+        assert!(draft.events_recent.pane_closed.is_empty());
+    }
 }
