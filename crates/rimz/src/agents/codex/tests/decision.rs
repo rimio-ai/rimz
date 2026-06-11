@@ -43,6 +43,62 @@ fn permission_deny_shape_is_pinned() {
 }
 
 #[test]
+fn plan_approval_allow_shape_is_pinned() {
+    let item = fixture(FeedKind::PlanApproval);
+    let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
+    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+
+    insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow"
+          }
+        }
+        "###);
+}
+
+#[test]
+fn ask_user_question_allow_shape_carries_updated_input_when_present() {
+    let item = fixture(FeedKind::Question);
+    let resolution = Resolution::new(
+        json!({ "choice": "allow", "updatedInput": { "question": "ready?" } }),
+        ResolutionMethod::HookBridge,
+    );
+    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+
+    insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": {
+              "question": "ready?"
+            }
+          }
+        }
+        "###);
+}
+
+#[test]
+fn pre_tool_deny_shape_carries_reason() {
+    let item = fixture(FeedKind::PlanApproval);
+    let mut resolution = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+    resolution.reason = Some("plan needs narrower scope".to_owned());
+    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+
+    insta::assert_json_snapshot!(rendered, @r###"
+        {
+          "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "deny",
+            "permissionDecisionReason": "plan needs narrower scope"
+          }
+        }
+        "###);
+}
+
+#[test]
 fn neutral_payload_is_empty_stdout() {
     let rendered = CodexAdapter.render_neutral("PermissionRequest").unwrap();
 

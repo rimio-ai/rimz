@@ -6,10 +6,10 @@
 //! Silent events (read-only PostToolUse, PermissionRequest in observe_lifecycle)
 //! and compaction events are parsed to keep the wire surface typed and auditable.
 //!
-//! **Output** (Serialize): the Codex `PermissionRequest` decision shape. Unlike
-//! Claude, Codex's `PermissionRequest` decision carries an optional `message`
-//! field alongside `behavior` — see adapter/codex-reference.md for the
-//! divergence note.
+//! **Output** (Serialize): the Codex `PermissionRequest` and blocking
+//! `PreToolUse` decision shapes. Unlike Claude, Codex's `PermissionRequest`
+//! decision carries an optional `message` field alongside `behavior` — see
+//! adapter/codex-reference.md for the divergence note.
 //!
 //! Like the Claude catalog, this module is the **complete, parse-ready wire
 //! catalog**: every installed and near-term-catalog event (including the
@@ -199,6 +199,34 @@ pub struct CodexPermissionBehavior {
     /// Reason surfaced when the resolver blocked the call. Absent when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+/// Codex `PreToolUse` decision output for `ExitPlanMode` and
+/// `AskUserQuestion` feed items.
+///
+/// Wire: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`
+///
+/// `updatedInput` is optional on allow. A denial carries
+/// `permissionDecisionReason`; callers supply a default before construction.
+#[derive(Debug, Serialize)]
+pub struct CodexPreToolUseDecisionOutput {
+    #[serde(rename = "hookSpecificOutput")]
+    pub hook_specific_output: CodexPreToolUseHookOutput,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CodexPreToolUseHookOutput {
+    #[serde(rename = "hookEventName")]
+    pub hook_event_name: &'static str,
+    #[serde(rename = "permissionDecision")]
+    pub permission_decision: &'static str,
+    #[serde(rename = "updatedInput", skip_serializing_if = "Option::is_none")]
+    pub updated_input: Option<Value>,
+    #[serde(
+        rename = "permissionDecisionReason",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub permission_decision_reason: Option<String>,
 }
 
 // ── Tests ──────────────────────────────────────────────────────────────────

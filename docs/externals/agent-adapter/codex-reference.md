@@ -85,7 +85,7 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 | `SessionStart` | session starts / resumes / clears / compacts | `source` (`startup`\|`resume`\|`clear`\|`compact`; `compact` is triggerless close evidence in Rimz) | ✓ |
 | `UserPromptSubmit` | user submits a prompt | `turn_id`, `prompt` | ✓ |
 | `SubagentStart` | a subagent launches | `turn_id`, `agent_id`, `agent_type`, `permission_mode` | ✓ |
-| `PreToolUse` | before Bash / `apply_patch` / MCP tools | `turn_id`, `tool_name`, `tool_use_id`, `tool_input` | ✓ |
+| `PreToolUse` | before Bash / `apply_patch` / MCP tools and approval/question pseudo-tools | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`; `tool_name = "ExitPlanMode"` is plan approval, `tool_name = "AskUserQuestion"` is a user question | ✓ |
 | `PermissionRequest` | approval needed (shell escalation, network) | `turn_id`, `tool_name`, `tool_input`, `tool_input.description?` | ✓ |
 | `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response` | ✓ |
 | `SubagentStop` | a subagent stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` | ✓ |

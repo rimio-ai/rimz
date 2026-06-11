@@ -127,10 +127,14 @@ Native event → internal mapping; the upstream events, payloads, and decision s
 | `SubagentStop`                       | lifecycle     | `SubagentStopped`                   | child row; keeps the type label                  |
 | `Stop`                               | lifecycle     | `TurnEnded { errored, parked_on_background: false }` | clear task                      |
 | `PermissionRequest`                  | blocking-feed | `waiting`                           | —                                                |
+| `PreToolUse: ExitPlanMode`           | blocking-feed | `waiting`                           | plan approval                                   |
+| `PreToolUse: AskUserQuestion`        | blocking-feed | `waiting`                           | user question                                   |
 | `PostToolUse` (mutating)             | lifecycle     | `ToolUsed { mutates: true, edits }` | `edits` for `apply_patch`; read-only tools stay silent |
-| `PreToolUse` (broad)                 | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row or closes a compaction bracket |
+| `PreToolUse` (other tools)           | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row or closes a compaction bracket |
 | `PreCompact`                         | lifecycle     | `Compacting`                        | stamps the head                                  |
 | `PostCompact`                        | lifecycle     | `CompactionEnded` with known trigger | safely redundant as a close; carries the auto/manual trigger bit |
+
+`ExitPlanMode` and `AskUserQuestion` self-classify from `tool_name` on the broad `PreToolUse` hook. Every other `PreToolUse` remains lifecycle proof-of-work only.
 
 Codex shares the same keyed subagent identity as Claude (`resolve_subagent_identity`): a `SubagentStart`/`SubagentStop` with no distinct child id is quarantined, never folded onto the parent. The root arm shares Claude's drop rule too (`resolve_root_identity`): a non-`Subagent*` event carrying a distinct `agent_id` folds to nothing rather than keying a parentless phantom root — latent today, since Codex stamps `agent_id` only on `Subagent*`. Codex has no `SessionEnd` or `Notification` hook, so `ends_session` is never true — a Codex session leaves the rollup by liveness alone (see [agent.md](./agent.md#liveness-and-presence)). It has no background-task parking, so `parked_on_background` is always `false`.
 

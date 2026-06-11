@@ -1,11 +1,11 @@
 //! Codex hook adapter.
 //!
-//! Classifies `PermissionRequest` (blocking) and the lifecycle events
+//! Classifies `PermissionRequest` and blocking `PreToolUse` questions
+//! (`ExitPlanMode`, `AskUserQuestion`) onto the feed, plus the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
 //! to running, `SubagentStop` returns the child to idle, `Stop` completes the
-//! root turn — success, or failed on an error signal); renders the Codex-shaped
-//! `PermissionRequest` `hookSpecificOutput` decision payload (neutral is empty
-//! stdout).
+//! root turn — success, or failed on an error signal); renders Codex-shaped
+//! hook decision payloads (neutral is empty stdout).
 //!
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
@@ -43,9 +43,10 @@ use self::install::{
 use self::install::{has_rimz_hook_command, snake_event_token};
 use self::payloads::{
     CodexPermissionBehavior, CodexPermissionDecisionOutput, CodexPermissionHookOutput,
-    CodexPostCompact, CodexSessionStart, CodexSubagentStart, CodexSubagentStop,
-    CodexUserPromptSubmit, parse_post_compact, parse_session_start, parse_stop,
-    parse_subagent_start, parse_subagent_stop, parse_user_prompt_submit,
+    CodexPostCompact, CodexPreToolUseDecisionOutput, CodexPreToolUseHookOutput, CodexSessionStart,
+    CodexSubagentStart, CodexSubagentStop, CodexUserPromptSubmit, parse_post_compact,
+    parse_pre_tool_use, parse_session_start, parse_stop, parse_subagent_start, parse_subagent_stop,
+    parse_user_prompt_submit,
 };
 pub use self::transcript::refresh_transcript_context;
 #[cfg(test)]
@@ -242,8 +243,16 @@ impl AgentAdapter for CodexAdapter {
         Some(argv)
     }
 
-    fn classify_hook(&self, event_name: &str, _payload: &Value) -> ClassifiedHook {
-        let feed_kind = (event_name == "PermissionRequest").then_some(FeedKind::Permission);
+    fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
+        let feed_kind = match event_name {
+            "PermissionRequest" => Some(FeedKind::Permission),
+            "PreToolUse" => match parse_pre_tool_use(payload).tool_name.as_deref() {
+                Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
+                Some("AskUserQuestion") => Some(FeedKind::Question),
+                _ => None,
+            },
+            _ => None,
+        };
         classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
     }
 
@@ -268,6 +277,33 @@ impl AgentAdapter for CodexAdapter {
                 };
                 Ok(serde_json::to_value(output)
                     .expect("CodexPermissionDecisionOutput is infallible"))
+            }
+            FeedKind::PlanApproval | FeedKind::Question => {
+                let allow = choice_is_allow(resolution);
+                let output = CodexPreToolUseDecisionOutput {
+                    hook_specific_output: CodexPreToolUseHookOutput {
+                        hook_event_name: "PreToolUse",
+                        permission_decision: if allow { "allow" } else { "deny" },
+                        updated_input: allow
+                            .then(|| resolution_updated_input(resolution))
+                            .flatten(),
+                        permission_decision_reason: (!allow).then(|| {
+                            resolution
+                                .reason
+                                .clone()
+                                .or_else(|| {
+                                    resolution
+                                        .decision
+                                        .get("reason")
+                                        .and_then(Value::as_str)
+                                        .map(ToOwned::to_owned)
+                                })
+                                .unwrap_or_else(|| "denied by resolver".to_owned())
+                        }),
+                    },
+                };
+                Ok(serde_json::to_value(output)
+                    .expect("CodexPreToolUseDecisionOutput is infallible"))
             }
             other => Err(AgentErr::Render {
                 agent: "codex",
@@ -425,6 +461,14 @@ impl AgentAdapter for CodexAdapter {
     ) -> crate::agents::spending::SpendParse {
         spend::parse_codex_spend(path, resume, prices)
     }
+}
+
+fn resolution_updated_input(resolution: &Resolution) -> Option<Value> {
+    resolution
+        .decision
+        .get("updatedInput")
+        .or_else(|| resolution.decision.get("updated_input"))
+        .cloned()
 }
 
 struct CodexLifecycleParts {

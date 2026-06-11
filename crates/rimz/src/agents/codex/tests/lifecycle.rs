@@ -37,6 +37,25 @@ fn session_sources_and_classification_cover_the_installed_surface() {
 }
 
 #[test]
+fn pre_tool_plan_and_question_hooks_are_blocking_feed() {
+    for (tool, expected_kind) in [
+        ("ExitPlanMode", FeedKind::PlanApproval),
+        ("AskUserQuestion", FeedKind::Question),
+    ] {
+        let c = CodexAdapter.classify_hook("PreToolUse", &json!({ "tool_name": tool }));
+        assert_eq!(c.class, AgentHookClass::BlockingFeed, "{tool}");
+        assert_eq!(c.feed_kind, Some(expected_kind), "{tool}");
+    }
+
+    let normal_tool = CodexAdapter.classify_hook(
+        "PreToolUse",
+        &json!({ "session_id": "sess-1", "tool_name": "shell" }),
+    );
+    assert_eq!(normal_tool.class, AgentHookClass::Lifecycle);
+    assert_eq!(normal_tool.feed_kind, None);
+}
+
+#[test]
 fn compaction_pair_maps_trigger_to_lifecycle_signals() {
     for event in ["PreCompact", "PostCompact"] {
         let c = CodexAdapter.classify_hook(event, &json!({ "session_id": "sess-1" }));
