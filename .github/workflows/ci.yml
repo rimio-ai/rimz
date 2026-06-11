@@ -21,6 +21,8 @@ jobs:
     name: cargo xtask ci
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
+    env:
+      CARGO_TARGET_DIR: /tmp/rimz-ci-target-${{ github.run_id }}-ci
     steps:
       - uses: actions/checkout@v4
 
@@ -30,10 +32,6 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy, llvm-tools-preview
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rimz-ci
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
       # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
@@ -60,21 +58,23 @@ jobs:
       - name: cargo xtask ci
         run: cargo xtask ci
 
+      - name: Clean cargo target
+        if: always()
+        run: rm -rf "$CARGO_TARGET_DIR"
+
   mux-tests:
     name: mux backends (zellij + tmux)
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 20
     continue-on-error: true
     needs: ci
+    env:
+      CARGO_TARGET_DIR: /tmp/rimz-ci-target-${{ github.run_id }}-mux
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: rimz-mux
 
       - name: Check tmux
         run: |
@@ -111,3 +111,7 @@ jobs:
 
       - name: cargo xtask test
         run: cargo xtask test
+
+      - name: Clean cargo target
+        if: always()
+        run: rm -rf "$CARGO_TARGET_DIR"
