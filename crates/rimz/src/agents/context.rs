@@ -209,6 +209,21 @@ pub struct AgentCurrentUsage {
     pub cache_read_input_tokens: Option<u64>,
 }
 
+impl AgentCurrentUsage {
+    /// Whether the breakdown carries no token count at all: every field is
+    /// either absent or explicitly zero.
+    pub fn is_zero(&self) -> bool {
+        [
+            self.input_tokens,
+            self.output_tokens,
+            self.cache_creation_input_tokens,
+            self.cache_read_input_tokens,
+        ]
+        .into_iter()
+        .all(|count| count.unwrap_or(0) == 0)
+    }
+}
+
 /// The rate-limit windows the agent surfaces, ordered short→long by duration.
 /// Each window carries its own length, so a renderer derives its label (`5h`,
 /// `7d`, …) and its reset-to-max roll-forward from the window itself — no
@@ -320,6 +335,34 @@ mod tests {
         assert!(!window(Some(0)).is_spent());
         // An unreported window is not a spent one.
         assert!(!window(None).is_spent());
+    }
+
+    #[test]
+    fn current_usage_is_zero_when_every_count_is_absent_or_zero() {
+        assert!(AgentCurrentUsage::default().is_zero());
+        assert!(
+            AgentCurrentUsage {
+                input_tokens: Some(0),
+                output_tokens: Some(0),
+                cache_creation_input_tokens: Some(0),
+                cache_read_input_tokens: Some(0),
+            }
+            .is_zero()
+        );
+        assert!(
+            AgentCurrentUsage {
+                input_tokens: Some(0),
+                ..AgentCurrentUsage::default()
+            }
+            .is_zero()
+        );
+        assert!(
+            !AgentCurrentUsage {
+                cache_read_input_tokens: Some(1),
+                ..AgentCurrentUsage::default()
+            }
+            .is_zero()
+        );
     }
 
     #[test]

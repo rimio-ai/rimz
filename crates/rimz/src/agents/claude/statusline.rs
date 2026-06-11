@@ -62,8 +62,9 @@ struct ContextWindowField {
     context_window_size: Option<u64>,
     used_percentage: Option<f64>,
     remaining_percentage: Option<f64>,
-    /// Null before the first API call and right after `/compact`, so it stays
-    /// `Option` even though the surrounding object is present.
+    /// Older Claude reports null before the first API call and right after
+    /// `/compact`; newer Claude reports the same state as explicit zeros.
+    /// Both shapes project to `None`.
     current_usage: Option<CurrentUsageField>,
 }
 
@@ -165,12 +166,13 @@ fn rate_window(field: Option<RateWindowField>, duration_mins: u32) -> Option<Rat
 
 fn current_usage(field: Option<CurrentUsageField>) -> Option<AgentCurrentUsage> {
     let field = field?;
-    non_empty(AgentCurrentUsage {
+    let usage = AgentCurrentUsage {
         input_tokens: field.input_tokens,
         output_tokens: field.output_tokens,
         cache_creation_input_tokens: field.cache_creation_input_tokens,
         cache_read_input_tokens: field.cache_read_input_tokens,
-    })
+    };
+    (!usage.is_zero()).then_some(usage)
 }
 
 /// Cap on the surfaced error text. The upstream message is one short line
@@ -519,8 +521,8 @@ mod tests {
         assert!(ctx.rate_limits.is_none());
         assert!(ctx.pr.is_none());
 
-        // `current_usage` is null before the first API call; the rest of the
-        // context window still projects.
+        // `current_usage` is null before the first API call in older Claude;
+        // the rest of the context window still projects.
         let ctx = parse(json!({
             "context_window": { "used_percentage": 12, "current_usage": null }
         }));
@@ -532,6 +534,12 @@ mod tests {
         // serializing as `{}`.
         let ctx = parse(json!({
             "context_window": { "used_percentage": 5, "current_usage": {} }
+        }));
+        assert!(ctx.tokens.unwrap().current_usage.is_none());
+
+        // Newer Claude reports the same state as explicit zeros.
+        let ctx = parse(json!({
+            "context_window": { "used_percentage": 5, "current_usage": { "input_tokens": 0 } }
         }));
         assert!(ctx.tokens.unwrap().current_usage.is_none());
 
@@ -568,6 +576,33 @@ mod tests {
             Some(100),
             "exactly 100% used remains exhausted"
         );
+    }
+
+    #[test]
+    fn post_compact_zeroed_usage_collapses_like_the_null_shape() {
+        let ctx = parse(json!({
+            "context_window": {
+                "context_window_size": 1_000_000,
+                "used_percentage": 0,
+                "remaining_percentage": 100,
+                "current_usage": {
+                    "input_tokens": 0,
+                    "output_tokens": 0,
+                    "cache_creation_input_tokens": 0,
+                    "cache_read_input_tokens": 0
+                }
+            },
+            "exceeds_200k_tokens": true,
+            "version": "2.1.173"
+        }));
+
+        let tokens = ctx.tokens.unwrap();
+        assert_eq!(tokens.context_window_size, Some(1_000_000));
+        assert_eq!(tokens.used_percentage, Some(0));
+        assert_eq!(tokens.remaining_percentage, Some(100));
+        assert!(tokens.current_usage.is_none());
+        assert_eq!(ctx.exceeds_200k_tokens, Some(true));
+        assert_eq!(ctx.agent_version.as_deref(), Some("2.1.173"));
     }
 
     /// The verbatim shape an API-error abort writes (observed live 2026-06-04):

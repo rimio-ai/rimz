@@ -207,7 +207,11 @@ fn preserve_established_tokens(
 }
 
 fn established_token_usage(tokens: &AgentTokenUsage) -> bool {
-    tokens.used_percentage.is_some_and(|pct| pct > 0) || token_usage_sum(tokens) > 0
+    tokens.used_percentage.is_some_and(|pct| pct > 0)
+        || tokens
+            .current_usage
+            .as_ref()
+            .is_some_and(|usage| !usage.is_zero())
 }
 
 fn should_preserve_tokens(kind: &str, refresh: &AgentTokenUsage) -> bool {
@@ -217,25 +221,10 @@ fn should_preserve_tokens(kind: &str, refresh: &AgentTokenUsage) -> bool {
 fn inferred_fresh_codex_tokens(tokens: &AgentTokenUsage) -> bool {
     tokens.used_percentage == Some(0)
         && tokens.remaining_percentage == Some(100)
-        && tokens.current_usage.as_ref().is_some_and(|usage| {
-            usage.input_tokens.unwrap_or(0) == 0
-                && usage.output_tokens.unwrap_or(0) == 0
-                && usage.cache_creation_input_tokens.unwrap_or(0) == 0
-                && usage.cache_read_input_tokens.unwrap_or(0) == 0
-        })
-}
-
-fn token_usage_sum(tokens: &AgentTokenUsage) -> u64 {
-    tokens
-        .current_usage
-        .as_ref()
-        .map(|usage| {
-            usage.input_tokens.unwrap_or(0)
-                + usage.output_tokens.unwrap_or(0)
-                + usage.cache_creation_input_tokens.unwrap_or(0)
-                + usage.cache_read_input_tokens.unwrap_or(0)
-        })
-        .unwrap_or(0)
+        && tokens
+            .current_usage
+            .as_ref()
+            .is_some_and(|usage| usage.is_zero())
 }
 
 fn preserve_cached_context_window(
