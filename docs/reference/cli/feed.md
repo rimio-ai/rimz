@@ -270,17 +270,18 @@ Project config can launch resolvers only after project trust allows its command-
 ## Agent hooks
 
 ```sh
-rimz hooks install <agent>
-rimz hooks uninstall <agent>
+rimz hooks install [agent]
+rimz hooks uninstall [agent]
 ```
 
-`hooks install` writes Rimz-managed hook entries into the agent's per-user config. `hooks uninstall` removes only the Rimz-managed hook block. `<agent>` is an agent kind such as `claude`, `codex`, or `pi`.
+`hooks install` writes Rimz-managed hook entries into the agent's per-user config. With no `agent`, it installs every detected supported agent on PATH and prints a JSON array of reports; with an explicit `agent`, it prints the existing single JSON object. `hooks uninstall` removes only Rimz-managed hook blocks. With no `agent`, it removes every installed Rimz-managed hook set, does not require the agent binary to still be on PATH, prints `[]` when nothing is installed, and exits successfully. `agent` is a kind such as `claude`, `codex`, or `pi`.
 
 Examples:
 
 ```sh
+rimz hooks install
 rimz hooks install claude
-rimz hooks install codex
+rimz hooks uninstall
 rimz hooks uninstall claude
 ```
 

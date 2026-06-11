@@ -36,8 +36,8 @@ use jiff::Timestamp;
 
 use self::app_server::CodexAppServer;
 use self::install::{
-    codex_config_path, hooks_installed_at, install_into, preview_install_at, uninstall_from,
-    untrusted_hook_events_at,
+    codex_config_path, hooks_installed_at, install_into, managed_artifacts_at, preview_install_at,
+    uninstall_from, untrusted_hook_events_at,
 };
 #[cfg(test)]
 use self::install::{has_rimz_hook_command, snake_event_token};
@@ -487,6 +487,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn hooks_installed(&self) -> bool {
         codex_config_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn managed_hook_artifacts_present(&self) -> bool {
+        codex_config_path().is_ok_and(|path| managed_artifacts_at(&path))
     }
 
     fn untrusted_installed_hooks(&self) -> Vec<String> {

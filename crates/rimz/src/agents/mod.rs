@@ -566,6 +566,14 @@ pub trait AgentAdapter: Send + Sync {
         })
     }
 
+    /// Whether the user's config carries any Rimz-managed hook artifact, including
+    /// partial or legacy installs that are not complete enough to be considered
+    /// usable by [`Self::hooks_installed`]. No-arg uninstall uses this so
+    /// "ensure absent" cleans damaged configs without rewriting untouched ones.
+    fn managed_hook_artifacts_present(&self) -> bool {
+        self.hooks_installed()
+    }
+
     /// The user's original statusline command this agent currently wraps, if
     /// any. `None` when the agent manages no statusline (Codex), or when no
     /// wrap is configured. The `rimz statusline feed` CLI calls this to find

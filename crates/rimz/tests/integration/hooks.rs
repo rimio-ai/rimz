@@ -1050,6 +1050,200 @@ fn claude_install_uninstall_cli_round_trips_into_settings_json() {
     );
 }
 
+#[cfg(unix)]
+fn fake_agent_bin_dir(names: &[&str]) -> tempfile::TempDir {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::TempDir::new().expect("fake agent bin dir");
+    for name in names {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "#!/bin/sh\nexit 0\n").expect("write fake agent");
+        let mut perms = std::fs::metadata(&path)
+            .expect("fake agent metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&path, perms).expect("chmod fake agent");
+    }
+    dir
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_install_no_arg_installs_all_detected_agents() {
+    let env = Env::new();
+    let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
+
+    let install = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn install");
+    assert!(
+        install.status.success(),
+        "install stderr: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+    let reports: Value = serde_json::from_slice(&install.stdout).expect("install reports json");
+    let reports = reports.as_array().expect("array report");
+    let agents = reports
+        .iter()
+        .filter_map(|report| report["agent"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(agents, vec!["claude", "codex"]);
+    assert!(env.agent_hooks_installed("claude"));
+    assert!(env.agent_hooks_installed("codex"));
+
+    let reinstall = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn reinstall");
+    assert!(
+        reinstall.status.success(),
+        "idempotent reinstall stderr: {}",
+        String::from_utf8_lossy(&reinstall.stderr)
+    );
+    let reports: Value = serde_json::from_slice(&reinstall.stdout).expect("reinstall reports json");
+    assert_eq!(reports.as_array().expect("array report").len(), 2);
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_install_no_arg_fails_when_no_supported_agents_are_detected() {
+    let env = Env::new();
+    let bin_dir = fake_agent_bin_dir(&[]);
+
+    let install = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn install");
+
+    assert!(
+        !install.status.success(),
+        "install should fail with no agents"
+    );
+    let stderr = String::from_utf8_lossy(&install.stderr);
+    assert!(
+        stderr.contains("no supported coding agents detected on PATH"),
+        "stderr should name the fix, got: {stderr}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_uninstall_no_arg_removes_installed_hooks_without_path_detection() {
+    let env = Env::new();
+    let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
+    let install = env
+        .rimz()
+        .env("PATH", bin_dir.path())
+        .args(["hooks", "install"])
+        .output()
+        .expect("spawn install");
+    assert!(
+        install.status.success(),
+        "install stderr: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let empty_path = fake_agent_bin_dir(&[]);
+    let uninstall = env
+        .rimz()
+        .env("PATH", empty_path.path())
+        .args(["hooks", "uninstall"])
+        .output()
+        .expect("spawn uninstall");
+    assert!(
+        uninstall.status.success(),
+        "uninstall stderr: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    let reports: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall reports json");
+    let agents = reports
+        .as_array()
+        .expect("array report")
+        .iter()
+        .filter_map(|report| report["agent"].as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(agents, vec!["claude", "codex"]);
+    assert!(!env.agent_hooks_installed("claude"));
+    assert!(!env.agent_hooks_installed("codex"));
+
+    let second_empty_path = fake_agent_bin_dir(&[]);
+    let second = env
+        .rimz()
+        .env("PATH", second_empty_path.path())
+        .args(["hooks", "uninstall"])
+        .output()
+        .expect("spawn second uninstall");
+    assert!(
+        second.status.success(),
+        "second uninstall stderr: {}",
+        String::from_utf8_lossy(&second.stderr)
+    );
+    let reports: Value =
+        serde_json::from_slice(&second.stdout).expect("second uninstall reports json");
+    assert_eq!(reports.as_array().expect("array report").len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn hooks_uninstall_no_arg_removes_partial_managed_hook_sets() {
+    let env = Env::new();
+    let claude_settings = env.agent_config_path("claude");
+    let install = env
+        .rimz()
+        .args(["hooks", "install", "claude"])
+        .output()
+        .expect("spawn install");
+    assert!(
+        install.status.success(),
+        "install stderr: {}",
+        String::from_utf8_lossy(&install.stderr)
+    );
+
+    let mut settings: Value =
+        serde_json::from_slice(&std::fs::read(&claude_settings).expect("settings"))
+            .expect("settings json");
+    let hooks = settings["hooks"].as_object_mut().expect("hooks object");
+    let removed_event = hooks.keys().next().cloned().expect("one installed event");
+    hooks.remove(&removed_event);
+    std::fs::write(
+        &claude_settings,
+        serde_json::to_vec_pretty(&settings).expect("settings json"),
+    )
+    .expect("write partial settings");
+
+    let empty_path = fake_agent_bin_dir(&[]);
+    let uninstall = env
+        .rimz()
+        .env("PATH", empty_path.path())
+        .args(["hooks", "uninstall"])
+        .output()
+        .expect("spawn uninstall");
+    assert!(
+        uninstall.status.success(),
+        "uninstall stderr: {}",
+        String::from_utf8_lossy(&uninstall.stderr)
+    );
+    let reports: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
+    assert!(
+        reports
+            .as_array()
+            .expect("array report")
+            .iter()
+            .any(|report| report["agent"].as_str() == Some("claude")),
+        "partial managed install should still be selected for uninstall: {reports}"
+    );
+    let text = std::fs::read_to_string(&claude_settings).expect("settings after uninstall");
+    assert!(!text.contains("rimz hooks feed --source claude"));
+    assert!(!text.contains("rimz statusline feed --source claude"));
+}
+
 /// The statusline feed passes the JSON through to the wrapped command verbatim
 /// and forwards its stdout, so the user's rendering is unaffected.
 #[test]

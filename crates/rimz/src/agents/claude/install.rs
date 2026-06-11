@@ -139,6 +139,27 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
     })
 }
 
+pub(super) fn managed_artifacts_at(path: &Path) -> bool {
+    let Ok(root) = read_existing_json(path) else {
+        return false;
+    };
+    let has_hook_artifact = root
+        .get(HOOKS_KEY)
+        .and_then(Value::as_object)
+        .is_some_and(|hooks| {
+            hooks.values().any(|entries| {
+                entries.as_array().is_some_and(|entries| {
+                    entries
+                        .iter()
+                        .any(|entry| entry.as_object().is_some_and(entry_is_rimz_owned))
+                })
+            })
+        });
+    has_hook_artifact
+        || status_line_is_rimz_managed(&root, &STATUS_LINE)
+        || status_line_is_rimz_managed(&root, &SUBAGENT_STATUS_LINE)
+}
+
 fn canonical_entry_is_installed(
     obj: &Map<String, Value>,
     event: &str,
@@ -413,6 +434,13 @@ fn is_rimz_managed_object(obj: &Map<String, Value>) -> bool {
         .unwrap_or(false)
 }
 
+fn status_line_is_rimz_managed(root: &Map<String, Value>, spec: &StatusLineSpec) -> bool {
+    matches!(
+        root.get(spec.key),
+        Some(Value::Object(obj)) if is_rimz_managed_object(obj)
+    )
+}
+
 /// Insert or refresh Rimz's `statusLine` wrapper. Idempotent: a prior
 /// Rimz-managed statusline has the user's original under `_rimz_wrapped`, which
 /// is read back (never double-wrapped); a user's prior statusline of any shape
@@ -461,10 +489,7 @@ pub(super) fn upsert_rimz_status_line(root: &mut Map<String, Value>, spec: &Stat
 /// the key entirely when nothing was wrapped. A non-Rimz value is left
 /// untouched. Returns whether a Rimz-managed value was found.
 fn strip_rimz_status_line(root: &mut Map<String, Value>, spec: &StatusLineSpec) -> bool {
-    let managed = matches!(
-        root.get(spec.key),
-        Some(Value::Object(obj)) if is_rimz_managed_object(obj)
-    );
+    let managed = status_line_is_rimz_managed(root, spec);
     if !managed {
         return false;
     }

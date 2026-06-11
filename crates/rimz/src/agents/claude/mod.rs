@@ -35,8 +35,8 @@ use serde_json::Value;
 #[cfg(test)]
 use self::install::{classify_status_line_change, upsert_rimz_status_line};
 use self::install::{
-    claude_settings_path, hooks_installed_at, install_into, preview_install_at, read_existing_json,
-    uninstall_from, wrapped_status_line_command_from,
+    claude_settings_path, hooks_installed_at, install_into, managed_artifacts_at,
+    preview_install_at, read_existing_json, uninstall_from, wrapped_status_line_command_from,
 };
 use self::payloads::{
     ClaudeCommon, ClaudePermissionBehavior, ClaudePermissionDecisionOutput,
@@ -600,6 +600,10 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn hooks_installed(&self) -> bool {
         claude_settings_path().is_ok_and(|path| hooks_installed_at(&path))
+    }
+
+    fn managed_hook_artifacts_present(&self) -> bool {
+        claude_settings_path().is_ok_and(|path| managed_artifacts_at(&path))
     }
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {

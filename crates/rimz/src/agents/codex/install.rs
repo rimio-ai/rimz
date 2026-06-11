@@ -106,6 +106,16 @@ pub(super) fn hooks_installed_at(path: &Path) -> bool {
         .all(|(event, _)| has_rimz_hook_command(&root, event))
 }
 
+pub(super) fn managed_artifacts_at(path: &Path) -> bool {
+    read_existing_table(path).is_ok_and(|root| {
+        has_any_rimz_hook_command(&root)
+            || root
+                .get(HOOKS_TABLE)
+                .and_then(toml::Value::as_table)
+                .is_some_and(|hooks| hooks.contains_key(RIMZ_BLOCK))
+    })
+}
+
 /// Rimz-installed hook events Codex has not yet trusted. Codex records trust
 /// per hook-definition hash under `[hooks.state]`
 /// (`"<config-path>:<event_token>:<i>:<j>"` keys) and **silently skips** an
@@ -296,6 +306,24 @@ pub(super) fn has_rimz_hook_command(root: &toml::Table, event: &str) -> bool {
                     .and_then(|table| table.get("hooks"))
                     .and_then(toml::Value::as_array)
                     .is_some_and(|handlers| handlers.iter().any(is_current_rimz_hook_handler))
+            })
+        })
+}
+
+fn has_any_rimz_hook_command(root: &toml::Table) -> bool {
+    root.get(HOOKS_TABLE)
+        .and_then(toml::Value::as_table)
+        .is_some_and(|hooks| {
+            hooks.values().any(|value| {
+                value.as_array().is_some_and(|groups| {
+                    groups.iter().any(|group| {
+                        group
+                            .as_table()
+                            .and_then(|table| table.get("hooks"))
+                            .and_then(toml::Value::as_array)
+                            .is_some_and(|handlers| handlers.iter().any(is_rimz_hook_handler))
+                    })
+                })
             })
         })
 }
