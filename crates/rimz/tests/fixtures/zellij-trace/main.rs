@@ -7,7 +7,7 @@
 
 use std::env;
 use std::fs::OpenOptions;
-use std::io::Write;
+use std::io::{self, Write};
 
 fn main() {
     let log_path = env::var_os("RIMZ_TEST_ZELLIJ_LOG").expect("RIMZ_TEST_ZELLIJ_LOG unset");
@@ -22,12 +22,12 @@ fn main() {
 
     let cli = &args[1..];
     if cli.first().is_some_and(|arg| arg == "--version") {
-        println!("zellij 0.44.3");
+        write_stdout("zellij 0.44.3");
         return;
     }
 
     if cli.first().is_some_and(|arg| arg == "list-sessions") {
-        eprintln!("No active zellij sessions found.");
+        write_stderr("No active zellij sessions found.");
         std::process::exit(1);
     }
 
@@ -36,7 +36,17 @@ fn main() {
         && cli.first().is_some_and(|arg| arg == "attach")
         && cli.get(1).is_some_and(|arg| arg == "--create-background")
     {
-        eprintln!("failed to bind socket: File name too long");
+        write_stderr("failed to bind socket: File name too long");
         std::process::exit(5);
     }
+}
+
+fn write_stdout(line: &str) {
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{line}").expect("write zellij trace stdout");
+}
+
+fn write_stderr(line: &str) {
+    let mut stderr = io::stderr().lock();
+    writeln!(stderr, "{line}").expect("write zellij trace stderr");
 }
