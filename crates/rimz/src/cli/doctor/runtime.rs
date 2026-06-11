@@ -1,3 +1,8 @@
+use std::collections::BTreeMap;
+use std::fs;
+use std::path::Path;
+use std::time::SystemTime;
+
 use rimz::bridge::AF_UNIX_PATH_LIMIT;
 use rimz::config::MachineConfig;
 use rimz::mux::{
@@ -63,6 +68,142 @@ pub(super) fn report_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) {
     );
     if headroom.len >= headroom.limit {
         println!("  zellij socket : export ZELLIJ_SOCKET_DIR=/tmp/zellij and rerun rimz");
+    }
+}
+
+/// Report live sidebar sessions that share this workspace. Producer election
+/// is workspace-wide, so an old room for the same workspace can keep producing
+/// the shared pane cache for its session and make the current room's renderer
+/// hold frameless updates.
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+pub(super) fn report_duplicate_sidebar_sessions(ws: &rimz::ResolvedWorkspace) {
+    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+        Ok(runtime) => runtime,
+        Err(err) => {
+            println!("  duplicate sessions: unavailable ({err})");
+            return;
+        }
+    };
+    let heartbeats = match fresh_sidebar_heartbeats_for_doctor(&runtime) {
+        Ok(heartbeats) => heartbeats,
+        Err(err) => {
+            println!("  duplicate sessions: unavailable ({err})");
+            return;
+        }
+    };
+    let groups = duplicate_sidebar_session_groups(&heartbeats);
+    if groups.is_empty() {
+        println!("  duplicate sessions: none");
+        return;
+    }
+
+    println!(
+        "  duplicate sessions: WARN ({} live sessions share this workspace; pane updates can be held)",
+        groups.len(),
+    );
+    for group in groups {
+        let here = if group.session_name == ws.session_name {
+            "* "
+        } else {
+            "  "
+        };
+        let panes = if group.pane_ids.is_empty() {
+            "unlocated".to_owned()
+        } else {
+            group.pane_ids.join(", ")
+        };
+        println!(
+            "    {here}{session}: {count} sidebars ({panes})",
+            session = group.session_name,
+            count = group.sidebar_count,
+        );
+    }
+    println!("  duplicate sessions: close stale sidebars or retire stale sessions when safe");
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct SidebarSessionGroup {
+    session_name: String,
+    sidebar_count: usize,
+    pane_ids: Vec<String>,
+}
+
+fn duplicate_sidebar_session_groups(
+    heartbeats: &[rimz::schema::heartbeat::SidebarHeartbeat],
+) -> Vec<SidebarSessionGroup> {
+    let mut by_session: BTreeMap<String, Vec<&rimz::schema::heartbeat::SidebarHeartbeat>> =
+        BTreeMap::new();
+    for heartbeat in heartbeats {
+        by_session
+            .entry(heartbeat.session_name.clone())
+            .or_default()
+            .push(heartbeat);
+    }
+    if by_session.len() < 2 {
+        return Vec::new();
+    }
+    by_session
+        .into_iter()
+        .map(|(session_name, mut heartbeats)| {
+            heartbeats
+                .sort_by(|left, right| left.instance_id.as_str().cmp(right.instance_id.as_str()));
+            let sidebar_count = heartbeats.len();
+            let mut pane_ids = heartbeats
+                .into_iter()
+                .filter_map(|heartbeat| heartbeat.pane_id.as_ref().map(ToString::to_string))
+                .collect::<Vec<_>>();
+            pane_ids.sort();
+            pane_ids.dedup();
+            SidebarSessionGroup {
+                session_name,
+                sidebar_count,
+                pane_ids,
+            }
+        })
+        .collect()
+}
+
+fn fresh_sidebar_heartbeats_for_doctor(
+    runtime: &RuntimePaths,
+) -> std::io::Result<Vec<rimz::schema::heartbeat::SidebarHeartbeat>> {
+    let entries = match fs::read_dir(&runtime.heartbeat_dir) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(err) => return Err(err),
+    };
+    let mut heartbeats = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if !rimz::schema::heartbeat::SidebarHeartbeat::is_heartbeat_file(&path)
+            || !heartbeat_mtime_is_fresh(&path)
+        {
+            continue;
+        }
+        let heartbeat = match rimz::schema::heartbeat::SidebarHeartbeat::read_from(&path) {
+            Ok(heartbeat) => heartbeat,
+            Err(_) => continue,
+        };
+        if heartbeat.protocol_version != rimz::schema::SIDEBAR_PROTOCOL_VERSION
+            || heartbeat.workspace_id != runtime.workspace_id
+        {
+            continue;
+        }
+        heartbeats.push(heartbeat);
+    }
+    Ok(heartbeats)
+}
+
+fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
+    let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(_) => return false,
+    };
+    match SystemTime::now().duration_since(modified) {
+        Ok(age) => age <= rimz::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
+        Err(_) => true,
     }
 }
 
@@ -530,6 +671,21 @@ mod tests {
         rimz::SidebarInstanceId::parse(raw).expect("valid sidebar id")
     }
 
+    fn heartbeat(
+        session_name: &str,
+        instance_id: &str,
+        pane: Option<&str>,
+    ) -> rimz::schema::heartbeat::SidebarHeartbeat {
+        rimz::schema::heartbeat::SidebarHeartbeat::new(
+            rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+            sidebar(instance_id),
+            rimz::MuxName::Zellij,
+            session_name,
+            "/tmp/sidebar.sock".into(),
+            pane.map(|pane| rimz::PaneId::parse(pane).unwrap()),
+        )
+    }
+
     #[test]
     fn diagnostic_summary_includes_frame_ref_and_producer_peer_ids() {
         let rejected = diagnostic_summary(&DiagEvent::FrameRejected {
@@ -552,6 +708,56 @@ mod tests {
                 new_elder: elder.clone(),
             })
             .contains(elder.as_str())
+        );
+    }
+
+    #[test]
+    fn duplicate_sidebar_sessions_require_multiple_session_names() {
+        let same_session = vec![
+            heartbeat(
+                "rimz-current",
+                "sb_019eb7da41f478b2a84079743e472a87",
+                Some("zellij:terminal_1"),
+            ),
+            heartbeat(
+                "rimz-current",
+                "sb_019eb7da43787c6081a474afb02c2067",
+                Some("zellij:terminal_2"),
+            ),
+        ];
+        assert!(
+            duplicate_sidebar_session_groups(&same_session).is_empty(),
+            "multiple sidebars in one session are normal"
+        );
+
+        let duplicate_sessions = vec![
+            heartbeat(
+                "rimz-current",
+                "sb_019eb7da41f478b2a84079743e472a87",
+                Some("zellij:terminal_1"),
+            ),
+            heartbeat(
+                "rimz-old",
+                "sb_019eb7da2dda7992b4286dee69d33358",
+                Some("zellij:terminal_7"),
+            ),
+            heartbeat("rimz-old", "sb_019eb7da2de17752994de2401b433b70", None),
+        ];
+        let groups = duplicate_sidebar_session_groups(&duplicate_sessions);
+        assert_eq!(
+            groups,
+            vec![
+                SidebarSessionGroup {
+                    session_name: "rimz-current".to_owned(),
+                    sidebar_count: 1,
+                    pane_ids: vec!["zellij:terminal_1".to_owned()],
+                },
+                SidebarSessionGroup {
+                    session_name: "rimz-old".to_owned(),
+                    sidebar_count: 2,
+                    pane_ids: vec!["zellij:terminal_7".to_owned()],
+                },
+            ]
         );
     }
 }

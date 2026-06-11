@@ -130,6 +130,6 @@ In an interactive terminal, setup offers to write the default per-machine config
 rimz doctor [--audit]
 ```
 
-`rimz doctor` reports the resolved workspace, backend and version, session health, sidebar pane, agent hook status, remote-control state, room tree, protocol versions, trust state, unauthorized resolver heartbeats, agent rollup, and recent sidebar diagnostics.
+`rimz doctor` reports the resolved workspace, backend and version, session health, duplicate live sidebar sessions for the workspace, sidebar pane, agent hook status, remote-control state, room tree, protocol versions, trust state, unauthorized resolver heartbeats, agent rollup, and recent sidebar diagnostics.
 
 `--audit` expands the agent rollup with durable historical detail. Run doctor first when a room, hook, resolver, sidebar, or backend behaves unexpectedly; each failing check prints the next fix where Rimz knows one.

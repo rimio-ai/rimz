@@ -17,9 +17,10 @@ use agents::{
 };
 use protocol::report_protocol_versions;
 use runtime::{
-    report_presence_channel, report_recent_diagnostics, report_remote_control, report_room_tree,
-    report_session_health, report_sidebar_pane, report_socket_headroom, report_tmux_capabilities,
-    report_zellij_capabilities, report_zellij_socket_headroom,
+    report_duplicate_sidebar_sessions, report_presence_channel, report_recent_diagnostics,
+    report_remote_control, report_room_tree, report_session_health, report_sidebar_pane,
+    report_socket_headroom, report_tmux_capabilities, report_zellij_capabilities,
+    report_zellij_socket_headroom,
 };
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
@@ -73,6 +74,7 @@ pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
                         report_zellij_socket_headroom(ws);
                     }
                     report_session_health(backend.as_ref(), &ws.session_name);
+                    report_duplicate_sidebar_sessions(ws);
                     if mux == MuxName::Zellij {
                         report_presence_channel(ws);
                     }
