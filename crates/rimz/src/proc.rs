@@ -222,10 +222,10 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
 }
 
 /// One process's resource metrics from a **single** `/proc/<pid>/stat` read:
-/// CPU ticks, resident set size, and the raw start time. One read serves the
-/// sidebar's CPU% delta, its `M` memory figure, and the pid-reuse guard —
-/// where a separate `status` read used to pay a second file open per pane for
-/// `VmRSS` alone.
+/// self CPU ticks, waited-child CPU ticks, resident set size, and the raw start
+/// time. One read serves the sidebar's CPU% delta, its `M` memory figure, and
+/// the pid-reuse guard — where a separate `status` read used to pay a second
+/// file open per pane for `VmRSS` alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StatMetrics {
     /// Process state character from field 3 (`R`, `S`, `D`, `Z`, ...).
@@ -233,6 +233,10 @@ pub struct StatMetrics {
     /// utime + stime (fields 14 + 15), in clock ticks. Two readings diffed
     /// over a known interval give CPU%.
     pub cpu_ticks: u64,
+    /// cutime + cstime (fields 16 + 17), in clock ticks. The kernel accounts
+    /// CPU used by waited-for children here, so pane-tree sampling can keep
+    /// short-lived rustc/linker work visible after the child process exits.
+    pub child_cpu_ticks: u64,
     /// Resident set size in KiB: field 24 (`rss`, in pages) × the page size.
     /// `rss` is the kernel's resident-page counter and can run a few pages
     /// apart from `status`'s `VmRSS`; invisible at the display's MiB
@@ -261,7 +265,7 @@ pub fn stat_metrics(_pid: u32) -> Option<StatMetrics> {
 /// Parse a `/proc/<pid>/stat` line into [`StatMetrics`]. The same
 /// `rsplit_once(')')` anchor as [`parse_starttime_ticks`] — `comm` may carry
 /// spaces and parens — then, indexed past the closing paren: state 0, utime 11,
-/// stime 12, starttime 19, rss 21.
+/// stime 12, cutime 13, cstime 14, starttime 19, rss 21.
 #[cfg(target_os = "linux")]
 fn parse_stat_metrics(stat: &str, page_kb: u64) -> Option<StatMetrics> {
     let tail = stat.rsplit_once(')')?.1;
@@ -269,11 +273,14 @@ fn parse_stat_metrics(stat: &str, page_kb: u64) -> Option<StatMetrics> {
     let state = fields.next()?.chars().next()?;
     let utime: u64 = fields.nth(10)?.parse().ok()?;
     let stime: u64 = fields.next()?.parse().ok()?;
-    let start_ticks: u64 = fields.nth(6)?.parse().ok()?;
+    let cutime: u64 = fields.next()?.parse().ok()?;
+    let cstime: u64 = fields.next()?.parse().ok()?;
+    let start_ticks: u64 = fields.nth(4)?.parse().ok()?;
     let rss_pages: u64 = fields.nth(1)?.parse().ok()?;
     Some(StatMetrics {
         state,
         cpu_ticks: utime.saturating_add(stime),
+        child_cpu_ticks: cutime.saturating_add(cstime),
         rss_kb: rss_pages.saturating_mul(page_kb),
         start_ticks,
     })
@@ -489,7 +496,8 @@ Uid:\t0\t0\t0\t0
             Some(StatMetrics {
                 state: 'S',
                 cpu_ticks: 59, // 42 + 17
-                rss_kb: 8192,  // 2048 pages × 4 KiB
+                child_cpu_ticks: 0,
+                rss_kb: 8192, // 2048 pages × 4 KiB
                 start_ticks: 646_245_020,
             })
         );
@@ -505,9 +513,20 @@ Uid:\t0\t0\t0\t0
             Some(StatMetrics {
                 state: 'S',
                 cpu_ticks: 15, // 10 + 5
-                rss_kb: 12,    // 3 pages × 4 KiB
+                child_cpu_ticks: 0,
+                rss_kb: 12, // 3 pages × 4 KiB
                 start_ticks: 100,
             })
+        );
+    }
+
+    #[test]
+    fn parse_stat_metrics_reads_waited_child_cpu() {
+        let stat = "1234 (cargo) S 1 1234 1234 0 -1 0 0 0 0 0 42 17 300 25 20 0 1 0 646245020 9000000 2048 …";
+
+        assert_eq!(
+            parse_stat_metrics(stat, 4).map(|metrics| metrics.child_cpu_ticks),
+            Some(325)
         );
     }
 

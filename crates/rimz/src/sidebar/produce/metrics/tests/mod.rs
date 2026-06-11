@@ -5,6 +5,7 @@ use std::path::PathBuf;
 mod binding_cache;
 mod cadence;
 mod pid_backfill;
+mod tree;
 
 /// A process-table entry for the pid-backfill matcher fixtures; everything
 /// runs as one uid (1000) unless a test says otherwise.
@@ -97,17 +98,20 @@ fn backfill(
 /// records it. `command` is the sample-time foreground the carry guard keys on.
 fn binding_entry(pane_pid: u32, start_ticks: u64, command: &str) -> MetricsSampleEntry {
     MetricsSampleEntry {
+        sample_version: METRICS_SAMPLE_VERSION,
         stats_pid: pane_pid,
         cpu_ticks: 0,
         io_bytes: 0,
+        io_bytes_valid: true,
         sampled_at_ms: 0,
+        tree_process_count: 1,
         pane_pid: Some(pane_pid),
         root_start_ticks: Some(start_ticks),
         command: Some(command.to_owned()),
         cpu_pct: None,
         io_bps: None,
         rss_kb: None,
-        state_char: None,
+        state_samples: Vec::new(),
         process_state: None,
     }
 }

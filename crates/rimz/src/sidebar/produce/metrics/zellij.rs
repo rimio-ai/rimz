@@ -1,6 +1,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 use crate::ProcessState;
 use crate::sidebar::frame::PaneFrame;
 
@@ -24,6 +25,7 @@ pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
     children
 }
 
+#[cfg(test)]
 pub(super) fn process_state_from_stat(
     current: Option<char>,
     prior: Option<char>,

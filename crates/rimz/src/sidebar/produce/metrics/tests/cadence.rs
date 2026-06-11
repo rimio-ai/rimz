@@ -31,6 +31,18 @@ fn metric_entry_due_samples_missing_and_changed_entries_immediately() {
 }
 
 #[test]
+fn metric_entry_due_warms_legacy_sample_versions() {
+    let command = Some("cargo build".to_owned());
+    let mut entry = fresh_entry(42, 700, "cargo build", 1_000);
+    entry.sample_version = 1;
+
+    assert!(
+        metric_entry_due(Some(&entry), &command, 1_001),
+        "single-process cache entries cannot seed pane-tree rates"
+    );
+}
+
+#[test]
 fn metric_entry_due_uses_idle_or_hot_ttl() {
     let idle = (
         Some("zsh".to_owned()),
@@ -43,7 +55,7 @@ fn metric_entry_due_uses_idle_or_hot_ttl() {
         METRICS_HOT_SAMPLE_TTL.as_millis() as u64,
     );
     let mut child_entry = fresh_entry(42, 700, "htop", 1_000);
-    child_entry.stats_pid = 99;
+    child_entry.tree_process_count = 2;
     assert!(metrics_entry_hot(&child_entry));
     let child = (
         Some("htop".to_owned()),

@@ -96,7 +96,7 @@ pub struct PaneProcess {
     pub elevated_agent: Option<ElevatedAgent>,
 }
 
-/// Producer-sampled resource figures for one pane's foreground process —
+/// Producer-sampled resource figures for one pane's process tree —
 /// display-only, written by the metrics cadence and projected onto process
 /// rows. The CPU/memory/IO figures publish together once two same-tenant
 /// `/proc` samples complete them, never as a partial set.

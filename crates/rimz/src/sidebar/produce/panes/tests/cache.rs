@@ -135,12 +135,14 @@ fn zombie_stat_metrics_do_not_prove_liveness() {
     let zombie = crate::proc::StatMetrics {
         state: 'Z',
         cpu_ticks: 1,
+        child_cpu_ticks: 0,
         rss_kb: 0,
         start_ticks: 42,
     };
     let sleeping = crate::proc::StatMetrics {
         state: 'S',
         cpu_ticks: 1,
+        child_cpu_ticks: 0,
         rss_kb: 4,
         start_ticks: 43,
     };

@@ -1,6 +1,6 @@
 //! Per-pane `/proc` resource metrics on the sampling cadence's own clock: the
-//! two-sample CPU/IO rates, the persisted pane→root-pid bindings with their
-//! starttime pid-reuse guard, and the Zellij pid backfill walk.
+//! two-sample pane-tree CPU/IO rates, the persisted pane→root-pid bindings with
+//! their starttime pid-reuse guard, and the Zellij pid backfill walk.
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -15,9 +15,10 @@ use crate::sidebar::timing::{METRICS_HOT_SAMPLE_TTL, METRICS_SAMPLE_TTL};
 mod zellij;
 
 pub(super) use zellij::backfill_zellij_pane_pids_from_proc;
-use zellij::process_state_from_stat;
 #[cfg(test)]
-use zellij::{backfill_zellij_pane_pids, resolve_candidate_root};
+use zellij::{backfill_zellij_pane_pids, process_state_from_stat, resolve_candidate_root};
+
+const METRICS_SAMPLE_VERSION: u8 = 2;
 
 /// Per-pane CPU and IO tick counters sampled by the producer on the previous
 /// tick, plus the pane's root-pid binding. Two consecutive readings plus the
@@ -26,16 +27,30 @@ use zellij::{backfill_zellij_pane_pids, resolve_candidate_root};
 /// `/proc` table walk that re-deriving it costs.
 #[derive(serde::Serialize, serde::Deserialize, Clone, Default)]
 struct MetricsSampleEntry {
-    /// The PID the metrics were read from (shell or its single foreground
-    /// child). `0` records an unbound sample attempt, so pidless panes that
-    /// cannot be matched still respect the hot/idle retry cadence.
+    /// Cache shape for the sampled counters. Version 1 sampled one process
+    /// (`stats_pid`) and cannot seed pane-tree rates, so version mismatches
+    /// force one warmup sample while still allowing guarded root-pid restore.
+    #[serde(default)]
+    sample_version: u8,
+    /// The pane root pid whose tree was sampled. `0` records an unbound sample
+    /// attempt, so pidless panes that cannot be matched still respect the
+    /// hot/idle retry cadence.
     stats_pid: u32,
-    /// utime + stime ticks from `/proc/<pid>/stat` at sample time.
+    /// Aggregated pane-tree CPU ticks at sample time. Each live process
+    /// contributes self CPU plus waited-child CPU.
     cpu_ticks: u64,
-    /// rchar + wchar bytes from `/proc/<pid>/io` at sample time.
+    /// Aggregated pane-tree rchar + wchar bytes at sample time.
     io_bytes: u64,
+    /// Whether `io_bytes` came from a complete tree I/O sample. A missing
+    /// `/proc/<pid>/io` read keeps the display hidden and cannot seed the next
+    /// rate calculation from zero.
+    #[serde(default)]
+    io_bytes_valid: bool,
     /// Unix milliseconds when this sample was taken.
     sampled_at_ms: u64,
+    /// Number of stat-readable processes included in the tree sample.
+    #[serde(default)]
+    tree_process_count: u32,
     /// The pane's root pid (tmux semantics: the direct child of the mux
     /// server), recorded so the next tick restores the binding instead of
     /// re-matching the pane against the whole process table.
@@ -63,13 +78,32 @@ struct MetricsSampleEntry {
     io_bps: Option<u64>,
     #[serde(default)]
     rss_kb: Option<u64>,
-    /// Last `/proc/<pid>/stat` state character for the sampled process.
+    /// Last stat-readable process states in the tree, keyed by pid and
+    /// starttime so repeated `D` detection never aliases a reused pid.
     #[serde(default)]
-    state_char: Option<char>,
+    state_samples: Vec<ProcessStateSample>,
     /// Last stuck verdict, carried across fresh windows without re-reading
     /// `/proc`.
     #[serde(default)]
     process_state: Option<ProcessState>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+struct ProcessStateSample {
+    pid: u32,
+    start_ticks: u64,
+    state: char,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PaneTreeSample {
+    direct_children: Vec<u32>,
+    process_count: u32,
+    cpu_ticks: u64,
+    io_bytes: Option<u64>,
+    rss_kb: u64,
+    root_start_ticks: u64,
+    state_samples: Vec<ProcessStateSample>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Default)]
@@ -134,7 +168,7 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
     })
 }
 
-/// Enrich each pane with per-process resource metrics from `/proc`, on the
+/// Enrich each pane with process-tree resource metrics from `/proc`, on the
 /// sampling cadence's own clock: active/recently-changed panes sample on
 /// [`METRICS_HOT_SAMPLE_TTL`], idle panes on [`METRICS_SAMPLE_TTL`]. Fresh
 /// entries carry their stored display values — and the pane→root-pid binding
@@ -143,11 +177,12 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
 /// fresh stamped sample for the next window. Linux-only; on other platforms
 /// every pane's metric fields stay `None`.
 ///
-/// The steady-state due sample is O(due panes) small `/proc` reads: each Zellij
-/// pane's root pid restores from the prior window's guarded binding
-/// ([`restore_cached_bindings`]) and each shell's foreground child comes from
-/// its own `/proc/<pid>/task/<pid>/children` file. The full process-table walk
-/// runs only while some due pane's binding is unknown — pane churn or a
+/// The steady-state due sample is O(due pane trees) small `/proc` reads: each
+/// Zellij pane's root pid restores from the prior window's guarded binding
+/// ([`restore_cached_bindings`]), then descendants come from the full
+/// process-table child map when it was already paid for, or from each sampled
+/// process's `/proc/<pid>/task/<pid>/children` file. The full process-table
+/// walk runs only while some due pane's binding is unknown — pane churn or a
 /// foreground change, exactly the moments a fresh `list-panes` was already
 /// paid for.
 pub(super) fn enrich_pane_metrics(
@@ -234,91 +269,183 @@ fn sample_due_pane(
     let Some(shell_pid) = pane.current.pid else {
         return unbound_entry(pane.current.command.clone(), now_ms);
     };
-    let kids = match children.get(&shell_pid) {
-        Some(kids) => kids.clone(),
-        None if !needs_walk => crate::proc::children(shell_pid),
-        None => Vec::new(),
+    let Some(sample) = sample_pane_tree(
+        shell_pid,
+        children,
+        needs_walk,
+        &crate::proc::stat_metrics,
+        &crate::proc::io_bytes,
+        &crate::proc::children,
+    ) else {
+        return MetricsSampleEntry {
+            sample_version: METRICS_SAMPLE_VERSION,
+            stats_pid: shell_pid,
+            sampled_at_ms: now_ms,
+            pane_pid: Some(shell_pid),
+            command: pane.current.command.clone(),
+            ..MetricsSampleEntry::default()
+        };
     };
-    pane.children = kids.clone();
-    let stats_pid = match kids.as_slice() {
-        &[child] => child,
-        _ => shell_pid,
-    };
-
-    let stat_now = crate::proc::stat_metrics(stats_pid);
-    let rss_kb = stat_now.map(|stat| stat.rss_kb);
-    let cpu_now = stat_now.map(|stat| stat.cpu_ticks);
-    let state_char = stat_now.map(|stat| stat.state);
-    let io_now = crate::proc::io_bytes(stats_pid);
-    let (prior_state_char, cpu_pct, io_bps) = rate_metrics(
-        prior.entries.get(pane_key),
-        pane,
-        stats_pid,
-        cpu_now,
-        io_now,
-        clk_tck,
-        now_ms,
-    );
-    let process_state =
-        process_state_from_stat(state_char, prior_state_char).filter(ProcessState::is_stuck);
-    if display_metrics_ready(cpu_pct, io_bps, rss_kb) {
-        pane.metrics.rss_kb = rss_kb;
+    pane.children = sample.direct_children.clone();
+    let (cpu_pct, io_bps) =
+        rate_metrics(prior.entries.get(pane_key), pane, &sample, clk_tck, now_ms);
+    let prior_states = prior
+        .entries
+        .get(pane_key)
+        .filter(|entry| entry.sample_version == METRICS_SAMPLE_VERSION)
+        .map(|entry| entry.state_samples.as_slice())
+        .unwrap_or_default();
+    let process_state = process_state_from_tree(&sample.state_samples, prior_states);
+    if display_metrics_ready(cpu_pct, io_bps, Some(sample.rss_kb)) {
+        pane.metrics.rss_kb = Some(sample.rss_kb);
         pane.metrics.cpu_pct = cpu_pct;
         pane.metrics.io_bps = io_bps;
     }
     pane.metrics.process_state = process_state;
 
-    let root_start_ticks = if stats_pid == shell_pid {
-        stat_now.map(|stat| stat.start_ticks)
-    } else {
-        crate::proc::stat_metrics(shell_pid).map(|stat| stat.start_ticks)
-    };
     MetricsSampleEntry {
-        stats_pid,
-        cpu_ticks: cpu_now.unwrap_or(0),
-        io_bytes: io_now.unwrap_or(0),
+        sample_version: METRICS_SAMPLE_VERSION,
+        stats_pid: shell_pid,
+        cpu_ticks: sample.cpu_ticks,
+        io_bytes: sample.io_bytes.unwrap_or(0),
+        io_bytes_valid: sample.io_bytes.is_some(),
         sampled_at_ms: now_ms,
+        tree_process_count: sample.process_count,
         pane_pid: Some(shell_pid),
-        root_start_ticks,
+        root_start_ticks: Some(sample.root_start_ticks),
         command: pane.current.command.clone(),
         cpu_pct: pane.metrics.cpu_pct,
         io_bps: pane.metrics.io_bps,
         rss_kb: pane.metrics.rss_kb,
-        state_char,
+        state_samples: sample.state_samples,
         process_state,
     }
+}
+
+fn sample_pane_tree(
+    root_pid: u32,
+    children: &HashMap<u32, Vec<u32>>,
+    needs_walk: bool,
+    stat_metrics: &dyn Fn(u32) -> Option<crate::proc::StatMetrics>,
+    io_bytes: &dyn Fn(u32) -> Option<u64>,
+    proc_children: &dyn Fn(u32) -> Vec<u32>,
+) -> Option<PaneTreeSample> {
+    let root_stat = stat_metrics(root_pid)?;
+    let root_children = direct_children(root_pid, children, needs_walk, proc_children);
+    let mut sample = PaneTreeSample {
+        direct_children: root_children.clone(),
+        process_count: 0,
+        cpu_ticks: 0,
+        io_bytes: Some(0),
+        rss_kb: 0,
+        root_start_ticks: root_stat.start_ticks,
+        state_samples: Vec::new(),
+    };
+    add_process_to_sample(root_pid, root_stat, io_bytes, &mut sample);
+
+    let mut seen = HashSet::from([root_pid]);
+    let mut stack = root_children;
+    while let Some(pid) = stack.pop() {
+        if !seen.insert(pid) {
+            continue;
+        }
+        let Some(stat) = stat_metrics(pid) else {
+            continue;
+        };
+        add_process_to_sample(pid, stat, io_bytes, &mut sample);
+        stack.extend(direct_children(pid, children, needs_walk, proc_children));
+    }
+    Some(sample)
+}
+
+fn direct_children(
+    pid: u32,
+    children: &HashMap<u32, Vec<u32>>,
+    needs_walk: bool,
+    proc_children: &dyn Fn(u32) -> Vec<u32>,
+) -> Vec<u32> {
+    match children.get(&pid) {
+        Some(kids) => kids.clone(),
+        None if !needs_walk => proc_children(pid),
+        None => Vec::new(),
+    }
+}
+
+fn add_process_to_sample(
+    pid: u32,
+    stat: crate::proc::StatMetrics,
+    io_bytes: &dyn Fn(u32) -> Option<u64>,
+    sample: &mut PaneTreeSample,
+) {
+    sample.process_count = sample.process_count.saturating_add(1);
+    sample.cpu_ticks = sample
+        .cpu_ticks
+        .saturating_add(stat.cpu_ticks)
+        .saturating_add(stat.child_cpu_ticks);
+    sample.rss_kb = sample.rss_kb.saturating_add(stat.rss_kb);
+    sample.io_bytes = match (sample.io_bytes, io_bytes(pid)) {
+        (Some(total), Some(bytes)) => Some(total.saturating_add(bytes)),
+        _ => None,
+    };
+    sample.state_samples.push(ProcessStateSample {
+        pid,
+        start_ticks: stat.start_ticks,
+        state: stat.state,
+    });
+}
+
+fn process_state_from_tree(
+    current: &[ProcessStateSample],
+    prior: &[ProcessStateSample],
+) -> Option<ProcessState> {
+    if current.iter().any(|sample| sample.state == 'Z') {
+        return Some(ProcessState::Stuck);
+    }
+    let prior_d: HashSet<(u32, u64)> = prior
+        .iter()
+        .filter(|sample| sample.state == 'D')
+        .map(|sample| (sample.pid, sample.start_ticks))
+        .collect();
+    current
+        .iter()
+        .any(|sample| sample.state == 'D' && prior_d.contains(&(sample.pid, sample.start_ticks)))
+        .then_some(ProcessState::Stuck)
 }
 
 fn rate_metrics(
     prior_entry: Option<&MetricsSampleEntry>,
     pane: &PaneState,
-    stats_pid: u32,
-    cpu_now: Option<u64>,
-    io_now: Option<u64>,
+    sample: &PaneTreeSample,
     clk_tck: f64,
     now_ms: u64,
-) -> (Option<char>, Option<u16>, Option<u64>) {
+) -> (Option<u16>, Option<u64>) {
     let Some(prior_entry) = prior_entry else {
-        return (None, None, None);
+        return (None, None);
     };
-    if prior_entry.command != pane.current.command || prior_entry.stats_pid != stats_pid {
-        return (prior_entry.state_char, None, None);
+    if prior_entry.sample_version != METRICS_SAMPLE_VERSION
+        || prior_entry.command != pane.current.command
+        || prior_entry.pane_pid != pane.current.pid
+        || prior_entry.root_start_ticks != Some(sample.root_start_ticks)
+    {
+        return (None, None);
     }
     let elapsed_ms = now_ms.saturating_sub(prior_entry.sampled_at_ms);
     let elapsed_secs = elapsed_ms as f64 / 1_000.0;
     if elapsed_secs < 0.1 {
-        return (prior_entry.state_char, None, None);
+        return (None, None);
     }
-    let cpu_pct = cpu_now.map(|ticks| {
-        let delta = ticks.saturating_sub(prior_entry.cpu_ticks);
-        let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
-        pct.clamp(0.0, u16::MAX as f64) as u16
-    });
-    let io_bps = io_now.map(|bytes| {
-        let delta = bytes.saturating_sub(prior_entry.io_bytes);
-        (delta as f64 / elapsed_secs) as u64
-    });
-    (prior_entry.state_char, cpu_pct, io_bps)
+    let delta = sample.cpu_ticks.saturating_sub(prior_entry.cpu_ticks);
+    let pct = (delta as f64 / elapsed_secs / clk_tck * 100.0).round();
+    let cpu_pct = Some(pct.clamp(0.0, u16::MAX as f64) as u16);
+    let io_bps = if prior_entry.io_bytes_valid {
+        sample.io_bytes.map(|bytes| {
+            let delta = bytes.saturating_sub(prior_entry.io_bytes);
+            (delta as f64 / elapsed_secs) as u64
+        })
+    } else {
+        None
+    };
+    (cpu_pct, io_bps)
 }
 
 /// The entry recorded for a due pidless pane the walk could not match: no
@@ -327,6 +454,7 @@ fn rate_metrics(
 /// process table every produce.
 fn unbound_entry(command: Option<String>, sampled_at_ms: u64) -> MetricsSampleEntry {
     MetricsSampleEntry {
+        sample_version: METRICS_SAMPLE_VERSION,
         sampled_at_ms,
         command,
         ..MetricsSampleEntry::default()
@@ -357,6 +485,9 @@ fn metric_entry_due(
     let Some(entry) = entry else {
         return true;
     };
+    if entry.sample_version != METRICS_SAMPLE_VERSION {
+        return true;
+    }
     if entry.command != *command {
         return true;
     }
@@ -369,17 +500,15 @@ fn metric_entry_due(
 }
 
 /// Whether an entry rides the hot cadence: its sample-time command reads as
-/// active work, or its stats rode a foreground child of the pane root (the
-/// shell has a tenant). [`metric_entry_due`] consults this only behind its
-/// command guard, so the entry's command is also the pane's current one.
+/// active work, or the pane root had live descendants. [`metric_entry_due`]
+/// consults this only behind its command guard, so the entry's command is also
+/// the pane's current one.
 fn metrics_entry_hot(entry: &MetricsSampleEntry) -> bool {
     entry
         .command
         .as_deref()
         .is_some_and(crate::ledger::snapshot::process_is_active)
-        || entry
-            .pane_pid
-            .is_some_and(|pane_pid| entry.stats_pid != pane_pid)
+        || entry.tree_process_count > 1
 }
 
 /// The all-or-nothing display gate: CPU, memory, and IO reach the pane
