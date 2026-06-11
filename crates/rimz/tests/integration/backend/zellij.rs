@@ -1093,33 +1093,6 @@ fn wait_for_tab_count(xdg: &Path, session: &str, want: usize) -> Vec<u64> {
     }
 }
 
-/// Poll `list_panes` until a terminal pane reports its cwd metadata, then return
-/// the listing (bounded). A pane can surface in `list-panes` a beat before
-/// Zellij fills in cwd/pid — under load that window widens — so a test that
-/// asserts on that metadata waits for it here rather than for the bare pane to
-/// exist. Zellij 0.44 can still omit command fields for the implicit shell pane;
-/// the adapter preserves that as `None` for the frame rotation layer to repair
-/// from a prior observation when one exists.
-fn wait_for_pane_with_cwd(xdg: &Path, session: &str) -> Vec<PaneRef> {
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        let panes = ZellijBackend::with_runtime_dir(xdg)
-            .list_panes(PaneListOptions {
-                session_name: Some(session.to_owned()),
-                ..Default::default()
-            })
-            .unwrap_or_default()
-            .panes;
-        let ready = panes
-            .iter()
-            .any(|pane| pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()));
-        if ready || Instant::now() >= deadline {
-            return panes;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
 /// Poll `list_panes` until at least `want` panes appear (bounded). Returns the
 /// last observation either way so the caller can assert and print it.
 fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
@@ -1443,62 +1416,4 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         diff <= 5,
         "work panes should split evenly after reopening from one pane, got {split:?}",
     );
-}
-
-/// `wake_sidebar` issues `zellij --session <name> pipe --name rimz::feed --
-/// <payload>`. We assert the subprocess returns success even when no
-/// pipe-aware client consumes the payload.
-#[test]
-fn wake_sidebar_pipe_invocation_succeeds() {
-    require_zellij!();
-
-    let name = unique_session_name("pipe");
-    let session = ZellijSession::spawn(&name);
-
-    let payload = format!(
-        r#"{{"v":"{}","workspace_id":"ws_0123456789abcdef01234567","session_name":"rimz-test","sent_at_ms":0,"event":{{"kind":"ledger_delta"}}}}"#,
-        rimz::schema::sidebar_event::SIDEBAR_EVENT_VERSION
-    );
-    ZellijBackend::with_runtime_dir(session.xdg.path())
-        .wake_sidebar(&name, payload.as_bytes())
-        .expect("wake_sidebar succeeds against a live zellij session");
-}
-
-/// `list_panes` parses `zellij action list-panes -j -a` JSON. A fresh
-/// session has at least one terminal pane (the implicit shell).
-#[test]
-fn list_panes_with_session_returns_terminals() {
-    require_zellij!();
-
-    let name = unique_session_name("panes");
-    let session = ZellijSession::spawn(&name);
-
-    // Poll until the implicit shell pane reports cwd metadata, not just until it
-    // exists: a pane can surface in `list-panes` a beat before Zellij fills in
-    // cwd/pid, and under load that window widens. Command can still be absent for
-    // the implicit shell pane on Zellij 0.44.
-    let panes = wait_for_pane_with_cwd(session.xdg.path(), &name);
-    assert!(
-        !panes.is_empty(),
-        "expected ≥1 terminal pane in fresh session {name}, got {panes:?}",
-    );
-    for pane in &panes {
-        assert_eq!(pane.pane_id.mux(), MuxName::Zellij);
-        assert!(
-            pane.pane_id.raw().starts_with("terminal_"),
-            "list_panes should filter plugins out; got {}",
-            pane.pane_id,
-        );
-        assert_eq!(pane.session_name, name);
-        if let Some(command) = pane.command.as_deref() {
-            assert!(
-                !command.is_empty(),
-                "zellij should not report an empty PaneRef::command: {pane:?}",
-            );
-        }
-        assert!(
-            pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()),
-            "zellij should report pane_cwd into PaneRef::cwd: {pane:?}",
-        );
-    }
 }

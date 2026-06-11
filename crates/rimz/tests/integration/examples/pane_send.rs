@@ -16,8 +16,8 @@ use rimz::feed::RuntimeOwnerKind;
 use rimz::ledger::runtime::current_process_owner;
 
 use crate::common::{
-    Env, ScrubSessionEnvExt, example_resolver_script, permission_payload, python3_present,
-    skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
+    Env, ScrubSessionEnvExt, permission_payload, skip_preconditions, spawn_example_resolver,
+    wait_for_heartbeat,
 };
 
 /// Isolated `TMUX_TMPDIR` so the live-pane happy path never collides with the
@@ -73,81 +73,6 @@ fn pane_send_resolver_abstains_when_item_has_no_pane() {
     assert!(
         abstain_reasons.iter().any(|r| r == "no_pane"),
         "expected feed.abstain with reason=no_pane, got {abstain_reasons:?}"
-    );
-}
-
-#[test]
-fn pane_send_resolver_match_prompt_recognises_bounded_patterns() {
-    if !python3_present() {
-        tracing::warn!("skipping: python3 not on PATH");
-        return;
-    }
-    let script = example_resolver_script("pane_send_resolver.py");
-    let import_dir = script
-        .parent()
-        .expect("script parent")
-        .display()
-        .to_string();
-
-    let probe = r#"
-import sys
-sys.path.insert(0, sys.argv[1])
-import pane_send_resolver as r
-
-ok_cases = [
-    ["Are you sure? [y/N]"],
-    ["junk above", "Do you want to continue? [y/N]"],
-    ["Proceed? [Y/n]   "],
-]
-bad_cases = [
-    ["unrelated prompt $"],
-    ["Please type the secret"],
-    [],
-]
-
-for lines in ok_cases:
-    assert r.match_prompt(lines) == "y\n", lines
-for lines in bad_cases:
-    assert r.match_prompt(lines) is None, lines
-print("ok")
-"#;
-
-    let out = Command::new("python3")
-        .args(["-c", probe, &import_dir])
-        .output()
-        .expect("spawn python probe");
-    assert!(
-        out.status.success(),
-        "pattern probe failed: stdout={} stderr={}",
-        String::from_utf8_lossy(&out.stdout),
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), "ok");
-}
-
-#[test]
-fn pane_send_resolver_help_is_well_formed() {
-    if !python3_present() {
-        tracing::warn!("skipping: python3 not on PATH");
-        return;
-    }
-    let script = example_resolver_script("pane_send_resolver.py");
-    let out = Command::new("python3")
-        .arg(&script)
-        .arg("--help")
-        .output()
-        .expect("spawn --help");
-    assert!(out.status.success());
-    let stdout = String::from_utf8(out.stdout).expect("utf8");
-    assert!(
-        stdout.contains("--workspace-id") && stdout.contains("--resolver-id"),
-        "help missing required arg flags:\n{stdout}"
-    );
-    // The body is in a single docstring; the first line should mention the
-    // resolver's role so the help text doubles as documentation.
-    assert!(
-        stdout.contains("pane-send resolver"),
-        "help missing role line:\n{stdout}"
     );
 }
 

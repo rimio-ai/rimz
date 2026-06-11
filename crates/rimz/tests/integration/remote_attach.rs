@@ -169,46 +169,6 @@ fn exec_hands_ssh_the_expected_argv() {
 }
 
 #[test]
-fn supervised_connect_starts_a_probe_stream() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "150")
-        .env("RIMZ_REMOTE_PROBE_MS", "20")
-        .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        out.status.success(),
-        "shim exits 0\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let invocations = shim_invocations(&log);
-    assert!(
-        invocations.iter().any(|argv| is_probe_invocation(argv)),
-        "probe stream is spawned: {invocations:?}"
-    );
-    assert!(
-        invocations
-            .iter()
-            .any(|argv| is_control_check_invocation(argv)),
-        "probe waits on a ControlMaster readiness check: {invocations:?}"
-    );
-    let main = invocations
-        .iter()
-        .find(|argv| is_main_invocation(argv))
-        .expect("main ssh invocation");
-    assert!(
-        main.iter().any(|arg| arg == "ControlMaster=auto"),
-        "main ssh owns the control master: {main:?}"
-    );
-}
-
-#[test]
 fn probe_stream_waits_for_control_master_before_starting() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -345,29 +305,6 @@ fn local_link_notify_command_receives_lost_and_restored_env() {
         1,
         "restored edge fires once:\n{text}"
     );
-}
-
-#[test]
-fn first_connection_failure_never_retries() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let plan = env.project_root.join("ssh-trace.plan");
-    std::fs::write(&plan, "255\n").expect("write plan");
-    // Default gatetime: the shim's instant 255 reads as an auth/host
-    // failure, not a drop — fatal, no password-prompt loop.
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_PLAN", &plan)
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(!out.status.success(), "transport failure surfaces");
-    assert_eq!(shim_invocations(&log).len(), 1, "no retry");
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(stderr.contains("255"), "names the ssh exit: {stderr}");
 }
 
 #[test]

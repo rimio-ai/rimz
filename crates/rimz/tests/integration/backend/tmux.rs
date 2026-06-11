@@ -205,66 +205,6 @@ impl Drop for TmuxServer {
     }
 }
 
-/// Sanity: ensure a session, see it in `list_sessions`. Establishes that
-/// the per-test socket gives us a usable tmux server.
-#[test]
-fn ensure_and_list_sessions_round_trip() {
-    require_tmux!();
-
-    let server = TmuxServer::new();
-    let cwd = TempDir::new().expect("cwd tempdir");
-    server
-        .backend
-        .ensure_session(&SessionOptions {
-            session_name: "rimz-test".to_owned(),
-            workspace_id: WorkspaceId::from_project_root(cwd.path()),
-            project_root: cwd.path().to_path_buf(),
-            cwd: cwd.path().to_path_buf(),
-            config: rimz::config::MultiplexerConfig::default(),
-            detected_size: None,
-        })
-        .expect("ensure");
-
-    let listed = server.backend.list_sessions().expect("list_sessions");
-    assert!(
-        listed.iter().any(|s| s == "rimz-test"),
-        "expected `rimz-test` in {listed:?}",
-    );
-    // `pane_current_path` reports the live shell process's cwd, and the
-    // pane's shell may still be mid-rc — oh-my-zsh, for one, chdirs into its
-    // cache dir transiently during startup — so poll briefly until the cwd
-    // settles back to the launch directory before pinning it.
-    let expected = cwd.path().display().to_string();
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-    let mut current = server.pane_current_path("rimz-test");
-    while current != expected && std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(50));
-        current = server.pane_current_path("rimz-test");
-    }
-    assert_eq!(current, expected);
-
-    // The identity pin landed in the session environment at birth, so every
-    // pane — and every agent hook child — inherits the room it lives in.
-    let pin = show_session_environment(&server, "rimz-test", rimz::workspace::ENV_WORKSPACE_ID);
-    assert_eq!(
-        pin,
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_WORKSPACE_ID,
-            WorkspaceId::from_project_root(cwd.path()),
-        ),
-    );
-    let root = show_session_environment(&server, "rimz-test", rimz::workspace::ENV_PROJECT_ROOT);
-    assert_eq!(
-        root,
-        format!(
-            "{}={}",
-            rimz::workspace::ENV_PROJECT_ROOT,
-            cwd.path().display(),
-        ),
-    );
-}
-
 /// `tmux show-environment -t <session> <name>` — the session-scoped env the
 /// identity pin is stamped into.
 fn show_session_environment(server: &TmuxServer, session: &str, name: &str) -> String {
@@ -310,6 +250,39 @@ fn ensure_session_applies_room_options_in_one_batch() {
     assert_eq!(
         server.show_option(&["-w", "-t", "rimz-options"], "allow-passthrough"),
         "on",
+    );
+
+    let listed = server.backend.list_sessions().expect("list_sessions");
+    assert!(
+        listed.iter().any(|s| s == "rimz-options"),
+        "expected `rimz-options` in {listed:?}",
+    );
+    let expected = cwd.path().display().to_string();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut current = server.pane_current_path("rimz-options");
+    while current != expected && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(50));
+        current = server.pane_current_path("rimz-options");
+    }
+    assert_eq!(current, expected);
+
+    let pin = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_WORKSPACE_ID);
+    assert_eq!(
+        pin,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_WORKSPACE_ID,
+            WorkspaceId::from_project_root(cwd.path()),
+        ),
+    );
+    let root = show_session_environment(&server, "rimz-options", rimz::workspace::ENV_PROJECT_ROOT);
+    assert_eq!(
+        root,
+        format!(
+            "{}={}",
+            rimz::workspace::ENV_PROJECT_ROOT,
+            cwd.path().display(),
+        ),
     );
 }
 

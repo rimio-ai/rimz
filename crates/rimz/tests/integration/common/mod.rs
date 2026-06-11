@@ -21,7 +21,6 @@ pub use command::{CommandTimeoutExt, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
 pub use harness::Harness;
 pub use payloads::{
-    claude_pre_tool_use_payload, codex_permission_payload, example_resolver_script,
-    lifecycle_event, permission_payload, pi_tool_call_payload, python3_present, skip_preconditions,
-    spawn_example_resolver, wait_for_heartbeat,
+    claude_pre_tool_use_payload, codex_permission_payload, lifecycle_event, permission_payload,
+    pi_tool_call_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
 };

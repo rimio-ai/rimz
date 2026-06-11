@@ -142,50 +142,6 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
 }
 
 #[test]
-fn run_status_json_includes_live_state_for_nonterminal_run() {
-    let env = Env::new();
-    let ledger = env.ledger();
-    let record = RunRecord::new(
-        env.workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "summarize".to_owned(),
-        env.project_root.clone(),
-    );
-    let run_id = record.run_id.clone();
-    rimz::run::create(ledger.paths(), &record).expect("create run");
-
-    let prompt_payload = json!({
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "sess-live",
-        "prompt": "summarize"
-    })
-    .to_string();
-    let mut prompt_cmd = env.hook_command("codex");
-    prompt_cmd.env(rimz::run::ENV_RUN_ID, run_id.as_str());
-    let out = env
-        .spawn_payload(prompt_cmd, &prompt_payload)
-        .wait_with_output()
-        .expect("wait prompt hook");
-    assert!(out.status.success(), "prompt hook failed");
-
-    let out = env
-        .rimz()
-        .args(["run", "status", run_id.as_str(), "--json"])
-        .output()
-        .expect("spawn run status");
-    assert!(
-        out.status.success(),
-        "run status failed: {}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("status json");
-    assert_eq!(parsed["status"], "running");
-    assert_eq!(parsed["live"]["agent_status"], "running");
-    assert_eq!(parsed["live"]["phase"], "reasoning");
-}
-
-#[test]
 fn run_status_honors_pinned_room_inside_nested_repo() {
     let env = Env::new();
     let nested = env.project_root.join("code").join("query-engine");

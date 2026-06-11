@@ -138,23 +138,19 @@ fn reset_archives_records_and_clears_room_state() {
         .expect("projection");
     assert_eq!(projection.items.len(), 0, "feed files are derived state");
     assert_eq!(projection.agents.len(), 1, "soft reset keeps resume rollup");
-}
 
-#[test]
-fn reset_hard_archives_without_seeding_prior_agents() {
-    let env = Env::new();
-    env.ledger()
+    let hard = Env::new();
+    hard.ledger()
         .append_event(&EventEnvelope::agent_lifecycle(
-            env.workspace_id.clone(),
+            hard.workspace_id.clone(),
             "rimz-test",
             "claude",
             "SessionStart",
-            &agent_observation(&env.project_root),
+            &agent_observation(&hard.project_root),
         ))
         .expect("append lifecycle");
-    let paths = env.state_path_for(&env.project_root);
-
-    env.rimz()
+    let paths = hard.state_path_for(&hard.project_root);
+    hard.rimz()
         .args(["--mux", "zellij", "reset", "--no-start", "--yes", "--hard"])
         .assert()
         .success()
@@ -165,7 +161,7 @@ fn reset_hard_archives_without_seeding_prior_agents() {
         "hard reset clears carryover"
     );
     assert_eq!(archive_paths(&paths.events_archive_dir).len(), 1);
-    let projection = env
+    let projection = hard
         .ledger()
         .runtime_projection(rimz::RuntimeScope::Audit)
         .expect("projection");

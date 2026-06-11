@@ -78,98 +78,56 @@ impl Drop for HeartbeatKeepalive {
 }
 
 #[test]
-fn chain_advances_on_budget_elapse() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    // First resolver has a 1-second per-step budget; second is generous.
-    env.enrol("opus-policy", 10, "1s");
-    env.enrol("slack-on-call", 20, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-    env.write_heartbeat("slack-on-call", Timestamp::now());
-
-    let child = env.spawn_hook("claude", &permission_payload("Bash"));
-
-    let request_id = env
-        .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
-        .expect("bridge item should appear in feed");
-
-    // Keep slack-on-call heartbeating fresh while we wait for the budget
-    // elapse, so the loop's restat after the chain advance succeeds.
-    let heartbeat_keepalive = keep_heartbeat_fresh(&env, "slack-on-call");
-
-    assert!(
-        env.poll_active_resolver(
-            &request_id,
-            "slack-on-call",
-            Instant::now() + Duration::from_secs(5),
-        ),
-        "chain should advance to slack-on-call after the 1s budget elapses"
+fn chain_advances_on_budget_elapse_or_stale_heartbeat() {
+    assert_chain_advances_to_second_resolver(
+        "budget_elapsed",
+        |env| {
+            env.enrol("opus-policy", 10, "1s");
+            env.enrol("slack-on-call", 20, "30s");
+            env.write_heartbeat("opus-policy", Timestamp::now());
+            env.write_heartbeat("slack-on-call", Timestamp::now());
+        },
+        |_| {},
     );
-
-    let resolve = env.resolve(
-        &request_id,
-        r#"{"choice":"allow"}"#,
-        "slack-on-call",
-        "hook-bridge",
-    );
-    assert!(
-        resolve.status.success(),
-        "resolve failed: {}",
-        String::from_utf8_lossy(&resolve.stderr)
-    );
-
-    let output = child.wait_with_output().expect("wait child");
-    drop(heartbeat_keepalive);
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
-    assert_eq!(
-        decision["hookSpecificOutput"]["decision"]["behavior"],
-        "allow"
-    );
-
-    let reasons = chain_elapse_reasons(&env);
-    assert!(
-        reasons.iter().any(|r| r == "budget_elapsed"),
-        "expected feed.chain_elapse with reason=budget_elapsed, got {reasons:?}"
+    assert_chain_advances_to_second_resolver(
+        "heartbeat_stale",
+        |env| {
+            env.enrol("opus-policy", 10, "30s");
+            env.enrol("slack-on-call", 20, "30s");
+            env.write_heartbeat("opus-policy", Timestamp::now());
+            env.write_heartbeat("slack-on-call", Timestamp::now());
+        },
+        |env| {
+            env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+        },
     );
 }
 
-#[test]
-fn chain_advances_on_heartbeat_stale() {
+fn assert_chain_advances_to_second_resolver(
+    reason: &str,
+    setup: impl FnOnce(&Env),
+    trigger: impl FnOnce(&Env),
+) {
     let env = Env::new();
     if env.skip_if_sandboxed() {
         return;
     }
-    // Generous per-step budgets — the trigger we want is heartbeat staleness.
-    env.enrol("opus-policy", 10, "30s");
-    env.enrol("slack-on-call", 20, "30s");
-    env.write_heartbeat("opus-policy", Timestamp::now());
-    env.write_heartbeat("slack-on-call", Timestamp::now());
+    setup(&env);
 
     let child = env.spawn_hook("claude", &permission_payload("Bash"));
-
     let request_id = env
         .poll_pending_request_id(Instant::now() + Duration::from_secs(5))
         .expect("bridge item should appear in feed");
 
-    // Age out opus-policy's heartbeat; keep slack-on-call alive.
-    env.write_heartbeat("opus-policy", Timestamp::now() - Duration::from_secs(60));
+    trigger(&env);
     let heartbeat_keepalive = keep_heartbeat_fresh(&env, "slack-on-call");
-
     assert!(
         env.poll_active_resolver(
             &request_id,
             "slack-on-call",
             Instant::now() + Duration::from_secs(5),
         ),
-        "chain should advance once opus-policy heartbeat is stale"
+        "chain should advance to slack-on-call after {reason}"
     );
 
     let resolve = env.resolve(
@@ -200,8 +158,8 @@ fn chain_advances_on_heartbeat_stale() {
 
     let reasons = chain_elapse_reasons(&env);
     assert!(
-        reasons.iter().any(|r| r == "heartbeat_stale"),
-        "expected feed.chain_elapse with reason=heartbeat_stale, got {reasons:?}"
+        reasons.iter().any(|r| r == reason),
+        "expected feed.chain_elapse with reason={reason}, got {reasons:?}"
     );
 }
 

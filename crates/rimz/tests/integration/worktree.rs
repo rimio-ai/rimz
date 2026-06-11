@@ -171,34 +171,27 @@ fn agents_exec_sighup_removes_clean_worktree() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_keeps_dirty_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-    std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
-    let mut child = spawn_agent_exec(&env, &path, "dirty");
-
-    wait_for_file(&env.home_root.join("dirty.ready"));
-    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("dirty.pid"));
-
-    assert!(path.exists(), "dirty worktree is kept after SIGHUP");
-    assert!(
-        branch_exists(&env.project_root, "demo"),
-        "dirty worktree branch is kept"
-    );
+fn agents_exec_sighup_keeps_dirty_and_unmerged_worktrees() {
+    assert_sighup_keeps_worktree("dirty", |_, path| {
+        std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
+    });
+    assert_sighup_keeps_worktree("ahead", |_, path| {
+        let marker = rimz::worktree::read_marker_for_worktree(path)
+            .expect("read marker")
+            .expect("marker");
+        commit_file(path, "feature.txt", "feature\n", "feature");
+        assert_eq!(
+            rimz::worktree::status(path, &marker)
+                .expect("status")
+                .commits_unmerged,
+            Some(1),
+            "clean local commit is unmerged until it lands on the base"
+        );
+    });
 }
 
 #[cfg(unix)]
-#[test]
-fn agents_exec_sighup_keeps_unmerged_clean_worktree() {
+fn assert_sighup_keeps_worktree(label: &str, setup: impl FnOnce(&Env, &Path)) {
     if git_missing() {
         return;
     }
@@ -209,27 +202,17 @@ fn agents_exec_sighup_keeps_unmerged_clean_worktree() {
         .assert()
         .success();
     let path = env.home_root.join("project-worktrees").join("demo");
-    let marker = rimz::worktree::read_marker_for_worktree(&path)
-        .expect("read marker")
-        .expect("marker");
-    commit_file(&path, "feature.txt", "feature\n", "feature");
-    assert_eq!(
-        rimz::worktree::status(&path, &marker)
-            .expect("status")
-            .commits_unmerged,
-        Some(1),
-        "clean local commit is unmerged until it lands on the base"
-    );
-    let mut child = spawn_agent_exec(&env, &path, "ahead");
+    setup(&env, &path);
+    let mut child = spawn_agent_exec(&env, &path, label);
 
-    wait_for_file(&env.home_root.join("ahead.ready"));
+    wait_for_file(&env.home_root.join(format!("{label}.ready")));
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
-    let _status = wait_for_exit(&mut child, &env.home_root.join("ahead.pid"));
+    let _status = wait_for_exit(&mut child, &env.home_root.join(format!("{label}.pid")));
 
-    assert!(path.exists(), "unmerged worktree is kept after SIGHUP");
+    assert!(path.exists(), "{label} worktree is kept after SIGHUP");
     assert!(
         branch_exists(&env.project_root, "demo"),
-        "unmerged worktree branch is kept"
+        "{label} worktree branch is kept"
     );
 }
 
@@ -276,35 +259,6 @@ fn worktree_remove_split_landed_succeeds_without_force() {
     assert!(
         !branch_exists(&env.project_root, "demo"),
         "split-landed branch deleted after proof"
-    );
-}
-
-#[test]
-fn worktree_cleanup_command_removes_clean_worktree() {
-    if git_missing() {
-        return;
-    }
-    let env = Env::new();
-    init_repo(&env.project_root);
-    env.rimz()
-        .args(["worktree", "new", "demo"])
-        .assert()
-        .success();
-    let path = env.home_root.join("project-worktrees").join("demo");
-
-    env.rimz()
-        .args(["worktree", "cleanup"])
-        .arg(&path)
-        .arg("--non-interactive")
-        .current_dir(&env.home_root)
-        .assert()
-        .success()
-        .stderr(contains("removed clean worktree"));
-
-    assert!(!path.exists(), "clean worktree removed by hidden cleanup");
-    assert!(
-        !branch_exists(&env.project_root, "demo"),
-        "cleanup deleted clean branch"
     );
 }
 

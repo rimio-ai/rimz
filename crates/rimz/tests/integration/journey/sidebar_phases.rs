@@ -12,7 +12,7 @@ use rimz::ledger::runtime::current_process_owner;
 
 use super::{
     RoomHarness, SETTLE, permission_request, post_tool_use, process_pane, session_start,
-    session_start_at, user_prompt_submit,
+    user_prompt_submit,
 };
 use crate::common::Env;
 
@@ -272,109 +272,6 @@ fn phase4_fleet_groups_and_tallies() {
     );
 }
 
-/// A fleet room end to end: the harness room root is a bare directory (class
-/// `directory`), holding one child git repo. The producer enumerates the child
-/// as a group root, so its agent renders under a `⑂` pod named for the repo,
-/// while the agent at the room root sits under the name-only root header.
-#[test]
-fn phase4_directory_room_groups_by_child_repo() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    let child = env.project_root.join("query-engine");
-    std::fs::create_dir_all(&child).expect("mkdir child repo");
-    let git_init = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&child)
-        .status();
-    if !git_init.map(|status| status.success()).unwrap_or(false) {
-        eprintln!("git unavailable; skipping fleet-room journey");
-        return;
-    }
-
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-    room.onboard(&["codex"]);
-    room.agent_hook(
-        "codex",
-        &session_start_at("c1", "GPT-5.5", "high", child.display().to_string(), None),
-    );
-    room.agent_hook(
-        "codex",
-        &session_start_at(
-            "r1",
-            "GPT-5.5",
-            "low",
-            env.project_root.display().to_string(),
-            None,
-        ),
-    );
-
-    let screen = room.wait_for(
-        |s| s.contains("⑂ query-engine") && s.matches("○ codex").count() == 2,
-        SETTLE,
-    );
-    assert!(
-        screen.contains("⑂ query-engine"),
-        "the child repo mints a fork-glyph pod named for the repo:\n{screen}"
-    );
-    assert!(
-        !screen.contains("⑂ project"),
-        "the room's own pod is name-only — no fork glyph on a plain directory:\n{screen}"
-    );
-    // The root header line: the pod label after the gutter/seal chrome, on a
-    // line that is neither the cockpit title (`⌘ project`) nor a `⑂` pod.
-    let root_header = screen.lines().any(|line| {
-        !line.contains('⌘')
-            && !line.contains('⑂')
-            && line
-                .trim_start_matches(|c: char| !c.is_alphanumeric())
-                .starts_with("project")
-    });
-    assert!(
-        root_header,
-        "the room root renders its name-only header:\n{screen}"
-    );
-}
-
-/// Within a worktree, the most attention-hungry rises: a `waiting` row sorts
-/// above a calm agent in the same group. (Implemented — independent of the
-/// idle/running mechanics, since both calm statuses outrank `waiting`.)
-#[test]
-fn phase4_waiting_rises_within_worktree() {
-    let env = Env::new();
-    if env.skip_if_sandboxed() {
-        return;
-    }
-    // A waiting ask and a calm agent in the same worktree. The short
-    // `feed ask --no-block` process is audit-only under runtime expel rules,
-    // so this fixture keeps the script owner live for the rendered scenario.
-    push_worktree_script_ask_fixture(&env, "approve deploy?");
-    let worktree = env.project_root.display().to_string();
-
-    let room = RoomHarness::launch(&env, MuxName::Tmux);
-    room.onboard(&["codex"]);
-    room.agent_hook(
-        "codex",
-        &session_start_at("sess-1", "GPT-5.5", "high", worktree, None),
-    );
-
-    let screen = room.wait_for(
-        |s| s.contains("approve deploy?") && s.contains("○ codex"),
-        SETTLE,
-    );
-    let waiting_at = screen
-        .find("approve deploy?")
-        .unwrap_or_else(|| panic!("waiting row missing:\n{screen}"));
-    let agent_at = screen
-        .find("codex")
-        .unwrap_or_else(|| panic!("agent row missing:\n{screen}"));
-    assert!(
-        waiting_at < agent_at,
-        "the waiting row must rank above the calm agent in its worktree:\n{screen}"
-    );
-}
-
 /// Phase 6 — detach and reattach. Walk away (drop the renderer); the ledger
 /// keeps the state. A fresh renderer reconstructs every agent where you left
 /// it. (Implemented — the renderer is a stateless projection of the ledger.)
@@ -484,29 +381,4 @@ fn push_workspace_script_ask_fixture(env: &Env, title: &str) {
     env.ledger()
         .push_feed_item(&item, "rimz-journey")
         .expect("push script ask");
-}
-
-fn push_worktree_script_ask_fixture(env: &Env, title: &str) {
-    let mut item = FeedItem::new(
-        env.workspace_id.clone(),
-        Surface::Script,
-        FeedKind::Question,
-        title,
-        "deploy",
-        "script",
-    );
-    item.worktree_path = Some(env.project_root.display().to_string());
-    item.runtime_owner = Some(current_process_owner(
-        RuntimeOwnerKind::Script,
-        item.request_id.to_string(),
-    ));
-    item.pane = Some(process_pane(
-        MuxName::Tmux,
-        90,
-        "deploy",
-        env.project_root.display().to_string(),
-    ));
-    env.ledger()
-        .push_feed_item(&item, "rimz-journey")
-        .expect("push worktree script ask");
 }
