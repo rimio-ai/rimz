@@ -215,11 +215,14 @@ fn two_tone_bar(
 /// vocabulary and of the composition segments. The *tier* is the domain's
 /// verdict ([`ContextSeverity`], classified on the producer and stamped on the
 /// row); the renderer only maps it to a tone here.
-pub(in crate::sidebar_pane::render) fn severity_color(severity: ContextSeverity) -> Color {
+pub(in crate::sidebar_pane::render) fn severity_color(
+    theme: &Theme,
+    severity: ContextSeverity,
+) -> Color {
     match severity {
         ContextSeverity::Calm => Color::Blue,
         ContextSeverity::Yellow => Color::Yellow,
-        ContextSeverity::Amber => ORANGE,
+        ContextSeverity::Amber => theme.clay(),
         ContextSeverity::Red => Color::Red,
     }
 }
@@ -233,7 +236,7 @@ pub(in crate::sidebar_pane::render) fn severity_color(severity: ContextSeverity)
 /// `NO_COLOR` every band collapses to the same bare DIM weight.
 pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) -> Style {
     let color = match window {
-        1_000_000.. => ORANGE,
+        1_000_000.. => theme.clay(),
         258_000.. => Color::Yellow,
         128_000.. => Color::Blue,
         _ => return theme.dim(),
@@ -403,7 +406,7 @@ pub(in crate::sidebar_pane::render) fn mana_style(
     if remaining_pct < zones.red {
         theme.style(Color::Red, Modifier::empty())
     } else if remaining_pct < zones.amber {
-        theme.style(ORANGE, Modifier::empty())
+        theme.style(theme.clay(), Modifier::empty())
     } else if remaining_pct < zones.yellow {
         theme.style(Color::Yellow, Modifier::empty())
     } else {
@@ -452,7 +455,7 @@ pub(in crate::sidebar_pane::render) fn pace_style(
     let style = if pace_pct > f64::from(pace.red) {
         theme.style(Color::Red, Modifier::empty())
     } else if pace_pct > f64::from(pace.amber) {
-        theme.style(ORANGE, Modifier::empty())
+        theme.style(theme.clay(), Modifier::empty())
     } else if pace_pct > f64::from(pace.yellow) {
         theme.style(Color::Yellow, Modifier::empty())
     } else {
@@ -473,12 +476,12 @@ pub(in crate::sidebar_pane::render) fn pace_style(
 /// empty track by shape.
 pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
     theme: &Theme,
-    color: u8,
+    color: Color,
     width: usize,
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
         std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
-        theme.style(Color::Indexed(color), Modifier::empty()),
+        theme.style(color, Modifier::empty()),
     )]
 }
 

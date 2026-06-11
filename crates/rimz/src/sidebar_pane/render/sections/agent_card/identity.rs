@@ -12,7 +12,7 @@ pub(super) fn agent_name_style(
     providers
         .iter()
         .find(|panel| panel.kind == kind)
-        .map(|panel| theme.style(Color::Indexed(panel.color), Modifier::empty()))
+        .map(|panel| theme.style(theme.brand_tone(panel), Modifier::empty()))
         .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()))
 }
 

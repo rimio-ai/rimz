@@ -475,6 +475,7 @@ fn provider_panel(
             "  ▘▘ ▝▝".to_owned(),
         ],
         color,
+        color_rgb: None,
         version: Some("2.1.158".to_owned()),
         plan: Some("Claude Max".to_owned()),
         metered,

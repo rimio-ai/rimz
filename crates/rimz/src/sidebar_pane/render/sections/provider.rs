@@ -292,7 +292,8 @@ fn provider_tab_rail(
             // keep their `─` so a click moves color alone, never a glyph.
             // When `NO_COLOR` drops the fill, the `┤ ├` caps paint into
             // those cells instead as the pick's shape.
-            let chip = theme.chip(TAB_INK, Color::Indexed(panel.color), Modifier::BOLD);
+            let brand = theme.brand_tone(panel);
+            let chip = theme.chip(TAB_INK, brand, Modifier::BOLD);
             let (left, right) = if chip.bg.is_none() {
                 (
                     Span::styled(TAB_CAP_LEFT.to_string(), rail),
@@ -308,7 +309,7 @@ fn provider_tab_rail(
             spans.push(fill(1));
             spans.push(Span::styled(
                 format!(" {label} "),
-                theme.style(Color::Indexed(panel.color), Modifier::empty()),
+                theme.style(theme.brand_tone(panel), Modifier::empty()),
             ));
             spans.push(fill(1));
         }
@@ -379,7 +380,7 @@ fn provider_header_line(
     } else {
         left.push(Span::styled(
             panel.product_name.clone(),
-            theme.style(Color::Indexed(panel.color), Modifier::BOLD),
+            theme.style(theme.brand_tone(panel), Modifier::BOLD),
         ));
         if let Some(version) = panel.version.as_deref() {
             left.push(Span::styled(format!(" v{version}"), theme.dim()));
@@ -429,7 +430,7 @@ fn provider_body_lines(
             let art_line = panel.art.get(index).map(String::as_str).unwrap_or("");
             spans.push(Span::styled(
                 pad_to(art_line, PROVIDER_ART_WIDTH),
-                theme.style(Color::Indexed(panel.color), Modifier::empty()),
+                theme.style(theme.brand_tone(panel), Modifier::empty()),
             ));
             spans.push(Span::raw(" "));
         }
@@ -497,7 +498,7 @@ fn provider_bar_rows(
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
-        return vec![infinite_bar_row(theme, panel.color, region)];
+        return vec![infinite_bar_row(theme, theme.brand_tone(panel), region)];
     }
     panel
         .windows
@@ -668,12 +669,12 @@ fn reset_value_spans(
 /// brand color, so the row reads as a single branded unmetered bar. The value
 /// column is reserved but empty — no countdown — so the bar's right edge still
 /// aligns with the metered bars'.
-fn infinite_bar_row(theme: &Theme, color: u8, region: usize) -> Vec<Span<'static>> {
+fn infinite_bar_row(theme: &Theme, color: Color, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     let mut spans = vec![
         Span::styled(
             format!("{:<PROVIDER_LABEL_WIDTH$}", "∞"),
-            theme.style(Color::Indexed(color), Modifier::BOLD),
+            theme.style(color, Modifier::BOLD),
         ),
         Span::raw(" "),
     ];

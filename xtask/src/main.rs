@@ -819,6 +819,8 @@ struct StateScreenshotOptions {
     state: SidebarScreenshotState,
     width: u16,
     height: u16,
+    theme_mode: Option<String>,
+    theme_scheme: Option<String>,
     output: Option<PathBuf>,
 }
 
@@ -899,7 +901,14 @@ fn screenshot(root: &Path, args: &[String]) -> Result<()> {
         "state" => {
             let opts = parse_state_screenshot_options(&args[1..])?;
             ensure_screenshot_prerequisites()?;
-            let ansi = render_state_ansi(root, opts.state, opts.width, opts.height)?;
+            let ansi = render_state_ansi(
+                root,
+                opts.state,
+                opts.width,
+                opts.height,
+                opts.theme_mode.as_deref(),
+                opts.theme_scheme.as_deref(),
+            )?;
             let output = screenshot_output_path(root, opts.output, opts.state.as_str())?;
             write_screenshot_png(root, &ansi, &output)?;
             print_screenshot_path(&output);
@@ -923,7 +932,7 @@ fn print_screenshot_help() {
     println!("  cargo xtask screenshot live [--lines N] [--output PATH]");
     println!("  cargo xtask screenshot pane <id> [--lines N] [--output PATH]");
     println!(
-        "  cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--output PATH]"
+        "  cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
 }
 
@@ -974,7 +983,7 @@ fn print_screenshot_pane_help() {
 )]
 fn print_screenshot_state_help() {
     println!(
-        "cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--output PATH]"
+        "cargo xtask screenshot state <empty|fleet|provider> [--width W] [--height H] [--theme-mode auto|truecolor|256] [--theme-scheme NAME] [--output PATH]"
     );
     println!();
     println!("Render a deterministic sidebar fixture frame and write a PNG.");
@@ -1009,6 +1018,8 @@ fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOpti
         state: SidebarScreenshotState::parse(state)?,
         width: 54,
         height: 34,
+        theme_mode: None,
+        theme_scheme: None,
         output: None,
     };
     let mut index = 1;
@@ -1022,6 +1033,16 @@ fn parse_state_screenshot_options(args: &[String]) -> Result<StateScreenshotOpti
             "--height" => {
                 let value = required_option_value(args, index, "--height")?;
                 opts.height = parse_u16_flag(value, "--height")?;
+                index += 2;
+            }
+            "--theme-mode" => {
+                let value = required_option_value(args, index, "--theme-mode")?;
+                opts.theme_mode = Some(value.to_owned());
+                index += 2;
+            }
+            "--theme-scheme" => {
+                let value = required_option_value(args, index, "--theme-scheme")?;
+                opts.theme_scheme = Some(value.to_owned());
                 index += 2;
             }
             "-o" | "--output" => {
@@ -1069,8 +1090,10 @@ fn render_state_ansi(
     state: SidebarScreenshotState,
     width: u16,
     height: u16,
+    theme_mode: Option<&str>,
+    theme_scheme: Option<&str>,
 ) -> Result<Vec<u8>> {
-    let args = [
+    let mut args = vec![
         OsString::from("sidebar"),
         OsString::from("fixture"),
         OsString::from(state.as_str()),
@@ -1079,6 +1102,14 @@ fn render_state_ansi(
         OsString::from("--height"),
         OsString::from(height.to_string()),
     ];
+    if let Some(mode) = theme_mode {
+        args.push(OsString::from("--theme-mode"));
+        args.push(OsString::from(mode));
+    }
+    if let Some(scheme) = theme_scheme {
+        args.push(OsString::from("--theme-scheme"));
+        args.push(OsString::from(scheme));
+    }
     rimz_output_with_env(root, &args, &[("COLORTERM", "truecolor")], &["NO_COLOR"])
 }
 

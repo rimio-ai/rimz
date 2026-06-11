@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::render::TallyAnim;
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::token_breakdown_spans;
-use crate::sidebar_pane::render::theme::{ORANGE, Theme};
+use crate::sidebar_pane::render::theme::Theme;
 
 use super::{SESSIONS_GLYPH, VALUE_FLASH, metric_spans, pin_right};
 
@@ -64,7 +64,12 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     phase: u64,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(theme, ACTIVE_AGENTS_GLYPH, ORANGE, &live_agents.to_string());
+    let left = metric_spans(
+        theme,
+        ACTIVE_AGENTS_GLYPH,
+        theme.clay(),
+        &live_agents.to_string(),
+    );
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::agents::{AgentAccount, RateLimitWindow, SpendTally};
+use crate::config::ThemeColor;
 use crate::feed::AgentState;
 
 use super::{SidebarProviderPanel, SidebarSnapshot};
@@ -124,18 +125,24 @@ impl SidebarSnapshot {
                 .filter(|plan| !plan.is_empty())
                 .map(|raw| format_plan_label(&kind, &raw));
 
-            let (default_name, default_art, default_color) = default_provider_style(&kind);
+            let defaults = default_provider_style(&kind);
             let style = self.sidebar.providers.get(&kind);
             let product_name = style
                 .and_then(|style| style.product_name.clone())
                 .filter(|name| !name.is_empty())
-                .unwrap_or(default_name);
+                .unwrap_or(defaults.product_name);
             let art = style
                 .and_then(|style| style.ascii_art.as_deref())
                 .filter(|art| !art.is_empty())
                 .map(|art| art.lines().map(ToOwned::to_owned).collect())
-                .unwrap_or(default_art);
-            let color = style.and_then(|style| style.color).unwrap_or(default_color);
+                .unwrap_or(defaults.art);
+            let (color, color_rgb) = match style.and_then(|style| style.color) {
+                Some(color @ ThemeColor::Indexed(_)) => (color.indexed(), None),
+                Some(color @ ThemeColor::Rgb(red, green, blue)) => {
+                    (color.indexed(), Some((red, green, blue)))
+                }
+                None => (defaults.color, defaults.color_rgb),
+            };
             let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
             let spending = provider_spending.get(&kind).cloned();
 
@@ -144,6 +151,7 @@ impl SidebarSnapshot {
                 product_name,
                 art,
                 color,
+                color_rgb,
                 version,
                 plan,
                 metered,
@@ -308,25 +316,38 @@ pub(super) fn stable_window(
     live.or(undated)
 }
 
-/// Built-in `(product_name, art lines, color)` for a provider kind, read from
-/// the adapter's brand descriptor ([`crate::agents::Brand`]); used when the
-/// per-machine config overrides none of them. An unregistered kind renders
-/// title-cased with no emblem in neutral grey (244).
-pub(super) fn default_provider_style(kind: &str) -> (String, Vec<String>, u8) {
+/// Built-in provider style, read from the adapter's brand descriptor
+/// ([`crate::agents::Brand`]); used when the per-machine config overrides none
+/// of it. An unregistered kind renders title-cased with no emblem in neutral
+/// grey (244).
+struct ProviderStyleDefaults {
+    product_name: String,
+    art: Vec<String>,
+    color: u8,
+    color_rgb: Option<(u8, u8, u8)>,
+}
+
+fn default_provider_style(kind: &str) -> ProviderStyleDefaults {
     if let Some(descriptor) = crate::agents::descriptor_by_kind(kind) {
-        return (
-            descriptor.display_name.to_owned(),
-            descriptor
+        return ProviderStyleDefaults {
+            product_name: descriptor.display_name.to_owned(),
+            art: descriptor
                 .brand
                 .emblem
                 .trim_matches('\n')
                 .lines()
                 .map(ToOwned::to_owned)
                 .collect(),
-            descriptor.brand.color,
-        );
+            color: descriptor.brand.color,
+            color_rgb: Some(descriptor.brand.color_rgb),
+        };
     }
-    (provider_title_case(kind), Vec::new(), 244)
+    ProviderStyleDefaults {
+        product_name: provider_title_case(kind),
+        art: Vec::new(),
+        color: 244,
+        color_rgb: None,
+    }
 }
 
 /// Format a raw provider plan tier into its brand label, per the adapter's

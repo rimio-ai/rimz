@@ -109,7 +109,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
     assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
     assert_eq!(
         bucket_fg(40 * 60),
-        style(theme::ORANGE),
+        style(theme.clay()),
         "amber past the half hour"
     );
     assert_eq!(

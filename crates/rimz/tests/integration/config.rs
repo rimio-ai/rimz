@@ -82,6 +82,26 @@ fn config_get_set_round_trip_preserves_template_comments() {
         text.contains("max_cols = 80"),
         "set should write the override:\n{text}"
     );
+
+    for (key, value, expected) in [
+        ("sidebar.theme.mode", "truecolor", "truecolor\n"),
+        ("sidebar.theme.mode", "256", "256\n"),
+        ("sidebar.theme.scheme", "slate", "slate\n"),
+        ("sidebar.theme.good", "'#a3be8c'", "#a3be8c\n"),
+        ("sidebar.theme.caution", "214", "214\n"),
+        ("sidebar.providers.claude.color", "'#D97757'", "#d97757\n"),
+    ] {
+        env.rimz()
+            .args(["config", "set", key, value])
+            .assert()
+            .success()
+            .stdout(contains(format!("set {key}")));
+        env.rimz()
+            .args(["config", "get", key])
+            .assert()
+            .success()
+            .stdout(expected);
+    }
 }
 
 #[test]
@@ -99,6 +119,25 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .assert()
         .failure()
         .stderr(contains("validating `sidebar.max_cols`"));
+
+    env.rimz()
+        .args(["config", "set", "sidebar.theme.scheme", "does-not-exist"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown sidebar theme scheme `does-not-exist`"));
+
+    let bad_scheme = env.home_root.join("bad-theme");
+    std::fs::write(&bad_scheme, "background = #000000\n").expect("write bad scheme");
+    env.rimz()
+        .args([
+            "config",
+            "set",
+            "sidebar.theme.scheme",
+            bad_scheme.to_str().expect("utf-8 path"),
+        ])
+        .assert()
+        .failure()
+        .stderr(contains("invalid sidebar theme scheme"));
 }
 
 #[test]

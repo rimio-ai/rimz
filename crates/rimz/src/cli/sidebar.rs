@@ -93,6 +93,10 @@ enum SidebarSubcmd {
         width: u16,
         #[arg(long, default_value_t = 34)]
         height: u16,
+        #[arg(long)]
+        theme_mode: Option<String>,
+        #[arg(long)]
+        theme_scheme: Option<String>,
     },
     /// Presence poke from the Zellij presence plugin: refresh the liveness
     /// stamp and wake the sidebar fleet through either an exact-cache shortcut
@@ -180,7 +184,9 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
             state,
             width,
             height,
-        } => fixture(state, width, height),
+            theme_mode,
+            theme_scheme,
+        } => fixture(state, width, height, theme_mode, theme_scheme),
         SidebarSubcmd::Wake {
             workspace_id,
             reason,
@@ -441,10 +447,31 @@ fn render(width: u16, height: u16) -> Result<()> {
         .context("rendering snapshot")
 }
 
-fn fixture(state: SidebarFixtureState, width: u16, height: u16) -> Result<()> {
-    let snapshot = sidebar_fixture_snapshot(state)?;
+fn fixture(
+    state: SidebarFixtureState,
+    width: u16,
+    height: u16,
+    theme_mode: Option<String>,
+    theme_scheme: Option<String>,
+) -> Result<()> {
+    let mut snapshot = sidebar_fixture_snapshot(state)?;
+    if let Some(mode) = theme_mode.as_deref() {
+        snapshot.sidebar.theme.mode = parse_fixture_theme_mode(mode)?;
+    }
+    if let Some(scheme) = theme_scheme {
+        snapshot.sidebar.theme.scheme = Some(scheme);
+    }
     rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
         .context("rendering sidebar fixture")
+}
+
+fn parse_fixture_theme_mode(value: &str) -> Result<rimz::config::ThemeMode> {
+    match value {
+        "auto" => Ok(rimz::config::ThemeMode::Auto),
+        "truecolor" => Ok(rimz::config::ThemeMode::Truecolor),
+        "256" => Ok(rimz::config::ThemeMode::Indexed),
+        other => anyhow::bail!("unknown theme mode `{other}`; expected auto, truecolor, or 256"),
+    }
 }
 
 struct WakeCommand {

@@ -22,10 +22,14 @@ fn branch_delta_omits_zero_components() {
 
 #[test]
 fn gauge_bars_map_severity_and_apportion_segments() {
-    assert_eq!(severity_color(ContextSeverity::Calm), Color::Blue);
-    assert_eq!(severity_color(ContextSeverity::Yellow), Color::Yellow);
-    assert_eq!(severity_color(ContextSeverity::Amber), ORANGE);
-    assert_eq!(severity_color(ContextSeverity::Red), Color::Red);
+    let theme = Theme::fixed(false);
+    assert_eq!(severity_color(&theme, ContextSeverity::Calm), Color::Blue);
+    assert_eq!(
+        severity_color(&theme, ContextSeverity::Yellow),
+        Color::Yellow
+    );
+    assert_eq!(severity_color(&theme, ContextSeverity::Amber), theme.clay());
+    assert_eq!(severity_color(&theme, ContextSeverity::Red), Color::Red);
     assert_eq!(apportion([3, 1, 1], 5), vec![3, 1, 1]);
     assert_eq!(apportion([1, 1, 1], 4).iter().sum::<usize>(), 4);
     assert_eq!(apportion([0, 0], 3), vec![0, 0]);
@@ -123,7 +127,7 @@ fn mana_style_honours_custom_and_misordered_zones() {
         tone(Color::Green),
         "healthy rests green"
     );
-    assert_eq!(mana_style(&lit, 39, &tuned), tone(ORANGE));
+    assert_eq!(mana_style(&lit, 39, &tuned), tone(lit.clay()));
     assert_eq!(mana_style(&lit, 19, &tuned), tone(Color::Red));
     let bar = mana_bar_spans(&lit, 70, 10, &tuned);
     assert_eq!(bar[0].style.fg, Some(Color::Indexed(179)));
@@ -175,8 +179,8 @@ fn pace_style_honours_boundaries_custom_zones_and_no_color() {
     assert_eq!(pace_style(&lit, 1.0, &defaults), lit.soft());
     assert_eq!(pace_style(&lit, 1.01, &defaults), tone(Color::Yellow));
     assert_eq!(pace_style(&lit, 1.5, &defaults), tone(Color::Yellow));
-    assert_eq!(pace_style(&lit, 1.51, &defaults), tone(ORANGE));
-    assert_eq!(pace_style(&lit, 2.0, &defaults), tone(ORANGE));
+    assert_eq!(pace_style(&lit, 1.51, &defaults), tone(lit.clay()));
+    assert_eq!(pace_style(&lit, 2.0, &defaults), tone(lit.clay()));
     assert_eq!(pace_style(&lit, 2.01, &defaults), tone(Color::Red));
 
     let tuned = BudgetPaceConfig {
@@ -185,7 +189,7 @@ fn pace_style_honours_boundaries_custom_zones_and_no_color() {
         red: 160,
     };
     assert_eq!(pace_style(&lit, 0.81, &tuned), tone(Color::Yellow));
-    assert_eq!(pace_style(&lit, 1.21, &tuned), tone(ORANGE));
+    assert_eq!(pace_style(&lit, 1.21, &tuned), tone(lit.clay()));
     assert_eq!(pace_style(&lit, 1.61, &tuned), tone(Color::Red));
 
     let misordered = BudgetPaceConfig {
@@ -203,12 +207,12 @@ fn pace_style_honours_boundaries_custom_zones_and_no_color() {
 #[test]
 fn no_color_shape_contracts_keep_budget_todo_and_diff_readable() {
     let plain = Theme::fixed(true);
-    let spans = infinite_bar_spans(&plain, 208, 8);
+    let spans = infinite_bar_spans(&plain, Color::Indexed(208), 8);
     assert_eq!(text(&spans), "▱▱▱▱▱▱▱▱");
     assert_no_fg(&spans);
 
     let lit = Theme::fixed(false);
-    let spans = infinite_bar_spans(&lit, 208, 8);
+    let spans = infinite_bar_spans(&lit, Color::Indexed(208), 8);
     assert_eq!(spans[0].style.fg, Some(Color::Indexed(208)));
 
     let spans = todo_spans(&plain, 3, 5);
@@ -279,7 +283,7 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     let theme = Theme::fixed(false);
     let spans = context_breakdown_spans(
         &theme,
-        ORANGE,
+        theme.clay(),
         76_500,
         68_200,
         6_600,

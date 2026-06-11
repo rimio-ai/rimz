@@ -378,7 +378,7 @@ fn context_line_age_tone_steps_with_the_clock_quarters() {
     );
     assert_eq!(
         age_style(40 * 60, '◕'),
-        theme.style(theme::ORANGE, Modifier::empty()),
+        theme.style(theme.clay(), Modifier::empty()),
         "amber past the half hour"
     );
     assert_eq!(

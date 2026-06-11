@@ -98,6 +98,7 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
         product_name: format!("Provider {index}"),
         art: vec!["▐███▌".to_owned(), "▝▜█▛▘".to_owned(), " ▘▝ ".to_owned()],
         color: 100 + index as u8,
+        color_rgb: None,
         version: Some("1.2.3".to_owned()),
         plan: Some("Max".to_owned()),
         metered: true,

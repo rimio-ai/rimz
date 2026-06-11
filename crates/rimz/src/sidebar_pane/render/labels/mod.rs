@@ -13,7 +13,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use super::animation::{AnimationRole, effect_modifier, frame_at, still_frame};
-use super::theme::{ORANGE, Theme};
+use super::theme::Theme;
 
 mod glyphs;
 mod meters;
@@ -26,12 +26,27 @@ pub(super) use self::{glyphs::*, meters::*};
 /// `None` through the first quarter (callers pick the resting tone), yellow to
 /// the half hour, amber beyond it, red past the hour — when resuming would
 /// almost certainly re-read the whole context at uncached input rates.
-pub(super) fn age_heat(age_secs: i64) -> Option<Color> {
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Heat {
+    Yellow,
+    Amber,
+    Red,
+}
+
+pub(super) fn age_heat(age_secs: i64) -> Option<Heat> {
     match age_secs {
         i64::MIN..=900 => None,
-        901..=1800 => Some(Color::Yellow),
-        1801..=3600 => Some(ORANGE),
-        _ => Some(Color::Red),
+        901..=1800 => Some(Heat::Yellow),
+        1801..=3600 => Some(Heat::Amber),
+        _ => Some(Heat::Red),
+    }
+}
+
+pub(super) fn heat_color(theme: &Theme, heat: Heat) -> Color {
+    match heat {
+        Heat::Yellow => Color::Yellow,
+        Heat::Amber => theme.clay(),
+        Heat::Red => Color::Red,
     }
 }
 
@@ -41,7 +56,9 @@ pub(super) fn age_heat(age_secs: i64) -> Option<Color> {
 /// the cost warning it is. The figure itself still carries the magnitude
 /// under `NO_COLOR`.
 pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
-    age_heat(age_secs).map_or(theme.dim(), |color| theme.style(color, Modifier::empty()))
+    age_heat(age_secs).map_or(theme.dim(), |heat| {
+        theme.style(heat_color(theme, heat), Modifier::empty())
+    })
 }
 
 #[cfg(test)]

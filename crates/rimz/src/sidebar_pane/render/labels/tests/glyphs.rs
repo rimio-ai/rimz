@@ -24,8 +24,8 @@ fn window_style_tints_by_size_class_but_stays_subordinate() {
     assert_eq!(banded(200_000), theme.style(Color::Blue, Modifier::DIM));
     assert_eq!(banded(258_000), theme.style(Color::Yellow, Modifier::DIM));
     assert_eq!(banded(999_999), theme.style(Color::Yellow, Modifier::DIM));
-    assert_eq!(banded(1_000_000), theme.style(ORANGE, Modifier::DIM));
-    assert_eq!(banded(1_050_000), theme.style(ORANGE, Modifier::DIM));
+    assert_eq!(banded(1_000_000), theme.style(theme.clay(), Modifier::DIM));
+    assert_eq!(banded(1_050_000), theme.style(theme.clay(), Modifier::DIM));
 
     let plain = Theme::fixed(true);
     for window in [32_000, 128_000, 258_000, 1_050_000] {
@@ -42,7 +42,7 @@ fn window_style_tints_by_size_class_but_stays_subordinate() {
 fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     let theme = Theme::fixed(false);
     let yellow = theme.style(Color::Yellow, Modifier::BOLD).fg;
-    let amber = theme.style(ORANGE, Modifier::BOLD).fg;
+    let amber = theme.style(theme.clay(), Modifier::BOLD).fg;
     let red = theme.style(Color::Red, Modifier::BOLD).fg;
 
     // Both attention states floor at yellow while the age heat is still
@@ -265,7 +265,7 @@ fn loading_dots_stay_static_while_attention_breath_paces_with_age() {
 fn activity_age_style_steps_with_the_clock_quarters() {
     let theme = Theme::fixed(false);
     let yellow = theme.style(Color::Yellow, Modifier::empty());
-    let amber = theme.style(ORANGE, Modifier::empty());
+    let amber = theme.style(theme.clay(), Modifier::empty());
     let red = theme.style(Color::Red, Modifier::empty());
     assert_eq!(activity_age_style(&theme, 60), theme.dim());
     assert_eq!(activity_age_style(&theme, 900), theme.dim());

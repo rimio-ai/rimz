@@ -239,7 +239,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             labels::status_style(&theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
             "the idle lead keeps its neutral style one DIM step down (no_color={no_color})"
         );
-        let active_lead = theme.style(theme::ORANGE, Modifier::DIM);
+        let active_lead = theme.style(theme.clay(), Modifier::DIM);
         assert!(
             lines
                 .iter()

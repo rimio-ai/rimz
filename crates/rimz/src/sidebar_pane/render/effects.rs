@@ -37,9 +37,9 @@ use ratatui::style::Color;
 use tachyonfx::{CellFilter, Effect, EffectTimer, Interpolation, fx};
 
 use super::fmt::age_secs;
-use super::labels::{age_heat, status_glyph};
+use super::labels::{Heat, age_heat, status_glyph};
 use super::row_passes_filter;
-use super::theme::{ORANGE, Theme};
+use super::theme::Theme;
 
 /// The glow's peak lightness lift (HSL points over the painted tone). Strong
 /// enough to read as a swell on the muted palette, gentle enough to stay a
@@ -336,10 +336,10 @@ fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
         return None;
     }
     let heat = age_heat(age_secs(row.last_activity, now));
-    if heat == Some(Color::Red) {
+    if heat == Some(Heat::Red) {
         return None;
     }
-    let level = breath_level(phase, heat == Some(ORANGE));
+    let level = breath_level(phase, heat == Some(Heat::Amber));
     (level > 0.0).then_some(level * GLOW_MAX_LIGHTNESS)
 }
 

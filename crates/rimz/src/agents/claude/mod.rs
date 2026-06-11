@@ -84,6 +84,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
 ▝▜█████▛▘
   ▘▘ ▝▝",
         color: 173,
+        color_rgb: (0xd9, 0x77, 0x57),
     },
     plan_label: PlanLabel::Prefixed { prefix: "Claude" },
     // An Anthropic OAuth subscription is the account Claude meters, so a

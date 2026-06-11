@@ -3,7 +3,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::SidebarAnimationsConfig;
+use crate::config::{SidebarAnimationsConfig, ThemeColor, ThemeMode};
 use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 
 /// `[sidebar] scrollbar`: when the agent cards overflow their viewport, how
@@ -129,11 +129,9 @@ pub struct SidebarConfig {
     /// detection alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
-    /// Palette overrides for the renderer's semantic color slots. Each slot is
-    /// a 256-color index; an omitted slot keeps the built-in tone, so an
-    /// absent section paints exactly the shipped palette. Resolved
-    /// producer-side onto the snapshot like `providers`, so every renderer of
-    /// the workspace paints the same tones.
+    /// Palette preferences and overrides for the renderer's semantic color
+    /// slots. Omitted slots keep the selected scheme tone; override values
+    /// accept either a 256-color index or `#rrggbb`.
     #[serde(skip_serializing_if = "SidebarThemeConfig::is_unset")]
     pub theme: SidebarThemeConfig,
     /// Status-head animations for the renderer. An omitted role keeps the
@@ -191,52 +189,61 @@ impl SidebarConfig {
     }
 }
 
-/// `[sidebar.theme]`: per-machine overrides for the renderer's semantic palette
-/// slots, each a 256-color index. Display-only — it tunes tones, never the
-/// glyph grammar (shape still carries every state under `NO_COLOR`), and never
-/// the ledger. Slot names follow the semantics, not the shipped hues, so a
-/// user re-theming to light terminals reads `good`/`warn`/`alarm` rather than
+/// `[sidebar.theme]`: per-machine palette depth, scheme selection, and
+/// semantic slot overrides. Display-only — it tunes tones, never the glyph
+/// grammar (shape still carries every state under `NO_COLOR`), and never the
+/// ledger. Slot names follow the semantics, not the shipped hues, so a user
+/// re-theming to light terminals reads `good`/`warn`/`alarm` rather than
 /// `green`/`yellow`/`red`.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarThemeConfig {
+    /// Palette depth: `auto` follows the terminal's truecolor advertisement,
+    /// `truecolor` forces RGB, and `256` quantizes RGB tones to xterm indexes.
+    #[serde(skip_serializing_if = "is_default_theme_mode")]
+    pub mode: ThemeMode,
+    /// Palette scheme: unset or `"auto"` follows Ghostty's active theme when
+    /// visible to the sidebar process, falling back to the built-in clay
+    /// palette. Built-in names and Ghostty-format paths are accepted.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
     /// Calm/positive: running tallies, low gauges, `+` additions, cache reads.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub good: Option<u8>,
+    pub good: Option<ThemeColor>,
     /// Caution: waiting glyphs at rest, mid gauges, cache writes.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub warn: Option<u8>,
+    pub warn: Option<ThemeColor>,
     /// Elevated caution: amber badge/gauge rung between warning and alarm.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub caution: Option<u8>,
+    pub caution: Option<ThemeColor>,
     /// Alarm: failed glyphs, high gauges, `-` removals, fresh input.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub alarm: Option<u8>,
+    pub alarm: Option<ThemeColor>,
     /// Structure accent: worktree headers and the selected lane spine.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent: Option<u8>,
+    pub accent: Option<ThemeColor>,
     /// Cool informational: the `plan` posture pill, window tags.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub cool: Option<u8>,
+    pub cool: Option<ThemeColor>,
     /// Delegation/meta: the `⇅ rc` flag, the subagent `⧉` marker.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<u8>,
+    pub meta: Option<ThemeColor>,
     /// Soft content text: stat figures, capability tokens, subagent lines —
     /// a step above `dim`, just below full-strength text.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub soft: Option<u8>,
+    pub soft: Option<ThemeColor>,
     /// Dim chrome: labels, ages, subordinate values.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dim: Option<u8>,
+    pub dim: Option<ThemeColor>,
     /// Faintest chrome: bar tracks, `·` separators, dotted dividers.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub faint: Option<u8>,
+    pub faint: Option<ThemeColor>,
     /// The darkest chrome (the scrollbar track) — a step below `faint`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub rule: Option<u8>,
+    pub rule: Option<ThemeColor>,
     /// The selected-row `▌` accent bar.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection: Option<u8>,
+    pub selection: Option<ThemeColor>,
 }
 
 impl SidebarThemeConfig {
@@ -244,6 +251,10 @@ impl SidebarThemeConfig {
     pub fn is_unset(&self) -> bool {
         *self == Self::default()
     }
+}
+
+fn is_default_theme_mode(mode: &ThemeMode) -> bool {
+    *mode == ThemeMode::default()
 }
 
 /// `[sidebar.attention]`: timing knobs for the attention projection. The
@@ -393,7 +404,7 @@ pub struct SidebarProviderStyle {
     /// Multi-line ASCII emblem painted at the left of the provider block.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub ascii_art: Option<String>,
-    /// 256-color index for the emblem (the provider's brand color).
+    /// Brand color for the emblem. Accepts a 256-color index or `#rrggbb`.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<u8>,
+    pub color: Option<ThemeColor>,
 }

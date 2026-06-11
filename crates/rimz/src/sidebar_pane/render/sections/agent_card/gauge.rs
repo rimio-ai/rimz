@@ -90,7 +90,7 @@ pub(super) fn gauge_line(
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
     let severity = row_severity(row, bands);
-    let color = severity_color(severity);
+    let color = severity_color(theme, severity);
     // The severity decides composition-vs-solid: the segments (where the window
     // went) paint only while the meter rests calm; once it warms the bar goes
     // solid severity.
@@ -230,7 +230,7 @@ pub(super) fn context_tokens_line(
     // The `▤` head mirrors the bar's severity — the same stamped verdict — so
     // the absolute figure and the meter above it read at one urgency. A row
     // with no gauge percent folds to 0 and lets the token overlay alone speak.
-    let severity = severity_color(row_severity(row, bands));
+    let severity = severity_color(theme, row_severity(row, bands));
     let mut left = vec![Span::raw("  ")];
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())

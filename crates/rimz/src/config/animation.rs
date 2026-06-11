@@ -2,6 +2,8 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
+use super::parse_hex;
+
 /// `[sidebar.animations]`: per-machine status-head animation overrides. Each
 /// role is optional and each field inside a role is optional, so a user can
 /// change one glyph run without copying the shipped color or cadence.
@@ -188,6 +190,7 @@ pub enum AnimationColor {
     Faint,
     Clay,
     Indexed(u8),
+    Rgb(u8, u8, u8),
 }
 
 impl AnimationColor {
@@ -203,7 +206,7 @@ impl AnimationColor {
             Self::Dim => Some("dim"),
             Self::Faint => Some("faint"),
             Self::Clay => Some("clay"),
-            Self::Indexed(_) => None,
+            Self::Indexed(_) | Self::Rgb(_, _, _) => None,
         }
     }
 
@@ -231,10 +234,14 @@ impl Serialize for AnimationColor {
     {
         if let Some(name) = self.name() {
             serializer.serialize_str(name)
-        } else if let Self::Indexed(index) = self {
-            serializer.serialize_u8(*index)
         } else {
-            unreachable!("named colors are handled above")
+            match self {
+                Self::Indexed(index) => serializer.serialize_u8(*index),
+                Self::Rgb(red, green, blue) => {
+                    serializer.serialize_str(&format!("#{red:02x}{green:02x}{blue:02x}"))
+                }
+                _ => unreachable!("named colors are handled above"),
+            }
         }
     }
 }
@@ -250,18 +257,24 @@ impl<'de> Deserialize<'de> for AnimationColor {
             type Value = AnimationColor;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a lowercase color name or 256-color index")
+                formatter.write_str("a lowercase color name, #rrggbb hex color, or 256-color index")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
             where
                 E: de::Error,
             {
-                AnimationColor::parse_name(value).ok_or_else(|| {
-                    E::custom(format!(
-                        "unknown animation color `{value}`; expected good, warn, alarm, accent, cool, meta, soft, dim, faint, clay, or 0-255"
-                    ))
-                })
+                if let Some(color) = AnimationColor::parse_name(value) {
+                    return Ok(color);
+                }
+                if value.starts_with('#') {
+                    return parse_hex(value)
+                        .map(|(red, green, blue)| AnimationColor::Rgb(red, green, blue))
+                        .map_err(E::custom);
+                }
+                Err(E::custom(format!(
+                    "unknown animation color `{value}`; expected good, warn, alarm, accent, cool, meta, soft, dim, faint, clay, #rrggbb, or 0-255"
+                )))
             }
 
             fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
@@ -343,6 +356,8 @@ mod tests {
         assert_eq!(named.value, AnimationColor::Clay);
         let indexed: ColorWrap = toml::from_str("value = 173").expect("indexed color");
         assert_eq!(indexed.value, AnimationColor::Indexed(173));
+        let rgb: ColorWrap = toml::from_str("value = \"#2FB1D1\"").expect("rgb color");
+        assert_eq!(rgb.value, AnimationColor::Rgb(0x2f, 0xb1, 0xd1));
     }
 
     #[test]

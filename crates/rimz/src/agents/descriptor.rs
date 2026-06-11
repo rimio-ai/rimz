@@ -90,6 +90,8 @@ pub struct Brand {
     pub emblem: &'static str,
     /// 256-color index.
     pub color: u8,
+    /// Truecolor brand tone for renderers using RGB depth.
+    pub color_rgb: (u8, u8, u8),
 }
 
 /// How a raw plan tier string becomes its brand label.

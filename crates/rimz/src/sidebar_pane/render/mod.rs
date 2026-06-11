@@ -20,6 +20,7 @@ mod effects;
 mod fmt;
 mod labels;
 mod odometer;
+pub mod scheme;
 mod scrollbar;
 mod sections;
 mod theme;

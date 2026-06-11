@@ -77,21 +77,22 @@
 # stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds
 
 [sidebar.theme]
-# Palette slots are optional 256-color overrides. Omitted slots use the built-in
-# renderer palette. The example values below mirror the renderer's Palette::BUILTIN
-# tones, but stay double-commented because they are optional overrides, not config defaults.
-## good = 108
-## warn = 179
-## caution = 173
-## alarm = 167
-## accent = 73
-## cool = 75
-## meta = 141
-## soft = 246
-## dim = 242
-## faint = 238
-## rule = 238
-## selection = 110
+# Palette depth and scheme are optional. mode = "auto" uses truecolor when COLORTERM advertises it, otherwise 256. scheme = "auto" follows Ghostty's active theme when visible and falls back to clay.
+# Slot overrides accept either 256-color indexes or "#rrggbb"; omitted slots use the selected scheme.
+## mode = "auto"
+## scheme = "auto"
+## good = "#96c293"
+## warn = "#dfb66d"
+## caution = "#e0915c"
+## alarm = "#de6e6e"
+## accent = "#72b3aa"
+## cool = "#7fa8de"
+## meta = "#b49be0"
+## soft = "#a6a19a"
+## dim = "#767168"
+## faint = "#45423d"
+## rule = "#343230"
+## selection = "#8ab3e0"
 
 [sidebar.animations]
 # Status-head animation roles are optional. Each role accepts frames, color,
@@ -99,9 +100,8 @@
 # string split per Unicode codepoint or an array for multi-codepoint glyphs;
 # every frame must occupy exactly one terminal cell.
 # Colors are palette slots ("good", "warn", "alarm", "accent", "cool", "meta",
-# "soft", "dim", "faint"), "clay", or a 0-255 color index. effect is "static",
-# "breathe", or "blink"; speed is "slow", "normal", or "fast" for both frame
-# advance and effect cadence.
+# "soft", "dim", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
+# effect is "static", "breathe", or "blink"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
 # waiting, failed, and paused honor one frame and color; attention heat, unread
 # blink, and the parked pause grammar are fixed product behavior.
 ## [sidebar.animations.thinking]
@@ -153,7 +153,7 @@
 # Provider styles are keyed by agent kind and every field is optional.
 ## [sidebar.providers.claude]
 ## product_name = "Claude Code"
-## color = 173
+## color = "#d97757"
 ## ascii_art = "CLAUDE"
 
 [zellij]

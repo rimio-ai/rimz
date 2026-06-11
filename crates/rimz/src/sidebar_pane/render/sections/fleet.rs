@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat, agent_style_at, attention_floor_color, hard_blink, status_chip_color, status_glyph,
-    status_rest_style, status_style_at, status_style_with_modifier,
+    age_heat, agent_style_at, attention_floor_color, hard_blink, heat_color, status_chip_color,
+    status_glyph, status_rest_style, status_style_at, status_style_with_modifier,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -333,7 +333,9 @@ fn attention_bucket_style(
         .max()
         .unwrap_or(0);
     theme.style(
-        age_heat(oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
+        age_heat(oldest)
+            .map(|heat| heat_color(theme, heat))
+            .unwrap_or_else(|| attention_floor_color(theme, status)),
         Modifier::BOLD,
     )
 }
@@ -351,7 +353,9 @@ fn unread_bucket_style(
     };
     match status {
         AgentStatus::Waiting | AgentStatus::Failed => theme.style(
-            age_heat(oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
+            age_heat(oldest)
+                .map(|heat| heat_color(theme, heat))
+                .unwrap_or_else(|| attention_floor_color(theme, status)),
             hard_blink(animation_phase),
         ),
         AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running | AgentStatus::Idle => {

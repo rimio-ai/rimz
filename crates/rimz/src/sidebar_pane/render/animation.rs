@@ -1,12 +1,12 @@
 use crate::config::{
-    AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
+    AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
     SidebarAnimationsConfig,
 };
 use crate::feed::AgentStatus;
 use ratatui::style::{Color, Modifier};
 
 use super::labels::{breath_wave, hard_blink};
-use super::theme::{ORANGE, Palette};
+use super::theme::Palette;
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
@@ -124,7 +124,11 @@ pub(crate) struct ResolvedAnimations {
 
 impl Default for ResolvedAnimations {
     fn default() -> Self {
-        Self::resolve(&SidebarAnimationsConfig::default(), &Palette::BUILTIN)
+        let palette = Palette::resolve_fixed(
+            &crate::config::SidebarThemeConfig::default(),
+            crate::config::ColorDepth::Indexed,
+        );
+        Self::resolve(&SidebarAnimationsConfig::default(), &palette)
     }
 }
 
@@ -209,7 +213,7 @@ pub(crate) fn effect_modifier(animation: &Animation, phase: u64) -> Modifier {
 }
 
 fn resolve_role(role: AnimationRole, spec: Option<&AnimationSpec>, palette: &Palette) -> Animation {
-    let mut animation = builtin(role);
+    let mut animation = builtin(role, palette);
     if let Some(spec) = spec {
         if let Some(frames) = spec.frames.as_ref() {
             animation.frames = frames.as_slice().to_vec();
@@ -237,48 +241,68 @@ fn role_allows_effect(role: AnimationRole) -> bool {
     )
 }
 
-fn builtin(role: AnimationRole) -> Animation {
+fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
     let (frames, color, effect, speed) = match role {
         AnimationRole::Thinking => (
             THINKING_FRAMES.to_vec(),
-            ORANGE,
+            palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Working => (
             vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
-            ORANGE,
+            palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Compacting => (
             vec!["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"],
-            Color::Magenta,
+            palette.animation_color(AnimationColor::Meta),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Delegating => (
             vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
-            ORANGE,
+            palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Resolving => (
             vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
-            Color::Magenta,
+            palette.animation_color(AnimationColor::Meta),
             Effect::Static,
             Speed::Fast,
         ),
-        AnimationRole::Idle => (vec!["○"], Color::Green, Effect::Static, Speed::Normal),
-        AnimationRole::Success => (vec!["✓"], Color::Green, Effect::Static, Speed::Normal),
-        AnimationRole::Paused => (
-            vec!["⏸\u{FE0E}"],
-            Color::Yellow,
+        AnimationRole::Idle => (
+            vec!["○"],
+            palette.animation_color(AnimationColor::Good),
             Effect::Static,
             Speed::Normal,
         ),
-        AnimationRole::Waiting => (vec!["?"], Color::Yellow, Effect::Static, Speed::Normal),
-        AnimationRole::Failed => (vec!["!"], Color::Red, Effect::Static, Speed::Normal),
+        AnimationRole::Success => (
+            vec!["✓"],
+            palette.animation_color(AnimationColor::Good),
+            Effect::Static,
+            Speed::Normal,
+        ),
+        AnimationRole::Paused => (
+            vec!["⏸\u{FE0E}"],
+            palette.animation_color(AnimationColor::Warn),
+            Effect::Static,
+            Speed::Normal,
+        ),
+        AnimationRole::Waiting => (
+            vec!["?"],
+            palette.animation_color(AnimationColor::Warn),
+            Effect::Static,
+            Speed::Normal,
+        ),
+        AnimationRole::Failed => (
+            vec!["!"],
+            palette.animation_color(AnimationColor::Alarm),
+            Effect::Static,
+            Speed::Normal,
+        ),
     };
     Animation {
         frames: frames.into_iter().map(ToOwned::to_owned).collect(),
@@ -293,6 +317,13 @@ fn builtin(role: AnimationRole) -> Animation {
 mod tests {
     use super::*;
 
+    fn test_palette() -> Palette {
+        Palette::resolve_fixed(
+            &crate::config::SidebarThemeConfig::default(),
+            crate::config::ColorDepth::Indexed,
+        )
+    }
+
     #[test]
     fn unset_config_resolves_to_builtins() {
         let animations = ResolvedAnimations::default();
@@ -300,10 +331,13 @@ mod tests {
             animations.role(AnimationRole::Thinking).frames(),
             THINKING_FRAMES
         );
-        assert_eq!(animations.role(AnimationRole::Working).color(), ORANGE);
+        assert_eq!(
+            animations.role(AnimationRole::Working).color(),
+            Color::Indexed(173)
+        );
         assert_eq!(
             animations.role(AnimationRole::Failed).color(),
-            Color::Red,
+            test_palette().animation_color(AnimationColor::Alarm),
             "the static failed marker remains alarm-red"
         );
     }
@@ -312,10 +346,11 @@ mod tests {
     fn partial_override_changes_only_the_named_field() {
         let config: SidebarAnimationsConfig =
             toml::from_str("[thinking]\nframes = \"ab\"\n").expect("config");
-        let animations = ResolvedAnimations::resolve(&config, &Palette::BUILTIN);
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&config, &palette);
         let thinking = animations.role(AnimationRole::Thinking);
         assert_eq!(thinking.frames(), ["a", "b"]);
-        assert_eq!(thinking.color(), ORANGE);
+        assert_eq!(thinking.color(), Color::Indexed(173));
         assert_eq!(frame_at(thinking, 0), "a");
         assert_eq!(frame_at(thinking, 1), "b", "fast advances every tick");
         assert_eq!(frame_at(thinking, 2), "a");
@@ -327,12 +362,18 @@ mod tests {
             "[working]\ncolor = \"clay\"\n\n[idle]\ncolor = \"good\"\n\n[success]\ncolor = 34\n",
         )
         .expect("config");
-        let palette = Palette::resolve(&crate::config::SidebarThemeConfig {
-            good: Some(34),
-            ..crate::config::SidebarThemeConfig::default()
-        });
+        let palette = Palette::resolve_fixed(
+            &crate::config::SidebarThemeConfig {
+                good: Some(crate::config::ThemeColor::Indexed(34)),
+                ..crate::config::SidebarThemeConfig::default()
+            },
+            crate::config::ColorDepth::Indexed,
+        );
         let animations = ResolvedAnimations::resolve(&config, &palette);
-        assert_eq!(animations.role(AnimationRole::Working).color(), ORANGE);
+        assert_eq!(
+            animations.role(AnimationRole::Working).color(),
+            Color::Indexed(173)
+        );
         assert_eq!(
             animations.role(AnimationRole::Idle).color(),
             Color::Indexed(34),
@@ -349,10 +390,24 @@ mod tests {
     }
 
     #[test]
+    fn default_clay_animations_follow_truecolor_depth() {
+        let palette = Palette::resolve_fixed(
+            &crate::config::SidebarThemeConfig::default(),
+            crate::config::ColorDepth::Truecolor,
+        );
+        let animations = ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette);
+        let clay = palette.animation_color(AnimationColor::Clay);
+        assert_eq!(animations.role(AnimationRole::Thinking).color(), clay);
+        assert_eq!(animations.role(AnimationRole::Working).color(), clay);
+        assert_eq!(animations.role(AnimationRole::Delegating).color(), clay);
+    }
+
+    #[test]
     fn effects_and_resting_motion_are_resolved() {
         let config: SidebarAnimationsConfig =
             toml::from_str("[idle]\neffect = \"breathe\"\n").expect("config");
-        let animations = ResolvedAnimations::resolve(&config, &Palette::BUILTIN);
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&config, &palette);
         assert!(animations.has_resting_motion());
         assert_eq!(
             effect_modifier(animations.role(AnimationRole::Idle), 0),
@@ -366,7 +421,8 @@ mod tests {
             "[idle]\neffect = \"breathe\"\nspeed = \"slow\"\n\n[success]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
-        let animations = ResolvedAnimations::resolve(&config, &Palette::BUILTIN);
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&config, &palette);
         assert_ne!(
             effect_modifier(animations.role(AnimationRole::Idle), 5),
             effect_modifier(animations.role(AnimationRole::Success), 5),
@@ -377,7 +433,8 @@ mod tests {
             "[idle]\neffect = \"blink\"\nspeed = \"slow\"\n\n[success]\neffect = \"blink\"\nspeed = \"fast\"\n",
         )
         .expect("config");
-        let animations = ResolvedAnimations::resolve(&config, &Palette::BUILTIN);
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&config, &palette);
         assert_ne!(
             effect_modifier(animations.role(AnimationRole::Idle), 2),
             effect_modifier(animations.role(AnimationRole::Success), 2),
@@ -391,7 +448,8 @@ mod tests {
             "[waiting]\neffect = \"blink\"\nspeed = \"fast\"\n\n[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
-        let animations = ResolvedAnimations::resolve(&config, &Palette::BUILTIN);
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&config, &palette);
         assert_eq!(
             effect_modifier(animations.role(AnimationRole::Waiting), 0),
             Modifier::empty()

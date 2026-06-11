@@ -171,7 +171,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert_eq!(label_fg, theme.style(Color::Red, Modifier::empty()).fg);
     assert_eq!(
         reset_marker_fg(&rows[0]),
-        theme.style(theme::ORANGE, Modifier::empty()).fg,
+        theme.style(theme.clay(), Modifier::empty()).fg,
         "spent exactly halfway through the window reads as 2x amber pace"
     );
     assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));

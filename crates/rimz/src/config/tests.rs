@@ -281,14 +281,24 @@ fn attention_config_defaults_parses_and_rejects_zero() {
 #[test]
 fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
     let dir = tempdir().expect("tempdir");
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 34\nselection = 25\n"))
-            .expect("load");
-    assert_eq!(config.sidebar.theme.good, Some(34));
-    assert_eq!(config.sidebar.theme.selection, Some(25));
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.theme]\nmode = 256\nscheme = \"slate\"\ngood = 34\nselection = \"#8ab3e0\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.sidebar.theme.mode, ThemeMode::Indexed);
+    assert_eq!(config.sidebar.theme.scheme.as_deref(), Some("slate"));
+    assert_eq!(config.sidebar.theme.good, Some(ThemeColor::Indexed(34)));
+    assert_eq!(
+        config.sidebar.theme.selection,
+        Some(ThemeColor::Rgb(0x8a, 0xb3, 0xe0))
+    );
     assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");
     assert!(MachineConfig::default().sidebar.theme.is_unset());
     assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
+    assert!(
+        MachineConfig::load_from(&write(&dir, "[sidebar.theme]\nselection = \"#bad\"\n")).is_err()
+    );
 }
 
 #[test]
@@ -563,14 +573,14 @@ fn budget_zones_default_and_parse() {
 #[test]
 fn provider_style_parses_art_and_color() {
     let dir = tempdir().expect("tempdir");
-    let text = "[sidebar.providers.claude]\ncolor = 173\nascii_art = \" ▐▛███▜▌\"\n";
+    let text = "[sidebar.providers.claude]\ncolor = \"#D97757\"\nascii_art = \" ▐▛███▜▌\"\n";
     let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
     let claude = config
         .sidebar
         .providers
         .get("claude")
         .expect("claude provider style");
-    assert_eq!(claude.color, Some(173));
+    assert_eq!(claude.color, Some(ThemeColor::Rgb(0xd9, 0x77, 0x57)));
     assert_eq!(claude.ascii_art.as_deref(), Some(" ▐▛███▜▌"));
     assert_eq!(claude.product_name, None);
 }

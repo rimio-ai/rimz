@@ -102,6 +102,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
 ▐▜▌ ▚ ▐▛▌
  ▝▀▀▀▀▀▘",
         color: 38,
+        color_rgb: (0x2f, 0xb1, 0xd1),
     },
     plan_label: PlanLabel::Prefixed { prefix: "ChatGPT" },
     // An OpenAI OAuth subscription is the ChatGPT account Codex meters; Pi's

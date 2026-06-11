@@ -59,6 +59,7 @@ fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarPr
         product_name: kind.to_owned(),
         art: Vec::new(),
         color: 0,
+        color_rgb: None,
         version: None,
         plan: None,
         metered: true,

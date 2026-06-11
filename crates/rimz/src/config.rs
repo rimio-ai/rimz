@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::ledger::paths::config_home;
 
 mod animation;
+mod color;
 mod mux;
 mod notifications;
 mod remote_control;
@@ -28,6 +29,7 @@ pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig,
 };
+pub use color::{ColorDepth, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

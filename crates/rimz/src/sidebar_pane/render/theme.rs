@@ -1,111 +1,167 @@
-//! Capability-aware styling. Picks the color depth and modifier set the
+//! Capability-aware styling. Picks the palette depth and modifier set the
 //! renderer is allowed to emit, so the grammar stays identical across tiers
 //! while the chrome adapts.
 //!
-//! The default tier is "stock Unicode + a tuned 256-color palette"; `NO_COLOR`
-//! strips color but keeps Unicode and modifiers, so every gauge still reads by
-//! shape and fill (the bar's `█`/`░` count carries the meter without the
-//! green→red ramp). Truecolor is the "garnish" tier: when `COLORTERM`
-//! advertises 24-bit color (and `NO_COLOR` is off) the post-render effects
-//! pass ([`super::effects`]) layers smooth color motion over the composed
-//! frame — color depth only, never the grammar. The tier is also a choice:
-//! the `[sidebar] glow` mode rides the snapshot like the palette overrides —
-//! `never` pins the plain 256-color render on any terminal, and `always`
-//! forces the pass where a truecolor terminal's advertisement went missing
-//! (an SSH hop forwards `TERM` but drops `COLORTERM`).
+//! The default palette depth is automatic: truecolor terminals get RGB
+//! palette tones, and other terminals get the same tones quantized to xterm
+//! 256-color indexes. `NO_COLOR` strips color but keeps Unicode and
+//! modifiers, so every gauge still reads by shape and fill. The color-only
+//! effects pass ([`super::effects`]) remains a separate tier controlled by
+//! `[sidebar] glow`: it runs only when glow permits it and `NO_COLOR` is off.
 //!
-//! The palette is data, not constants: every semantic slot carries a built-in
-//! tone ([`Palette::BUILTIN`]) and an optional per-machine override from
-//! `[sidebar.theme]` ([`SidebarThemeConfig`]), resolved producer-side onto the
-//! snapshot exactly like the `[sidebar.providers]` brand styling — so every
-//! renderer of the same workspace paints the same tones with zero config
-//! knowledge of its own.
+//! Palette choice is data in the snapshot's `[sidebar.theme]`: `scheme`
+//! selects a built-in palette, a Ghostty-format theme file, or Ghostty's
+//! active theme when set to `auto`; per-slot overrides then win over the
+//! selected scheme. The renderer resolves depth because terminal capability
+//! is a renderer-local fact.
 
-use crate::config::{AnimationColor, GlowMode, SidebarConfig, SidebarThemeConfig};
+use crate::config::{
+    AnimationColor, ColorDepth, GlowMode, SidebarConfig, SidebarThemeConfig, ThemeColor,
+    nearest_xterm_index,
+};
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
 use super::animation::ResolvedAnimations;
+use super::scheme;
 
-/// Claude clay — the running agent's animated working/thinking head, so the
-/// live cell reads in the agent's own brand orange. Closest muted 256-color
-/// tone to Claude's `#D97757`. Deliberately not a palette slot: it is a brand
-/// tone (like the per-provider dashboard colors), not chrome, and a generic
-/// `Indexed(173)` remap would wrongly absorb unrelated 173s.
-pub(super) const ORANGE: Color = Color::Indexed(173);
+pub(crate) const CLAUDE_CLAY_RGB: (u8, u8, u8) = (0xd9, 0x77, 0x57);
 
-/// The muted 256-color palette, one named slot per semantic tone. The
-/// renderer's callers speak in semantic ANSI names (`Color::Green` for "good",
-/// `Color::Red` for "alarm"); [`Theme::style`] resolves each through the active
-/// palette, so the whole tone set lives in one place, stays easy on the eyes on
-/// a dark terminal, and re-tunes from `[sidebar.theme]` without touching a
-/// callsite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PaletteTones {
+    pub(crate) good: (u8, u8, u8),
+    pub(crate) warn: (u8, u8, u8),
+    pub(crate) caution: (u8, u8, u8),
+    pub(crate) alarm: (u8, u8, u8),
+    pub(crate) accent: (u8, u8, u8),
+    pub(crate) cool: (u8, u8, u8),
+    pub(crate) meta: (u8, u8, u8),
+    pub(crate) soft: (u8, u8, u8),
+    pub(crate) dim: (u8, u8, u8),
+    pub(crate) faint: (u8, u8, u8),
+    pub(crate) rule: (u8, u8, u8),
+    pub(crate) selection: (u8, u8, u8),
+}
+
+impl PaletteTones {
+    pub(crate) const CLAY: Self = Self {
+        good: (0x96, 0xc2, 0x93),
+        warn: (0xdf, 0xb6, 0x6d),
+        caution: (0xe0, 0x91, 0x5c),
+        alarm: (0xde, 0x6e, 0x6e),
+        accent: (0x72, 0xb3, 0xaa),
+        cool: (0x7f, 0xa8, 0xde),
+        meta: (0xb4, 0x9b, 0xe0),
+        soft: (0xa6, 0xa1, 0x9a),
+        dim: (0x76, 0x71, 0x68),
+        faint: (0x45, 0x42, 0x3d),
+        rule: (0x34, 0x32, 0x30),
+        selection: (0x8a, 0xb3, 0xe0),
+    };
+
+    pub(crate) const SLATE: Self = Self {
+        good: (0x9e, 0xce, 0x6a),
+        warn: (0xe0, 0xaf, 0x68),
+        caution: (0xff, 0x9e, 0x64),
+        alarm: (0xf7, 0x76, 0x8e),
+        accent: (0x41, 0xa6, 0xb5),
+        cool: (0x7a, 0xa2, 0xf7),
+        meta: (0xbb, 0x9a, 0xf7),
+        soft: (0xa9, 0xb1, 0xd6),
+        dim: (0x56, 0x5f, 0x89),
+        faint: (0x3b, 0x42, 0x61),
+        rule: (0x29, 0x2e, 0x42),
+        selection: (0x7a, 0xa2, 0xf7),
+    };
+
+    pub(crate) const CLASSIC: Self = Self {
+        good: (0x8d, 0xbe, 0x8d),
+        warn: (0xdc, 0xb1, 0x68),
+        caution: (0xdc, 0x8c, 0x62),
+        alarm: (0xdc, 0x66, 0x66),
+        accent: (0x66, 0xb0, 0xb0),
+        cool: (0x6b, 0xaa, 0xf5),
+        meta: (0xb2, 0x8f, 0xf5),
+        soft: (0x99, 0x99, 0x99),
+        dim: (0x6e, 0x6e, 0x6e),
+        faint: (0x46, 0x46, 0x46),
+        // Keep classic@256 exactly on the legacy rule index 238; the rule's
+        // DIM modifier supplies the darker visual step.
+        rule: (0x46, 0x46, 0x46),
+        selection: (0x8a, 0xb1, 0xdb),
+    };
+}
+
+pub(crate) fn builtin_palette_tones(name: &str) -> Option<PaletteTones> {
+    match name {
+        "clay" => Some(PaletteTones::CLAY),
+        "slate" => Some(PaletteTones::SLATE),
+        "classic" => Some(PaletteTones::CLASSIC),
+        _ => None,
+    }
+}
+
+/// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Palette {
-    /// sage — running tally / low gauge / additions / cache reads (`Color::Green`).
+    depth: ColorDepth,
     good: Color,
-    /// gold — waiting / mid gauge (`Color::Yellow`).
     warn: Color,
-    /// muted amber — elevated caution between warning and alarm (`Color::LightRed`).
     caution: Color,
-    /// balanced red — failed / high gauge / fresh input (`Color::Red`).
     alarm: Color,
-    /// teal — worktree headers and the lane spine (`Color::Cyan`).
     accent: Color,
-    /// sky — the cautious `plan` posture pill (`Color::Blue`).
     cool: Color,
-    /// soft purple — cache writes, the provider `⇅ rc` flag, and delegation family (`Color::Magenta`).
     meta: Color,
-    /// mid gray — the soft content tier: capability tokens, card figures,
-    /// subagent lines. A step above `dim`, below the default-fg `value`.
     soft: Color,
-    /// deep gray — labels, ages, seams (`Color::DarkGray`/`Color::Gray`).
     dim: Color,
-    /// deeper gray — recedes below `dim`: bar tracks, `·` separators, dividers.
     faint: Color,
-    /// the darkest chrome — `faint`'s gray dropped a further step by the `DIM`
-    /// attenuation: the scrollbar's resting track.
     rule: Color,
-    /// soft blue — the selected-row left bar, brighter than the chrome so the
-    /// `▎` reads as "here you are" without inverting the whole row.
     selection: Color,
+    clay: Color,
 }
 
 impl Palette {
-    /// The shipped tones. Every `[sidebar.theme]` slot a user leaves unset
-    /// falls back here, so an absent section renders the built-ins.
-    pub(crate) const BUILTIN: Palette = Palette {
-        good: Color::Indexed(108),
-        warn: Color::Indexed(179),
-        caution: Color::Indexed(173),
-        alarm: Color::Indexed(167),
-        accent: Color::Indexed(73),
-        cool: Color::Indexed(75),
-        meta: Color::Indexed(141),
-        soft: Color::Indexed(246),
-        dim: Color::Indexed(242),
-        faint: Color::Indexed(238),
-        rule: Color::Indexed(238),
-        selection: Color::Indexed(110),
-    };
+    pub(crate) fn resolve(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
+        Self::resolve_with_auto_fallback(theme, depth, PaletteTones::CLAY, true)
+    }
 
-    /// Resolve the active palette: each configured `[sidebar.theme]` slot (a
-    /// 256-color index) overrides its built-in; an unset slot keeps it.
-    pub(crate) fn resolve(theme: &SidebarThemeConfig) -> Palette {
-        let slot = |over: Option<u8>, builtin: Color| over.map(Color::Indexed).unwrap_or(builtin);
+    pub(crate) fn resolve_fixed(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
+        Self::resolve_with_auto_fallback(theme, depth, PaletteTones::CLASSIC, false)
+    }
+
+    fn resolve_with_auto_fallback(
+        theme: &SidebarThemeConfig,
+        depth: ColorDepth,
+        auto_fallback: PaletteTones,
+        detect_auto_scheme: bool,
+    ) -> Palette {
+        let tones = match theme.scheme.as_deref() {
+            None | Some("auto") if detect_auto_scheme => {
+                scheme::auto_palette_tones().unwrap_or(auto_fallback)
+            }
+            None | Some("auto") => auto_fallback,
+            Some(name) => selected_palette_tones(name).unwrap_or(PaletteTones::CLAY),
+        };
+        let slot = |override_color: Option<ThemeColor>, builtin| {
+            override_color
+                .map(|color| theme_color(color, depth))
+                .unwrap_or_else(|| rgb_color(builtin, depth))
+        };
         Palette {
-            good: slot(theme.good, Self::BUILTIN.good),
-            warn: slot(theme.warn, Self::BUILTIN.warn),
-            caution: slot(theme.caution, Self::BUILTIN.caution),
-            alarm: slot(theme.alarm, Self::BUILTIN.alarm),
-            accent: slot(theme.accent, Self::BUILTIN.accent),
-            cool: slot(theme.cool, Self::BUILTIN.cool),
-            meta: slot(theme.meta, Self::BUILTIN.meta),
-            soft: slot(theme.soft, Self::BUILTIN.soft),
-            dim: slot(theme.dim, Self::BUILTIN.dim),
-            faint: slot(theme.faint, Self::BUILTIN.faint),
-            rule: slot(theme.rule, Self::BUILTIN.rule),
-            selection: slot(theme.selection, Self::BUILTIN.selection),
+            depth,
+            good: slot(theme.good, tones.good),
+            warn: slot(theme.warn, tones.warn),
+            caution: slot(theme.caution, tones.caution),
+            alarm: slot(theme.alarm, tones.alarm),
+            accent: slot(theme.accent, tones.accent),
+            cool: slot(theme.cool, tones.cool),
+            meta: slot(theme.meta, tones.meta),
+            soft: slot(theme.soft, tones.soft),
+            dim: slot(theme.dim, tones.dim),
+            faint: slot(theme.faint, tones.faint),
+            rule: slot(theme.rule, tones.rule),
+            selection: slot(theme.selection, tones.selection),
+            clay: rgb_color(CLAUDE_CLAY_RGB, depth),
         }
     }
 
@@ -120,9 +176,28 @@ impl Palette {
             AnimationColor::Soft => self.soft,
             AnimationColor::Dim => self.dim,
             AnimationColor::Faint => self.faint,
-            AnimationColor::Clay => ORANGE,
+            AnimationColor::Clay => self.clay,
             AnimationColor::Indexed(index) => Color::Indexed(index),
+            AnimationColor::Rgb(red, green, blue) => rgb_color((red, green, blue), self.depth),
         }
+    }
+}
+
+fn selected_palette_tones(name: &str) -> Option<PaletteTones> {
+    builtin_palette_tones(name).or_else(|| scheme::explicit_palette_tones(name))
+}
+
+fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {
+    match color {
+        ThemeColor::Indexed(index) => Color::Indexed(index),
+        ThemeColor::Rgb(red, green, blue) => rgb_color((red, green, blue), depth),
+    }
+}
+
+fn rgb_color((red, green, blue): (u8, u8, u8), depth: ColorDepth) -> Color {
+    match depth {
+        ColorDepth::Truecolor => Color::Rgb(red, green, blue),
+        ColorDepth::Indexed => Color::Indexed(nearest_xterm_index(red, green, blue)),
     }
 }
 
@@ -130,11 +205,9 @@ impl Palette {
 pub(crate) struct Theme {
     no_color: bool,
     /// The terminal advertises 24-bit color (`COLORTERM`). Gates the
-    /// post-render effects pass; the composed grammar never reads it.
+    /// post-render effects pass; palette depth has its own mode.
     truecolor: bool,
-    /// The `[sidebar] glow` mode, riding the snapshot. `auto` follows the
-    /// terminal capability; `always` forces the pass past a missing
-    /// `COLORTERM`; `never` pins the plain 256-color render.
+    depth: ColorDepth,
     glow: GlowMode,
     palette: Palette,
     pub(crate) animations: ResolvedAnimations,
@@ -142,67 +215,71 @@ pub(crate) struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
+        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
         Self {
             no_color: false,
             truecolor: false,
+            depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
-            palette: Palette::BUILTIN,
-            animations: ResolvedAnimations::default(),
+            animations: ResolvedAnimations::resolve(
+                &crate::config::SidebarAnimationsConfig::default(),
+                &palette,
+            ),
+            palette,
         }
     }
 }
 
 impl Theme {
-    /// The active theme for a frame: the cached `NO_COLOR` and `COLORTERM`
-    /// readings plus the palette and glow mode resolved from the snapshot's
-    /// `[sidebar]` config. Called per compose — the resolve is ten copies of a
-    /// `Color`, far below the frame budget — so a config change lands with the
-    /// next produced snapshot, no renderer restart.
+    /// The active theme for a frame: cached `NO_COLOR` and `COLORTERM`
+    /// readings plus the palette, depth, and glow mode resolved from the
+    /// snapshot's `[sidebar]` config.
     pub(crate) fn for_sidebar(sidebar: &SidebarConfig) -> Self {
-        let palette = Palette::resolve(&sidebar.theme);
+        let truecolor = truecolor_env();
+        let depth = sidebar.theme.mode.depth(truecolor);
+        let palette = Palette::resolve(&sidebar.theme, depth);
         Self {
             no_color: crate::tui::no_color(),
-            truecolor: truecolor_env(),
+            truecolor,
+            depth,
             glow: sidebar.glow,
-            palette,
             animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
+            palette,
         }
     }
 
-    /// Build a constant theme — used by tests to assert the NO_COLOR shape
-    /// without poking at the process environment. Always the built-in palette;
-    /// override tests go through [`Theme::for_sidebar`].
+    /// Build a deterministic test theme. Tests use the classic indexed palette
+    /// unless they explicitly pass a sidebar config to [`Self::fixed_for_sidebar`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
+        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
         Self {
             no_color,
             truecolor: false,
+            depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
-            palette: Palette::BUILTIN,
-            animations: ResolvedAnimations::default(),
+            animations: ResolvedAnimations::resolve(
+                &crate::config::SidebarAnimationsConfig::default(),
+                &palette,
+            ),
+            palette,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fixed_for_sidebar(no_color: bool, sidebar: &SidebarConfig) -> Self {
-        let palette = Palette::resolve(&sidebar.theme);
+        let depth = sidebar.theme.mode.depth(false);
+        let palette = Palette::resolve_fixed(&sidebar.theme, depth);
         Self {
             no_color,
             truecolor: false,
+            depth,
             glow: sidebar.glow,
-            palette,
             animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
+            palette,
         }
     }
 
-    /// Whether the post-render effects pass runs. `NO_COLOR` beats everything
-    /// — the pass is color-only, so it has nothing to say on a colorless
-    /// frame. Under `auto` the terminal must advertise 24-bit color (smooth
-    /// lightness interpolation quantizes into visible banding on a 256-color
-    /// palette); `always` trusts the user's word over a missing advertisement;
-    /// `never` pins the plain render. With the pass off the modifier-based
-    /// attention breath alone carries the cue, exactly as before the glow
-    /// tier existed.
     pub(crate) fn effects_enabled(&self) -> bool {
         !self.no_color
             && match self.glow {
@@ -212,10 +289,6 @@ impl Theme {
             }
     }
 
-    /// Style with `fg` color and `modifier`, suppressing the color when
-    /// `NO_COLOR` is in effect. Modifiers (BOLD/DIM) survive — they shape the
-    /// glyph itself, not its color. The semantic `fg` is mapped through the
-    /// active palette so the whole renderer paints one tuned set of tones.
     pub(crate) fn style(&self, fg: Color, modifier: Modifier) -> Style {
         let style = Style::default().add_modifier(modifier);
         if self.no_color {
@@ -225,12 +298,6 @@ impl Theme {
         }
     }
 
-    /// Style a chip — `fg` ink on a `bg` fill plus `modifier` — the provider
-    /// tab rail's active pick. Both colors are suppressed under `NO_COLOR`
-    /// (the `┤ ├` caps then carry the pick by shape); otherwise each maps
-    /// through the palette, so an explicit `Indexed` brand fill and the dark
-    /// ink pass through unchanged like every other indexed tone. Modifiers
-    /// always survive — they shape the glyph, not its color.
     pub(crate) fn chip(&self, fg: Color, bg: Color, modifier: Modifier) -> Style {
         let style = Style::default().add_modifier(modifier);
         if self.no_color {
@@ -240,11 +307,6 @@ impl Theme {
         }
     }
 
-    /// A plain palette gray at normal weight — the shared shape of the lit
-    /// gray ladder. The ladder steps by color index alone; a `DIM` modifier
-    /// would hand each tone back to the terminal's attenuation and collapse
-    /// the steps. Under `NO_COLOR` every rung falls to the bare `DIM`
-    /// modifier, so "a step below `value`" still carries as weight.
     fn gray(&self, color: Color) -> Style {
         if self.no_color {
             Style::default().add_modifier(Modifier::DIM)
@@ -253,57 +315,41 @@ impl Theme {
         }
     }
 
-    /// Shared dim-chrome style — for ages, labels, and seams that sit
-    /// alongside the active vocabulary glyphs. A step below
-    /// [`soft`](Self::soft) on the gray ladder.
     pub(crate) fn dim(&self) -> Style {
         self.gray(self.palette.dim)
     }
 
-    /// The soft middle tier — between the default-fg full-strength text and
-    /// the gray [`dim`](Self::dim) chrome, for content a reader actually
-    /// reads: capability tokens, stat figures, subagent lines, the process
-    /// rows' program names.
     pub(crate) fn soft(&self) -> Style {
         self.gray(self.palette.soft)
     }
 
-    /// The faintest chrome — a step below [`dim`](Self::dim) for the pure
-    /// scaffolding that should recede furthest: bar tracks, `·` separators, and
-    /// dividers. Under `NO_COLOR` it collapses to the same dim modifier as the
-    /// rest of the ladder; the shape (a light `─` track, a thin `·`) carries
-    /// the reading without the tone.
     pub(crate) fn faint(&self) -> Style {
         self.gray(self.palette.faint)
     }
 
-    /// The darkest chrome — [`faint`](Self::faint)'s gray under the `DIM`
-    /// attenuation, a step below it: the scrollbar's resting track (`▕`),
-    /// receding beside its `dim` thumb so the position reads without the rail
-    /// shouting.
     pub(crate) fn rule(&self) -> Style {
         self.style(self.palette.rule, Modifier::DIM)
     }
 
-    /// Accent style for the selected-row left bar (`▎`). Under `NO_COLOR` the
-    /// bar glyph alone marks selection, so no style is needed.
     pub(crate) fn selection(&self) -> Style {
         self.style(self.palette.selection, Modifier::BOLD)
     }
 
-    /// The resolved palette tone for a semantic color, as a bare `Color` — the
-    /// effects pass feeds these to its shaders, which interpolate the color
-    /// itself rather than build a `Style`. Only meaningful when
-    /// [`effects_enabled`](Self::effects_enabled) holds, which already implies
-    /// `NO_COLOR` is off.
+    pub(crate) fn clay(&self) -> Color {
+        self.palette.clay
+    }
+
+    pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
+        match (self.depth, panel.color_rgb) {
+            (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),
+            _ => Color::Indexed(panel.color),
+        }
+    }
+
     pub(super) fn tone(&self, color: Color) -> Color {
         self.resolve(color)
     }
 
-    /// Map a semantic ANSI color to its tuned palette tone. Anything outside
-    /// the renderer's vocabulary — an explicit `Indexed` brand color, the
-    /// palette tones the dedicated methods pass back through — goes out
-    /// unchanged.
     fn resolve(&self, color: Color) -> Color {
         match color {
             Color::Green => self.palette.good,
@@ -319,10 +365,6 @@ impl Theme {
     }
 }
 
-/// Read the terminal's 24-bit color capability once. `COLORTERM=truecolor` (or
-/// `24bit`) is the de-facto convention emulators use to advertise it; like
-/// `NO_COLOR` it cannot change mid-process, so the reading is cached for the
-/// same per-frame reason.
 fn truecolor_env() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| {
@@ -333,19 +375,59 @@ fn truecolor_env() -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{SidebarAnimationsConfig, ThemeMode};
+
+    fn indices(palette: Palette) -> [Color; 13] {
+        [
+            palette.good,
+            palette.warn,
+            palette.caution,
+            palette.alarm,
+            palette.accent,
+            palette.cool,
+            palette.meta,
+            palette.soft,
+            palette.dim,
+            palette.faint,
+            palette.rule,
+            palette.selection,
+            palette.clay,
+        ]
+    }
+
+    #[test]
+    fn classic_indexed_palette_matches_legacy_indices() {
+        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        assert_eq!(
+            indices(palette),
+            [
+                Color::Indexed(108),
+                Color::Indexed(179),
+                Color::Indexed(173),
+                Color::Indexed(167),
+                Color::Indexed(73),
+                Color::Indexed(75),
+                Color::Indexed(141),
+                Color::Indexed(246),
+                Color::Indexed(242),
+                Color::Indexed(238),
+                Color::Indexed(238),
+                Color::Indexed(110),
+                Color::Indexed(173),
+            ]
+        );
+    }
 
     #[test]
     fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
-        assert_eq!(
-            Palette::resolve(&SidebarThemeConfig::default()),
-            Palette::BUILTIN
-        );
-
         let theme = Theme {
-            palette: Palette::resolve(&SidebarThemeConfig {
-                good: Some(34),
-                ..SidebarThemeConfig::default()
-            }),
+            palette: Palette::resolve_fixed(
+                &SidebarThemeConfig {
+                    good: Some(ThemeColor::Indexed(34)),
+                    ..SidebarThemeConfig::default()
+                },
+                ColorDepth::Indexed,
+            ),
             ..Theme::default()
         };
         assert_eq!(
@@ -361,15 +443,18 @@ mod tests {
             Some(Color::Indexed(173))
         );
         assert_eq!(
-            theme.style(ORANGE, Modifier::empty()).fg,
+            theme.style(Color::Indexed(173), Modifier::empty()).fg,
             Some(Color::Indexed(173))
         );
 
         let theme = Theme {
-            palette: Palette::resolve(&SidebarThemeConfig {
-                caution: Some(214),
-                ..SidebarThemeConfig::default()
-            }),
+            palette: Palette::resolve_fixed(
+                &SidebarThemeConfig {
+                    caution: Some(ThemeColor::Indexed(214)),
+                    ..SidebarThemeConfig::default()
+                },
+                ColorDepth::Indexed,
+            ),
             ..Theme::default()
         };
 
@@ -382,6 +467,86 @@ mod tests {
             Some(Color::Indexed(179)),
             "warning stays separate from elevated caution"
         );
+    }
+
+    #[test]
+    fn rgb_overrides_follow_depth() {
+        let sidebar = SidebarConfig {
+            theme: SidebarThemeConfig {
+                mode: ThemeMode::Truecolor,
+                scheme: Some("classic".to_owned()),
+                good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+                ..SidebarThemeConfig::default()
+            },
+            ..SidebarConfig::default()
+        };
+        let truecolor = Theme::fixed_for_sidebar(false, &sidebar);
+        assert_eq!(
+            truecolor.style(Color::Green, Modifier::empty()).fg,
+            Some(Color::Rgb(0xa3, 0xbe, 0x8c))
+        );
+
+        let sidebar = SidebarConfig {
+            theme: SidebarThemeConfig {
+                scheme: Some("classic".to_owned()),
+                good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+                ..SidebarThemeConfig::default()
+            },
+            ..SidebarConfig::default()
+        };
+        let indexed = Theme::fixed_for_sidebar(false, &sidebar);
+        assert_eq!(
+            indexed.style(Color::Green, Modifier::empty()).fg,
+            Some(Color::Indexed(nearest_xterm_index(0xa3, 0xbe, 0x8c)))
+        );
+    }
+
+    #[test]
+    fn builtin_schemes_resolve_by_name() {
+        let sidebar = SidebarConfig {
+            theme: SidebarThemeConfig {
+                scheme: Some("slate".to_owned()),
+                ..SidebarThemeConfig::default()
+            },
+            ..SidebarConfig::default()
+        };
+        let theme = Theme::fixed_for_sidebar(false, &sidebar);
+        assert_eq!(
+            theme.style(Color::Green, Modifier::empty()).fg,
+            Some(Color::Indexed(nearest_xterm_index(0x9e, 0xce, 0x6a)))
+        );
+    }
+
+    #[test]
+    fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
+        let panel = crate::SidebarProviderPanel {
+            kind: "claude".to_owned(),
+            product_name: "Claude".to_owned(),
+            art: Vec::new(),
+            color: 173,
+            color_rgb: Some((0xd9, 0x77, 0x57)),
+            version: None,
+            plan: None,
+            metered: false,
+            remote_control: false,
+            spending: None,
+            windows: Vec::new(),
+        };
+
+        let indexed = Theme::fixed(false);
+        assert_eq!(indexed.brand_tone(&panel), Color::Indexed(173));
+
+        let truecolor = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    mode: ThemeMode::Truecolor,
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        assert_eq!(truecolor.brand_tone(&panel), Color::Rgb(0xd9, 0x77, 0x57));
     }
 
     #[test]
@@ -404,10 +569,13 @@ mod tests {
         }
 
         let themed = Theme {
-            palette: Palette::resolve(&SidebarThemeConfig {
-                soft: Some(252),
-                ..SidebarThemeConfig::default()
-            }),
+            palette: Palette::resolve_fixed(
+                &SidebarThemeConfig {
+                    soft: Some(ThemeColor::Indexed(252)),
+                    ..SidebarThemeConfig::default()
+                },
+                ColorDepth::Indexed,
+            ),
             ..Theme::default()
         };
         assert_eq!(themed.soft().fg, Some(Color::Indexed(252)));
@@ -417,10 +585,13 @@ mod tests {
     fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
         let theme = Theme {
             no_color: true,
-            palette: Palette::resolve(&SidebarThemeConfig {
-                alarm: Some(196),
-                ..SidebarThemeConfig::default()
-            }),
+            palette: Palette::resolve_fixed(
+                &SidebarThemeConfig {
+                    alarm: Some(ThemeColor::Indexed(196)),
+                    ..SidebarThemeConfig::default()
+                },
+                ColorDepth::Indexed,
+            ),
             ..Theme::default()
         };
         let style = theme.style(Color::Red, Modifier::BOLD);
@@ -444,12 +615,20 @@ mod tests {
 
     #[test]
     fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
-        let theme = |no_color, truecolor, glow| Theme {
-            no_color,
-            truecolor,
-            glow,
-            palette: Palette::BUILTIN,
-            animations: ResolvedAnimations::default(),
+        let theme = |no_color, truecolor, glow| {
+            let palette =
+                Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+            Theme {
+                no_color,
+                truecolor,
+                depth: ColorDepth::Indexed,
+                glow,
+                animations: ResolvedAnimations::resolve(
+                    &SidebarAnimationsConfig::default(),
+                    &palette,
+                ),
+                palette,
+            }
         };
         assert!(theme(false, true, GlowMode::Auto).effects_enabled());
         assert!(
@@ -458,7 +637,7 @@ mod tests {
         );
         assert!(
             theme(false, false, GlowMode::Always).effects_enabled(),
-            "always forces the pass past a missing COLORTERM (the SSH hop)"
+            "always forces the pass past a missing COLORTERM"
         );
         assert!(
             !theme(false, true, GlowMode::Never).effects_enabled(),

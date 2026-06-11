@@ -132,6 +132,7 @@ fn set(args: SetArgs) -> Result<()> {
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     let value = parse_edit_value(&args.value);
+    validate_set_value(&key, &value)?;
     set_document_value(&mut doc, &key, value)?;
 
     let rendered = doc.to_string();
@@ -307,8 +308,11 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.budget.pace.red",
         "sidebar.attention.stalled_after_secs",
         "sidebar.trunk",
+        "sidebar.theme.mode",
+        "sidebar.theme.scheme",
         "sidebar.theme.good",
         "sidebar.theme.warn",
+        "sidebar.theme.caution",
         "sidebar.theme.alarm",
         "sidebar.theme.accent",
         "sidebar.theme.cool",
@@ -360,6 +364,23 @@ fn parse_edit_value(raw: &str) -> Value {
         .unwrap_or_else(|_| Value::from(raw.to_owned()))
 }
 
+fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if matches!(
+        path,
+        [root, child, leaf] if root == "sidebar" && child == "theme" && leaf == "scheme"
+    ) {
+        let Some(scheme) = value.as_str() else {
+            bail!("sidebar.theme.scheme must be a string");
+        };
+        if scheme != "auto"
+            && let Err(err) = rimz::sidebar_pane::render::scheme::validate_explicit_scheme(scheme)
+        {
+            bail!("{err}");
+        }
+    }
+    Ok(())
+}
+
 fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> Result<()> {
     let mut table = doc.as_table_mut();
     for segment in &path[..path.len() - 1] {
@@ -407,6 +428,9 @@ mod tests {
             "tab.keywords.codex-yolo.args",
             "tab.keywords.htop.command",
             "sidebar.providers.claude.color",
+            "sidebar.theme.mode",
+            "sidebar.theme.scheme",
+            "sidebar.theme.caution",
             "sidebar.animations.thinking.frames",
             "sidebar.animations.working.color",
             "sidebar.animations.idle.effect",

@@ -36,6 +36,12 @@ fn template_covers_serialized_default_leaves() {
 #[test]
 fn template_lists_optional_sidebar_theme_slots() {
     let template = MachineConfig::template();
+    for setting in ["mode", "scheme"] {
+        assert!(
+            template.contains(&format!("## {setting} = ")),
+            "template is missing optional sidebar theme setting {setting}"
+        );
+    }
     for slot in [
         "good",
         "warn",

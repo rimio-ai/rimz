@@ -19,6 +19,10 @@ pub struct SidebarProviderPanel {
     pub art: Vec<String>,
     /// 256-color index for the emblem.
     pub color: u8,
+    /// Truecolor brand tone for renderers using RGB depth. Older snapshots may
+    /// omit it; renderers fall back to `color`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_rgb: Option<(u8, u8, u8)>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Brand plan label (`Claude Max`, `ChatGPT Pro`); `None` when unknown.

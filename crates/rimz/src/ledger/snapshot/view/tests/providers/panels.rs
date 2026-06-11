@@ -34,6 +34,62 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
 }
 
 #[test]
+fn provider_brand_color_carries_rgb_and_indexed_fallback() {
+    let panel_for = |mut snapshot: SidebarSnapshot| {
+        snapshot =
+            snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+        snapshot
+            .providers
+            .into_iter()
+            .find(|panel| panel.kind == "claude")
+            .expect("claude panel")
+    };
+
+    let panel = panel_for(room(
+        Vec::new(),
+        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
+    ));
+    assert_eq!(panel.color, 173);
+    assert_eq!(panel.color_rgb, Some((0xd9, 0x77, 0x57)));
+
+    let mut snapshot = room(
+        Vec::new(),
+        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
+    );
+    snapshot.sidebar.providers.insert(
+        "claude".to_owned(),
+        crate::config::SidebarProviderStyle {
+            color: Some(crate::config::ThemeColor::Indexed(208)),
+            ..Default::default()
+        },
+    );
+    let panel = panel_for(snapshot);
+    assert_eq!(panel.color, 208);
+    assert_eq!(
+        panel.color_rgb, None,
+        "indexed override stays compatible with indexed-only renderers"
+    );
+
+    let mut snapshot = room(
+        Vec::new(),
+        vec![agent("claude", "c1", AgentStatus::Idle, 10)],
+    );
+    snapshot.sidebar.providers.insert(
+        "claude".to_owned(),
+        crate::config::SidebarProviderStyle {
+            color: Some(crate::config::ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+            ..Default::default()
+        },
+    );
+    let panel = panel_for(snapshot);
+    assert_eq!(
+        panel.color,
+        crate::config::nearest_xterm_index(0xa3, 0xbe, 0x8c)
+    );
+    assert_eq!(panel.color_rgb, Some((0xa3, 0xbe, 0x8c)));
+}
+
+#[test]
 fn provider_list_filters_and_orders_dashboard_panels() {
     for case in [
         (

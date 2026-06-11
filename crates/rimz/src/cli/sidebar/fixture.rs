@@ -32,6 +32,7 @@ pub(super) fn sidebar_fixture_snapshot(
         link: None,
         reflects_log: None,
     };
+    snapshot.sidebar.theme.scheme = Some("clay".to_owned());
 
     match state {
         SidebarFixtureState::Empty => {}
@@ -329,6 +330,12 @@ fn provider_panel(
             "  ▘▘ ▝▝".to_owned(),
         ],
         color,
+        color_rgb: Some(match kind {
+            "claude" => (0xd9, 0x77, 0x57),
+            "codex" => (0x2f, 0xb1, 0xd1),
+            "pi" => (0x27, 0xa0, 0x77),
+            _ => (color, color, color),
+        }),
         version: version.map(ToOwned::to_owned),
         plan: plan.map(ToOwned::to_owned),
         metered,
