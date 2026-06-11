@@ -142,7 +142,7 @@ rimz tab --layout 'claude,codex+term' --name "docs review" --no-focus
 rimz tab [--layout <NAME|SPEC>] [--worktree [NAME]] [--name <TITLE>] [--prompt <TEXT>] [--no-focus]
 ```
 
-`--layout` accepts a named `[agents.layouts]` entry or an inline spec. Commas split columns, plus signs stack rows, and cells are agent kinds or `term`; for example, `claude,codex+term` opens one Claude column and one stacked Codex plus shell column. With no layout, Rimz opens one terminal.
+`--layout` accepts a named `[tab.layouts]` entry or an inline spec. Commas split columns, plus signs stack rows, and cells are keywords: `term`, agent kinds, adapter-supported `<kind>-<mode>` variants, or entries from `[tab.keywords]`; for example, `claude,codex+term` opens one Claude column and one stacked Codex plus shell column. With no layout, Rimz opens one terminal.
 
 `--worktree [NAME]` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare flag creates a generated worktree name. `--name` sets the tab or window title, `--prompt` passes text to agent cells, and `--no-focus` leaves focus where it is.
 

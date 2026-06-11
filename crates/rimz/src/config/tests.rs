@@ -1,4 +1,5 @@
 use super::*;
+use crate::run::PermissionMode;
 use std::num::NonZeroU16;
 use tempfile::tempdir;
 
@@ -46,39 +47,64 @@ fn worktree_config_defaults_and_parses() {
 }
 
 #[test]
-fn agents_layouts_parse_shape_and_detailed_entries() {
-    const CODEX_FLAGS: &str = "--model gpt-5-codex -c model_reasoning_effort=high";
+fn tab_keywords_and_layouts_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
-        "[agents.layouts]\n\
-             stacked = \"claude,codex+term\"\n\
-             [agents.layouts.peer]\n\
-             shape = \"claude,codex\"\n\
-             [agents.layouts.peer.flags]\n\
-             claude = \"--permission-mode plan\"\n\
-             codex = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n",
+        "[tab.keywords]\n\
+             vim = \"nvim -p\"\n\
+             [tab.keywords.htop]\n\
+             command = \"htop\"\n\
+             [tab.keywords.codex-yolo]\n\
+             agent = \"codex\"\n\
+             mode = \"yolo\"\n\
+             args = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n\
+             [tab.layouts]\n\
+             stacked = \"claude,codex+vim\"\n",
     ))
     .expect("load");
-    let layouts = &config.agents.layouts.0;
+    let keywords = &config.tab.keywords.0;
     assert_eq!(
-        layouts.get("stacked").map(LayoutEntry::shape),
-        Some("claude,codex+term")
+        keywords.get("vim"),
+        Some(&Keyword::Command("nvim -p".to_owned()))
     );
-    let peer = layouts.get("peer").expect("peer layout");
-    assert_eq!(peer.shape(), "claude,codex");
-    let flags = peer.flags().expect("peer flags");
     assert_eq!(
-        flags.get("claude").map(String::as_str),
-        Some("--permission-mode plan")
+        keywords.get("htop"),
+        Some(&Keyword::CommandTable {
+            command: "htop".to_owned()
+        })
     );
-    assert_eq!(flags.get("codex").map(String::as_str), Some(CODEX_FLAGS));
-    let err = MachineConfig::load_from(&write(
-        &dir,
-        "[agents.layouts.peer]\n[agents.layouts.peer.flags]\ncodex = \"--model x\"\n",
-    ))
-    .unwrap_err();
-    assert!(err.to_string().contains("missing field `shape`"));
+    assert_eq!(
+        keywords.get("codex-yolo"),
+        Some(&Keyword::Agent {
+            agent: "codex".to_owned(),
+            mode: Some(PermissionMode::Yolo),
+            args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
+        })
+    );
+    assert_eq!(
+        config.tab.layouts.0.get("stacked").map(String::as_str),
+        Some("claude,codex+vim")
+    );
+}
+
+#[test]
+fn tab_keyword_tables_reject_mixed_forms() {
+    let dir = tempdir().expect("tempdir");
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[tab.keywords.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
+        ))
+        .is_err()
+    );
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[tab.keywords.missing_agent]\ncommand = \"codex\"\nmode = \"yolo\"\n",
+        ))
+        .is_err()
+    );
 }
 
 #[test]

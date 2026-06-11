@@ -1,5 +1,6 @@
 //! `rimz tab` — open one laid-out tab/window in the current room.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -33,8 +34,15 @@ pub fn run(args: TabArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine_config = super::machine_config();
-    let layout =
-        rimz::tab_layout::resolve_layout(args.layout.as_deref(), &machine_config.agents.layouts)?;
+    let layout = rimz::tab_layout::resolve_layout(
+        args.layout.as_deref(),
+        &machine_config.tab.keywords,
+        &machine_config.tab.layouts,
+    )?;
+    if should_warn_worktree_without_agent(args.worktree.is_some(), args.layout.as_deref(), &layout)
+    {
+        warn_worktree_without_agent()?;
+    }
     let launch = resolve_cwd(
         &workspace,
         &machine_config.worktree,
@@ -129,6 +137,23 @@ fn tab_title_name(cwd: &Path) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+fn warn_worktree_without_agent() -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "warning: --worktree is set but this layout has no agent cell; command panes will not run Rimz-owned worktree cleanup"
+    )?;
+    Ok(())
+}
+
+fn should_warn_worktree_without_agent(
+    has_worktree: bool,
+    layout_arg: Option<&str>,
+    layout: &LayoutSpec,
+) -> bool {
+    has_worktree && layout_arg.is_some_and(|raw| !raw.trim().is_empty()) && !layout.has_agent()
+}
+
 pub(crate) fn layout_panes(
     layout: &LayoutSpec,
     cwd: &Path,
@@ -158,7 +183,10 @@ fn pane_cmd(
     cleanup_worktree: bool,
 ) -> Result<PaneCmd> {
     let argv = match cell {
-        Cell::Term => vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())],
+        Cell::Command { argv } if argv.is_empty() => {
+            vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())]
+        }
+        Cell::Command { argv } => argv.clone(),
         Cell::Agent { kind, args } => {
             let mut argv = vec![
                 rimz_bin.to_string_lossy().into_owned(),
@@ -207,7 +235,10 @@ mod tests {
     fn layout_panes_wraps_agents_and_shells_terms() {
         let layout = LayoutSpec {
             columns: vec![Column {
-                rows: vec![Cell::agent(AgentKind::new_unchecked("codex")), Cell::Term],
+                rows: vec![
+                    Cell::agent(AgentKind::new_unchecked("codex")),
+                    Cell::shell(),
+                ],
             }],
         };
         let panes =
@@ -219,6 +250,34 @@ mod tests {
         assert!(agent.iter().any(|arg| arg == "--worktree-path"));
         assert!(agent.iter().any(|arg| arg == "hi"));
         assert!(!panes.columns[0][1].argv.is_empty());
+    }
+
+    #[test]
+    fn layout_panes_passes_command_cells_verbatim() {
+        let layout = LayoutSpec {
+            columns: vec![Column {
+                rows: vec![Cell::Command {
+                    argv: vec!["nvim".to_owned(), "-p".to_owned()],
+                }],
+            }],
+        };
+        let panes =
+            layout_panes(&layout, Path::new("/repo-wt/a"), Some("hi"), true).expect("panes");
+
+        assert_eq!(panes.columns[0][0].argv, vec!["nvim", "-p"]);
+    }
+
+    #[test]
+    fn layout_panes_resolves_empty_command_to_shell() {
+        let layout = LayoutSpec {
+            columns: vec![Column {
+                rows: vec![Cell::shell()],
+            }],
+        };
+        let panes =
+            layout_panes(&layout, Path::new("/repo-wt/a"), Some("hi"), true).expect("panes");
+
+        assert!(!panes.columns[0][0].argv.is_empty());
     }
 
     #[test]
@@ -254,13 +313,41 @@ mod tests {
     }
 
     #[test]
+    fn worktree_warning_only_applies_to_explicit_agentless_layouts() {
+        let shell = LayoutSpec::single(Cell::shell());
+        let agent = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+
+        assert!(!should_warn_worktree_without_agent(true, None, &shell));
+        assert!(!should_warn_worktree_without_agent(
+            true,
+            Some("  "),
+            &shell
+        ));
+        assert!(!should_warn_worktree_without_agent(
+            false,
+            Some("term"),
+            &shell
+        ));
+        assert!(!should_warn_worktree_without_agent(
+            true,
+            Some("codex"),
+            &agent
+        ));
+        assert!(should_warn_worktree_without_agent(
+            true,
+            Some("term"),
+            &shell
+        ));
+    }
+
+    #[test]
     fn worktree_tab_title_uses_resolved_worktree_name() {
         let layout = LayoutSpec {
             columns: vec![Column {
                 rows: vec![
                     Cell::agent(AgentKind::new_unchecked("claude")),
                     Cell::agent(AgentKind::new_unchecked("codex")),
-                    Cell::Term,
+                    Cell::shell(),
                 ],
             }],
         };

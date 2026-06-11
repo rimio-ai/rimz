@@ -35,15 +35,17 @@ Rimz sidebar panes are chrome: they inherit the tab cwd for launch, and worktree
 
 ## Tab layout IR
 
-`rimz tab --layout` resolves either a named `[agents.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a registered agent kind or `term`. Named layouts may be a table with `shape` plus per-agent `flags`; inline specs are shape-only.
+`rimz tab --layout` resolves either a named `[tab.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a keyword: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` variant such as `claude-auto` or `codex-yolo`, or a `[tab.keywords]` entry.
 
 ```text
 claude,codex+term
+vim,htop+zsh
+claude-auto,codex-yolo
 ```
 
-That example creates two columns: Claude on the left, Codex stacked above a shell on the right. The built-in `peer` layout is `claude,codex`; no layout means one `term` cell.
+The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user keywords. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` layout is `claude,codex`; no layout means one `term` cell.
 
-The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt`, optional `--worktree-path`, and `-- <flags>` when the named layout supplies launch flags for that kind; `term` cells run the user's shell. Backends never resolve agent kinds or worktrees.
+The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt`, optional `--worktree-path`, and `-- <args>` from their keyword; command cells run their raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees.
 
 ## Backend shape
 

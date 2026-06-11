@@ -210,21 +210,27 @@ fn is_known_get_key(path: &[String]) -> bool {
     let joined = path.join(".");
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
-        || matches!(path, [root] if root == "agents")
-        || matches!(path, [root, child] if root == "agents" && child == "layouts")
+        || matches!(path, [root] if root == "tab")
+        || matches!(path, [root, child] if root == "tab" && matches!(child.as_str(), "keywords" | "layouts"))
         || matches!(path, [root, child] if root == "sidebar" && child == "providers")
         || matches!(path, [root, child, _] if root == "sidebar" && child == "providers")
 }
 
 fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
-    exact_set_keys().contains(&joined) || is_agent_layout_key(path) || is_provider_style_key(path)
+    exact_set_keys().contains(&joined) || is_tab_key(path) || is_provider_style_key(path)
 }
 
-fn is_agent_layout_key(path: &[String]) -> bool {
-    matches!(path, [root, child, _] if root == "agents" && child == "layouts")
-        || matches!(path, [root, child, _, leaf] if root == "agents" && child == "layouts" && leaf == "shape")
-        || matches!(path, [root, child, _, branch, _] if root == "agents" && child == "layouts" && branch == "flags")
+fn is_tab_key(path: &[String]) -> bool {
+    matches!(path, [root, child, _] if root == "tab" && child == "layouts")
+        || matches!(path, [root, child, _] if root == "tab" && child == "keywords")
+        || matches!(
+            path,
+            [root, child, _, leaf]
+                if root == "tab"
+                    && child == "keywords"
+                    && matches!(leaf.as_str(), "command" | "agent" | "mode" | "args")
+        )
 }
 
 fn is_provider_style_key(path: &[String]) -> bool {
@@ -357,13 +363,17 @@ mod tests {
     fn validates_static_and_dynamic_keys() {
         validate_set_key(&parse_key("sidebar.max_cols").unwrap()).unwrap();
         validate_set_key(&parse_key("sidebar.budget.pace.red").unwrap()).unwrap();
-        validate_set_key(&parse_key("agents.layouts.review").unwrap()).unwrap();
-        validate_set_key(&parse_key("agents.layouts.peer.shape").unwrap()).unwrap();
-        validate_set_key(&parse_key("agents.layouts.peer.flags.codex").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.layouts.review").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.keywords.vim").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.keywords.codex-yolo.agent").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.keywords.codex-yolo.mode").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.keywords.codex-yolo.args").unwrap()).unwrap();
+        validate_set_key(&parse_key("tab.keywords.htop.command").unwrap()).unwrap();
         validate_set_key(&parse_key("sidebar.providers.claude.color").unwrap()).unwrap();
 
         assert!(validate_set_key(&parse_key("sidebar.nope").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("agents.layouts.peer.flags").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("tab.layouts.peer.shape").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("tab.keywords.codex-yolo.flags").unwrap()).is_err());
         assert!(validate_set_key(&parse_key("sidebar.providers.claude.nope").unwrap()).is_err());
     }
 

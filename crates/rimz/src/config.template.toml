@@ -9,16 +9,29 @@
 # dir = "../{repo}-worktrees"          # where Rimz-owned Git worktrees live; {repo} is the root basename
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 
-[agents.layouts]
-# A layout is a shape string (commas split columns, + stacks rows; cells are
-# agent kinds or `term`) or a table with `shape` plus a `flags` map of per-agent
-# launch flags. `peer` (claude,codex) is built in; redefine it to add flags.
-## stacked = "claude,codex+term"
-## [agents.layouts.peer]
-## shape = "claude,codex"
-## [agents.layouts.peer.flags]
-## claude = "--permission-mode plan"
-## codex = "--model gpt-5-codex -c model_reasoning_effort=high"
+[tab]
+# `rimz tab --layout` cells are keywords. Built-ins include `term`, agent kinds,
+# and adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
+# `codex-yolo`; user keywords below override built-ins. `peer` (claude,codex) is
+# a built-in layout.
+
+[tab.keywords]
+# Bare strings are shell-split raw commands. Agent keyword tables use `agent`
+# plus optional `mode` ("auto", "ask", "yolo") and extra shell-split `args`.
+## vim = "nvim -p"
+## htop = "htop"
+## [tab.keywords.claude-plan]
+## agent = "claude"
+## args = "--permission-mode plan"
+## [tab.keywords.codex-yolo]
+## agent = "codex"
+## mode = "yolo"
+## args = "--model gpt-5-codex -c model_reasoning_effort=high"
+
+[tab.layouts]
+# Layouts are shape strings that compose keywords with `,` columns and `+` rows.
+## review = "claude-plan,codex+vim"
+## debug = "pi,htop+term"
 
 [remote_control]
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab

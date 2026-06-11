@@ -2008,7 +2008,9 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let required = [
         "[worktree]",
-        "[agents.layouts]",
+        "[tab]",
+        "[tab.keywords]",
+        "[tab.layouts]",
         "[remote_control]",
         "[notifications]",
         "[sidebar]",

@@ -15,15 +15,14 @@ use serde::{Deserialize, Serialize};
 
 use crate::ledger::paths::config_home;
 
-mod agents;
 mod mux;
 mod notifications;
 mod remote_control;
 mod resume;
 mod sidebar;
+mod tab;
 mod worktree;
 
-pub use agents::{AgentsConfig, LayoutEntry, LayoutsConfig};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
@@ -38,6 +37,7 @@ pub use sidebar::{
     ContextSeverityConfig, GlowMode, ProviderTabsMode, ScrollbarMode, SidebarConfig,
     SidebarProviderStyle, SidebarThemeConfig,
 };
+pub use tab::{Keyword, KeywordsConfig, LayoutsConfig, TabConfig};
 pub use worktree::{WorktreeBase, WorktreeConfig};
 
 const CONFIG_FILE: &str = "config.toml";
@@ -69,7 +69,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 #[serde(default)]
 pub struct MachineConfig {
     pub worktree: WorktreeConfig,
-    pub agents: AgentsConfig,
+    pub tab: TabConfig,
     pub remote_control: RemoteControlConfig,
     pub notifications: NotificationsPrefs,
     pub sidebar: SidebarConfig,

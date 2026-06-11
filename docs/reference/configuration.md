@@ -21,7 +21,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, tab keywords and layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -36,7 +36,7 @@ Eight sections make up the per-machine file:
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[agents.layouts]` | named tab layouts and per-agent launch flags for `rimz tab --layout` |
+| `[tab]` | tab keywords and named tab layouts for `rimz tab --layout` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
 | `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, glow, and display bands |
@@ -104,21 +104,30 @@ base = "fresh"
 
 `rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Cleanup state lives in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
 
-### Agent Tab Layouts
+### Tab Keywords And Layouts
 
 ```toml
-[agents.layouts]
-stacked = "claude,codex+term"
+[tab.keywords]
+vim = "nvim -p"
+htop = "htop"
 
-[agents.layouts.peer]
-shape = "claude,codex"
+[tab.keywords.claude-plan]
+agent = "claude"
+args = "--permission-mode plan"
 
-[agents.layouts.peer.flags]
-claude = "--permission-mode plan"
-codex = "--model gpt-5-codex -c model_reasoning_effort=high"
+[tab.keywords.codex-yolo]
+agent = "codex"
+mode = "yolo"
+args = "--model gpt-5-codex -c model_reasoning_effort=high"
+
+[tab.layouts]
+review = "claude-plan,codex-yolo+vim"
+debug = "pi,htop+term"
 ```
 
-Named layouts feed `rimz tab --layout <name>`. A layout is either a shape string or a table with `shape` plus `flags`. Shape strings use commas for columns, plus signs for stacked rows in a column, and registered agent kinds or `term` as cells. The built-in `peer = "claude,codex"` exists even when unset; defining `[agents.layouts.peer]` overrides the built-in for this machine, usually to attach flags. Layout names `term` and registered agent kinds are reserved for inline single-cell specs. Flags are shell-split, passed as direct argv to that agent kind, and apply to every matching cell when a shape repeats a kind. Inline CLI specs such as `rimz tab --layout "claude,codex+term"` stay shape-only.
+Named layouts feed `rimz tab --layout <name>`, and inline specs such as `rimz tab --layout "claude,codex+term"` use the same cell resolver. A layout is a shape string: commas split columns, plus signs stack rows in a column, and each cell is a keyword. Keywords resolve in this order: user entries in `[tab.keywords]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` agent variants such as `claude-auto`, `codex-ask`, or `codex-yolo`. Non-`ask` virtual modes exist only when that adapter contributes permission argv for the posture. The built-in `peer = "claude,codex"` exists even when unset, and `[tab.layouts.peer]` overrides it for this machine. Layout names that collide with a keyword, `term`, an agent kind, or a virtual mode name are reserved for inline single-cell specs.
+
+A bare keyword string is shell-split as a raw command pane. A keyword table with `agent = "<kind>"` opens an agent cell; `mode = "auto" | "ask" | "yolo"` adds that adapter's permission argv first, then `args` is shell-split and appended. Launch posture and model flags live on keywords, so a named layout composes variants like `claude-plan` or `codex-yolo` directly.
 
 ### Sidebar Bands
 

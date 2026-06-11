@@ -1,6 +1,7 @@
 //! Supervised interactive-agent runs.
 
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -20,6 +21,21 @@ pub enum PermissionMode {
     Auto,
     Ask,
     Yolo,
+}
+
+impl FromStr for PermissionMode {
+    type Err = String;
+
+    fn from_str(raw: &str) -> std::result::Result<Self, Self::Err> {
+        match raw {
+            "auto" => Ok(Self::Auto),
+            "ask" => Ok(Self::Ask),
+            "yolo" => Ok(Self::Yolo),
+            _ => Err(format!(
+                "unknown permission mode `{raw}`; expected auto, ask, or yolo"
+            )),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
