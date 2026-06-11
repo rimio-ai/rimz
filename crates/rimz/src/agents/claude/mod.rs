@@ -20,6 +20,7 @@
 pub(crate) mod account;
 mod install;
 pub(crate) mod payloads;
+pub(crate) mod remote_control;
 pub(crate) mod spend;
 mod statusline;
 mod subagent_statusline;
@@ -46,10 +47,12 @@ use self::payloads::{
     parse_session_start, parse_stop, parse_stop_failure, parse_subagent_start, parse_subagent_stop,
     parse_user_prompt_submit,
 };
+use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::LifecycleSignal;
@@ -101,6 +104,10 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // rebinds a live pane after a mux rebirth clears the stamp.
         registers_lazily: false,
         hook_install: true,
+        remote_control: RemoteControlCapability {
+            pane_sessions: true,
+            background_sessions: true,
+        },
     },
     default_context_window: None,
     default_model: None,
@@ -277,7 +284,7 @@ impl AgentAdapter for ClaudeAdapter {
         // Claude Code ≥2.1.173 opens its agents dashboard by default; the
         // Rimz pane contract (hooks, transcript tail, steer/queue sends)
         // drives the classic interactive REPL.
-        vec![("CLAUDE_CODE_DISABLE_AGENT_VIEW", "1")]
+        vec![(remote_control::DISABLE_AGENT_VIEW_ENV, "1")]
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
@@ -615,6 +622,13 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn remote_control_status(&self) -> RemoteControlStatus {
+        let (_, settings) = remote_control::read_rc_settings();
+        RemoteControlStatus {
+            pane_auto: remote_control::pane_auto_enabled(&settings),
+        }
     }
 
     fn transcript_files(&self) -> Vec<PathBuf> {

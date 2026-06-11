@@ -60,7 +60,8 @@ use self::transcript::{
 };
 use super::context::AgentContext;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
@@ -125,6 +126,10 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // an idle agent.
         registers_lazily: true,
         hook_install: true,
+        remote_control: RemoteControlCapability {
+            pane_sessions: true,
+            background_sessions: true,
+        },
     },
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     default_model: Some(DEFAULT_MODEL),

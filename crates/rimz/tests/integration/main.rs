@@ -30,6 +30,7 @@ mod reset;
 mod resolver;
 mod run;
 mod sidebar_launch;
+mod sidebar_snapshot;
 mod start;
 mod transcript_watch;
 mod trust;

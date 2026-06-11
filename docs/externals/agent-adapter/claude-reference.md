@@ -16,6 +16,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Statusline (full JSON schema, `subagentStatusLine`) | <https://code.claude.com/docs/en/statusline> |
 | Subagents | <https://code.claude.com/docs/en/sub-agents> |
 | Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
+| Remote Control (`remote-control`, `--remote-control`, `/remote-control`, version floor, settings) | <https://code.claude.com/docs/en/remote-control> |
 | Transcript JSONL | no official schema published — see [Transcript JSONL](#transcript-jsonl) below |
 
 ## Hooks
@@ -282,6 +283,16 @@ Rimz wraps this command like the session `statusLine` and harvests each task's `
 A bare `claude` launch (≥ 2.1.173) opens the agents dashboard — a background-session supervisor, not the interactive REPL. The `disableAgentView` settings key turns the surface off (`claude agents`, `--bg`, `/background`, and the on-demand supervisor), and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` is its documented environment equivalent (settings page above).
 
 Rimz pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, steer/queue sends — drives the classic REPL, and multi-agent supervision is Rimz's own job.
+
+## Remote control
+
+Claude Code's remote-control host is `claude remote-control --spawn worktree`. Rimz launches it in the `rimzd` view when `[remote_control] claude = true`, from the project root so each on-demand session is cut from the canonical repo. The host path explicitly unsets `CLAUDE_CODE_DISABLE_AGENT_VIEW`, because Claude Code ≥ 2.1.173 hosts remote control through the agent-view supervisor while ordinary Rimz pane sessions still need the classic REPL.
+
+Version gates Rimz enforces: remote control exists at Claude Code ≥ 2.1.51; it is on by default at ≥ 2.1.128 unless `disableRemoteControl: true` is set; API-key auth disables remote control at ≥ 2.1.157 when `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, `apiKeyHelper`, or matching keys in settings `env` are active; `disableAgentView: true` disables the host at ≥ 2.1.173. An unknown `claude --version` applies only the version-independent `disableRemoteControl` gate and warns rather than guessing.
+
+`remoteControlAtStartup: true` auto-enables remote control for ordinary Claude pane sessions. Rimz reads that setting to light the provider dashboard's `⇅ rc` flag even when the Rimz daemon-host toggle is off; `disableRemoteControl: true` suppresses the auto flag. `$CLAUDE_CODE_REMOTE` marks remote web sessions, not local host readiness.
+
+Rimz's remote-control preflight and badge read the user-level Claude `settings.json`, or the file named by `RIMZ_CLAUDE_SETTINGS` in tests and controlled environments. Claude Code also folds managed, local, and project settings; Rimz currently treats those tiers as upstream runtime policy and leaves their merge to Claude Code.
 
 ## Auth surface
 

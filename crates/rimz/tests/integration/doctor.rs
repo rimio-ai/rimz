@@ -9,6 +9,8 @@ use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
 
 use crate::common::Env;
+use std::os::unix::fs::PermissionsExt;
+use std::path::{Path, PathBuf};
 
 fn inject_lifecycle(
     env: &Env,
@@ -201,6 +203,69 @@ fn trust_codex_hooks(env: &Env) {
         ));
     }
     std::fs::write(&config, text).expect("write trust state");
+}
+
+fn write_machine_config(env: &Env, text: &str) -> PathBuf {
+    let dir = env.config_root().join("rimz");
+    std::fs::create_dir_all(&dir).expect("mkdir config");
+    let path = dir.join("config.toml");
+    std::fs::write(&path, text).expect("write machine config");
+    path
+}
+
+fn write_claude_settings(env: &Env, text: &str) -> PathBuf {
+    let path = env.home_root.join("claude-settings.json");
+    std::fs::write(&path, text).expect("write claude settings");
+    path
+}
+
+fn stub_claude_version(env: &Env, version: &str) -> PathBuf {
+    let dir = env.home_root.join("bin");
+    std::fs::create_dir_all(&dir).expect("mkdir bin");
+    let path = dir.join("claude");
+    std::fs::write(
+        &path,
+        format!(
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo '{version}'; exit 0; fi\nexit 1\n"
+        ),
+    )
+    .expect("write claude stub");
+    let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&path, perms).expect("chmod claude stub");
+    dir
+}
+
+fn path_with_stub_first(stub_dir: &Path) -> String {
+    let current = std::env::var_os("PATH").unwrap_or_default();
+    format!("{}:{}", stub_dir.display(), current.to_string_lossy())
+}
+
+#[test]
+fn doctor_reports_remote_control_preflight_refusals() {
+    let env = Env::new();
+    write_machine_config(&env, "[remote_control]\nclaude = true\ncodex = true\n");
+    let settings = write_claude_settings(&env, r#"{ "disableRemoteControl": true }"#);
+    let stub_dir = stub_claude_version(&env, "2.1.173 (Claude Code)");
+    let codex_home = env.home_root.join("codex-home");
+
+    let output = env
+        .rimz()
+        .arg("doctor")
+        .env("PATH", path_with_stub_first(&stub_dir))
+        .env("CODEX_HOME", &codex_home)
+        .env("RIMZ_CLAUDE_SETTINGS", &settings)
+        .output()
+        .expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(stdout.contains("remote control: claude enabled, blocked"));
+    assert!(stdout.contains("codex enabled, standalone install missing"));
+    assert!(stdout.contains("`disableRemoteControl: true`"));
+    assert!(stdout.contains("managed standalone Codex install is missing"));
+    assert!(stdout.contains("[remote_control] claude = false"));
+    assert!(stdout.contains("[remote_control] codex = false"));
 }
 
 #[test]

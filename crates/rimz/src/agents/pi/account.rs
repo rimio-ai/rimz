@@ -14,11 +14,9 @@
 //!
 //! [docs/internals/adapter/pi-reference.md]: ../../../../../docs/internals/adapter/pi-reference.md
 
+use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::Path;
-use std::process::{Command, Stdio};
-
-use serde::Deserialize;
 
 use super::spend::{pi_config_dir, pi_session_files};
 use crate::agents::account::AccountProbe;
@@ -151,24 +149,6 @@ fn provider_of_line(line: &str) -> Option<String> {
         .message?
         .provider
         .filter(|provider| !provider.is_empty())
-}
-
-/// `pi --version` — the binary version surface (Pi ships no statusline or
-/// app-server to read it from). Captured stdio, never inherited; any failure is
-/// a `None` version, not account truth.
-pub(crate) fn version() -> Option<String> {
-    let output = Command::new("pi")
-        .arg("--version")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .output()
-        .ok()?;
-    if !output.status.success() {
-        return None;
-    }
-    let version = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    (!version.is_empty()).then_some(version)
 }
 
 #[cfg(test)]

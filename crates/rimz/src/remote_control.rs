@@ -25,12 +25,17 @@
 //! fixed path, so a `codex` merely on PATH (a different binary) is not enough.
 //! When the `codex` toggle is on but that install is absent, [`preflight`]
 //! refuses the start with the fix — fail-fast, rather than ensuring a daemon
-//! that only prints an install error.
+//! that only prints an install error. Claude has version- and settings-gated
+//! preconditions too: old binaries lack remote control, `disableRemoteControl`
+//! blocks the surface, newer agent-view settings can kill the host, and API-key
+//! auth disables remote control on affected releases.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+use crate::agents::claude::remote_control as claude_rc;
 use crate::agents::codex::app_server::codex_home;
+use crate::agents::version::CliVersion;
 use crate::config::RemoteControlConfig;
 use crate::feed::{ElevatedAgent, PaneRef};
 use crate::ids::AgentKind;
@@ -65,6 +70,21 @@ pub fn claude_command() -> Vec<String> {
         "--spawn".to_owned(),
         "worktree".to_owned(),
     ]
+}
+
+/// The daemon-host Claude argv. Pane launches deliberately set
+/// [`claude_rc::DISABLE_AGENT_VIEW_ENV`] so a plain `claude` opens the classic
+/// REPL, but the remote-control host needs the agent-view supervisor on newer
+/// Claude Code builds. `env -u` unsets only that key while preserving the rest
+/// of the inherited environment.
+pub fn claude_host_argv() -> Vec<String> {
+    let mut argv = vec![
+        "env".to_owned(),
+        "-u".to_owned(),
+        claude_rc::DISABLE_AGENT_VIEW_ENV.to_owned(),
+    ];
+    argv.extend(claude_command());
+    argv
 }
 
 /// The Codex remote-control argv (program first), invoked through `bin` — the
@@ -161,6 +181,46 @@ pub enum PreflightError {
     /// `[remote_control] codex = true` but the managed standalone install is
     /// absent. The `Display` carries the full, user-facing fix.
     CodexStandaloneMissing,
+    /// `[remote_control] claude = true` but the installed Claude Code version is
+    /// older than remote-control support.
+    ClaudeTooOld { found: CliVersion },
+    /// Claude's own settings explicitly disable remote control.
+    ClaudeRemoteControlDisabled { settings_path: PathBuf },
+    /// Newer Claude Code hosts remote control through the agent-view surface,
+    /// and that surface is disabled in settings.
+    ClaudeAgentViewDisabled {
+        settings_path: PathBuf,
+        found: CliVersion,
+    },
+    /// Claude Code disables remote control when API-key auth is active on
+    /// affected versions.
+    ClaudeAuthConflict {
+        sources: Vec<ClaudeAuthConflictSource>,
+    },
+}
+
+/// A configured auth source that disables Claude remote control on affected
+/// Claude Code versions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClaudeAuthConflictSource {
+    ApiKeyEnv,
+    AuthTokenEnv,
+    ApiKeyHelperSetting,
+    SettingsEnv,
+}
+
+impl std::fmt::Display for ClaudeAuthConflictSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ApiKeyEnv => write!(f, "ANTHROPIC_API_KEY in the launch environment"),
+            Self::AuthTokenEnv => write!(f, "ANTHROPIC_AUTH_TOKEN in the launch environment"),
+            Self::ApiKeyHelperSetting => write!(f, "apiKeyHelper in Claude settings"),
+            Self::SettingsEnv => write!(
+                f,
+                "ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN in Claude settings env"
+            ),
+        }
+    }
 }
 
 impl std::fmt::Display for PreflightError {
@@ -176,6 +236,49 @@ impl std::fmt::Display for PreflightError {
                  Install it with:\n    {CODEX_INSTALL_COMMAND}\n\n\
                  then re-run, or set `[remote_control] codex = false` to disable the Codex host."
             ),
+            Self::ClaudeTooOld { found } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `claude --version` reports {found}; remote control requires Claude Code \
+                 >= {}.\n\n\
+                 Upgrade Claude Code, then re-run, or set `[remote_control] claude = false` \
+                 to disable the Claude host.",
+                claude_rc::MIN_REMOTE_CONTROL,
+            ),
+            Self::ClaudeRemoteControlDisabled { settings_path } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `disableRemoteControl: true` in {} blocks it.\n\n\
+                 Remove that setting or set it to false, then re-run, or set \
+                 `[remote_control] claude = false` to disable the Claude host.",
+                settings_path.display(),
+            ),
+            Self::ClaudeAgentViewDisabled {
+                settings_path,
+                found,
+            } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 `disableAgentView: true` in {} blocks the remote-control host on Claude \
+                 Code {found}.\n\n\
+                 Remove that setting or set it to false, then re-run, or set \
+                 `[remote_control] claude = false` to disable the Claude host.",
+                settings_path.display(),
+            ),
+            Self::ClaudeAuthConflict { sources } => write!(
+                f,
+                "Claude remote-control is enabled (`[remote_control] claude = true`) but \
+                 Claude Code disables remote control when API-key auth is active on this \
+                 version. Conflicting source(s): {}.\n\n\
+                 Remove those auth sources and use a claude.ai login for remote control, \
+                 then re-run, or set `[remote_control] claude = false` to disable the \
+                 Claude host.",
+                sources
+                    .iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
         }
     }
 }
@@ -185,11 +288,44 @@ impl std::error::Error for PreflightError {}
 /// Refuse `rimz start` when a configured remote-control host cannot possibly
 /// start, so the user gets the fix instead of a workspace built around a host
 /// that only errors. Codex's `remote-control start` requires the managed
-/// standalone install ([`codex_standalone_bin`]); when `codex` is enabled that
-/// install must exist. Claude has no such precondition — a missing `claude` is
-/// skipped at launch (best-effort), so it never blocks a start.
+/// standalone install ([`codex_standalone_bin`]); Claude's host is version- and
+/// settings-gated when the `claude` binary is present. A missing `claude` is
+/// still skipped at launch (best-effort), so it never blocks a start.
 pub fn preflight(config: &RemoteControlConfig) -> Result<(), PreflightError> {
+    preflight_codex(config)?;
+    preflight_claude(config)
+}
+
+/// Check only the configured Codex remote-control daemon precondition.
+/// `rimz doctor` uses this beside [`preflight_claude`] so it can report every
+/// configured host failure instead of only the first one.
+pub fn preflight_codex(config: &RemoteControlConfig) -> Result<(), PreflightError> {
     preflight_decision(config.codex, codex_standalone_bin().is_some())
+}
+
+/// Check only the configured Claude remote-control host preconditions. `rimz
+/// doctor` uses this to report Claude readiness beside Codex readiness while
+/// `preflight` keeps the single fail-fast entry point for `rimz start`.
+pub fn preflight_claude(config: &RemoteControlConfig) -> Result<(), PreflightError> {
+    if !config.claude {
+        return Ok(());
+    }
+    if which::which("claude").is_err() {
+        return Ok(());
+    }
+    let (settings_path, settings) = claude_rc::read_rc_settings();
+    let version = (!settings.disable_remote_control)
+        .then(claude_rc::probed_version)
+        .flatten();
+    claude_preflight_decision(
+        config.claude,
+        true,
+        version,
+        settings_path,
+        settings,
+        env_var_present("ANTHROPIC_API_KEY"),
+        env_var_present("ANTHROPIC_AUTH_TOKEN"),
+    )
 }
 
 /// The pure preflight decision, split from [`preflight`] so the full matrix is
@@ -202,6 +338,63 @@ fn preflight_decision(
         return Err(PreflightError::CodexStandaloneMissing);
     }
     Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn claude_preflight_decision(
+    claude_enabled: bool,
+    claude_present: bool,
+    version: Option<CliVersion>,
+    settings_path: PathBuf,
+    settings: claude_rc::ClaudeRcSettings,
+    env_api_key: bool,
+    env_auth_token: bool,
+) -> Result<(), PreflightError> {
+    if !claude_enabled || !claude_present {
+        return Ok(());
+    }
+    if settings.disable_remote_control {
+        return Err(PreflightError::ClaudeRemoteControlDisabled { settings_path });
+    }
+
+    let Some(found) = version else {
+        tracing::warn!(
+            "Claude remote-control preflight could not determine `claude --version`; applying version-independent gates only"
+        );
+        return Ok(());
+    };
+    if found < claude_rc::MIN_REMOTE_CONTROL {
+        return Err(PreflightError::ClaudeTooOld { found });
+    }
+    if found >= claude_rc::AGENT_VIEW_HOSTS_RC_SINCE && settings.disable_agent_view {
+        return Err(PreflightError::ClaudeAgentViewDisabled {
+            settings_path,
+            found,
+        });
+    }
+
+    let mut sources = Vec::new();
+    if env_api_key {
+        sources.push(ClaudeAuthConflictSource::ApiKeyEnv);
+    }
+    if env_auth_token {
+        sources.push(ClaudeAuthConflictSource::AuthTokenEnv);
+    }
+    if settings.api_key_helper {
+        sources.push(ClaudeAuthConflictSource::ApiKeyHelperSetting);
+    }
+    if settings.env_auth_conflict {
+        sources.push(ClaudeAuthConflictSource::SettingsEnv);
+    }
+    if found >= claude_rc::AUTH_ENV_BLOCKS_RC_SINCE && !sources.is_empty() {
+        return Err(PreflightError::ClaudeAuthConflict { sources });
+    }
+
+    Ok(())
+}
+
+fn env_var_present(key: &str) -> bool {
+    std::env::var_os(key).is_some_and(|value| !value.is_empty())
 }
 
 /// Whether `pane` hosts a managed daemon — the Claude remote-control host or the
@@ -446,370 +639,4 @@ fn is_codex_cli_cmdline(cmdline: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ids::{MuxName, PaneId};
-    use std::collections::BTreeMap;
-
-    fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
-            session_name: "rimz-demo".to_owned(),
-            view_id: None,
-            view_kind: None,
-            view_name: view_name.map(ToOwned::to_owned),
-            is_focused: false,
-            command: command.map(ToOwned::to_owned),
-            spawn_command: None,
-            cwd: None,
-            pane_pid: None,
-            pane_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        }
-    }
-
-    #[test]
-    fn claude_command_uses_worktree_spawn() {
-        assert_eq!(
-            claude_command(),
-            vec!["claude", "remote-control", "--spawn", "worktree"],
-        );
-    }
-
-    #[test]
-    fn codex_command_runs_the_standalone_bin() {
-        let bin = Path::new("/home/u/.codex/packages/standalone/current/codex");
-        assert_eq!(
-            codex_command(bin),
-            vec![
-                "/home/u/.codex/packages/standalone/current/codex",
-                "remote-control",
-                "start",
-            ],
-        );
-    }
-
-    #[test]
-    fn standalone_bin_resolves_only_when_the_install_exists() {
-        let home = tempfile::tempdir().expect("tempdir");
-        // Absent install → no host: `remote-control start` would only error.
-        assert!(standalone_bin_under(home.path()).is_none());
-
-        let bin = home
-            .path()
-            .join("packages")
-            .join("standalone")
-            .join("current")
-            .join("codex");
-        std::fs::create_dir_all(bin.parent().expect("parent")).expect("mkdir");
-        std::fs::write(&bin, b"#!/bin/sh\n").expect("write");
-        assert_eq!(standalone_bin_under(home.path()), Some(bin));
-    }
-
-    #[test]
-    fn preflight_blocks_only_codex_without_its_standalone() {
-        // codex off → never blocks, install present or not.
-        assert!(preflight_decision(false, false).is_ok());
-        assert!(preflight_decision(false, true).is_ok());
-        // codex on → blocks iff the standalone install is absent.
-        assert_eq!(
-            preflight_decision(true, false),
-            Err(PreflightError::CodexStandaloneMissing),
-        );
-        assert!(preflight_decision(true, true).is_ok());
-    }
-
-    #[test]
-    fn preflight_error_carries_the_official_install_command() {
-        let msg = PreflightError::CodexStandaloneMissing.to_string();
-        assert!(
-            msg.contains(CODEX_INSTALL_COMMAND),
-            "guidance names the installer"
-        );
-        assert!(
-            msg.contains("[remote_control] codex"),
-            "guidance names the toggle"
-        );
-    }
-
-    #[test]
-    fn ensure_codex_daemon_requires_toggle_and_standalone() {
-        // codex off → never ensure, install present or not.
-        assert!(!should_ensure_codex_daemon(false, false));
-        assert!(!should_ensure_codex_daemon(false, true));
-        // codex on → ensure iff the managed standalone install is present.
-        assert!(!should_ensure_codex_daemon(true, false));
-        assert!(should_ensure_codex_daemon(true, true));
-    }
-
-    #[test]
-    fn detects_both_hosts_by_full_command_line() {
-        // Zellij reports the full command line. Claude spells the subcommand
-        // `remote-control`; the broker spells `app-server`.
-        assert!(pane_is_host(&pane(
-            Some("claude remote-control --spawn worktree"),
-            None,
-        )));
-        assert!(pane_is_host(&pane(
-            Some("rimz codex app-server serve --workspace-id w"),
-            None,
-        )));
-    }
-
-    #[test]
-    fn detects_hosts_by_spawn_command() {
-        let host = PaneRef {
-            command: Some("claude".to_owned()),
-            spawn_command: Some("claude remote-control --spawn worktree".to_owned()),
-            ..pane(Some("claude"), None)
-        };
-
-        assert!(pane_is_host(&host));
-    }
-
-    #[test]
-    fn detects_host_by_view_name_when_command_is_a_bare_basename() {
-        // tmux reports only the basename, but the window carries the view name,
-        // so any pane in the rimzd view is a host regardless of its command.
-        assert!(pane_is_host(&pane(Some("claude"), Some(VIEW_NAME))));
-        assert!(pane_is_host(&pane(Some("rimz"), Some(VIEW_NAME))));
-    }
-
-    #[test]
-    fn a_plain_agent_is_not_the_host() {
-        // A real coding session: bare basename, no rimzd view. A plain `codex`
-        // agent pane must never be classified as a host.
-        assert!(!pane_is_host(&pane(Some("claude"), Some("2"))));
-        assert!(!pane_is_host(&pane(Some("codex"), Some("3"))));
-        assert!(!pane_is_host(&pane(Some("zsh"), None)));
-    }
-
-    #[test]
-    fn elevation_wrapper_gate_reads_the_entrypoint() {
-        assert!(command_starts_with_elevation_wrapper("sudo su"));
-        assert!(command_starts_with_elevation_wrapper(
-            "/usr/bin/doas claude"
-        ));
-        assert!(command_starts_with_elevation_wrapper("su -"));
-        assert!(!command_starts_with_elevation_wrapper("claude"));
-        assert!(!command_starts_with_elevation_wrapper("zsh"));
-    }
-
-    #[test]
-    fn elevated_agent_scan_detects_foreign_uid_descendant_past_sudo_su() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 0, "-bash", &[22]),
-            ProcNode::new(
-                22,
-                0,
-                "node /opt/node_modules/@anthropic-ai/claude-code/cli.js",
-                &[],
-            )
-            .with_comm("node"),
-        ]);
-
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
-    }
-
-    #[test]
-    fn elevated_agent_scan_can_fall_back_to_precise_comm() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 0, "-bash", &[22]),
-            ProcNode::new(22, 0, "", &[]).with_comm("claude"),
-        ]);
-
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
-    }
-
-    #[test]
-    fn elevated_agent_scan_detects_direct_sudo_agent() {
-        let fixture = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 0, "sudo -u root claude", &[]),
-        ]);
-
-        let elevated = fixture.elevated_agent(10, 1_000).expect("foreign agent");
-
-        assert_eq!(elevated.kind.as_str(), "claude");
-        assert_eq!(elevated.uid, 0);
-    }
-
-    #[test]
-    fn elevated_agent_scan_ignores_same_uid_and_non_wrapper_paths() {
-        let same_uid = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 1_000, "sudo su", &[21]),
-            ProcNode::new(21, 1_000, "claude", &[]),
-        ]);
-        assert_eq!(same_uid.elevated_agent(10, 1_000), None);
-
-        let no_wrapper = ProcFixture::new([
-            ProcNode::new(10, 1_000, "zsh", &[20]),
-            ProcNode::new(20, 0, "claude", &[]),
-        ]);
-        assert_eq!(no_wrapper.elevated_agent(10, 1_000), None);
-    }
-
-    #[test]
-    fn codex_daemon_cmdline_matches_the_app_server_surface() {
-        // The per-user daemon runs the codex binary on its daemon surface.
-        assert!(is_codex_daemon_cmdline(
-            "/home/u/.codex/packages/standalone/current/codex app-server"
-        ));
-        assert!(is_codex_daemon_cmdline("codex remote-control start"));
-    }
-
-    #[test]
-    fn codex_daemon_cmdline_rejects_a_plain_session_or_other_server() {
-        // A plain in-pane codex TUI is a standalone session, not the daemon —
-        // process liveness reaps it, so it must not join the daemon set.
-        assert!(!is_codex_daemon_cmdline("codex"));
-        assert!(!is_codex_daemon_cmdline("codex --model gpt-5.5"));
-        // A non-codex server that merely spells a marker is not the codex daemon.
-        assert!(!is_codex_daemon_cmdline("some-other app-server"));
-    }
-
-    #[test]
-    fn codex_cli_cmdline_matches_bare_cli_not_daemon() {
-        // The in-pane TUI a user launches, including the npm `node` wrapper.
-        assert!(is_codex_cli_cmdline("codex"));
-        assert!(is_codex_cli_cmdline("codex --model gpt-5.5"));
-        assert!(is_codex_cli_cmdline("node /usr/bin/codex"));
-        // The daemon, the remote-control host, and Rimz's broker all spell a
-        // daemon surface, so none reads as the in-pane CLI.
-        assert!(!is_codex_cli_cmdline("codex app-server"));
-        assert!(!is_codex_cli_cmdline("codex remote-control start"));
-        assert!(!is_codex_cli_cmdline(
-            "rimz codex app-server serve --workspace-id w"
-        ));
-        // A non-codex process is never the codex CLI.
-        assert!(!is_codex_cli_cmdline("zsh"));
-    }
-
-    #[test]
-    fn codex_resume_cmdline_yields_session_id() {
-        assert_eq!(
-            codex_resumed_session_id_from_cmdline("codex resume 019ea276").as_deref(),
-            Some("019ea276")
-        );
-        assert_eq!(
-            codex_resumed_session_id_from_cmdline("node /usr/bin/codex resume sess-2").as_deref(),
-            Some("sess-2")
-        );
-        assert_eq!(
-            codex_resumed_session_id_from_cmdline("codex --model gpt-5 resume sess"),
-            None
-        );
-        assert_eq!(
-            codex_resumed_session_id_from_cmdline("codex app-server resume sess"),
-            None
-        );
-    }
-
-    #[test]
-    fn codex_resume_root_yields_session_id_from_root_or_single_child() {
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| (pid == 200).then_some("codex resume root-sess".to_owned()),
-                &|_| Vec::new(),
-            )
-            .as_deref(),
-            Some("root-sess")
-        );
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| match pid {
-                    200 => Some("zsh".to_owned()),
-                    300 => Some("codex resume child-sess".to_owned()),
-                    _ => None,
-                },
-                &|pid| (pid == 200).then_some(vec![300]).unwrap_or_default(),
-            )
-            .as_deref(),
-            Some("child-sess")
-        );
-        assert_eq!(
-            codex_resumed_session_id_for_root_with(
-                200,
-                &|pid| match pid {
-                    300 => Some("codex resume child-a".to_owned()),
-                    301 => Some("codex resume child-b".to_owned()),
-                    _ => Some("zsh".to_owned()),
-                },
-                &|pid| (pid == 200).then_some(vec![300, 301]).unwrap_or_default(),
-            ),
-            None
-        );
-    }
-
-    struct ProcNode {
-        pid: u32,
-        uid: u32,
-        comm: Option<&'static str>,
-        cmdline: &'static str,
-        children: &'static [u32],
-    }
-
-    impl ProcNode {
-        const fn new(pid: u32, uid: u32, cmdline: &'static str, children: &'static [u32]) -> Self {
-            Self {
-                pid,
-                uid,
-                comm: None,
-                cmdline,
-                children,
-            }
-        }
-
-        const fn with_comm(mut self, comm: &'static str) -> Self {
-            self.comm = Some(comm);
-            self
-        }
-    }
-
-    struct ProcFixture {
-        nodes: BTreeMap<u32, ProcNode>,
-    }
-
-    impl ProcFixture {
-        fn new(nodes: impl IntoIterator<Item = ProcNode>) -> Self {
-            Self {
-                nodes: nodes.into_iter().map(|node| (node.pid, node)).collect(),
-            }
-        }
-
-        fn elevated_agent(&self, root: u32, own_uid: u32) -> Option<ElevatedAgent> {
-            elevated_in_pane_agent_with(
-                root,
-                own_uid,
-                &|pid| {
-                    self.nodes
-                        .get(&pid)
-                        .map(|node| node.children.to_vec())
-                        .unwrap_or_default()
-                },
-                &|pid| self.nodes.get(&pid).map(|node| node.cmdline.to_owned()),
-                &|pid| {
-                    self.nodes
-                        .get(&pid)
-                        .and_then(|node| node.comm.map(str::to_owned))
-                },
-                &|pid| self.nodes.get(&pid).map(|node| node.uid),
-            )
-        }
-    }
-}
+mod tests;

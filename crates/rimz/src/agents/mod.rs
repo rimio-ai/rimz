@@ -30,6 +30,7 @@ pub mod spending;
 #[cfg(test)]
 pub(crate) mod testkit;
 pub(crate) mod transcript_fs;
+pub mod version;
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -48,7 +49,8 @@ pub use context::{
     TurnErrorClass,
 };
 pub use descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
@@ -290,6 +292,14 @@ pub struct RefreshSpawn {
     pub args: Vec<String>,
 }
 
+/// Dynamic remote-control state read from the agent's own machine-local
+/// settings. Static capability still lives in [`AgentDescriptor`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RemoteControlStatus {
+    /// Existing pane sessions auto-enable their own remote-control surface.
+    pub pane_auto: bool,
+}
+
 pub trait AgentAdapter: Send + Sync {
     /// The adapter's static identity, branding, capabilities, and
     /// classification tables. Everything `const` about an agent lives here;
@@ -469,18 +479,25 @@ pub trait AgentAdapter: Send + Sync {
         account::AccountProbe::LoggedOut
     }
 
+    /// Dynamic remote-control state from this provider's own settings.
+    /// Best-effort and read-only: failures return the default "off/unknown"
+    /// state. The sidebar uses this only to light a capability-gated flag.
+    fn remote_control_status(&self) -> RemoteControlStatus {
+        RemoteControlStatus::default()
+    }
+
     /// Whether this adapter exposes a cheap out-of-band binary version probe.
-    /// The sidebar producer uses this to repair older account-cache entries
-    /// whose login facts are still fresh but whose version field is absent.
+    /// The sidebar producer uses this during account refresh to fill a
+    /// display-only provider header when no live context has a fresher version.
     fn probes_version(&self) -> bool {
-        false
+        true
     }
 
     /// Probe the agent binary's version out-of-band. Producer-only and
     /// display-only: a failure leaves the provider header without a version,
-    /// never affecting account truth or ledger correctness.
+    /// never affecting account truth, cache freshness, or ledger correctness.
     fn probe_version(&self) -> Option<String> {
-        None
+        version::probe_cli_version(self.descriptor().kind)
     }
 
     /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the

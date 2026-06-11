@@ -29,8 +29,6 @@ mod codex_refresh;
 mod live_spend;
 mod rate_limits;
 
-#[cfg(test)]
-pub(crate) use accounts::accounts_cache_missing_versions;
 pub use codex_refresh::refresh_codex_transcript_context;
 #[cfg(test)]
 pub(crate) use codex_refresh::{
@@ -609,12 +607,26 @@ fn fold_machine_config_with(
     let bands = snapshot.sidebar.context.clone();
     stamp_context_severity(&mut snapshot.worktree_groups, &bands);
 
-    // The `⇅ rc` flag per provider comes from the remote-control toggles.
+    // The `⇅ rc` flag per provider comes from either Rimz's auto-launch toggle
+    // or the provider's own pane-session auto-enable setting.
     let mut remote_control_flags: BTreeMap<String, bool> = BTreeMap::new();
-    remote_control_flags.insert("claude".to_owned(), remote_control.claude);
-    remote_control_flags.insert("codex".to_owned(), remote_control.codex);
+    for adapter in crate::agents::ADAPTERS {
+        let descriptor = adapter.descriptor();
+        let config_toggle = remote_control_toggle(descriptor.kind, &remote_control);
+        let pane_auto = descriptor.capabilities.remote_control.pane_sessions
+            && adapter.remote_control_status().pane_auto;
+        remote_control_flags.insert(descriptor.kind.to_owned(), config_toggle || pane_auto);
+    }
 
     snapshot.with_provider_aggregates(&accounts, &remote_control_flags, provider_spending)
+}
+
+fn remote_control_toggle(kind: &str, config: &crate::config::RemoteControlConfig) -> bool {
+    match kind {
+        "claude" => config.claude,
+        "codex" => config.codex,
+        _ => false,
+    }
 }
 
 /// Stamp [`SidebarRow::context_severity`] on every agent row from the

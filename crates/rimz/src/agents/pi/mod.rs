@@ -39,7 +39,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, ThreadKey, ToolClassification,
+    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
+    ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_context_pct;
@@ -93,6 +94,10 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         background_tasks: false,
         registers_lazily: false,
         hook_install: true,
+        remote_control: RemoteControlCapability {
+            pane_sessions: false,
+            background_sessions: false,
+        },
     },
     default_context_window: None,
     default_model: None,
@@ -404,14 +409,6 @@ impl AgentAdapter for PiAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
-    }
-
-    fn probes_version(&self) -> bool {
-        true
-    }
-
-    fn probe_version(&self) -> Option<String> {
-        account::version()
     }
 }
 

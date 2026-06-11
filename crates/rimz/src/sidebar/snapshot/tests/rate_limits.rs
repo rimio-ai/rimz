@@ -1,55 +1,6 @@
 use super::*;
 
 #[test]
-fn account_cache_missing_pi_version_forces_refresh() {
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/pi-version"));
-    let snapshot = SidebarSnapshot::build_with_agents(
-        workspace.clone(),
-        Vec::new(),
-        vec![root_agent("pi", "pi-active", None)],
-        Timestamp::now(),
-    );
-    let mut accounts = BTreeMap::new();
-    accounts.insert(
-        "pi".to_owned(),
-        crate::agents::AgentAccount {
-            plan: Some("Anthropic OAuth".to_owned()),
-            metered: Some(true),
-            version: None,
-            sub_provider: Some("anthropic".to_owned()),
-        },
-    );
-    let cache = AccountsCache {
-        refreshed_at_ms: unix_now_ms(),
-        accounts,
-        ok: true,
-    };
-    assert!(
-        accounts_cache_missing_versions(&cache, &snapshot),
-        "an old successful Pi account cache without a version re-probes immediately"
-    );
-
-    let empty_cache = AccountsCache {
-        refreshed_at_ms: unix_now_ms(),
-        accounts: BTreeMap::new(),
-        ok: true,
-    };
-    assert!(
-        accounts_cache_missing_versions(&empty_cache, &snapshot),
-        "an active Pi session can still get a version-only cache entry"
-    );
-
-    let failed_recent = AccountsCache {
-        ok: false,
-        ..empty_cache
-    };
-    assert!(
-        !accounts_cache_missing_versions(&failed_recent, &snapshot),
-        "a failed probe waits for the retry TTL instead of forking every tick"
-    );
-}
-
-#[test]
 fn idle_window_projection_ages_only_known_elapsed_windows() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let future = Timestamp::from_second(2_000_010_000).unwrap();

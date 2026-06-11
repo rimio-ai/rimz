@@ -123,10 +123,9 @@ pub(super) fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
     }
 }
 
-/// Report the per-machine remote-control auto-launch posture. Codex's host has a
-/// hard precondition — the managed standalone install — that `rimz start`
-/// enforces fail-fast, so doctor surfaces the same gap and the same fix ahead of
-/// time. Claude's host is best-effort (gated on PATH), so it only warns.
+/// Report the per-machine remote-control auto-launch posture. Configured hosts
+/// have hard preconditions that `rimz start` enforces fail-fast, so doctor
+/// surfaces the same gaps and fixes ahead of time.
 #[expect(
     clippy::print_stdout,
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
@@ -144,18 +143,25 @@ pub(super) fn report_remote_control() {
         return;
     }
 
-    let codex_standalone_missing =
-        config.codex && rimz::remote_control::codex_standalone_bin().is_none();
+    let claude_preflight = config
+        .claude
+        .then(|| rimz::remote_control::preflight_claude(&config));
+    let codex_preflight = config
+        .codex
+        .then(|| rimz::remote_control::preflight_codex(&config));
     let mut parts = Vec::new();
     if config.claude {
-        parts.push(if which::which("claude").is_ok() {
+        let claude_present = which::which("claude").is_ok();
+        parts.push(if !claude_present {
+            "claude enabled, not on PATH".to_owned()
+        } else if claude_preflight.as_ref().is_some_and(Result::is_ok) {
             "claude ready".to_owned()
         } else {
-            "claude enabled, not on PATH".to_owned()
+            "claude enabled, blocked".to_owned()
         });
     }
     if config.codex {
-        parts.push(if codex_standalone_missing {
+        parts.push(if codex_preflight.as_ref().is_some_and(Result::is_err) {
             "codex enabled, standalone install missing".to_owned()
         } else {
             "codex ready".to_owned()
@@ -163,11 +169,12 @@ pub(super) fn report_remote_control() {
     }
     println!("  remote control: {}", parts.join("; "));
 
-    if codex_standalone_missing {
-        println!(
-            "  remote control: `rimz start` refuses until the managed standalone Codex install exists — {}",
-            rimz::remote_control::CODEX_INSTALL_COMMAND,
-        );
+    for err in [codex_preflight.as_ref(), claude_preflight.as_ref()]
+        .into_iter()
+        .flatten()
+        .filter_map(|result| result.as_ref().err())
+    {
+        println!("  remote control: `rimz start` refuses:\n{err}");
     }
 }
 

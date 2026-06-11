@@ -149,6 +149,19 @@ pub struct Capabilities {
     pub registers_lazily: bool,
     /// Rimz can install a hook configuration the agent actually executes.
     pub hook_install: bool,
+    /// Remote-control surfaces the provider can host.
+    pub remote_control: RemoteControlCapability,
+}
+
+/// Static remote-control capability. Dynamic "enabled on this machine" state
+/// lives on [`AgentAdapter`](super::AgentAdapter), because it may read provider
+/// settings.
+#[derive(Clone, Copy, Debug)]
+pub struct RemoteControlCapability {
+    /// Living pane sessions can be driven remotely.
+    pub pane_sessions: bool,
+    /// The provider can spawn background remote sessions without a local pane.
+    pub background_sessions: bool,
 }
 
 impl AgentDescriptor {
@@ -218,5 +231,20 @@ mod tests {
         assert!(codex.tool_mutates(&json!({ "tool_name": "apply_patch" })));
         assert!(codex.tool_edits_files(&json!({ "tool_name": "apply_patch" })));
         assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
+    }
+
+    #[test]
+    fn remote_control_capabilities_are_pinned_per_adapter() {
+        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
+        assert!(claude.capabilities.remote_control.pane_sessions);
+        assert!(claude.capabilities.remote_control.background_sessions);
+
+        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert!(codex.capabilities.remote_control.pane_sessions);
+        assert!(codex.capabilities.remote_control.background_sessions);
+
+        let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
+        assert!(!pi.capabilities.remote_control.pane_sessions);
+        assert!(!pi.capabilities.remote_control.background_sessions);
     }
 }

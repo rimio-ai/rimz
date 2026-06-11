@@ -68,6 +68,20 @@ Notifications are best-effort attention delivery layered over the sidebar. `wait
 
 `command` runs locally through `sh -c` with `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND` in its environment. Use it for machine-local routing such as ntfy, Slack, Pushover, or an OS notifier. Mechanics live in [internals/sidebar/notifications.md](../internals/sidebar/notifications.md).
 
+### Remote Control
+
+```toml
+[remote_control]
+claude = false
+codex = false
+```
+
+These are per-machine opt-ins for background remote-control infrastructure. `claude = true` launches `claude remote-control --spawn worktree` in the `rimzd` view when `claude` is on PATH. `codex = true` ensures the managed standalone Codex daemon (`$CODEX_HOME/packages/standalone/current/codex remote-control start`) before the room opens.
+
+Configured hosts are fail-fast preconditions for `rimz start`. Claude refuses when its own settings or version make the host impossible: Claude Code older than 2.1.51, `disableRemoteControl: true`, `disableAgentView: true` on Claude Code 2.1.173 or newer, or API-key auth sources active on Claude Code 2.1.157 or newer. Codex refuses when the managed standalone install is missing. `rimz doctor` reports the same refusal text and fix before launch.
+
+The sidebar's `⇅ rc` provider flag is broader than these auto-launch toggles: it also lights when a provider-owned pane-session setting enables remote control, such as Claude's `remoteControlAtStartup: true`. Reading provider settings is local enrichment and adds no project trust-hash field.
+
 ### Multiplexer Room Options
 
 Rimz applies room-scoped defaults when it creates or reattaches a session, so the room gets the mouse, clipboard, rich-key, and scrollback behavior agents need without editing your global Zellij or tmux files.

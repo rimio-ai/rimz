@@ -17,6 +17,8 @@ Every agent — Claude, Codex, Pi, and every future one — speaks to Rimz throu
 - **`render_decision`** / **`render_neutral`** emit the agent-native decision JSON when a resolver answers, and the neutral no-op when no one does.
 - **`hook_cap`** (a descriptor field) is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/mod.rs); **`local_context_refresh`** derives sidecar fields from local provider state during non-blocking progress hooks; `ends_session` / `moves_on` mark the events that expire a session's pending asks.
+- **`remote_control_status`** reads provider-owned local settings that affect remote-control display state; the static ability to drive pane or background sessions stays in the descriptor's `remote_control` capability.
+- **`probe_version`** defaults to the shared `<kind> --version` probe; adapters override only when the binary name or a richer primary transport differs.
 - **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it (gated by the descriptor's `hook_install` capability).
 
 Two invariants hold the seam shut:
