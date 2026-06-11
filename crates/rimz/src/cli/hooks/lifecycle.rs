@@ -34,11 +34,13 @@ pub(super) fn handle_lifecycle_hook(
             workspace,
             ledger,
             agent,
-            event_name,
-            payload,
-            agent_id,
-            model_hint,
-            observed_turn_error,
+            context: LifecycleEventContext {
+                event_name,
+                payload,
+                agent_id,
+                model_hint,
+                observed_turn_error,
+            },
         });
     }
     if let Some(recorded) = recorded.as_ref() {
@@ -57,6 +59,10 @@ struct AgentContextHook<'a> {
     workspace: &'a ResolvedWorkspace,
     ledger: &'a Ledger,
     agent: &'a dyn AgentAdapter,
+    context: LifecycleEventContext<'a>,
+}
+
+struct LifecycleEventContext<'a> {
     event_name: &'a str,
     payload: &'a Value,
     agent_id: &'a str,
@@ -304,13 +310,15 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
         workspace,
         ledger,
         agent,
+        context,
+    } = ctx;
+    let LifecycleEventContext {
         event_name,
         payload,
         agent_id,
         model_hint,
         observed_turn_error,
-    } = ctx;
-
+    } = context;
     // Tombstone the session's statusline context sidecar so it cannot pin stale
     // enrichment to a session the rollup has dropped.
     if agent.ends_session(event_name)
