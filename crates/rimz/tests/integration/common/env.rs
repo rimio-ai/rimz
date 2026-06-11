@@ -134,6 +134,10 @@ impl Env {
             .env("XDG_RUNTIME_DIR", &self.runtime_root)
             .env("XDG_CONFIG_HOME", self.config_root())
             .env("HOME", &self.home_root)
+            .env("SHELL", "/bin/sh")
+            .env_remove("ENV")
+            .env_remove("BASH_ENV")
+            .env_remove("ZDOTDIR")
             .env_remove("RUST_LOG")
             .current_dir(&self.project_root);
         cmd

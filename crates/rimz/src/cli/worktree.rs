@@ -280,14 +280,14 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
 #[cfg(unix)]
 fn exec_shell(path: &Path) -> Result<()> {
     use std::os::unix::process::CommandExt;
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned());
+    let shell = rimz::launch::user_shell_program();
     let err = Command::new(&shell).current_dir(path).exec();
     Err::<(), _>(err).with_context(|| format!("execing {shell}"))
 }
 
 #[cfg(not(unix))]
 fn exec_shell(path: &Path) -> Result<()> {
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned());
+    let shell = rimz::launch::user_shell_program();
     let status = Command::new(&shell)
         .current_dir(path)
         .status()

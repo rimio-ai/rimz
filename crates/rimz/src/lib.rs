@@ -18,6 +18,7 @@ pub mod config;
 pub mod diag;
 pub mod feed;
 pub mod ids;
+pub mod launch;
 pub mod ledger;
 pub mod message;
 pub mod mux;

@@ -5,6 +5,8 @@ use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
 
 use crate::common::Env;
+#[cfg(unix)]
+use crate::common::{path_with_front, write_env_dump_shim};
 
 /// A minimal project config carrying one command-executing hook field — the
 /// fixture the trust-surface tests grant against.
@@ -262,35 +264,4 @@ fn untrusted_agent_env_refuses_a_tab_launch_before_side_effects() {
         .assert()
         .failure()
         .stderr(contains("rimz trust grant"));
-}
-
-/// Shim agent on PATH that dumps its argv (`ARGV=` line) and environment to
-/// `$RIMZ_TEST_AGENT_ENV_DUMP` and exits — the probe proving launch-time env
-/// injection and the launch argv reach the child.
-#[cfg(unix)]
-fn write_env_dump_shim(env: &Env, agent: &str) -> std::path::PathBuf {
-    use std::os::unix::fs::PermissionsExt;
-
-    let dir = env.home_root.join("agent-bin");
-    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
-    let shim = dir.join(agent);
-    std::fs::write(
-        &shim,
-        "#!/bin/sh\n{ printf 'ARGV=%s\\n' \"$*\"; env; } > \"$RIMZ_TEST_AGENT_ENV_DUMP\"\n",
-    )
-    .expect("write agent shim");
-    let mut perms = std::fs::metadata(&shim)
-        .expect("shim metadata")
-        .permissions();
-    perms.set_mode(0o755);
-    std::fs::set_permissions(&shim, perms).expect("chmod shim");
-    dir
-}
-
-#[cfg(unix)]
-fn path_with_front(dir: &std::path::Path) -> std::ffi::OsString {
-    let original = std::env::var_os("PATH").unwrap_or_default();
-    let mut paths = vec![dir.to_path_buf()];
-    paths.extend(std::env::split_paths(&original));
-    std::env::join_paths(paths).expect("join PATH")
 }

@@ -260,7 +260,7 @@ event = "PreToolUse"
 command = "notify-send rimz"
 ```
 
-Command-running fields enter the trust hash, so a clone with project config shows `untrusted` until `rimz trust grant` pins the current executable surface on this machine. An `untrusted` or `stale` workspace with `[[agents]]` `env` configured refuses the agent launch with the `rimz trust grant` fix. The hash contract and launch-time enforcement are in [internals/sidebar/trust.md](../internals/sidebar/trust.md); the threat model is in [security.md](../guide/security.md).
+Command-running fields enter the trust hash, so a clone with project config shows `untrusted` until `rimz trust grant` pins the current executable surface on this machine. Agents launch through your default shell so terminal env applies, then trusted project `[[agents]]` env and adapter pins outrank shell rc/profile values. An `untrusted` or `stale` workspace with `[[agents]]` `env` configured refuses the agent launch with the `rimz trust grant` fix. The hash contract and launch-time enforcement are in [internals/sidebar/trust.md](../internals/sidebar/trust.md); the threat model is in [security.md](../guide/security.md).
 
 ## Sidecars And Privacy
 

@@ -8,6 +8,7 @@
 
 mod common;
 
+mod agent_launch;
 mod backend;
 mod chain_advance;
 mod codex_broker;

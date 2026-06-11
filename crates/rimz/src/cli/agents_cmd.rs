@@ -12,6 +12,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, RoomTarget};
+use rimz::agents::AgentAdapter;
 use rimz::mux::{TabOptions, own_pane_id};
 use rimz::tab_layout::{Cell, LayoutSpec};
 use rimz::workspace::WorkspaceResolver;
@@ -138,7 +139,10 @@ pub(crate) fn agent_launch_env(
 ) -> Result<BTreeMap<String, String>> {
     use rimz::trust::{AgentEnv, TrustState};
     match rimz::trust::agent_env(project_root, kind)? {
-        AgentEnv::Apply(env) => Ok(env),
+        AgentEnv::Apply(env) => {
+            validate_agent_launch_env(kind, &env)?;
+            Ok(env)
+        }
         AgentEnv::Unconfigured => Ok(BTreeMap::new()),
         AgentEnv::Blocked(state) => {
             let fix = match state {
@@ -156,6 +160,32 @@ pub(crate) fn agent_launch_env(
     }
 }
 
+pub(crate) fn full_agent_launch_env(
+    project_root: &Path,
+    adapter: &dyn AgentAdapter,
+    run_id: Option<&rimz::RunId>,
+) -> Result<BTreeMap<String, String>> {
+    let kind = adapter.descriptor().kind;
+    let mut env = agent_launch_env(project_root, kind)?;
+    for (key, value) in adapter.launch_env() {
+        env.insert(key.to_owned(), value.to_owned());
+    }
+    if let Some(run_id) = run_id {
+        env.insert(rimz::run::ENV_RUN_ID.to_owned(), run_id.as_str().to_owned());
+    }
+    validate_agent_launch_env(kind, &env)?;
+    Ok(env)
+}
+
+fn validate_agent_launch_env(kind: &str, env: &BTreeMap<String, String>) -> Result<()> {
+    if let Some(key) = rimz::launch::invalid_env_key(env) {
+        bail!(
+            "agent `{kind}` launch env key `{key}` is invalid; environment variable names must be non-empty, cannot contain `=`, and cannot start with `-`",
+        );
+    }
+    Ok(())
+}
+
 fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if args.worktree_path.is_some() {
         reset_cleanup_signal_flag();
@@ -169,7 +199,6 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
-    let launch_env = agent_launch_env(&workspace.project_root, &args.kind)?;
     let argv = match args.resume.as_deref() {
         Some(session_id) => {
             let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
@@ -181,16 +210,14 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             .launch_command(&args.extra_args, args.prompt.as_deref())
             .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
     };
+    let rimz_env = full_agent_launch_env(&workspace.project_root, adapter, args.run_id.as_ref())?;
+    let argv = rimz::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
     let mut command = Command::new(program);
     command.args(rest);
-    command.envs(launch_env);
-    command.envs(adapter.launch_env());
-    if let Some(run_id) = args.run_id.as_ref() {
-        command.env(rimz::run::ENV_RUN_ID, run_id.as_str());
-    }
+    command.envs(&rimz_env);
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;

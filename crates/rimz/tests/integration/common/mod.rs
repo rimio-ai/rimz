@@ -16,6 +16,7 @@ mod command;
 mod env;
 mod harness;
 mod payloads;
+mod shim;
 
 pub use command::{CommandTimeoutExt, ScrubSessionEnvExt};
 pub use env::{Env, af_unix_bind_sandboxed, canonical, tmux_pane};
@@ -24,3 +25,5 @@ pub use payloads::{
     claude_pre_tool_use_payload, codex_permission_payload, lifecycle_event, permission_payload,
     pi_tool_call_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
 };
+#[cfg(unix)]
+pub use shim::{path_with_front, write_env_dump_shim, write_fake_login_shell};

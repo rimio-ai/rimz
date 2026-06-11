@@ -123,8 +123,12 @@ fn run_prompt(args: RunArgs, globals: &GlobalFlags) -> Result<()> {
         .filter(|prompt| !prompt.trim().is_empty())
         .ok_or_else(|| anyhow::anyhow!("expected a prompt, or `rimz run status|list`"))?;
     let workspace = resolve_run_workspace(globals)?;
-    let (adapter, permission_args) = resolve_run_adapter(args.agent.as_deref(), mode, &prompt)?;
-    super::agents_cmd::agent_launch_env(&workspace.project_root, adapter.descriptor().kind)?;
+    let (adapter, permission_args) = resolve_run_adapter(
+        &workspace.project_root,
+        args.agent.as_deref(),
+        mode,
+        &prompt,
+    )?;
 
     let machine_config = super::machine_config();
     let launch = super::tab::resolve_cwd(
@@ -368,6 +372,7 @@ fn permission_mode(args: &RunArgs) -> Result<PermissionMode> {
 }
 
 fn resolve_run_adapter(
+    project_root: &Path,
     requested: Option<&str>,
     mode: PermissionMode,
     prompt: &str,
@@ -375,15 +380,16 @@ fn resolve_run_adapter(
     if let Some(kind) = requested {
         let adapter = rimz::agents::find_adapter(kind)
             .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+        let launch_env = super::agents_cmd::full_agent_launch_env(project_root, adapter, None)?;
         preflight_agent(adapter)?;
         let permission_args = adapter.permission_args(mode);
-        preflight_program(adapter, &permission_args, prompt)?;
+        preflight_program(adapter, &permission_args, prompt, &launch_env)?;
         return Ok((adapter, permission_args));
     }
 
     for adapter in rimz::agents::ADAPTERS {
         let permission_args = adapter.permission_args(mode);
-        if default_run_adapter_ready(*adapter, &permission_args, prompt) {
+        if default_run_adapter_ready(*adapter, project_root, &permission_args, prompt) {
             return Ok((*adapter, permission_args));
         }
     }
@@ -396,17 +402,18 @@ fn resolve_run_adapter(
 
 fn default_run_adapter_ready(
     adapter: &'static dyn AgentAdapter,
+    project_root: &Path,
     permission_args: &[String],
     prompt: &str,
 ) -> bool {
     if !adapter.hooks_installed() || !adapter.untrusted_installed_hooks().is_empty() {
         return false;
     }
-    let Some(argv) = adapter.launch_command(permission_args, Some(prompt)) else {
+    let Ok(launch_env) = super::agents_cmd::full_agent_launch_env(project_root, adapter, None)
+    else {
         return false;
     };
-    argv.first()
-        .is_some_and(|program| which::which(program).is_ok())
+    preflight_program(adapter, permission_args, prompt, &launch_env).is_ok()
 }
 
 fn preflight_agent(adapter: &dyn AgentAdapter) -> Result<()> {
@@ -431,6 +438,7 @@ fn preflight_program(
     adapter: &dyn AgentAdapter,
     permission_args: &[String],
     prompt: &str,
+    launch_env: &std::collections::BTreeMap<String, String>,
 ) -> Result<()> {
     let argv = adapter
         .launch_command(permission_args, Some(prompt))
@@ -446,7 +454,11 @@ fn preflight_program(
             adapter.descriptor().kind
         );
     };
-    which::which(program).with_context(|| format!("finding `{program}` on PATH"))?;
+    let resolves = rimz::launch::program_resolves_after_shell_rc(launch_env, program)
+        .with_context(|| format!("checking `{program}` after shell startup"))?;
+    if !resolves {
+        bail!("finding `{program}` on PATH after shell startup");
+    }
     Ok(())
 }
 

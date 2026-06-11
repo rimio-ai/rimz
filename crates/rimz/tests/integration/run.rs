@@ -87,6 +87,48 @@ fn hooks_bind_and_complete_supervised_run() {
 }
 
 #[test]
+fn run_rejects_invalid_agent_env_before_recording() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[[agents]]\nname = \"codex\"\nenv = { \"BAD=KEY\" = \"yes\" }\n",
+    );
+    let trust = env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .expect("spawn trust grant");
+    assert!(
+        trust.status.success(),
+        "trust grant failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&trust.stdout),
+        String::from_utf8_lossy(&trust.stderr)
+    );
+
+    let out = env
+        .rimz()
+        .args(["run", "--agent", "codex", "summarize"])
+        .output()
+        .expect("spawn run");
+    assert!(
+        !out.status.success(),
+        "run should reject invalid launch env\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("BAD=KEY"),
+        "run error should name the invalid key\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let records = rimz::run::list(env.ledger().paths()).expect("list runs");
+    assert!(
+        records.is_empty(),
+        "invalid launch env should fail before recording a run: {records:?}"
+    );
+}
+
+#[test]
 fn run_stop_marks_canceled_and_wakes_waiter() {
     let env = Env::new();
     if env.skip_if_sandboxed() {

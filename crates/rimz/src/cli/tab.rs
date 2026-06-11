@@ -189,7 +189,7 @@ fn pane_cmd(
 ) -> Result<PaneCmd> {
     let argv = match cell {
         Cell::Command { argv } if argv.is_empty() => {
-            vec![std::env::var("SHELL").unwrap_or_else(|_| "sh".to_owned())]
+            vec![rimz::launch::user_shell_program()]
         }
         Cell::Command { argv } => argv.clone(),
         Cell::Agent { kind, args } => {
