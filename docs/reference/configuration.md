@@ -174,9 +174,18 @@ scrollbar = "auto"
 glow = "auto"
 card_density = "auto"
 trunk = "develop"
+
+[sidebar.theme]
+mode = "auto"
+scheme = "auto"
+good = "#96c293"
 ```
 
 `max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
+
+`[sidebar.theme]` controls palette depth and palette source. `mode = "auto"` uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that under-advertise; `256` pins indexed output. `scheme = "auto"` follows Ghostty's active theme when the sidebar process can read it and falls back to the built-in `clay` palette. Built-in scheme names are `clay`, `slate`, and `classic`; other names are resolved from `~/.config/ghostty/themes/`, then `$GHOSTTY_RESOURCES_DIR/themes/`, then as a path. Ghostty `theme = dark:X,light:Y` entries pick the dark side because muxes do not expose a reliable light/dark signal. Auto-detection is cached for the sidebar process lifetime, so changing the terminal theme needs a sidebar restart; explicit `scheme = "slate"` or `scheme = "/path/to/theme"` is the pin lever.
+
+Palette slot overrides under `[sidebar.theme]` accept either `#rrggbb` or a raw 0-255 index. RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact. `NO_COLOR` still suppresses all color and leaves the glyph grammar intact.
 
 `glow = "auto"` follows `COLORTERM` for the truecolor attention glow and transition flashes. `always` is useful when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM`; `never` keeps the plain 256-color render. `NO_COLOR` still disables color effects.
 
@@ -207,7 +216,7 @@ effect = "breathe"
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; raw indexes and `clay` pass through as explicit tones. `effect` is `static`, `breathe`, or `blink`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence.
+`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static`, `breathe`, or `blink`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence.
 
 `waiting`, `failed`, and `paused` honor one `frames` value and `color`. The attention age heat, unread hard-blink, and held pause grammar are product behavior, so `effect` and `speed` on those roles are ignored, and multiple frames for those roles are rejected.
 
@@ -220,12 +229,12 @@ provider_list = ["codex", "all"]
 max_provider_blocks = 3
 
 [sidebar.providers.claude]
-color = 173
+color = "#d97757"
 ```
 
 The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses today's spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
 
-`[sidebar.providers.<kind>]` overrides the built-in display name, ASCII art, or brand color for that provider. Each field is optional, so a color override can leave the shipped art intact. Account and budget sourcing is in [internals/agents/account.md](../internals/agents/account.md).
+`[sidebar.providers.<kind>]` overrides the built-in display name, ASCII art, or brand color for that provider. `color` accepts either `#rrggbb` or a raw 0-255 index; RGB values carry a quantized fallback for indexed renderers. Each field is optional, so a color override can leave the shipped art intact. Account and budget sourcing is in [internals/agents/account.md](../internals/agents/account.md).
 
 ## Changing Values
 
