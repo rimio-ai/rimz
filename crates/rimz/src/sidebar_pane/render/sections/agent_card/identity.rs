@@ -46,8 +46,8 @@ pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> L
         return composed_row(
             ctx.theme,
             Span::styled(
-                resolver_glyph(ctx.animation_phase),
-                status_style(ctx.theme, AgentStatus::Waiting),
+                resolver_glyph(ctx.theme, ctx.animation_phase),
+                resolver_style(ctx.theme, ctx.animation_phase),
             ),
             &row.name,
             &format!("{resolver_name} {remaining}"),
@@ -87,7 +87,10 @@ pub(super) fn agent_lead_cell(
 ) -> Span<'static> {
     let actionable = status.is_actionable();
     if !actionable && agent(row).is_some_and(|agent| agent.compacting) {
-        return Span::styled(compacting_glyph(animation_phase), compacting_style(theme));
+        return Span::styled(
+            compacting_glyph(theme, animation_phase),
+            compacting_head_style(theme, animation_phase),
+        );
     }
     if status == AgentStatus::Running
         && agent(row).is_some_and(|agent| {
@@ -97,16 +100,20 @@ pub(super) fn agent_lead_cell(
                 .any(|child| child.status == AgentStatus::Running)
         })
     {
-        return Span::styled(subagent_glyph(animation_phase), subagent_style(theme));
+        return Span::styled(
+            subagent_glyph(theme, animation_phase),
+            subagent_head_style(theme, animation_phase),
+        );
     }
     // A blocked `?`/`!` breathes — a slow brightness pulse via
     // `attention_glyph_style` — to pull the eye back to an unanswered row. It
     // never blanks, so the one-cell column never shifts as it swells and fades.
     Span::styled(
-        agent_glyph(status, row.phase(), animation_phase),
-        attention_glyph_style(
+        agent_glyph(theme, status, row.phase(), animation_phase),
+        agent_lead_style(
             theme,
             status,
+            row.phase(),
             age_secs(row.last_activity, now),
             animation_phase,
             row.unread,
@@ -114,7 +121,7 @@ pub(super) fn agent_lead_cell(
     )
 }
 
-/// Line 1 for an agent: the leading cell (the working fill or thinking sparkle
+/// Line 1 for an agent: the leading cell (the working fill or thinking head
 /// while active; a blocked `?`/`!` breathes a slow brightness pulse), the agent
 /// name, then the dim capability tokens (`· model · effort · window`) with the
 /// bold `$cost` (money-green) pinned right — counting up through the row's

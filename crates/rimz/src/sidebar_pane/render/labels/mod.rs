@@ -12,6 +12,7 @@ use crate::feed::ContextSeverity;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
+use super::animation::{AnimationRole, effect_modifier, frame_at, still_frame};
 use super::theme::{ORANGE, Theme};
 
 mod glyphs;

@@ -8,9 +8,10 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat, agent_style, hard_blink, status_glyph, status_style,
+    age_heat, agent_style_at, attention_floor_color, hard_blink, status_color, status_glyph,
+    status_style_at,
 };
-use crate::sidebar_pane::render::theme::{ORANGE, Theme};
+use crate::sidebar_pane::render::theme::Theme;
 
 use super::{TAB_INK, pin_right, trim_spans_to_width};
 
@@ -43,7 +44,7 @@ pub(crate) struct MakeUpHit {
 /// rows worth a glance — `waiting` `?` and `failed` `!` (each wearing its
 /// oldest row's age heat over a yellow floor), parked `paused` `⏸` (held
 /// amber, never heating), then `success` `✓`. The right cluster is the
-/// live-capacity tail — working `⢿` (every running agent; the thinking sparkle
+/// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
 /// bucket renders — the glyph always in its semantic color, a zero
 /// count at the soft gray beside it. Counts span the capped agents
@@ -89,7 +90,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     let mut left = Cluster::new(theme, filter);
     left.push_count(
         AgentStatus::Waiting,
-        Color::Yellow,
+        status_color(theme, AgentStatus::Waiting),
         waiting,
         unread_bucket_style(
             theme,
@@ -102,7 +103,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     );
     left.push_count(
         AgentStatus::Failed,
-        Color::Red,
+        status_color(theme, AgentStatus::Failed),
         failed,
         unread_bucket_style(
             theme,
@@ -121,7 +122,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // is nothing to do until the provider recovers or the window resets.
     left.push_count(
         AgentStatus::Paused,
-        Color::Yellow,
+        status_color(theme, AgentStatus::Paused),
         paused,
         unread_bucket_style(
             theme,
@@ -129,12 +130,12 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
             AgentStatus::Paused,
             now,
             animation_phase,
-            status_style(theme, AgentStatus::Paused),
+            status_style_at(theme, AgentStatus::Paused, animation_phase),
         ),
     );
     left.push_count(
         AgentStatus::Success,
-        Color::Green,
+        status_color(theme, AgentStatus::Success),
         success,
         unread_bucket_style(
             theme,
@@ -142,21 +143,21 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
             AgentStatus::Success,
             now,
             animation_phase,
-            status_style(theme, AgentStatus::Success),
+            status_style_at(theme, AgentStatus::Success, animation_phase),
         ),
     );
     let mut right = Cluster::new(theme, filter);
     right.push_count(
         AgentStatus::Running,
-        ORANGE,
+        status_color(theme, AgentStatus::Running),
         working,
-        agent_style(theme, AgentStatus::Running),
+        agent_style_at(theme, AgentStatus::Running, animation_phase),
     );
     right.push_count(
         AgentStatus::Idle,
-        Color::Green,
+        status_color(theme, AgentStatus::Idle),
         idle,
-        status_style(theme, AgentStatus::Idle),
+        status_style_at(theme, AgentStatus::Idle, animation_phase),
     );
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
@@ -239,7 +240,7 @@ impl<'a> Cluster<'a> {
             self.spans.push(Span::raw("   "));
             self.col += 3;
         }
-        let glyph = status_glyph(status);
+        let glyph = status_glyph(self.theme, status);
         let start = self.col;
         if self.filter == Some(status) && count > 0 {
             let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::empty());
@@ -276,7 +277,7 @@ impl<'a> Cluster<'a> {
     }
 
     fn push_span(&mut self, span: Span<'static>) {
-        self.col += span.content.chars().count();
+        self.col += span.width();
         self.spans.push(span);
     }
 }
@@ -303,7 +304,7 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
 /// The cockpit attention bucket's tone: bold, wearing the oldest contributing
 /// row's [`age_heat`] over the same yellow floor as the per-row glyph — the
 /// aggregate echo of
-/// [`attention_glyph_style`](crate::sidebar_pane::render::labels::attention_glyph_style)'s
+/// [`agent_lead_style`](crate::sidebar_pane::render::labels::agent_lead_style)'s
 /// escalation. Reads the rendered rows (capped-away agents are excluded — the
 /// bucket count still spans them, but a hidden agent never drives the visible
 /// heat).
@@ -320,7 +321,10 @@ fn attention_bucket_style(
         .map(|row| age_secs(row.last_activity, now))
         .max()
         .unwrap_or(0);
-    theme.style(age_heat(oldest).unwrap_or(Color::Yellow), Modifier::BOLD)
+    theme.style(
+        age_heat(oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
+        Modifier::BOLD,
+    )
 }
 
 fn unread_bucket_style(
@@ -335,18 +339,19 @@ fn unread_bucket_style(
         return base;
     };
     theme.style(
-        unread_bucket_color(status, oldest),
+        unread_bucket_color(theme, status, oldest),
         hard_blink(animation_phase),
     )
 }
 
-fn unread_bucket_color(status: AgentStatus, age_secs: i64) -> Color {
+fn unread_bucket_color(theme: &Theme, status: AgentStatus, age_secs: i64) -> Color {
     match status {
-        AgentStatus::Waiting | AgentStatus::Failed => age_heat(age_secs).unwrap_or(Color::Yellow),
-        AgentStatus::Paused => Color::Yellow,
-        AgentStatus::Success => Color::Green,
-        AgentStatus::Running => ORANGE,
-        AgentStatus::Idle => Color::Green,
+        AgentStatus::Waiting | AgentStatus::Failed => {
+            age_heat(age_secs).unwrap_or_else(|| attention_floor_color(theme, status))
+        }
+        AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running | AgentStatus::Idle => {
+            status_color(theme, status)
+        }
     }
 }
 

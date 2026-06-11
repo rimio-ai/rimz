@@ -157,7 +157,7 @@ fn pin_right(left: Vec<Span<'static>>, right: Vec<Span<'static>>, width: usize) 
 
 /// Total display width of a span run, in terminal cells.
 fn spans_width(spans: &[Span<'static>]) -> usize {
-    spans.iter().map(|span| span.content.chars().count()).sum()
+    spans.iter().map(Span::width).sum()
 }
 
 fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
@@ -167,19 +167,32 @@ fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'sta
         if remaining == 0 {
             break;
         }
-        let span_width = span.content.chars().count();
+        let span_width = span.width();
         if span_width <= remaining {
             remaining -= span_width;
             trimmed.push(span);
             continue;
         }
-        let content = span.content.chars().take(remaining).collect::<String>();
+        let content = take_cells(span.content.as_ref(), remaining);
         if !content.is_empty() {
             trimmed.push(Span::styled(content, span.style));
         }
         break;
     }
     trimmed
+}
+
+fn take_cells(content: &str, width: usize) -> String {
+    let mut taken = String::new();
+    for ch in content.chars() {
+        let mut candidate = taken.clone();
+        candidate.push(ch);
+        if Span::raw(candidate.as_str()).width() > width {
+            break;
+        }
+        taken.push(ch);
+    }
+    taken
 }
 
 /// A stats metric as a colored icon glyph + value (`◷ 2h34m`, `¤ 5`): the

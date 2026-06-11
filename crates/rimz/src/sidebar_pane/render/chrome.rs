@@ -1,9 +1,11 @@
+use crate::feed::AgentStatus;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::fmt::age_short;
+use super::labels::{status_glyph, thinking_glyph};
 use super::theme::Theme;
 use super::{Alert, GateNotice};
 
@@ -244,6 +246,13 @@ pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
 /// below the cards it sits under.
 pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     let faint = theme.faint();
+    let waiting = status_glyph(theme, AgentStatus::Waiting);
+    let attention = status_glyph(theme, AgentStatus::Failed);
+    let paused = status_glyph(theme, AgentStatus::Paused);
+    let done = status_glyph(theme, AgentStatus::Success);
+    let working = status_glyph(theme, AgentStatus::Running);
+    let thinking = thinking_glyph(theme, 0);
+    let idle = status_glyph(theme, AgentStatus::Idle);
     vec![
         Line::styled("keys & legend", faint),
         Line::styled("move     j/k rows   J/K worktrees", faint),
@@ -254,7 +263,13 @@ pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("         w working  o idle   a all", faint),
         Line::styled("system   r reload   x dismiss", faint),
         Line::styled("help     ? close", faint),
-        Line::styled("? waiting  ! attention  ⏸ paused", faint),
-        Line::styled("✓ done    ⢿ working  ✻ think  ○ idle", faint),
+        Line::styled(
+            format!("{waiting} waiting  {attention} attention  {paused} paused"),
+            faint,
+        ),
+        Line::styled(
+            format!("{done} done    {working} working  {thinking} think  {idle} idle"),
+            faint,
+        ),
     ]
 }

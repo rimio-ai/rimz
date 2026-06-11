@@ -92,6 +92,62 @@
 ## rule = 238
 ## selection = 110
 
+[sidebar.animations]
+# Status-head animation roles are optional. Each role accepts frames, color,
+# effect, and speed; omitted fields keep the built-in value. frames can be a
+# string split per Unicode codepoint or an array for multi-codepoint glyphs;
+# every frame must occupy exactly one terminal cell.
+# Colors are palette slots ("good", "warn", "alarm", "accent", "cool", "meta",
+# "soft", "dim", "faint"), "clay", or a 0-255 color index. effect is "static",
+# "breathe", or "blink"; speed is "slow", "normal", or "fast" for both frame
+# advance and effect cadence.
+# waiting, failed, and paused honor one frame and color; attention heat, unread
+# blink, and the parked pause grammar are fixed product behavior.
+## [sidebar.animations.thinking]
+## frames = "⢄⢂⢁⡁⡈⡐⡠"
+## color = "clay"
+## effect = "static"
+## speed = "slow"
+## [sidebar.animations.working]
+## frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
+## color = "clay"
+## effect = "static"
+## speed = "fast"
+## [sidebar.animations.compacting]
+## frames = "▁▃▄▅▆▇▆▅▄▃"
+## color = "meta"
+## effect = "static"
+## speed = "fast"
+## [sidebar.animations.delegating]
+## frames = ["_", "-", "`", "´", "'", "´", "`", "-"]
+## color = "clay"
+## effect = "static"
+## speed = "fast"
+## [sidebar.animations.resolving]
+## frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+## color = "meta"
+## effect = "static"
+## speed = "fast"
+## [sidebar.animations.idle]
+## frames = "○"
+## color = "good"
+## effect = "static"
+## speed = "normal"
+## [sidebar.animations.success]
+## frames = "✓"
+## color = "good"
+## effect = "static"
+## speed = "normal"
+## [sidebar.animations.paused]
+## frames = ["⏸︎"]
+## color = "warn"
+## [sidebar.animations.waiting]
+## frames = "?"
+## color = "warn"
+## [sidebar.animations.failed]
+## frames = "!"
+## color = "alarm"
+
 [sidebar.providers]
 # Provider styles are keyed by agent kind and every field is optional.
 ## [sidebar.providers.claude]

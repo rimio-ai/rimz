@@ -212,13 +212,17 @@ fn is_known_get_key(path: &[String]) -> bool {
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "tab")
         || matches!(path, [root, child] if root == "tab" && matches!(child.as_str(), "keywords" | "layouts"))
+        || is_sidebar_animation_get_key(path)
         || matches!(path, [root, child] if root == "sidebar" && child == "providers")
         || matches!(path, [root, child, _] if root == "sidebar" && child == "providers")
 }
 
 fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
-    exact_set_keys().contains(&joined) || is_tab_key(path) || is_provider_style_key(path)
+    exact_set_keys().contains(&joined)
+        || is_tab_key(path)
+        || is_provider_style_key(path)
+        || is_sidebar_animation_set_key(path)
 }
 
 fn is_tab_key(path: &[String]) -> bool {
@@ -238,6 +242,38 @@ fn is_provider_style_key(path: &[String]) -> bool {
         && path[0] == "sidebar"
         && path[1] == "providers"
         && matches!(path[3].as_str(), "product_name" | "ascii_art" | "color")
+}
+
+fn is_sidebar_animation_get_key(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "sidebar" && child == "animations")
+        || matches!(path, [root, child, role] if root == "sidebar" && child == "animations" && is_sidebar_animation_role(role))
+}
+
+fn is_sidebar_animation_set_key(path: &[String]) -> bool {
+    matches!(
+        path,
+        [root, child, role, field]
+            if root == "sidebar"
+                && child == "animations"
+                && is_sidebar_animation_role(role)
+                && matches!(field.as_str(), "frames" | "color" | "effect" | "speed")
+    )
+}
+
+fn is_sidebar_animation_role(role: &str) -> bool {
+    matches!(
+        role,
+        "thinking"
+            | "working"
+            | "compacting"
+            | "delegating"
+            | "resolving"
+            | "idle"
+            | "success"
+            | "paused"
+            | "waiting"
+            | "failed"
+    )
 }
 
 fn exact_set_keys() -> BTreeSet<String> {
@@ -370,11 +406,36 @@ mod tests {
         validate_set_key(&parse_key("tab.keywords.codex-yolo.args").unwrap()).unwrap();
         validate_set_key(&parse_key("tab.keywords.htop.command").unwrap()).unwrap();
         validate_set_key(&parse_key("sidebar.providers.claude.color").unwrap()).unwrap();
+        validate_set_key(&parse_key("sidebar.animations.thinking.frames").unwrap()).unwrap();
+        validate_set_key(&parse_key("sidebar.animations.working.color").unwrap()).unwrap();
+        validate_set_key(&parse_key("sidebar.animations.idle.effect").unwrap()).unwrap();
+        validate_set_key(&parse_key("sidebar.animations.success.speed").unwrap()).unwrap();
 
         assert!(validate_set_key(&parse_key("sidebar.nope").unwrap()).is_err());
         assert!(validate_set_key(&parse_key("tab.layouts.peer.shape").unwrap()).is_err());
         assert!(validate_set_key(&parse_key("tab.keywords.codex-yolo.flags").unwrap()).is_err());
         assert!(validate_set_key(&parse_key("sidebar.providers.claude.nope").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("sidebar.animations").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("sidebar.animations.nope.frames").unwrap()).is_err());
+        assert!(validate_set_key(&parse_key("sidebar.animations.thinking.nope").unwrap()).is_err());
+        assert!(
+            validate_set_key(&parse_key("sidebar.animations.thinking.frames.extra").unwrap())
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn known_get_keys_include_animation_tables() {
+        assert!(is_known_get_key(&parse_key("sidebar.animations").unwrap()));
+        assert!(is_known_get_key(
+            &parse_key("sidebar.animations.thinking").unwrap()
+        ));
+        assert!(is_known_get_key(
+            &parse_key("sidebar.animations.thinking.frames").unwrap()
+        ));
+        assert!(!is_known_get_key(
+            &parse_key("sidebar.animations.nope").unwrap()
+        ));
     }
 
     #[test]

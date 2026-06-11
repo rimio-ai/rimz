@@ -1,6 +1,6 @@
 ---
-source: crates/rimz/src/sidebar_pane/render/tests.rs
-assertion_line: 83
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -8,7 +8,7 @@ expression: screen
  ◎ 0
  ¤ 1
  ────────────────────────────────────────────────────
- ? 0   ! 0   ⏸︎ 0   ✓ 0                     ⢿ 1   ○ 0
+ ? 0   ! 0   ⏸︎ 0   ✓ 0                      ⢿ 1   ○ 0
 
 ▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌_ claude · Opus 4.8 · high · 200k              $1.27
@@ -18,7 +18,7 @@ expression: screen
 ▌  ⧉ subagents (2)
 ▌    ✓ Explore — locate the render seam
 ▌      ◇ 12k · Opus 4.8  · high                 ◔  1m
-▌    · review — audit the trust hash
+▌    ⢄ review — audit the trust hash
 ▌      ◇  3k · Haiku 4.5                        ◔ <1m
 
 

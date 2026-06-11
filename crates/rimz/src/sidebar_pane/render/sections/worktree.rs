@@ -229,7 +229,7 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
 /// still surfaces; the calm counts stay with the cockpit.
 fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
     let cw = content_width(width);
-    let tally = attention_tally(&group.status_counts);
+    let tally = attention_tally(theme, &group.status_counts);
     let head = format!("┄ {} ", group.label);
     let tail = if tally.is_empty() {
         String::new()
@@ -253,12 +253,12 @@ fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -
 /// failed counts only. The glyph and count are separated by a space (`? 1`,
 /// never `1?`); the calm states are omitted (the cockpit owns the fleet
 /// make-up). Empty when nothing in the group needs a human.
-fn attention_tally(counts: &[SidebarStatusCount]) -> String {
+fn attention_tally(theme: &Theme, counts: &[SidebarStatusCount]) -> String {
     counts
         .iter()
         .filter(|count| count.status.is_actionable())
         .filter(|count| count.count > 0)
-        .map(|count| format!("{} {}", status_glyph(count.status), count.count))
+        .map(|count| format!("{} {}", status_glyph(theme, count.status), count.count))
         .collect::<Vec<_>>()
         .join("  ")
 }

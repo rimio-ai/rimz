@@ -112,7 +112,7 @@ pub struct ToolClassification {
     pub mutating: &'static [&'static str],
     /// The file-editing subset of `mutating` — the turn's first edit moves it
     /// from reasoning to acting. A shell tool mutates but does not edit, so a
-    /// research turn that only runs commands keeps the thinking sparkle.
+    /// research turn that only runs commands keeps the thinking head.
     pub editing: &'static [&'static str],
 }
 

@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     // A selected parent expands its `⧉ subagents` list. Each child reads two
-    // lines: the live head (the thinking sparkle while it reasons, `✓` once
+    // lines: the live head (the thinking orbit while it reasons, `✓` once
     // it lands), the type, and its `subagentStatusLine` description, then the
     // token spend `◇`, model, and effort left with the clock-fill elapsed
     // work pinned right. The first child is finished, so its elapsed is
@@ -50,7 +50,7 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         Some("review"),
     );
     fresh.parent_agent_id = Some("claude-1".into());
-    // Mid-reasoning: the child's leading cell is the thinking sparkle (frame 0
+    // Mid-reasoning: the child's leading cell is the thinking orbit (frame 0
     // of the animation at the test's fixed phase), not the static `⢿`.
     fresh.phase = crate::agents::TurnPhase::Reasoning;
     fresh.subagent_description = Some("audit the trust hash".to_owned());
@@ -80,10 +80,10 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         rendered.contains("Explore — locate the render seam"),
         "line 1 carries the description:\n{rendered}"
     );
-    // The running child's leading cell is the thinking sparkle (frame 0 at the
+    // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
     assert!(
-        rendered.contains("· review — audit the trust hash"),
+        rendered.contains("⢄ review — audit the trust hash"),
         "a reasoning child wears the thinking head:\n{rendered}"
     );
     // Line 2: token spend, model, and effort left, elapsed work right-pinned.

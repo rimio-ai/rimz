@@ -78,7 +78,7 @@ idle
  │ turn started (a mutating tool on an idle row also reconciles it)
  ▼
 running ───── turn ended ─────┬── clean ─────► success ──┐
- ▲   ✻ reasoning ──► acting   │                          │
+ ▲   ⢄ reasoning ──► acting   │                          │
  │                            └── errored ───► failed ───┤
  │                                                       │
  └── turn started re-enters · a mutating tool on ────────┘
@@ -118,16 +118,16 @@ A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bi
 
 ### Turn phase
 
-The phase is the running turn's shape, derived from the turn's own hook events — the agent owns its status, Rimz derives the phase. Every turn opens in `reasoning`: `TurnStarted` and `SubagentStarted` set it, and the sidebar paints the thinking sparkle while the turn reads, searches, and decides. The turn's first **file-editing** tool moves it to `acting` — `ToolUsed { edits: true }`, each adapter's file-writing subset of its mutating set (Claude `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, Codex `apply_patch`, Pi `edit`/`write`), read through `tool_edits_files`. The trigger is always a hook event, never prompt or transcript content.
+The phase is the running turn's shape, derived from the turn's own hook events — the agent owns its status, Rimz derives the phase. Every turn opens in `reasoning`: `TurnStarted` and `SubagentStarted` set it, and the sidebar paints the themeable thinking head from the [interface legend](../../interface/sidebar.md#reading-the-glyphs) while the turn reads, searches, and decides. The turn's first **file-editing** tool moves it to `acting` — `ToolUsed { edits: true }`, each adapter's file-writing subset of its mutating set (Claude `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, Codex `apply_patch`, Pi `edit`/`write`), read through `tool_edits_files`. The trigger is always a hook event, never prompt or transcript content.
 
 ```text
-turn starts ──► reasoning ✻ ──first file-editing tool──► acting ──► turn ends
+turn starts ──► reasoning ⢄ ──first file-editing tool──► acting ──► turn ends
                     │                                                  ▲
                     └── a research turn that never edits a file ───────┘
 clean end with background work still in flight ──► parked (the row stays running, ⋯ bg)
 ```
 
-- **A research turn sparkles end to end** — searches, reads, and shell commands write no file, so a turn that answers without editing stays in `reasoning`.
+- **A research turn stays in the thinking head end to end** — searches, reads, and shell commands write no file, so a turn that answers without editing stays in `reasoning`.
 - **A shell command is work without writing**: it keeps the row live and leaves the phase in place. A phase that left `reasoning` never re-arms mid-turn, and a parked turn that runs a tool is visibly back at work in `acting`.
 - **Any turn boundary rests the phase** — `TurnEnded` and `SubagentStopped` drop it; the next prompt re-arms it. A clean end with background work still in flight parks it instead.
 - **Subagents** own separate `agent_id`s, so a child observation never mutates its parent's phase — and the lifecycle channel is bracket-grained for children: only `SubagentStarted`/`SubagentStopped` fold to the child's rollup, a child's per-tool events are dropped at the adapter ([hooks.md → In-subagent attribution](./hooks.md#appendix--claude-code)), and the sidebar's child entry carries status only.
@@ -150,7 +150,7 @@ Compaction is a transient head over the status: the opening signal (`Compacting`
 4. **Turn death** — a `running` agent whose latest turn died on a non-pause provider API error escalates to `!` at once: the marker postdates its `last_activity`, so the explicit death certificate beats the stall window. The card quotes the upstream error text, and any newer hook event (a prompt, a resume, a rewind) self-clears it.
 5. **Stall** — a `running` agent silent past the configurable stall window projects to `paused` only when its kind has a spent, unreset window; otherwise it escalates to the attention `!` (see [Liveness and presence](#liveness-and-presence)).
 
-Each rung reads enrichment plus liveness to refine the displayed cell, and each leaves `snapshot.agents` holding the true lifecycle status. The order is a pinned contract: the [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/ledger/snapshot/view/tests/status/stall.rs) projection test stacks the causes per rung and asserts which one wins, so a reordering fails the suite even when every single-cause test still passes. The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking sparkle ([Turn phase](#turn-phase)), and an open [compaction bracket](#the-compaction-bracket) pulses over any base status.
+Each rung reads enrichment plus liveness to refine the displayed cell, and each leaves `snapshot.agents` holding the true lifecycle status. The order is a pinned contract: the [`displayed_status_precedence_ladder_holds`](../../../crates/rimz/src/ledger/snapshot/view/tests/status/stall.rs) projection test stacks the causes per rung and asserts which one wins, so a reordering fails the suite even when every single-cause test still passes. The phase and head paints ride over this base: a `running` agent in `reasoning` renders the thinking head ([Turn phase](#turn-phase)), and an open [compaction bracket](#the-compaction-bracket) pulses over any base status.
 
 ## The instance lifecycle
 

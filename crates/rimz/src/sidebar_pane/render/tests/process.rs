@@ -249,6 +249,55 @@ fn process_rows_dim_a_step_below_agent_cards() {
         );
     }
 }
+
+#[test]
+fn active_process_rows_use_the_configured_working_animation_style() {
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.working = Some(
+        toml::from_str::<AnimationSpec>(
+            "frames = \"AB\"\ncolor = 196\neffect = \"blink\"\nspeed = \"fast\"\n",
+        )
+        .expect("working animation spec"),
+    );
+    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
+        vec![pane("%1", "cargo build --release", "/repo/main")],
+        None,
+    );
+
+    let mut lines = Vec::new();
+    let mut map = Vec::new();
+    let mut row_index = 0;
+    worktree_group_lines(
+        &theme,
+        &snapshot.worktree_groups[0],
+        &snapshot.providers,
+        snapshot.now,
+        44,
+        &snapshot.sidebar.context,
+        snapshot.sidebar.card_density,
+        None,
+        &mut row_index,
+        0,
+        0,
+        &CostRolls::default(),
+        &mut lines,
+        &mut map,
+    );
+
+    let lead = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "A")
+        .expect("the process row uses the custom working frame");
+    assert_eq!(lead.style.fg, Some(Color::Indexed(196)));
+    assert!(lead.style.add_modifier.contains(Modifier::BOLD));
+    assert!(
+        lead.style.add_modifier.contains(Modifier::DIM),
+        "process rows stay one visual step below agent cards"
+    );
+}
+
 #[test]
 fn render_process_row_shows_without_hint() {
     let snapshot = snapshot_with(Vec::new(), Vec::new())

@@ -300,6 +300,124 @@ fn render_running_head_spins_with_the_phase() {
         "a running agent's head must advance with the phase"
     );
 }
+
+#[test]
+fn render_reasoning_head_uses_the_new_thinking_orbit() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("reading"),
+    );
+    claude.phase = crate::agents::TurnPhase::Reasoning;
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(3), 40, 10);
+
+    assert!(
+        first.contains("⢄ claude"),
+        "the first thinking frame is the braille orbit:\n{first}"
+    );
+    assert!(
+        second.contains("⢂ claude"),
+        "slow thinking speed advances after three ticks:\n{second}"
+    );
+}
+
+#[test]
+fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.thinking = Some(
+        toml::from_str::<AnimationSpec>(
+            "frames = \"AB\"\ncolor = 196\neffect = \"blink\"\nspeed = \"fast\"\n",
+        )
+        .expect("animation spec"),
+    );
+
+    let lit = Theme::fixed_for_sidebar(false, &sidebar);
+    assert_eq!(
+        labels::agent_glyph(
+            &lit,
+            AgentStatus::Running,
+            crate::agents::TurnPhase::Reasoning,
+            1,
+        ),
+        "B"
+    );
+    let blink_on = labels::agent_role_style_at(
+        &lit,
+        AgentStatus::Running,
+        crate::agents::TurnPhase::Reasoning,
+        0,
+    );
+    assert_eq!(blink_on.fg, Some(Color::Indexed(196)));
+    assert!(blink_on.add_modifier.contains(Modifier::BOLD));
+    let blink_off = labels::agent_role_style_at(
+        &lit,
+        AgentStatus::Running,
+        crate::agents::TurnPhase::Reasoning,
+        2,
+    );
+    assert!(blink_off.add_modifier.contains(Modifier::DIM));
+
+    let plain = Theme::fixed_for_sidebar(true, &sidebar);
+    let plain_style = labels::agent_role_style_at(
+        &plain,
+        AgentStatus::Running,
+        crate::agents::TurnPhase::Reasoning,
+        0,
+    );
+    assert_eq!(plain_style.fg, None, "NO_COLOR strips only color");
+    assert_eq!(
+        labels::agent_glyph(
+            &plain,
+            AgentStatus::Running,
+            crate::agents::TurnPhase::Reasoning,
+            1,
+        ),
+        "B",
+        "NO_COLOR keeps the themed glyph shape"
+    );
+
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("reading"),
+    );
+    claude.phase = crate::agents::TurnPhase::Reasoning;
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    snapshot.sidebar = sidebar;
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
+    assert!(
+        screen.contains("B claude"),
+        "custom frame reaches the row:\n{screen}"
+    );
+}
+
+#[test]
+fn calm_custom_animation_wakes_the_slow_cadence() {
+    let mut snapshot = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    assert_eq!(animation_cadence(&snapshot), AnimationCadence::None);
+    snapshot.sidebar.animations.idle =
+        Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
+    assert_eq!(animation_cadence(&snapshot), AnimationCadence::Slow);
+}
+
 /// A card's `$cost` counts up through its eased roll: with a climb seeded
 /// from $1.00 toward the snapshot's $1.27, the first click paints $1.11 (the
 /// ease-out curve's first point over the 27¢ gap, rounded to cents) and a

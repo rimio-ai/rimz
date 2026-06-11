@@ -8,8 +8,10 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{age_short, clip, fmt_cpu, fmt_io, fmt_rss};
-use crate::sidebar_pane::render::labels::{status_glyph, status_style, working_glyph};
-use crate::sidebar_pane::render::theme::{ORANGE, Theme};
+use crate::sidebar_pane::render::labels::{
+    status_glyph, status_style, working_glyph, working_style,
+};
+use crate::sidebar_pane::render::theme::Theme;
 
 use super::{Tier, pin_right, trim_spans_to_width};
 
@@ -32,21 +34,21 @@ pub(super) fn process_row_line(
         .and_then(|process| process.foreign_user.as_deref());
     let (lead, lead_style) = if foreign_user.is_some() && state.is_idle() {
         (
-            status_glyph(AgentStatus::Running),
-            theme.style(ORANGE, Modifier::DIM),
+            status_glyph(theme, AgentStatus::Running),
+            working_style(theme, animation_phase).add_modifier(Modifier::DIM),
         )
     } else {
         match state {
             ProcessState::Busy => (
-                working_glyph(animation_phase),
-                theme.style(ORANGE, Modifier::DIM),
+                working_glyph(theme, animation_phase),
+                working_style(theme, animation_phase).add_modifier(Modifier::DIM),
             ),
             ProcessState::Stuck => (
-                status_glyph(AgentStatus::Failed),
+                status_glyph(theme, AgentStatus::Failed),
                 status_style(theme, AgentStatus::Failed).add_modifier(Modifier::BOLD),
             ),
             ProcessState::Idle => (
-                status_glyph(AgentStatus::Idle),
+                status_glyph(theme, AgentStatus::Idle),
                 status_style(theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
             ),
         }

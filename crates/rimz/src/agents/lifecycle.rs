@@ -120,7 +120,7 @@ pub enum TurnPhase {
     #[default]
     Idle,
     /// The turn's pre-edit opening: reading, searching, reasoning. The sidebar
-    /// paints the thinking sparkle. Set by a turn (or child task) start,
+    /// paints the thinking head. Set by a turn (or child task) start,
     /// carried through non-editing tools.
     Reasoning,
     /// The turn has begun mutating the workspace — its first file-editing tool
@@ -345,7 +345,7 @@ fn map_phase(signal: &LifecycleSignal, prior_phase: TurnPhase, status: AgentStat
     let phase = match signal {
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted => TurnPhase::Reasoning,
         // A shell command during the reasoning phase is work, but the turn has
-        // still written nothing — the sparkle carries forward. Anywhere else a
+        // still written nothing — the thinking head carries forward. Anywhere else a
         // completed tool is visible work (acting): a phase that left reasoning
         // never re-arms mid-turn, and a parked turn that runs a tool is
         // visibly back at work.

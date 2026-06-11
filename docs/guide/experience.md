@@ -165,7 +165,7 @@ The reader does what they came to do: spins up four more agents across two workt
 ▌? claude · Opus · xhigh
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
-▏✻ claude · Sonnet · high · 200k
+▏⢄ claude · Sonnet · high · 200k
 ▏  add tests
 ▏  ▣ ━━━━━━────────────────────────────   18%
 ▏⢿ codex · GPT 5.5 · high
@@ -200,7 +200,7 @@ The footer advertises `?`, and pressing it overlays the legend and keys, so the 
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
- ⢿ working   ✻ thinking   ? waiting
+ ⢿ working   ⢄ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
 

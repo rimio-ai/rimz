@@ -292,6 +292,61 @@ fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
 }
 
 #[test]
+fn sidebar_animations_parse_as_partial_role_overrides() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.animations.thinking]\n\
+             frames = \"⢄⢂\"\n\
+             color = \"clay\"\n\
+             speed = \"slow\"\n\
+             [sidebar.animations.idle]\n\
+             effect = \"breathe\"\n",
+    ))
+    .expect("load");
+    let thinking = config
+        .sidebar
+        .animations
+        .thinking
+        .expect("thinking override");
+    assert_eq!(
+        thinking.frames.expect("frames").as_slice(),
+        ["⢄".to_owned(), "⢂".to_owned()]
+    );
+    assert_eq!(thinking.color, Some(AnimationColor::Clay));
+    assert_eq!(thinking.speed, Some(AnimationSpeed::Slow));
+    assert_eq!(
+        config
+            .sidebar
+            .animations
+            .idle
+            .expect("idle override")
+            .effect,
+        Some(AnimationEffect::Breathe)
+    );
+    assert!(MachineConfig::default().sidebar.animations.is_unset());
+}
+
+#[test]
+fn sidebar_animations_reject_bad_frame_shapes() {
+    let dir = tempdir().expect("tempdir");
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.animations.waiting]\nframes = \"?!\"\n",
+        ))
+        .is_err()
+    );
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.animations.idle]\nframes = [\"...\"]\n",
+        ))
+        .is_err()
+    );
+}
+
+#[test]
 fn sidebar_glow_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
     assert_eq!(

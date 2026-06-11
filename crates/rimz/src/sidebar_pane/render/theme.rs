@@ -21,9 +21,11 @@
 //! renderer of the same workspace paints the same tones with zero config
 //! knowledge of its own.
 
-use crate::config::{GlowMode, SidebarConfig, SidebarThemeConfig};
+use crate::config::{AnimationColor, GlowMode, SidebarConfig, SidebarThemeConfig};
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
+
+use super::animation::ResolvedAnimations;
 
 /// Claude clay — the running agent's animated working/thinking head, so the
 /// live cell reads in the agent's own brand orange. Closest muted 256-color
@@ -102,9 +104,25 @@ impl Palette {
             selection: slot(theme.selection, Self::BUILTIN.selection),
         }
     }
+
+    pub(crate) fn animation_color(&self, color: AnimationColor) -> Color {
+        match color {
+            AnimationColor::Good => self.good,
+            AnimationColor::Warn => self.warn,
+            AnimationColor::Alarm => self.alarm,
+            AnimationColor::Accent => self.accent,
+            AnimationColor::Cool => self.cool,
+            AnimationColor::Meta => self.meta,
+            AnimationColor::Soft => self.soft,
+            AnimationColor::Dim => self.dim,
+            AnimationColor::Faint => self.faint,
+            AnimationColor::Clay => ORANGE,
+            AnimationColor::Indexed(index) => Color::Indexed(index),
+        }
+    }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
     /// The terminal advertises 24-bit color (`COLORTERM`). Gates the
@@ -115,6 +133,7 @@ pub(crate) struct Theme {
     /// `COLORTERM`; `never` pins the plain 256-color render.
     glow: GlowMode,
     palette: Palette,
+    pub(crate) animations: ResolvedAnimations,
 }
 
 impl Default for Theme {
@@ -124,6 +143,7 @@ impl Default for Theme {
             truecolor: false,
             glow: GlowMode::Auto,
             palette: Palette::BUILTIN,
+            animations: ResolvedAnimations::default(),
         }
     }
 }
@@ -135,11 +155,13 @@ impl Theme {
     /// `Color`, far below the frame budget — so a config change lands with the
     /// next produced snapshot, no renderer restart.
     pub(crate) fn for_sidebar(sidebar: &SidebarConfig) -> Self {
+        let palette = Palette::resolve(&sidebar.theme);
         Self {
             no_color: crate::tui::no_color(),
             truecolor: truecolor_env(),
             glow: sidebar.glow,
-            palette: Palette::resolve(&sidebar.theme),
+            palette,
+            animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
         }
     }
 
@@ -147,12 +169,25 @@ impl Theme {
     /// without poking at the process environment. Always the built-in palette;
     /// override tests go through [`Theme::for_sidebar`].
     #[cfg(test)]
-    pub(crate) const fn fixed(no_color: bool) -> Self {
+    pub(crate) fn fixed(no_color: bool) -> Self {
         Self {
             no_color,
             truecolor: false,
             glow: GlowMode::Auto,
             palette: Palette::BUILTIN,
+            animations: ResolvedAnimations::default(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn fixed_for_sidebar(no_color: bool, sidebar: &SidebarConfig) -> Self {
+        let palette = Palette::resolve(&sidebar.theme);
+        Self {
+            no_color,
+            truecolor: false,
+            glow: sidebar.glow,
+            palette,
+            animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
         }
     }
 
@@ -410,6 +445,7 @@ mod tests {
             truecolor,
             glow,
             palette: Palette::BUILTIN,
+            animations: ResolvedAnimations::default(),
         };
         assert!(theme(false, true, GlowMode::Auto).effects_enabled());
         assert!(

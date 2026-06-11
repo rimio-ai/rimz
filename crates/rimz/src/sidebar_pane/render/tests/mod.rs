@@ -2,7 +2,7 @@ use crate::agents::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
     RateLimitWindow, TurnErrorClass,
 };
-use crate::config::ScrollbarMode;
+use crate::config::{AnimationSpec, ScrollbarMode};
 use crate::feed::{AgentState, AgentStatus, FeedKind, PaneRef};
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::{EventEnvelope, FeedItem, FeedStatus, SidebarSnapshot, Surface, WorkspaceId};
@@ -652,6 +652,24 @@ fn make_up_text(lines: &[Line<'static>]) -> String {
         .iter()
         .map(|span| span.content.as_ref())
         .collect()
+}
+
+fn text_cell_range(text: &str, start: u16, end: u16) -> String {
+    let start = byte_index_at_cell(text, usize::from(start));
+    let end = byte_index_at_cell(text, usize::from(end));
+    text[start..end].to_owned()
+}
+
+fn byte_index_at_cell(text: &str, target: usize) -> usize {
+    let mut cells = 0;
+    for (index, ch) in text.char_indices() {
+        let width = ratatui::text::Span::raw(ch.to_string()).width();
+        if cells >= target && width > 0 {
+            return index;
+        }
+        cells += width;
+    }
+    text.len()
 }
 
 /// Six short running cards across two worktrees — taller than the small frames

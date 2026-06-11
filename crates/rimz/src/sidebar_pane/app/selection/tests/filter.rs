@@ -140,11 +140,7 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
         .make_up_hits
         .iter()
         .map(|hit| {
-            let text: String = texts[hit.line]
-                .chars()
-                .skip(usize::from(hit.col_start))
-                .take(usize::from(hit.col_end - hit.col_start))
-                .collect();
+            let text = text_cell_range(&texts[hit.line], hit.col_start, hit.col_end);
             (hit.status, text)
         })
         .collect();
@@ -164,6 +160,25 @@ fn make_up_hits_land_on_the_painted_buckets_through_the_real_frame() {
     handle_mouse_click(column, u16::try_from(row).unwrap(), &mut ui, &snapshot);
     assert_eq!(ui.make_up_filter, Some(AgentStatus::Failed));
 }
+
+fn text_cell_range(text: &str, start: u16, end: u16) -> String {
+    let start = byte_index_at_cell(text, usize::from(start));
+    let end = byte_index_at_cell(text, usize::from(end));
+    text[start..end].to_owned()
+}
+
+fn byte_index_at_cell(text: &str, target: usize) -> usize {
+    let mut cells = 0;
+    for (index, ch) in text.char_indices() {
+        let width = ratatui::text::Span::raw(ch.to_string()).width();
+        if cells >= target && width > 0 {
+            return index;
+        }
+        cells += width;
+    }
+    text.len()
+}
+
 #[test]
 fn make_up_filter_auto_clears_when_its_bucket_empties() {
     use crate::feed::AgentStatus;

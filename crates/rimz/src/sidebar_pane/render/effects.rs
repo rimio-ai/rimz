@@ -206,7 +206,7 @@ impl EffectState {
             let Some(run) = row_run(line_map, index) else {
                 continue;
             };
-            if let Some(word) = word_rect(buf, area, &run, row) {
+            if let Some(word) = word_rect(buf, area, &run, row, theme) {
                 shift_lightness(delta, buf, word);
             }
             shift_lightness(delta, buf, spine_rect(area, &run));
@@ -423,8 +423,14 @@ fn spine_rect(area: Rect, run: &Range<usize>) -> Rect {
 /// composed status glyph in the glyph column, which also skips the group header
 /// line sharing the run. `None` when the identity line is scrolled out or the
 /// glyph is not on screen this frame.
-fn word_rect(buf: &Buffer, area: Rect, run: &Range<usize>, row: &SidebarRow) -> Option<Rect> {
-    let glyph = row.status().map(status_glyph)?;
+fn word_rect(
+    buf: &Buffer,
+    area: Rect,
+    run: &Range<usize>,
+    row: &SidebarRow,
+    theme: &Theme,
+) -> Option<Rect> {
+    let glyph = row.status().map(|status| status_glyph(theme, status))?;
     for line in run.clone() {
         let y = area.y.saturating_add(line as u16);
         let Some(cell) = buf.cell((area.x + 1, y)) else {

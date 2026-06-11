@@ -18,10 +18,10 @@ use crate::sidebar_pane::render::fmt::{
 };
 use crate::sidebar_pane::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
-    agent_glyph, agent_style, attention_glyph_style, compacting_glyph, compacting_style,
+    agent_glyph, agent_lead_style, agent_role_style_at, compacting_glyph, compacting_head_style,
     context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
-    gauge_spans, loading_dots, resolver_glyph, segmented_gauge_spans, severity_color, status_style,
-    subagent_glyph, subagent_style, todo_spans, window_style,
+    gauge_spans, loading_dots, resolver_glyph, resolver_style, segmented_gauge_spans,
+    severity_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -159,7 +159,7 @@ pub(super) fn row_lines(
 /// The expanded card's subagent list: a `⧉ subagents (N)` header — the marker
 /// in the delegation violet, the label dim — then up to two indented lines per
 /// child. Line 1 leads with the same live cell an agent row wears — the
-/// thinking sparkle while the child reasons, the working fill while it acts,
+/// thinking head while the child reasons, the working fill while it acts,
 /// the static `✓`/`!` verdict once it finishes — then the type and the
 /// description of what the parent asked it to do; line 2 (deeper indent) is
 /// its token spend `◇` (the card's whole-unit figure, never a decimal), model,
@@ -215,14 +215,14 @@ fn sub_agent_lines(
         .unwrap_or(0);
     for sub in sub_agents {
         // The leading cell is the agent-row vocabulary verbatim: a running
-        // child sparkles (reasoning) or fills (acting) in the live clay, a
+        // child thinks (reasoning) or fills (acting) in the live clay, a
         // finished one holds its static `✓`/`!` verdict — one head grammar
         // for the parent's cell and its children's.
         let mut spans = vec![
             Span::raw("    "),
             Span::styled(
-                agent_glyph(sub.status, sub.phase, animation_phase),
-                agent_style(theme, sub.status),
+                agent_glyph(theme, sub.status, sub.phase, animation_phase),
+                agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
             ),
             Span::raw(" "),
             Span::styled(sub.name.clone(), theme.soft()),

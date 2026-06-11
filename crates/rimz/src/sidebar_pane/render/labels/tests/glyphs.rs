@@ -60,42 +60,89 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     // modifier varies by frame; only the color is asserted here.
     for status in [AgentStatus::Waiting, AgentStatus::Failed] {
         assert_eq!(
-            attention_glyph_style(&theme, status, 5 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false).fg,
             yellow
         );
         assert_eq!(
-            attention_glyph_style(&theme, status, 25 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false).fg,
             yellow
         );
         assert_eq!(
-            attention_glyph_style(&theme, status, 31 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 31 * 60, 0, false).fg,
             amber
         );
         assert_eq!(
-            attention_glyph_style(&theme, status, 61 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 61 * 60, 0, false).fg,
             red
         );
     }
     // Calm states never heat, however old — they take their plain style.
     assert_eq!(
-        attention_glyph_style(&theme, AgentStatus::Idle, 2 * 60 * 60, 0, false).fg,
-        agent_style(&theme, AgentStatus::Idle).fg
+        agent_lead_style(
+            &theme,
+            AgentStatus::Idle,
+            TurnPhase::Idle,
+            2 * 60 * 60,
+            0,
+            false
+        )
+        .fg,
+        agent_style_at(&theme, AgentStatus::Idle, 0).fg
     );
     assert_eq!(
-        attention_glyph_style(&theme, AgentStatus::Running, 2 * 60 * 60, 0, false).fg,
-        agent_style(&theme, AgentStatus::Running).fg
+        agent_lead_style(
+            &theme,
+            AgentStatus::Running,
+            TurnPhase::Acting,
+            2 * 60 * 60,
+            0,
+            false
+        )
+        .fg,
+        agent_style_at(&theme, AgentStatus::Running, 0).fg
     );
 }
 
 #[test]
 fn unread_glyph_hard_blinks_without_heating() {
     let theme = Theme::fixed(false);
-    let read = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, false);
-    let unread_on = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 0, true);
-    let unread_off = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 3, true);
-    let unread_wrap = attention_glyph_style(&theme, AgentStatus::Success, 5 * 60, 6, true);
+    let read = agent_lead_style(
+        &theme,
+        AgentStatus::Success,
+        TurnPhase::Idle,
+        5 * 60,
+        0,
+        false,
+    );
+    let unread_on = agent_lead_style(
+        &theme,
+        AgentStatus::Success,
+        TurnPhase::Idle,
+        5 * 60,
+        0,
+        true,
+    );
+    let unread_off = agent_lead_style(
+        &theme,
+        AgentStatus::Success,
+        TurnPhase::Idle,
+        5 * 60,
+        3,
+        true,
+    );
+    let unread_wrap = agent_lead_style(
+        &theme,
+        AgentStatus::Success,
+        TurnPhase::Idle,
+        5 * 60,
+        6,
+        true,
+    );
 
-    assert_eq!(unread_on.fg, agent_style(&theme, AgentStatus::Success).fg);
+    assert_eq!(
+        unread_on.fg,
+        agent_style_at(&theme, AgentStatus::Success, 0).fg
+    );
     assert_eq!(unread_on.add_modifier, Modifier::BOLD);
     assert_eq!(unread_off.add_modifier, Modifier::DIM);
     assert_eq!(unread_wrap.add_modifier, Modifier::BOLD);
@@ -105,8 +152,22 @@ fn unread_glyph_hard_blinks_without_heating() {
 #[test]
 fn unread_actionable_glyph_blinks_and_keeps_heat_color() {
     let theme = Theme::fixed(false);
-    let unread_waiting_on = attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60, 0, true);
-    let unread_waiting_off = attention_glyph_style(&theme, AgentStatus::Waiting, 5 * 60, 3, true);
+    let unread_waiting_on = agent_lead_style(
+        &theme,
+        AgentStatus::Waiting,
+        TurnPhase::Idle,
+        5 * 60,
+        0,
+        true,
+    );
+    let unread_waiting_off = agent_lead_style(
+        &theme,
+        AgentStatus::Waiting,
+        TurnPhase::Idle,
+        5 * 60,
+        3,
+        true,
+    );
     assert_eq!(
         unread_waiting_on.fg,
         theme.style(Color::Yellow, Modifier::empty()).fg
@@ -114,7 +175,14 @@ fn unread_actionable_glyph_blinks_and_keeps_heat_color() {
     assert_eq!(unread_waiting_on.add_modifier, Modifier::BOLD);
     assert_eq!(unread_waiting_off.add_modifier, Modifier::DIM);
 
-    let red_read = attention_glyph_style(&theme, AgentStatus::Failed, 2 * 60 * 60, 0, false);
+    let red_read = agent_lead_style(
+        &theme,
+        AgentStatus::Failed,
+        TurnPhase::Idle,
+        2 * 60 * 60,
+        0,
+        false,
+    );
     assert_eq!(red_read.fg, theme.style(Color::Red, Modifier::empty()).fg);
     assert_eq!(red_read.add_modifier, hard_blink(0));
 }
@@ -122,47 +190,46 @@ fn unread_actionable_glyph_blinks_and_keeps_heat_color() {
 /// without bound.
 #[test]
 fn animations_cycle_and_wrap() {
-    for (phase, expected) in WORKING_FRAMES.iter().enumerate() {
-        assert_eq!(working_glyph(phase as u64), *expected);
+    let theme = Theme::fixed(false);
+    let working = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
+    for (phase, expected) in working.iter().enumerate() {
+        assert_eq!(working_glyph(&theme, phase as u64), *expected);
+    }
+    assert_eq!(working_glyph(&theme, working.len() as u64), working[0]);
+    let thinking = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"];
+    for (phase, expected) in thinking.iter().enumerate() {
+        let held_phase = phase as u64 * 3;
+        assert_eq!(thinking_glyph(&theme, held_phase), *expected);
+        assert_eq!(thinking_glyph(&theme, held_phase + 1), *expected);
+        assert_eq!(thinking_glyph(&theme, held_phase + 2), *expected);
     }
     assert_eq!(
-        working_glyph(WORKING_FRAMES.len() as u64),
-        WORKING_FRAMES[0]
+        thinking_glyph(&theme, thinking.len() as u64 * 3),
+        thinking[0]
     );
-    assert_eq!(THINKING_FRAMES, ["·", "✢", "✳", "✶", "✻", "✶", "✳", "✢"]);
-    for (phase, expected) in THINKING_FRAMES.iter().enumerate() {
-        let held_phase = phase as u64 * THINKING_FRAME_HOLD;
-        assert_eq!(thinking_glyph(held_phase), *expected);
-        assert_eq!(thinking_glyph(held_phase + 1), *expected);
-        assert_eq!(thinking_glyph(held_phase + 2), *expected);
-    }
-    assert_eq!(
-        thinking_glyph(THINKING_FRAMES.len() as u64 * THINKING_FRAME_HOLD),
-        THINKING_FRAMES[0]
-    );
-    assert_eq!(
-        resolver_glyph(RESOLVER_FRAMES.len() as u64),
-        RESOLVER_FRAMES[0]
-    );
+    let resolving = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+    assert_eq!(resolver_glyph(&theme, resolving.len() as u64), resolving[0]);
     // The two transient heads cycle and wrap on the same shared phase.
-    for (phase, expected) in COMPACTING_FRAMES.iter().enumerate() {
-        assert_eq!(compacting_glyph(phase as u64), *expected);
+    let compacting = ["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"];
+    for (phase, expected) in compacting.iter().enumerate() {
+        assert_eq!(compacting_glyph(&theme, phase as u64), *expected);
     }
     assert_eq!(
-        compacting_glyph(COMPACTING_FRAMES.len() as u64),
-        COMPACTING_FRAMES[0]
+        compacting_glyph(&theme, compacting.len() as u64),
+        compacting[0]
     );
-    for (phase, expected) in SUBAGENT_FRAMES.iter().enumerate() {
-        assert_eq!(subagent_glyph(phase as u64), *expected);
+    let delegating = ["_", "-", "`", "´", "'", "´", "`", "-"];
+    for (phase, expected) in delegating.iter().enumerate() {
+        assert_eq!(subagent_glyph(&theme, phase as u64), *expected);
     }
     assert_eq!(
-        subagent_glyph(SUBAGENT_FRAMES.len() as u64),
-        SUBAGENT_FRAMES[0]
+        subagent_glyph(&theme, delegating.len() as u64),
+        delegating[0]
     );
     // The phase can grow without bound and still indexes a frame.
     assert_eq!(
-        working_glyph(u64::MAX),
-        WORKING_FRAMES[(u64::MAX % WORKING_FRAMES.len() as u64) as usize]
+        working_glyph(&theme, u64::MAX),
+        working[(u64::MAX % working.len() as u64) as usize]
     );
 }
 /// The loading dots are static while the attention glyph breathes a slow
@@ -268,7 +335,8 @@ fn activity_age_style_steps_with_the_clock_quarters() {
 /// monochrome and the cockpit columns never drift when it appears.
 #[test]
 fn paused_glyph_carries_the_text_presentation_selector() {
-    assert_eq!(status_glyph(AgentStatus::Paused), PAUSED_GLYPH);
+    let theme = Theme::fixed(false);
+    assert_eq!(status_glyph(&theme, AgentStatus::Paused), PAUSED_GLYPH);
     let mut chars = PAUSED_GLYPH.chars();
     assert_eq!(chars.next(), Some('⏸'));
     assert_eq!(chars.next(), Some('\u{FE0E}'));
@@ -277,7 +345,10 @@ fn paused_glyph_carries_the_text_presentation_selector() {
     // it occupies exactly one cell like every other status glyph — so the
     // cockpit columns never drift when the `⏸` bucket appears.
     assert_eq!(Span::raw(PAUSED_GLYPH).width(), 1);
-    assert_eq!(Span::raw(status_glyph(AgentStatus::Waiting)).width(), 1);
+    assert_eq!(
+        Span::raw(status_glyph(&theme, AgentStatus::Waiting)).width(),
+        1
+    );
 }
 /// Paused rests in held amber — the attention family, but *not* the
 /// bold, heating weight of `?`/`!`. It is attention-class yet parked, so
@@ -289,29 +360,72 @@ fn paused_rests_in_held_amber_and_never_reddens() {
     let style = status_style(&theme, AgentStatus::Paused);
     assert_eq!(style.fg, Some(Color::Indexed(179)));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
-    let long_parked = attention_glyph_style(&theme, AgentStatus::Paused, 2 * 60 * 60, 0, false);
+    let long_parked = agent_lead_style(
+        &theme,
+        AgentStatus::Paused,
+        TurnPhase::Idle,
+        2 * 60 * 60,
+        0,
+        false,
+    );
     assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
 }
 /// A running agent animates the working fill; while its turn is still in
-/// the pre-edit thinking phase it sparkles; a stalled agent (folded to
-/// `Failed` upstream) and every other state takes the static glyph,
-/// regardless of phase.
+/// the pre-edit thinking phase it uses the thinking head. Calm statuses can
+/// animate their configured frames, while attention statuses keep a fixed head
+/// and put urgency in color and brightness.
 #[test]
-fn agent_glyph_animates_only_active_states() {
+fn agent_glyph_animates_live_and_calm_status_frames() {
+    let theme = Theme::fixed(false);
     assert_eq!(
-        agent_glyph(AgentStatus::Running, TurnPhase::Acting, 2),
-        WORKING_FRAMES[2]
+        agent_glyph(&theme, AgentStatus::Running, TurnPhase::Acting, 2),
+        "⣻"
     );
     assert_eq!(
-        agent_glyph(AgentStatus::Running, TurnPhase::Reasoning, 4),
-        THINKING_FRAMES[1]
+        agent_glyph(&theme, AgentStatus::Running, TurnPhase::Reasoning, 4),
+        "⢂"
     );
-    // The sparkle is the running-state indicator — a stale thinking bit on
-    // a non-running agent never sparkles.
-    assert_eq!(agent_glyph(AgentStatus::Idle, TurnPhase::Idle, 2), "○");
-    assert_eq!(agent_glyph(AgentStatus::Waiting, TurnPhase::Idle, 2), "?");
-    assert_eq!(agent_glyph(AgentStatus::Failed, TurnPhase::Idle, 2), "!");
-    assert_eq!(agent_glyph(AgentStatus::Idle, TurnPhase::Idle, 2), "○");
-    assert_eq!(agent_glyph(AgentStatus::Success, TurnPhase::Idle, 2), "✓");
+    // The thinking head is the running-state indicator — a stale thinking bit
+    // on a non-running agent never changes the static status glyph.
+    assert_eq!(
+        agent_glyph(&theme, AgentStatus::Idle, TurnPhase::Idle, 2),
+        "○"
+    );
+    assert_eq!(
+        agent_glyph(&theme, AgentStatus::Waiting, TurnPhase::Idle, 2),
+        "?"
+    );
+    assert_eq!(
+        agent_glyph(&theme, AgentStatus::Failed, TurnPhase::Idle, 2),
+        "!"
+    );
+    assert_eq!(
+        agent_glyph(&theme, AgentStatus::Success, TurnPhase::Idle, 2),
+        "✓"
+    );
+
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.idle = Some(
+        toml::from_str::<crate::config::AnimationSpec>("frames = \"AB\"\nspeed = \"fast\"\n")
+            .expect("idle animation spec"),
+    );
+    sidebar.animations.success = Some(
+        toml::from_str::<crate::config::AnimationSpec>("frames = \"XY\"\nspeed = \"fast\"\n")
+            .expect("success animation spec"),
+    );
+    let custom = Theme::fixed_for_sidebar(false, &sidebar);
+    assert_eq!(
+        agent_glyph(&custom, AgentStatus::Idle, TurnPhase::Idle, 1),
+        "B"
+    );
+    assert_eq!(
+        agent_glyph(&custom, AgentStatus::Success, TurnPhase::Idle, 1),
+        "Y"
+    );
+    assert_eq!(
+        status_glyph(&custom, AgentStatus::Idle),
+        "A",
+        "legend/status summaries keep the representative still frame"
+    );
 }

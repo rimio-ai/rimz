@@ -68,7 +68,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
         bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
         "make-up order is ? ! ⏸ ✓ | ⢿ ○: {buckets}"
     );
-    assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('⢄'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.
     assert!(
@@ -221,11 +221,7 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
             .iter()
             .find(|hit| hit.status == status)
             .expect("active bucket keeps its hit");
-        let footprint: String = text
-            .chars()
-            .skip(usize::from(hit.col_start))
-            .take(usize::from(hit.col_end - hit.col_start))
-            .collect();
+        let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
         assert_eq!(footprint, expected, "hit covers the fixed bucket");
     }
 }
@@ -260,11 +256,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         .iter()
         .find(|hit| hit.status == AgentStatus::Failed)
         .expect("the picked bucket keeps its hit");
-    let footprint: String = text
-        .chars()
-        .skip(usize::from(hit.col_start))
-        .take(usize::from(hit.col_end - hit.col_start))
-        .collect();
+    let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
     assert_eq!(footprint, "! 1", "the hit covers the fixed bucket");
     let active = lines[0]
         .spans
@@ -293,14 +285,10 @@ fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
         "only the non-zero buckets are tabs"
     );
     for hit in &hits {
-        let footprint: String = text
-            .chars()
-            .skip(usize::from(hit.col_start))
-            .take(usize::from(hit.col_end - hit.col_start))
-            .collect();
+        let footprint = text_cell_range(&text, hit.col_start, hit.col_end);
         assert_eq!(
             footprint,
-            format!("{} 1", labels::status_glyph(hit.status)),
+            format!("{} 1", labels::status_glyph(&theme, hit.status)),
             "the hit sits exactly on its bucket:\n{text}"
         );
     }
@@ -421,7 +409,7 @@ fn render_make_up_filter_narrows_the_body() {
     assert_snapshot("make_up_filter_failed", screen);
 }
 /// A compacting agent counts as **working** (`⢿`) in the cockpit — the
-/// compaction pulse, like the thinking sparkle, is a per-row head and never
+/// compaction pulse, like the thinking head, is a per-row head and never
 /// a bucket.
 #[test]
 fn compacting_agent_counts_as_working() {
@@ -443,5 +431,5 @@ fn compacting_agent_counts_as_working() {
         buckets.contains("⢿ 1"),
         "compacting counts as working: {buckets}"
     );
-    assert!(!buckets.contains('✻'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('⢄'), "no thinking bucket: {buckets}");
 }

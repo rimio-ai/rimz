@@ -154,7 +154,7 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AgentStatus>,
     /// The running turn's shape, copied from the rollup: `reasoning` paints the
-    /// thinking sparkle, `acting` the working spinner, `parked` the secondary
+    /// thinking head, `acting` the working spinner, `parked` the secondary
     /// "background" marker.
     #[serde(default, skip_serializing_if = "turn_phase_is_idle")]
     pub phase: TurnPhase,

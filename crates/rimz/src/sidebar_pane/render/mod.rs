@@ -12,6 +12,7 @@
 //! reload-recovery contract documented in
 //! [`docs/internals/sidebar/sidebar.md`](../../docs/internals/sidebar/sidebar.md).
 
+mod animation;
 mod ansi;
 mod chrome;
 mod compose;
@@ -98,7 +99,7 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             return AnimationCadence::Fast;
         }
     }
-    if slow {
+    if slow || snapshot.sidebar.animations.has_resting_motion() {
         AnimationCadence::Slow
     } else {
         AnimationCadence::None

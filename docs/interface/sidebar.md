@@ -28,7 +28,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌  ⧉ subagents (2)                                        ← subagents spawned this turn
 ▌    ✓ Explore — locate the render seam                   ← done child: subagent kind · task
 ▌      ◇ 12k · Opus 4.8                          ◔ 10m    ← tokens · model · elapsed time
-▌    ✻ Explore — audit the trust hash                     ← active child: thinking head
+▌    ⢄ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇  3k · Opus 4.8                          ◔  3m    ← same
 
  ─────────────────────────────────────────────────────
@@ -58,7 +58,7 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the configurable stall window | yes — yellow, heating amber then red with the age clock; the breath quickens with it, blinking at red; unread rows hard-blink until focused |
 | `⏸`   | paused | stopped mid-turn on a provider limit — rate-limit or overload; resumes after the provider recovers or the window resets | waiting on recovery — held amber, never heats |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
-| `✻`   | thinking   | running, before the turn's first file edit — sparkles `· ✢ ✳ ✶ ✻`, holding `✻` for the peak frame, in clay | no |
+| `⢄`   | thinking   | running, before the turn's first file edit — orbits `⢄ ⢂ ⢁ ⡁ ⡈ ⡐ ⡠` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no; unread results hard-blink until focused |
@@ -68,11 +68,11 @@ Three short-lived heads ride over the base status on the leading cell, so they n
 
 | head | meaning |
 |------|---------|
-| `✻` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits sparkles end to end |
+| `⢄` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits stays in the thinking orbit end to end |
 | `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
 | `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
 
-Every running agent — whichever head rides its cell — counts as **working** (`⢿`) in the cockpit make-up.
+Every running agent — whichever head rides its cell — counts as **working** (`⢿`) in the cockpit make-up. The status-head frames, base colors, effects, and speeds are themeable per machine through `[sidebar.animations]` ([configuration](../reference/configuration.md#sidebar-animations)).
 
 The two actionable attention glyphs (`?` / `!`) **breathe**: a brightness pulse swells from dim to bold and fades back, never blanking, pulling the eye to an unanswered row. They also **heat with the age clock** — yellow from the first second, amber once the row sits unanswered past the half hour, red past the hour. That is the same quarter-hour ramp the `◔` age glyph beside them wears, so a fresh ask reads calm-urgent and a long-ignored one visibly heats up. The breath paces with that heat: a slow ~2.4s swell while yellow, double-time once amber, and at red the swell gives way to a hard bold↔dim blink — so the cadence alone carries the urgency even under `NO_COLOR`. Unread cards hard-blink regardless of heat and render the description bold; both clear when the pane is focused in any tab. A working agent gone silent past the configurable stall window (30 minutes by default) escalates to a breathing `!`; the exception is a provider kind with a spent, unreset window, which pauses instead. The `⏸` paused head is attention-class but parked: it holds still in a held amber and never heats or breathes, because waiting for provider recovery is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work. An idle agent with no prompt yet shows a static `...` on line 2 in place of the em dash.
 
@@ -140,7 +140,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
 - **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once today records spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. Any non-zero bucket with unread rows hard-blinks in its semantic tone. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking sparkle and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. Any non-zero bucket with unread rows hard-blinks in its semantic tone. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking orbit and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
 - **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
@@ -213,17 +213,17 @@ selected — only appends, never reshapes
 ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn. A `⧉ subagents (N)` header (the marker violet, the label soft) opens the list, then one entry per child in spawn order (creation time ascending, stable across refreshes). Each entry leads with the same live head an agent row wears — the `✻` thinking sparkle while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's type and what the parent asked it to do. A deeper-indented second line carries the child's metadata: token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. Elapsed work pins right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the parent's age ramp, so a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
+The expanded card also lists any **subagents** the agent spawned this turn. A `⧉ subagents (N)` header (the marker violet, the label soft) opens the list, then one entry per child in spawn order (creation time ascending, stable across refreshes). Each entry leads with the same live head an agent row wears — the `⢄` thinking orbit while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's type and what the parent asked it to do. A deeper-indented second line carries the child's metadata: token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. Elapsed work pins right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the parent's age ramp, so a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
 
 ```
 ▌  ⧉ subagents (2)
-▌    ✻ Explore — locate the render seam
+▌    ⢄ Explore — locate the render seam
 ▌      ◇ 12k · Opus 4.8                         ◔ 14m
 ▌    ✓ review — audit the trust hash
 ▌      ◇  3k · Haiku 4.5 · high                 ◔ <1m
 ```
 
-The description, tokens, and elapsed time ride in from Claude's `subagentStatusLine` (Claude-only, harvested at install time). The model, effort, and turn phase come from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child sparkles like its parent would. (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes.) A child with none of these — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
+The description, tokens, and elapsed time ride in from Claude's `subagentStatusLine` (Claude-only, harvested at install time). The model, effort, and turn phase come from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child uses the same thinking orbit its parent would. (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes.) A child with none of these — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
 
 ### Attention rows
 
@@ -399,7 +399,7 @@ These notices clear when the next accepted pane frame lands. A health alert take
  ↑/↓ select   1-9 jump   ↵ jump
  ␣ next ?!   ←/→ provider tab
  x dismiss   r reload   ? close
- ⢿ working   ✻ thinking   ? waiting
+ ⢿ working   ⢄ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
 

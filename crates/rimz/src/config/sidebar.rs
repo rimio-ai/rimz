@@ -3,6 +3,7 @@ use std::num::{NonZeroU16, NonZeroU32};
 
 use serde::{Deserialize, Serialize};
 
+use crate::config::SidebarAnimationsConfig;
 use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 
 /// `[sidebar] scrollbar`: when the agent cards overflow their viewport, how
@@ -135,6 +136,11 @@ pub struct SidebarConfig {
     /// the workspace paints the same tones.
     #[serde(skip_serializing_if = "SidebarThemeConfig::is_unset")]
     pub theme: SidebarThemeConfig,
+    /// Status-head animations for the renderer. An omitted role keeps the
+    /// built-in frames, tone, effect, and speed; an omitted field inside a
+    /// role keeps just that built-in field.
+    #[serde(skip_serializing_if = "SidebarAnimationsConfig::is_unset")]
+    pub animations: SidebarAnimationsConfig,
     /// How the agent-cards scrollbar shows when the cards overflow. `auto`
     /// (default) paints it only while the viewport moves and hides it once the
     /// view settles; `always` keeps it up; `never` removes it. Resolved
@@ -171,6 +177,7 @@ impl Default for SidebarConfig {
             attention: AttentionConfig::default(),
             trunk: None,
             theme: SidebarThemeConfig::default(),
+            animations: SidebarAnimationsConfig::default(),
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
             card_density: CardDensityMode::default(),

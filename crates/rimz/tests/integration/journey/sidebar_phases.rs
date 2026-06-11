@@ -143,7 +143,7 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
 }
 
 /// The turn phase on a rendered frame: a prompted agent opens with the thinking
-/// sparkle, a shell command keeps it (work, but no file written), and the turn's
+/// head, a shell command keeps it (work, but no file written), and the turn's
 /// first file edit flips the leading cell to the working fill.
 #[test]
 fn turn_phase_flips_thinking_to_working_on_first_edit() {
@@ -162,7 +162,7 @@ fn turn_phase_flips_thinking_to_working_on_first_edit() {
         "a prompted agent opens its turn thinking:\n{screen}"
     );
 
-    // A shell command mutates but edits nothing — the sparkle stays.
+    // A shell command mutates but edits nothing — the thinking head stays.
     room.agent_hook("codex", &post_tool_use("sess-1", "shell"));
     let screen = room.wait_for(|s| thinking_row(s, "codex"), SETTLE);
     assert!(
@@ -435,11 +435,11 @@ fn running_row(screen: &str, name: &str) -> bool {
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }
 
-/// A running row still in its pre-edit thinking phase leads with an animated
-/// sparkle, so a live capture may show any frame — confirm the leading cell is
-/// one of them.
+/// A running row still in its pre-edit thinking phase leads with the animated
+/// thinking orbit, so a live capture may show any frame — confirm the leading
+/// cell is one of them.
 fn thinking_row(screen: &str, name: &str) -> bool {
-    ['·', '✢', '✳', '✶', '✻']
+    ['⢄', '⢂', '⢁', '⡁', '⡈', '⡐', '⡠']
         .iter()
         .any(|frame| screen.contains(&format!("{frame} {name}")))
 }
