@@ -54,11 +54,11 @@ fn footer_left_pins_fresh_link_badge_and_keeps_help_when_it_fits() {
 
     assert!(text.starts_with("⇄ remote 230ms"));
     assert!(!text.contains('%'));
-    assert!(text.contains("? for help"));
+    assert!(text.ends_with("? for help"));
 }
 
 #[test]
-fn footer_prints_meaningful_loss_and_drops_help_on_collision() {
+fn footer_prints_right_help_when_remote_badge_would_collide() {
     let snapshot = with_link(
         LinkTier::Bad,
         crate::SidebarLinkFreshness::Fresh,
@@ -66,8 +66,8 @@ fn footer_prints_meaningful_loss_and_drops_help_on_collision() {
         18,
     );
 
-    assert_eq!(footer_text(&snapshot, 17), "⇄ remote 612ms");
-    assert_eq!(footer_text(&snapshot, 20), "⇄ remote 612ms 18%");
+    assert_eq!(footer_text(&snapshot, 17), "       ? for help");
+    assert_eq!(footer_text(&snapshot, 20), "          ? for help");
 }
 
 #[test]
@@ -79,8 +79,10 @@ fn stale_link_badge_is_unknown() {
         0,
     );
 
-    assert_eq!(footer_text(&snapshot, 20), "⇄ remote ?");
-    let spans = footer_spans(&snapshot, 20);
+    let text = footer_text(&snapshot, 24);
+    assert!(text.starts_with("⇄ remote ?"));
+    assert!(text.ends_with("? for help"));
+    let spans = footer_spans(&snapshot, 24);
     let badge = spans
         .iter()
         .find(|span| span.content.contains("remote"))
@@ -96,7 +98,7 @@ fn warming_link_badge_uses_remote_ellipsis() {
 }
 
 #[test]
-fn footer_pins_triage_hint_right_when_attention_needs_it() {
+fn footer_pins_help_right_when_attention_needs_it() {
     let snapshot = snapshot_with(
         Vec::new(),
         vec![agent(
@@ -111,12 +113,12 @@ fn footer_pins_triage_hint_right_when_attention_needs_it() {
 
     let text = footer_text(&snapshot, 40);
 
-    assert_eq!(text.find("? for help"), Some(15));
-    assert_eq!(text.find("␣ next ?!"), Some(31));
+    assert_eq!(text.find("? for help"), Some(30));
+    assert!(!text.contains("next"));
 }
 
 #[test]
-fn footer_drops_right_hint_before_centered_help() {
+fn footer_keeps_help_right_without_attention_hint() {
     let snapshot = snapshot_with(
         Vec::new(),
         vec![agent(
@@ -131,12 +133,12 @@ fn footer_drops_right_hint_before_centered_help() {
 
     let text = footer_text(&snapshot, 24);
 
-    assert_eq!(text.find("? for help"), Some(7));
-    assert!(!text.contains("␣ next ?!"));
+    assert_eq!(text.find("? for help"), Some(14));
+    assert!(!text.contains("next"));
 }
 
 #[test]
-fn remote_footer_keeps_all_zones_when_they_fit() {
+fn remote_footer_keeps_left_badge_and_right_help_when_they_fit() {
     let mut snapshot = with_link(
         LinkTier::Degraded,
         crate::SidebarLinkFreshness::Fresh,
@@ -159,6 +161,13 @@ fn remote_footer_keeps_all_zones_when_they_fit() {
     let text = footer_text(&snapshot, 44);
 
     assert!(text.starts_with("⇄ remote 210ms"));
-    assert!(text.contains("? for help"));
-    assert!(text.ends_with("␣ next ?!"));
+    assert!(text.ends_with("? for help"));
+    assert!(!text.contains("next"));
+}
+
+#[test]
+fn footer_trims_help_to_narrow_width() {
+    let snapshot = snapshot_with(Vec::new(), Vec::new());
+
+    assert_eq!(footer_text(&snapshot, 4), "? fo");
 }

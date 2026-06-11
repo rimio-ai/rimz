@@ -145,62 +145,27 @@ pub(super) fn footer_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let needs_attention = snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .any(|row| {
-            row.status()
-                .is_some_and(crate::feed::AgentStatus::is_actionable)
-        });
-    vec![footer_line(
-        snapshot.link.as_ref(),
-        needs_attention,
-        theme,
-        width,
-    )]
+    vec![footer_line(snapshot.link.as_ref(), theme, width)]
 }
 
-fn footer_line(
-    link: Option<&SidebarLinkHealth>,
-    needs_attention: bool,
-    theme: &Theme,
-    width: usize,
-) -> Line<'static> {
+fn footer_line(link: Option<&SidebarLinkHealth>, theme: &Theme, width: usize) -> Line<'static> {
     const HELP_TEXT: &str = "? for help";
-    const TRIAGE_TEXT: &str = "␣ next ?!";
 
     let badge = link.map(|link| link_badge(link, theme, width));
-    let help = Span::styled(HELP_TEXT.to_owned(), theme.faint());
-    let triage = needs_attention.then(|| Span::styled(TRIAGE_TEXT.to_owned(), theme.faint()));
+    let help_text: String = HELP_TEXT.chars().take(width).collect();
+    let help = Span::styled(help_text, theme.faint());
+    let help_start = right_start(width, span_width(&help)).unwrap_or(0);
 
-    let Some(help_start) = centered_start(width, span_width(&help)) else {
-        return badge
-            .map(|badge| Line::from(vec![badge]))
-            .unwrap_or_else(|| Line::from(vec![help]));
-    };
-    let triage_start = triage
-        .as_ref()
-        .and_then(|span| right_start(width, span_width(span)));
-    if let Some(line) = positioned_footer_line(
-        badge.clone(),
-        Some((help_start, help.clone())),
-        triage_start.zip(triage.clone()),
-    ) {
+    if let Some(line) = positioned_footer_line(badge, Some((help_start, help.clone()))) {
         return line;
     }
-    if let Some(line) = positioned_footer_line(badge.clone(), Some((help_start, help)), None) {
-        return line;
-    }
-    badge
-        .map(|badge| Line::from(vec![badge]))
-        .unwrap_or_else(|| center_line(Line::styled(HELP_TEXT.to_owned(), theme.faint()), width))
+    positioned_footer_line(None, Some((help_start, help.clone())))
+        .unwrap_or_else(|| Line::from(vec![help]))
 }
 
 fn positioned_footer_line(
     badge: Option<Span<'static>>,
     help: Option<(usize, Span<'static>)>,
-    triage: Option<(usize, Span<'static>)>,
 ) -> Option<Line<'static>> {
     let mut placements = Vec::new();
     if let Some(badge) = badge {
@@ -211,9 +176,6 @@ fn positioned_footer_line(
     }
     if let Some(help) = help {
         placements.push(help);
-    }
-    if let Some(triage) = triage {
-        placements.push(triage);
     }
     placements.sort_by_key(|(start, _)| *start);
 
@@ -262,10 +224,6 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
     Span::styled(text, style)
 }
 
-fn centered_start(width: usize, content_width: usize) -> Option<usize> {
-    (content_width <= width).then(|| width.saturating_sub(content_width) / 2)
-}
-
 fn right_start(width: usize, content_width: usize) -> Option<usize> {
     (content_width <= width).then(|| width - content_width)
 }
@@ -274,10 +232,10 @@ fn span_width(span: &Span<'_>) -> usize {
     span.content.chars().count()
 }
 
-/// Center a single line within `width` by prepending padding — used to pin the
-/// navigation footer to the bottom edge, horizontally centered. A line already
+/// Center a single line within `width` by prepending padding. A line already
 /// at or past the width is returned unchanged. The line-level style survives
-/// the rebuild, so the footer's hairline tone reaches the screen.
+/// the rebuild, so styled chrome stays styled through the helper.
+#[cfg(test)]
 pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     let content_width: usize = line
         .spans
@@ -311,7 +269,7 @@ pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("keys & legend", faint),
         Line::styled("move     j/k rows   J/K worktrees", faint),
         Line::styled("focus    l or ↵     1-9 direct", faint),
-        Line::styled("triage   ␣ next ?!  ←/→ accounts", faint),
+        Line::styled("accounts ←/→ tabs", faint),
         Line::styled("filter   q waiting   !/e attention", faint),
         Line::styled("         p paused   d done", faint),
         Line::styled("         w working  o idle   a all", faint),

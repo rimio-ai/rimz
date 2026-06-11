@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/cli/sidebar/tests.rs
-assertion_line: 34
 expression: strip_sgr(&ansi)
 ---
  ⌘ query-engine                /srv/code/query-engine
@@ -36,4 +35,4 @@ expression: strip_sgr(&ansi)
   W: ◎ 8  ◇ 2.0M ↘ 1.4M ↗ 398.7k ◌ 199.4k      $26.38
   M: ◎ 8  ◇ 5.3M ↘ 3.7M ↗   1.1M ◌ 526.9k      $69.71
 
-                      ? for help            ␣ next ?!
+                                           ? for help

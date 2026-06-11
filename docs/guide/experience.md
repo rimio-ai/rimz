@@ -133,7 +133,7 @@ This is the moment Rimz earns its place. Claude hits a permission prompt: a feed
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
 
-                 ? for help        ␣ next ?!
+                                 ? for help
 ```
 
 Even from another pane or another app, the OS notification reaches the reader:
@@ -184,12 +184,12 @@ The reader does what they came to do: spins up four more agents across two workt
  ? deploy.sh
    Deploy staging?
 
-                 ? for help        ␣ next ?!
+                                 ? for help
 ```
 
 The cockpit make-up is the first thing the eye lands on: `? 2   ! 1`, two waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.
 
-The power move is going straight to the blocked pane. A single session-scoped keystroke (`␣`, shown as "next ?!" in the footer) focuses the next item that needs attention, in ranking order, without the reader ever focusing the sidebar. Twelve agents, one key, straight to the oldest blocked one; press it again for the next. Seeing the blocked pane and getting to it are different actions, and this key collapses them, so triage cost stays flat as the fleet grows. It is bound only inside the Rimz session, so the reader's global mux config is untouched.
+The power move is going straight to the blocked pane. A single session-scoped Space keystroke focuses the next item that needs attention, in ranking order, without the reader ever focusing the sidebar. Twelve agents, one key, straight to the oldest blocked one; press it again for the next. Seeing the blocked pane and getting to it are different actions, and this key collapses them, so triage cost stays flat as the fleet grows. It is bound only inside the Rimz session, so the reader's global mux config is untouched.
 
 The grouping matches the reader's mental model. Groups are keyed on worktree isolation, since only same-worktree agents share files: a header marks each one, and the worktree the reader has selected reads as one bracketed lane, a thin spine down its full height with a faint dotted seal capping its header and the selected card inside it bolder. The `external` catch-all holds scripts, CI, and panes outside any worktree; it renders as a dim `┄ external ┄` divider and sorts last unless it holds something waiting or failed. The room scales past one repo too: `rimz start` in `~/code`, or on a headless box with no source control, makes that directory the room, where each child repo is a pod with its own branch and churn and the same cockpit, ranking, and jump triage the whole machine ([the fleet room](./product.md#many-repos-one-room)).
 
@@ -197,9 +197,12 @@ The footer advertises `?`, and pressing it overlays the legend and keys, so the 
 
 ```
  keys & legend
- ↑/↓ select   1-9 jump   ↵ jump
- ␣ next ?!   ←/→ provider tab
- x dismiss   r reload   ? close
+ move     j/k rows   J/K worktrees
+ focus    l or ↵     1-9 direct
+ accounts ←/→ tabs
+ filter   q waiting  !/e attention
+ system   r reload   x dismiss
+ help     ? close
  ⢿ working   ⢄ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
@@ -264,7 +267,7 @@ And because agents and scripts share one CLI, a deploy or migration script can p
 | First run | installs, consents, lands in the room | additive-diff gate, then `○ zsh` and a hint | reassured, then oriented |
 | The agent shows up | types `claude`, then prompts it | row re-skins to `○ claude`, then `⢿ running` | delight, then calm |
 | The question reaches you | gets notified, jumps to the pane | `? waiting`, an OS notification | the pitch lands |
-| The fleet | hits "next ?!" | grouped roster, `? 2  ! 1` | in control |
+| The fleet | presses Space | grouped roster, `? 2  ! 1` | in control |
 | Detach, reattach | closes laptop, ssh back | the column reconstructed from the ledger | relief, then trust |
 | When wrong | hits a failure | a labeled degraded banner | trust through honesty |
 | Growing into it | enrols a resolver | the chain working the row | leverage |

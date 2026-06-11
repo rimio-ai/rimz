@@ -22,10 +22,8 @@ fn render_footer_and_help_overlay() {
     );
     let snapshot = snapshot_with(vec![native], vec![codex]);
     let rendered = snapshot_to_screen(&snapshot, 80, 18);
-    // A frame-backed waiting row puts triage on screen, so the footer carries
-    // the triage key alongside the resting help hint.
-    assert!(rendered.contains("␣ next ?!"), "{rendered}");
     assert!(rendered.contains("? for help"), "{rendered}");
+    assert!(!rendered.contains("next"), "{rendered}");
 
     let help = snapshot_to_screen_with_alert_and_ui(
         &snapshot,

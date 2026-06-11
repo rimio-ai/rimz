@@ -1,5 +1,5 @@
 ---
-source: crates/rimz/src/sidebar_pane/render/tests.rs
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
 expression: screen
 ---
  ⌘ query-engine
@@ -15,4 +15,4 @@ expression: screen
 
 
 
-                       ? for help
+                                             ? for help

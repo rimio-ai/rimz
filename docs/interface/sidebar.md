@@ -41,7 +41,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88    ← week stats: sessions · tokens · usd value
  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66    ← month stats: sessions · tokens · usd value
 
-                      ? for help                          ← footer (help message)
+                                                    ? for help  ← footer help
 ```
 
 The rest of this doc reads that frame zone by zone.
@@ -122,7 +122,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `⇅ rc`          | remote control is on for that provider |
 | `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
-Remote-link badge tones are color-only: soft gray for calm, yellow for minor, amber for major, and bold red for critical. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge, `? for help` stays centered when there is room, and `␣ next ?!` pins to the right edge when an agent needs attention.
+Remote-link badge tones are color-only: soft gray for calm, yellow for minor, amber for major, and bold red for critical. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge when it fits, and `? for help` pins to the footer's right edge.
 
 ## Zone 1 — the cockpit
 
@@ -371,11 +371,10 @@ Every figure is computed from the transcript JSONL — Codex's dollars priced fr
 
 Pinned to the bottom edge, below all three zones. The body is truncated before this chrome is ever clipped, so it can never scroll off.
 
-**Footer.** Faint chrome — the deepest legible gray, receding to pure scaffolding. At rest it is just `? for help`; the triage key joins it only when something actually needs you, so the signature `␣` stays discoverable without shouting:
+**Footer.** Faint chrome — the deepest legible gray, receding to pure scaffolding. It is just `? for help`, pinned to the bottom-right edge:
 
 ```
-                             ? for help                  ← nothing needs you
-                             ? for help        ␣ next ?!  ← at least one waiting/failed row
+                                                   ? for help
 ```
 
 **Pane-source notice.** When the producer repairs a partial pane read by carrying live panes from the prior frame, a dim line appears above the footer while the room stays interactive:
@@ -396,9 +395,12 @@ These notices clear when the next accepted pane frame lands. A health alert take
 
 ```
  keys & legend
- ↑/↓ select   1-9 jump   ↵ jump
- ␣ next ?!   ←/→ provider tab
- x dismiss   r reload   ? close
+ move     j/k rows   J/K worktrees
+ focus    l or ↵     1-9 direct
+ accounts ←/→ tabs
+ filter   q waiting  !/e attention
+ system   r reload   x dismiss
+ help     ? close
  ⢿ working   ⢄ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```

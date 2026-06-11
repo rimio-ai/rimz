@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -36,4 +35,4 @@ expression: screen
  ▝▜█████▛▘ <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱  ↻ <reset>
    ▘▘ ▝▝   <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱  ↻ <reset>
 
-                      ? for help
+                                           ? for help

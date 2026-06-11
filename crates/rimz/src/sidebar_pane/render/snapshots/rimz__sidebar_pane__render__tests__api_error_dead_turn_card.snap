@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -16,4 +15,4 @@ expression: screen
 ▌  ▣ ━━━━━━━━━━━━━━━━────────────────────────── 38.2%
 ▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ <t>
 
-                      ? for help            ␣ next ?!
+                                           ? for help

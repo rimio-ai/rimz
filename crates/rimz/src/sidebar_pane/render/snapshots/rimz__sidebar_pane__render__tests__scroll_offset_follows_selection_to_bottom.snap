@@ -1,6 +1,5 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
-assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -20,4 +19,4 @@ expression: screen
 ▌⣾ codex · 258k
 ▌  task-5
 ▌  ▢ ──────────────────────────    0%
-              ? for help
+                           ? for help
