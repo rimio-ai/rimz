@@ -25,19 +25,27 @@ The first command is `rimz`, and it auto-detects the multiplexer (Zellij or tmux
 The first time `rimz` runs on a machine, it does not drop straight into the room. To show what an agent is doing, Rimz adds reporting hooks to the agents already on the machine, and editing their config is exactly the thing a cautious reader is nervous about. So the first screen is a clean inline consent gate, terminal-native and left in scrollback, that treats the change as a security surface and turns nervousness into trust.
 
 ```
-  rimz hook install
+  rimz - first-run setup
 
+  Rimz found 2 coding agents on this machine: claude, codex.
   Rimz routes attention across your coding agents into one sidebar.
-  To show what an agent is doing, it adds reporting hooks to the agents on this machine.
+  To show what an agent is doing, it adds reporting hooks to the agent's config.
   These hooks only report events to Rimz. They never answer a prompt for you.
 
-  Detected agents (space toggles):
-  > [x] claude  8 events  ~/.claude/settings.json
-    [x] codex   6 events  ~/.codex/config.toml
+  2 quick questions - one per agent.
 
-  What changes: additive config edits; existing hooks are kept.
-    + claude: 8 events at ~/.claude/settings.json
-    + codex: 6 events at ~/.codex/config.toml
+  [Enter] set up   [s/Esc] skip for now
+```
+
+```
+  rimz - first-run setup - claude (1 of 2)
+
+  Add 8 reporting hooks to claude?
+
+    config   ~/.claude/settings.json
+    change   additive - your existing hooks are kept
+    also     sets your statusLine to report context to Rimz (removed on uninstall)
+    undo     rimz hooks uninstall claude
 
   Diff  1/24
   --- ~/.claude/settings.json
@@ -50,10 +58,10 @@ The first time `rimz` runs on a machine, it does not drop straight into the room
   +      { "hooks": [{ "type": "command", "command": "rimz hooks feed --source claude" }] }
   +    ],
 
-  [Enter] install selected   [Space] toggle   [d] hide diff   [s/Esc] skip
+  [Enter] add   [n] skip   [d] hide diff   [Left/b] back   [Esc] skip rest
 ```
 
-The gate answers the two fears before they are spoken. The change is additive and names the keys it preserves, so "it will overwrite my hooks" dies in one line, and the diff is a real unified diff with unchanged regions collapsed (press `d` to expand it). It states the boundary in the consent itself: the hooks report events, and answering a prompt stays with the reader. Space toggles any agent that should stay unwired, and `s` or Esc skips entirely, installing nothing and still dropping the reader into the room, where an unwired agent shows up as a plain process row and the empty-room hint says how to wire it later. Hook install is per-machine state, so later runs go straight to the room, and `rimz doctor` reports per-agent status for anyone who forgets. A committed project config, if this repo ever carries one, is its own separate gate with its own diff (see [trust.md](../internals/sidebar/trust.md)); a toy project has none, so day one never shows it. The authoritative wired set and config shape live in [hooks.md](../internals/agents/hooks.md#hook-install--the-visible-security-step).
+The gate answers the two fears before they are spoken. The change is additive and names the keys it preserves, so "it will overwrite my hooks" dies in one line, and the diff is a real unified diff with unchanged regions collapsed for the agent currently on screen (press `d` to expand it). It states the boundary in the consent itself: the hooks report events, and answering a prompt stays with the reader. `n` skips the current agent, Back returns to the previous question before anything is installed, and Esc keeps earlier approvals while skipping the rest; skipping every agent still drops the reader into the room, where an unwired agent shows up as a plain process row and the empty-room hint says how to wire it later. Hook install is per-machine state, so later runs go straight to the room, and `rimz doctor` reports per-agent status for anyone who forgets. A committed project config, if this repo ever carries one, is its own separate gate with its own diff (see [trust.md](../internals/sidebar/trust.md)); a toy project has none, so day one never shows it. The authoritative wired set and config shape live in [hooks.md](../internals/agents/hooks.md#hook-install--the-visible-security-step).
 
 Backing out is the mirror of opting in, and the reader is told so right here: `rimz hooks uninstall` removes exactly what the gate added, the additive diff in reverse, and leaves the agents untouched. A tool you can cleanly remove is a tool worth trying.
 

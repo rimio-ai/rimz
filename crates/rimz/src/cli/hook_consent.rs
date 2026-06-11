@@ -2,7 +2,7 @@ use std::io::{self, IsTerminal};
 
 use anyhow::Result;
 use ratatui::backend::{Backend, CrosstermBackend};
-use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::crossterm::terminal as crossterm_terminal;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
@@ -20,16 +20,9 @@ const FOOTER_ROWS: usize = 1;
 
 pub(super) const CONSENT_INTRO: &str =
     "Rimz routes attention across your coding agents into one sidebar.";
-pub(super) const CONSENT_INSTALL_INTENT: &str =
-    "To show what an agent is doing, it adds reporting hooks to the agents on this machine.";
 pub(super) const CONSENT_BOUNDARY: &str =
     "These hooks only report events to Rimz. They never answer a prompt for you.";
-pub(super) const CONSENT_CHANGE_SUMMARY: &str =
-    "What changes: additive config edits; existing hooks are kept.";
-pub(super) const CONSENT_TEXT_CHANGE_SUMMARY: &str =
-    "Rimz will make an additive, reversible per-user config change so runs appear in the sidebar.";
-pub(super) const CONSENT_REVERSIBLE: &str =
-    "Reversible any time with `rimz hooks uninstall <agent>`.";
+pub(super) const CONSENT_REVERSIBLE: &str = "Reversible any time with `rimz hooks uninstall`.";
 
 pub(super) fn run_consent_gate(previews: &[HookInstallPreview]) -> Result<Vec<&'static str>> {
     if !io::stdin().is_terminal() || !io::stderr().is_terminal() {
@@ -54,10 +47,10 @@ pub(super) fn run_consent_gate(previews: &[HookInstallPreview]) -> Result<Vec<&'
         {
             match state.handle_key(key, &data, height as usize) {
                 ConsentAction::Continue => {}
-                ConsentAction::Install => {
+                ConsentAction::Finish => {
                     return Ok(state.selected_agents(&data));
                 }
-                ConsentAction::Skip => {
+                ConsentAction::SkipAll => {
                     return Ok(Vec::new());
                 }
             }
@@ -123,19 +116,34 @@ impl<'a> ConsentData<'a> {
         self.items.len()
     }
 
-    fn diff_line_count(&self) -> usize {
+    fn max_diff_line_count(&self) -> usize {
         self.items
             .iter()
-            .enumerate()
-            .map(|(idx, item)| item.diff_lines.len() + usize::from(idx > 0))
-            .sum()
+            .map(|item| item.diff_lines.len())
+            .max()
+            .unwrap_or(0)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WizardStep {
+    Welcome,
+    Agent(usize),
+}
+
+impl WizardStep {
+    fn previous(self) -> Self {
+        match self {
+            Self::Welcome | Self::Agent(0) => Self::Welcome,
+            Self::Agent(idx) => Self::Agent(idx - 1),
+        }
     }
 }
 
 #[derive(Clone, Debug)]
 struct ConsentState {
-    focused: usize,
-    selected: Vec<bool>,
+    step: WizardStep,
+    decisions: Vec<Option<bool>>,
     show_diff: bool,
     diff_scroll: usize,
 }
@@ -143,15 +151,15 @@ struct ConsentState {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ConsentAction {
     Continue,
-    Install,
-    Skip,
+    Finish,
+    SkipAll,
 }
 
 impl ConsentState {
     fn new(previews: &[HookInstallPreview]) -> Self {
         Self {
-            focused: 0,
-            selected: vec![true; previews.len()],
+            step: WizardStep::Welcome,
+            decisions: vec![None; previews.len()],
             show_diff: false,
             diff_scroll: 0,
         }
@@ -163,25 +171,63 @@ impl ConsentState {
         data: &ConsentData<'_>,
         height: usize,
     ) -> ConsentAction {
+        if is_ctrl_c(key) {
+            return ConsentAction::SkipAll;
+        }
+        match self.step {
+            WizardStep::Welcome => self.handle_welcome_key(key, data),
+            WizardStep::Agent(idx) => self.handle_agent_key(idx, key, data, height),
+        }
+    }
+
+    fn handle_welcome_key(&mut self, key: KeyEvent, data: &ConsentData<'_>) -> ConsentAction {
         match key.code {
-            KeyCode::Enter => ConsentAction::Install,
-            KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('S') => ConsentAction::Skip,
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                if data.len() == 0 {
+                    ConsentAction::Finish
+                } else {
+                    self.step = WizardStep::Agent(0);
+                    self.reset_diff();
+                    ConsentAction::Continue
+                }
+            }
+            KeyCode::Esc
+            | KeyCode::Char('s')
+            | KeyCode::Char('S')
+            | KeyCode::Char('n')
+            | KeyCode::Char('N') => ConsentAction::SkipAll,
+            _ => ConsentAction::Continue,
+        }
+    }
+
+    fn handle_agent_key(
+        &mut self,
+        idx: usize,
+        key: KeyEvent,
+        data: &ConsentData<'_>,
+        height: usize,
+    ) -> ConsentAction {
+        match key.code {
+            KeyCode::Enter | KeyCode::Char('y') | KeyCode::Char('Y') => {
+                self.decide_and_advance(idx, true, data)
+            }
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Char('s') | KeyCode::Char('S') => {
+                self.decide_and_advance(idx, false, data)
+            }
+            KeyCode::Esc => ConsentAction::Finish,
+            KeyCode::Left | KeyCode::Char('b') | KeyCode::Char('B') => {
+                self.step = self.step.previous();
+                self.reset_diff();
+                ConsentAction::Continue
+            }
             KeyCode::Char('d') | KeyCode::Char('D') => {
                 self.show_diff = !self.show_diff;
                 self.clamp_diff_scroll(data, height);
                 ConsentAction::Continue
             }
-            KeyCode::Char(' ') => {
-                if let Some(selected) = self.selected.get_mut(self.focused) {
-                    *selected = !*selected;
-                }
-                ConsentAction::Continue
-            }
             KeyCode::Up | KeyCode::Char('k') | KeyCode::Char('K') => {
                 if self.show_diff {
                     self.diff_scroll = self.diff_scroll.saturating_sub(1);
-                } else {
-                    self.focused = self.focused.saturating_sub(1);
                 }
                 ConsentAction::Continue
             }
@@ -189,37 +235,76 @@ impl ConsentState {
                 if self.show_diff {
                     self.diff_scroll = self.diff_scroll.saturating_add(1);
                     self.clamp_diff_scroll(data, height);
-                } else if self.focused + 1 < self.selected.len() {
-                    self.focused += 1;
                 }
                 ConsentAction::Continue
             }
             KeyCode::PageUp => {
-                self.diff_scroll = self.diff_scroll.saturating_sub(5);
+                if self.show_diff {
+                    self.diff_scroll = self.diff_scroll.saturating_sub(5);
+                }
                 ConsentAction::Continue
             }
             KeyCode::PageDown => {
-                self.diff_scroll = self.diff_scroll.saturating_add(5);
-                self.clamp_diff_scroll(data, height);
+                if self.show_diff {
+                    self.diff_scroll = self.diff_scroll.saturating_add(5);
+                    self.clamp_diff_scroll(data, height);
+                }
                 ConsentAction::Continue
             }
             _ => ConsentAction::Continue,
         }
     }
 
+    fn decide_and_advance(
+        &mut self,
+        idx: usize,
+        decision: bool,
+        data: &ConsentData<'_>,
+    ) -> ConsentAction {
+        if let Some(slot) = self.decisions.get_mut(idx) {
+            *slot = Some(decision);
+        }
+        self.reset_diff();
+        if idx + 1 >= data.len() {
+            ConsentAction::Finish
+        } else {
+            self.step = WizardStep::Agent(idx + 1);
+            ConsentAction::Continue
+        }
+    }
+
     fn selected_agents(&self, data: &ConsentData<'_>) -> Vec<&'static str> {
         data.items
             .iter()
-            .zip(&self.selected)
-            .filter_map(|(item, selected)| selected.then_some(item.preview.agent))
+            .zip(&self.decisions)
+            .filter_map(|(item, selected)| {
+                selected
+                    .is_some_and(|yes| yes)
+                    .then_some(item.preview.agent)
+            })
             .collect()
     }
 
     fn clamp_diff_scroll(&mut self, data: &ConsentData<'_>, height: usize) {
-        let viewport = diff_view_capacity(data, height).max(1);
-        self.diff_scroll = self
-            .diff_scroll
-            .min(data.diff_line_count().saturating_sub(viewport));
+        let viewport = diff_view_capacity(data, self, height).max(1);
+        let line_count = self.current_diff_line_count(data);
+        self.diff_scroll = self.diff_scroll.min(line_count.saturating_sub(viewport));
+    }
+
+    fn current_diff_line_count(&self, data: &ConsentData<'_>) -> usize {
+        match self.step {
+            WizardStep::Welcome => 0,
+            WizardStep::Agent(idx) => data
+                .items
+                .get(idx)
+                .map(|item| item.diff_lines.len())
+                .unwrap_or(0),
+        }
+    }
+
+    fn reset_diff(&mut self) {
+        self.show_diff = false;
+        self.diff_scroll = 0;
     }
 }
 
@@ -252,7 +337,13 @@ fn gate_lines(
     let footer = footer_line(state, no_color);
     let max_body_rows = height.saturating_sub(FOOTER_ROWS);
     if state.show_diff {
-        lines.extend(diff_section_lines(data, state, max_body_rows, no_color));
+        lines.extend(diff_section_lines(
+            data,
+            state,
+            max_body_rows,
+            lines.len(),
+            no_color,
+        ));
     }
 
     if lines.len() > max_body_rows {
@@ -266,89 +357,133 @@ fn gate_lines(
 }
 
 fn base_lines(data: &ConsentData<'_>, state: &ConsentState, no_color: bool) -> Vec<Line<'static>> {
-    let mut lines = vec![
+    match state.step {
+        WizardStep::Welcome => welcome_lines(data, no_color),
+        WizardStep::Agent(idx) => agent_lines(data, idx, no_color),
+    }
+}
+
+fn welcome_lines(data: &ConsentData<'_>, no_color: bool) -> Vec<Line<'static>> {
+    let agent_names = data
+        .items
+        .iter()
+        .map(|item| item.preview.agent)
+        .collect::<Vec<_>>()
+        .join(", ");
+    let agent_word = if data.len() == 1 { "agent" } else { "agents" };
+    let question_line = if data.len() == 1 {
+        "One quick question.".to_owned()
+    } else {
+        format!("{} quick questions - one per agent.", data.len())
+    };
+    vec![
         line(vec![styled(
-            "rimz hook install",
+            "rimz - first-run setup",
             Color::Cyan,
             Modifier::BOLD,
             no_color,
         )]),
         Line::from(""),
+        Line::from(format!(
+            "Rimz found {} coding {agent_word} on this machine: {agent_names}.",
+            data.len()
+        )),
         Line::from(CONSENT_INTRO),
-        Line::from(CONSENT_INSTALL_INTENT),
+        Line::from(
+            "To show what an agent is doing, it adds reporting hooks to the agent's config.",
+        ),
         Line::from(CONSENT_BOUNDARY),
         Line::from(""),
-        Line::from("Detected agents (space toggles):"),
-    ];
+        Line::from(question_line),
+    ]
+}
 
-    for (idx, item) in data.items.iter().enumerate() {
-        let preview = item.preview;
-        let marker = if state.focused == idx { ">" } else { " " };
-        let checked = if state.selected[idx] { "[x]" } else { "[ ]" };
-        let style = if state.focused == idx {
-            style(Color::Yellow, Modifier::BOLD, no_color)
-        } else {
-            Style::default()
-        };
-        lines.push(Line::from(vec![
-            Span::styled(format!("{marker} {checked} "), style),
-            Span::styled(preview.agent.to_owned(), style),
-            Span::raw(format!(
-                "  {} events  {}",
-                preview.planned_events.len(),
-                preview.config_path.display()
-            )),
-        ]));
-        for summary in &item.status_summaries {
-            lines.push(Line::from(vec![
-                Span::raw("      "),
-                styled(summary.to_owned(), Color::DarkGray, Modifier::DIM, no_color),
-            ]));
-        }
-    }
-
-    lines.push(Line::from(""));
-    lines.push(Line::from(CONSENT_CHANGE_SUMMARY));
-    for item in &data.items {
-        let preview = item.preview;
-        lines.push(Line::from(format!(
-            "  + {}: {} events at {}",
-            preview.agent,
+fn agent_lines(data: &ConsentData<'_>, idx: usize, no_color: bool) -> Vec<Line<'static>> {
+    let Some(item) = data.items.get(idx) else {
+        return welcome_lines(data, no_color);
+    };
+    let preview = item.preview;
+    let mut lines = vec![
+        line(vec![styled(
+            format!(
+                "rimz - first-run setup - {} ({} of {})",
+                preview.agent,
+                idx + 1,
+                data.len()
+            ),
+            Color::Cyan,
+            Modifier::BOLD,
+            no_color,
+        )]),
+        Line::from(""),
+        Line::from(format!(
+            "Add {} reporting hooks to {}?",
             preview.planned_events.len(),
-            preview.config_path.display()
-        )));
+            preview.agent
+        )),
+        Line::from(""),
+        Line::from(format!("  config   {}", preview.config_path.display())),
+        Line::from("  change   additive - your existing hooks are kept"),
+    ];
+    for summary in &item.status_summaries {
+        lines.push(Line::from(format!("  also     {summary}")));
     }
+    lines.push(Line::from(format!(
+        "  undo     rimz hooks uninstall {}",
+        preview.agent
+    )));
     lines
 }
 
 fn footer_line(state: &ConsentState, no_color: bool) -> Line<'static> {
-    Line::from(vec![
-        styled("[Enter]", Color::Green, Modifier::BOLD, no_color),
-        Span::raw(" install selected   "),
-        styled("[Space]", Color::Yellow, Modifier::BOLD, no_color),
-        Span::raw(" toggle   "),
-        styled("[d]", Color::Cyan, Modifier::BOLD, no_color),
-        Span::raw(if state.show_diff {
-            " hide diff   "
-        } else {
-            " show diff   "
-        }),
-        styled("[s/Esc]", Color::Red, Modifier::BOLD, no_color),
-        Span::raw(" skip"),
-    ])
+    match state.step {
+        WizardStep::Welcome => Line::from(vec![
+            styled("[Enter]", Color::Green, Modifier::BOLD, no_color),
+            Span::raw(" set up   "),
+            styled("[s/Esc]", Color::Red, Modifier::BOLD, no_color),
+            Span::raw(" skip for now"),
+        ]),
+        WizardStep::Agent(_) => Line::from(vec![
+            styled("[Enter]", Color::Green, Modifier::BOLD, no_color),
+            Span::raw(" add   "),
+            styled("[n]", Color::Red, Modifier::BOLD, no_color),
+            Span::raw(" skip   "),
+            styled("[d]", Color::Cyan, Modifier::BOLD, no_color),
+            Span::raw(if state.show_diff {
+                " hide diff   "
+            } else {
+                " view diff   "
+            }),
+            styled("[Left/b]", Color::Yellow, Modifier::BOLD, no_color),
+            Span::raw(" back   "),
+            styled("[Esc]", Color::Red, Modifier::BOLD, no_color),
+            Span::raw(" skip rest"),
+        ]),
+    }
 }
 
 fn diff_section_lines(
     data: &ConsentData<'_>,
     state: &ConsentState,
     max_body_rows: usize,
+    base_rows: usize,
     no_color: bool,
 ) -> Vec<Line<'static>> {
+    let WizardStep::Agent(idx) = state.step else {
+        return Vec::new();
+    };
+    let Some(item) = data.items.get(idx) else {
+        return Vec::new();
+    };
     let capacity = max_body_rows
-        .saturating_sub(base_line_count(data))
+        .saturating_sub(base_rows)
         .saturating_sub(DIFF_CHROME_ROWS)
         .max(1);
-    let diff_lines = all_diff_lines(data, no_color);
+    let diff_lines = item
+        .diff_lines
+        .iter()
+        .map(|line| diff_line(line, no_color))
+        .collect::<Vec<_>>();
     let max_scroll = diff_lines.len().saturating_sub(capacity);
     let scroll = state.diff_scroll.min(max_scroll);
     let mut lines = vec![
@@ -367,41 +502,32 @@ fn diff_section_lines(
 }
 
 fn inline_height(data: &ConsentData<'_>, terminal_rows: u16) -> u16 {
-    let wanted = base_line_count(data)
+    let wanted = max_base_line_count(data)
         .saturating_add(FOOTER_ROWS)
         .saturating_add(DIFF_CHROME_ROWS)
-        .saturating_add(usize::from(DIFF_VIEW_ROWS).min(data.diff_line_count()));
+        .saturating_add(usize::from(DIFF_VIEW_ROWS).min(data.max_diff_line_count()));
     let max_rows = usize::from(terminal_rows.max(1));
     wanted.min(max_rows).max(1) as u16
 }
 
-fn base_line_count(data: &ConsentData<'_>) -> usize {
-    9 + data.len() * 2
-        + data
-            .items
-            .iter()
-            .map(|item| item.status_summaries.len())
-            .sum::<usize>()
+fn max_base_line_count(data: &ConsentData<'_>) -> usize {
+    let welcome = welcome_lines(data, true).len();
+    let agent = (0..data.len())
+        .map(|idx| agent_lines(data, idx, true).len())
+        .max()
+        .unwrap_or(0);
+    welcome.max(agent)
 }
 
-fn diff_view_capacity(data: &ConsentData<'_>, height: usize) -> usize {
+fn base_line_count(data: &ConsentData<'_>, state: &ConsentState) -> usize {
+    base_lines(data, state, true).len()
+}
+
+fn diff_view_capacity(data: &ConsentData<'_>, state: &ConsentState, height: usize) -> usize {
     height
         .saturating_sub(FOOTER_ROWS)
-        .saturating_sub(base_line_count(data))
+        .saturating_sub(base_line_count(data, state))
         .saturating_sub(DIFF_CHROME_ROWS)
-}
-
-fn all_diff_lines(data: &ConsentData<'_>, no_color: bool) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for (idx, item) in data.items.iter().enumerate() {
-        if idx > 0 {
-            lines.push(Line::from(""));
-        }
-        for line in &item.diff_lines {
-            lines.push(diff_line(line, no_color));
-        }
-    }
-    lines
 }
 
 fn diff_line(text: &str, no_color: bool) -> Line<'static> {
@@ -444,10 +570,14 @@ fn push_status_line_summary(
 ) {
     match change {
         Some(StatusLineChange::Added) => {
-            summaries.push(format!("also sets {key} to {purpose}"));
+            summaries.push(format!(
+                "sets your {key} to {purpose} (removed on uninstall)"
+            ));
         }
         Some(StatusLineChange::Wrapping { original }) => {
-            summaries.push(format!("also wraps {key} command ({original})"));
+            summaries.push(format!(
+                "wraps your {key} command ({original}) - restored on uninstall"
+            ));
         }
         Some(StatusLineChange::Unchanged) | None => {}
     }
@@ -466,6 +596,11 @@ fn line(spans: Vec<Span<'static>>) -> Line<'static> {
     Line::from(spans)
 }
 
+fn is_ctrl_c(key: KeyEvent) -> bool {
+    matches!(key.code, KeyCode::Char('c') | KeyCode::Char('C'))
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+}
+
 fn style(color: Color, modifier: Modifier, no_color: bool) -> Style {
     let style = Style::default().add_modifier(modifier);
     if no_color { style } else { style.fg(color) }
@@ -479,10 +614,14 @@ mod tests {
 
     use super::*;
 
-    fn preview(original: Option<&str>, candidate: &str) -> HookInstallPreview {
+    fn preview_for(
+        agent: &'static str,
+        original: Option<&str>,
+        candidate: &str,
+    ) -> HookInstallPreview {
         HookInstallPreview {
-            agent: "claude",
-            config_path: PathBuf::from("/home/me/.claude/settings.json"),
+            agent,
+            config_path: PathBuf::from(format!("/home/me/.{agent}/settings.json")),
             planned_events: vec!["SessionStart".to_owned(), "PreToolUse".to_owned()],
             original_config: original.map(str::to_owned),
             candidate_config: candidate.to_owned(),
@@ -490,6 +629,10 @@ mod tests {
             status_line_change: None,
             subagent_status_line_change: None,
         }
+    }
+
+    fn preview(original: Option<&str>, candidate: &str) -> HookInstallPreview {
+        preview_for("claude", original, candidate)
     }
 
     fn render(
@@ -538,35 +681,114 @@ mod tests {
     }
 
     #[test]
-    fn space_toggles_focused_agent_and_enter_installs_selected() {
+    fn enter_through_wizard_selects_agent() {
         let previews = [preview(Some("{}\n"), "{\"hooks\": []}\n")];
         let data = ConsentData::new(&previews);
         let mut state = ConsentState::new(&previews);
 
-        assert_eq!(state.selected_agents(&data), vec!["claude"]);
-        let action = state.handle_key(KeyEvent::from(KeyCode::Char(' ')), &data, 20);
-        assert_eq!(action, ConsentAction::Continue);
         assert!(state.selected_agents(&data).is_empty());
+        let action = state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
+        assert_eq!(action, ConsentAction::Continue);
+        assert_eq!(state.step, WizardStep::Agent(0));
         assert_eq!(
             state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
-            ConsentAction::Install
+            ConsentAction::Finish
         );
+        assert_eq!(state.selected_agents(&data), vec!["claude"]);
+    }
+
+    #[test]
+    fn no_skips_one_agent_and_advances() {
+        let previews = [
+            preview_for("claude", Some("{}\n"), "{\"hooks\": []}\n"),
+            preview_for("codex", Some("{}\n"), "{\"hooks\": []}\n"),
+        ];
+        let data = ConsentData::new(&previews);
+        let mut state = ConsentState::new(&previews);
+
+        assert_eq!(
+            state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
+            ConsentAction::Continue
+        );
+        assert_eq!(
+            state.handle_key(KeyEvent::from(KeyCode::Char('n')), &data, 20),
+            ConsentAction::Continue
+        );
+        assert_eq!(state.step, WizardStep::Agent(1));
+        assert_eq!(
+            state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
+            ConsentAction::Finish
+        );
+        assert_eq!(state.selected_agents(&data), vec!["codex"]);
+    }
+
+    #[test]
+    fn esc_on_agent_keeps_prior_yeses_and_skips_rest() {
+        let previews = [
+            preview_for("claude", Some("{}\n"), "{\"hooks\": []}\n"),
+            preview_for("codex", Some("{}\n"), "{\"hooks\": []}\n"),
+        ];
+        let data = ConsentData::new(&previews);
+        let mut state = ConsentState::new(&previews);
+
+        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
+        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
+
+        assert_eq!(state.step, WizardStep::Agent(1));
+        assert_eq!(
+            state.handle_key(KeyEvent::from(KeyCode::Esc), &data, 20),
+            ConsentAction::Finish
+        );
+        assert_eq!(state.selected_agents(&data), vec!["claude"]);
+    }
+
+    #[test]
+    fn ctrl_c_skips_the_consent_gate() {
+        let previews = [preview(Some("{}\n"), "{\"hooks\": []}\n")];
+        let data = ConsentData::new(&previews);
+        let mut state = ConsentState::new(&previews);
+        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+
+        assert_eq!(state.handle_key(key, &data, 20), ConsentAction::SkipAll);
+    }
+
+    #[test]
+    fn back_steps_to_previous_agent_and_resets_diff() {
+        let previews = [
+            preview_for("claude", Some("old\n"), "new\n"),
+            preview_for("codex", Some("old\n"), "new\n"),
+        ];
+        let data = ConsentData::new(&previews);
+        let mut state = ConsentState::new(&previews);
+
+        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
+        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
+        state.handle_key(KeyEvent::from(KeyCode::Char('d')), &data, 20);
+        assert!(state.show_diff);
+
+        assert_eq!(
+            state.handle_key(KeyEvent::from(KeyCode::Left), &data, 20),
+            ConsentAction::Continue
+        );
+        assert_eq!(state.step, WizardStep::Agent(0));
+        assert!(!state.show_diff);
     }
 
     #[test]
     fn frame_composition_renders_agents_and_diff() {
         let previews = [preview(Some("old\n"), "new\n")];
         let mut state = ConsentState::new(&previews);
+        state.step = WizardStep::Agent(0);
         state.show_diff = true;
 
         let screen = render(&previews, &state, 90, 24);
 
-        assert!(screen.contains("rimz hook install"));
-        assert!(screen.contains("[x] claude"));
+        assert!(screen.contains("rimz - first-run setup - claude (1 of 1)"));
+        assert!(screen.contains("Add 2 reporting hooks to claude?"));
         assert!(screen.contains("Diff"));
         assert!(screen.contains("-old"));
         assert!(screen.contains("+new"));
-        assert!(screen.contains("[Enter] install selected"));
+        assert!(screen.contains("[Enter] add"));
     }
 
     #[test]
@@ -578,11 +800,11 @@ mod tests {
         let lines = screen.lines().collect::<Vec<_>>();
 
         assert!(
-            lines[23].contains("[Enter] install selected"),
+            lines[23].contains("[Enter] set up"),
             "footer should own the last reserved row:\n{screen}"
         );
         assert!(
-            !lines[22].contains("[Enter] install selected"),
+            !lines[22].contains("[Enter] set up"),
             "footer should not float above blank slack:\n{screen}"
         );
     }
