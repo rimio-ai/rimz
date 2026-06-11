@@ -68,7 +68,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
         bucket_positions.windows(2).all(|pair| pair[0] < pair[1]),
         "make-up order is ? ! ⏸ ✓ | ⢿ ○: {buckets}"
     );
-    assert!(!buckets.contains('⢄'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
     // one lane: the header gains the dotted seal and a `▏` lane spine.
     assert!(
@@ -118,10 +118,9 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         "red past the hour"
     );
 }
-/// State glyphs never dim. A zero bucket keeps its glyph's semantic tone at
-/// rest weight — the make-up reads as a stable colored legend — and rests only
-/// its count at the soft stat tier; the calm `○`/`✓` card leads read at full
-/// strength in their quiet green.
+/// State glyphs never dim. A zero bucket keeps its resting style and rests
+/// only its count at the soft stat tier; idle is neutral by default, while
+/// the colored states keep their semantic tone.
 #[test]
 fn state_glyphs_never_dim() {
     let theme = Theme::fixed(false);
@@ -152,7 +151,12 @@ fn state_glyphs_never_dim() {
     assert_eq!(
         glyph_style("✓"),
         theme.style(Color::Green, Modifier::empty()),
-        "a zero ✓ bucket keeps the quiet green at full strength"
+        "a zero ✓ bucket keeps the quiet success tone at full strength"
+    );
+    assert_eq!(
+        glyph_style("○").fg,
+        None,
+        "a zero idle bucket carries no foreground color by default"
     );
     let zero_counts: Vec<_> = spans
         .iter()
@@ -163,15 +167,12 @@ fn state_glyphs_never_dim() {
         zero_counts.iter().all(|span| span.style == theme.soft()),
         "only the zero count rests at the soft stat tier"
     );
-    // The card leads share the same full-strength read: the calm states keep
-    // their quiet green with no dim weight.
-    for status in [AgentStatus::Idle, AgentStatus::Success] {
-        assert_eq!(
-            labels::status_style(&theme, status),
-            theme.style(Color::Green, Modifier::empty()),
-            "{status:?} leads at full strength"
-        );
-    }
+    assert_eq!(labels::status_style(&theme, AgentStatus::Idle).fg, None);
+    assert_eq!(
+        labels::status_style(&theme, AgentStatus::Success),
+        theme.style(Color::Green, Modifier::empty()),
+        "success keeps the quiet success tone at full strength"
+    );
 }
 /// With color, a make-up pick changes fill and weight only: whichever bucket
 /// is active, the line renders glyph-for-glyph identical text and every hit
@@ -268,6 +269,40 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         "NO_COLOR marks the active fixed cells by modifier"
     );
 }
+
+#[test]
+fn selected_idle_filter_uses_modifier_only_by_default() {
+    let theme = Theme::fixed(false);
+    let idle = agent(
+        "idle-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("resting"),
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let (lines, _) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        Some(AgentStatus::Idle),
+        0,
+        38,
+    );
+    let active = lines[0]
+        .spans
+        .iter()
+        .find(|span| span.content.as_ref() == "○ 1")
+        .expect("the selected idle bucket stays one span");
+    assert_eq!(active.style.fg, None);
+    assert!(
+        active.style.add_modifier.contains(Modifier::REVERSED)
+            && active.style.add_modifier.contains(Modifier::BOLD),
+        "selected idle uses only weight and reverse video"
+    );
+}
+
 /// A zero bucket emits no hit — inert, as if not a tab — and every emitted
 /// hit's column range covers exactly its bucket's `glyph count` text, in the
 /// left cluster (content-absolute) and the right (offset to wherever
@@ -431,5 +466,5 @@ fn compacting_agent_counts_as_working() {
         buckets.contains("⢿ 1"),
         "compacting counts as working: {buckets}"
     );
-    assert!(!buckets.contains('⢄'), "no thinking bucket: {buckets}");
+    assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
 }

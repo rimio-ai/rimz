@@ -178,8 +178,8 @@ fn render_process_rows_below_agents_without_a_seam() {
     assert_snapshot("agents_process_tail", rendered);
 }
 /// The command tail reads one step below the agent cards: the lead glyph
-/// carries the DIM modifier over its semantic tone (quiet-green idle,
-/// work-clay active) and the program name wears the soft middle tier — which
+/// carries the DIM modifier over its status style (neutral idle, work-clay
+/// active) and the program name wears the soft middle tier — which
 /// itself falls back to the bare DIM weight under `NO_COLOR`, so the
 /// stripped color still sets processes apart.
 #[test]
@@ -237,7 +237,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
         assert_eq!(
             span_style("○"),
             labels::status_style(&theme, AgentStatus::Idle).add_modifier(Modifier::DIM),
-            "the idle lead keeps its quiet green one DIM step down (no_color={no_color})"
+            "the idle lead keeps its neutral style one DIM step down (no_color={no_color})"
         );
         let active_lead = theme.style(theme::ORANGE, Modifier::DIM);
         assert!(

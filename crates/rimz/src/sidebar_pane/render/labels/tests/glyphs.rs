@@ -196,7 +196,10 @@ fn animations_cycle_and_wrap() {
         assert_eq!(working_glyph(&theme, phase as u64), *expected);
     }
     assert_eq!(working_glyph(&theme, working.len() as u64), working[0]);
-    let thinking = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"];
+    let thinking = [
+        "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶",
+        "⣷", "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
+    ];
     for (phase, expected) in thinking.iter().enumerate() {
         assert_eq!(thinking_glyph(&theme, phase as u64), *expected);
     }
@@ -378,7 +381,7 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
     );
     assert_eq!(
         agent_glyph(&theme, AgentStatus::Running, TurnPhase::Reasoning, 1),
-        "⢂"
+        "⠂"
     );
     // The thinking head is the running-state indicator — a stale thinking bit
     // on a non-running agent never changes the static status glyph.
@@ -421,5 +424,34 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
         status_glyph(&custom, AgentStatus::Idle),
         "A",
         "legend/status summaries keep the representative still frame"
+    );
+}
+
+#[test]
+fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
+    let theme = Theme::fixed(false);
+    assert_eq!(status_style(&theme, AgentStatus::Idle).fg, None);
+    assert_eq!(agent_style_at(&theme, AgentStatus::Idle, 0).fg, None);
+    assert_eq!(
+        agent_lead_style(&theme, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
+        Style::default().add_modifier(Modifier::BOLD),
+        "unread idle keeps the hard-blink weight without adding a color"
+    );
+
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.idle = Some(
+        toml::from_str::<crate::config::AnimationSpec>("color = \"good\"\n")
+            .expect("idle color spec"),
+    );
+    let custom = Theme::fixed_for_sidebar(false, &sidebar);
+    assert_eq!(
+        status_style(&custom, AgentStatus::Idle),
+        custom.style(Color::Green, Modifier::empty()),
+        "an explicit idle color still paints the glyph"
+    );
+    assert_eq!(
+        agent_lead_style(&custom, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
+        custom.style(Color::Green, Modifier::BOLD),
+        "configured idle color survives unread hard-blink"
     );
 }

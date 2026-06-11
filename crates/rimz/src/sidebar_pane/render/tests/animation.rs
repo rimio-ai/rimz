@@ -317,11 +317,11 @@ fn render_reasoning_head_uses_the_new_thinking_orbit() {
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
 
     assert!(
-        first.contains("⢄ claude"),
+        first.contains("⠁ claude"),
         "the first thinking frame is the braille orbit:\n{first}"
     );
     assert!(
-        second.contains("⢂ claude"),
+        second.contains("⠂ claude"),
         "fast thinking speed advances on the next tick:\n{second}"
     );
 }

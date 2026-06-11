@@ -83,7 +83,7 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
     assert!(
-        rendered.contains("⢄ review — audit the trust hash"),
+        rendered.contains("⠁ review — audit the trust hash"),
         "a reasoning child wears the thinking head:\n{rendered}"
     );
     // Line 2: token spend, model, and effort left, elapsed work right-pinned.

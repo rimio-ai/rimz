@@ -28,7 +28,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
 ▌  ⧉ subagents (2)                                        ← subagents spawned this turn
 ▌    ✓ Explore — locate the render seam                   ← done child: subagent kind · task
 ▌      ◇ 12k · Opus 4.8                          ◔ 10m    ← tokens · model · elapsed time
-▌    ⢄ Explore — audit the trust hash                     ← active child: thinking head
+▌    ⠁ Explore — audit the trust hash                     ← active child: thinking head
 ▌      ◇  3k · Opus 4.8                          ◔  3m    ← same
 
  ─────────────────────────────────────────────────────
@@ -58,17 +58,17 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 | `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the configurable stall window | yes — yellow, heating amber then red with the age clock; the breath quickens with it, blinking at red; unread rows hard-blink until focused |
 | `⏸`   | paused | stopped mid-turn on a provider limit — rate-limit or overload; resumes after the provider recovers or the window resets | waiting on recovery — held amber, never heats |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
-| `⢄`   | thinking   | running, before the turn's first file edit — orbits `⢄ ⢂ ⢁ ⡁ ⡈ ⡐ ⡠` in clay | no |
+| `⠁`   | thinking   | running, before the turn's first file edit — animates `⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
 | `✓`   | done       | finished cleanly | no; unread results hard-blink until focused |
-| `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow `○` in the idle quiet green, real work the `⢿` spinner in the working clay — the whole row one soft step below the agent cards, never a cockpit tally | no |
+| `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow neutral `○`, real work the `⢿` spinner in the working clay — the whole row one soft step below the agent cards, never a cockpit tally | no |
 
 Three short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
 
 | head | meaning |
 |------|---------|
-| `⢄` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits stays in the thinking orbit end to end |
+| `⠁` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits stays in the thinking animation end to end |
 | `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
 | `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
 
@@ -140,8 +140,8 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
 - **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once today records spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. Any non-zero bucket with unread rows hard-blinks in its semantic tone. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking orbit and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows — the glyph in its semantic tone, a zero count at the soft stat tier beside it — so the line is scannable by position and reads as a stable colored legend.
-- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip — dark ink on its semantic fill, bold, with one space on each side like the dashboard tab — and under `NO_COLOR` `┤ ├` caps wrap that padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (breathing, each wearing its oldest row's age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. Any non-zero bucket with unread rows hard-blinks in its semantic tone. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking animation and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows; colored statuses wear their semantic tone, idle rests neutral by default, and zero counts read at the soft stat tier beside them.
+- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while default idle uses reverse video and weight only. Under `NO_COLOR` `┤ ├` caps wrap the padded pick instead. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
@@ -213,17 +213,17 @@ selected — only appends, never reshapes
 ▌    ⢿ Explore
 ```
 
-The expanded card also lists any **subagents** the agent spawned this turn. A `⧉ subagents (N)` header (the marker violet, the label soft) opens the list, then one entry per child in spawn order (creation time ascending, stable across refreshes). Each entry leads with the same live head an agent row wears — the `⢄` thinking orbit while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's type and what the parent asked it to do. A deeper-indented second line carries the child's metadata: token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. Elapsed work pins right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the parent's age ramp, so a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
+The expanded card also lists any **subagents** the agent spawned this turn. A `⧉ subagents (N)` header (the marker violet, the label soft) opens the list, then one entry per child in spawn order (creation time ascending, stable across refreshes). Each entry leads with the same live head an agent row wears — the `⠁` thinking animation while the child reasons, the `⢿` working fill while it acts, the static verdict once it lands — followed by the child's type and what the parent asked it to do. A deeper-indented second line carries the child's metadata: token spend `◇` (the card's whole-unit figure, never a decimal), model, and reasoning effort. That line is a per-card grid — the figure right-aligned, the model padded to the widest sibling, a missing field blank-filling its slot — so the metadata stacks into columns across children. Elapsed work pins right under the parent's stats: the clock-fill glyph (filling with the child's worked span) over a fixed three-cell `m`/`h` label (`<1m` under a minute, never seconds), toned by the parent's age ramp, so a long-running child visibly heats up. A finished child holds its `✓` (or `!`) on the list until the parent's next turn clears it:
 
 ```
 ▌  ⧉ subagents (2)
-▌    ⢄ Explore — locate the render seam
+▌    ⠁ Explore — locate the render seam
 ▌      ◇ 12k · Opus 4.8                         ◔ 14m
 ▌    ✓ review — audit the trust hash
 ▌      ◇  3k · Haiku 4.5 · high                 ◔ <1m
 ```
 
-The description, tokens, and elapsed time ride in from Claude's `subagentStatusLine` (Claude-only, harvested at install time). The model, effort, and turn phase come from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child uses the same thinking orbit its parent would. (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes.) A child with none of these — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
+The description, tokens, and elapsed time ride in from Claude's `subagentStatusLine` (Claude-only, harvested at install time). The model, effort, and turn phase come from the child's own lifecycle events, so siblings on different models read apart at a glance and a reasoning child uses the same thinking animation its parent would. (Claude reports a child's effort on its `SubagentStop`, so the effort token typically joins the line as the child finishes.) A child with none of these — a Codex child, or a Claude child before its first render — shows just the `glyph type` line. Subagents have no pane of their own, so they never get a row; they nest here only.
 
 ### Attention rows
 
@@ -240,7 +240,7 @@ A `?` waiting row reads the same with a `?` glyph. The row carries *who* needs y
 
 ### Process rows
 
-A pane no agent has stamped reads like a slim agent card, one soft step quieter: a hollow `○` in the idle agent's quiet green for an idle shell or editor, the `⢿` spinner in the working clay for a pane doing real work (a build, test, or install), and the program name in the soft middle tier. That step is the boundary. Inside a worktree group the process rows settle below the agent cards, and the slight recession — falling back to DIM weight under `NO_COLOR` — reads them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a second line. At wide (L2) widths a working or stuck row pins a resource grid right on line 1 — `C  <n>%  M <n>[k/M/G]  ⇅  <n>[k/M/G]/s`, CPU, RAM, and combined VFS I/O rate; an idle `○` shell or editor stays bare even when sampled values exist. Each marker takes its own DIM-weighted tone (`C` sky, `M` sage, `⇅` violet) with its figure right-aligned in a dim slot, and the whole cluster waits until CPU, memory, and I/O all have values, so it reads whole from the first reading and never wanders as values change. It rides the same right slot an agent card gives its `$cost`, so active resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
+A pane no agent has stamped reads like a slim agent card, one soft step quieter: a hollow neutral `○` for an idle shell or editor, the `⢿` spinner in the working clay for a pane doing real work (a build, test, or install), and the program name in the soft middle tier. That step is the boundary. Inside a worktree group the process rows settle below the agent cards, and the slight recession — falling back to DIM weight under `NO_COLOR` — reads them as the group's command tail rather than more agents. An active pane anchors its primary line on the shell that owns it, so the line stays put as commands come and go, and carries the live command in full on a second line. At wide (L2) widths a working or stuck row pins a resource grid right on line 1 — `C  <n>%  M <n>[k/M/G]  ⇅  <n>[k/M/G]/s`, CPU, RAM, and combined VFS I/O rate; an idle `○` shell or editor stays bare even when sampled values exist. Each marker takes its own DIM-weighted tone (`C` sky, `M` sage, `⇅` violet) with its figure right-aligned in a dim slot, and the whole cluster waits until CPU, memory, and I/O all have values, so it reads whole from the first reading and never wanders as values change. It rides the same right slot an agent card gives its `$cost`, so active resource load reads at a glance without leaving the sidebar. The stats are process-row vocabulary; an agent card keeps that line for its identity and cost:
 
 ```
 ○ zsh
@@ -401,7 +401,7 @@ These notices clear when the next accepted pane frame lands. A health alert take
  filter   q waiting  !/e attention
  system   r reload   x dismiss
  help     ? close
- ⢿ working   ⢄ thinking   ? waiting
+ ⢿ working   ⠁ thinking   ? waiting
  ! attention   ○ idle   ✓ done
 ```
 

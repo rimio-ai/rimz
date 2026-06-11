@@ -105,7 +105,7 @@
 # waiting, failed, and paused honor one frame and color; attention heat, unread
 # blink, and the parked pause grammar are fixed product behavior.
 ## [sidebar.animations.thinking]
-## frames = "⢄⢂⢁⡁⡈⡐⡠"
+## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 ## color = "clay"
 ## effect = "static"
 ## speed = "fast"

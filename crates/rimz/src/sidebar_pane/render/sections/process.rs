@@ -24,8 +24,8 @@ pub(super) fn process_row_line(
     // The row speaks the agent cards' vocabulary one step down: an active
     // pane (a build, a test, a script) gets the running braille spinner in
     // the same work clay a running agent wears, an idle shell or a TUI rests
-    // on the quiet-green hollow `○` of an idle agent — the lead DIM-weighted,
-    // the name at the soft tier. That slight step — not a seam line — is what
+    // on the neutral hollow `○` of an idle agent — the lead DIM-weighted, the
+    // name at the soft tier. That slight step — not a seam line — is what
     // sets the group's command tail apart from the agent cards above it, and
     // under `NO_COLOR` it survives as the soft tier's DIM weight.
     let state = row.process_state().unwrap_or(ProcessState::Idle);

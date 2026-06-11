@@ -8,6 +8,11 @@ use ratatui::style::{Color, Modifier};
 use super::labels::{breath_wave, hard_blink};
 use super::theme::{ORANGE, Palette};
 
+const THINKING_FRAMES: &[&str] = &[
+    "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
+    "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
+];
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimationRole {
     Thinking,
@@ -235,7 +240,7 @@ fn role_allows_effect(role: AnimationRole) -> bool {
 fn builtin(role: AnimationRole) -> Animation {
     let (frames, color, effect, speed) = match role {
         AnimationRole::Thinking => (
-            vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
+            THINKING_FRAMES.to_vec(),
             ORANGE,
             Effect::Static,
             Speed::Fast,
@@ -293,7 +298,7 @@ mod tests {
         let animations = ResolvedAnimations::default();
         assert_eq!(
             animations.role(AnimationRole::Thinking).frames(),
-            ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]
+            THINKING_FRAMES
         );
         assert_eq!(animations.role(AnimationRole::Working).color(), ORANGE);
         assert_eq!(

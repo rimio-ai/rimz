@@ -51,9 +51,8 @@ const TAB_CAP_LEFT: char = '┤';
 const TAB_CAP_RIGHT: char = '├';
 
 /// The active chip's ink: near-black, crisp on every mid-brightness fill — the
-/// provider tab rail's brand fill and the make-up bucket's semantic fill
-/// alike. A brand-tone pass-through like the theme's `ORANGE`, not a palette
-/// slot.
+/// provider tab rail's brand fill and the make-up bucket fills alike. A
+/// brand-tone pass-through like the theme's `ORANGE`, not a palette slot.
 const TAB_INK: Color = Color::Indexed(16);
 
 /// The selected card's left accent: a bold half-block `▌` running the card's

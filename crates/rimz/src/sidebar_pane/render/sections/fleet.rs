@@ -8,8 +8,8 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat, agent_style_at, attention_floor_color, hard_blink, status_color, status_glyph,
-    status_style_at,
+    age_heat, agent_style_at, attention_floor_color, hard_blink, status_chip_color, status_glyph,
+    status_rest_style, status_style_at, status_style_with_modifier,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -46,19 +46,19 @@ pub(crate) struct MakeUpHit {
 /// amber, never heating), then `success` `✓`. The right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
-/// bucket renders — the glyph always in its semantic color, a zero
-/// count at the soft gray beside it. Counts span the capped agents
-/// (`status_counts`). The
+/// bucket renders; colored statuses use their semantic tone, idle rests
+/// neutral by default, and a zero count sits at the soft gray beside it.
+/// Counts span the capped agents (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
 ///
 /// Every non-zero bucket is also a click-to-filter target, so the line returns
 /// its [`MakeUpHit`]s alongside — emitted in lockstep with the spans, columns
 /// relative to the unpadded content. The `filter` is the active pick: that
-/// bucket paints the same `glyph count` cells as rest (ink on its semantic
-/// fill plus the bucket's current weight), so moving the pick changes style
-/// without moving text. Under `NO_COLOR`, where the fill drops, reverse-video
-/// marks the same fixed cells.
+/// bucket paints the same `glyph count` cells as rest (ink on a colored fill
+/// where the status has one, plus the bucket's current weight), so moving the
+/// pick changes style without moving text. Under `NO_COLOR`, or for neutral
+/// idle, reverse-video marks the same fixed cells.
 pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -90,7 +90,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     let mut left = Cluster::new(theme, filter);
     left.push_count(
         AgentStatus::Waiting,
-        status_color(theme, AgentStatus::Waiting),
+        status_chip_color(theme, AgentStatus::Waiting),
         waiting,
         unread_bucket_style(
             theme,
@@ -103,7 +103,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     );
     left.push_count(
         AgentStatus::Failed,
-        status_color(theme, AgentStatus::Failed),
+        status_chip_color(theme, AgentStatus::Failed),
         failed,
         unread_bucket_style(
             theme,
@@ -122,7 +122,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // is nothing to do until the provider recovers or the window resets.
     left.push_count(
         AgentStatus::Paused,
-        status_color(theme, AgentStatus::Paused),
+        status_chip_color(theme, AgentStatus::Paused),
         paused,
         unread_bucket_style(
             theme,
@@ -135,7 +135,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     );
     left.push_count(
         AgentStatus::Success,
-        status_color(theme, AgentStatus::Success),
+        status_chip_color(theme, AgentStatus::Success),
         success,
         unread_bucket_style(
             theme,
@@ -149,13 +149,13 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     let mut right = Cluster::new(theme, filter);
     right.push_count(
         AgentStatus::Running,
-        status_color(theme, AgentStatus::Running),
+        status_chip_color(theme, AgentStatus::Running),
         working,
         agent_style_at(theme, AgentStatus::Running, animation_phase),
     );
     right.push_count(
         AgentStatus::Idle,
-        status_color(theme, AgentStatus::Idle),
+        status_chip_color(theme, AgentStatus::Idle),
         idle,
         status_style_at(theme, AgentStatus::Idle, animation_phase),
     );
@@ -227,15 +227,20 @@ impl<'a> Cluster<'a> {
     /// its count are always separated by a single space (`? 2`, never `?2`);
     /// successive buckets are separated by three. Every bucket renders, so a
     /// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by
-    /// position. The glyph always wears its semantic color, so the make-up
-    /// reads as a stable colored legend; a zero bucket rests the glyph (no
-    /// bold, no heat), reads its count at the soft stat tier, and emits no hit
-    /// — inert, as if not a tab. The active filter's bucket paints the fixed
-    /// `glyph count` footprint as a chip (`TAB_INK` on the glyph's semantic
-    /// fill plus the bucket's current weight); under `NO_COLOR` it keeps the
-    /// footprint and adds reverse video because there is no fill color to carry
-    /// the pick.
-    fn push_count(&mut self, status: AgentStatus, glyph_color: Color, count: usize, style: Style) {
+    /// position. Colored statuses wear their semantic tone; idle rests
+    /// neutral unless the user configured a tone. A zero bucket rests the glyph
+    /// (no bold, no heat), reads its count at the soft stat tier, and emits no
+    /// hit — inert, as if not a tab. The active filter's bucket paints the
+    /// fixed `glyph count` footprint as a chip for colored statuses; neutral
+    /// idle uses reverse video and weight only, preserving the no-color idle
+    /// head.
+    fn push_count(
+        &mut self,
+        status: AgentStatus,
+        glyph_color: Option<Color>,
+        count: usize,
+        style: Style,
+    ) {
         if !self.spans.is_empty() {
             self.spans.push(Span::raw("   "));
             self.col += 3;
@@ -243,16 +248,20 @@ impl<'a> Cluster<'a> {
         let glyph = status_glyph(self.theme, status);
         let start = self.col;
         if self.filter == Some(status) && count > 0 {
-            let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::empty());
-            let pick = if chip.bg.is_none() {
-                chip.add_modifier(Modifier::REVERSED)
-            } else {
-                chip
-            };
             let weight = if style.add_modifier.is_empty() {
                 Modifier::BOLD
             } else {
                 style.add_modifier
+            };
+            let pick = if let Some(glyph_color) = glyph_color {
+                let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::empty());
+                if chip.bg.is_none() {
+                    chip.add_modifier(Modifier::REVERSED)
+                } else {
+                    chip
+                }
+            } else {
+                Style::default().add_modifier(Modifier::REVERSED)
             };
             self.push_span(Span::styled(
                 format!("{glyph} {count}"),
@@ -261,7 +270,7 @@ impl<'a> Cluster<'a> {
         } else if count == 0 {
             self.push_span(Span::styled(
                 glyph.to_owned(),
-                self.theme.style(glyph_color, Modifier::empty()),
+                status_rest_style(self.theme, status),
             ));
             self.push_span(Span::styled(format!(" {count}"), self.theme.soft()));
             return;
@@ -338,19 +347,13 @@ fn unread_bucket_style(
     let Some(oldest) = oldest_unread_age(groups, status, now) else {
         return base;
     };
-    theme.style(
-        unread_bucket_color(theme, status, oldest),
-        hard_blink(animation_phase),
-    )
-}
-
-fn unread_bucket_color(theme: &Theme, status: AgentStatus, age_secs: i64) -> Color {
     match status {
-        AgentStatus::Waiting | AgentStatus::Failed => {
-            age_heat(age_secs).unwrap_or_else(|| attention_floor_color(theme, status))
-        }
+        AgentStatus::Waiting | AgentStatus::Failed => theme.style(
+            age_heat(oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
+            hard_blink(animation_phase),
+        ),
         AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running | AgentStatus::Idle => {
-            status_color(theme, status)
+            status_style_with_modifier(theme, status, hard_blink(animation_phase))
         }
     }
 }

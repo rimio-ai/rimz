@@ -309,10 +309,10 @@ mod tests {
 
     #[test]
     fn string_frames_split_per_unicode_scalar() {
-        let frames = toml::from_str::<FrameWrap>("value = \"⢄⢂⢁⡁⡈⡐⡠\"")
+        let frames = toml::from_str::<FrameWrap>("value = \"⠁⠂⠄⡀\"")
             .expect("frame wrap")
             .value;
-        assert_eq!(frames.as_slice(), ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]);
+        assert_eq!(frames.as_slice(), ["⠁", "⠂", "⠄", "⡀"]);
     }
 
     #[test]

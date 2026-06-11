@@ -297,7 +297,7 @@ fn sidebar_animations_parse_as_partial_role_overrides() {
     let config = MachineConfig::load_from(&write(
         &dir,
         "[sidebar.animations.thinking]\n\
-             frames = \"⢄⢂\"\n\
+             frames = \"⠁⠂\"\n\
              color = \"clay\"\n\
              speed = \"slow\"\n\
              [sidebar.animations.idle]\n\
@@ -311,7 +311,7 @@ fn sidebar_animations_parse_as_partial_role_overrides() {
         .expect("thinking override");
     assert_eq!(
         thinking.frames.expect("frames").as_slice(),
-        ["⢄".to_owned(), "⢂".to_owned()]
+        ["⠁".to_owned(), "⠂".to_owned()]
     );
     assert_eq!(thinking.color, Some(AnimationColor::Clay));
     assert_eq!(thinking.speed, Some(AnimationSpeed::Slow));

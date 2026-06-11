@@ -172,10 +172,6 @@ pub(in crate::sidebar_pane::render) fn status_style(theme: &Theme, status: Agent
     status_style_at(theme, status, 0)
 }
 
-pub(in crate::sidebar_pane::render) fn status_color(theme: &Theme, status: AgentStatus) -> Color {
-    theme.animations.status(status).color()
-}
-
 pub(in crate::sidebar_pane::render) fn status_style_at(
     theme: &Theme,
     status: AgentStatus,
@@ -188,12 +184,49 @@ pub(in crate::sidebar_pane::render) fn status_style_at(
     )
 }
 
+pub(in crate::sidebar_pane::render) fn status_rest_style(
+    theme: &Theme,
+    status: AgentStatus,
+) -> Style {
+    status_style_with_modifier(theme, status, Modifier::empty())
+}
+
+pub(in crate::sidebar_pane::render) fn status_style_with_modifier(
+    theme: &Theme,
+    status: AgentStatus,
+    modifier: Modifier,
+) -> Style {
+    role_style_with_modifier(
+        theme,
+        crate::sidebar_pane::render::animation::ResolvedAnimations::status_role(status),
+        modifier,
+    )
+}
+
+pub(in crate::sidebar_pane::render) fn status_chip_color(
+    theme: &Theme,
+    status: AgentStatus,
+) -> Option<Color> {
+    let animation = theme.animations.status(status);
+    if status == AgentStatus::Idle && !animation.color_overridden() {
+        None
+    } else {
+        Some(animation.color())
+    }
+}
+
 fn role_style(theme: &Theme, role: AnimationRole, animation_phase: u64) -> Style {
     let animation = theme.animations.role(role);
-    theme.style(
-        animation.color(),
-        effect_modifier(animation, animation_phase),
-    )
+    role_style_with_modifier(theme, role, effect_modifier(animation, animation_phase))
+}
+
+fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifier) -> Style {
+    let animation = theme.animations.role(role);
+    if role == AnimationRole::Idle && !animation.color_overridden() {
+        Style::default().add_modifier(modifier)
+    } else {
+        theme.style(animation.color(), modifier)
+    }
 }
 
 /// The compacting head's tone: cool violet, the token/context-domain color the
@@ -264,10 +297,7 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
         let color = age_heat(age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
         theme.style(color, hard_blink(animation_phase))
     } else if unread {
-        theme.style(
-            theme.animations.role(role).color(),
-            hard_blink(animation_phase),
-        )
+        role_style_with_modifier(theme, role, hard_blink(animation_phase))
     } else if status.is_actionable() {
         let color = age_heat(age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
         theme.style(color, attention_breath(animation_phase, age_secs))

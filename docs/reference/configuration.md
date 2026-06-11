@@ -180,7 +180,7 @@ trunk = "develop"
 
 ```toml
 [sidebar.animations.thinking]
-frames = "⢄⢂⢁⡁⡈⡐⡠"
+frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 color = "clay"
 effect = "static"
 speed = "fast"
@@ -189,9 +189,9 @@ speed = "fast"
 effect = "breathe"
 ```
 
-`[sidebar.animations]` themes the status heads the sidebar paints. The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and color alone.
+`[sidebar.animations]` themes the status heads the sidebar paints. The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone.
 
-`frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⢄⢂⢁⡁⡈⡐⡠"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
+`frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
 `color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; raw indexes and `clay` pass through as explicit tones. `effect` is `static`, `breathe`, or `blink`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence.
 
