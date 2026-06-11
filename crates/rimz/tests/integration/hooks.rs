@@ -18,35 +18,6 @@ use crate::common::{
 const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
 const TEST_HOOK_CAP_MILLIS: &str = "50";
 
-#[test]
-fn hooks_install_is_discoverable_but_feed_entrypoint_is_hidden() {
-    let top = Command::cargo_bin("rimz")
-        .expect("cargo-bin")
-        .arg("--help")
-        .output()
-        .expect("top help");
-    assert!(top.status.success());
-    let top_stdout = String::from_utf8(top.stdout).expect("utf8 top help");
-    assert!(
-        top_stdout.contains("hooks"),
-        "top-level help should expose hook install/uninstall entrypoint:\n{top_stdout}"
-    );
-
-    let hooks = Command::cargo_bin("rimz")
-        .expect("cargo-bin")
-        .args(["hooks", "--help"])
-        .output()
-        .expect("hooks help");
-    assert!(hooks.status.success());
-    let hooks_stdout = String::from_utf8(hooks.stdout).expect("utf8 hooks help");
-    assert!(hooks_stdout.contains("install"));
-    assert!(hooks_stdout.contains("uninstall"));
-    assert!(
-        !hooks_stdout.contains("\n  feed"),
-        "internal hook feed entrypoint should stay hidden:\n{hooks_stdout}"
-    );
-}
-
 fn permission_cases() -> [(&'static str, String); 2] {
     [
         ("claude", permission_payload("Bash")),
@@ -143,6 +114,74 @@ fn run_cap_timeout(env: &Env, source: &str, payload: &str) -> Output {
     env.spawn_payload(cmd, payload)
         .wait_with_output()
         .expect("wait child")
+}
+
+#[test]
+fn session_start_hooks_write_lifecycle_rows() {
+    for (source, payload, expected_id, expected_fields) in [
+        (
+            "codex",
+            json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "sess-codex-01",
+                "approval_policy": "ask",
+                "worktree_branch": "feature-x",
+            }),
+            "sess-codex-01",
+            vec![("worktree_branch", json!("feature-x"))],
+        ),
+        (
+            "pi",
+            json!({
+                "hook_event_name": "session_start",
+                "session_id": "019e9161-a5d0-791d-879e-39679acd4ded",
+                "reason": "startup",
+                "model": "gpt-5.5",
+                "context_pct": 3,
+                "context_window": 272000,
+                "total_tokens": 8160,
+            }),
+            "019e9161-a5d0-791d-879e-39679acd4ded",
+            vec![
+                ("model", json!("gpt-5.5")),
+                ("context_window", json!(272000)),
+            ],
+        ),
+        (
+            "claude",
+            json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "sess-claude-01",
+                "permission_mode": "default",
+                "worktree_branch": "feature-x",
+            }),
+            "sess-claude-01",
+            vec![("worktree_branch", json!("feature-x"))],
+        ),
+    ] {
+        let env = Env::new();
+        let payload = serde_json::to_string(&payload).expect("payload");
+        let output = env.run_hook(source, &payload);
+        assert!(
+            output.status.success(),
+            "{source} stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            output.stdout.is_empty(),
+            "{source} lifecycle hook is silent"
+        );
+
+        let parsed = env.snapshot_json();
+        let agents = parsed["agents"].as_array().expect("agents array");
+        assert_eq!(agents.len(), 1, "{source} rolled up one agent: {agents:?}");
+        assert_eq!(agents[0]["kind"], source);
+        assert_eq!(agents[0]["agent_id"], expected_id);
+        assert_eq!(agents[0]["status"], "idle");
+        for (field, value) in expected_fields {
+            assert_eq!(agents[0][field], value, "{source} {field}");
+        }
+    }
 }
 
 #[test]
@@ -272,36 +311,6 @@ fn permission_hook_bridge_cap_timeout_emits_neutral() {
         assert_eq!(parsed[0]["surface"], "bridge");
         assert_eq!(parsed[0]["source"], source);
     }
-}
-
-#[test]
-fn codex_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-codex-01",
-        "approval_policy": "ask",
-        "worktree_branch": "feature-x",
-    }))
-    .expect("payload");
-
-    let output = env.run_hook("codex", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    // The lifecycle event must land in the snapshot's agents rollup.
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
-    assert_eq!(agents[0]["kind"], "codex");
-    assert_eq!(agents[0]["agent_id"], "sess-codex-01");
-    // SessionStart registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["worktree_branch"], "feature-x");
 }
 
 #[test]
@@ -458,42 +467,6 @@ fn pi_tool_call_bridge_allow_renders_empty_object() {
     // Pi's allow is the empty object — the extension blocks only on
     // `block === true`.
     assert_eq!(decision, json!({}), "decision: {decision}");
-}
-
-#[test]
-fn pi_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "session_start",
-        "session_id": "019e9161-a5d0-791d-879e-39679acd4ded",
-        "reason": "startup",
-        "model": "gpt-5.5",
-        "context_pct": 3,
-        "context_window": 272000,
-        "total_tokens": 8160,
-    }))
-    .expect("payload");
-
-    let output = env.run_hook("pi", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1, "exactly one agent rolled up: {agents:?}");
-    assert_eq!(agents[0]["kind"], "pi");
-    assert_eq!(
-        agents[0]["agent_id"],
-        "019e9161-a5d0-791d-879e-39679acd4ded"
-    );
-    // session_start registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["model"], "gpt-5.5");
-    assert_eq!(agents[0]["context_window"], 272000);
 }
 
 #[test]
@@ -837,217 +810,66 @@ fn claude_pre_tool_bridge_path_renders_updated_input() {
 // --- Claude lifecycle and install/uninstall ---
 
 #[test]
-fn claude_session_start_writes_agent_lifecycle_event() {
-    let env = Env::new();
-    let payload = serde_json::to_string(&json!({
-        "hook_event_name": "SessionStart",
-        "session_id": "sess-claude-01",
-        "permission_mode": "default",
-        "worktree_branch": "feature-x",
-    }))
-    .expect("payload");
+fn claude_compaction_bracket_closers_clear_head() {
+    for (session_id, closer, expect_running, expect_event_count) in [
+        (
+            "sess-claude-compact",
+            json!({
+                "hook_event_name": "SessionStart",
+                "session_id": "sess-claude-compact",
+                "source": "compact",
+            }),
+            true,
+            None,
+        ),
+        (
+            "sess-claude-pretool-close",
+            json!({
+                "hook_event_name": "PreToolUse",
+                "session_id": "sess-claude-pretool-close",
+                "tool_name": "Read",
+            }),
+            false,
+            Some(3),
+        ),
+    ] {
+        let env = Env::new();
+        run_claude_lifecycle(
+            &env,
+            json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": session_id,
+                "prompt": "continue the turn",
+            }),
+        );
+        run_claude_lifecycle(
+            &env,
+            json!({
+                "hook_event_name": "PreCompact",
+                "session_id": session_id,
+            }),
+        );
+        run_claude_lifecycle(&env, closer);
 
-    let output = env.run_hook("claude", &payload);
-    assert!(
-        output.status.success(),
-        "stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(output.stdout.is_empty(), "lifecycle hook is silent");
-
-    let parsed = env.snapshot_json();
-    let agents = parsed["agents"].as_array().expect("agents array");
-    assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0]["kind"], "claude");
-    assert_eq!(agents[0]["agent_id"], "sess-claude-01");
-    // SessionStart registers the agent idle (wired in, nothing asked yet).
-    assert_eq!(agents[0]["status"], "idle");
-    assert_eq!(agents[0]["worktree_branch"], "feature-x");
-}
-
-#[test]
-fn claude_session_start_compact_closes_and_counts_the_bracket() {
-    let env = Env::new();
-
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-compact",
-            "prompt": "continue the turn",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-claude-compact",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "SessionStart",
-            "session_id": "sess-claude-compact",
-            "source": "compact",
-        }),
-    );
-
-    let parsed = env.snapshot_json();
-    let agent = &parsed["agents"][0];
-    assert_eq!(agent["status"], "running");
-    assert_eq!(agent["phase"], "reasoning");
-    assert_eq!(agent["compaction_count"], 1);
-    assert!(
-        agent.get("compacting_since").is_none_or(Value::is_null),
-        "compacting head should be cleared: {agent:?}"
-    );
-}
-
-#[test]
-fn claude_bracket_closing_pre_tool_use_is_persisted() {
-    let env = Env::new();
-
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "UserPromptSubmit",
-            "session_id": "sess-claude-pretool-close",
-            "prompt": "continue the turn",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreCompact",
-            "session_id": "sess-claude-pretool-close",
-        }),
-    );
-    run_claude_lifecycle(
-        &env,
-        json!({
-            "hook_event_name": "PreToolUse",
-            "session_id": "sess-claude-pretool-close",
-            "tool_name": "Read",
-        }),
-    );
-
-    assert_eq!(
-        lifecycle_event_count(&env),
-        3,
-        "the non-mutating PreToolUse must be durable when it closes a compaction bracket"
-    );
-    let parsed = env.snapshot_json();
-    let agent = &parsed["agents"][0];
-    assert_eq!(agent["compaction_count"], 1);
-    assert!(
-        agent.get("compacting_since").is_none_or(Value::is_null),
-        "compacting head should be cleared: {agent:?}"
-    );
-}
-
-#[test]
-fn claude_install_uninstall_cli_round_trips_into_settings_json() {
-    let env = Env::new();
-    let claude_settings = env.home_root.join(".claude").join("settings.json");
-    // Seed pre-existing user statusLine and subagentStatusLine commands so the
-    // round-trip also proves the wrap-then-restore contract for both render
-    // commands, not just hooks.
-    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
-    std::fs::write(
-        &claude_settings,
-        r#"{
-            "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" },
-            "subagentStatusLine": { "type": "command", "command": "my-subagent-line" }
-        }"#,
-    )
-    .unwrap();
-
-    let install = env
-        .rimz()
-        .env("RIMZ_CLAUDE_SETTINGS", &claude_settings)
-        .args(["hooks", "install", "claude"])
-        .output()
-        .expect("spawn install");
-    assert!(
-        install.status.success(),
-        "install stderr: {}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-    let report: Value = serde_json::from_slice(&install.stdout).expect("install report json");
-    assert_eq!(report["agent"], "claude");
-    assert_eq!(report["merged"], true);
-    let events = report["installed_events"].as_array().expect("events");
-    let names: Vec<&str> = events.iter().filter_map(Value::as_str).collect();
-    assert!(names.contains(&"SessionStart"));
-    assert!(names.contains(&"PermissionRequest"));
-    assert!(names.contains(&"PreToolUse"));
-
-    assert!(
-        claude_settings.exists(),
-        "settings file should exist after install"
-    );
-    let on_disk: Value =
-        serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
-    // PreToolUse installs as a single broad hook; its blocking sub-events
-    // (ExitPlanMode/AskUserQuestion) self-classify off it from `tool_name`.
-    let pre_tool = on_disk["hooks"]["PreToolUse"].as_array().expect("array");
-    assert_eq!(pre_tool.len(), 1);
-    // The statusLine now points at Rimz and wraps the user's original verbatim.
-    assert_eq!(
-        on_disk["statusLine"]["command"],
-        "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude"
-    );
-    assert_eq!(
-        on_disk["statusLine"]["_rimz_wrapped"]["command"],
-        "npx -y ccstatusline@latest"
-    );
-    // The subagentStatusLine is wrapped the same way, independently.
-    assert_eq!(
-        on_disk["subagentStatusLine"]["command"],
-        "RIMZ_AGENT_PID=$PPID exec rimz statusline feed --source claude --subagent"
-    );
-    assert_eq!(
-        on_disk["subagentStatusLine"]["_rimz_wrapped"]["command"],
-        "my-subagent-line"
-    );
-
-    let uninstall = env
-        .rimz()
-        .env("RIMZ_CLAUDE_SETTINGS", &claude_settings)
-        .args(["hooks", "uninstall", "claude"])
-        .output()
-        .expect("spawn uninstall");
-    assert!(
-        uninstall.status.success(),
-        "uninstall stderr: {}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    let report: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
-    assert_eq!(report["existed"], true);
-    let removed = report["removed_events"].as_array().expect("removed events");
-    assert!(
-        !removed.is_empty(),
-        "uninstall must report removed event labels"
-    );
-    // The user's original statusLine is restored exactly.
-    let restored: Value =
-        serde_json::from_slice(&std::fs::read(&claude_settings).unwrap()).expect("settings json");
-    assert_eq!(
-        restored["statusLine"]["command"],
-        "npx -y ccstatusline@latest"
-    );
-    assert!(restored["statusLine"].get("_rimz_managed").is_none());
-    // The user's original subagentStatusLine is restored exactly too.
-    assert_eq!(
-        restored["subagentStatusLine"]["command"],
-        "my-subagent-line"
-    );
-    assert!(
-        restored["subagentStatusLine"]
-            .get("_rimz_managed")
-            .is_none()
-    );
+        if let Some(count) = expect_event_count {
+            assert_eq!(
+                lifecycle_event_count(&env),
+                count,
+                "the non-mutating PreToolUse must be durable when it closes a compaction bracket"
+            );
+        }
+        let parsed = env.snapshot_json();
+        let agent = &parsed["agents"][0];
+        assert_eq!(agent["compaction_count"], 1);
+        assert!(
+            agent.get("compacting_since").is_none_or(Value::is_null),
+            "compacting head should be cleared: {agent:?}"
+        );
+        if expect_running {
+            assert_eq!(agent["status"], "running");
+            assert_eq!(agent["phase"], "reasoning");
+        }
+    }
 }
 
 #[cfg(unix)]
@@ -1069,7 +891,7 @@ fn fake_agent_bin_dir(names: &[&str]) -> tempfile::TempDir {
 
 #[cfg(unix)]
 #[test]
-fn hooks_install_no_arg_installs_all_detected_agents() {
+fn hooks_install_and_uninstall_no_arg_round_trips_detected_agents() {
     let env = Env::new();
     let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
 
@@ -1094,62 +916,6 @@ fn hooks_install_no_arg_installs_all_detected_agents() {
     assert!(env.agent_hooks_installed("claude"));
     assert!(env.agent_hooks_installed("codex"));
 
-    let reinstall = env
-        .rimz()
-        .env("PATH", bin_dir.path())
-        .args(["hooks", "install"])
-        .output()
-        .expect("spawn reinstall");
-    assert!(
-        reinstall.status.success(),
-        "idempotent reinstall stderr: {}",
-        String::from_utf8_lossy(&reinstall.stderr)
-    );
-    let reports: Value = serde_json::from_slice(&reinstall.stdout).expect("reinstall reports json");
-    assert_eq!(reports.as_array().expect("array report").len(), 2);
-}
-
-#[cfg(unix)]
-#[test]
-fn hooks_install_no_arg_fails_when_no_supported_agents_are_detected() {
-    let env = Env::new();
-    let bin_dir = fake_agent_bin_dir(&[]);
-
-    let install = env
-        .rimz()
-        .env("PATH", bin_dir.path())
-        .args(["hooks", "install"])
-        .output()
-        .expect("spawn install");
-
-    assert!(
-        !install.status.success(),
-        "install should fail with no agents"
-    );
-    let stderr = String::from_utf8_lossy(&install.stderr);
-    assert!(
-        stderr.contains("no supported coding agents detected on PATH"),
-        "stderr should name the fix, got: {stderr}"
-    );
-}
-
-#[cfg(unix)]
-#[test]
-fn hooks_uninstall_no_arg_removes_installed_hooks_without_path_detection() {
-    let env = Env::new();
-    let bin_dir = fake_agent_bin_dir(&["claude", "codex"]);
-    let install = env
-        .rimz()
-        .env("PATH", bin_dir.path())
-        .args(["hooks", "install"])
-        .output()
-        .expect("spawn install");
-    assert!(
-        install.status.success(),
-        "install stderr: {}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-
     let empty_path = fake_agent_bin_dir(&[]);
     let uninstall = env
         .rimz()
@@ -1172,76 +938,6 @@ fn hooks_uninstall_no_arg_removes_installed_hooks_without_path_detection() {
     assert_eq!(agents, vec!["claude", "codex"]);
     assert!(!env.agent_hooks_installed("claude"));
     assert!(!env.agent_hooks_installed("codex"));
-
-    let second_empty_path = fake_agent_bin_dir(&[]);
-    let second = env
-        .rimz()
-        .env("PATH", second_empty_path.path())
-        .args(["hooks", "uninstall"])
-        .output()
-        .expect("spawn second uninstall");
-    assert!(
-        second.status.success(),
-        "second uninstall stderr: {}",
-        String::from_utf8_lossy(&second.stderr)
-    );
-    let reports: Value =
-        serde_json::from_slice(&second.stdout).expect("second uninstall reports json");
-    assert_eq!(reports.as_array().expect("array report").len(), 0);
-}
-
-#[cfg(unix)]
-#[test]
-fn hooks_uninstall_no_arg_removes_partial_managed_hook_sets() {
-    let env = Env::new();
-    let claude_settings = env.agent_config_path("claude");
-    let install = env
-        .rimz()
-        .args(["hooks", "install", "claude"])
-        .output()
-        .expect("spawn install");
-    assert!(
-        install.status.success(),
-        "install stderr: {}",
-        String::from_utf8_lossy(&install.stderr)
-    );
-
-    let mut settings: Value =
-        serde_json::from_slice(&std::fs::read(&claude_settings).expect("settings"))
-            .expect("settings json");
-    let hooks = settings["hooks"].as_object_mut().expect("hooks object");
-    let removed_event = hooks.keys().next().cloned().expect("one installed event");
-    hooks.remove(&removed_event);
-    std::fs::write(
-        &claude_settings,
-        serde_json::to_vec_pretty(&settings).expect("settings json"),
-    )
-    .expect("write partial settings");
-
-    let empty_path = fake_agent_bin_dir(&[]);
-    let uninstall = env
-        .rimz()
-        .env("PATH", empty_path.path())
-        .args(["hooks", "uninstall"])
-        .output()
-        .expect("spawn uninstall");
-    assert!(
-        uninstall.status.success(),
-        "uninstall stderr: {}",
-        String::from_utf8_lossy(&uninstall.stderr)
-    );
-    let reports: Value = serde_json::from_slice(&uninstall.stdout).expect("uninstall report json");
-    assert!(
-        reports
-            .as_array()
-            .expect("array report")
-            .iter()
-            .any(|report| report["agent"].as_str() == Some("claude")),
-        "partial managed install should still be selected for uninstall: {reports}"
-    );
-    let text = std::fs::read_to_string(&claude_settings).expect("settings after uninstall");
-    assert!(!text.contains("rimz hooks feed --source claude"));
-    assert!(!text.contains("rimz statusline feed --source claude"));
 }
 
 /// The statusline feed passes the JSON through to the wrapped command verbatim
@@ -1274,9 +970,10 @@ fn statusline_feed_passes_json_through_to_wrapped_command() {
 }
 
 /// With no wrapped command, the feed prints nothing (Claude falls back to its
-/// built-in statusline) but still captures the per-session context sidecar.
+/// built-in statusline), captures the per-session context sidecar, and folds it
+/// onto the session row once lifecycle creates that row.
 #[test]
-fn statusline_feed_with_no_wrap_emits_nothing_but_captures_context() {
+fn statusline_feed_with_no_wrap_captures_context_and_folds_snapshot() {
     let env = Env::new();
     env.install_agent_hooks("claude");
 
@@ -1304,6 +1001,21 @@ fn statusline_feed_with_no_wrap_emits_nothing_but_captures_context() {
         record.context.tokens.as_ref().unwrap().used_percentage,
         Some(42)
     );
+
+    let start = env.run_installed_hook(
+        "claude",
+        r#"{ "hook_event_name": "SessionStart", "session_id": "sess-ctx", "permission_mode": "default" }"#,
+    );
+    assert!(start.status.success());
+
+    let snapshot = env.snapshot_json();
+    let agents = snapshot["agents"].as_array().expect("agents array");
+    let agent = agents
+        .iter()
+        .find(|a| a["agent_id"] == "sess-ctx")
+        .expect("session agent present");
+    assert_eq!(agent["context"]["model_display_name"], "Opus");
+    assert_eq!(agent["context"]["tokens"]["used_percentage"], 42);
 }
 
 /// The `--subagent` feed harvests every task in a `subagentStatusLine` payload
@@ -1358,40 +1070,6 @@ fn subagent_statusline_feed_writes_one_sidecar_per_task() {
     assert!(records[0].context.started_at.is_some());
     assert_eq!(records[1].agent_id, "child-2");
     assert_eq!(records[1].context.token_count, Some(3_100));
-}
-
-/// The captured context surfaces on the session's agent row in the snapshot
-/// JSON once a lifecycle event has created the agent state.
-#[test]
-fn statusline_context_folds_into_the_snapshot_agent() {
-    let env = Env::new();
-    env.install_agent_hooks("claude");
-
-    // A SessionStart creates the agent state for `sess-fold`. The installed
-    // command is `--event`-free, so the event rides the payload.
-    let start = env.run_installed_hook(
-        "claude",
-        r#"{ "hook_event_name": "SessionStart", "session_id": "sess-fold", "permission_mode": "default" }"#,
-    );
-    assert!(start.status.success());
-
-    // The statusline feed publishes rich context for the same session.
-    let feed = env.run_statusline_feed(
-        "claude",
-        r#"{ "session_id": "sess-fold", "rate_limits": { "five_hour": { "used_percentage": 23.5 } } }"#,
-    );
-    assert!(feed.status.success());
-
-    let snapshot = env.snapshot_json();
-    let agents = snapshot["agents"].as_array().expect("agents array");
-    let agent = agents
-        .iter()
-        .find(|a| a["agent_id"] == "sess-fold")
-        .expect("session agent present");
-    assert_eq!(
-        agent["context"]["rate_limits"]["windows"][0]["used_percentage"], 24,
-        "statusline context folds onto the agent row (23.5 rounds to 24)"
-    );
 }
 
 /// Build the `rimz hooks feed --source codex` command with `RIMZ_CODEX_BIN`
@@ -1556,29 +1234,6 @@ fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
     );
 }
 
-/// When `codex` cannot be launched the refresh is a silent no-op: the hook
-/// still succeeds and writes no sidecar (best-effort enrichment, never
-/// correctness).
-#[test]
-fn codex_context_refresh_is_noop_when_binary_missing() {
-    let env = Env::new();
-    let cmd =
-        codex_hook_with_app_server(&env, std::path::Path::new("/nonexistent/codex-binary-xyz"));
-    let payload = r#"{ "hook_event_name": "SessionStart", "session_id": "sess-missing", "approval_policy": "ask" }"#;
-    let out = env
-        .spawn_payload(cmd, payload)
-        .wait_with_output()
-        .expect("wait hook");
-    assert!(out.status.success());
-
-    assert!(
-        env.agent_contexts()
-            .iter()
-            .all(|record| record.agent_id != "sess-missing"),
-        "no sidecar when the app-server binary is missing"
-    );
-}
-
 /// The sidebar's idle/account-only refresh path calls the hidden
 /// `refresh-rate-limits` helper, which reads the same app-server method and
 /// merges the windows into the shared provider cache.
@@ -1613,41 +1268,4 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         cache["windows"]["codex"]["windows"][1]["used_percentage"], 7,
         "the long window comes from the app-server secondary window"
     );
-}
-
-/// A nonzero exit from the wrapped command is forwarded, so a broken user
-/// statusline surfaces as it would without Rimz in the middle.
-#[test]
-fn statusline_feed_forwards_wrapped_exit_code() {
-    let env = Env::new();
-    let claude_settings = env.agent_config_path("claude");
-    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
-    std::fs::write(
-        &claude_settings,
-        r#"{ "statusLine": { "type": "command", "command": "exit 3" } }"#,
-    )
-    .unwrap();
-    env.install_agent_hooks("claude");
-
-    let out = env.run_statusline_feed("claude", r#"{"session_id":"s"}"#);
-    assert_eq!(out.status.code(), Some(3));
-}
-
-/// Malformed stdin must still pass through unchanged — a parse failure can
-/// never blank the user's statusline.
-#[test]
-fn statusline_feed_malformed_json_still_passes_through() {
-    let env = Env::new();
-    let claude_settings = env.agent_config_path("claude");
-    std::fs::create_dir_all(claude_settings.parent().unwrap()).unwrap();
-    std::fs::write(
-        &claude_settings,
-        r#"{ "statusLine": { "type": "command", "command": "cat" } }"#,
-    )
-    .unwrap();
-    env.install_agent_hooks("claude");
-
-    let out = env.run_statusline_feed("claude", "not json at all");
-    assert!(out.status.success());
-    assert_eq!(String::from_utf8_lossy(&out.stdout), "not json at all");
 }

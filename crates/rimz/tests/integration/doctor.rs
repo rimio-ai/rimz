@@ -59,6 +59,13 @@ fn doctor_renders_status_row_per_agent() {
         &env,
         "claude",
         "claude-session-abc",
+        LifecycleSignal::Registered,
+        Some("main"),
+    );
+    inject_lifecycle(
+        &env,
+        "claude",
+        "claude-session-abc",
         LifecycleSignal::TurnEnded {
             errored: true,
             parked_on_background: false,
@@ -96,6 +103,11 @@ fn doctor_renders_status_row_per_agent() {
     );
 
     // Per-agent row: agent id + worktree + status.
+    assert_eq!(
+        stdout.matches("claude-session-abc").count(),
+        1,
+        "the rollup folds both claude events into one row, got:\n{stdout}"
+    );
     assert!(stdout.contains("claude-session-abc"));
     assert!(stdout.contains("main"));
     assert!(stdout.contains("failed"));
@@ -106,47 +118,7 @@ fn doctor_renders_status_row_per_agent() {
 }
 
 #[test]
-fn doctor_keeps_latest_status_per_agent_id() {
-    let env = Env::new();
-    inject_lifecycle(
-        &env,
-        "claude",
-        "claude-session-abc",
-        LifecycleSignal::Registered,
-        Some("main"),
-    );
-    inject_lifecycle(
-        &env,
-        "claude",
-        "claude-session-abc",
-        LifecycleSignal::TurnStarted,
-        Some("main"),
-    );
-
-    let output = env
-        .rimz()
-        .args(["doctor", "--audit"])
-        .output()
-        .expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert_eq!(
-        stdout.matches("claude-session-abc").count(),
-        1,
-        "the rollup folds both events into one row, got:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("running"),
-        "rollup should reflect the latest observation, got:\n{stdout}"
-    );
-}
-
-#[test]
-fn doctor_reports_agent_hooks_not_installed() {
-    // A fresh machine has no agent hooks wired. Running codex/claude in a Rimz
-    // room then registers nothing — and the only signal the user gets must be
-    // here: doctor names each un-wired agent and the command that wires it.
+fn doctor_reports_agent_hook_install_and_trust_states() {
     let env = Env::new();
     let output = env.rimz().arg("doctor").output().expect("spawn doctor");
     assert!(
@@ -168,10 +140,7 @@ fn doctor_reports_agent_hooks_not_installed() {
         stdout.contains("rimz hooks install claude") && stdout.contains("rimz hooks install codex"),
         "doctor must name the wiring command for each missing agent:\n{stdout}"
     );
-}
 
-#[test]
-fn doctor_reports_agent_hooks_installed_after_wiring() {
     let env = Env::new();
     env.install_agent_hooks("codex");
     let output = env.rimz().arg("doctor").output().expect("spawn doctor");
@@ -179,12 +148,33 @@ fn doctor_reports_agent_hooks_installed_after_wiring() {
     let stdout = String::from_utf8(output.stdout).expect("utf8");
 
     assert!(
-        stdout.contains("codex installed"),
-        "a wired agent must read 'installed':\n{stdout}"
-    );
-    assert!(
         stdout.contains("rimz hooks install claude"),
         "claude is still unwired, so its install hint stays:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("codex installed, untrusted"),
+        "freshly installed hooks are untrusted until /hooks:\n{stdout}"
+    );
+    assert!(
+        stdout.contains("run /hooks inside codex and trust the Rimz hooks"),
+        "doctor names the fix:\n{stdout}"
+    );
+
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    assert!(
+        stdout.contains("codex installed") && !stdout.contains("untrusted"),
+        "trusted hooks read plain installed:\n{stdout}"
+    );
+    assert!(
+        !stdout.contains("hooks trust"),
+        "no trust-fix line once trusted:\n{stdout}"
     );
 }
 
@@ -211,48 +201,6 @@ fn trust_codex_hooks(env: &Env) {
         ));
     }
     std::fs::write(&config, text).expect("write trust state");
-}
-
-#[test]
-fn doctor_reports_untrusted_codex_hooks_with_the_fix() {
-    // Codex silently skips installed-but-untrusted hooks, so a fresh install
-    // is a dead channel until the user trusts it inside Codex — doctor is
-    // where that gap and its fix become visible.
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert!(
-        stdout.contains("codex installed, untrusted"),
-        "freshly installed hooks are untrusted until /hooks:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("run /hooks inside codex and trust the Rimz hooks"),
-        "doctor names the fix:\n{stdout}"
-    );
-}
-
-#[test]
-fn doctor_trust_line_clears_once_codex_hooks_are_trusted() {
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
-
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert!(
-        stdout.contains("codex installed") && !stdout.contains("untrusted"),
-        "trusted hooks read plain installed:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("hooks trust"),
-        "no trust-fix line once trusted:\n{stdout}"
-    );
 }
 
 #[test]

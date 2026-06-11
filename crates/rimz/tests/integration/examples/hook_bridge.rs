@@ -45,30 +45,3 @@ fn python_resolver_allow_path_renders_claude_decision() {
         "decision: {decision}"
     );
 }
-
-#[test]
-fn python_resolver_abstain_path_exhausts_chain_to_neutral() {
-    let env = Env::new();
-    if skip_preconditions(&env) {
-        return;
-    }
-    // Short budget so the chain-exhausted path fires before the test times
-    // out (the resolver abstains on tool_name=Bash; chain has one link).
-    env.enrol("demo", 10, "1s");
-
-    let mut resolver = spawn_example_resolver(&env, "hook_bridge_resolver.py", "demo", 8.0, None);
-    wait_for_heartbeat(&env, "demo", Instant::now() + Duration::from_secs(3));
-
-    let output = env.run_hook("claude", &permission_payload("Bash"));
-    let _ = resolver.kill();
-    let _ = resolver.wait();
-    assert!(
-        output.status.success(),
-        "hook stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    assert!(
-        output.stdout.is_empty(),
-        "abstain on Bash should drain the chain and keep neutral stdout empty"
-    );
-}

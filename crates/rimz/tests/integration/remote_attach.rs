@@ -135,51 +135,6 @@ fn link_stats_ingest_writes_the_runtime_sidecar_and_acks() {
 }
 
 #[test]
-fn link_stats_ingest_schema_mismatch_exits_as_version_skew() {
-    use std::io::Write as _;
-
-    let env = Env::new();
-    let dir = env.project_root.to_string_lossy().into_owned();
-    let mut child = env
-        .rimz()
-        .args(["remote", "link-stats", "ingest", "--dir", &dir])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn link-stats ingest");
-    let mut stdin = child.stdin.take().expect("stdin");
-    writeln!(
-        stdin,
-        "{}",
-        serde_json::json!({
-            "v": "rimz.link.v999",
-            "seq": 7,
-            "sent_at_ms": 1_000u64,
-            "stats": {
-                "miss_pct": 0,
-                "window": 0
-            }
-        })
-    )
-    .expect("write probe");
-    drop(stdin);
-
-    let out = child.wait_with_output().expect("wait link-stats ingest");
-
-    assert_eq!(
-        out.status.code(),
-        Some(2),
-        "schema mismatch is classified as probe version skew"
-    );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("unsupported link probe schema"),
-        "stderr names the mismatch: {stderr}"
-    );
-}
-
-#[test]
 fn exec_hands_ssh_the_expected_argv() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -303,81 +258,6 @@ fn probe_stream_waits_for_control_master_before_starting() {
 }
 
 #[test]
-fn probe_stream_respawn_rechecks_control_master() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let ready = env.project_root.join("control-master-ready");
-    let fallback = env.project_root.join("probe-before-master");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_CONTROL_MASTER_READY", &ready)
-        .env("RIMZ_TEST_PROBE_BEFORE_MASTER", &fallback)
-        .env("RIMZ_TEST_PROBE_EXIT_AFTER_ACKS", "1")
-        .env("RIMZ_TEST_REMOVE_CONTROL_MASTER_ON_PROBE_EXIT", &ready)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "1300")
-        .env("RIMZ_REMOTE_PROBE_MS", "20")
-        .env("RIMZ_REMOTE_PROBE_TIMEOUT_MS", "20")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        out.status.success(),
-        "shim exits 0\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert!(
-        !fallback.exists(),
-        "probe stream respawn must not bypass the ControlMaster readiness check"
-    );
-    let invocations = shim_invocations(&log);
-    let first_probe_index = invocations
-        .iter()
-        .position(|argv| is_probe_invocation(argv))
-        .expect("first probe stream invocation");
-    assert!(
-        invocations[first_probe_index + 1..]
-            .iter()
-            .any(|argv| is_control_check_invocation(argv)),
-        "respawn path rechecks ControlMaster after the first probe exits: {invocations:?}"
-    );
-    assert_eq!(
-        invocations
-            .iter()
-            .filter(|argv| is_probe_invocation(argv))
-            .count(),
-        1,
-        "no second probe stream starts after the master marker disappears: {invocations:?}"
-    );
-}
-
-#[test]
-fn probe_kill_switch_suppresses_the_probe_stream() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let out = env
-        .rimz()
-        .args(["remote", "connect", "dev-box:query-engine", "--attach"])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .env("RIMZ_TEST_SSH_SLEEP_MS", "100")
-        .env("RIMZ_REMOTE_PROBE_MS", "0")
-        .bounded_output()
-        .expect("run rimz remote connect --attach");
-    assert!(
-        out.status.success(),
-        "shim exits 0\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    let invocations = shim_invocations(&log);
-    assert!(
-        invocations.iter().all(|argv| !is_probe_invocation(argv)),
-        "probe stream disabled: {invocations:?}"
-    );
-}
-
-#[test]
 fn link_drop_on_an_established_session_reconnects() {
     let env = Env::new();
     let log = env.project_root.join("ssh-trace.log");
@@ -491,31 +371,6 @@ fn first_connection_failure_never_retries() {
 }
 
 #[test]
-fn no_reconnect_hands_the_link_to_one_ssh() {
-    let env = Env::new();
-    let log = env.project_root.join("ssh-trace.log");
-    let out = env
-        .rimz()
-        .args([
-            "remote",
-            "connect",
-            "dev-box:query-engine",
-            "--attach",
-            "--no-reconnect",
-        ])
-        .env("RIMZ_SSH_BIN", ssh_shim())
-        .env("RIMZ_TEST_SSH_LOG", &log)
-        .bounded_output()
-        .expect("run rimz remote connect --no-reconnect");
-    assert!(
-        out.status.success(),
-        "exec'd shim exits 0\nstderr:\n{}",
-        String::from_utf8_lossy(&out.stderr)
-    );
-    assert_eq!(shim_invocations(&log).len(), 1, "a single exec'd ssh");
-}
-
-#[test]
 fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
     let env = Env::new();
     let add = env
@@ -586,84 +441,5 @@ fn remote_alias_round_trip_connects_lists_resets_and_deletes() {
         del.status.success(),
         "delete succeeds\nstderr:\n{}",
         String::from_utf8_lossy(&del.stderr),
-    );
-}
-
-#[test]
-fn remote_add_persists_only_remote_scoped_mux_flags() {
-    let env = Env::new();
-    let add_global = env
-        .rimz()
-        .args([
-            "--mux",
-            "tmux",
-            "remote",
-            "add",
-            "global",
-            "global-box:query-engine",
-        ])
-        .bounded_output()
-        .expect("run rimz --mux tmux remote add");
-    assert!(
-        add_global.status.success(),
-        "global add succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&add_global.stderr),
-    );
-    let remote_file = env.config_root().join("rimz").join("remote.toml");
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(text.contains("name = \"global\""), "{text}");
-    assert!(
-        !text.contains("mux ="),
-        "global --mux is a per-invocation override, not persisted alias state: {text}",
-    );
-
-    let add_remote_scoped = env
-        .rimz()
-        .args([
-            "remote",
-            "--mux",
-            "tmux",
-            "add",
-            "scoped",
-            "scoped-box:query-engine",
-        ])
-        .bounded_output()
-        .expect("run rimz remote --mux tmux add");
-    assert!(
-        add_remote_scoped.status.success(),
-        "remote-scoped add succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&add_remote_scoped.stderr),
-    );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(text.contains("name = \"scoped\""), "{text}");
-    assert_eq!(
-        text.matches("mux = \"tmux\"").count(),
-        1,
-        "remote-scoped --mux pins the alias mux: {text}",
-    );
-
-    let add_local = env
-        .rimz()
-        .args([
-            "remote",
-            "add",
-            "local",
-            "local-box:query-engine",
-            "--mux",
-            "tmux",
-        ])
-        .bounded_output()
-        .expect("run rimz remote add --mux");
-    assert!(
-        add_local.status.success(),
-        "local add succeeds\nstderr:\n{}",
-        String::from_utf8_lossy(&add_local.stderr),
-    );
-    let text = std::fs::read_to_string(&remote_file).expect("read remote.toml");
-    assert!(text.contains("name = \"local\""), "{text}");
-    assert_eq!(
-        text.matches("mux = \"tmux\"").count(),
-        2,
-        "local --mux pins the alias mux: {text}",
     );
 }

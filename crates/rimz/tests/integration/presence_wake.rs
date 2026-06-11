@@ -3,10 +3,9 @@
 //! The poke contract (`rimz sidebar wake`): every reason refreshes the presence
 //! stamp that flips the producer's pane TTL to event mode. Every reason but
 //! `alive` broadcasts a typed sidebar event to every fresh heartbeat — exact
-//! command/focus/open/close events update renderer-owned overlays and never
-//! patch `snapshot.json`; a sparse poke degrades to the identity-free
-//! `PanesChanged` nudge. A producer publication broadcasts the same typed
-//! event envelope so consumers refold from cache instead of producing.
+//! command/open/close events update renderer-owned overlays and never patch
+//! `snapshot.json`; a sparse poke degrades to the identity-free
+//! `PanesChanged` nudge.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
 //! pane cache far past the poll TTL is served with **zero** mux forks — the
@@ -176,39 +175,6 @@ impl WakeEnv {
                 elevated_agent: None,
                 first_seen_at_ms: None,
             }],
-            produced_at_ms,
-            SESSION_NAME,
-        );
-        std::fs::write(
-            self.runtime.root.join("snapshot.json"),
-            serde_json::to_vec(&cache).expect("serialize pane cache"),
-        )
-        .expect("seed pane cache");
-    }
-
-    fn seed_pane_cache_with_focus(&self, produced_at_ms: u64) {
-        let mk_pane = |raw: &str, command: &str, is_focused: bool| PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: SESSION_NAME.to_owned(),
-            view_id: Some("tab_0".to_owned()),
-            view_kind: Some(rimz::ids::ViewKind::Tab),
-            view_name: None,
-            is_focused,
-            command: Some(command.to_owned()),
-            spawn_command: None,
-            cwd: Some(self.project_root.to_string_lossy().into_owned()),
-            pane_pid: None,
-            pane_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        };
-        let cache = assemble_frame(
-            vec![
-                mk_pane("terminal_6", "rimz-sidebar", false),
-                mk_pane("terminal_7", "zsh", true),
-                mk_pane("terminal_8", "zsh", false),
-            ],
             produced_at_ms,
             SESSION_NAME,
         );
@@ -465,34 +431,6 @@ fn wake_pane_opened_and_closed_broadcast_card_events() {
 }
 
 #[test]
-fn wake_focus_stranded_broadcasts_renderer_action_event() {
-    let env = WakeEnv::new();
-    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
-        return;
-    }
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
-
-    let output = env.wake_with(
-        "focus-stranded",
-        true,
-        &["--session-name", SESSION_NAME, "--pane-id", "terminal_6"],
-    );
-    assert!(
-        output.status.success(),
-        "wake failed: stderr={}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-
-    let event = recv_sidebar_event(&recv_eldest, "eldest");
-    assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
-    assert_eq!(event["event"]["kind"], "focus_stranded");
-    assert_eq!(event["event"]["pane_id"], "zellij:terminal_6");
-    env.assert_no_mux_fork();
-}
-
-#[test]
 fn wake_alive_stamps_without_a_datagram() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
@@ -512,34 +450,6 @@ fn wake_alive_stamps_without_a_datagram() {
     assert_no_datagram(&recv_eldest, "a keepalive poke");
     let stamp = env.read_stamp().expect("alive writes the stamp");
     assert!(stamp.written_at_ms > 0);
-    env.assert_no_mux_fork();
-}
-
-#[test]
-fn wake_with_topology_writes_runtime_cache_without_mux_fork() {
-    let env = WakeEnv::new();
-    let topology = env.topology_cache(unix_now_ms());
-    let topology_json = serde_json::to_string(&topology).expect("serialize topology");
-
-    let output = env.wake_with(
-        "panes-changed",
-        true,
-        &[
-            "--session-name",
-            SESSION_NAME,
-            "--topology",
-            topology_json.as_str(),
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "wake failed: stderr={}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-
-    let cached =
-        read_pane_topology_cache(&env.runtime, SESSION_NAME).expect("topology cache written");
-    assert_eq!(cached, topology);
     env.assert_no_mux_fork();
 }
 
@@ -661,29 +571,6 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
 }
 
 #[test]
-fn pane_frame_publication_broadcasts_to_all_fresh_sidebars() {
-    let env = WakeEnv::new();
-    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
-        return;
-    }
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    let recv_younger = env.bind_socket("sidebar.younger.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
-
-    let count = rimz::ledger::wakeup::wake_sidebars_pane_frame_published(&env.runtime)
-        .expect("publication wakeup walks sidebars");
-    assert_eq!(count, 2);
-
-    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
-        let event = recv_sidebar_event(&recv, name);
-        assert_sidebar_envelope(&event, &env.workspace_id, None);
-        assert_eq!(event["event"]["kind"], "pane_frame_published");
-    }
-}
-
-#[test]
 fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
@@ -791,70 +678,6 @@ fn wake_command_changed_treats_rimz_tab_as_nudge_and_strips_topology_command() {
 }
 
 #[test]
-fn wake_focus_changed_broadcasts_event_without_patching_pane_frame() {
-    let env = WakeEnv::new();
-    if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
-        tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
-        return;
-    }
-    let produced_at_ms = unix_now_ms().saturating_sub(5_000);
-    env.seed_pane_cache_with_focus(produced_at_ms);
-    let recv_eldest = env.bind_socket("sidebar.eldest.sock");
-    let recv_younger = env.bind_socket("sidebar.younger.sock");
-    env.plant_heartbeat("sidebar.eldest.json", ELDEST_ID, "sidebar.eldest.sock");
-    env.plant_heartbeat("sidebar.younger.json", YOUNGER_ID, "sidebar.younger.sock");
-
-    let output = env.wake_with(
-        "focus-changed",
-        true,
-        &[
-            "--session-name",
-            SESSION_NAME,
-            "--focused-pane-id",
-            "terminal_8",
-            "--unfocused-pane-id",
-            "terminal_7",
-        ],
-    );
-    assert!(
-        output.status.success(),
-        "wake failed: stderr={}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-
-    for (name, recv) in [("eldest", recv_eldest), ("younger", recv_younger)] {
-        let event = recv_sidebar_event(&recv, name);
-        assert_sidebar_envelope(&event, &env.workspace_id, Some(SESSION_NAME));
-        assert_eq!(event["event"]["kind"], "focus_changed");
-        assert_eq!(event["event"]["focused"][0], "zellij:terminal_8");
-        assert_eq!(event["event"]["unfocused"][0], "zellij:terminal_7");
-    }
-    let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
-        .expect("pane cache remains readable");
-    assert_eq!(
-        cached.produced_at_ms, produced_at_ms,
-        "typed overlay events must not masquerade as a fresh mux read",
-    );
-    let cached_panes = cached.to_pane_refs();
-    let terminal_7 = cached_panes
-        .iter()
-        .find(|pane| pane.pane_id.raw() == "terminal_7")
-        .expect("terminal_7 remains present");
-    let terminal_8 = cached_panes
-        .iter()
-        .find(|pane| pane.pane_id.raw() == "terminal_8")
-        .expect("terminal_8 remains present");
-    let sidebar = cached_panes
-        .iter()
-        .find(|pane| pane.pane_id.raw() == "terminal_6")
-        .expect("sidebar remains present");
-    assert!(!sidebar.is_focused);
-    assert!(terminal_7.is_focused);
-    assert!(!terminal_8.is_focused);
-    env.assert_no_mux_fork();
-}
-
-#[test]
 fn wake_without_live_sidebars_still_stamps_via_cwd_resolution() {
     // No heartbeats at all (a headless room) and no --workspace-id: the wake
     // resolves the workspace from cwd like every participant command, writes
@@ -873,45 +696,34 @@ fn wake_without_live_sidebars_still_stamps_via_cwd_resolution() {
 }
 
 #[test]
-fn event_mode_serves_a_stale_poll_cache_with_zero_mux_forks() {
-    // The layer's acceptance criterion at the CLI seam: stamp fresh → a pane
-    // cache 5s old (poll mode would have re-forked ~6 times over) is served
-    // as-is, and the trace shim proves the producer forked nothing.
-    let env = WakeEnv::new();
-    let wake = env.wake("alive", false);
+fn event_mode_stamp_controls_stale_cache_polling() {
+    let event_env = WakeEnv::new();
+    let wake = event_env.wake("alive", false);
     assert!(wake.status.success(), "stamp write must succeed");
-    env.seed_pane_cache(Duration::from_secs(5));
-
-    let output = env.snapshot();
+    event_env.seed_pane_cache(Duration::from_secs(5));
+    let output = event_env.snapshot();
     assert!(
         output.status.success(),
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
     assert_eq!(
-        env.trace_lines(),
+        event_env.trace_lines(),
         Vec::<String>::new(),
-        "event mode must serve the cache without a single mux fork",
+        "event mode must serve the stale poll cache without a mux fork",
     );
-}
 
-#[test]
-fn without_a_stamp_the_same_cache_is_stale_and_the_producer_polls() {
-    // The control: byte-identical inputs minus the stamp read as poll mode,
-    // so the 5s-old cache is past SNAPSHOT_CACHE_TTL and the producer forks
-    // `list-panes` exactly as it did before the layer landed.
-    let env = WakeEnv::new();
-    env.seed_pane_cache(Duration::from_secs(5));
-
-    let _ = env.snapshot();
-    let forked_list_panes = env
+    let poll_env = WakeEnv::new();
+    poll_env.seed_pane_cache(Duration::from_secs(5));
+    let _ = poll_env.snapshot();
+    let forked_list_panes = poll_env
         .trace_lines()
         .iter()
         .any(|line| line.contains("list-panes"));
     assert!(
         forked_list_panes,
-        "poll mode must re-fork list-panes for a 5s-old cache; trace: {:?}",
-        env.trace_lines(),
+        "poll mode must re-fork list-panes for the same 5s-old cache; trace: {:?}",
+        poll_env.trace_lines(),
     );
 }
 

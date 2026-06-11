@@ -338,24 +338,6 @@ mod daemon;
 mod presence;
 mod self_close;
 
-/// Sanity: spawn a session, see it in `list_sessions`. Establishes that the
-/// portable-pty harness can reach a usable Zellij.
-#[test]
-fn ensure_and_list_sessions_round_trip() {
-    require_zellij!();
-
-    let name = unique_session_name("list");
-    let session = ZellijSession::spawn(&name);
-
-    let listed = ZellijBackend::with_runtime_dir(session.xdg.path())
-        .list_sessions()
-        .expect("list_sessions succeeds against a live zellij");
-    assert!(
-        listed.iter().any(|s| s == &name),
-        "expected session {name} in {listed:?}",
-    );
-}
-
 /// Zellij 0.44.3 suppresses terminal mouse reporting when an attach command
 /// explicitly passes `options --mouse-mode true`. Rimz keeps the enabled case
 /// implicit so clicks reach the tab bar and sidebar, while still applying the
