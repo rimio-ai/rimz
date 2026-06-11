@@ -304,7 +304,7 @@ pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
 }
 
 pub(super) fn usage_from_transcript_tail(text: &str) -> TranscriptUsage {
-    scan_transcript_tail(&text).into_usage()
+    scan_transcript_tail(text).into_usage()
 }
 
 /// Cap on provider error text surfaced on the agent card.
