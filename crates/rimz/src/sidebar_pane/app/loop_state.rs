@@ -182,7 +182,8 @@ impl LoopState {
                     sent_at_ms,
                     now_ms,
                 ) {
-                    spawn_pane_focus(target);
+                    spawn_pane_focus(target.clone());
+                    self.record_focus_intent(config, target, anim_start, diag)?;
                 }
             }
             // An overlay event fuses into the in-memory state and paints this
@@ -257,7 +258,9 @@ impl LoopState {
                 terminal,
                 &self.current,
                 anim_start,
-            )? {
+            )?
+            .painted
+            {
                 self.dirty = false;
             }
             // A safe-width paint just landed; drop any stale hold a prior grow
@@ -274,21 +277,27 @@ impl LoopState {
 
     pub(super) fn on_input(
         &mut self,
+        config: &ServeConfig,
         wakeup: Wakeup,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         anim_start: Instant,
+        diag: Option<&crate::diag::DiagSink>,
     ) -> Result<()> {
-        if apply_input(
+        let applied = apply_input(
             wakeup,
             &mut self.ui,
             &mut self.health,
             terminal,
             &self.current,
             anim_start,
-        )? {
+        )?;
+        if applied.painted {
             // Key/mouse input paints synchronously for instant feedback; a
             // paint settles any frame the loop owed.
             self.dirty = false;
+        }
+        if let Some(pane) = applied.focused {
+            self.record_focus_intent(config, pane, anim_start, diag)?;
         }
         Ok(())
     }
@@ -396,6 +405,43 @@ impl LoopState {
         self.observe_commit();
         self.dirty = true;
         Ok(applied.rejected)
+    }
+
+    fn record_focus_intent(
+        &mut self,
+        config: &ServeConfig,
+        pane: PaneId,
+        anim_start: Instant,
+        diag: Option<&crate::diag::DiagSink>,
+    ) -> Result<()> {
+        let now_ms = crate::sidebar::cache::unix_now_ms();
+        let event = SidebarEvent::FocusChanged {
+            focused: vec![pane.clone()],
+            unfocused: Vec::new(),
+        };
+        self.event_store.append(event.clone(), now_ms, now_ms);
+        let fused = fuse(&self.last_pulled, &self.event_store, now_ms);
+        self.fold_outcome(
+            config,
+            FetchOutcome {
+                snapshot: Ok(fused),
+                final_for_request: false,
+                fresh_pane_frame: false,
+            },
+            anim_start,
+            diag,
+        )?;
+        self.next_frame = Instant::now();
+        if let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone())
+            && let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
+                &runtime,
+                Some(&config.session_name),
+                event,
+            )
+        {
+            debug!(pane = %pane, error = %err, "renderer focus event broadcast failed");
+        }
+        Ok(())
     }
 
     fn observe_commit(&mut self) {

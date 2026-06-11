@@ -107,6 +107,18 @@ fn forced_pane_freshness_overrides_event_mode() {
 }
 
 #[test]
+fn forced_pane_freshness_uses_observed_time_not_publish_time() {
+    let now = unix_now_ms();
+    let mut frame = cache_produced_at(now);
+    frame.observed_at_ms = Some(now - 5_000);
+
+    assert!(
+        !snapshot_cache_is_fresh(&frame, now, Some(now - 1_000), EVENT_PANE_TTL),
+        "a frame freshly republished from stale topology must not satisfy a post-event floor"
+    );
+}
+
+#[test]
 fn snapshot_cache_age_saturates_on_a_future_producer_clock() {
     let now = unix_now_ms();
     let future = cache_produced_at(now + 60_000);

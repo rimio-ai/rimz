@@ -10,15 +10,13 @@ use super::Result;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::mux::PaneListOptions;
+use crate::mux::{PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
     SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
     snapshot_cache_is_fresh, unix_now_ms,
 };
-use crate::sidebar::frame::{
-    PaneFrame, PaneMetrics, assemble_frame, assemble_frame_with_diagnostics,
-};
+use crate::sidebar::frame::{FrameInputs, PaneFrame, PaneMetrics};
 
 mod carry;
 mod starts;
@@ -67,7 +65,7 @@ fn list_session_panes(
     workspace_id: crate::WorkspaceId,
     min_topology_produced_at_ms: Option<u64>,
     command_timeout: Option<Duration>,
-) -> Result<Vec<crate::feed::PaneRef>> {
+) -> Result<PaneListing> {
     Ok(crate::mux::backend_for(mux).list_panes(PaneListOptions {
         session_name: Some(session.to_owned()),
         workspace_id: Some(workspace_id),
@@ -157,10 +155,10 @@ fn repair_pane_frame(
 }
 
 fn stamp_first_seen(frame: &mut PaneFrame) {
-    let produced_at_ms = frame.produced_at_ms;
+    let observed_at_ms = frame.observed_or_produced_at_ms();
     for pane in frame.pane_states_mut() {
         if pane.first_seen_at_ms.is_none() {
-            pane.first_seen_at_ms = Some(produced_at_ms);
+            pane.first_seen_at_ms = Some(observed_at_ms);
         }
     }
 }
@@ -172,8 +170,12 @@ pub fn repaired_pane_frame_for_binding(
     command_timeout: Duration,
 ) -> Result<PaneFrame> {
     let cache_path = runtime.root.join("snapshot.json");
-    let panes = match super::pane_list_fixture()? {
-        Some(fixture) => fixture,
+    let listing = match super::pane_list_fixture()? {
+        Some(fixture) => PaneListing {
+            panes: fixture,
+            observed_at_ms: unix_now_ms(),
+            source_active: std::collections::BTreeMap::new(),
+        },
         None => list_session_panes(
             mux,
             session,
@@ -182,7 +184,20 @@ pub fn repaired_pane_frame_for_binding(
             Some(command_timeout),
         )?,
     };
-    let mut frame = assemble_frame(panes, unix_now_ms(), session.to_owned());
+    let (mut frame, diagnostics) = crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+        panes: listing.panes,
+        produced_at_ms: unix_now_ms(),
+        observed_at_ms: listing.observed_at_ms,
+        session_name: session.to_owned(),
+        source_active: listing.source_active,
+        prior: read_snapshot_cache(&cache_path, session).as_ref(),
+    });
+    let diag = crate::diag::DiagSink::for_workspace(
+        runtime.workspace_id.clone(),
+        session.to_owned(),
+        None,
+    );
+    emit_frame_diagnostics(diag.as_ref(), diagnostics);
     repair_pane_frame(&mut frame, runtime, &cache_path, session, false);
     Ok(frame)
 }
@@ -389,10 +404,9 @@ fn annotate_elevated_agents(
     }
 }
 
-/// Return the live pane frame for `session` — the pane list plus the
-/// `produced_at_ms` read stamp the renderer's jump guard orders against —
-/// sharing one `list-panes` round-trip across every sidebar via a short-lived
-/// single-flight cache.
+/// Return the live pane frame for `session` — the pane list plus the pane-source
+/// observation stamp that event fusion orders against — sharing one `list-panes`
+/// round-trip across every sidebar via a short-lived single-flight cache.
 ///
 /// Fast path: a fresh same-session cache is read back with no mux work. Slow
 /// path: a non-blocking `try_lock` elects one producer; losers poll briefly for
@@ -458,28 +472,36 @@ pub(super) fn cached_panes_or_produce(
             diag,
         )
     };
-    let produce_candidate =
-        |enrich_metrics: bool, min_topology_produced_at_ms: Option<u64>| -> Result<PaneFrame> {
-            let panes = match list_session_panes(
-                mux,
-                session,
-                runtime.workspace_id.clone(),
-                min_topology_produced_at_ms,
-                None,
-            ) {
-                Ok(panes) => panes,
-                Err(err) => {
-                    emit_mux_error(diag, &cache_path, session, &err);
-                    return Err(err);
-                }
-            };
-            let panes = filter_foreign_session_panes(panes, session, diag);
-            let (mut frame, diagnostics) =
-                assemble_frame_with_diagnostics(panes, unix_now_ms(), session.to_owned());
-            emit_frame_diagnostics(diag, diagnostics);
-            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
-            Ok(frame)
+    let produce_candidate = |enrich_metrics: bool,
+                             min_topology_produced_at_ms: Option<u64>|
+     -> Result<PaneFrame> {
+        let listing = match list_session_panes(
+            mux,
+            session,
+            runtime.workspace_id.clone(),
+            min_topology_produced_at_ms,
+            None,
+        ) {
+            Ok(panes) => panes,
+            Err(err) => {
+                emit_mux_error(diag, &cache_path, session, &err);
+                return Err(err);
+            }
         };
+        let panes = filter_foreign_session_panes(listing.panes, session, diag);
+        let (mut frame, diagnostics) =
+            crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                panes,
+                produced_at_ms: unix_now_ms(),
+                observed_at_ms: listing.observed_at_ms,
+                session_name: session.to_owned(),
+                source_active: listing.source_active,
+                prior: read_snapshot_cache(&runtime.root.join("snapshot.json"), session).as_ref(),
+            });
+        emit_frame_diagnostics(diag, diagnostics);
+        repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+        Ok(frame)
+    };
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,

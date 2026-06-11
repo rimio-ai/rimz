@@ -74,8 +74,9 @@ pub(super) fn close_stopped_run_pane_after_grace(
             command_timeout: Some(STOP_BACKSTOP_POLL),
             ..Default::default()
         }) {
-            Ok(panes)
-                if panes
+            Ok(listing)
+                if listing
+                    .panes
                     .iter()
                     .any(|candidate| candidate.pane_id == pane.pane_id) =>
             {

@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use super::parse::{SessionState, is_transient_empty, session_state_from_line};
 use super::raw_pane::{
-    RawPane, SessionCleanliness, classify_session_panes, read_fresh_topology_cache,
+    RawPane, RawPaneListing, SessionCleanliness, classify_session_panes, read_fresh_topology_cache,
 };
 use super::{HEALTH_PROBE_TIMEOUT, LIST_PANES_ATTEMPTS, LIST_PANES_RETRY_DELAY, ZellijBackend};
 use crate::ids::WorkspaceId;
@@ -55,7 +55,7 @@ impl ZellijBackend {
         workspace_id: Option<&WorkspaceId>,
         min_topology_produced_at_ms: Option<u64>,
         timeout: Duration,
-    ) -> Result<Vec<RawPane>> {
+    ) -> Result<RawPaneListing> {
         if let Some(panes) = session
             .zip(workspace_id)
             .and_then(|(session, workspace_id)| {
@@ -64,7 +64,9 @@ impl ZellijBackend {
         {
             return Ok(panes);
         }
+        let observed_at_ms = crate::sidebar::cache::unix_now_ms();
         self.list_panes_bounded(session, timeout)
+            .map(|panes| RawPaneListing::from_cli(panes, observed_at_ms))
     }
 
     /// Classify `name`'s live room from a bounded pane listing. A running

@@ -11,7 +11,7 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FocusCorrection, FocusPatch, FocusShortcut,
+        self, CorrectionAction, FocusCorrection, FocusPatch, FocusResolution, FocusShortcut,
         ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
@@ -26,6 +26,7 @@ mod shell {
         foreground: BTreeMap<u32, String>,
         active_tab: Option<usize>,
         active_focused_pane: Option<u32>,
+        focus_resolution: FocusResolution,
         /// Classifies active-tab changes after Zellij's focus marks settle.
         focus_correction: FocusCorrection,
         /// Configuration written by rimz at load time (never user config):
@@ -94,6 +95,8 @@ mod shell {
                     let opened = policy::opened_card_panes(&self.tabs, &next_tabs);
                     let focus_patch =
                         policy::focus_shortcut_if_only_focus_changed(&self.tabs, &next_tabs);
+                    self.focus_resolution
+                        .fold_pane_update(&self.tabs, &next_tabs);
                     self.tabs = next_tabs;
                     // Poke every opened pane — `fold`, not `any`, so a manifest
                     // carrying two new panes emits both card-create events.
@@ -125,18 +128,30 @@ mod shell {
                         _ => self.fold(now),
                     }
                     self.resolve_focus_correction(now, true);
-                    self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
+                    self.active_focused_pane = policy::resolved_focused_pane_id(
+                        &self.tabs,
+                        self.active_tab,
+                        Some(&self.focus_resolution),
+                    );
                 }
                 Event::TabUpdate(tabs) => {
                     self.mark_granted(now);
                     let previous_active = self.active_tab;
-                    let previous_focused_pane = self
-                        .active_focused_pane
-                        .or_else(|| policy::focused_pane_id(&self.tabs, previous_active));
+                    let previous_focused_pane = self.active_focused_pane.or_else(|| {
+                        policy::resolved_focused_pane_id(
+                            &self.tabs,
+                            previous_active,
+                            Some(&self.focus_resolution),
+                        )
+                    });
                     let next_active = tabs.iter().find(|tab| tab.active).map(|tab| tab.position);
                     self.tab_names = tab_names(&tabs);
                     self.active_tab = next_active;
-                    self.active_focused_pane = policy::focused_pane_id(&self.tabs, self.active_tab);
+                    self.active_focused_pane = policy::resolved_focused_pane_id(
+                        &self.tabs,
+                        self.active_tab,
+                        Some(&self.focus_resolution),
+                    );
                     self.focus_correction.on_active_tab_change_with_focus(
                         previous_active,
                         next_active,
@@ -167,6 +182,14 @@ mod shell {
                 Event::PaneClosed(pane_id) => {
                     self.mark_granted(now);
                     self.remove_pane(&pane_id);
+                    if let PaneId::Terminal(id) = pane_id {
+                        self.focus_resolution.remove_pane(id);
+                    }
+                    self.active_focused_pane = policy::resolved_focused_pane_id(
+                        &self.tabs,
+                        self.active_tab,
+                        Some(&self.focus_resolution),
+                    );
                     if !self.poke_pane_closed(&pane_id, now) {
                         self.signal_change(now);
                     } else {
@@ -253,10 +276,13 @@ mod shell {
         /// only the stranded sidebar pane; the renderer owning that pane
         /// chooses the remembered working target.
         fn resolve_focus_correction(&mut self, now: u64, manifest_fresh: bool) {
-            match self
-                .focus_correction
-                .resolve(&self.tabs, self.active_tab, manifest_fresh, now)
-            {
+            match self.focus_correction.resolve_with_resolution(
+                &self.tabs,
+                self.active_tab,
+                Some(&self.focus_resolution),
+                manifest_fresh,
+                now,
+            ) {
                 CorrectionAction::Broadcast(pane_id) => {
                     self.poke_focus_stranded(pane_id, now);
                 }
@@ -319,11 +345,12 @@ mod shell {
             let Some(session_name) = self.session_name.as_deref() else {
                 return;
             };
-            let Some(payload) = policy::published_topology_payload(
+            let Some(payload) = policy::published_topology_payload_with_focus(
                 session_name,
                 now,
                 Some(&self.tabs),
                 &self.foreground,
+                Some(&self.focus_resolution),
             ) else {
                 return;
             };

@@ -749,7 +749,8 @@ fn reconcile_defers_the_add_on_a_detached_session() {
             session_name: Some(name.clone()),
             ..Default::default()
         })
-        .expect("list_panes after");
+        .expect("list_panes after")
+        .panes;
     assert_eq!(after.len(), 1, "no pane was added detached: {after:?}");
     assert_eq!(
         serve_processes_for(&name),
@@ -1125,7 +1126,8 @@ fn wait_for_pane_with_cwd(xdg: &Path, session: &str) -> Vec<PaneRef> {
                 session_name: Some(session.to_owned()),
                 ..Default::default()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .panes;
         let ready = panes
             .iter()
             .any(|pane| pane.cwd.as_deref().is_some_and(|cwd| !cwd.is_empty()));
@@ -1146,7 +1148,8 @@ fn wait_for_pane_count(xdg: &Path, session: &str, want: usize) -> Vec<PaneRef> {
                 session_name: Some(session.to_owned()),
                 ..Default::default()
             })
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .panes;
         if panes.len() >= want || Instant::now() >= deadline {
             return panes;
         }

@@ -32,7 +32,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::feed::PaneRef;
-use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
 
 #[derive(Debug, thiserror::Error)]
 pub enum MuxErr {
@@ -87,6 +87,19 @@ pub struct PaneListOptions {
     /// probes (e.g. the self-close watchdog) where a hung Zellij should not
     /// block the caller for the full timeout.
     pub command_timeout: Option<Duration>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct PaneListing {
+    pub panes: Vec<PaneRef>,
+    /// Wall-clock millisecond when the pane source observed this topology.
+    /// For a topology-cache hit this is the cache's `produced_at_ms`; for a
+    /// live mux CLI read it is stamped before the command starts.
+    pub observed_at_ms: u64,
+    /// Backend/source-resolved active panes by view. Zellij's presence plugin
+    /// fills this from transition-derived focus; normal CLI reads leave it
+    /// empty and frame assembly arbitrates from raw marks.
+    pub source_active: BTreeMap<ViewId, PaneId>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -342,7 +355,7 @@ pub trait MuxBackend: Send + Sync {
     /// renamed session idempotently.
     fn kill_session(&self, name: &str) -> Result<()>;
     fn list_sessions(&self) -> Result<Vec<String>>;
-    fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>>;
+    fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing>;
     fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
         let _ = opts;
         Ok(Vec::new())

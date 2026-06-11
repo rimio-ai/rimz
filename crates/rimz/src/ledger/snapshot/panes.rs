@@ -41,6 +41,12 @@ pub struct SidebarOwnView {
     /// wire shape stable.
     #[serde(default)]
     pub working_pane_ids: Vec<PaneId>,
+    /// The own view's frame had multiple raw focus candidates. The renderer holds
+    /// an existing selection baseline through this state instead of replacing it
+    /// with the producer's deterministic arbitration; a fused focus event that
+    /// names one of `working_pane_ids` clears it for that fused frame.
+    #[serde(default)]
+    pub focus_contested: bool,
     /// Whether the caller's own view is the `rimzd` daemon view: its siblings,
     /// after dropping any sidebar pane, are non-empty and all managed hosts
     /// ([`crate::remote_control::pane_is_host`]). `#[serde(default)]` keeps the

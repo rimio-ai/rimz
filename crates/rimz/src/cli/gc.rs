@@ -86,7 +86,7 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
     let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
             .list_panes(rimz::mux::PaneListOptions::default())
-            .map(|panes| live_user_cwds(&panes))
+            .map(|listing| live_user_cwds(&listing.panes))
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };

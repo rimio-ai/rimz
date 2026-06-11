@@ -105,6 +105,7 @@ fn notification_panes_target_agents_or_the_current_view() {
         own_is_active: false,
         active_pane_id: Some(first.clone()),
         working_pane_ids: vec![first.clone(), second.clone()],
+        focus_contested: false,
         own_view_is_daemon: false,
     });
     let notification = Notification {

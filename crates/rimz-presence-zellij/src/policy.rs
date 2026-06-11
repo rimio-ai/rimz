@@ -4,7 +4,7 @@
 //! host target; `main.rs` is the thin wasm shell that projects Zellij events
 //! into it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
@@ -80,10 +80,13 @@ pub enum FocusShortcut {
 pub struct TopologyPayload {
     pub session_name: String,
     pub produced_at_ms: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub active_panes: BTreeMap<u64, u64>,
     pub panes: Vec<PaneFields>,
 }
 
 impl TopologyPayload {
+    #[cfg(test)]
     pub fn from_tabs(
         session_name: impl Into<String>,
         produced_at_ms: u64,
@@ -92,26 +95,55 @@ impl TopologyPayload {
         Self {
             session_name: session_name.into(),
             produced_at_ms,
+            active_panes: BTreeMap::new(),
+            panes: tabs.values().flatten().cloned().collect(),
+        }
+    }
+
+    pub fn from_tabs_with_active(
+        session_name: impl Into<String>,
+        produced_at_ms: u64,
+        tabs: &BTreeMap<usize, Vec<PaneFields>>,
+        active_panes: BTreeMap<u64, u64>,
+    ) -> Self {
+        Self {
+            session_name: session_name.into(),
+            produced_at_ms,
+            active_panes,
             panes: tabs.values().flatten().cloned().collect(),
         }
     }
 }
 
+#[cfg(test)]
 pub fn published_topology_payload(
     session_name: impl Into<String>,
     produced_at_ms: u64,
     tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
     foreground: &BTreeMap<u32, String>,
 ) -> Option<TopologyPayload> {
+    published_topology_payload_with_focus(session_name, produced_at_ms, tabs, foreground, None)
+}
+
+pub fn published_topology_payload_with_focus(
+    session_name: impl Into<String>,
+    produced_at_ms: u64,
+    tabs: Option<&BTreeMap<usize, Vec<PaneFields>>>,
+    foreground: &BTreeMap<u32, String>,
+    focus_resolution: Option<&FocusResolution>,
+) -> Option<TopologyPayload> {
     let mut tabs = tabs?.clone();
     if tabs.is_empty() {
         return None;
     }
     apply_foreground_commands(&mut tabs, foreground);
-    Some(TopologyPayload::from_tabs(
+    Some(TopologyPayload::from_tabs_with_active(
         session_name,
         produced_at_ms,
         &tabs,
+        focus_resolution
+            .map(FocusResolution::active_panes_payload)
+            .unwrap_or_default(),
     ))
 }
 
@@ -158,8 +190,9 @@ pub fn manifest_hash(tabs: &BTreeMap<usize, Vec<PaneFields>>, _active_tab: Optio
     hasher.finish()
 }
 
-/// The focus values to publish when the only sidebar-relevant manifest change is
-/// a per-pane focus move onto a pane that can render as an agent/process card.
+/// The focus transitions to publish when the only sidebar-relevant manifest
+/// change is a per-pane focus move onto a pane that can render as an
+/// agent/process card.
 /// Returns [`FocusShortcut::Ignore`] for focus-only moves onto sidebar/chrome so
 /// selection holds its last card, and `None` for topology, command, held/exited,
 /// or suppression changes so the caller falls back to an authoritative pane
@@ -196,10 +229,10 @@ pub fn focus_shortcut_if_only_focus_changed(
                 return None;
             }
             changed |= previous.is_focused != next.is_focused;
-            if next.is_focused && next.is_card_pane() {
+            if previous.is_focused != next.is_focused && next.is_focused && next.is_card_pane() {
                 focused_card = true;
             }
-            if next.is_card_pane() {
+            if previous.is_focused != next.is_focused && next.is_card_pane() {
                 patch.push(FocusPatch {
                     id: next.id,
                     is_focused: next.is_focused,
@@ -214,6 +247,106 @@ pub fn focus_shortcut_if_only_focus_changed(
         Some(FocusShortcut::Patch(patch))
     } else {
         Some(FocusShortcut::Ignore)
+    }
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct FocusResolution {
+    resolved: BTreeMap<usize, u32>,
+}
+
+impl FocusResolution {
+    pub fn fold_pane_update(
+        &mut self,
+        previous: &BTreeMap<usize, Vec<PaneFields>>,
+        next: &BTreeMap<usize, Vec<PaneFields>>,
+    ) {
+        let tabs = previous
+            .keys()
+            .chain(next.keys())
+            .copied()
+            .collect::<BTreeSet<_>>();
+        for tab in tabs {
+            let previous_panes = previous.get(&tab).map(Vec::as_slice).unwrap_or(&[]);
+            let next_panes = next.get(&tab).map(Vec::as_slice).unwrap_or(&[]);
+            match resolved_focus_for_tab(
+                self.resolved.get(&tab).copied(),
+                previous_panes,
+                next_panes,
+            ) {
+                Some(pane_id) => {
+                    self.resolved.insert(tab, pane_id);
+                }
+                None => {
+                    self.resolved.remove(&tab);
+                }
+            }
+        }
+    }
+
+    pub fn remove_pane(&mut self, id: u32) {
+        self.resolved.retain(|_, resolved| *resolved != id);
+    }
+
+    pub fn focused_pane_id(&self, active_tab: Option<usize>) -> Option<u32> {
+        self.resolved.get(&active_tab?).copied()
+    }
+
+    pub fn active_panes_payload(&self) -> BTreeMap<u64, u64> {
+        self.resolved
+            .iter()
+            .map(|(tab, pane)| (*tab as u64, u64::from(*pane)))
+            .collect()
+    }
+}
+
+fn resolved_focus_for_tab(
+    sticky: Option<u32>,
+    previous: &[PaneFields],
+    next: &[PaneFields],
+) -> Option<u32> {
+    if next.is_empty() {
+        return None;
+    }
+    let flips = next
+        .iter()
+        .filter(|pane| {
+            pane.is_live_terminal()
+                && pane.is_focused
+                && !previous.iter().any(|old| {
+                    old.is_plugin == pane.is_plugin && old.id == pane.id && old.is_focused
+                })
+        })
+        .collect::<Vec<_>>();
+    match flips.as_slice() {
+        [pane] => return Some(pane.id),
+        [] => {}
+        _ => {
+            let card_flips = flips
+                .iter()
+                .copied()
+                .filter(|pane| pane.is_card_pane())
+                .collect::<Vec<_>>();
+            return match card_flips.as_slice() {
+                [pane] => Some(pane.id),
+                _ => None,
+            };
+        }
+    }
+    if let Some(sticky) = sticky
+        && next
+            .iter()
+            .any(|pane| pane.id == sticky && pane.is_live_terminal() && pane.is_focused)
+    {
+        return Some(sticky);
+    }
+    let marked = next
+        .iter()
+        .filter(|pane| pane.is_live_terminal() && pane.is_focused)
+        .collect::<Vec<_>>();
+    match marked.as_slice() {
+        [pane] => Some(pane.id),
+        _ => None,
     }
 }
 
@@ -359,12 +492,30 @@ fn program_basename(program: &str) -> &str {
 /// the tab's focus to the sidebar while a live working sibling exists. `None`
 /// means the tab is already on work, has no sidebar focus, or has no live
 /// working pane.
+#[cfg(test)]
 pub fn stranded_sidebar_pane(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
 ) -> Option<u32> {
-    let panes = tabs.get(&active_tab?)?;
-    let focused = focused_pane(tabs, active_tab)?;
+    stranded_sidebar_pane_with_resolution(tabs, active_tab, None)
+}
+
+pub fn stranded_sidebar_pane_with_resolution(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+    focus_resolution: Option<&FocusResolution>,
+) -> Option<u32> {
+    let active_tab = active_tab?;
+    let panes = tabs.get(&active_tab)?;
+    let focused = match focus_resolution {
+        Some(resolution) => {
+            let focused_id = resolution.focused_pane_id(Some(active_tab))?;
+            panes
+                .iter()
+                .find(|pane| pane.id == focused_id && pane.is_live_terminal())?
+        }
+        None => focused_pane(tabs, Some(active_tab))?,
+    };
     if !focused.is_sidebar() {
         return None;
     }
@@ -374,11 +525,38 @@ pub fn stranded_sidebar_pane(
         .then_some(focused.id)
 }
 
+#[cfg(test)]
 pub fn focused_pane_id(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
 ) -> Option<u32> {
     focused_pane(tabs, active_tab).map(|pane| pane.id)
+}
+
+pub fn resolved_focused_pane_id(
+    tabs: &BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+    focus_resolution: Option<&FocusResolution>,
+) -> Option<u32> {
+    resolved_focused_pane(tabs, active_tab, focus_resolution).map(|pane| pane.id)
+}
+
+fn resolved_focused_pane<'a>(
+    tabs: &'a BTreeMap<usize, Vec<PaneFields>>,
+    active_tab: Option<usize>,
+    focus_resolution: Option<&FocusResolution>,
+) -> Option<&'a PaneFields> {
+    let active_tab = active_tab?;
+    let panes = tabs.get(&active_tab)?;
+    if let Some(resolved) =
+        focus_resolution.and_then(|resolution| resolution.focused_pane_id(Some(active_tab)))
+        && let Some(pane) = panes
+            .iter()
+            .find(|pane| pane.id == resolved && pane.is_live_terminal())
+    {
+        return Some(pane);
+    }
+    panes.iter().find(|pane| pane.is_focused)
 }
 
 fn focused_pane(
@@ -417,6 +595,7 @@ pub struct FocusCorrection {
 impl FocusCorrection {
     /// Fold an active-tab observation. Loading the plugin (`None -> Some`) is a
     /// baseline, not navigation; only real tab switches arm classification.
+    #[cfg(test)]
     pub fn on_active_tab_change(
         &mut self,
         previous_active: Option<usize>,
@@ -453,10 +632,22 @@ impl FocusCorrection {
     /// Resolve the pending classification. A fresh manifest is authoritative
     /// immediately; a stale manifest is consulted only after the settle
     /// deadline, giving cross-tab explicit jumps time to land their focus mark.
+    #[cfg(test)]
     pub fn resolve(
         &mut self,
         tabs: &BTreeMap<usize, Vec<PaneFields>>,
         active_tab: Option<usize>,
+        manifest_fresh: bool,
+        now_ms: u64,
+    ) -> CorrectionAction {
+        self.resolve_with_resolution(tabs, active_tab, None, manifest_fresh, now_ms)
+    }
+
+    pub fn resolve_with_resolution(
+        &mut self,
+        tabs: &BTreeMap<usize, Vec<PaneFields>>,
+        active_tab: Option<usize>,
+        focus_resolution: Option<&FocusResolution>,
         manifest_fresh: bool,
         now_ms: u64,
     ) -> CorrectionAction {
@@ -470,13 +661,14 @@ impl FocusCorrection {
         if !manifest_fresh && now_ms < pending.deadline {
             return CorrectionAction::Wait;
         }
-        if focused_pane_id(tabs, Some(pending.tab)) == pending.previous_focused_pane
+        if resolved_focused_pane_id(tabs, Some(pending.tab), focus_resolution)
+            == pending.previous_focused_pane
             && pending.previous_focused_pane.is_some()
         {
             self.pending = None;
             return CorrectionAction::Clear;
         }
-        match stranded_sidebar_pane(tabs, Some(pending.tab)) {
+        match stranded_sidebar_pane_with_resolution(tabs, Some(pending.tab), focus_resolution) {
             Some(_) if now_ms < pending.deadline => CorrectionAction::Wait,
             Some(pane_id) => {
                 self.pending = None;

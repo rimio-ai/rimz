@@ -294,7 +294,7 @@ struct ProducerBindingFallbackLog<'a> {
 
 /// Fold the enrichments onto a base snapshot — one ordered spine for the
 /// producer and every consumer, so the two paths can never drift. `frame` is
-/// the live pane frame (panes plus the `produced_at_ms` read stamp): the
+/// the live pane frame (panes plus the observed-or-produced pane stamp): the
 /// producer's freshly resolved list, or the published `snapshot.json` a
 /// consumer read back. `None` skips the pane overlay — a cold consumer start
 /// (no publish yet) or a producer call with no live session — and leaves
@@ -387,6 +387,13 @@ pub fn enrich(
 
     if let Some(frame) = frame {
         snapshot.panes_produced_at_ms = Some(frame.produced_at_ms);
+        snapshot.panes_observed_at_ms = Some(frame.observed_or_produced_at_ms());
+        snapshot.focus_contested_panes = frame
+            .tabs
+            .iter()
+            .filter(|tab| tab.focus_contested)
+            .flat_map(|tab| tab.panes.iter().map(|pane| pane.pane_id.clone()))
+            .collect();
         snapshot.truth_degraded = truth_notice_for_frame(&frame);
         if let Some(own) = exclude {
             snapshot.own_view = SidebarOwnView::from_frame(own, &frame);

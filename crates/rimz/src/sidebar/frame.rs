@@ -7,6 +7,7 @@
 //! card; ledger, sidecars, and realtime events only enrich cards whose pane is
 //! present here.
 
+use std::cmp::Ordering;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use jiff::Timestamp;
@@ -20,6 +21,10 @@ use crate::schema::diag::DiagEvent;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PaneFrame {
     pub produced_at_ms: u64,
+    /// When the pane source observed the topology. For legacy frames this is
+    /// absent and consumers fall back to `produced_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at_ms: Option<u64>,
     /// Build id of the producer that assembled this frame
     /// ([`crate::build_id`]); absent on frames written by builds that predate
     /// the stamp.
@@ -52,6 +57,10 @@ pub struct TabFrame {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_pane: Option<PaneId>,
+    /// Raw focus marks for this view were multi-valued when this frame was
+    /// assembled. `active_pane` is the deterministic arbitration result.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub focus_contested: bool,
     pub panes: Vec<PaneState>,
 }
 
@@ -114,6 +123,10 @@ impl PaneMetrics {
 }
 
 impl PaneFrame {
+    pub fn observed_or_produced_at_ms(&self) -> u64 {
+        self.observed_at_ms.unwrap_or(self.produced_at_ms)
+    }
+
     pub fn to_pane_refs(&self) -> Vec<PaneRef> {
         self.tabs
             .iter()
@@ -282,8 +295,22 @@ impl SidebarOwnView {
             active_pane_id,
             working_pane_ids,
             own_view_is_daemon,
+            focus_contested: tab.focus_contested,
         })
     }
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+pub struct FrameInputs<'a> {
+    pub panes: Vec<PaneRef>,
+    pub produced_at_ms: u64,
+    pub observed_at_ms: u64,
+    pub session_name: String,
+    pub source_active: BTreeMap<ViewId, PaneId>,
+    pub prior: Option<&'a PaneFrame>,
 }
 
 pub fn assemble_frame(
@@ -299,7 +326,27 @@ pub fn assemble_frame_with_diagnostics(
     produced_at_ms: u64,
     session_name: impl Into<String>,
 ) -> (PaneFrame, Vec<DiagEvent>) {
+    assemble_frame_from_inputs(FrameInputs {
+        panes,
+        produced_at_ms,
+        observed_at_ms: produced_at_ms,
+        session_name: session_name.into(),
+        source_active: BTreeMap::new(),
+        prior: None,
+    })
+}
+
+pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<DiagEvent>) {
+    let FrameInputs {
+        panes,
+        produced_at_ms,
+        observed_at_ms,
+        session_name,
+        source_active,
+        prior,
+    } = inputs;
     let mut tabs: BTreeMap<ViewId, TabFrame> = BTreeMap::new();
+    let mut focused_candidates: BTreeMap<ViewId, Vec<PaneId>> = BTreeMap::new();
     let mut seen_panes = HashSet::new();
     let mut diagnostics = Vec::new();
     for pane in panes {
@@ -322,21 +369,17 @@ pub fn assemble_frame_with_diagnostics(
             kind,
             name: pane.view_name.clone(),
             active_pane: None,
+            focus_contested: false,
             panes: Vec::new(),
         });
         if tab.name.is_none() {
             tab.name = pane.view_name.clone();
         }
         if pane.is_focused {
-            if tab.active_pane.is_none() {
-                tab.active_pane = Some(pane.pane_id.clone());
-            } else {
-                tracing::debug!(
-                    view_id = %tab.view_id,
-                    pane_id = %pane.pane_id,
-                    "dropping extra active pane mark in one view"
-                );
-            }
+            focused_candidates
+                .entry(tab.view_id.clone())
+                .or_default()
+                .push(pane.pane_id.clone());
         }
         let resumed_session_id = pane.resumed_session_id.or_else(|| {
             pane.command
@@ -360,16 +403,112 @@ pub fn assemble_frame_with_diagnostics(
             metrics: PaneMetrics::default(),
         });
     }
+    resolve_tab_focus(
+        &mut tabs,
+        focused_candidates,
+        &source_active,
+        prior,
+        &mut diagnostics,
+    );
     (
         PaneFrame {
             produced_at_ms,
+            observed_at_ms: Some(observed_at_ms),
             build: crate::build_id::current().map(str::to_owned),
-            session_name: session_name.into(),
+            session_name,
             tabs: tabs.into_values().collect(),
             carried_panes: Vec::new(),
         },
         diagnostics,
     )
+}
+
+fn resolve_tab_focus(
+    tabs: &mut BTreeMap<ViewId, TabFrame>,
+    focused_candidates: BTreeMap<ViewId, Vec<PaneId>>,
+    source_active: &BTreeMap<ViewId, PaneId>,
+    prior: Option<&PaneFrame>,
+    diagnostics: &mut Vec<DiagEvent>,
+) {
+    for (view_id, candidates) in focused_candidates {
+        let Some(tab) = tabs.get_mut(&view_id) else {
+            continue;
+        };
+        match candidates.as_slice() {
+            [] => {}
+            [only] => tab.active_pane = Some(only.clone()),
+            _ => {
+                tab.focus_contested = true;
+                let resolved = resolve_contested_focus(tab, &candidates, source_active, prior);
+                tab.active_pane = Some(resolved.clone());
+                diagnostics.push(DiagEvent::FocusContested {
+                    view_id: tab.view_id.clone(),
+                    candidates,
+                    resolved,
+                });
+            }
+        }
+    }
+}
+
+fn resolve_contested_focus(
+    tab: &TabFrame,
+    candidates: &[PaneId],
+    source_active: &BTreeMap<ViewId, PaneId>,
+    prior: Option<&PaneFrame>,
+) -> PaneId {
+    if let Some(source) = source_active
+        .get(&tab.view_id)
+        .filter(|pane| candidates.iter().any(|candidate| candidate == *pane))
+    {
+        return source.clone();
+    }
+    let prior_tab = prior
+        .and_then(|frame| frame.tabs.iter().find(|prior| prior.view_id == tab.view_id))
+        .filter(|prior| prior.kind == tab.kind);
+    let prior_active = prior_tab.and_then(|prior| prior.active_pane.as_ref());
+    if !prior_tab.is_some_and(|prior| prior.focus_contested) {
+        let newly_marked = candidates
+            .iter()
+            .filter(|candidate| Some(*candidate) != prior_active)
+            .collect::<Vec<_>>();
+        if let [pane] = newly_marked.as_slice() {
+            return (*pane).clone();
+        }
+    }
+    if let Some(prior_active) =
+        prior_active.filter(|prior| candidates.iter().any(|candidate| candidate == *prior))
+    {
+        return prior_active.clone();
+    }
+    candidates
+        .iter()
+        .min_by(|left, right| pane_id_order(left.as_str(), right.as_str()))
+        .expect("contested focus has at least two candidates")
+        .clone()
+}
+
+fn pane_id_order(left: &str, right: &str) -> Ordering {
+    match (split_numeric_suffix(left), split_numeric_suffix(right)) {
+        (Some((left_prefix, left_num)), Some((right_prefix, right_num)))
+            if left_prefix == right_prefix =>
+        {
+            left_num.cmp(&right_num).then_with(|| left.cmp(right))
+        }
+        _ => left.cmp(right),
+    }
+}
+
+fn split_numeric_suffix(value: &str) -> Option<(&str, u64)> {
+    let suffix_start = value
+        .char_indices()
+        .rev()
+        .find_map(|(idx, ch)| (!ch.is_ascii_digit()).then_some(idx + ch.len_utf8()))?;
+    let suffix = value.get(suffix_start..)?;
+    if suffix.is_empty() || suffix.len() == value.len() {
+        return None;
+    }
+    Some((value.get(..suffix_start)?, suffix.parse().ok()?))
 }
 
 fn default_view_kind(mux: MuxName) -> ViewKind {
@@ -387,421 +526,4 @@ fn pane_is_sidebar_chrome(pane: &PaneState) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::ids::MuxName;
-
-    fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef {
-        PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: "rimz-test".to_owned(),
-            view_id: Some(view.to_owned()),
-            view_kind: Some(ViewKind::Tab),
-            view_name: None,
-            is_focused: focused,
-            command: command.map(ToOwned::to_owned),
-            spawn_command: None,
-            cwd: Some("/repo/main".to_owned()),
-            pane_pid: None,
-            pane_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        }
-    }
-
-    #[test]
-    fn active_pane_is_structural_one_per_tab() {
-        let frame = assemble_frame(
-            vec![
-                pane("terminal_1", "tab_0", Some("zsh"), true),
-                pane("terminal_2", "tab_0", Some("cargo build"), true),
-                pane("terminal_3", "tab_1", Some("zsh"), true),
-            ],
-            7,
-            "rimz-test",
-        );
-
-        assert_eq!(
-            frame.tabs[0].active_pane,
-            Some(frame.tabs[0].panes[0].pane_id.clone())
-        );
-        assert_eq!(
-            frame.tabs[1].active_pane,
-            Some(frame.tabs[1].panes[0].pane_id.clone())
-        );
-        let projected = frame.to_pane_refs();
-        assert!(projected[0].is_focused);
-        assert!(!projected[1].is_focused);
-        assert!(projected[2].is_focused);
-    }
-
-    #[test]
-    fn duplicate_pane_ids_keep_first_and_report_diagnostic() {
-        let (frame, diagnostics) = assemble_frame_with_diagnostics(
-            vec![
-                pane("terminal_1", "tab_0", Some("zsh"), false),
-                pane("terminal_1", "tab_0", Some("cargo build"), true),
-            ],
-            7,
-            "rimz-test",
-        );
-
-        assert_eq!(frame.pane_states().count(), 1);
-        assert_eq!(
-            frame.tabs[0].panes[0].current.command.as_deref(),
-            Some("zsh")
-        );
-        assert!(matches!(
-            diagnostics.as_slice(),
-            [DiagEvent::DuplicatePaneId { pane_id }] if pane_id.raw() == "terminal_1"
-        ));
-    }
-
-    #[test]
-    fn foreground_change_with_stable_spawn_does_not_rotate() {
-        let old_start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-        let mut prior = assemble_frame(
-            vec![PaneRef {
-                command: Some("codex".to_owned()),
-                spawn_command: Some(
-                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main"
-                        .to_owned(),
-                ),
-                ..pane("terminal_1", "tab_0", Some("codex"), false)
-            }],
-            1,
-            "rimz-test",
-        );
-        prior.tabs[0].panes[0].current.started_at = Some(old_start);
-        let mut fresh = assemble_frame(
-            vec![PaneRef {
-                command: Some("/usr/bin/codex".to_owned()),
-                spawn_command: Some(
-                    "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/main"
-                        .to_owned(),
-                ),
-                ..pane("terminal_1", "tab_0", Some("codex"), false)
-            }],
-            2,
-            "rimz-test",
-        );
-        fresh.tabs[0].panes[0].current.started_at = Some(old_start);
-
-        fresh.rotate_against_prior(&prior);
-
-        let state = &fresh.tabs[0].panes[0];
-        assert_eq!(state.current.command.as_deref(), Some("/usr/bin/codex"));
-        assert_eq!(state.current.started_at, Some(old_start));
-        assert!(state.previous.is_none());
-    }
-
-    #[test]
-    fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
-        let mut prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("claude"), false)],
-            1,
-            "rimz-test",
-        );
-        prior.tabs[0].panes[0].current.pid = Some(42);
-        prior.tabs[0].panes[0].current.spawn_command = Some("rimz agents exec claude".to_owned());
-        prior.tabs[0].panes[0].previous = Some(PaneProcess {
-            pid: Some(41),
-            command: Some("zsh".to_owned()),
-            spawn_command: None,
-            cwd: Some("/repo/main".to_owned()),
-            started_at: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-        });
-        let mut fresh = assemble_frame(
-            vec![PaneRef {
-                command: None,
-                cwd: None,
-                pane_pid: None,
-                ..pane("terminal_1", "tab_0", None, false)
-            }],
-            2,
-            "rimz-test",
-        );
-
-        fresh.rotate_against_prior(&prior);
-
-        let state = &fresh.tabs[0].panes[0];
-        assert_eq!(state.current.command.as_deref(), Some("claude"));
-        assert_eq!(
-            state.current.spawn_command.as_deref(),
-            Some("rimz agents exec claude")
-        );
-        assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"));
-        // The pid is never rotation-carried: only the metrics layer restores
-        // it, behind its starttime pid-reuse guard.
-        assert_eq!(state.current.pid, None);
-        assert_eq!(
-            state
-                .previous
-                .as_ref()
-                .and_then(|previous| previous.command.as_deref()),
-            Some("zsh")
-        );
-    }
-
-    #[test]
-    fn active_command_null_fresh_no_pid_does_not_backfill() {
-        let start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-        let mut prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("git push"), false)],
-            1,
-            "rimz-test",
-        );
-        prior.tabs[0].panes[0].current.spawn_command = Some("zsh".to_owned());
-        prior.tabs[0].panes[0].current.started_at = Some(start);
-        let mut fresh = assemble_frame(
-            vec![PaneRef {
-                cwd: None,
-                ..pane("terminal_1", "tab_0", None, false)
-            }],
-            2,
-            "rimz-test",
-        );
-
-        fresh.rotate_against_prior(&prior);
-
-        let state = &fresh.tabs[0].panes[0];
-        assert_eq!(state.current.command, None);
-        assert_eq!(state.current.spawn_command.as_deref(), Some("zsh"));
-        assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"));
-        assert_eq!(state.current.started_at, Some(start));
-    }
-
-    #[test]
-    fn active_command_null_fresh_same_pid_backfills() {
-        let mut prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("cargo build"), false)],
-            1,
-            "rimz-test",
-        );
-        prior.tabs[0].panes[0].current.pid = Some(42);
-        let mut fresh = assemble_frame(
-            vec![PaneRef {
-                pane_pid: Some(42),
-                ..pane("terminal_1", "tab_0", None, false)
-            }],
-            2,
-            "rimz-test",
-        );
-
-        fresh.rotate_against_prior(&prior);
-
-        assert_eq!(
-            fresh.tabs[0].panes[0].current.command.as_deref(),
-            Some("cargo build")
-        );
-    }
-
-    #[test]
-    fn idle_command_null_fresh_always_backfills() {
-        let prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
-            1,
-            "rimz-test",
-        );
-        let mut fresh = assemble_frame(
-            vec![pane("terminal_1", "tab_0", None, false)],
-            2,
-            "rimz-test",
-        );
-
-        fresh.rotate_against_prior(&prior);
-
-        assert_eq!(
-            fresh.tabs[0].panes[0].current.command.as_deref(),
-            Some("zsh")
-        );
-    }
-
-    #[test]
-    fn pid_change_rejects_prior_tenant_stamp_even_with_same_command() {
-        let old_start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-        let mut prior = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("codex"), false)],
-            1,
-            "rimz-test",
-        );
-        prior.tabs[0].panes[0].current.pid = Some(100);
-        prior.tabs[0].panes[0].current.started_at = Some(old_start);
-        let mut fresh = assemble_frame(
-            vec![pane("terminal_1", "tab_0", Some("codex"), false)],
-            2,
-            "rimz-test",
-        );
-        fresh.tabs[0].panes[0].current.pid = Some(200);
-
-        fresh.rotate_against_prior(&prior);
-
-        let state = &fresh.tabs[0].panes[0];
-        assert_eq!(state.current.pid, Some(200));
-        assert_eq!(state.current.started_at, None);
-        assert_eq!(
-            state.previous.as_ref().and_then(|previous| previous.pid),
-            Some(100)
-        );
-    }
-
-    #[test]
-    fn own_view_derives_from_the_own_tab() {
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let frame = assemble_frame(
-            vec![
-                pane("terminal_1", "tab_0", Some("rimz-sidebar"), false),
-                pane("terminal_2", "tab_0", Some("zsh"), true),
-                pane("terminal_3", "tab_1", Some("cargo build"), true),
-            ],
-            1,
-            "rimz-test",
-        );
-
-        let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
-
-        assert_eq!(view.sibling_count, 1);
-        assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(active.clone()));
-        assert_eq!(view.working_pane_ids, vec![active]);
-    }
-
-    fn own_view(own: &str, panes: Vec<PaneRef>) -> Option<SidebarOwnView> {
-        let own = PaneId::from_parts(MuxName::Zellij, own);
-        SidebarOwnView::from_frame(&own, &assemble_frame(panes, 1, "rimz-test"))
-    }
-
-    #[test]
-    fn own_view_counts_only_siblings_sharing_the_tab() {
-        let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-        let view = own_view(
-            "terminal_1",
-            vec![
-                pane("terminal_1", "tab_0", Some("zsh"), false),
-                pane("terminal_2", "tab_0", Some("zsh"), true),
-                // Another tab — not a sibling.
-                pane("terminal_3", "tab_1", Some("zsh"), true),
-            ],
-        )
-        .expect("own pane is present");
-
-        assert_eq!(view.sibling_count, 1);
-        assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(focused_here.clone()));
-        assert_eq!(
-            view.working_pane_ids,
-            vec![focused_here],
-            "the working set names only this tab's siblings — the fused \
-             focus filter rides it"
-        );
-    }
-
-    #[test]
-    fn own_view_marks_when_the_sidebar_itself_is_active() {
-        let view = own_view(
-            "terminal_1",
-            vec![
-                pane("terminal_1", "tab_0", Some("zsh"), true),
-                pane("terminal_2", "tab_0", Some("zsh"), false),
-            ],
-        )
-        .expect("own pane is present");
-
-        assert!(view.own_is_active);
-        assert_eq!(view.active_pane_id, None);
-    }
-
-    #[test]
-    fn own_view_is_none_when_own_pane_is_absent() {
-        // A view the caller cannot find itself in is unknowable — never close.
-        let panes = vec![pane("terminal_1", "tab_0", Some("zsh"), true)];
-        assert!(own_view("terminal_404", panes).is_none());
-    }
-
-    #[test]
-    fn own_view_picks_the_tab_active_pane_without_a_client() {
-        // The tab has an active pane but no client is looking at it. The
-        // baseline is the tab's active pane, defined regardless of where any
-        // client is — so the sidebar in an unviewed tab still points at the
-        // pane the user would land on.
-        let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
-        let view = own_view(
-            "terminal_52",
-            vec![
-                pane("terminal_52", "tab_11", Some("zsh"), false),
-                pane("terminal_53", "tab_11", Some("zsh"), true),
-            ],
-        )
-        .expect("own pane is present");
-
-        assert!(!view.own_is_active);
-        assert_eq!(view.active_pane_id, Some(active));
-    }
-
-    /// A pane fixture with a view name, so a test can build the `rimzd` daemon
-    /// view the tmux window-name fallback recognises.
-    fn pane_named(raw: &str, view: &str, command: &str, view_name: &str) -> PaneRef {
-        PaneRef {
-            view_name: Some(view_name.to_owned()),
-            ..pane(raw, view, Some(command), false)
-        }
-    }
-
-    #[test]
-    fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
-        // No view_name on these fixtures: the daemon view is recognised by the
-        // host command markers alone, covering builds that omit tab names.
-        let view = own_view(
-            "terminal_0",
-            vec![
-                pane("terminal_0", "tab_0", Some("rimz-sidebar"), false),
-                pane(
-                    "terminal_1",
-                    "tab_0",
-                    Some("claude remote-control --spawn worktree"),
-                    false,
-                ),
-                pane(
-                    "terminal_2",
-                    "tab_0",
-                    Some("rimz codex app-server serve"),
-                    false,
-                ),
-            ],
-        )
-        .expect("own pane present");
-        assert!(view.own_view_is_daemon);
-    }
-
-    #[test]
-    fn own_view_is_daemon_true_in_the_rimzd_view_tmux() {
-        // tmux: a host pane is recognised by the window-name fallback even when
-        // its command carries no marker.
-        let view = own_view(
-            "terminal_0",
-            vec![
-                pane_named("terminal_0", "rimzd", "rimz-sidebar", "rimzd"),
-                pane_named("terminal_1", "rimzd", "claude", "rimzd"),
-            ],
-        )
-        .expect("own pane present");
-        assert!(view.own_view_is_daemon);
-    }
-
-    #[test]
-    fn own_view_is_daemon_false_in_a_working_view() {
-        let view = own_view(
-            "terminal_0",
-            vec![
-                pane("terminal_0", "tab_1", Some("rimz-sidebar"), false),
-                pane("terminal_1", "tab_1", Some("zsh"), false),
-            ],
-        )
-        .expect("own pane present");
-        assert!(!view.own_view_is_daemon);
-    }
-}
+mod tests;

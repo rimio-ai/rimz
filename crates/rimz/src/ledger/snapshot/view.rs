@@ -72,6 +72,17 @@ pub struct SidebarSnapshot {
     /// events older than this baseline are superseded by pulled truth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panes_produced_at_ms: Option<u64>,
+    /// Pane-source observation timestamp folded into this snapshot. When absent
+    /// (legacy frame or frameless fold), fusion falls back to
+    /// `panes_produced_at_ms`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panes_observed_at_ms: Option<u64>,
+    /// Working pane ids from views whose frame focus was contested. Fusion keeps
+    /// focus events that name one of these panes even when their sender stamp is
+    /// older than the publish stamp, because the pulled frame abstains from
+    /// being authoritative for that view's focus.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub focus_contested_panes: Vec<PaneId>,
     /// The pane frame is painting from carried prior-pane truth because the
     /// latest mux pane source omitted panes whose processes are still alive.
     /// Display-only and renderer-local: the ledger state stays unchanged.
@@ -270,6 +281,8 @@ impl SidebarSnapshot {
             display_name,
             generated_at: now,
             panes_produced_at_ms: None,
+            panes_observed_at_ms: None,
+            focus_contested_panes: Vec::new(),
             truth_degraded: None,
             now,
             worktree_groups: Vec::new(),

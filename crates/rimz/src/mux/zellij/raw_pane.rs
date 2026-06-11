@@ -7,9 +7,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::{SIDEBAR_PANE_NAME, SIDEBAR_RESIZE_TRIGGER_PERCENT};
-use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::ids::{MuxName, PaneId, ViewId, WorkspaceId};
 use crate::ledger::paths;
-use crate::mux::{SidebarWidth, ViewSidebars};
+use crate::mux::{PaneListing, SidebarWidth, ViewSidebars};
 use crate::schema::pane_topology::{PaneTopologyCache, PaneTopologyPane};
 
 /// Cleanliness of a live room after a successful pane inspection.
@@ -384,14 +384,67 @@ pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> 
     cache.panes.into_iter().map(Into::into).collect()
 }
 
+#[derive(Debug)]
+pub(super) struct RawPaneListing {
+    pub(super) panes: Vec<RawPane>,
+    pub(super) observed_at_ms: u64,
+    pub(super) source_active: std::collections::BTreeMap<ViewId, PaneId>,
+}
+
+impl RawPaneListing {
+    pub(super) fn from_cli(panes: Vec<RawPane>, observed_at_ms: u64) -> Self {
+        Self {
+            panes,
+            observed_at_ms,
+            source_active: std::collections::BTreeMap::new(),
+        }
+    }
+
+    pub(super) fn from_topology(cache: PaneTopologyCache) -> Self {
+        let observed_at_ms = cache.produced_at_ms;
+        let source_active = cache
+            .active_panes
+            .iter()
+            .map(|(tab_position, pane_id)| {
+                (
+                    ViewId::new_unchecked(format!("tab_{tab_position}")),
+                    PaneId::from_parts(MuxName::Zellij, format!("terminal_{pane_id}")),
+                )
+            })
+            .collect();
+        Self {
+            panes: raw_panes_from_topology(cache),
+            observed_at_ms,
+            source_active,
+        }
+    }
+
+    pub(super) fn into_pane_listing(
+        self,
+        session_name: String,
+        project: impl FnMut(RawPane, &str) -> Option<crate::feed::PaneRef>,
+    ) -> PaneListing {
+        let mut project = project;
+        PaneListing {
+            panes: self
+                .panes
+                .into_iter()
+                .filter_map(|pane| project(pane, &session_name))
+                .collect(),
+            observed_at_ms: self.observed_at_ms,
+            source_active: self.source_active,
+        }
+    }
+}
+
 pub(super) fn read_fresh_topology_cache(
     session: &str,
     workspace_id: &WorkspaceId,
     min_produced_at_ms: Option<u64>,
-) -> Option<Vec<RawPane>> {
+) -> Option<RawPaneListing> {
     let runtime = paths::RuntimePaths::for_workspace(workspace_id.clone()).ok()?;
     crate::sidebar::cache::read_fresh_pane_topology_cache(&runtime, session, min_produced_at_ms)
-        .map(raw_panes_from_topology)
+        .map(RawPaneListing::from_topology)
 }
 
 pub(super) fn timestamp_from_json(value: &Value) -> Option<Timestamp> {

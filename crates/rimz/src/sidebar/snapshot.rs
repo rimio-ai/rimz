@@ -11,9 +11,9 @@ pub use super::cache::{
     DiffStats, DiffStatsCache, DiffStatsCacheEntry, EVENT_PANE_TTL, GIT_ACTIVITY_WINDOW,
     PRESENCE_STAMP_FRESH, PresenceStamp, SNAPSHOT_CACHE_TTL, WORKTREE_ROOTS_TTL,
     WorktreeRootsCache, effective_pane_ttl, presence_event_mode, presence_stamp_age_ms,
-    presence_stamp_path, published_frame_age_ms, published_frame_produced_at_ms,
-    read_diff_stats_cache, read_snapshot_cache, snapshot_cache_is_fresh, unix_now_ms,
-    write_presence_stamp,
+    presence_stamp_path, published_frame_age_ms, published_frame_observed_at_ms,
+    published_frame_produced_at_ms, read_diff_stats_cache, read_snapshot_cache,
+    snapshot_cache_is_fresh, unix_now_ms, write_presence_stamp,
 };
 pub use super::consumer::{RollupCursor, read_published_snapshot, rollup_snapshot};
 pub use super::enrich::{

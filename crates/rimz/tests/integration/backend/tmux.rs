@@ -144,7 +144,8 @@ impl TmuxServer {
                     session_name: Some(session.to_owned()),
                     ..Default::default()
                 })
-                .expect("list_panes");
+                .expect("list_panes")
+                .panes;
             if listed
                 .iter()
                 .any(|pane| pane.command.as_deref() == Some(command))
@@ -332,6 +333,7 @@ fn focus_pane_switches_the_containing_window() {
             ..Default::default()
         })
         .expect("list_panes")
+        .panes
         .into_iter()
         .find(|pane| pane.view_name.as_deref() == Some("second"))
         .expect("the second window's pane");
@@ -494,7 +496,8 @@ fn list_panes_with_session_returns_terminals() {
                 session_name: Some("panes".to_owned()),
                 ..Default::default()
             })
-            .expect("list_panes");
+            .expect("list_panes")
+            .panes;
         if panes.first().and_then(|p| p.command.as_deref()) == Some("sh")
             || Instant::now() >= deadline
         {
@@ -590,6 +593,7 @@ fn open_background_view_creates_named_window_idempotently() {
             ..Default::default()
         })
         .expect("list panes")
+        .panes
         .into_iter()
         .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
         .count();
@@ -657,6 +661,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
             ..Default::default()
         })
         .expect("list panes")
+        .panes
         .into_iter()
         .filter(|pane| pane.view_name.as_deref() == Some("claude:feature"))
         .count();
@@ -712,7 +717,8 @@ fn split_pane_injects_env_vars() {
             session_name: Some("split".to_owned()),
             ..Default::default()
         })
-        .expect("list_panes after split");
+        .expect("list_panes after split")
+        .panes;
     assert_eq!(
         panes.len(),
         2,
@@ -749,7 +755,8 @@ fn capture_send_keys_and_named_key_round_trip() {
             session_name: Some("io".to_owned()),
             ..Default::default()
         })
-        .expect("list_panes");
+        .expect("list_panes")
+        .panes;
     let pane_id = panes[0].pane_id.clone();
 
     server

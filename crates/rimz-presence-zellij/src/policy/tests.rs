@@ -627,12 +627,59 @@ fn focus_only_partial_still_takes_shortcut() {
                 id: 11,
                 is_focused: true,
             },
-            FocusPatch {
-                id: 20,
-                is_focused: false,
-            },
         ]))
     );
+}
+
+#[test]
+fn focus_resolution_prefers_false_to_true_transition() {
+    let mut previous_focused = pane_in_tab(10, 0);
+    previous_focused.is_focused = true;
+    let previous = tabs_by_index(vec![(0, vec![previous_focused, pane_in_tab(11, 0)])]);
+    let mut old = pane_in_tab(10, 0);
+    old.is_focused = true;
+    let mut new = pane_in_tab(11, 0);
+    new.is_focused = true;
+    let next = tabs_by_index(vec![(0, vec![old, new])]);
+
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&previous, &next);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
+    assert_eq!(resolution.active_panes_payload().get(&0_u64), Some(&11));
+}
+
+#[test]
+fn focus_resolution_sticks_when_contested_without_transition() {
+    let mut focused = pane_in_tab(11, 0);
+    focused.is_focused = true;
+    let initial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), focused])]);
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&BTreeMap::new(), &initial);
+    let mut first = pane_in_tab(10, 0);
+    first.is_focused = true;
+    let mut second = pane_in_tab(11, 0);
+    second.is_focused = true;
+    let contested = tabs_by_index(vec![(0, vec![first, second])]);
+
+    resolution.fold_pane_update(&contested, &contested);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
+}
+
+#[test]
+fn focus_resolution_unresolves_ambiguous_simultaneous_card_flips() {
+    let previous = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
+    let mut first = pane_in_tab(10, 0);
+    first.is_focused = true;
+    let mut second = pane_in_tab(11, 0);
+    second.is_focused = true;
+    let next = tabs_by_index(vec![(0, vec![first, second])]);
+    let mut resolution = FocusResolution::default();
+
+    resolution.fold_pane_update(&previous, &next);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), None);
 }
 
 #[test]

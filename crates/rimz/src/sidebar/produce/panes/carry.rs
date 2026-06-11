@@ -264,6 +264,7 @@ fn insert_carried_pane(fresh: &mut PaneFrame, prior_tab: &TabFrame, prior_pane: 
                 kind: prior_tab.kind,
                 name: prior_tab.name.clone(),
                 active_pane: prior_tab.active_pane.clone(),
+                focus_contested: prior_tab.focus_contested,
                 panes: Vec::new(),
             });
             fresh.tabs.last_mut().expect("just pushed tab")
@@ -546,6 +547,7 @@ mod tests {
     fn omitted_tab_is_recreated_from_prior_metadata() {
         let mut prior = PaneFrame {
             produced_at_ms: 1,
+            observed_at_ms: Some(1),
             build: None,
             session_name: "s".to_owned(),
             tabs: vec![TabFrame {
@@ -553,6 +555,7 @@ mod tests {
                 kind: ViewKind::Tab,
                 name: Some("work".to_owned()),
                 active_pane: Some(pane_id("terminal_9")),
+                focus_contested: false,
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
                     first_seen_at_ms: Some(1),

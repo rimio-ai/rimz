@@ -275,7 +275,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
             }
             wakeup => {
-                state.on_input(wakeup, &mut terminal, anim_start)?;
+                state.on_input(&config, wakeup, &mut terminal, anim_start, diag.as_ref())?;
             }
         }
 
@@ -388,7 +388,7 @@ fn apply_input(
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
     anim_start: Instant,
-) -> Result<bool> {
+) -> Result<InputApply> {
     let outcome = handle_wakeup(wakeup, ui, snapshot);
     if outcome.dismiss {
         health.alert = None;
@@ -404,9 +404,21 @@ fn apply_input(
         // highlight moves only when the derived baseline catches up on a later
         // fold — late, never wrong — and any make-up filter clears as focus
         // leaves the tab (the redraw above repaints the reshaped body).
-        spawn_pane_focus(pane);
+        spawn_pane_focus(pane.clone());
+        return Ok(InputApply {
+            painted: outcome.redraw,
+            focused: Some(pane),
+        });
     }
-    Ok(outcome.redraw)
+    Ok(InputApply {
+        painted: outcome.redraw,
+        focused: None,
+    })
+}
+
+struct InputApply {
+    painted: bool,
+    focused: Option<PaneId>,
 }
 
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {

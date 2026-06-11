@@ -183,23 +183,27 @@ impl MuxBackend for FakeBackend {
         Ok(Vec::new())
     }
 
-    fn list_panes(&self, _opts: PaneListOptions) -> rimz::mux::Result<Vec<PaneRef>> {
-        Ok(vec![PaneRef {
-            pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
-            session_name: "session".to_owned(),
-            view_id: Some("@1".to_owned()),
-            view_kind: Some(ViewKind::Window),
-            view_name: None,
-            is_focused: false,
-            command: Some("sh".to_owned()),
-            spawn_command: None,
-            cwd: None,
-            pane_pid: None,
-            pane_process_start: None,
-            resumed_session_id: None,
-            elevated_agent: None,
-            first_seen_at_ms: None,
-        }])
+    fn list_panes(&self, _opts: PaneListOptions) -> rimz::mux::Result<rimz::mux::PaneListing> {
+        Ok(rimz::mux::PaneListing {
+            panes: vec![PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Tmux, "%1"),
+                session_name: "session".to_owned(),
+                view_id: Some("@1".to_owned()),
+                view_kind: Some(ViewKind::Window),
+                view_name: None,
+                is_focused: false,
+                command: Some("sh".to_owned()),
+                spawn_command: None,
+                cwd: None,
+                pane_pid: None,
+                pane_process_start: None,
+                resumed_session_id: None,
+                elevated_agent: None,
+                first_seen_at_ms: None,
+            }],
+            observed_at_ms: rimz::sidebar::snapshot::unix_now_ms(),
+            source_active: std::collections::BTreeMap::new(),
+        })
     }
 
     fn split_pane(&self, _opts: SplitPaneOptions) -> rimz::mux::Result<()> {

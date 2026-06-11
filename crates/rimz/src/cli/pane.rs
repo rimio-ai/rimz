@@ -115,10 +115,11 @@ fn list(
     session_name: Option<String>,
 ) -> Result<()> {
     let session_name = resolve_session_name(globals, session_name)?;
-    let panes = backend.list_panes(PaneListOptions {
+    let listing = backend.list_panes(PaneListOptions {
         session_name: Some(session_name),
         ..Default::default()
     })?;
+    let panes = listing.panes;
     if json {
         let rendered = serde_json::to_string_pretty(&panes)?;
         #[expect(clippy::print_stdout, reason = "json emitter")]
@@ -180,10 +181,12 @@ fn validate_pane_not_reused(
     let Some(expected_start) = expected_start else {
         return Ok(());
     };
-    let panes = backend.list_panes(PaneListOptions {
-        session_name,
-        ..Default::default()
-    })?;
+    let panes = backend
+        .list_panes(PaneListOptions {
+            session_name,
+            ..Default::default()
+        })?
+        .panes;
     let Some(live) = panes.iter().find(|candidate| candidate.pane_id == *pane) else {
         bail!("pane {pane} is no longer present");
     };

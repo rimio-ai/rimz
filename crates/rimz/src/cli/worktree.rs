@@ -223,9 +223,10 @@ fn other_live_pane_inside(path: &Path, globals: &GlobalFlags) -> bool {
         return false;
     };
     let backend = rimz::mux::backend_for(mux);
-    let Ok(panes) = backend.list_panes(rimz::mux::PaneListOptions::default()) else {
+    let Ok(listing) = backend.list_panes(rimz::mux::PaneListOptions::default()) else {
         return false;
     };
+    let panes = listing.panes;
     other_live_user_pane_inside(&panes, &own, path)
 }
 

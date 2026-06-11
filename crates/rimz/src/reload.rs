@@ -413,7 +413,7 @@ fn reap_orphan_sidebars(backend: &dyn MuxBackend, mux: MuxName, ws: &KnownWorksp
         session_name: Some(ws.session_name.clone()),
         ..Default::default()
     }) {
-        Ok(panes) => panes.into_iter().map(|pane| pane.pane_id).collect(),
+        Ok(listing) => listing.panes.into_iter().map(|pane| pane.pane_id).collect(),
         Err(err) => {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: listing panes to reap orphans");
             return 0;

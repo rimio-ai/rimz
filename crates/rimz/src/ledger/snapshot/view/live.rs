@@ -62,7 +62,7 @@ impl SidebarSnapshot {
                 default_models: &self.lazy_agent_default_models,
                 pairings: lazy_pairings,
             },
-            self.panes_produced_at_ms,
+            self.panes_observed_at_ms.or(self.panes_produced_at_ms),
             self.now,
         );
         self.worktree_groups = build_worktree_groups_from_rows(
@@ -162,13 +162,23 @@ impl SidebarSnapshot {
             }
         }
         if let Some(view) = &mut self.own_view {
-            if let Some(own_focused) = focused
+            let own_focused = focused
                 .iter()
-                .find(|&pane_id| view.working_pane_ids.contains(pane_id))
-            {
-                if view.active_pane_id.as_ref() != Some(own_focused) || view.own_is_active {
+                .filter(|&pane_id| view.working_pane_ids.contains(pane_id))
+                .find(|&pane_id| view.active_pane_id.as_ref() != Some(pane_id))
+                .or_else(|| {
+                    focused
+                        .iter()
+                        .find(|&pane_id| view.working_pane_ids.contains(pane_id))
+                });
+            if let Some(own_focused) = own_focused {
+                if view.active_pane_id.as_ref() != Some(own_focused)
+                    || view.own_is_active
+                    || view.focus_contested
+                {
                     view.active_pane_id = Some(own_focused.clone());
                     view.own_is_active = false;
+                    view.focus_contested = false;
                     changed = true;
                 }
             } else if view

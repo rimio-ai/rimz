@@ -528,6 +528,8 @@ mod tests {
             display_name: "query-engine".to_owned(),
             generated_at: now,
             panes_produced_at_ms: None,
+            panes_observed_at_ms: None,
+            focus_contested_panes: Vec::new(),
             truth_degraded: None,
             now,
             worktree_groups: vec![SidebarWorktreeGroup {

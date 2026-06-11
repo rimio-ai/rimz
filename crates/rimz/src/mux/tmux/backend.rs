@@ -3,13 +3,12 @@
 use super::TmuxBackend;
 use super::options::{sidebar_serve_command, tmux_views_with_sidebars};
 use super::parse::{parse_focused_client_panes, parse_new_window_ids, parse_pane_line};
-use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, Result, SessionOptions,
-    SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions, TabOptions,
-    ensure_pane_backend,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result,
+    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
+    TabOptions, ensure_pane_backend,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -138,10 +137,11 @@ impl MuxBackend for TmuxBackend {
             .collect())
     }
 
-    fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
+    fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing> {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
+        let observed_at_ms = crate::sidebar::cache::unix_now_ms();
         let mut spec = self.cmd().args([
             "list-panes",
             "-a",
@@ -156,7 +156,11 @@ impl MuxBackend for TmuxBackend {
             .lines()
             .filter_map(parse_pane_line)
             .collect();
-        Ok(panes)
+        Ok(PaneListing {
+            panes,
+            observed_at_ms,
+            source_active: std::collections::BTreeMap::new(),
+        })
     }
 
     fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {
@@ -322,7 +326,7 @@ impl MuxBackend for TmuxBackend {
             session_name: Some(opts.session_name.clone()),
             ..Default::default()
         })?;
-        let views = tmux_views_with_sidebars(&panes);
+        let views = tmux_views_with_sidebars(&panes.panes);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
         let mut failed_stale_close_views = std::collections::HashSet::new();

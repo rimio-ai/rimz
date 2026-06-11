@@ -11,15 +11,27 @@ use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::events::EventStore;
 
 pub fn fuse(pulled: &SidebarSnapshot, events: &EventStore, now_ms: u64) -> SidebarSnapshot {
-    let baseline = pulled.panes_produced_at_ms.unwrap_or(0);
+    let baseline = pulled
+        .panes_observed_at_ms
+        .or(pulled.panes_produced_at_ms)
+        .unwrap_or(0);
     let carried_panes = pulled
         .truth_degraded
         .as_ref()
         .map(|notice| notice.pane_ids.iter().cloned().collect::<HashSet<_>>())
         .unwrap_or_default();
+    let contested_panes = pulled
+        .focus_contested_panes
+        .iter()
+        .cloned()
+        .collect::<HashSet<_>>();
     let active = events
         .active(now_ms)
-        .filter(|event| event.sent_at_ms > baseline || closes_carried_pane(event, &carried_panes))
+        .filter(|event| {
+            event.sent_at_ms > baseline
+                || closes_carried_pane(event, &carried_panes)
+                || focus_touches_contested_pane(event, &contested_panes)
+        })
         .collect::<Vec<_>>();
     if active.is_empty() {
         return pulled.clone();
@@ -65,6 +77,19 @@ fn closes_carried_pane(
 ) -> bool {
     match &event.event {
         SidebarEvent::PaneClosed { pane_id } => carried_panes.contains(pane_id),
+        _ => false,
+    }
+}
+
+fn focus_touches_contested_pane(
+    event: &crate::sidebar::events::StoredEvent,
+    contested_panes: &HashSet<crate::ids::PaneId>,
+) -> bool {
+    match &event.event {
+        SidebarEvent::FocusChanged { focused, unfocused } => focused
+            .iter()
+            .chain(unfocused)
+            .any(|pane_id| contested_panes.contains(pane_id)),
         _ => false,
     }
 }
@@ -131,7 +156,15 @@ mod tests {
             own_is_active: false,
             active_pane_id: active,
             working_pane_ids: working.iter().map(|&pane_id| pane_id.clone()).collect(),
+            focus_contested: false,
             own_view_is_daemon: false,
+        }
+    }
+
+    fn contested_own_view(working: &[&PaneId], active: Option<PaneId>) -> crate::SidebarOwnView {
+        crate::SidebarOwnView {
+            focus_contested: true,
+            ..own_view(working, active)
         }
     }
 
@@ -230,6 +263,70 @@ mod tests {
         assert_eq!(
             row_ids(&fuse(&snapshot, &store, 20)),
             vec!["zellij:terminal_1"]
+        );
+    }
+
+    #[test]
+    fn observed_at_not_publish_time_supersedes_focus_events() {
+        let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            20,
+        );
+        snapshot.panes_observed_at_ms = Some(10);
+        snapshot.own_view = Some(own_view(&[&first, &active], Some(first.clone())));
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            15,
+            SidebarEvent::FocusChanged {
+                focused: vec![active.clone()],
+                unfocused: vec![first],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 21);
+        assert_eq!(
+            fused.own_view.and_then(|view| view.active_pane_id),
+            Some(active)
+        );
+    }
+
+    #[test]
+    fn contested_focus_pane_event_survives_newer_ambiguous_frame() {
+        let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            20,
+        );
+        snapshot.own_view = Some(contested_own_view(&[&first, &active], Some(first.clone())));
+        snapshot.focus_contested_panes = vec![first.clone(), active.clone()];
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            19,
+            SidebarEvent::FocusChanged {
+                focused: vec![active.clone()],
+                unfocused: vec![first],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 21);
+        assert_eq!(
+            fused
+                .own_view
+                .as_ref()
+                .and_then(|view| view.active_pane_id.clone()),
+            Some(active.clone())
+        );
+        assert!(
+            !fused
+                .own_view
+                .as_ref()
+                .is_some_and(|view| view.focus_contested),
+            "the focus event resolves the own-view contest for the fused frame",
         );
     }
 
@@ -396,6 +493,32 @@ mod tests {
             SidebarEvent::FocusChanged {
                 focused: vec![own_active.clone(), foreign],
                 unfocused: vec![sibling],
+            },
+        );
+
+        let fused = fuse(&snapshot, &store, 11);
+        assert_eq!(
+            fused.own_view.and_then(|view| view.active_pane_id),
+            Some(own_active)
+        );
+    }
+
+    #[test]
+    fn level_dump_focus_prefers_transition_over_current_active() {
+        let sibling = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+        let own_active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+        let mut snapshot = pulled(
+            vec![pane("terminal_1", "zsh"), pane("terminal_2", "zsh")],
+            10,
+        );
+        snapshot.own_view = Some(own_view(&[&sibling, &own_active], Some(sibling.clone())));
+        let mut store = EventStore::default();
+        append(
+            &mut store,
+            11,
+            SidebarEvent::FocusChanged {
+                focused: vec![sibling, own_active.clone()],
+                unfocused: Vec::new(),
             },
         );
 

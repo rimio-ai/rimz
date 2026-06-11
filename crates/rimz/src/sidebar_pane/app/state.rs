@@ -60,6 +60,8 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         display_name,
         generated_at: now,
         panes_produced_at_ms: None,
+        panes_observed_at_ms: None,
+        focus_contested_panes: Vec::new(),
         truth_degraded: None,
         now,
         worktree_groups: Vec::new(),
@@ -173,7 +175,16 @@ pub(super) fn apply_fetch_outcome(
     *last_snapshot = state.last_snapshot;
     *health = state.health;
     *current = state.snapshot;
-    let focused_pane = focused_working_pane(current);
+    let contested_existing_baseline = current
+        .own_view
+        .as_ref()
+        .is_some_and(|view| view.focus_contested)
+        && ui.baseline_pane.is_some();
+    let focused_pane = if contested_existing_baseline {
+        None
+    } else {
+        focused_working_pane(current)
+    };
     let focused_row_id = focused_pane
         .as_ref()
         .and_then(|pane| row_id_of_pane(current, pane));

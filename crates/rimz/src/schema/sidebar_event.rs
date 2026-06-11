@@ -28,9 +28,10 @@ pub struct SidebarEventEnvelope {
     /// apply to every session renderer of the workspace.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_name: Option<String>,
-    /// Sender wall clock. Fusion compares this against the pulled frame's
-    /// `produced_at_ms` for supersession; receivers TTL on their own clock, so
-    /// sender skew can mis-order an overlay briefly but never pin it.
+    /// Sender wall clock. Fusion compares this against the pulled frame's pane
+    /// observation stamp, falling back to `produced_at_ms` for legacy frames;
+    /// receivers TTL on their own clock, so sender skew can mis-order an overlay
+    /// briefly but never pin it.
     pub sent_at_ms: u64,
     pub event: SidebarEvent,
 }
@@ -72,11 +73,11 @@ pub enum SidebarEvent {
         pane_id: PaneId,
         command: String,
     },
-    /// Per-view focus marks changed. The patch may span several views — both
-    /// backends keep one active pane per view, so a multi-tab session carries
-    /// one focused pane per tab. Fusion mirrors the bits onto every row and
-    /// retargets a renderer's own-view baseline only when the patch names one
-    /// of that view's own working panes.
+    /// Focus changed. New Zellij presence plugins emit transitions only; old
+    /// plugins and other producers may still send level-style focused/unfocused
+    /// sets. Fusion mirrors the bits onto every row and retargets a renderer's
+    /// own-view baseline only when the patch names one of that view's own
+    /// working panes.
     FocusChanged {
         focused: Vec<PaneId>,
         unfocused: Vec<PaneId>,

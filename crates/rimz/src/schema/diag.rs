@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, WorkspaceId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, SidebarInstanceId, ViewId, WorkspaceId};
 use crate::remote::link::LinkTier;
 
 pub const DIAG_SCHEMA_VERSION: &str = "rimz.diag.v1";
@@ -153,6 +153,11 @@ pub enum DiagEvent {
     DuplicatePaneId {
         pane_id: PaneId,
     },
+    FocusContested {
+        view_id: ViewId,
+        candidates: Vec<PaneId>,
+        resolved: PaneId,
+    },
     ForeignSessionPane {
         pane_id: PaneId,
         session: String,
@@ -212,6 +217,7 @@ impl DiagEvent {
             }
             | Self::RowConflict { .. }
             | Self::DuplicatePaneId { .. }
+            | Self::FocusContested { .. }
             | Self::ForeignSessionPane { .. } => DiagSeverity::Warn,
             Self::FrameAnomaly { .. } => DiagSeverity::Warn,
             Self::RendererPanic { .. } => DiagSeverity::Error,
@@ -252,6 +258,7 @@ impl DiagEvent {
             Self::ProducerDemoted { .. } => "producer_demoted",
             Self::RowConflict { .. } => "row_conflict",
             Self::DuplicatePaneId { .. } => "duplicate_pane_id",
+            Self::FocusContested { .. } => "focus_contested",
             Self::ForeignSessionPane { .. } => "foreign_session_pane",
             Self::GroupMigration { .. } => "group_migration",
             Self::NewbornQuarantined { .. } => "newborn_quarantined",
@@ -317,6 +324,11 @@ impl DiagEvent {
             Self::DuplicatePaneId { pane_id } | Self::NewbornQuarantined { pane_id } => {
                 format!("{}:{pane_id}", self.kind_name())
             }
+            Self::FocusContested {
+                view_id,
+                candidates,
+                ..
+            } => format!("{}:{view_id}:{candidates:?}", self.kind_name()),
             Self::ForeignSessionPane { pane_id, session } => {
                 format!("{}:{pane_id}:{session}", self.kind_name())
             }

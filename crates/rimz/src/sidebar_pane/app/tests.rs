@@ -19,6 +19,7 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
         own_is_active: true,
         active_pane_id: None,
         working_pane_ids: vec![first_work.clone(), second_work.clone()],
+        focus_contested: false,
         own_view_is_daemon: false,
     });
     (snapshot, sidebar, first_work, second_work)

@@ -159,6 +159,8 @@ fn run_fetch_cycle(
     let now_ms = crate::sidebar::cache::unix_now_ms();
     let published_frame_produced_at_ms =
         crate::sidebar::cache::published_frame_produced_at_ms(runtime, &config.session_name);
+    let published_frame_observed_at_ms =
+        crate::sidebar::cache::published_frame_observed_at_ms(runtime, &config.session_name);
     let fast = crate::sidebar::consumer::read_published_snapshot(
         cursor,
         state,
@@ -187,8 +189,8 @@ fn run_fetch_cycle(
         snapshot.panes_produced_at_ms.is_some()
             && (request.published_frame_hint
                 || request.min_pane_cache_ms.is_some_and(|min| {
-                    published_frame_produced_at_ms
-                        .is_some_and(|produced_at_ms| produced_at_ms >= min)
+                    published_frame_observed_at_ms
+                        .is_some_and(|observed_at_ms| observed_at_ms >= min)
                 }))
     });
     match fast {

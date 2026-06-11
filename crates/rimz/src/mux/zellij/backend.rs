@@ -15,7 +15,7 @@ use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, Result, SessionHealth,
+    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
     SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth,
     SplitPaneOptions, TabOptions, ensure_pane_backend,
 };
@@ -63,7 +63,7 @@ impl MuxBackend for ZellijBackend {
             .collect())
     }
 
-    fn list_panes(&self, opts: PaneListOptions) -> Result<Vec<PaneRef>> {
+    fn list_panes(&self, opts: PaneListOptions) -> Result<PaneListing> {
         let timeout = opts
             .command_timeout
             .unwrap_or(super::super::COMMAND_TIMEOUT);
@@ -74,33 +74,32 @@ impl MuxBackend for ZellijBackend {
             timeout,
         )?;
         let session_name = opts.session_name.unwrap_or_default();
-        Ok(raws
-            .into_iter()
-            .filter(RawPane::is_live_terminal)
-            .map(|mut p| {
-                let command = p.display_command();
-                PaneRef {
-                    pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
-                    session_name: session_name.clone(),
-                    view_id: Some(format!("tab_{}", p.view_position())),
-                    view_kind: Some(ViewKind::Tab),
-                    view_name: p.tab_name.take(),
-                    is_focused: p.is_focused,
-                    pane_pid: p.pid(),
-                    pane_process_start: p.process_start(),
-                    command,
-                    spawn_command: p.spawn_command().map(str::to_owned),
-                    cwd: p.reported_cwd().map(str::to_owned),
-                    resumed_session_id: None,
-                    elevated_agent: None,
-                    first_seen_at_ms: None,
-                    // Zellij's `list-panes -j` exposes no per-pane "tab is active"
-                    // or "session attached" signal, so pane visibility is unknown
-                    // here. `None` makes the renderer's visibility gate fall back
-                    // to always painting — the deliberate cross-backend floor.
-                }
+        Ok(raws.into_pane_listing(session_name, |mut p, session_name| {
+            if !p.is_live_terminal() {
+                return None;
+            }
+            let command = p.display_command();
+            Some(PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
+                session_name: session_name.to_owned(),
+                view_id: Some(format!("tab_{}", p.view_position())),
+                view_kind: Some(ViewKind::Tab),
+                view_name: p.tab_name.take(),
+                is_focused: p.is_focused,
+                pane_pid: p.pid(),
+                pane_process_start: p.process_start(),
+                command,
+                spawn_command: p.spawn_command().map(str::to_owned),
+                cwd: p.reported_cwd().map(str::to_owned),
+                resumed_session_id: None,
+                elevated_agent: None,
+                first_seen_at_ms: None,
+                // Zellij's `list-panes -j` exposes no per-pane "tab is active"
+                // or "session attached" signal, so pane visibility is unknown
+                // here. `None` makes the renderer's visibility gate fall back
+                // to always painting — the deliberate cross-backend floor.
             })
-            .collect())
+        }))
     }
 
     fn focused_client_panes(&self, opts: ClientFocusOptions) -> Result<Vec<PaneId>> {

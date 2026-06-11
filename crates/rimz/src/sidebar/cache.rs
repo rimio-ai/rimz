@@ -114,7 +114,7 @@ pub fn snapshot_cache_is_fresh(
     ttl: Duration,
 ) -> bool {
     let fresh = now_ms.saturating_sub(cache.produced_at_ms) <= ttl.as_millis() as u64;
-    let new_enough = min_produced_at_ms.is_none_or(|min| cache.produced_at_ms >= min);
+    let new_enough = min_produced_at_ms.is_none_or(|min| cache.observed_or_produced_at_ms() >= min);
     fresh && new_enough
 }
 
@@ -134,6 +134,13 @@ pub fn published_frame_age_ms(runtime: &RuntimePaths, session: &str, now_ms: u64
 pub fn published_frame_produced_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
     let cache_path = runtime.root.join("snapshot.json");
     read_snapshot_cache(&cache_path, session).map(|cache| cache.produced_at_ms)
+}
+
+/// The observation timestamp of the published same-session pane frame. `None`
+/// when no usable same-session frame exists.
+pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> Option<u64> {
+    let cache_path = runtime.root.join("snapshot.json");
+    read_snapshot_cache(&cache_path, session).map(|cache| cache.observed_or_produced_at_ms())
 }
 
 /// The presence liveness stamp the Zellij presence plugin refreshes through
@@ -378,6 +385,7 @@ mod tests {
         let cache = PaneTopologyCache {
             session_name: "rimz-test".to_owned(),
             produced_at_ms: 100,
+            active_panes: BTreeMap::new(),
             panes: Vec::new(),
         };
 

@@ -37,6 +37,7 @@ fn snapshot_with_sibling_count(ws: &WorkspaceId, sibling_count: usize) -> Sideba
         own_is_active: false,
         active_pane_id: None,
         working_pane_ids: Vec::new(),
+        focus_contested: false,
         own_view_is_daemon: false,
     });
     snapshot
@@ -112,6 +113,7 @@ fn row_snapshot_at(
             own_is_active: false,
             active_pane_id: Some(pane_id),
             working_pane_ids: Vec::new(),
+            focus_contested: false,
             own_view_is_daemon: false,
         });
     }
@@ -155,6 +157,139 @@ fn apply_ok(
         None,
     )
     .expect("apply ok fetch");
+}
+
+fn two_pane_snapshot(
+    ws: &WorkspaceId,
+    active: PaneId,
+    focus_contested: bool,
+) -> (SidebarSnapshot, PaneId, PaneId) {
+    let first = PaneId::from_parts(crate::MuxName::Tmux, "%1");
+    let second = PaneId::from_parts(crate::MuxName::Tmux, "%2");
+    let mut snap = row_snapshot(ws, crate::feed::AgentStatus::Running, false);
+    let mut second_row = snap.worktree_groups[0].rows[0].clone();
+    second_row.id = "sess-2".to_owned();
+    second_row.name = "codex".to_owned();
+    second_row.pane = Some(crate::feed::PaneRef::from_id(second.clone()));
+    snap.worktree_groups[0].rows.push(second_row);
+    snap.worktree_groups[0].status_counts[0].count = 2;
+    snap.own_view = Some(crate::SidebarOwnView {
+        sibling_count: 2,
+        own_is_active: false,
+        active_pane_id: Some(active),
+        working_pane_ids: vec![first.clone(), second.clone()],
+        focus_contested,
+        own_view_is_daemon: false,
+    });
+    (snap, first, second)
+}
+
+#[test]
+fn contested_own_view_holds_existing_selection_baseline() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut read_marks) = read_mark_store(&ws);
+    let mut last_snapshot = None;
+    let mut current = snapshot(&ws);
+    let mut ui = UiState::default();
+    let (initial, first, second) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+
+    apply_ok(
+        &config,
+        initial,
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+        &mut read_marks,
+    );
+    assert_eq!(ui.baseline_pane, Some(first.clone()));
+
+    let (contested, _, _) = two_pane_snapshot(&ws, second, true);
+    apply_ok(
+        &config,
+        contested,
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+        &mut read_marks,
+    );
+
+    assert_eq!(ui.baseline_pane, Some(first.clone()));
+    assert_eq!(ui.selected_pane, Some(first));
+}
+
+#[test]
+fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline() {
+    let ws = workspace();
+    let config = serve_config(&ws);
+    let (_dir, mut read_marks) = read_mark_store(&ws);
+    let mut last_snapshot = None;
+    let mut current = snapshot(&ws);
+    let mut ui = UiState::default();
+    let (initial, first, second) =
+        two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
+
+    apply_ok(
+        &config,
+        initial,
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+        &mut read_marks,
+    );
+    assert_eq!(ui.selected_pane, Some(first.clone()));
+
+    let (mut contested, _, _) = two_pane_snapshot(&ws, first.clone(), true);
+    contested.focus_contested_panes = vec![first.clone(), second.clone()];
+    let mut events = crate::sidebar::events::EventStore::default();
+    events.append(
+        crate::schema::sidebar_event::SidebarEvent::FocusChanged {
+            focused: vec![second.clone()],
+            unfocused: Vec::new(),
+        },
+        10,
+        10,
+    );
+    let fused = crate::sidebar::fuse::fuse(&contested, &events, 10);
+    assert_eq!(
+        fused
+            .own_view
+            .as_ref()
+            .and_then(|view| view.active_pane_id.clone()),
+        Some(second.clone())
+    );
+    assert!(
+        !fused
+            .own_view
+            .as_ref()
+            .is_some_and(|view| view.focus_contested),
+        "the event resolves the contested own view for this fold",
+    );
+
+    apply_ok(
+        &config,
+        fused,
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+        &mut read_marks,
+    );
+    assert_eq!(ui.selected_pane, Some(second.clone()));
+
+    apply_ok(
+        &config,
+        contested,
+        &mut last_snapshot,
+        &mut current,
+        &mut ui,
+        &mut read_marks,
+    );
+    assert_eq!(
+        ui.selected_pane,
+        Some(second),
+        "after the focus event expires, a still-contested pull holds the clicked baseline",
+    );
 }
 
 #[test]
