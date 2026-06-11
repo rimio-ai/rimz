@@ -120,7 +120,7 @@
 ## effect = "static"
 ## speed = "fast"
 ## [sidebar.animations.delegating]
-## frames = ["_", "-", "`", "´", "'", "´", "`", "-"]
+## frames = "⢄⢂⢁⡁⡈⡐⡠"
 ## color = "clay"
 ## effect = "static"
 ## speed = "fast"

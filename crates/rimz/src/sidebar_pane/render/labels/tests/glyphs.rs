@@ -194,7 +194,7 @@ fn animations_cycle_and_wrap() {
         compacting_glyph(&theme, compacting.len() as u64),
         compacting[0]
     );
-    let delegating = ["_", "-", "`", "´", "'", "´", "`", "-"];
+    let delegating = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"];
     assert_eq!(
         subagent_glyph(&theme, delegating.len() as u64),
         delegating[0]

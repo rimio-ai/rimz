@@ -70,7 +70,7 @@ Three short-lived heads ride over the base status on the leading cell, so they n
 |------|---------|
 | `⠁` thinking | the running turn before its first file edit — the agent is reasoning and reading, not yet writing; a research turn that never edits stays in the thinking animation end to end |
 | `▇` compacting | condensing its context window — pulses `▁▃▄▅▆▇▆▅▄▃` in violet, then returns to its resting head |
-| `´` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a low clay wave (`_` bobbing up to `´` and back) |
+| `⢄` waiting on subagents | the main agent delegated to its children; the work is in the rows below — a clay braille wave (`⢄⢂⢁⡁⡈⡐⡠`) |
 
 Every running agent — whichever head rides its cell — counts as **working** (`⢿`) in the cockpit make-up. The status-head frames, base colors, effects, and speeds are themeable per machine through `[sidebar.animations]` ([configuration](../reference/configuration.md#sidebar-animations)).
 

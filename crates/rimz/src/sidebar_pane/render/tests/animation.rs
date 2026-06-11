@@ -491,13 +491,13 @@ fn transient_live_heads_replace_the_working_spinner() {
     );
     kid.parent_agent_id = Some("claude-1".into());
     let snapshot = snapshot_with(Vec::new(), vec![parent, kid]);
-    // Phase 2 of the wave is a distinctive backtick, unique to the
+    // Phase 2 of the wave is a distinctive braille edge, unique to the
     // delegated-wait head (the cockpit's working bucket still shows `⢿`).
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(2), 44, 10);
     let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(4), 44, 10);
     assert_ne!(first, second, "the delegated-wait head animates");
     assert!(
-        first.contains('`'),
+        first.contains('⢁'),
         "the parent shows the delegated-wait wave, not the working spinner:\n{first}"
     );
 }

@@ -258,7 +258,7 @@ fn builtin(role: AnimationRole) -> Animation {
             Speed::Fast,
         ),
         AnimationRole::Delegating => (
-            vec!["_", "-", "`", "´", "'", "´", "`", "-"],
+            vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
             ORANGE,
             Effect::Static,
             Speed::Fast,
