@@ -46,8 +46,9 @@ pub(crate) struct MakeUpHit {
 /// amber, never heating), then `success` `✓`. The right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
-/// bucket renders; colored statuses use their semantic tone, idle rests
-/// neutral by default, and a zero count sits at the soft gray beside it.
+/// bucket renders; colored statuses use their semantic tone, idle rests at the
+/// soft stat gray, and every zero count sits at the same soft gray beside its
+/// glyph.
 /// Counts span the capped agents (`status_counts`). The
 /// fleet's live time / token / commit totals are gone — the summary line's
 /// today-accumulated breakdown carries the fleet's resource read.
@@ -57,8 +58,8 @@ pub(crate) struct MakeUpHit {
 /// relative to the unpadded content. The `filter` is the active pick: that
 /// bucket paints the same `glyph count` cells as rest (ink on a colored fill
 /// where the status has one, plus the bucket's current weight), so moving the
-/// pick changes style without moving text. Under `NO_COLOR`, or for neutral
-/// idle, reverse-video marks the same fixed cells.
+/// pick changes style without moving text. Under `NO_COLOR`, or for the soft
+/// idle bucket, reverse-video marks the same fixed cells.
 pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -157,7 +158,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Idle,
         status_chip_color(theme, AgentStatus::Idle),
         idle,
-        status_style_at(theme, AgentStatus::Idle, animation_phase),
+        theme.soft(),
     );
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
@@ -227,13 +228,12 @@ impl<'a> Cluster<'a> {
     /// its count are always separated by a single space (`? 2`, never `?2`);
     /// successive buckets are separated by three. Every bucket renders, so a
     /// zero reads `? 0` — the cockpit is a fixed dashboard, scannable by
-    /// position. Colored statuses wear their semantic tone; idle rests
-    /// neutral unless the user configured a tone. A zero bucket rests the glyph
-    /// (no bold, no heat), reads its count at the soft stat tier, and emits no
-    /// hit — inert, as if not a tab. The active filter's bucket paints the
-    /// fixed `glyph count` footprint as a chip for colored statuses; neutral
-    /// idle uses reverse video and weight only, preserving the no-color idle
-    /// head.
+    /// position. Colored statuses wear their semantic tone; idle reads at the
+    /// soft stat tier. A zero bucket rests the glyph (no bold, no heat), reads
+    /// its count at the soft stat tier, and emits no hit — inert, as if not a
+    /// tab. The active filter's bucket paints the fixed `glyph count` footprint
+    /// as a chip for colored statuses; idle keeps the soft gray and adds reverse
+    /// video plus weight, preserving the fixed idle head.
     fn push_count(
         &mut self,
         status: AgentStatus,
@@ -261,17 +261,19 @@ impl<'a> Cluster<'a> {
                     chip
                 }
             } else {
-                Style::default().add_modifier(Modifier::REVERSED)
+                style.add_modifier(Modifier::REVERSED)
             };
             self.push_span(Span::styled(
                 format!("{glyph} {count}"),
                 pick.add_modifier(weight),
             ));
         } else if count == 0 {
-            self.push_span(Span::styled(
-                glyph.to_owned(),
-                status_rest_style(self.theme, status),
-            ));
+            let glyph_style = if status == AgentStatus::Idle {
+                self.theme.soft()
+            } else {
+                status_rest_style(self.theme, status)
+            };
+            self.push_span(Span::styled(glyph.to_owned(), glyph_style));
             self.push_span(Span::styled(format!(" {count}"), self.theme.soft()));
             return;
         } else {

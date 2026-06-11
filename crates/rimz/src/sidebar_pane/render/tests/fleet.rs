@@ -118,11 +118,11 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         "red past the hour"
     );
 }
-/// State glyphs never dim. A zero bucket keeps its resting style and rests
-/// only its count at the soft stat tier; idle is neutral by default, while
-/// the colored states keep their semantic tone.
+/// State glyphs keep their cockpit tier. A zero bucket keeps its resting style
+/// and rests only its count at the soft stat tier; idle's glyph and count read
+/// at that same soft tier, while the colored states keep their semantic tone.
 #[test]
-fn state_glyphs_never_dim() {
+fn state_glyphs_keep_their_cockpit_tier() {
     let theme = Theme::fixed(false);
     // A room with one working agent: every bucket but `⢿` is zero.
     let working = agent(
@@ -154,9 +154,9 @@ fn state_glyphs_never_dim() {
         "a zero ✓ bucket keeps the quiet success tone at full strength"
     );
     assert_eq!(
-        glyph_style("○").fg,
-        None,
-        "a zero idle bucket carries no foreground color by default"
+        glyph_style("○"),
+        theme.soft(),
+        "a zero idle bucket carries the soft stat gray"
     );
     let zero_counts: Vec<_> = spans
         .iter()
@@ -165,7 +165,7 @@ fn state_glyphs_never_dim() {
     assert!(!zero_counts.is_empty(), "zero buckets render their counts");
     assert!(
         zero_counts.iter().all(|span| span.style == theme.soft()),
-        "only the zero count rests at the soft stat tier"
+        "zero counts rest at the soft stat tier"
     );
     assert_eq!(labels::status_style(&theme, AgentStatus::Idle).fg, None);
     assert_eq!(
@@ -271,7 +271,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
 }
 
 #[test]
-fn selected_idle_filter_uses_modifier_only_by_default() {
+fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
     let theme = Theme::fixed(false);
     let idle = agent(
         "idle-1",
@@ -295,11 +295,11 @@ fn selected_idle_filter_uses_modifier_only_by_default() {
         .iter()
         .find(|span| span.content.as_ref() == "○ 1")
         .expect("the selected idle bucket stays one span");
-    assert_eq!(active.style.fg, None);
+    assert_eq!(active.style.fg, theme.soft().fg);
     assert!(
         active.style.add_modifier.contains(Modifier::REVERSED)
             && active.style.add_modifier.contains(Modifier::BOLD),
-        "selected idle uses only weight and reverse video"
+        "selected idle uses soft gray plus weight and reverse video"
     );
 }
 

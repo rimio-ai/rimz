@@ -1,6 +1,28 @@
 use super::*;
 
 #[test]
+fn idle_agent_card_lead_uses_soft_gray() {
+    let idle = agent(
+        "idle-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("resting"),
+    );
+    let snapshot = snapshot_with(Vec::new(), vec![idle]);
+    let theme = Theme::fixed(false);
+    let lines = group_lines(&snapshot, &theme, 0);
+    let lead = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "○")
+        .expect("idle card lead glyph renders as its own span");
+
+    assert_eq!(lead.style, theme.soft());
+}
+
+#[test]
 fn render_agent_capability_and_window() {
     let mut claude = agent(
         "claude-1",

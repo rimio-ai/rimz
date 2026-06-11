@@ -108,16 +108,34 @@ pub(super) fn agent_lead_cell(
     // A blocked `?`/`!` breathes — a slow brightness pulse via
     // `attention_glyph_style` — to pull the eye back to an unanswered row. It
     // never blanks, so the one-cell column never shifts as it swells and fades.
+    let style = agent_card_lead_style(theme, row, status, now, animation_phase);
     Span::styled(
         agent_glyph(theme, status, row.phase(), animation_phase),
-        agent_lead_style(
-            theme,
-            status,
-            row.phase(),
-            age_secs(row.last_activity, now),
-            animation_phase,
-            row.unread,
-        ),
+        style,
+    )
+}
+
+fn agent_card_lead_style(
+    theme: &Theme,
+    row: &SidebarRow,
+    status: AgentStatus,
+    now: Timestamp,
+    animation_phase: u64,
+) -> Style {
+    if status == AgentStatus::Idle {
+        let mut style = theme.soft();
+        if row.unread {
+            style = style.add_modifier(hard_blink(animation_phase));
+        }
+        return style;
+    }
+    agent_lead_style(
+        theme,
+        status,
+        row.phase(),
+        age_secs(row.last_activity, now),
+        animation_phase,
+        row.unread,
     )
 }
 
