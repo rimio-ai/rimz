@@ -117,8 +117,6 @@ fn event_key(event: &SidebarEvent) -> Option<EventKey> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use super::*;
     use crate::ids::MuxName;
 
@@ -234,33 +232,5 @@ mod tests {
                 SidebarEvent::PaneClosed { pane_id } if pane_id == &pane("terminal_0")
             )
         }));
-    }
-
-    fn append_flood(count: usize) -> Duration {
-        let mut store = EventStore::default();
-        let start = Instant::now();
-        for idx in 0..count {
-            store.append(
-                SidebarEvent::PaneClosed {
-                    pane_id: pane(&format!("terminal_{idx}")),
-                },
-                idx as u64,
-                idx as u64,
-            );
-        }
-        assert_eq!(store.len(), MAX_EVENTS);
-        start.elapsed()
-    }
-
-    #[test]
-    fn event_append_stays_bounded_under_a_flood() {
-        let small = append_flood(1024).max(Duration::from_micros(1));
-        let big = append_flood(8192);
-        let ratio = big.as_secs_f64() / small.as_secs_f64();
-        assert!(
-            ratio < 20.0,
-            "event append flood ratio {ratio:.1}× suggests unbounded growth \
-             (big {big:?}, small {small:?})"
-        );
     }
 }

@@ -438,12 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn absent_heartbeat_dir_is_not_fresh() {
-        let h = Harness::new();
-        assert!(!fresh_sidebar_present(&h.runtime));
-    }
-
-    #[test]
     fn liveness_collects_claimed_panes_and_flags_unlocated() {
         use crate::ids::{MuxName, PaneId};
 
@@ -481,41 +475,42 @@ mod tests {
     }
 
     #[test]
-    fn fresh_current_protocol_heartbeat_is_present() {
-        let h = Harness::new();
-        h.write_sidebar("sidebar.fresh.json", SIDEBAR_PROTOCOL_VERSION);
-        assert!(fresh_sidebar_present(&h.runtime));
-    }
+    fn fresh_sidebar_present_accepts_only_current_fresh_readable_heartbeats() {
+        let absent = Harness::new();
+        assert!(!fresh_sidebar_present(&absent.runtime), "absent dir");
 
-    #[test]
-    fn stale_heartbeat_is_ignored() {
-        let h = Harness::new();
-        let path = h.write_sidebar("sidebar.stale.json", SIDEBAR_PROTOCOL_VERSION);
-        let old = SystemTime::now() - SIDEBAR_HEARTBEAT_TTL - Duration::from_secs(1);
-        std::fs::File::open(&path)
-            .expect("open heartbeat")
-            .set_modified(old)
-            .expect("set mtime");
-        assert!(!fresh_sidebar_present(&h.runtime));
-    }
+        let fresh = Harness::new();
+        fresh.write_sidebar("sidebar.fresh.json", SIDEBAR_PROTOCOL_VERSION);
+        assert!(
+            fresh_sidebar_present(&fresh.runtime),
+            "fresh current protocol"
+        );
 
-    #[test]
-    fn wrong_protocol_heartbeat_is_ignored() {
-        let h = Harness::new();
-        h.write_sidebar("sidebar.old.json", "rimz.plugin.v0");
-        assert!(!fresh_sidebar_present(&h.runtime));
-    }
+        let stale = Harness::new();
+        make_stale(&stale.write_sidebar("sidebar.stale.json", SIDEBAR_PROTOCOL_VERSION));
+        assert!(!fresh_sidebar_present(&stale.runtime), "stale heartbeat");
 
-    #[test]
-    fn unreadable_json_heartbeat_is_ignored() {
-        let h = Harness::new();
-        h.ensure_runtime();
+        let old_protocol = Harness::new();
+        old_protocol.write_sidebar("sidebar.old.json", "rimz.plugin.v0");
+        assert!(
+            !fresh_sidebar_present(&old_protocol.runtime),
+            "old protocol"
+        );
+
+        let unreadable = Harness::new();
+        unreadable.ensure_runtime();
         std::fs::write(
-            h.runtime.heartbeat_dir.join("sidebar.invalid.json"),
+            unreadable
+                .runtime
+                .heartbeat_dir
+                .join("sidebar.invalid.json"),
             b"{ not json",
         )
         .expect("write invalid heartbeat");
-        assert!(!fresh_sidebar_present(&h.runtime));
+        assert!(
+            !fresh_sidebar_present(&unreadable.runtime),
+            "unreadable json"
+        );
     }
 
     #[test]

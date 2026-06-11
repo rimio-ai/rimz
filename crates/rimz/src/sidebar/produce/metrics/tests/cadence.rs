@@ -14,7 +14,7 @@ fn metrics_runtime(name: &str) -> (tempfile::TempDir, crate::RuntimePaths) {
 }
 
 #[test]
-fn metric_entry_due_samples_missing_and_changed_entries_immediately() {
+fn metric_entry_due_samples_missing_changed_and_legacy_entries_immediately() {
     let command = Some("zsh".to_owned());
     let entry = fresh_entry(42, 700, "zsh", 1_000);
 
@@ -28,16 +28,11 @@ fn metric_entry_due_samples_missing_and_changed_entries_immediately() {
         !metric_entry_due(Some(&entry), &command, 500),
         "a clock that ran backwards reads fresh rather than busy-looping"
     );
-}
 
-#[test]
-fn metric_entry_due_warms_legacy_sample_versions() {
-    let command = Some("cargo build".to_owned());
     let mut entry = fresh_entry(42, 700, "cargo build", 1_000);
     entry.sample_version = 1;
-
     assert!(
-        metric_entry_due(Some(&entry), &command, 1_001),
+        metric_entry_due(Some(&entry), &Some("cargo build".to_owned()), 1_001),
         "single-process cache entries cannot seed pane-tree rates"
     );
 }

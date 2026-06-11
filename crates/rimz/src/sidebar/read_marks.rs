@@ -187,14 +187,6 @@ mod tests {
     }
 
     #[test]
-    fn missing_dir_reads_empty() {
-        let (_dir, runtime) = runtime();
-        let store = ReadMarkStore::new(runtime, instance("01"));
-
-        assert_eq!(store.load_merged(), ReadMarks::empty());
-    }
-
-    #[test]
     fn writes_and_reads_one_instances_marks() {
         let (_dir, runtime) = runtime();
         let mut store = ReadMarkStore::new(runtime.clone(), instance("01"));
@@ -226,7 +218,11 @@ mod tests {
     }
 
     #[test]
-    fn garbage_files_are_skipped() {
+    fn missing_or_garbage_read_marks_read_empty() {
+        let (_missing_dir, missing_runtime) = runtime();
+        let missing_store = ReadMarkStore::new(missing_runtime, instance("01"));
+        assert_eq!(missing_store.load_merged(), ReadMarks::empty());
+
         let (_dir, runtime) = runtime();
         runtime.ensure_dirs().expect("runtime dirs");
         fs::write(
@@ -235,9 +231,9 @@ mod tests {
         )
         .expect("garbage");
         fs::write(runtime.read_marks_dir.join("notes.txt"), b"not a mark").expect("other file");
-        let store = ReadMarkStore::new(runtime, instance("01"));
+        let garbage_store = ReadMarkStore::new(runtime, instance("01"));
 
-        assert_eq!(store.load_merged(), ReadMarks::empty());
+        assert_eq!(garbage_store.load_merged(), ReadMarks::empty());
     }
 
     #[test]

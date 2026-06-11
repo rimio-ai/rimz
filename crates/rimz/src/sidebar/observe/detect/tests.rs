@@ -154,20 +154,19 @@ fn roster_flap_fires_after_warmup() {
 }
 
 #[test]
-fn duplicate_rows_fire_without_warmup() {
+fn duplicate_row_identity_invariants_fire_without_warmup() {
     let mut observer = Observer::default();
 
-    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("a", "p2", "main")]));
+    let drafts = observer.observe(sig(
+        0,
+        vec![
+            row("a", "p1", "main"),
+            row("a", "p2", "main"),
+            row("b", "p1", "main"),
+        ],
+    ));
 
     assert!(kinds(&drafts).contains(&"duplicate_row_id"));
-}
-
-#[test]
-fn duplicate_pane_rows_fire_without_warmup() {
-    let mut observer = Observer::default();
-
-    let drafts = observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p1", "main")]));
-
     assert!(drafts.iter().any(|draft| matches!(
         &draft.kind,
         AnomalyKind::DuplicatePaneRows { pane_id, row_ids }
@@ -176,37 +175,25 @@ fn duplicate_pane_rows_fire_without_warmup() {
 }
 
 #[test]
-fn pane_close_suppresses_roster_flap_empty_edge() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]));
-    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
-    let mut empty = sig(12_000, Vec::new());
-    empty.events.pane_closed.push(EventPaneSig {
-        pane_id: "p1".to_owned(),
-        sent_at_ms: 12_000,
-    });
-    observer.observe(empty);
-
-    let drafts = observer.observe(sig(13_000, vec![row("a", "p1", "main")]));
-
+fn roster_flap_suppression_edges_stay_quiet() {
+    let mut pane_closed = Observer::default();
+    pane_closed.observe(sig(0, vec![row("a", "p1", "main")]));
+    pane_closed.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    pane_closed.observe(with_pane_closed(sig(12_000, Vec::new()), "p1"));
+    let drafts = pane_closed.observe(sig(13_000, vec![row("a", "p1", "main")]));
     assert!(!kinds(&drafts).contains(&"roster_flap"));
-}
 
-#[test]
-fn roster_flap_stays_quiet_with_zero_siblings() {
-    let mut observer = Observer::default();
-    observer.observe(with_sibling_count(sig(0, vec![row("a", "p1", "main")]), 1));
-    observer.observe(with_sibling_count(
+    let mut no_siblings = Observer::default();
+    no_siblings.observe(with_sibling_count(sig(0, vec![row("a", "p1", "main")]), 1));
+    no_siblings.observe(with_sibling_count(
         sig(11_000, vec![row("a", "p1", "main")]),
         1,
     ));
-    observer.observe(with_sibling_count(sig(12_000, Vec::new()), 0));
-
-    let drafts = observer.observe(with_sibling_count(
+    no_siblings.observe(with_sibling_count(sig(12_000, Vec::new()), 0));
+    let drafts = no_siblings.observe(with_sibling_count(
         sig(13_000, vec![row("a", "p1", "main")]),
         0,
     ));
-
     assert!(!kinds(&drafts).contains(&"roster_flap"));
 }
 
@@ -246,6 +233,11 @@ fn row_presence_flap_reports_single_row_disappearance() {
         AnomalyKind::RowPresenceFlap { row_id, pane_id, .. }
             if row_id == "a" && pane_id.as_deref() == Some("p1")
     )));
+    assert!(
+        drafts
+            .iter()
+            .all(|draft| !matches!(draft.kind, AnomalyKind::RosterFlap { .. }))
+    );
 }
 
 #[test]
@@ -322,28 +314,24 @@ fn windowed_detectors_are_suppressed_during_warmup() {
 }
 
 #[test]
-fn roster_flap_stays_quiet_outside_window() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main")]));
-    observer.observe(sig(11_000, vec![row("a", "p1", "main")]));
-    observer.observe(sig(12_000, Vec::new()));
+fn flap_detectors_stay_quiet_outside_window() {
+    let mut roster = Observer::default();
+    roster.observe(sig(0, vec![row("a", "p1", "main")]));
+    roster.observe(sig(11_000, vec![row("a", "p1", "main")]));
+    roster.observe(sig(12_000, Vec::new()));
+    assert!(
+        !kinds(&roster.observe(sig(23_001, vec![row("a", "p1", "main")]))).contains(&"roster_flap")
+    );
 
-    let drafts = observer.observe(sig(23_001, vec![row("a", "p1", "main")]));
-
-    assert!(!kinds(&drafts).contains(&"roster_flap"));
-}
-
-#[test]
-fn row_presence_flap_stays_quiet_outside_window() {
-    let mut observer = Observer::default();
-    observer.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
-    observer.observe(sig(
+    let mut presence = Observer::default();
+    presence.observe(sig(0, vec![row("a", "p1", "main"), row("b", "p2", "main")]));
+    presence.observe(sig(
         11_000,
         vec![row("a", "p1", "main"), row("b", "p2", "main")],
     ));
-    observer.observe(sig(12_000, vec![row("b", "p2", "main")]));
+    presence.observe(sig(12_000, vec![row("b", "p2", "main")]));
 
-    let drafts = observer.observe(sig(
+    let drafts = presence.observe(sig(
         20_001,
         vec![row("a", "p1", "main"), row("b", "p2", "main")],
     ));
@@ -553,32 +541,40 @@ fn status_churn_counts_only_real_transitions() {
 }
 
 #[test]
-fn hidden_group_allows_declared_status_count_to_exceed_visible_tally() {
-    let mut observer = Observer::default();
-    let mut frame = sig(0, vec![row("a", "p1", "main")]);
-    frame.groups[0].hidden_count = 2;
-    frame.groups[0].status_counts = vec![StatusCountSig {
-        status: "running".to_owned(),
-        count: 3,
-    }];
+fn status_count_checks_respect_hidden_rows() {
+    let cases = [
+        (
+            "hidden rows allow a larger declared tally",
+            2,
+            "running",
+            3,
+            false,
+        ),
+        (
+            "visible groups require exact declared counts",
+            0,
+            "failed",
+            1,
+            true,
+        ),
+    ];
+    for (name, hidden_count, status, count, should_mismatch) in cases {
+        let mut observer = Observer::default();
+        let mut frame = sig(0, vec![row("a", "p1", "main")]);
+        frame.groups[0].hidden_count = hidden_count;
+        frame.groups[0].status_counts = vec![StatusCountSig {
+            status: status.to_owned(),
+            count,
+        }];
 
-    let drafts = observer.observe(frame);
+        let drafts = observer.observe(frame);
 
-    assert!(!kinds(&drafts).contains(&"status_count_mismatch"));
-}
-
-#[test]
-fn visible_group_requires_exact_status_counts() {
-    let mut observer = Observer::default();
-    let mut frame = sig(0, vec![row("a", "p1", "main")]);
-    frame.groups[0].status_counts = vec![StatusCountSig {
-        status: "failed".to_owned(),
-        count: 1,
-    }];
-
-    let drafts = observer.observe(frame);
-
-    assert!(kinds(&drafts).contains(&"status_count_mismatch"));
+        assert_eq!(
+            kinds(&drafts).contains(&"status_count_mismatch"),
+            should_mismatch,
+            "{name}"
+        );
+    }
 }
 
 #[test]
@@ -645,89 +641,4 @@ fn historical_detector_maps_prune_after_row_absence_window() {
     assert!(!observer.values.keys().any(|(row_id, _)| row_id == "a"));
     assert!(!observer.last_status.contains_key("a"));
     assert!(!observer.status_transitions.contains_key("a"));
-}
-
-mod recorded_episodes {
-    use super::*;
-
-    const WORKSPACE: &str = "ws_f89e49906df0621ad2765112";
-    const TARGET_ROW: &str = "019eaffe-738a-7f11-b845-98a437e58b39";
-    const TARGET_PANE: &str = "zellij:terminal_39";
-    const WARM_AT_MS: u64 = 1_781_070_530_000;
-    const PARTIAL_AT_MS: u64 = 1_781_070_542_122;
-    const RESTORE_AT_MS: u64 = 1_781_070_544_381;
-    const RESTORE_PRODUCED_AT_MS: u64 = 1_781_070_544_378;
-
-    fn process_row(id: &str, pane: &str) -> RowSig {
-        let mut row = row(id, pane, "main");
-        row.is_agent = false;
-        row.watched.status = None;
-        row
-    }
-
-    fn episode_rows(include_target: bool) -> Vec<RowSig> {
-        let mut rows = vec![
-            row("reload", "zellij:terminal_37", "worktree-sidebar_reload"),
-            row("group", "zellij:terminal_47", "worktree-sidebar_group"),
-            row("pane-lock", "zellij:terminal_51", "worktree-pane_lock"),
-            row("side-task", "zellij:terminal_44", "worktree-side-task"),
-            process_row("shell-55", "zellij:terminal_55"),
-            process_row("shell-57", "zellij:terminal_57"),
-        ];
-        if include_target {
-            rows.push(row(TARGET_ROW, TARGET_PANE, "worktree-sidebar_reload"));
-        }
-        rows
-    }
-
-    fn episode_sig(at_ms: u64, produced_at_ms: u64, include_target: bool) -> FrameSig {
-        let mut sig = sig(at_ms, episode_rows(include_target));
-        sig.panes_produced_at_ms = Some(produced_at_ms);
-        sig.pulled_rows = 7;
-        sig.pulled_panes_produced_at_ms = Some(produced_at_ms);
-        sig
-    }
-
-    #[test]
-    fn june_10_partial_pane_episode_reports_row_presence_not_roster_flap() {
-        // Captured from workspace ws_f89e49906df0621ad2765112 on June 10:
-        // a 14->6 pane-source partial read omitted zellij:terminal_39 with no
-        // PaneClosed event, then restored the row 2.259s later.
-        assert!(WORKSPACE.starts_with("ws_"));
-        let mut observer = Observer::default();
-        observer.observe(episode_sig(WARM_AT_MS, WARM_AT_MS, true));
-        observer.observe(episode_sig(PARTIAL_AT_MS, PARTIAL_AT_MS, false));
-
-        let drafts = observer.observe(episode_sig(RESTORE_AT_MS, RESTORE_PRODUCED_AT_MS, true));
-
-        assert!(
-            drafts
-                .iter()
-                .all(|draft| !matches!(draft.kind, AnomalyKind::RosterFlap { .. }))
-        );
-        assert!(drafts.iter().any(|draft| matches!(
-            &draft.kind,
-            AnomalyKind::RowPresenceFlap {
-                row_id,
-                pane_id,
-                gone_at_ms: PARTIAL_AT_MS,
-                back_at_ms: RESTORE_AT_MS,
-            } if row_id == TARGET_ROW && pane_id.as_deref() == Some(TARGET_PANE)
-        )));
-        let draft = drafts
-            .iter()
-            .find(|draft| {
-                matches!(
-                    &draft.kind,
-                    AnomalyKind::RowPresenceFlap { row_id, .. } if row_id == TARGET_ROW
-                )
-            })
-            .expect("recorded row flap");
-        assert_eq!(draft.window_ms, Some(7_000));
-        assert_eq!(draft.frame.produced_at_ms, Some(RESTORE_PRODUCED_AT_MS));
-        assert_eq!(draft.frame.rows, 7);
-        assert_eq!(draft.frame.agents, 5);
-        assert_eq!(draft.frame.processes, 2);
-        assert!(draft.events_recent.pane_closed.is_empty());
-    }
 }

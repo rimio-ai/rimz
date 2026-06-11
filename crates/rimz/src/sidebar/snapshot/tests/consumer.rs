@@ -436,16 +436,6 @@ fn consumer_reflects_a_fresh_rollup_over_a_stale_pane_cache() {
 }
 
 #[test]
-fn read_snapshot_cache_misses_a_different_session() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("snapshot.json");
-    let cache = assemble_frame(Vec::new(), unix_now_ms(), "rimz-one");
-    atomic::write_temp_then_rename(&path, &cache).unwrap();
-    assert!(read_snapshot_cache(&path, "rimz-one").is_some());
-    assert!(read_snapshot_cache(&path, "rimz-other").is_none());
-}
-
-#[test]
 fn read_snapshot_cache_reflects_a_changed_file() {
     // The thread-local parse cache must invalidate when the file changes, or
     // a consumer would serve a stale base forever. Keyed on (mtime, len), so

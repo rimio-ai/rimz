@@ -41,10 +41,7 @@ fn unique_foreground_match_backfills_the_pane_root() {
     let mut panes = vec![pane("terminal_4", Some("htop"), Some("/repo"))];
     backfill(&mut panes, &procs, &[]);
     assert_eq!(panes[0].pane_pid, Some(200));
-}
 
-#[test]
-fn unique_match_skips_the_cwd_check() {
     // An agent that chdir'd into its worktree sits in another directory
     // than its pane reports (`claude --worktree`), so a unique cmdline
     // match must bind without a cwd comparison.

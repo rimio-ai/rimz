@@ -315,7 +315,7 @@ mod tests {
     }
 
     #[test]
-    fn cached_version_survives_a_missing_probe_version() {
+    fn cached_versions_survive_missing_probe_versions_for_active_providers() {
         let mut previous = BTreeMap::new();
         previous.insert(
             "pi".to_owned(),
@@ -344,10 +344,7 @@ mod tests {
             Some("0.78.0"),
             "a refreshed account with no version keeps the last known version"
         );
-    }
 
-    #[test]
-    fn cached_version_only_enriches_active_providers() {
         let mut previous = BTreeMap::new();
         previous.insert(
             "pi".to_owned(),

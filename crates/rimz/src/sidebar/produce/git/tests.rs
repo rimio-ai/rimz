@@ -79,14 +79,11 @@ fn parse_status_entries_reads_clean_dirty_and_untracked() {
         );
     assert!(!status.clean);
     assert_eq!(status.untracked_added, 7);
-}
 
-#[test]
-fn parse_status_entries_skips_a_rename_source_token() {
     // A rename entry — staged (`R `) or detected in the worktree column
     // (` R`) — carries its source path as a second NUL token; it must not
     // read as an entry (or an untracked path) of its own.
-    let status = parse_status_entries(
+    let renamed = parse_status_entries(
         "R  new.rs\0old.rs\0 R moved.rs\0was.rs\0?? x.txt\0",
         |path| {
             assert_eq!(path, "x.txt");
@@ -94,8 +91,8 @@ fn parse_status_entries_skips_a_rename_source_token() {
         },
     );
 
-    assert!(!status.clean);
-    assert_eq!(status.untracked_added, 1);
+    assert!(!renamed.clean);
+    assert_eq!(renamed.untracked_added, 1);
 }
 
 #[test]

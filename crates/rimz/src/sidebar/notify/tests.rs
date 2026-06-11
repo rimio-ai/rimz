@@ -99,28 +99,20 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
 }
 
 #[test]
-fn first_observation_seeds_without_notifications() {
-    let mut state = NotificationState::default();
-    let out = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-        &prefs(),
-        1,
-    );
-
-    assert!(out.is_empty());
-}
-
-#[test]
 fn configured_transition_edges_fire() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {
         triggers: vec![crate::config::NotificationTrigger::Failed],
         ..prefs()
     };
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-        &prefs,
-        1,
+    assert!(
+        state
+            .evaluate(
+                &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
+                &prefs,
+                1,
+            )
+            .is_empty()
     );
 
     let waiting = state.evaluate(

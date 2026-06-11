@@ -2,10 +2,8 @@ use super::*;
 
 // ── Activity-tiered git freshness ───────────────────────────────────────────────
 
-/// The same entry holds different verdicts under the two tiers: stale on the
-/// fast TTL is still fresh on the idle one, boundary-exact on both.
 #[test]
-fn diff_stats_entry_freshness_is_ttl_parameterized() {
+fn git_cache_freshness_boundaries_are_inclusive() {
     let entry = DiffStatsCacheEntry::new(1_000, None, None, None, None, None, None);
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
@@ -17,10 +15,7 @@ fn diff_stats_entry_freshness_is_ttl_parameterized() {
     // The tiering's whole point: a hot-stale entry is idle-fresh, so an idle
     // worktree skips the forks a hot one pays.
     assert!(entry.is_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
-}
 
-#[test]
-fn worktree_roots_cache_expires_after_roots_ttl() {
     let cache = WorktreeRootsCache {
         refreshed_at_ms: 1_000,
         roots: Vec::new(),

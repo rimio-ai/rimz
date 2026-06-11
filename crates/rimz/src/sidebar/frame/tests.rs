@@ -56,11 +56,7 @@ fn contested_focus_without_better_signal_uses_lowest_candidate_and_reports() {
     assert!(projected[0].is_focused);
     assert!(!projected[1].is_focused);
     assert!(projected[2].is_focused);
-}
-
-#[test]
-fn contested_focus_tiebreak_orders_numeric_pane_suffixes() {
-    let (frame, diagnostics) = assemble_frame_with_diagnostics(
+    let (numeric, diagnostics) = assemble_frame_with_diagnostics(
         vec![
             pane("terminal_10", "tab_0", Some("zsh"), true),
             pane("terminal_9", "tab_0", Some("cargo build"), true),
@@ -70,7 +66,7 @@ fn contested_focus_tiebreak_orders_numeric_pane_suffixes() {
     );
 
     assert_eq!(
-        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        numeric.tabs[0].active_pane.as_ref().map(PaneId::raw),
         Some("terminal_9")
     );
     assert!(matches!(
@@ -338,77 +334,55 @@ fn unchanged_command_repairs_raced_nulls_and_keeps_previous() {
 }
 
 #[test]
-fn active_command_null_fresh_no_pid_does_not_backfill() {
+fn null_fresh_command_backfill_matrix_matches_process_identity() {
     let start: Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
-    let mut prior = assemble_frame(
-        vec![pane("terminal_1", "tab_0", Some("git push"), false)],
-        1,
-        "rimz-test",
-    );
-    prior.tabs[0].panes[0].current.spawn_command = Some("zsh".to_owned());
-    prior.tabs[0].panes[0].current.started_at = Some(start);
-    let mut fresh = assemble_frame(
-        vec![PaneRef {
-            cwd: None,
-            ..pane("terminal_1", "tab_0", None, false)
-        }],
-        2,
-        "rimz-test",
-    );
+    for (name, prior_command, prior_pid, fresh_pid, expected_command) in [
+        (
+            "active command without fresh pid",
+            "git push",
+            None,
+            None,
+            None,
+        ),
+        (
+            "active command with same pid",
+            "cargo build",
+            Some(42),
+            Some(42),
+            Some("cargo build"),
+        ),
+        ("idle command", "zsh", None, None, Some("zsh")),
+    ] {
+        let mut prior = assemble_frame(
+            vec![pane("terminal_1", "tab_0", Some(prior_command), false)],
+            1,
+            "rimz-test",
+        );
+        prior.tabs[0].panes[0].current.pid = prior_pid;
+        prior.tabs[0].panes[0].current.spawn_command = Some("zsh".to_owned());
+        prior.tabs[0].panes[0].current.started_at = Some(start);
+        let mut fresh = assemble_frame(
+            vec![PaneRef {
+                cwd: None,
+                pane_pid: fresh_pid,
+                ..pane("terminal_1", "tab_0", None, false)
+            }],
+            2,
+            "rimz-test",
+        );
 
-    fresh.rotate_against_prior(&prior);
+        fresh.rotate_against_prior(&prior);
 
-    let state = &fresh.tabs[0].panes[0];
-    assert_eq!(state.current.command, None);
-    assert_eq!(state.current.spawn_command.as_deref(), Some("zsh"));
-    assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"));
-    assert_eq!(state.current.started_at, Some(start));
-}
-
-#[test]
-fn active_command_null_fresh_same_pid_backfills() {
-    let mut prior = assemble_frame(
-        vec![pane("terminal_1", "tab_0", Some("cargo build"), false)],
-        1,
-        "rimz-test",
-    );
-    prior.tabs[0].panes[0].current.pid = Some(42);
-    let mut fresh = assemble_frame(
-        vec![PaneRef {
-            pane_pid: Some(42),
-            ..pane("terminal_1", "tab_0", None, false)
-        }],
-        2,
-        "rimz-test",
-    );
-
-    fresh.rotate_against_prior(&prior);
-
-    assert_eq!(
-        fresh.tabs[0].panes[0].current.command.as_deref(),
-        Some("cargo build")
-    );
-}
-
-#[test]
-fn idle_command_null_fresh_always_backfills() {
-    let prior = assemble_frame(
-        vec![pane("terminal_1", "tab_0", Some("zsh"), false)],
-        1,
-        "rimz-test",
-    );
-    let mut fresh = assemble_frame(
-        vec![pane("terminal_1", "tab_0", None, false)],
-        2,
-        "rimz-test",
-    );
-
-    fresh.rotate_against_prior(&prior);
-
-    assert_eq!(
-        fresh.tabs[0].panes[0].current.command.as_deref(),
-        Some("zsh")
-    );
+        let state = &fresh.tabs[0].panes[0];
+        assert_eq!(state.current.command.as_deref(), expected_command, "{name}");
+        assert_eq!(
+            state.current.spawn_command.as_deref(),
+            Some("zsh"),
+            "{name}"
+        );
+        assert_eq!(state.current.cwd.as_deref(), Some("/repo/main"), "{name}");
+        assert_eq!(state.current.started_at, Some(start), "{name}");
+    }
 }
 
 #[test]
@@ -492,7 +466,7 @@ fn own_view_counts_only_siblings_sharing_the_tab() {
 }
 
 #[test]
-fn own_view_marks_when_the_sidebar_itself_is_active() {
+fn own_view_edge_cases_are_explicit() {
     let view = own_view(
         "terminal_1",
         vec![
@@ -504,23 +478,17 @@ fn own_view_marks_when_the_sidebar_itself_is_active() {
 
     assert!(view.own_is_active);
     assert_eq!(view.active_pane_id, None);
-}
 
-#[test]
-fn own_view_is_none_when_own_pane_is_absent() {
     // A view the caller cannot find itself in is unknowable — never close.
     let panes = vec![pane("terminal_1", "tab_0", Some("zsh"), true)];
     assert!(own_view("terminal_404", panes).is_none());
-}
 
-#[test]
-fn own_view_picks_the_tab_active_pane_without_a_client() {
     // The tab has an active pane but no client is looking at it. The
     // baseline is the tab's active pane, defined regardless of where any
     // client is — so the sidebar in an unviewed tab still points at the
     // pane the user would land on.
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_53");
-    let view = own_view(
+    let unfocused_view = own_view(
         "terminal_52",
         vec![
             pane("terminal_52", "tab_11", Some("zsh"), false),
@@ -529,8 +497,8 @@ fn own_view_picks_the_tab_active_pane_without_a_client() {
     )
     .expect("own pane is present");
 
-    assert!(!view.own_is_active);
-    assert_eq!(view.active_pane_id, Some(active));
+    assert!(!unfocused_view.own_is_active);
+    assert_eq!(unfocused_view.active_pane_id, Some(active));
 }
 
 /// A pane fixture with a view name, so a test can build the `rimzd` daemon
@@ -543,10 +511,10 @@ fn pane_named(raw: &str, view: &str, command: &str, view_name: &str) -> PaneRef 
 }
 
 #[test]
-fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
+fn own_view_daemon_detection_matches_host_panes() {
     // No view_name on these fixtures: the daemon view is recognised by the
     // host command markers alone, covering builds that omit tab names.
-    let view = own_view(
+    let zellij = own_view(
         "terminal_0",
         vec![
             pane("terminal_0", "tab_0", Some("rimz-sidebar"), false),
@@ -565,14 +533,11 @@ fn own_view_is_daemon_true_in_the_rimzd_view_zellij() {
         ],
     )
     .expect("own pane present");
-    assert!(view.own_view_is_daemon);
-}
+    assert!(zellij.own_view_is_daemon);
 
-#[test]
-fn own_view_is_daemon_true_in_the_rimzd_view_tmux() {
     // tmux: a host pane is recognised by the window-name fallback even when
     // its command carries no marker.
-    let view = own_view(
+    let tmux = own_view(
         "terminal_0",
         vec![
             pane_named("terminal_0", "rimzd", "rimz-sidebar", "rimzd"),
@@ -580,12 +545,9 @@ fn own_view_is_daemon_true_in_the_rimzd_view_tmux() {
         ],
     )
     .expect("own pane present");
-    assert!(view.own_view_is_daemon);
-}
+    assert!(tmux.own_view_is_daemon);
 
-#[test]
-fn own_view_is_daemon_false_in_a_working_view() {
-    let view = own_view(
+    let working = own_view(
         "terminal_0",
         vec![
             pane("terminal_0", "tab_1", Some("rimz-sidebar"), false),
@@ -593,5 +555,5 @@ fn own_view_is_daemon_false_in_a_working_view() {
         ],
     )
     .expect("own pane present");
-    assert!(!view.own_view_is_daemon);
+    assert!(!working.own_view_is_daemon);
 }

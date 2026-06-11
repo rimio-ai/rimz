@@ -49,23 +49,14 @@ fn account_cache_missing_pi_version_forces_refresh() {
     );
 }
 
-/// A window whose reset instant is still in the future projects unchanged —
-/// the last-known drained reading stands while the budget is genuinely spent.
 #[test]
-fn idle_window_before_reset_shows_last_known() {
+fn idle_window_projection_ages_only_known_elapsed_windows() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let future = Timestamp::from_second(2_000_010_000).unwrap();
     let cached = rl_window(80, Some(future));
     let projected = project_idle_window(cached.clone(), now);
     assert_eq!(projected, cached, "before reset the cached reading stands");
-}
 
-/// Once `now` reaches the reset instant with no fresh reading, the window has
-/// refilled: it projects to full (0% used) with its reset rolled its own
-/// duration forward, so the countdown still reads sensibly.
-#[test]
-fn idle_window_past_reset_refills_to_full_and_rolls_forward() {
-    let now = Timestamp::from_second(2_000_000_000).unwrap();
     let passed = Timestamp::from_second(1_999_990_000).unwrap();
     let projected = project_idle_window(rl_window(95, Some(passed)), now);
     assert_eq!(projected.used_percentage, Some(0), "a reset window is full");
@@ -74,14 +65,7 @@ fn idle_window_past_reset_refills_to_full_and_rolls_forward() {
         now.checked_add(SignedDuration::from_secs(300 * 60)).ok(),
         "the reset rolls one window length (300 min) forward from now"
     );
-}
 
-/// A cached window that can't be aged — no reset instant, or a passed reset
-/// with no known duration to roll by — projects as-is.
-#[test]
-fn idle_window_unageable_shows_as_is() {
-    let now = Timestamp::from_second(2_000_000_000).unwrap();
-    let passed = Timestamp::from_second(1_999_990_000).unwrap();
     let undated = rl_window(40, None);
     assert_eq!(project_idle_window(undated.clone(), now), undated);
     let no_duration = RateLimitWindow {

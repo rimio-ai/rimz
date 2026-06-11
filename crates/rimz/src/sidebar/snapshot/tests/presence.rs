@@ -1,16 +1,13 @@
 use super::*;
 
 #[test]
-fn presence_event_mode_boundary_is_inclusive() {
+fn presence_event_mode_selects_ttl_at_boundary() {
     let fresh_edge = PRESENCE_STAMP_FRESH.as_millis() as u64;
     assert!(presence_event_mode(Some(0)));
     assert!(presence_event_mode(Some(fresh_edge)));
     assert!(!presence_event_mode(Some(fresh_edge + 1)));
     assert!(!presence_event_mode(None), "absent stamp is poll mode");
-}
 
-#[test]
-fn effective_pane_ttl_selects_by_mode() {
     assert_eq!(effective_pane_ttl(Some(0)), EVENT_PANE_TTL);
     assert_eq!(
         effective_pane_ttl(Some(PRESENCE_STAMP_FRESH.as_millis() as u64 + 1)),
@@ -40,32 +37,27 @@ fn presence_stamp_round_trips_through_the_runtime_root() {
 }
 
 #[test]
-fn presence_stamp_from_a_future_clock_saturates_to_fresh() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-
+fn presence_stamp_age_handles_clock_skew_and_bad_files() {
+    let future_dir = tempfile::tempdir().unwrap();
+    let future_workspace = WorkspaceId::from_project_root(future_dir.path());
+    let future_runtime = RuntimePaths::under(future_workspace, future_dir.path()).unwrap();
     let future = PresenceStamp {
         written_at_ms: unix_now_ms() + 60_000,
     };
-    atomic::write_temp_then_rename_cache(&presence_stamp_path(&runtime), &future).unwrap();
+    atomic::write_temp_then_rename_cache(&presence_stamp_path(&future_runtime), &future).unwrap();
     assert_eq!(
-        presence_stamp_age_ms(&runtime),
+        presence_stamp_age_ms(&future_runtime),
         Some(0),
         "a stamp ahead of this reader's clock saturates to age 0, never poll mode"
     );
-}
 
-#[test]
-fn unreadable_presence_stamp_reads_poll_mode() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
-
-    std::fs::create_dir_all(&runtime.root).unwrap();
-    std::fs::write(presence_stamp_path(&runtime), b"{ not json").unwrap();
-    assert_eq!(presence_stamp_age_ms(&runtime), None);
-    assert!(!presence_event_mode(presence_stamp_age_ms(&runtime)));
+    let bad_dir = tempfile::tempdir().unwrap();
+    let bad_workspace = WorkspaceId::from_project_root(bad_dir.path());
+    let bad_runtime = RuntimePaths::under(bad_workspace, bad_dir.path()).unwrap();
+    std::fs::create_dir_all(&bad_runtime.root).unwrap();
+    std::fs::write(presence_stamp_path(&bad_runtime), b"{ not json").unwrap();
+    assert_eq!(presence_stamp_age_ms(&bad_runtime), None);
+    assert!(!presence_event_mode(presence_stamp_age_ms(&bad_runtime)));
 }
 
 fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {
@@ -93,7 +85,7 @@ fn event_mode_serves_a_cache_poll_mode_would_reject() {
 }
 
 #[test]
-fn forced_pane_freshness_overrides_event_mode() {
+fn forced_pane_freshness_uses_observed_topology_time() {
     let now = unix_now_ms();
     let five_seconds_old = cache_produced_at(now - 5_000);
     assert!(
@@ -104,14 +96,9 @@ fn forced_pane_freshness_overrides_event_mode() {
         snapshot_cache_is_fresh(&five_seconds_old, now, Some(now - 5_000), EVENT_PANE_TTL),
         "a cache at the floor is usable"
     );
-}
 
-#[test]
-fn forced_pane_freshness_uses_observed_time_not_publish_time() {
-    let now = unix_now_ms();
     let mut frame = cache_produced_at(now);
     frame.observed_at_ms = Some(now - 5_000);
-
     assert!(
         !snapshot_cache_is_fresh(&frame, now, Some(now - 1_000), EVENT_PANE_TTL),
         "a frame freshly republished from stale topology must not satisfy a post-event floor"
