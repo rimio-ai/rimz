@@ -24,32 +24,7 @@ fn log_sync_stamp(h: &Harness) -> std::path::PathBuf {
 }
 
 #[test]
-fn warm_event_append_performs_zero_fsyncs() {
-    let h = Harness::new();
-    // The first append pays the cold costs once: the parent-dir sync that
-    // makes the log's existence durable, and the first group sync.
-    h.ledger
-        .append_event(&lifecycle(&h, "warmup"))
-        .expect("warmup");
-
-    // Pin the debounce stamp fresh so the measured append sits mid-interval
-    // even on a stalled runner.
-    std::fs::write(log_sync_stamp(&h), b"").expect("touch stamp");
-    let before = fsync_count();
-    h.ledger
-        .append_event(&lifecycle(&h, "steady"))
-        .expect("steady append");
-    assert_eq!(
-        fsync_count() - before,
-        0,
-        "a steady-state event append is write()-only: the frame rides the \
-         page cache until the next due group sync, and the publish writes \
-         cache-class files"
-    );
-}
-
-#[test]
-fn warm_feed_push_and_resolve_perform_zero_fsyncs() {
+fn warm_append_push_and_resolve_perform_zero_fsyncs() {
     // The full hot decision path — supersede scan, feed write, event
     // append, resolve CAS, terminal relocation, checkpoint publish — is
     // fsync-free: feed files are cache-class (rename atomicity carries the
@@ -64,6 +39,9 @@ fn warm_feed_push_and_resolve_perform_zero_fsyncs() {
     // Pin the group-sync debounce mid-interval for the measured block.
     std::fs::write(log_sync_stamp(&h), b"").expect("touch stamp");
     let before = fsync_count();
+    h.ledger
+        .append_event(&lifecycle(&h, "steady"))
+        .expect("steady append");
     let item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Bridge,
@@ -86,8 +64,8 @@ fn warm_feed_push_and_resolve_perform_zero_fsyncs() {
     assert_eq!(
         fsync_count() - before,
         0,
-        "a warm push + resolve cycle performs no fsync anywhere — critical \
-         section or tail"
+        "steady-state appends and a warm push + resolve cycle perform no \
+         fsync anywhere — critical section or tail"
     );
 }
 

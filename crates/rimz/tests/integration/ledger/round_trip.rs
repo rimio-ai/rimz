@@ -154,7 +154,9 @@ fn native_ui_requests_are_dismiss_only() {
 fn timeout_marks_script_item_and_late_answer_is_audit_only() {
     let h = crate::common::Harness::new();
 
-    let item = FeedItem::new(
+    let opus: ResolverId = "opus-policy".parse().unwrap();
+    let slack: ResolverId = "slack-on-call".parse().unwrap();
+    let mut item = FeedItem::new(
         h.workspace_id.clone(),
         Surface::Script,
         FeedKind::Question,
@@ -162,6 +164,10 @@ fn timeout_marks_script_item_and_late_answer_is_audit_only() {
         "rimz",
         "cli",
     );
+    item.activate_resolver_chain(vec![
+        chain_step(&opus, 10, 30_000),
+        chain_step(&slack, 20, 300_000),
+    ]);
     let request_id = item.request_id.clone();
     h.ledger.push_feed_item(&item, "rimz-test").expect("push");
 
@@ -175,6 +181,14 @@ fn timeout_marks_script_item_and_late_answer_is_audit_only() {
     let timed_out = h.ledger.load_feed_item(&request_id).expect("reload");
     assert_eq!(timed_out.status, FeedStatus::TimedOut);
     assert!(timed_out.resolution.is_none());
+    assert_eq!(timed_out.chain[0].state, ResolverStepState::BudgetElapsed);
+    assert_eq!(
+        timed_out.chain[0].reason.as_deref(),
+        Some("bridge_cap_elapsed")
+    );
+    assert_eq!(timed_out.chain[1].state, ResolverStepState::Queued);
+    assert!(timed_out.chain_active_resolver.is_none());
+    assert!(timed_out.chain_active_until.is_none());
 
     let late = h
         .ledger
@@ -313,32 +327,6 @@ fn abstain_with_no_next_resolver_exhausts_chain() {
     assert_eq!(after.chain[0].state, ResolverStepState::Abstained);
     // Feed item remains pending so the bridge can fall through to its cap.
     assert_eq!(after.status, FeedStatus::Pending);
-}
-
-#[test]
-fn timeout_marks_active_resolver_budget_elapsed() {
-    let h = crate::common::Harness::new();
-    let opus: ResolverId = "opus-policy".parse().unwrap();
-    let slack: ResolverId = "slack-on-call".parse().unwrap();
-    let mut item = bridge_permission(&h, "timeout?");
-    item.activate_resolver_chain(vec![
-        chain_step(&opus, 10, 30_000),
-        chain_step(&slack, 20, 300_000),
-    ]);
-    let request_id = item.request_id.clone();
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    h.ledger
-        .mark_feed_item_timed_out(&request_id, "rimz-test", AbandonReason::BridgeCapElapsed)
-        .expect("timeout");
-
-    let after = h.ledger.load_feed_item(&request_id).expect("reload");
-    assert_eq!(after.status, FeedStatus::TimedOut);
-    assert_eq!(after.chain[0].state, ResolverStepState::BudgetElapsed);
-    assert_eq!(after.chain[0].reason.as_deref(), Some("bridge_cap_elapsed"));
-    assert_eq!(after.chain[1].state, ResolverStepState::Queued);
-    assert!(after.chain_active_resolver.is_none());
-    assert!(after.chain_active_until.is_none());
 }
 
 #[test]

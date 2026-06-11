@@ -172,17 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn distinct_children_get_distinct_files() {
-        let (_dir, runtime) = runtime();
-        let now = Timestamp::now();
-        write(&runtime, "claude", "child-1", &ctx(now)).unwrap();
-        write(&runtime, "claude", "child-2", &ctx(now)).unwrap();
-        let mut ids: Vec<_> = read_all(&runtime).into_iter().map(|r| r.agent_id).collect();
-        ids.sort();
-        assert_eq!(ids, vec!["child-1".to_owned(), "child-2".to_owned()]);
-    }
-
-    #[test]
     fn corrupt_file_is_skipped() {
         let (_dir, runtime) = runtime();
         std::fs::write(

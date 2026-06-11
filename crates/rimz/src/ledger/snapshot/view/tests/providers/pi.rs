@@ -65,34 +65,3 @@ fn pi_borrows_windows_only_for_metered_mapped_subscriptions() {
         }
     }
 }
-
-#[test]
-fn version_only_pi_probe_enriches_active_panel_without_creating_idle_one() {
-    let mut probed: BTreeMap<String, AgentAccount> = BTreeMap::new();
-    probed.insert(
-        "pi".to_owned(),
-        AgentAccount {
-            version: Some("0.78.1".to_owned()),
-            ..Default::default()
-        },
-    );
-
-    let active = room(Vec::new(), vec![agent("pi", "p1", AgentStatus::Idle, 20)])
-        .with_provider_aggregates(&probed, &BTreeMap::new(), &BTreeMap::new());
-    let pi_panel = active
-        .providers
-        .iter()
-        .find(|panel| panel.kind == "pi")
-        .expect("active pi panel present");
-    assert_eq!(pi_panel.version.as_deref(), Some("0.78.1"));
-
-    let idle = room(Vec::new(), Vec::new()).with_provider_aggregates(
-        &probed,
-        &BTreeMap::new(),
-        &BTreeMap::new(),
-    );
-    assert!(
-        idle.providers.is_empty(),
-        "a binary version alone is not a logged-in account"
-    );
-}

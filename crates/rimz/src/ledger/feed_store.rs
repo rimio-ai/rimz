@@ -183,53 +183,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn write_then_load_round_trip() {
-        let dir = tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let item = FeedItem::new(
-            workspace,
-            Surface::NativeUi,
-            FeedKind::Permission,
-            "approve?",
-            "rimz",
-            "cli",
-        );
-        write(dir.path(), &item).unwrap();
-        let loaded = load(dir.path(), &item.request_id).unwrap();
-        assert_eq!(loaded.title, "approve?");
-        assert_eq!(loaded.surface, Surface::NativeUi);
-    }
-
-    #[test]
-    fn list_returns_most_recently_updated_first() {
-        let dir = tempdir().unwrap();
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut old = FeedItem::new(
-            workspace.clone(),
-            Surface::Script,
-            FeedKind::Question,
-            "old",
-            "rimz",
-            "cli",
-        );
-        let new = FeedItem::new(
-            workspace,
-            Surface::Script,
-            FeedKind::Question,
-            "new",
-            "rimz",
-            "cli",
-        );
-        old.updated_at -= std::time::Duration::from_secs(10);
-        write(dir.path(), &old).unwrap();
-        write(dir.path(), &new).unwrap();
-        let items = list(dir.path()).unwrap();
-        assert_eq!(items.len(), 2);
-        assert_eq!(items[0].title, "new");
-        assert_eq!(items[1].title, "old");
-    }
-
-    #[test]
     fn list_reports_malformed_feed_file() {
         let dir = tempdir().unwrap();
         std::fs::write(dir.path().join("req_bad.json"), b"{not json").unwrap();

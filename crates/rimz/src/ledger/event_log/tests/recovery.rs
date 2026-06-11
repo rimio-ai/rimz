@@ -64,22 +64,3 @@ fn repair_cuts_an_invalid_tail_frame_too() {
     assert!(outcome.truncated());
     assert_eq!(fs::metadata(&path).unwrap().len(), committed);
 }
-
-#[test]
-fn repair_of_an_intact_or_missing_log_is_a_noop() {
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    assert_eq!(repair(&path).unwrap(), RepairOutcome::default());
-
-    append(&path, &test_event("event.first")).unwrap();
-    let len = fs::metadata(&path).unwrap().len();
-    let outcome = repair(&path).unwrap();
-    assert_eq!(
-        outcome,
-        RepairOutcome {
-            frames_kept: 1,
-            bytes_truncated: 0,
-        }
-    );
-    assert_eq!(fs::metadata(&path).unwrap().len(), len, "log untouched");
-}

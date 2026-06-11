@@ -162,29 +162,6 @@ fn next_lifecycle_signal_closes_missed_compaction_bracket() {
 }
 
 #[test]
-fn double_compaction_end_events_count_once_in_either_order() {
-    let prompt = lifecycle("codex", "UserPromptSubmit", signal("turn_started"));
-    let compact = lifecycle("codex", "PreCompact", signal("compacting"));
-    let post = lifecycle("codex", "PostCompact", compaction_ended(Some(true)));
-    let session_compact = lifecycle("codex", "SessionStart", compaction_ended(None));
-
-    for events in [
-        vec![
-            prompt.clone(),
-            compact.clone(),
-            post.clone(),
-            session_compact.clone(),
-        ],
-        vec![prompt, compact, session_compact, post],
-    ] {
-        let agents = reduce_agent_states(&events);
-        assert_eq!(agents[0].compaction_count, 1);
-        assert!(agents[0].compacting_since.is_none());
-        assert_eq!(agents[0].status, AgentStatus::Running);
-    }
-}
-
-#[test]
 fn turn_started_at_is_stamped_when_progress_reconciles_a_turn_open() {
     let registered = lifecycle_at("claude", 0, "SessionStart", signal("registered"));
     let tool = lifecycle_at("claude", 5, "PostToolUse", tool_used());

@@ -30,18 +30,19 @@ fn lifecycle_reduces_pane_id_and_carries_it_forward() {
 }
 
 #[test]
-fn rebirth_boundary_unstamps_prior_panes_in_log_order() {
+fn rebirth_boundary_unstamps_prior_panes_and_resumes_split_or_whole() {
     // A mux rebirth renumbers panes from zero, so the boundary must clear
     // every stamp recorded before it — while a stamp recorded after it is the
     // new incarnation's and stays, even on the very same reused pane id.
     let workspace = project_workspace();
     let boundary = EventEnvelope::session_rebirth(workspace.clone(), "session");
 
-    let agents = reduce_agent_states(&[
+    let events = vec![
         stamped_start(&workspace, "sess-old", "zellij:terminal_6"),
         boundary.clone(),
         stamped_start(&workspace, "sess-new", "zellij:terminal_6"),
-    ]);
+    ];
+    let agents = reduce_agent_states(&events);
     let by_id = |id: &str| {
         agents
             .iter()
@@ -78,19 +79,6 @@ fn rebirth_boundary_unstamps_prior_panes_in_log_order() {
             .raw(),
         "terminal_9"
     );
-}
-
-#[test]
-fn rebirth_boundary_folds_identically_split_or_whole() {
-    // The seeded-resume property the incremental fold stands on holds across
-    // the boundary: folding the tail (boundary included) onto the prefix's map
-    // equals folding the whole log from scratch.
-    let workspace = project_workspace();
-    let events = vec![
-        stamped_start(&workspace, "sess-old", "zellij:terminal_6"),
-        EventEnvelope::session_rebirth(workspace.clone(), "session"),
-        stamped_start(&workspace, "sess-new", "zellij:terminal_6"),
-    ];
 
     let whole = reduce_agent_states_seeded(BTreeMap::new(), &events);
     let prefix = reduce_agent_states_seeded(BTreeMap::new(), &events[..1]);

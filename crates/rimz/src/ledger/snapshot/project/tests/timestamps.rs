@@ -47,7 +47,7 @@ fn registered_at_stamps_first_event_and_restamps_after_tombstone() {
 }
 
 #[test]
-fn turn_started_at_holds_across_a_parked_wake() {
+fn turn_started_at_survives_parked_wake_then_restamps_on_next_turn() {
     let start = raw_lifecycle_at(
         "claude",
         0,
@@ -58,7 +58,6 @@ fn turn_started_at_holds_across_a_parked_wake() {
         10,
         serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
     );
-    let first_turn = prompt.timestamp;
     let park = raw_lifecycle_at(
         "claude",
         20,
@@ -69,36 +68,11 @@ fn turn_started_at_holds_across_a_parked_wake() {
         30,
         serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
     );
-
-    let agents = reduce_agent_states(&[start, prompt, park, wake]);
-
+    let agents = reduce_agent_states(&[start.clone(), prompt.clone(), park.clone(), wake.clone()]);
     assert_eq!(agents[0].status, AgentStatus::Running);
     assert_eq!(agents[0].phase, TurnPhase::Reasoning);
-    assert_eq!(agents[0].turn_started_at, Some(first_turn));
-}
+    assert_eq!(agents[0].turn_started_at, Some(prompt.timestamp));
 
-#[test]
-fn turn_started_at_restamps_on_the_next_genuine_turn() {
-    let start = raw_lifecycle_at(
-        "claude",
-        0,
-        serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
-    );
-    let prompt = raw_lifecycle_at(
-        "claude",
-        10,
-        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
-    );
-    let park = raw_lifecycle_at(
-        "claude",
-        20,
-        serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": true } }),
-    );
-    let wake = raw_lifecycle_at(
-        "claude",
-        30,
-        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
-    );
     let stop = raw_lifecycle_at(
         "claude",
         40,

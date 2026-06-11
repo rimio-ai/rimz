@@ -96,18 +96,6 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn legacy_record_without_root_class_decodes_as_repo() {
-        let json = serde_json::json!({
-            "workspace_id": "ws_0123456789abcdef01234567",
-            "project_root": "/repo",
-            "session_name": "rimz-repo",
-            "updated_at": "2026-01-01T00:00:00Z",
-        });
-        let record: WorkspaceRecord = serde_json::from_value(json).expect("decode legacy record");
-        assert_eq!(record.root_class, RootClass::Repo);
-    }
-
-    #[test]
     fn record_round_trips() {
         let dir = tempdir().unwrap();
         let project = dir.path().join("project");

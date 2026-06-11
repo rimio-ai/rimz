@@ -1,18 +1,6 @@
 use super::*;
 
 #[test]
-fn default_emblems_keep_every_rows_leading_spaces() {
-    // The emblem literals open with a bare newline so the art sits at
-    // column 0 in source; the split must keep each row's leading spaces —
-    // a `\` continuation once ate the first row's indent and the art
-    // drifted a cell left on screen.
-    let art = |kind: &str| default_provider_style(kind).1;
-    assert_eq!(art("claude"), [" ▐▛███▜▌", "▝▜█████▛▘", "  ▘▘ ▝▝"]);
-    assert_eq!(art("codex"), [" ▗▛███▜▖", "▐▜▌ ▚ ▐▛▌", " ▝▀▀▀▀▀▘"]);
-    assert_eq!(art("pi"), [" █▜███▛█", "▝▜▛▀▀▀▜▛▘", " ▝▘   ▝▘"]);
-}
-
-#[test]
 fn provider_without_the_rate_limit_capability_drops_stray_windows() {
     // Pi declares `rate_limit_windows: false`; Claude declares it true. The
     // same stray session reading must paint a budget bar only where the

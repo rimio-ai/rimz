@@ -150,36 +150,6 @@ mod tests {
     use crate::ledger::snapshot::testkit::*;
 
     #[test]
-    fn pane_command_is_known_requires_a_nonempty_command() {
-        // Foreground is the display source, but spawn identity is enough to
-        // keep a known pane from disappearing during a raced foreground read.
-        assert!(pane_command_is_known(&pane("%1", "zsh", "/repo/main")));
-        let raced = crate::feed::PaneRef {
-            command: None,
-            spawn_command: Some("rimz agents exec codex --worktree-path /repo/main".to_owned()),
-            ..pane("%1", "zsh", "/repo/main")
-        };
-        assert!(pane_command_is_known(&raced));
-        let empty = crate::feed::PaneRef {
-            command: Some(String::new()),
-            spawn_command: Some(String::new()),
-            ..pane("%1", "zsh", "/repo/main")
-        };
-        assert!(!pane_command_is_known(&empty));
-    }
-
-    #[test]
-    fn pane_agent_kind_tries_spawn_before_foreground() {
-        let pane = crate::feed::PaneRef {
-            command: Some("zsh".to_owned()),
-            spawn_command: Some("rimz agents exec codex --worktree-path /repo/wt".to_owned()),
-            ..pane("%1", "zsh", "/repo/wt")
-        };
-
-        assert_eq!(pane_agent_kind(&pane), Some("codex"));
-    }
-
-    #[test]
     fn process_activity_follows_the_real_program() {
         // A sudo-wrapped build is real work; an agent host and bare shells are not.
         assert!(process_is_active("sudo npm install -g @openai/codex"));

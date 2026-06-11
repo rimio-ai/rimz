@@ -168,156 +168,87 @@ mod tests {
     }
 
     #[test]
-    fn runtime_projection_includes_live_owner() {
+    fn runtime_projection_filters_items_by_owner_and_scope() {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut item = FeedItem::new(
-            workspace,
-            Surface::Script,
-            FeedKind::Question,
-            "deploy?",
-            "rimz",
-            "cli",
-        );
-        item.runtime_owner = Some(current_process_owner(RuntimeOwnerKind::Script, "ask"));
-
-        let projection = RuntimeProjection::from_parts(
-            vec![item],
-            Vec::new(),
-            Vec::new(),
-            RuntimeScope::Runtime,
-        );
-
-        assert_eq!(projection.items.len(), 1);
-    }
-
-    #[test]
-    fn runtime_projection_excludes_ownerless_legacy_item() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let item = FeedItem::new(
-            workspace,
-            Surface::Script,
-            FeedKind::Question,
-            "deploy?",
-            "rimz",
-            "cli",
-        );
+        let item = |surface, owner| {
+            let mut item = FeedItem::new(
+                workspace.clone(),
+                surface,
+                FeedKind::Question,
+                "deploy?",
+                "rimz",
+                "cli",
+            );
+            item.runtime_owner = owner;
+            item
+        };
 
         let runtime = RuntimeProjection::from_parts(
-            vec![item.clone()],
+            vec![
+                item(
+                    Surface::Script,
+                    Some(current_process_owner(RuntimeOwnerKind::Script, "live")),
+                ),
+                item(Surface::Script, None),
+                item(Surface::Bridge, None),
+                #[cfg(target_os = "linux")]
+                item(
+                    Surface::Script,
+                    Some(RuntimeOwner::new(
+                        RuntimeOwnerKind::Script,
+                        "dead",
+                        u32::MAX,
+                        None,
+                    )),
+                ),
+                #[cfg(target_os = "linux")]
+                item(
+                    Surface::Script,
+                    Some(RuntimeOwner::new(
+                        RuntimeOwnerKind::Script,
+                        "reused",
+                        std::process::id(),
+                        Some("definitely-not-this-process".to_owned()),
+                    )),
+                ),
+            ],
             Vec::new(),
             Vec::new(),
             RuntimeScope::Runtime,
         );
-        let audit =
-            RuntimeProjection::from_parts(vec![item], Vec::new(), Vec::new(), RuntimeScope::Audit);
-
-        assert!(runtime.items.is_empty());
-        assert_eq!(audit.items.len(), 1);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn runtime_projection_excludes_start_token_mismatch() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut item = FeedItem::new(
-            workspace,
-            Surface::Script,
-            FeedKind::Question,
-            "deploy?",
-            "rimz",
-            "cli",
-        );
-        item.runtime_owner = Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Script,
-            "ask",
-            std::process::id(),
-            Some("definitely-not-this-process".to_owned()),
-        ));
-
-        let projection = RuntimeProjection::from_parts(
-            vec![item],
-            Vec::new(),
-            Vec::new(),
-            RuntimeScope::Runtime,
+        assert_eq!(
+            runtime.items.len(),
+            2,
+            "live script and ownerless bridge stay; ownerless/dead scripts drop"
         );
 
-        assert!(projection.items.is_empty());
+        let audit = RuntimeProjection::from_parts(
+            vec![item(Surface::Script, None)],
+            Vec::new(),
+            Vec::new(),
+            RuntimeScope::Audit,
+        );
+        assert_eq!(audit.items.len(), 1, "audit keeps durable history");
     }
 
     #[test]
-    fn runtime_projection_keeps_ownerless_agent() {
-        // An agent with no captured pid abstains — foreground/pane corroboration
-        // carries its liveness, so the owner-required gate must not hide it.
-        let projection = RuntimeProjection::from_parts(
-            Vec::new(),
-            Vec::new(),
-            vec![agent(None)],
-            RuntimeScope::Runtime,
-        );
-        assert_eq!(projection.agents.len(), 1);
-    }
-
-    #[test]
-    fn runtime_projection_keeps_ownerless_non_script_item() {
-        // A bridge ask whose owner pid was never captured stays visible; its
-        // staleness is the agent rollup join's job, not the owner gate.
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let item = FeedItem::new(
-            workspace,
-            Surface::Bridge,
-            FeedKind::Permission,
-            "allow?",
-            "claude",
-            "agent-hook",
-        );
-        let projection = RuntimeProjection::from_parts(
-            vec![item],
-            Vec::new(),
-            Vec::new(),
-            RuntimeScope::Runtime,
-        );
-        assert_eq!(projection.items.len(), 1);
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn runtime_projection_excludes_known_dead_agent() {
-        let dead = RuntimeOwner::new(RuntimeOwnerKind::Agent, "sess-1", u32::MAX, None);
-        let projection = RuntimeProjection::from_parts(
-            Vec::new(),
-            Vec::new(),
-            vec![agent(Some(dead))],
-            RuntimeScope::Runtime,
-        );
-        assert!(projection.agents.is_empty());
-    }
-
-    #[cfg(target_os = "linux")]
-    #[test]
-    fn runtime_projection_excludes_dead_pid() {
-        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-        let mut item = FeedItem::new(
-            workspace,
-            Surface::Script,
-            FeedKind::Question,
-            "deploy?",
-            "rimz",
-            "cli",
-        );
-        item.runtime_owner = Some(RuntimeOwner::new(
-            RuntimeOwnerKind::Script,
-            "ask",
+    fn runtime_projection_keeps_unknown_agents_and_drops_known_dead_ones() {
+        let mut agents = vec![agent(None)];
+        #[cfg(target_os = "linux")]
+        agents.push(agent(Some(RuntimeOwner::new(
+            RuntimeOwnerKind::Agent,
+            "sess-dead",
             u32::MAX,
             None,
-        ));
+        ))));
 
-        let projection = RuntimeProjection::from_parts(
-            vec![item],
-            Vec::new(),
-            Vec::new(),
-            RuntimeScope::Runtime,
+        let projection =
+            RuntimeProjection::from_parts(Vec::new(), Vec::new(), agents, RuntimeScope::Runtime);
+
+        assert_eq!(
+            projection.agents.len(),
+            1,
+            "unknown pid abstains while known-dead owners suppress stale overlays"
         );
-
-        assert!(projection.items.is_empty());
     }
 }

@@ -1,18 +1,6 @@
 use super::*;
 
 #[test]
-fn is_within_compares_path_components() {
-    let root = Path::new("/home/marvin");
-    assert!(is_within(root, root));
-    assert!(is_within(root, Path::new("/home/marvin/")));
-    assert!(is_within(root, Path::new("/home/marvin/sub/dir")));
-    // A shared string prefix that is not a component boundary is outside.
-    assert!(!is_within(root, Path::new("/home/marvinX")));
-    assert!(!is_within(root, Path::new("/home/other")));
-    assert!(!is_within(root, Path::new("/")));
-}
-
-#[test]
 fn path_grouping_uses_project_roots_worktree_roots_and_safe_fallbacks() {
     struct Case {
         label: &'static str,

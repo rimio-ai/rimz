@@ -202,36 +202,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn publish_gate_is_boundary_exact_on_the_interval() {
-        let just_inside = PUBLISH_INTERVAL - Duration::from_millis(1);
-        assert!(
-            !should_publish(just_inside, 100, 100),
-            "mid-interval with nothing unpublished: skip"
-        );
-        assert!(
-            should_publish(PUBLISH_INTERVAL, 100, 100),
-            "due exactly at the interval"
-        );
-    }
-
-    #[test]
-    fn publish_gate_is_boundary_exact_on_the_byte_budget() {
-        let fresh = Duration::ZERO;
-        assert!(
-            !should_publish(fresh, 100, 100 + PUBLISH_BYTE_BUDGET - 1),
-            "an unpublished tail under the budget rides the next interval"
-        );
-        assert!(
-            should_publish(fresh, 100, 100 + PUBLISH_BYTE_BUDGET),
-            "due exactly at the byte budget, whatever the stamp's age"
-        );
-    }
-
-    #[test]
-    fn publish_gate_forces_on_a_shrunken_log() {
-        // A log shorter than the stamped offset means rotation or an identity
-        // rewrite swapped the file underneath the stamp.
-        assert!(should_publish(Duration::ZERO, 100, 99));
-        assert!(!should_publish(Duration::ZERO, 100, 101));
+    fn publish_gate_boundaries() {
+        for (label, age, stamp_offset, log_len, expected) in [
+            (
+                "mid-interval with nothing unpublished",
+                PUBLISH_INTERVAL - Duration::from_millis(1),
+                100,
+                100,
+                false,
+            ),
+            ("interval boundary", PUBLISH_INTERVAL, 100, 100, true),
+            (
+                "under byte budget",
+                Duration::ZERO,
+                100,
+                100 + PUBLISH_BYTE_BUDGET - 1,
+                false,
+            ),
+            (
+                "byte budget boundary",
+                Duration::ZERO,
+                100,
+                100 + PUBLISH_BYTE_BUDGET,
+                true,
+            ),
+            ("shrunken log after rotation", Duration::ZERO, 100, 99, true),
+            ("fresh tail below budget", Duration::ZERO, 100, 101, false),
+        ] {
+            assert_eq!(
+                should_publish(age, stamp_offset, log_len),
+                expected,
+                "{label}",
+            );
+        }
     }
 }

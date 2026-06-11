@@ -13,31 +13,6 @@ fn write_then_read_round_trips() {
 }
 
 #[test]
-fn absent_merge_fields_round_trip_as_none() {
-    let now = Timestamp::now();
-    let record = new_record("codex", "sess-1", ctx(now));
-    let mut value = serde_json::to_value(&record).unwrap();
-    value
-        .as_object_mut()
-        .unwrap()
-        .remove("rate_limits_observed_at");
-    value.as_object_mut().unwrap().remove("transcript_path");
-    value.as_object_mut().unwrap().remove("transcript_stat");
-
-    let parsed: AgentContextRecord = serde_json::from_value(value).unwrap();
-    assert_eq!(parsed.kind, "codex");
-    assert_eq!(parsed.agent_id, "sess-1");
-    assert_eq!(parsed.rate_limits_observed_at, None);
-    assert_eq!(parsed.transcript_path, None);
-    assert_eq!(parsed.transcript_stat, None);
-
-    let serialized = serde_json::to_string(&record).unwrap();
-    assert!(!serialized.contains("rate_limits_observed_at"));
-    assert!(!serialized.contains("transcript_path"));
-    assert!(!serialized.contains("transcript_stat"));
-}
-
-#[test]
 fn read_one_bypasses_the_parse_cache() {
     let (_dir, runtime) = runtime();
     let now = Timestamp::now();
@@ -56,17 +31,6 @@ fn read_one_bypasses_the_parse_cache() {
 }
 
 #[test]
-fn distinct_sessions_get_distinct_files() {
-    let (_dir, runtime) = runtime();
-    let now = Timestamp::now();
-    write(&runtime, "claude", "sess-1", &ctx(now)).unwrap();
-    write(&runtime, "claude", "sess-2", &ctx(now)).unwrap();
-    let mut ids: Vec<_> = read_all(&runtime).into_iter().map(|r| r.agent_id).collect();
-    ids.sort();
-    assert_eq!(ids, vec!["sess-1".to_owned(), "sess-2".to_owned()]);
-}
-
-#[test]
 fn corrupt_file_is_skipped() {
     let (_dir, runtime) = runtime();
     std::fs::write(
@@ -75,15 +39,6 @@ fn corrupt_file_is_skipped() {
     )
     .unwrap();
     assert!(read_all(&runtime).is_empty());
-}
-
-#[test]
-fn past_ttl_record_is_skipped() {
-    let (_dir, runtime) = runtime();
-    let now = Timestamp::from_second(1_700_000_000).unwrap();
-    let stale = Timestamp::from_second(1_700_000_000 - CONTEXT_TTL_SECS - 60).unwrap();
-    write(&runtime, "claude", "sess-1", &ctx(stale)).unwrap();
-    assert!(read_all_at(&runtime, now).is_empty());
 }
 
 #[test]

@@ -18,11 +18,10 @@ mod subagents;
 mod windows;
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use super::aggregate::{attach_sub_agents, sub_agent_from_state};
-use super::layout::is_within;
-use super::providers::{default_provider_style, stable_window, stable_windows};
+use super::providers::{stable_window, stable_windows};
 use super::reap::GHOST_SESSION_TTL_SECS;
 use super::rows::row_from_agent;
 use super::{SidebarSnapshot, SidebarWorktreeKind, row_identity_violations};

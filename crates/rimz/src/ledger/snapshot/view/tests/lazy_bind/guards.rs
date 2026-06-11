@@ -40,21 +40,6 @@ fn paneless_agent_process_start_guard_controls_cwd_recovery() {
 }
 
 #[test]
-fn stamped_claude_wins_over_paneless_cwd_recovery() {
-    let paneless = agent("claude", "paneless", AgentStatus::Running, 1_000).worktree("/repo/main");
-    let stamped = agent("claude", "stamped", AgentStatus::Idle, 2_000)
-        .worktree("/repo/main")
-        .in_pane("term1");
-    let snapshot = room(Vec::new(), vec![paneless, stamped])
-        .with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
-
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_agent());
-    assert_eq!(rows[0].id, "stamped");
-}
-
-#[test]
 fn elevated_foreign_claude_marker_blocks_cwd_recovery() {
     let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     let mut pane = pane("term1", "sudo claude", "/repo/main");

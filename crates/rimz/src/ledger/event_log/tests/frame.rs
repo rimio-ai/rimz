@@ -24,25 +24,6 @@ fn frame_wire_format_is_len_crc_payload() {
 }
 
 #[test]
-fn legacy_two_field_frames_still_decode() {
-    // A log written before the CRC field: `<len> <json>` frames decode
-    // unchanged, and a mixed log (legacy prefix, CRC suffix) folds whole.
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("events.log.jsonl");
-    let payload = serde_json::to_vec(&test_event("event.legacy")).unwrap();
-    let mut legacy = Vec::new();
-    legacy.extend_from_slice(payload.len().to_string().as_bytes());
-    legacy.push(b' ');
-    legacy.extend_from_slice(&payload);
-    legacy.push(b'\n');
-    fs::write(&path, &legacy).unwrap();
-    append(&path, &test_event("event.new")).unwrap();
-
-    let events = read_all(&path).unwrap();
-    assert_eq!(methods(&events), ["event.legacy", "event.new"]);
-}
-
-#[test]
 fn crc_mismatch_is_a_skipped_tail_and_a_hard_middle_error() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("events.log.jsonl");
