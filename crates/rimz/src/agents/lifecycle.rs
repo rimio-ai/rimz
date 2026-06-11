@@ -33,7 +33,8 @@ pub enum LifecycleSignal {
     /// A session registered fresh (Claude/Codex `SessionStart` sources other
     /// than `compact`, Pi `session_start`).
     Registered,
-    /// A user turn began (`UserPromptSubmit`).
+    /// A user turn began (`UserPromptSubmit`). On a parked running row this
+    /// resumes the same logical turn instead of opening a fresh boundary.
     TurnStarted,
     /// A turn ended. `errored` always wins (the failure is the attention
     /// signal); a clean end with `parked_on_background` is the main thread
@@ -175,9 +176,11 @@ pub struct Transition {
     /// this signal leaves it. Any non-`Compacting` signal closes an open
     /// bracket; an unbracketed close signal closes nothing.
     pub compaction_closed: bool,
-    /// A turn boundary opened or re-opened. Explicit starts always stamp a
-    /// fresh prompt boundary; reconciled progress and auto-compaction resumes
-    /// stamp only when they enter `Running` from a non-running prior state.
+    /// A turn boundary opened or re-opened. Explicit starts stamp a fresh
+    /// prompt boundary except when a prompt wakes a parked running row and
+    /// resumes the same logical turn; reconciled progress and auto-compaction
+    /// resumes stamp only when they enter `Running` from a non-running prior
+    /// state.
     pub opened_turn: bool,
 }
 
@@ -212,7 +215,7 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
     let status = map_status(signal, prior_status, &mut kind);
     let phase = map_phase(signal, prior_phase, status);
     let compaction_closed = was_compacting && !compacting;
-    let opened_turn = opened_turn(signal, prior_status, status);
+    let opened_turn = opened_turn(signal, prior_status, prior_phase, status);
 
     if matches!(signal, LifecycleSignal::CompactionEnded { .. })
         && !was_compacting
@@ -240,8 +243,15 @@ pub fn step(prev: Option<&LifecycleState>, signal: &LifecycleSignal) -> Transiti
 fn opened_turn(
     signal: &LifecycleSignal,
     prior_status: Option<AgentStatus>,
+    prior_phase: TurnPhase,
     status: AgentStatus,
 ) -> bool {
+    if matches!(signal, LifecycleSignal::TurnStarted)
+        && prior_status == Some(AgentStatus::Running)
+        && prior_phase == TurnPhase::Parked
+    {
+        return false;
+    }
     matches!(
         signal,
         LifecycleSignal::TurnStarted | LifecycleSignal::SubagentStarted

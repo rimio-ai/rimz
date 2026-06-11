@@ -235,3 +235,88 @@ fn typeless_subagent_stop_without_start_is_ignored() {
     assert_eq!(rows[0].sub_agents()[0].id, "child-real");
     assert_eq!(rows[0].sub_agents()[0].name, "Explore");
 }
+
+#[test]
+fn finished_subagent_verdict_survives_the_parked_wake() {
+    let root_start = raw_lifecycle_at(
+        "claude",
+        0,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-root",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let root_prompt = raw_lifecycle_at(
+        "claude",
+        10,
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-root",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+    let parent_turn_started_at = root_prompt.timestamp;
+    let child_start = raw_lifecycle_at(
+        "claude",
+        20,
+        serde_json::json!({
+            "event_name": "SubagentStart",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_started" },
+            "parent_agent_id": "sess-root",
+            "task": "Explore",
+        }),
+    );
+    let root_park = raw_lifecycle_at(
+        "claude",
+        30,
+        serde_json::json!({
+            "event_name": "Stop",
+            "agent_id": "sess-root",
+            "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": true },
+        }),
+    );
+    let child_stop = raw_lifecycle_at(
+        "claude",
+        100,
+        serde_json::json!({
+            "event_name": "SubagentStop",
+            "agent_id": "child-1",
+            "signal": { "signal": "subagent_stopped", "errored": false },
+            "task": "Explore",
+        }),
+    );
+    let root_wake = raw_lifecycle_at(
+        "claude",
+        101,
+        serde_json::json!({
+            "event_name": "UserPromptSubmit",
+            "agent_id": "sess-root",
+            "signal": { "signal": "turn_started" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[
+        root_start,
+        root_prompt,
+        child_start,
+        root_park,
+        child_stop,
+        root_wake,
+    ]);
+    let parent = agents
+        .iter()
+        .find(|a| a.agent_id == "sess-root")
+        .expect("root row");
+    assert_eq!(parent.turn_started_at, Some(parent_turn_started_at));
+
+    let now = Timestamp::from_second(epoch().as_second() + 120).unwrap();
+    let mut rows = vec![row_from_agent(parent, now)];
+    attach_sub_agents(&mut rows, &agents, now);
+
+    assert_eq!(rows[0].sub_agents().len(), 1);
+    assert_eq!(rows[0].sub_agents()[0].id, "child-1");
+    assert_eq!(rows[0].sub_agents()[0].name, "Explore");
+    assert_eq!(rows[0].sub_agents()[0].status, AgentStatus::Success);
+}

@@ -83,3 +83,75 @@ fn registered_at_restamps_after_a_session_tombstone() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].registered_at, Some(reborn_ts));
 }
+
+#[test]
+fn turn_started_at_holds_across_a_parked_wake() {
+    let start = raw_lifecycle_at(
+        "claude",
+        0,
+        serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
+    );
+    let prompt = raw_lifecycle_at(
+        "claude",
+        10,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+    let first_turn = prompt.timestamp;
+    let park = raw_lifecycle_at(
+        "claude",
+        20,
+        serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": true } }),
+    );
+    let wake = raw_lifecycle_at(
+        "claude",
+        30,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+
+    let agents = reduce_agent_states(&[start, prompt, park, wake]);
+
+    assert_eq!(agents[0].status, AgentStatus::Running);
+    assert_eq!(agents[0].phase, TurnPhase::Reasoning);
+    assert_eq!(agents[0].turn_started_at, Some(first_turn));
+}
+
+#[test]
+fn turn_started_at_restamps_on_the_next_genuine_turn() {
+    let start = raw_lifecycle_at(
+        "claude",
+        0,
+        serde_json::json!({ "event_name": "SessionStart", "agent_id": "s1", "signal": { "signal": "registered" } }),
+    );
+    let prompt = raw_lifecycle_at(
+        "claude",
+        10,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+    let park = raw_lifecycle_at(
+        "claude",
+        20,
+        serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": true } }),
+    );
+    let wake = raw_lifecycle_at(
+        "claude",
+        30,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+    let stop = raw_lifecycle_at(
+        "claude",
+        40,
+        serde_json::json!({ "event_name": "Stop", "agent_id": "s1", "signal": { "signal": "turn_ended", "errored": false, "parked_on_background": false } }),
+    );
+    let next_prompt = raw_lifecycle_at(
+        "claude",
+        50,
+        serde_json::json!({ "event_name": "UserPromptSubmit", "agent_id": "s1", "signal": { "signal": "turn_started" } }),
+    );
+    let next_turn = next_prompt.timestamp;
+
+    let agents = reduce_agent_states(&[start, prompt, park, wake, stop, next_prompt]);
+
+    assert_eq!(agents[0].status, AgentStatus::Running);
+    assert_eq!(agents[0].phase, TurnPhase::Reasoning);
+    assert_eq!(agents[0].turn_started_at, Some(next_turn));
+}

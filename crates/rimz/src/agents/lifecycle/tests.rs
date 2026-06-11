@@ -124,6 +124,22 @@ fn core_turn_and_subagent_edges_follow_the_contract() {
             false,
         ),
         (
+            "wake after park resumes the turn",
+            Some(parked),
+            LifecycleSignal::TurnStarted,
+            reasoning,
+            TransitionKind::Normal,
+            false,
+        ),
+        (
+            "prompt on a live turn still re-stamps",
+            Some(reasoning),
+            LifecycleSignal::TurnStarted,
+            reasoning,
+            TransitionKind::Normal,
+            true,
+        ),
+        (
             "subagent starts reasoning",
             None,
             LifecycleSignal::SubagentStarted,
@@ -272,6 +288,15 @@ fn compaction_edges_keep_the_head_orthogonal_to_status_and_phase() {
             true,
         ),
         (
+            "parked wake closes open head without re-stamping",
+            Some(state(AgentStatus::Running, TurnPhase::Parked, true)),
+            LifecycleSignal::TurnStarted,
+            running_reasoning,
+            TransitionKind::Normal,
+            true,
+            false,
+        ),
+        (
             "compacting while compacting does not close",
             Some(state(AgentStatus::Running, TurnPhase::Reasoning, true)),
             LifecycleSignal::Compacting,
@@ -334,6 +359,13 @@ fn state_machine_is_total_and_keeps_phase_axis_valid() {
                         assert!(
                             !transition.compaction_closed,
                             "{signal:?} must not close an absent bracket"
+                        );
+                    }
+                    if matches!(signal, LifecycleSignal::TurnStarted) {
+                        assert_eq!(
+                            transition.opened_turn,
+                            !(status == AgentStatus::Running && phase == TurnPhase::Parked),
+                            "{status:?}/{phase:?}/{compacting} + {signal:?}"
                         );
                     }
                 }

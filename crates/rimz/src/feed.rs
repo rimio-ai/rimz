@@ -865,7 +865,9 @@ pub struct AgentState {
     /// turn boundary). Unlike `last_seen` it does *not* advance on `Stop`, so it
     /// marks the "next prompt" boundary the sidebar uses to clear a finished subagent:
     /// a completed child older than its parent's `turn_started_at` belongs to a
-    /// past turn and drops from the parent's expanded list.
+    /// past turn and drops from the parent's expanded list. A prompt waking a
+    /// parked running row resumes the same logical turn and carries this stamp
+    /// forward.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_started_at: Option<Timestamp>,
     /// When this agent last began compacting its context window — the timestamp

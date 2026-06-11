@@ -84,7 +84,7 @@ running ───── turn ended ─────┬── clean ────�
  └── turn started re-enters · a mutating tool on ────────┘
      success reconciles (failed holds until a new turn)
 
- parked     : a clean end with background work in flight stays running, phase ⋯ bg
+ parked     : a clean end with background work in flight stays running, phase ⋯ bg; a prompt wake resumes the same turn boundary
  subagents  : subagent started establishes the child row in running;
               subagent stopped resolves it to success / failed
  compacting : a transient head held over any status (the bracket below)
@@ -97,7 +97,7 @@ The edges, precisely:
 | Signal | From → to | Note |
 | --- | --- | --- |
 | `registered` | *(none)* → `idle` | establishes the row; with `subagent_started`, the only signal that does |
-| `turn_started` | any → `running` | opens the turn in the `reasoning` phase, stamps a fresh prompt boundary |
+| `turn_started` | any → `running` | opens the turn in the `reasoning` phase and stamps a fresh prompt boundary; a parked running row resumes and carries the prior boundary |
 | `turn_ended`, clean | `running` → `success` | the turn resolved; the phase rests |
 | `turn_ended`, errored | `running` → `failed` | the error bit always wins |
 | `turn_ended`, clean with background work in flight | `running` → `running` | the main thread parked, the phase is `parked`; see below |
@@ -108,7 +108,7 @@ The edges, precisely:
 | `compaction_ended` | auto → `running` (phase carried) · manual → `idle` · trigger unknown → held | closes and counts an open [bracket](#the-compaction-bracket) |
 | `ended` | removal | the reducer's tombstone path handles it upstream; reaching `step` it is an ignored no-op |
 
-A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bit — never back to `idle`. One exception keeps it `running`: a clean end whose signal also carries `parked_on_background` is the main thread *parking on still-in-flight background work*, not a turn end, so the row stays `running` in the `parked` phase and paints a distinct secondary `⋯ bg` marker rather than a false `✓` — the activity description stays the agent's real task, never a synthetic count (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). An error bit still wins. A `SubagentStopped` signal resolves the *child* entity the same way — `success`, or `failed` on its error bit (Claude maps a non-zero `exit_code`; Codex reports no subagent error signal, so its children always resolve clean) — and the sidebar keeps that `✓`/`!` result through the parent's turn ([sidebar.md → Sub-agent lists](../sidebar/sidebar.md#sub-agent-lists)).
+A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bit — never back to `idle`. One exception keeps it `running`: a clean end whose signal also carries `parked_on_background` is the main thread *parking on still-in-flight background work*, not a turn end, so the row stays `running` in the `parked` phase and paints a distinct secondary `⋯ bg` marker rather than a false `✓` — the activity description stays the agent's real task, never a synthetic count (the provider-specific detection lives in [hooks.md → Appendix Claude](./hooks.md#appendix--claude-code)). Claude wakes a parked parent by injecting the finished background task's notification as a `UserPromptSubmit`; folded on a parked running row, that `TurnStarted` resumes the same logical turn and carries `turn_started_at` forward, so child verdicts stay visible through the delegation wave. A real prompt submitted while the row is still parked follows the same signal-level edge and carries the prior boundary; once the turn reaches a clean end, the next prompt stamps fresh and clears past-turn verdicts. An error bit still wins. A `SubagentStopped` signal resolves the *child* entity the same way — `success`, or `failed` on its error bit (Claude maps a non-zero `exit_code`; Codex reports no subagent error signal, so its children always resolve clean) — and the sidebar keeps that `✓`/`!` result through the parent's turn ([sidebar.md → Sub-agent lists](../sidebar/sidebar.md#sub-agent-lists)).
 
 `waiting` arrives on the feed channel: a pending blocking ask joined to the agent puts the row in `waiting` ([hooks.md → Two hook channels](./hooks.md#two-hook-channels)); the lifecycle channel drives the other four lifecycle statuses.
 
