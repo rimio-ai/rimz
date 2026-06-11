@@ -1,11 +1,42 @@
 use super::*;
 
+fn hash6(root: &Path) -> String {
+    WorkspaceId::from_project_root(root).as_str()[3..9].to_owned()
+}
+
+fn expected_session(root: &Path, slug: &str) -> String {
+    format!("rimz-{slug}-{}", hash6(root))
+}
+
 #[test]
-fn session_name_slugs_the_full_path() {
-    assert_eq!(
-        session_name_for(Path::new("/home/marvin/xxx")),
-        "rimz-home-marvin-xxx",
-    );
+fn session_name_uses_bounded_basename_and_workspace_hash() {
+    let root = Path::new("/home/marvin/xxx");
+    assert_eq!(session_name_for(root), expected_session(root, "xxx"));
+    assert!(session_name_for(root).len() <= 20);
+}
+
+#[test]
+fn session_name_truncates_long_basename() {
+    let root = Path::new("/tmp/abcdefghijklmnop");
+    assert_eq!(session_name_for(root), expected_session(root, "abcdefgh"));
+}
+
+#[test]
+fn session_name_distinguishes_roots_with_the_same_basename() {
+    let a = Path::new("/tmp/one/project");
+    let b = Path::new("/tmp/two/project");
+
+    assert_ne!(session_name_for(a), session_name_for(b));
+    assert!(session_name_for(a).starts_with("rimz-project-"));
+    assert!(session_name_for(b).starts_with("rimz-project-"));
+}
+
+#[test]
+fn session_name_hash_matches_workspace_id_prefix() {
+    let root = Path::new("/home/marvin/rimio");
+    let name = session_name_for(root);
+
+    assert_eq!(name, format!("rimz-rimio-{}", hash6(root)));
 }
 
 #[test]
@@ -47,10 +78,10 @@ fn known_workspaces_reads_records_and_skips_recordless_dirs() {
     sessions.sort();
     assert_eq!(
         sessions,
-        vec![
-            "rimz-home-marvin-alpha".to_owned(),
-            "rimz-home-marvin-beta".to_owned(),
-        ],
+        ["/home/marvin/alpha", "/home/marvin/beta"]
+            .into_iter()
+            .map(|project| session_name_for(Path::new(project)))
+            .collect::<Vec<_>>(),
     );
 }
 
@@ -154,10 +185,8 @@ fn known_workspaces_under_missing_root_is_empty() {
 #[test]
 fn session_name_collapses_unsafe_runs() {
     // Spaces and `/` both fold to `-`, and runs collapse to a single `-`.
-    assert_eq!(
-        session_name_for(Path::new("/tmp/my repo")),
-        "rimz-tmp-my-repo",
-    );
+    let root = Path::new("/tmp/my repo");
+    assert_eq!(session_name_for(root), expected_session(root, "my-repo"));
 }
 
 #[test]
