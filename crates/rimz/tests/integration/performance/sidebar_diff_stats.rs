@@ -106,6 +106,8 @@ impl Fixture {
             "--json",
             "--workspace-id",
             self.env.workspace_id.as_str(),
+            "--mux",
+            "zellij",
             "--session-name",
             SESSION,
         ])
