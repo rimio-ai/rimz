@@ -49,14 +49,14 @@ use self::payloads::{
     parse_user_prompt_submit,
 };
 pub use self::transcript::refresh_transcript_context;
+use self::transcript::{
+    TranscriptUsage, configured_model, configured_reasoning_effort, detect_turn_error,
+    find_session_transcript, payload_reasoning_effort, usage_from_transcript_tail,
+};
 #[cfg(test)]
 use self::transcript::{
-    TranscriptUsage, configured_model_at, configured_reasoning_effort_at,
-    find_session_transcript_under, transcript_enrichment, transcript_stat,
-};
-use self::transcript::{
-    configured_model, configured_reasoning_effort, find_session_transcript,
-    payload_reasoning_effort, usage_from_transcript,
+    configured_model_at, configured_reasoning_effort_at, find_session_transcript_under,
+    transcript_enrichment, transcript_stat, usage_from_transcript,
 };
 use super::context::AgentContext;
 use super::descriptor::{
@@ -67,10 +67,11 @@ use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, ClassifiedHook, HookInstallPreview,
-    HookInstallReport, HookUninstallReport, LifecycleRefreshCtx, LocalContextRefresh,
-    LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity, SubagentIdentity, choice_is_allow,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, resolve_root_identity,
+    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
+    HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
+    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity,
+    SubagentIdentity, choice_is_allow, classify_agent_hook, classify_pre_tool_use,
+    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -246,14 +247,103 @@ impl AgentAdapter for CodexAdapter {
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),
-            "PreToolUse" => match parse_pre_tool_use(payload).tool_name.as_deref() {
-                Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
-                Some("AskUserQuestion") => Some(FeedKind::Question),
-                _ => None,
-            },
+            "PreToolUse" => classify_pre_tool_use(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
         classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+    }
+
+    #[cfg(test)]
+    fn installed_hook_events(&self) -> Vec<&'static str> {
+        INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
+    }
+
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        use super::{AgentHookClass, ClassificationSample};
+
+        vec![
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "shell" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::Permission),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::PlanApproval),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::Question),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "shell" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PostToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "apply_patch" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SessionStart",
+                serde_json::json!({ "session_id": "sess-1", "source": "startup" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "UserPromptSubmit",
+                serde_json::json!({ "session_id": "sess-1", "prompt": "fix auth" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SubagentStart",
+                serde_json::json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-thread-1",
+                    "agent_type": "review"
+                }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SubagentStop",
+                serde_json::json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-thread-1",
+                    "agent_type": "review"
+                }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "Stop",
+                serde_json::json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PreCompact",
+                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PostCompact",
+                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+        ]
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
@@ -333,7 +423,14 @@ impl AgentAdapter for CodexAdapter {
         payload: &Value,
     ) -> Option<AgentLifecycleObservation> {
         let parts = CodexLifecycleParts::parse(event_name, payload);
-        let signal = map_codex_lifecycle_signal(self.descriptor(), event_name, payload, &parts)?;
+        let transcript = codex_transcript_observation(payload, event_name == "Stop");
+        let signal = map_codex_lifecycle_signal(
+            self.descriptor(),
+            event_name,
+            payload,
+            &parts,
+            transcript.turn_error.as_ref(),
+        )?;
         let (agent_id, parent_agent_id) = resolve_codex_observation_identity(
             self.descriptor().kind,
             event_name,
@@ -346,6 +443,7 @@ impl AgentAdapter for CodexAdapter {
             signal,
             agent_id,
             parent_agent_id,
+            transcript,
         ))
     }
 
@@ -362,6 +460,10 @@ impl AgentAdapter for CodexAdapter {
                 .and_then(non_empty_trimmed),
             _ => None,
         }
+    }
+
+    fn observe_turn_error(&self, payload: &Value) -> Option<AgentTurnError> {
+        codex_payload_turn_error(payload)
     }
 
     fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
@@ -510,6 +612,7 @@ fn map_codex_lifecycle_signal(
     event_name: &str,
     payload: &Value,
     parts: &CodexLifecycleParts,
+    turn_error: Option<&AgentTurnError>,
 ) -> Option<LifecycleSignal> {
     match event_name {
         "SessionStart" => {
@@ -523,7 +626,7 @@ fn map_codex_lifecycle_signal(
         "UserPromptSubmit" => Some(LifecycleSignal::TurnStarted),
         "SubagentStop" => Some(LifecycleSignal::SubagentStopped { errored: false }),
         "Stop" => Some(LifecycleSignal::TurnEnded {
-            errored: stop_payload_errored(payload),
+            errored: stop_payload_errored(payload) || turn_error.is_some(),
             parked_on_background: false,
         }),
         "PostToolUse" if descriptor.tool_mutates(payload) => Some(LifecycleSignal::ToolUsed {
@@ -542,6 +645,40 @@ fn map_codex_lifecycle_signal(
                 .and_then(|p| p.trigger.auto_flag()),
         }),
         _ => None,
+    }
+}
+
+fn codex_payload_turn_error(payload: &Value) -> Option<AgentTurnError> {
+    let session_id = optional_payload_string(payload, &["session_id"])?;
+    let transcript_path = find_session_transcript(&session_id)?;
+    let tail = read_transcript_tail(&transcript_path)?;
+    detect_turn_error(&tail)
+}
+
+struct CodexTranscriptObservation {
+    path: Option<PathBuf>,
+    usage: TranscriptUsage,
+    turn_error: Option<AgentTurnError>,
+}
+
+fn codex_transcript_observation(
+    payload: &Value,
+    detect_turn_death: bool,
+) -> CodexTranscriptObservation {
+    let path = optional_payload_string(payload, &["session_id"])
+        .and_then(|id| find_session_transcript(&id));
+    let tail = path.as_deref().and_then(read_transcript_tail);
+    let usage = tail
+        .as_deref()
+        .map(usage_from_transcript_tail)
+        .unwrap_or_default();
+    let turn_error = detect_turn_death
+        .then(|| tail.as_deref().and_then(detect_turn_error))
+        .flatten();
+    CodexTranscriptObservation {
+        path,
+        usage,
+        turn_error,
     }
 }
 
@@ -588,20 +725,19 @@ fn build_codex_observation(
     signal: LifecycleSignal,
     agent_id: Option<crate::ids::AgentSessionId>,
     parent_agent_id: Option<crate::ids::AgentSessionId>,
+    transcript: CodexTranscriptObservation,
 ) -> AgentLifecycleObservation {
-    let transcript_path = optional_payload_string(payload, &["session_id"])
-        .and_then(|id| find_session_transcript(&id));
-    let usage = transcript_path
-        .as_deref()
-        .map(usage_from_transcript)
-        .unwrap_or_default();
+    let usage = transcript.usage;
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
     observation.task = codex_task(payload, parts.subagent());
     observation.prompt =
         sanitize_user_prompt(parts.user_prompt.as_ref().and_then(|p| p.prompt.as_deref()));
-    observation.transcript_path = transcript_path.map(|path| path.to_string_lossy().into_owned());
+    observation.transcript_path = transcript
+        .path
+        .map(|path| path.to_string_lossy().into_owned());
+    observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
     observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
     observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);

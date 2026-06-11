@@ -46,6 +46,8 @@ pub use row::{
     AgentCard, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState, SidebarRow,
     SidebarSubAgent,
 };
+#[cfg(test)]
+pub(crate) use view::fold_ask_onto_row;
 pub use view::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarSnapshot,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,

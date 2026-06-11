@@ -99,21 +99,19 @@ Codex has **no `SessionEnd` or `Notification` hook**. Compaction uses `PreCompac
 
 ### Decision and output schema
 
-`PermissionRequest` (the only shape Rimz renders):
+Rimz emits Codex-native decisions for `PermissionRequest` and the blocking `PreToolUse` tools it owns:
 
 ```json
 { "hookSpecificOutput": { "hookEventName": "PermissionRequest", "decision": { "behavior": "allow|deny", "message": "string" } } }
-```
-
-> **Divergence — never reuse Claude's shape.** A Codex `PermissionRequest` decision carries only `decision.behavior` and `message`. Emitting `updatedInput`, `updatedPermissions`, or `interrupt` corrupts it — those belong to *other* Codex hook types (e.g. `PreToolUse`, below), not to a permission answer.
-
-For reference, Codex's other decision shapes (Rimz does not currently emit these):
-
-```json
-// PreToolUse — allow (may carry updatedInput) / deny (carries permissionDecisionReason)
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "allow", "updatedInput": { "command": "string" } } }
 { "hookSpecificOutput": { "hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": "string" } }
+```
 
+> **Divergence — never reuse Claude's shape.** A Codex `PermissionRequest` decision carries only `decision.behavior` and `message`. Emitting `updatedInput`, `updatedPermissions`, or `interrupt` corrupts it — those belong to *other* Codex hook types such as `PreToolUse`, not to a permission answer.
+
+For reference, Codex's common-control and block shapes:
+
+```json
 // SessionStart / PreCompact / PostCompact / UserPromptSubmit / SubagentStop / Stop — common controls
 { "continue": true, "stopReason": "string", "systemMessage": "string", "suppressOutput": false, "hookSpecificOutput": { "additionalContext": "string" } }
 
@@ -235,7 +233,7 @@ Client connection preference (broker → daemon → cold-spawn) and the refresh 
 
 ## Rollout transcript JSONL
 
-Codex writes one rollout file per session — its session log — at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above). Two event shapes feed Rimz's context gauge, and one verified rollout event feeds supervised-run streaming:
+Codex writes one rollout file per session — its session log — at `~/.codex/sessions/YYYY/MM/DD/rollout-*-<session_id>.jsonl`. The format is defined by the open-source `codex-rs` types (no standalone published schema; the path tree and event shapes are the **official source**, linked above). Rollout events feed Rimz's context gauge, supervised-run streaming, and the local turn-death marker:
 
 ```jsonc
 // token usage
@@ -249,9 +247,21 @@ Codex writes one rollout file per session — its session log — at `~/.codex/s
 
 // assistant stream message
 { "type": "event_msg", "payload": { "type": "agent_message", "message": "..." } }
+
+// provider turn error — accepted variants, classified through the app-server TurnError vocabulary
+{ "timestamp": "2026-06-11T07:18:00.000Z",
+  "type": "event_msg",
+  "payload": { "type": "turn_error" | "stream_error" | "error",
+               "message": "You've hit your usage limit",
+               "codexErrorInfo": "usageLimitExceeded" | "serverOverloaded" | "internalServerError" | "..." } }
+{ "timestamp": "2026-06-11T07:18:00.000Z",
+  "type": "event_msg",
+  "payload": { "type": "task_complete",
+               "error": { "message": "API Error: Server Error",
+                          "codexErrorInfo": "internalServerError" } } }
 ```
 
-Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. `agent_message.message` is the main-thread assistant text Rimz emits as `rimz run --stream` / `rimz run stream` progress; duplicate `response_item` rows are ignored for streaming. The field → internal mapping and the date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root) are in [transcript.md](../../internals/agents/transcript.md#appendix--codex).
+Unlike Claude (raw tokens, window derived from the payload model), Codex carries the window directly (`model_context_window`), so the gauge is a precomputed `context_pct`. `last_token_usage` also feeds the card's per-call composition: `cached_input_tokens` is the `◌` cache-read figure, `input_tokens − cached_input_tokens` the `↘` fresh input (`input_tokens` includes the cached slice), and `output_tokens` the `↗` — the protocol reports no per-call cache-write, so the card grows no `◍`. `agent_message.message` is the main-thread assistant text Rimz emits as `rimz run --stream` / `rimz run stream` progress; duplicate `response_item` rows are ignored for streaming. Error records use the app-server `TurnError` vocabulary generated by `codex app-server generate-json-schema --out DIR`: `codexErrorInfo = usageLimitExceeded` pauses for a rate limit, `serverOverloaded` pauses for overload, and other known variants fail the row. The field → internal mapping, date-tree walk (`RIMZ_CODEX_SESSIONS` overrides the root), and self-clear rule are in [transcript.md](../../internals/agents/transcript.md#appendix--codex).
 
 ## Auth file
 

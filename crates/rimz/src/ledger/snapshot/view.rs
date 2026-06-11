@@ -36,7 +36,7 @@ use reap::{agent_hook_session_stale, is_agent_native_item};
 #[cfg(test)]
 pub(super) use aggregate::{attach_sub_agents, sub_agent_from_state};
 #[cfg(test)]
-pub(crate) use live::row_identity_violations;
+pub(crate) use live::{fold_ask_onto_row, row_identity_violations};
 #[cfg(test)]
 pub(super) use rows::row_from_agent;
 

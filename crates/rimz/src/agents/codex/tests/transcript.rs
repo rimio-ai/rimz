@@ -32,6 +32,162 @@ fn stream_assistant_messages_reads_rollout_agent_messages_only() {
 }
 
 #[test]
+fn turn_error_detector_maps_rollout_error_records() {
+    let line = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "turn_error",
+            "message": "You've hit your usage limit",
+            "codexErrorInfo": "usageLimitExceeded"
+        }
+    })
+    .to_string();
+    let error = detect_turn_error(&line).expect("turn error detected");
+
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        error.at,
+        "2026-06-11T07:18:00.000Z"
+            .parse::<jiff::Timestamp>()
+            .unwrap()
+    );
+    assert_eq!(error.label.as_deref(), Some("You've hit your usage limit"));
+}
+
+#[test]
+fn turn_error_detector_accepts_schema_error_notification_shape() {
+    // Generated from `codex app-server generate-json-schema --out …`:
+    // ErrorNotification carries `error.message` plus `error.codexErrorInfo`.
+    // The rollout wrapper still supplies the timestamp Rimz needs for
+    // self-clear projection.
+    let line = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "error": {
+            "message": "You've hit your usage limit",
+            "codexErrorInfo": "usageLimitExceeded"
+        },
+        "threadId": "thread-1",
+        "turnId": "turn-1",
+        "willRetry": false
+    })
+    .to_string();
+
+    let error = detect_turn_error(&line).expect("schema-shaped error detected");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(error.label.as_deref(), Some("You've hit your usage limit"));
+}
+
+#[test]
+fn turn_error_detector_maps_overloaded_and_generic_errors() {
+    let overloaded = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "stream_error",
+            "message": "Server is busy. Try again later."
+        }
+    })
+    .to_string();
+    assert_eq!(
+        detect_turn_error(&overloaded).expect("overloaded").class,
+        crate::agents::TurnErrorClass::PausedOverloaded
+    );
+
+    let generic = json!({
+        "timestamp": "2026-06-11T07:19:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "task_complete",
+            "error": {
+                "message": "API Error: Server Error",
+                "codexErrorInfo": "internalServerError"
+            }
+        }
+    })
+    .to_string();
+    let error = detect_turn_error(&generic).expect("generic error");
+    assert_eq!(error.class, crate::agents::TurnErrorClass::Failed);
+    assert_eq!(error.label.as_deref(), Some("API Error: Server Error"));
+
+    for empty_error in [json!(false), serde_json::Value::Null, json!(""), json!({})] {
+        let benign = json!({
+            "timestamp": "2026-06-11T07:20:00.000Z",
+            "type": "event_msg",
+            "payload": { "type": "task_complete", "error": empty_error }
+        })
+        .to_string();
+        assert!(
+            detect_turn_error(&benign).is_none(),
+            "empty task_complete error must not mark a dead turn"
+        );
+    }
+}
+
+#[test]
+fn turn_error_detector_self_clears_on_newer_live_record() {
+    let error = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": { "type": "error", "message": "API Error: Server Error" }
+    });
+    let newer = json!({
+        "timestamp": "2026-06-11T07:19:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "agent_message",
+            "message": "I recovered"
+        }
+    });
+    assert!(
+        detect_turn_error(&format!("{error}\n{newer}\n")).is_none(),
+        "a newer live rollout record means the session recovered"
+    );
+}
+
+#[test]
+fn turn_error_detector_does_not_treat_token_count_as_recovery() {
+    let error = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": { "type": "error", "message": "API Error: Server Error" }
+    });
+    let token_count = json!({
+        "timestamp": "2026-06-11T07:19:00.000Z",
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": { "last_token_usage": { "total_tokens": 42 } }
+        }
+    });
+
+    assert!(
+        detect_turn_error(&format!("{error}\n{token_count}\n")).is_some(),
+        "a token gauge after an error is not proof the turn recovered"
+    );
+}
+
+#[test]
+fn turn_error_detector_requires_a_clock_and_caps_the_label() {
+    let unclocked = json!({
+        "type": "event_msg",
+        "payload": { "type": "error", "message": "API Error: Server Error" }
+    })
+    .to_string();
+    assert!(detect_turn_error(&unclocked).is_none());
+
+    let long = "x".repeat(160);
+    let clocked = json!({
+        "timestamp": "2026-06-11T07:18:00.000Z",
+        "type": "event_msg",
+        "payload": { "type": "error", "message": long }
+    })
+    .to_string();
+    let error = detect_turn_error(&clocked).expect("clocked error");
+    assert_eq!(error.label.unwrap().chars().count(), 80);
+}
+
+#[test]
 fn fresh_transcript_reports_zero_context_not_unknown() {
     // A brand-new session has a rollout with no `token_count` event yet.
     // It must read as 0% (empty gauge), not `None` (no gauge), so a

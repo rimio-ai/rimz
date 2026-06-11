@@ -14,7 +14,9 @@ use projection::{LazyAgentPaneProjection, rows_from_panes};
 mod projection;
 
 #[cfg(test)]
-pub(crate) use projection::row_identity_violations;
+pub(crate) use projection::{
+    fold_ask_onto_row_for_test as fold_ask_onto_row, row_identity_violations,
+};
 
 impl SidebarSnapshot {
     /// Fold live multiplexer panes into the sidebar view-model. This reducer is

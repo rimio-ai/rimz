@@ -244,3 +244,8 @@ fn fold_ask_onto_row(row: &mut SidebarRow, ask: &FeedItem) {
     agent.resolver = active_resolver_state(ask);
     agent.options = ask.options.clone();
 }
+
+#[cfg(test)]
+pub(crate) fn fold_ask_onto_row_for_test(row: &mut SidebarRow, ask: &FeedItem) {
+    fold_ask_onto_row(row, ask);
+}

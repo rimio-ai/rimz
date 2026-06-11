@@ -167,6 +167,67 @@ impl AgentAdapter for PiAdapter {
         classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
     }
 
+    #[cfg(test)]
+    fn installed_hook_events(&self) -> Vec<&'static str> {
+        WIRED_EVENTS.to_vec()
+    }
+
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        use super::{AgentHookClass, ClassificationSample};
+
+        vec![
+            ClassificationSample::new(
+                "tool_call",
+                json!({ "session_id": "sess-1", "tool_name": "bash" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::Permission),
+            ),
+            ClassificationSample::new(
+                "session_start",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "before_agent_start",
+                json!({ "session_id": "sess-1", "prompt": "fix auth" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "agent_end",
+                json!({ "session_id": "sess-1", "stop_reason": "stop" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "tool_execution_end",
+                json!({ "session_id": "sess-1", "tool_name": "bash" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "session_before_compact",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "session_compact",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "session_shutdown",
+                json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+        ]
+    }
+
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
             FeedKind::Permission => {

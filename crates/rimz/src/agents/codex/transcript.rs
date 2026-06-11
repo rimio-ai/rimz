@@ -7,11 +7,14 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
+use jiff::Timestamp;
 use serde_json::Value;
 
 use super::DEFAULT_CONTEXT_WINDOW;
 use super::install::{codex_config_path, read_existing_table};
-use crate::agents::context::{AgentCost, AgentCurrentUsage, AgentTokenUsage};
+use crate::agents::context::{
+    AgentCost, AgentCurrentUsage, AgentTokenUsage, AgentTurnError, TurnErrorClass,
+};
 use crate::agents::pricing::PriceBook;
 use crate::agents::{
     LocalContextRefresh, TranscriptStat, optional_payload_string, read_transcript_tail,
@@ -297,7 +300,191 @@ pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
     };
+    usage_from_transcript_tail(&text)
+}
+
+pub(super) fn usage_from_transcript_tail(text: &str) -> TranscriptUsage {
     scan_transcript_tail(&text).into_usage()
+}
+
+/// Cap on provider error text surfaced on the agent card.
+const TURN_ERROR_LABEL_MAX: usize = 80;
+
+pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
+    for line in tail.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if transcript_record_proves_recovery(&value) {
+            return None;
+        }
+        let Some(payload) = error_payload(&value) else {
+            continue;
+        };
+        let Some(at) = record_timestamp(&value) else {
+            continue;
+        };
+        let label = turn_error_label(payload);
+        let class = classify_turn_error(codex_error_info(payload), label.as_deref());
+        return Some(AgentTurnError { class, at, label });
+    }
+    None
+}
+
+fn transcript_record_proves_recovery(value: &Value) -> bool {
+    if value.get("type").and_then(Value::as_str) == Some("turn_context") {
+        return true;
+    }
+    let Some(payload) = event_msg_payload(value) else {
+        return false;
+    };
+    matches!(
+        payload.get("type").and_then(Value::as_str),
+        Some("agent_message" | "task_started" | "user_message")
+    )
+}
+
+fn error_payload(value: &Value) -> Option<&Value> {
+    if let Some(payload) = event_msg_payload(value) {
+        return error_payload_from_event_payload(payload);
+    }
+    schema_error_payload(value)
+}
+
+fn error_payload_from_event_payload(payload: &Value) -> Option<&Value> {
+    match payload.get("type").and_then(Value::as_str) {
+        Some("stream_error" | "turn_error" | "error") => Some(payload),
+        Some("task_complete") if has_task_complete_error(payload) => Some(payload),
+        _ => schema_error_payload(payload),
+    }
+}
+
+fn schema_error_payload(payload: &Value) -> Option<&Value> {
+    payload.get("error").filter(|error| {
+        error.get("message").and_then(Value::as_str).is_some()
+            || error
+                .get("codexErrorInfo")
+                .or_else(|| error.get("codex_error_info"))
+                .is_some()
+    })
+}
+
+fn has_task_complete_error(payload: &Value) -> bool {
+    match payload.get("error") {
+        Some(Value::Null) | None => false,
+        Some(Value::Bool(false)) => false,
+        Some(Value::String(text)) => !text.trim().is_empty(),
+        Some(Value::Object(object)) => !object.is_empty(),
+        Some(_) => true,
+    }
+}
+
+fn event_msg_payload(value: &Value) -> Option<&Value> {
+    (value.get("type").and_then(Value::as_str) == Some("event_msg"))
+        .then(|| value.get("payload"))
+        .flatten()
+}
+
+fn record_timestamp(value: &Value) -> Option<Timestamp> {
+    value
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|timestamp| timestamp.parse::<Timestamp>().ok())
+}
+
+fn turn_error_label(payload: &Value) -> Option<String> {
+    let text = payload
+        .get("message")
+        .and_then(Value::as_str)
+        .or_else(|| payload.get("error_message").and_then(Value::as_str))
+        .or_else(|| {
+            payload
+                .get("error")
+                .and_then(|error| error.get("message"))
+                .and_then(Value::as_str)
+        })
+        .or_else(|| payload.get("error").and_then(Value::as_str))
+        .or_else(|| payload.get("last_agent_message").and_then(Value::as_str))?;
+    cap_turn_error_label(text)
+}
+
+fn cap_turn_error_label(text: &str) -> Option<String> {
+    let text = text.trim();
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(TURN_ERROR_LABEL_MAX).collect())
+}
+
+fn codex_error_info(payload: &Value) -> Option<&Value> {
+    payload
+        .get("codexErrorInfo")
+        .or_else(|| payload.get("codex_error_info"))
+        .or_else(|| {
+            payload
+                .get("error")
+                .and_then(|error| error.get("codexErrorInfo"))
+        })
+        .or_else(|| {
+            payload
+                .get("error")
+                .and_then(|error| error.get("codex_error_info"))
+        })
+}
+
+fn classify_turn_error(info: Option<&Value>, label: Option<&str>) -> TurnErrorClass {
+    if let Some(class) = info.and_then(class_from_codex_error_info) {
+        return class;
+    }
+    classify_turn_error_label(label)
+}
+
+fn class_from_codex_error_info(info: &Value) -> Option<TurnErrorClass> {
+    if let Some(kind) = info.as_str() {
+        return class_from_codex_error_kind(kind);
+    }
+    let object = info.as_object()?;
+    object
+        .keys()
+        .find_map(|kind| class_from_codex_error_kind(kind))
+}
+
+fn class_from_codex_error_kind(kind: &str) -> Option<TurnErrorClass> {
+    match kind {
+        "usageLimitExceeded" => Some(TurnErrorClass::PausedRateLimit),
+        "serverOverloaded" => Some(TurnErrorClass::PausedOverloaded),
+        "contextWindowExceeded"
+        | "internalServerError"
+        | "unauthorized"
+        | "badRequest"
+        | "sandboxError"
+        | "cyberPolicy"
+        | "threadRollbackFailed"
+        | "other" => Some(TurnErrorClass::Failed),
+        _ => None,
+    }
+}
+
+fn classify_turn_error_label(label: Option<&str>) -> TurnErrorClass {
+    let Some(label) = label else {
+        return TurnErrorClass::Failed;
+    };
+    let lower = label.to_ascii_lowercase();
+    if lower.contains("usage limit")
+        || lower.contains("rate limit")
+        || lower.contains("quota")
+        || lower.contains("too many requests")
+    {
+        TurnErrorClass::PausedRateLimit
+    } else if lower.contains("overloaded") || lower.contains("server is busy") {
+        TurnErrorClass::PausedOverloaded
+    } else {
+        TurnErrorClass::Failed
+    }
 }
 
 struct LastUsage {

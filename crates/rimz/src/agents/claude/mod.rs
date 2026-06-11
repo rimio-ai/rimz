@@ -59,8 +59,8 @@ use super::{
     AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
     RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow, classify_agent_hook,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    classify_pre_tool_use, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -278,15 +278,122 @@ impl AgentAdapter for ClaudeAdapter {
             "PermissionRequest" => Some(FeedKind::Permission),
             // ExitPlanMode / AskUserQuestion self-classify off the tool name on
             // the broad PreToolUse hook; every other tool call is plain lifecycle.
-            "PreToolUse" => match parse_pre_tool_use(payload).tool_name.as_deref() {
-                Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
-                Some("AskUserQuestion") => Some(FeedKind::Question),
-                _ => None,
-            },
+            "PreToolUse" => classify_pre_tool_use(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
 
         classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
+    }
+
+    #[cfg(test)]
+    fn installed_hook_events(&self) -> Vec<&'static str> {
+        INSTALLED_EVENTS.iter().map(|(event, _)| *event).collect()
+    }
+
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<super::ClassificationSample> {
+        use super::{AgentHookClass, ClassificationSample};
+
+        vec![
+            ClassificationSample::new(
+                "PermissionRequest",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::Permission),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::PlanApproval),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                AgentHookClass::BlockingFeed,
+                Some(FeedKind::Question),
+            ),
+            ClassificationSample::new(
+                "PreToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "Bash" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PostToolUse",
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "Edit" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SessionStart",
+                serde_json::json!({ "session_id": "sess-1", "source": "startup" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "UserPromptSubmit",
+                serde_json::json!({ "session_id": "sess-1", "prompt": "fix auth" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "Stop",
+                serde_json::json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "StopFailure",
+                serde_json::json!({ "session_id": "sess-1", "error": "api_error" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "Notification",
+                serde_json::json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SubagentStart",
+                serde_json::json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-1",
+                    "subagent_type": "Explore"
+                }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SubagentStop",
+                serde_json::json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-1",
+                    "agent_type": "Explore"
+                }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PreCompact",
+                serde_json::json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "PostCompact",
+                serde_json::json!({ "session_id": "sess-1", "trigger": "manual" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+            ClassificationSample::new(
+                "SessionEnd",
+                serde_json::json!({ "session_id": "sess-1" }),
+                AgentHookClass::Lifecycle,
+                None,
+            ),
+        ]
     }
 
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {

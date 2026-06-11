@@ -65,13 +65,14 @@ pub struct AgentContext {
     /// from the freshest session of each kind.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<AgentAccount>,
-    /// A turn that died on a provider API error with no `Stop` hook to record
-    /// it — detected from the transcript tail (Claude's "API Error" abort fires
-    /// no hook). Display-only like every field here: the projection reads it to
-    /// escalate a falsely-`running` row to the attention `!`, and it never
-    /// reaches the event log, a decision, or the rollup. Self-clears once a
-    /// newer hook event advances `last_activity` past
-    /// [`AgentTurnError::at`].
+    /// A turn that died on a provider API error, detected from a provider hook
+    /// or transcript/rollout tail. Display-only like every field here: the
+    /// projection reads it to refine a falsely-`running` row, or a same-turn
+    /// `failed` row, into `paused`/`failed` with the provider's reason. The
+    /// marker itself never reaches the event log or a decision. It self-clears
+    /// once a newer hook event advances `last_activity` past
+    /// [`AgentTurnError::at`], or once the rollup's `turn_started_at` proves the
+    /// marker belongs to a prior turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error: Option<AgentTurnError>,
     /// When the producer observed this record. The snapshot reaper drops a
@@ -262,12 +263,12 @@ pub enum TurnErrorClass {
     Failed,
 }
 
-/// A turn that ended on a provider API error without a `Stop` hook — the
-/// transcript is the only record of the death (an `assistant` entry flagged
-/// `isApiErrorMessage` and nothing newer), so the detector that reads the tail
-/// emits one of these. The projection compares [`at`](Self::at) against the
-/// row's `last_activity`: newer means the row's `running` is a corpse and the
-/// sidebar escalates it; any later hook event self-clears it.
+/// A turn that ended on a provider API error. Provider detectors read their
+/// hook payload or local transcript/rollout tail and normalize the death
+/// certificate into this marker. The projection compares [`at`](Self::at)
+/// against the row's `last_activity` for live `running` rows and against
+/// `turn_started_at` for terminal `failed` rows, so stale markers from prior
+/// turns do not reclassify fresh work.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct AgentTurnError {
     /// The display class for the dead turn. Older sidecars omitted this field;

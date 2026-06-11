@@ -1,7 +1,7 @@
 use super::*;
 use crate::agents::{
-    AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, LocalContextRefresh,
-    RateLimitWindow, TranscriptStat,
+    AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, AgentTurnError,
+    LocalContextRefresh, RateLimitWindow, TranscriptStat, TurnErrorClass,
 };
 
 struct MergeCase {
@@ -64,6 +64,29 @@ fn merge_local_context_preserves_prior_fields_by_case() {
         assert_eq!(merged.agent_id.as_str(), "sess-1", "{}", case.name);
         (case.assert)(&merged, prior_at, local_at);
     }
+}
+
+#[test]
+fn merge_turn_error_skips_identical_marker() {
+    let (_dir, runtime) = runtime();
+    let marker = AgentTurnError {
+        class: TurnErrorClass::PausedRateLimit,
+        at: Timestamp::from_second(1_700_000_000).unwrap(),
+        label: Some("You've hit your usage limit".to_owned()),
+    };
+
+    assert!(
+        merge_turn_error(&runtime, "codex", "sess-1", marker.clone()).unwrap(),
+        "first marker write updates the sidecar"
+    );
+    let first = read_one(&runtime, "codex", "sess-1").unwrap();
+
+    assert!(
+        !merge_turn_error(&runtime, "codex", "sess-1", marker).unwrap(),
+        "same marker is already present and should not rewrite"
+    );
+    let second = read_one(&runtime, "codex", "sess-1").unwrap();
+    assert_eq!(second, first);
 }
 
 fn codex_record(observed_at: Timestamp) -> AgentContextRecord {

@@ -47,6 +47,77 @@ fn api_error_turn_escalates_running_to_attention() {
 }
 
 #[test]
+fn codex_api_error_turn_escalates_running_to_attention() {
+    let session = agent("codex", "live-codex", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(60)
+        .turn_error(10, "API Error: Server Error");
+
+    let snapshot = room(Vec::new(), vec![session])
+        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+
+    let row = &snapshot.worktree_groups[0].rows[0];
+    assert_eq!(row.status(), Some(AgentStatus::Failed));
+    assert_eq!(row.turn_error_label(), Some("API Error: Server Error"));
+}
+
+#[test]
+fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
+    for case in [
+        (
+            "spent window parks a failed Stop over the rollout marker",
+            vec![window(100, 3_600)],
+            AgentStatus::Paused,
+            None,
+        ),
+        (
+            "after reset the terminal marker becomes an actionable failure",
+            vec![window(100, -60)],
+            AgentStatus::Failed,
+            Some("You've hit your usage limit"),
+        ),
+    ] {
+        let (label, windows, expected_status, expected_error_label) = case;
+        let session = agent("codex", "codex-stop-error", AgentStatus::Failed, 0)
+            .worktree("/repo/main")
+            .in_pane("%1")
+            .turn_started_ago(120)
+            .active_ago(5)
+            .limits(windows)
+            .paused_turn_error(10, "You've hit your usage limit");
+
+        let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+        let row = row(&snapshot, "codex-stop-error");
+        assert_eq!(row.status(), Some(expected_status), "{label}");
+        assert_eq!(row.turn_error_label(), expected_error_label, "{label}");
+    }
+}
+
+#[test]
+fn terminal_turn_error_before_current_turn_does_not_repark_row() {
+    let session = agent("codex", "codex-stale-error", AgentStatus::Failed, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .turn_started_ago(30)
+        .active_ago(5)
+        .limits(vec![window(100, 3_600)])
+        .paused_turn_error(60, "You've hit your usage limit");
+
+    let snapshot = room_with_agent_panes(Vec::new(), vec![session]);
+    let row = row(&snapshot, "codex-stale-error");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Failed),
+        "a marker from an older turn must not turn a fresh failed row into parked state"
+    );
+    assert!(
+        row.turn_error_label().is_none(),
+        "the older marker is ignored rather than shown as this turn's cause"
+    );
+}
+
+#[test]
 fn api_error_self_clears_when_activity_resumes() {
     // Any newer hook event (a prompt, a resume, a rewind) advances
     // `last_activity` past the stale marker and the escalation drops with

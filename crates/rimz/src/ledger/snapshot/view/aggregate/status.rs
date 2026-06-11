@@ -18,8 +18,17 @@ pub(super) fn project_display_status(
 ) {
     let rate_limit_kinds = rate_limit_window_kinds(agents, now);
     for row in rows.iter_mut() {
+        let row_id = row.id.clone();
         let row_name = row.name.clone();
         let last_activity = row.last_activity;
+        let turn_started_at = agents
+            .iter()
+            .find(|state| {
+                state.parent_agent_id.is_none()
+                    && state.kind == row_name
+                    && state.agent_id == row_id
+            })
+            .and_then(|state| state.turn_started_at);
         let Some(agent) = row.as_agent_mut() else {
             continue;
         };
@@ -34,8 +43,13 @@ pub(super) fn project_display_status(
             .sub_agents
             .iter()
             .any(|child| child.status == AgentStatus::Running);
-        let active_error = active_turn_error(status, agent.context.as_ref(), last_activity);
-        let projected = if let Some(error) = active_error.filter(|error| {
+        let turn_error = display_turn_error(
+            status,
+            agent.context.as_ref(),
+            last_activity,
+            turn_started_at,
+        );
+        let projected = if let Some(error) = turn_error.filter(|error| {
             matches!(
                 error.class,
                 TurnErrorClass::PausedRateLimit | TurnErrorClass::PausedOverloaded
@@ -52,8 +66,7 @@ pub(super) fn project_display_status(
             }
         } else if status == AgentStatus::Running && has_live_child {
             AgentStatus::Running
-        } else if let Some(error) =
-            active_error.filter(|error| error.class == TurnErrorClass::Failed)
+        } else if let Some(error) = turn_error.filter(|error| error.class == TurnErrorClass::Failed)
         {
             agent.turn_error_label = error.label.clone();
             AgentStatus::Failed
@@ -76,6 +89,16 @@ pub(super) fn project_display_status(
     }
 }
 
+fn display_turn_error(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+    turn_started_at: Option<Timestamp>,
+) -> Option<&AgentTurnError> {
+    active_turn_error(status, context, last_activity)
+        .or_else(|| terminal_turn_error(status, context, turn_started_at))
+}
+
 fn active_turn_error(
     status: AgentStatus,
     context: Option<&AgentContext>,
@@ -87,6 +110,20 @@ fn active_turn_error(
     context
         .and_then(|context| context.turn_error.as_ref())
         .filter(|error| error.at > last_activity)
+}
+
+fn terminal_turn_error(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    turn_started_at: Option<Timestamp>,
+) -> Option<&AgentTurnError> {
+    if status != AgentStatus::Failed {
+        return None;
+    }
+    let started = turn_started_at?;
+    context
+        .and_then(|context| context.turn_error.as_ref())
+        .filter(|error| error.at >= started)
 }
 
 #[derive(Default)]

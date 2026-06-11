@@ -16,6 +16,8 @@
 pub mod account;
 pub mod claude;
 pub mod codex;
+#[cfg(test)]
+pub(crate) mod conformance;
 pub mod context;
 pub mod descriptor;
 pub(crate) mod hook_types;
@@ -134,6 +136,42 @@ pub(crate) fn classify_agent_hook(
         class,
         feed_kind,
         event_name: event_name.to_owned(),
+    }
+}
+
+pub(crate) fn classify_pre_tool_use(tool_name: Option<&str>) -> Option<FeedKind> {
+    match tool_name {
+        Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
+        Some("AskUserQuestion") => Some(FeedKind::Question),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct ClassificationSample {
+    pub event_name: &'static str,
+    pub payload: Value,
+    pub expected: ClassifiedHook,
+}
+
+#[cfg(test)]
+impl ClassificationSample {
+    pub(crate) fn new(
+        event_name: &'static str,
+        payload: Value,
+        class: AgentHookClass,
+        feed_kind: Option<FeedKind>,
+    ) -> Self {
+        Self {
+            event_name,
+            payload,
+            expected: ClassifiedHook {
+                class,
+                feed_kind,
+                event_name: event_name.to_owned(),
+            },
+        }
     }
 }
 
@@ -266,6 +304,25 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook;
+
+    /// Test-only native payload corpus for registry-wide adapter conformance.
+    /// Keeping it on the adapter avoids a parallel per-agent registry. The
+    /// corpus must cover every event name in
+    /// [`installed_hook_events`](Self::installed_hook_events), and may include
+    /// multiple payload variants for broad hooks such as `PreToolUse`.
+    #[cfg(test)]
+    fn classification_corpus(&self) -> Vec<ClassificationSample> {
+        Vec::new()
+    }
+
+    /// Test-only list of native event names the installer wires for this
+    /// adapter. Conformance uses it to prove the hand-authored corpus covers the
+    /// installed surface instead of only proving the samples it happens to name.
+    #[cfg(test)]
+    fn installed_hook_events(&self) -> Vec<&'static str> {
+        Vec::new()
+    }
+
     /// Render the agent-native decision JSON for this resolution. Called
     /// only when the hook is on the bridge and a resolver has answered.
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value>;
@@ -299,17 +356,15 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Detect a turn that died without a hook to record it — an API-error abort
-    /// the agent wrote into its transcript but never reported on the lifecycle
-    /// channel (Claude fires no `Stop` on an "API Error" abort). The adapter
-    /// reads its own transcript tail from the out-of-band payload's path and
-    /// recognizes its own turn-terminal marker. Returns `None` when the newest
-    /// turn is alive or recovered, the transcript is unreadable, or the adapter
-    /// has no verified marker shape (Codex — its rollout error records are
-    /// unverified, so it inherits this default). Display-only enrichment, like
-    /// [`observe_context`](Self::observe_context) — it rides the context
-    /// sidecar and refines the displayed row; it never becomes a lifecycle
-    /// event or a ledger fact.
+    /// Detect a provider turn-death marker the adapter can recover from local
+    /// transcript/rollout evidence. Claude uses it for API-error aborts that
+    /// emit no `Stop`; Codex uses the same marker on `Stop` when the native
+    /// payload itself looks clean. Returns `None` when the newest turn is alive
+    /// or recovered, the transcript is unreadable, or the adapter has no local
+    /// marker shape. The marker itself is display-only enrichment: it rides the
+    /// context sidecar and refines the displayed row. An adapter may also use the
+    /// same evidence inside [`observe_lifecycle`](Self::observe_lifecycle) to set
+    /// a lifecycle error bit when the native turn-end payload lacks one.
     fn observe_turn_error(&self, _payload: &Value) -> Option<AgentTurnError> {
         None
     }
@@ -809,6 +864,20 @@ mod tests {
     fn sanitize_rejects_empty_and_whitespace() {
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
+    }
+
+    #[test]
+    fn pre_tool_use_classifier_maps_shared_blocking_tools() {
+        assert_eq!(
+            classify_pre_tool_use(Some("ExitPlanMode")),
+            Some(FeedKind::PlanApproval)
+        );
+        assert_eq!(
+            classify_pre_tool_use(Some("AskUserQuestion")),
+            Some(FeedKind::Question)
+        );
+        assert_eq!(classify_pre_tool_use(Some("Bash")), None);
+        assert_eq!(classify_pre_tool_use(None), None);
     }
 
     #[test]

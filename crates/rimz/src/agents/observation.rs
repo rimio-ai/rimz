@@ -13,8 +13,8 @@ use serde_json::Value;
 use crate::feed::RuntimeOwner;
 use crate::ids::{AgentSessionId, PaneId};
 
-use super::lifecycle::LifecycleSignal;
 use super::optional_payload_string;
+use super::{AgentTurnError, lifecycle::LifecycleSignal};
 
 /// One lifecycle observation: the agent-agnostic [`LifecycleSignal`] a native
 /// event carries plus the enrichment it reports. Returned by
@@ -68,6 +68,12 @@ pub struct AgentLifecycleObservation {
     pub context_window: Option<u64>,
     /// Cumulative token usage for this agent session.
     pub total_tokens: Option<u64>,
+    /// Provider-native turn-death marker discovered while building this
+    /// observation. The CLI merges it into the context sidecar; it is skipped in
+    /// the durable lifecycle event so the ledger still carries only the
+    /// normalized signal.
+    #[serde(skip)]
+    pub turn_error: Option<AgentTurnError>,
     /// The latest API call's per-call token split — what the agent card's
     /// composition line legends (`◌` cache-read, `↘` fresh input, `↗` output).
     /// Carry-forward enrichment for an agent with no richer realtime source
@@ -111,6 +117,7 @@ impl AgentLifecycleObservation {
             context_pct: None,
             context_window: None,
             total_tokens: None,
+            turn_error: None,
             cache_read_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,

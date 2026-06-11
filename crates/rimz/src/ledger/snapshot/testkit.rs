@@ -148,6 +148,8 @@ pub(super) trait AgentStateFx: Sized {
     /// Pin `last_activity`/`last_seen` to `secs` before the [`epoch`] — the
     /// stall-window and TTL scenarios' lever.
     fn active_ago(self, secs: i64) -> Self;
+    /// Stamp the current turn boundary `secs` before the [`epoch`].
+    fn turn_started_ago(self, secs: i64) -> Self;
     /// Attach rate-limit windows (merged into any context already attached).
     fn limits(self, windows: Vec<RateLimitWindow>) -> Self;
     /// Attach a transcript turn-death marker stamped `secs_ago` before the
@@ -180,6 +182,11 @@ impl AgentStateFx for AgentState {
         let at = Timestamp::from_second(epoch().as_second() - secs).unwrap();
         self.last_activity = at;
         self.last_seen = at;
+        self
+    }
+
+    fn turn_started_ago(mut self, secs: i64) -> Self {
+        self.turn_started_at = Some(ago(secs));
         self
     }
 

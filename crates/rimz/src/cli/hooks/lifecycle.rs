@@ -27,8 +27,18 @@ pub(super) fn handle_lifecycle_hook(
         .as_ref()
         .and_then(|recorded| recorded.model_hint.as_deref());
     if let Some(agent_id) = agent_id {
+        let observed_turn_error = recorded
+            .as_ref()
+            .and_then(|recorded| recorded.observation.turn_error.clone());
         manage_agent_context(
-            workspace, ledger, agent, event_name, payload, agent_id, model_hint,
+            workspace,
+            ledger,
+            agent,
+            event_name,
+            payload,
+            agent_id,
+            model_hint,
+            observed_turn_error,
         );
     }
     if let Some(recorded) = recorded.as_ref() {
@@ -290,6 +300,7 @@ fn manage_agent_context(
     payload: &Value,
     agent_id: &str,
     model_hint: Option<&str>,
+    observed_turn_error: Option<rimz::agents::AgentTurnError>,
 ) {
     // Tombstone the session's statusline context sidecar so it cannot pin stale
     // enrichment to a session the rollup has dropped.
@@ -328,6 +339,7 @@ fn manage_agent_context(
             payload,
             context_agent_id,
             model_hint,
+            observed_turn_error,
         );
     }
     // An adapter can request a detached `rimz` helper after a lifecycle event.
@@ -350,23 +362,23 @@ fn merge_agent_context_sidecars(
     payload: &Value,
     context_agent_id: &str,
     model_hint: Option<&str>,
+    observed_turn_error: Option<rimz::agents::AgentTurnError>,
 ) {
-    if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
-        if let Err(err) = rimz::ledger::agent_context::merge_turn_error(
-            ledger.runtime_paths(),
-            agent.descriptor().kind,
-            context_agent_id,
-            marker,
-        ) {
-            warn!(
-                agent = agent.descriptor().kind,
-                event = %event_name,
-                error = %err,
-                "lifecycle: failed to merge turn-error marker",
-            );
-        } else {
-            let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
-        }
+    let mut turn_error_updated = false;
+    if let Some(marker) = observed_turn_error {
+        turn_error_updated |=
+            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+    } else if let Some(marker) = agent.observe_turn_error_from_hook(event_name, payload) {
+        turn_error_updated |=
+            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+    } else if turn_error_refresh_event(event_name)
+        && let Some(marker) = agent.observe_turn_error(payload)
+    {
+        turn_error_updated |=
+            merge_turn_error_marker(ledger, agent, event_name, context_agent_id, marker);
+    }
+    if turn_error_updated {
+        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
     }
 
     let prior = rimz::ledger::agent_context::read_one(
@@ -411,6 +423,36 @@ fn merge_agent_context_sidecars(
         );
     } else {
         let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+}
+
+fn turn_error_refresh_event(event_name: &str) -> bool {
+    matches!(event_name, "Stop")
+}
+
+fn merge_turn_error_marker(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    event_name: &str,
+    context_agent_id: &str,
+    marker: rimz::agents::AgentTurnError,
+) -> bool {
+    match rimz::ledger::agent_context::merge_turn_error(
+        ledger.runtime_paths(),
+        agent.descriptor().kind,
+        context_agent_id,
+        marker,
+    ) {
+        Ok(updated) => updated,
+        Err(err) => {
+            warn!(
+                agent = agent.descriptor().kind,
+                event = %event_name,
+                error = %err,
+                "lifecycle: failed to merge turn-error marker",
+            );
+            false
+        }
     }
 }
 

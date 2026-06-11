@@ -177,14 +177,18 @@ pub fn merge_turn_error(
     kind: &str,
     agent_id: &str,
     marker: AgentTurnError,
-) -> Result<(), atomic::AtomicErr> {
+) -> Result<bool, atomic::AtomicErr> {
     let observed_at = Timestamp::now();
     let mut record = read_one(runtime, kind, agent_id)
         .unwrap_or_else(|| new_record(kind, agent_id, empty_context(kind, observed_at)));
+    if record.context.turn_error.as_ref() == Some(&marker) {
+        return Ok(false);
+    }
     record.context.source = kind.to_owned();
     record.context.turn_error = Some(marker);
     record.context.observed_at = observed_at;
-    write_record(runtime, &record)
+    write_record(runtime, &record)?;
+    Ok(true)
 }
 
 fn preserve_established_tokens(

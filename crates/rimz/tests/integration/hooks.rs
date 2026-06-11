@@ -1292,6 +1292,76 @@ fn codex_turn_boundary_refreshes_context_sidecar_from_app_server() {
     );
 }
 
+#[test]
+fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
+    let env = Env::new();
+    let session_id = "sess-codex-error";
+    let sessions = env.home_root.join("codex-sessions");
+    let day = sessions.join("2026").join("06").join("11");
+    std::fs::create_dir_all(&day).expect("mkdir codex sessions");
+    std::fs::write(
+        day.join(format!("rollout-2026-06-11T07-18-00-{session_id}.jsonl")),
+        json!({
+            "timestamp": "2026-06-11T07:18:00.000Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "turn_error",
+                "message": "You've hit your usage limit",
+                "codexErrorInfo": "usageLimitExceeded"
+            }
+        })
+        .to_string()
+            + "\n",
+    )
+    .expect("write rollout");
+
+    let payload = serde_json::to_string(&json!({
+        "hook_event_name": "Stop",
+        "session_id": session_id,
+        "model": "gpt-5.5-codex",
+    }))
+    .expect("payload");
+    let mut cmd = env.hook_command("codex");
+    cmd.env("RIMZ_CODEX_SESSIONS", &sessions)
+        .env("RIMZ_CODEX_BIN", "/nonexistent/codex-binary-xyz");
+    let out = env
+        .spawn_payload(cmd, &payload)
+        .wait_with_output()
+        .expect("wait hook");
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(out.stdout.is_empty(), "lifecycle hook is silent");
+
+    let record = env
+        .agent_contexts()
+        .into_iter()
+        .find(|record| record.agent_id == session_id)
+        .expect("turn-error sidecar");
+    let marker = record.context.turn_error.expect("turn-error marker");
+    assert_eq!(marker.class, rimz::agents::TurnErrorClass::PausedRateLimit);
+    assert_eq!(
+        marker.at,
+        "2026-06-11T07:18:00.000Z".parse::<Timestamp>().unwrap()
+    );
+    assert_eq!(marker.label.as_deref(), Some("You've hit your usage limit"));
+
+    let snapshot = env.snapshot_json();
+    let agent = snapshot["agents"]
+        .as_array()
+        .expect("agents array")
+        .iter()
+        .find(|agent| agent["agent_id"].as_str() == Some(session_id))
+        .expect("codex agent in snapshot");
+    assert_eq!(
+        agent["status"].as_str(),
+        Some("failed"),
+        "Stop over rollout turn_error must not reduce as success"
+    );
+}
+
 /// When `codex` cannot be launched the refresh is a silent no-op: the hook
 /// still succeeds and writes no sidecar (best-effort enrichment, never
 /// correctness).
