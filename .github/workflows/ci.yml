@@ -12,10 +12,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  # `-D warnings` is the deny-warnings gate. CI opts into mold explicitly; repo
-  # Cargo config stays install-safe and does not force a custom linker locally.
-  # mold + clang are installed per job below.
-  RUSTFLAGS: -D warnings -Clink-arg=-fuse-ld=mold
+  # `-D warnings` is the deny-warnings gate.
+  RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
 
 jobs:
@@ -36,15 +34,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: rimz-ci
-
-      - name: Install fast linker (mold + clang)
-        run: |
-          SUDO=
-          if command -v sudo >/dev/null 2>&1; then
-            SUDO=sudo
-          fi
-          $SUDO apt-get update
-          $SUDO apt-get install -y mold clang
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
       # cache miss (rust-cache does not cache ~/.cargo/bin).
@@ -72,16 +61,19 @@ jobs:
         with:
           shared-key: rimz-mux
 
-      - name: Install tmux, Zellij, and the fast linker
+      - name: Check tmux
         run: |
-          SUDO=
-          if command -v sudo >/dev/null 2>&1; then
-            SUDO=sudo
+          if ! command -v tmux >/dev/null 2>&1; then
+            echo "tmux is required on the Gitea runner for mux backend tests" >&2
+            exit 1
           fi
-          $SUDO apt-get update
-          $SUDO apt-get install -y tmux mold clang curl ca-certificates
+
+      - name: Install Zellij
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
           curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
-            | $SUDO tar -xz -C /usr/local/bin
+            | tar -xz -C "$RUNNER_TEMP/bin"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Install cargo-nextest (prebuilt)
         uses: taiki-e/install-action@v2
