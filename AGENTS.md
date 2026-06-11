@@ -59,6 +59,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 - [ARCHITECTURE.md](./ARCHITECTURE.md) — runtime shape, repository layout, module ownership.
 
 **Guide** — `docs/guide/`
+- [installation.md](./docs/guide/installation.md) — source install prerequisites and Rust toolchain setup for Linux and macOS.
 - [product.md](./docs/guide/product.md) — the working tour: the room, the loop, and the four scenarios people run.
 - [experience.md](./docs/guide/experience.md) — first-run-to-fleet experience, section by section.
 - [security.md](./docs/guide/security.md) — threat model and guardrails.

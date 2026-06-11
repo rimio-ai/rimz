@@ -86,7 +86,7 @@ The design commitments and the operating paths a question can take live in [DESI
 
 ## Development
 
-The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml). Zellij or tmux runs the room.
+The source install path lives in [docs/guide/installation.md](./docs/guide/installation.md). The Rust toolchain is pinned by [rust-toolchain.toml](./rust-toolchain.toml), and Zellij or tmux runs the room.
 
 ```sh
 cargo xtask build      # build rimz and the Zellij presence plugin
