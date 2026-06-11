@@ -377,7 +377,7 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
         "⣻"
     );
     assert_eq!(
-        agent_glyph(&theme, AgentStatus::Running, TurnPhase::Reasoning, 4),
+        agent_glyph(&theme, AgentStatus::Running, TurnPhase::Reasoning, 1),
         "⢂"
     );
     // The thinking head is the running-state indicator — a stale thinking bit

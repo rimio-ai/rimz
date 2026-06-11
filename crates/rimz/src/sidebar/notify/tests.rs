@@ -574,15 +574,23 @@ fn command_spawn_receives_notification_env() {
     let pid = spawn_notify_command(&command, &notification).expect("spawn command");
     assert!(pid > 0);
 
+    let expected =
+        "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\n";
     let deadline = Instant::now() + Duration::from_secs(2);
-    while !out.exists() && Instant::now() < deadline {
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        if let Ok(current) = std::fs::read_to_string(&out) {
+            text = current;
+            if text == expected {
+                break;
+            }
+        }
         std::thread::sleep(Duration::from_millis(10));
     }
-    let text = std::fs::read_to_string(&out).expect("command wrote env file");
-    assert_eq!(
-        text,
-        "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\n"
-    );
+    if text.is_empty() {
+        text = std::fs::read_to_string(&out).expect("command wrote env file");
+    }
+    assert_eq!(text, expected);
 }
 
 fn sh_quote(path: &std::path::Path) -> String {
