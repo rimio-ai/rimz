@@ -206,6 +206,9 @@ pub struct SidebarThemeConfig {
     /// Caution: waiting glyphs at rest, mid gauges, cache writes.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warn: Option<u8>,
+    /// Elevated caution: amber badge/gauge rung between warning and alarm.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caution: Option<u8>,
     /// Alarm: failed glyphs, high gauges, `-` removals, fresh input.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alarm: Option<u8>,

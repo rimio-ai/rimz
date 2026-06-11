@@ -132,9 +132,9 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// Link stats are stale after three missed two-second publishes plus slack.
-/// Stale renders as unknown amber (`⇅ ?`) rather than red: during a hard drop
-/// the remote-rendered sidebar cannot reach the user, and a second local viewer
-/// of the same room should not see a false hard failure.
+/// Stale renders as dim unknown (`⇄ remote ?`) rather than red: during a hard
+/// drop the remote-rendered sidebar cannot reach the user, and a second local
+/// viewer of the same room should not see a false hard failure.
 pub const LINK_STATS_STALE: Duration = Duration::from_secs(10);
 
 /// Link stats older than this are ignored entirely. This lets an old

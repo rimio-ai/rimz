@@ -120,9 +120,9 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `▐` / `▕`       | the cards' scrollbar — thumb / track, riding the right margin while the overflowing viewport is moving, settling away about a second after the scroll stops (`[sidebar] scrollbar` pins or removes it, [configuration](../reference/configuration.md#sidebar-rendering)) |
 | `┤ Tab ├`       | an active tab or make-up bucket under `NO_COLOR` — the caps carry the pick by shape when the fill drops; with color the padded chip marks it |
 | `⇅ rc`          | remote control is on for that provider |
-| `⇅ 42ms 0%`     | remote SSH link badge in the footer — RTT EWMA and probe-miss rate; `⇅ ?` means the last stats are stale |
+| `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
-Remote-link tiers are color-only: green for good, yellow for degraded, red bold for bad. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge and the `? for help` hint stays centered only when there is room.
+Remote-link badge tones are color-only: soft gray for calm, yellow for minor, amber for major, and bold red for critical. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge, `? for help` stays centered when there is room, and `␣ next ?!` pins to the right edge when an agent needs attention.
 
 ## Zone 1 — the cockpit
 
@@ -375,7 +375,7 @@ Pinned to the bottom edge, below all three zones. The body is truncated before t
 
 ```
                              ? for help                  ← nothing needs you
-             ␣ next ?!       ? for help                  ← at least one waiting/failed row
+                             ? for help        ␣ next ?!  ← at least one waiting/failed row
 ```
 
 **Pane-source notice.** When the producer repairs a partial pane read by carrying live panes from the prior frame, a dim line appears above the footer while the room stays interactive:

@@ -549,6 +549,7 @@ fn run_probe_stream(
     let Some(mut stdin) = child.stdin.take() else {
         return ProbeStreamExit::Ended { acked: false };
     };
+    window.begin_stream();
     let (ack_tx, ack_rx) = mpsc::channel();
     let reader = std::thread::spawn(move || {
         for line in BufReader::new(stdout)
@@ -595,8 +596,25 @@ fn run_probe_stream(
             }
         }
 
-        if drain_probe_acks(&ack_rx, events, window, blackout_latched, seen_ack) {
+        let drained = drain_probe_acks(&ack_rx, events, window, blackout_latched, seen_ack);
+        if drained.acked {
             acked = true;
+        }
+        if drained.reported_rtt_changed {
+            let sent_at_ms = rimz::sidebar::cache::unix_now_ms();
+            let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
+            // Stats refreshes update the remote cache immediately after a
+            // displayed RTT change. They are not measurement samples, so the
+            // ack is intentionally ignored by the window.
+            *seq = (*seq).saturating_add(1);
+            if write_link_probe(&mut stdin, &probe).is_err() {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = reader.join();
+                acked =
+                    finish_probe_stream(&ack_rx, events, window, blackout_latched, seen_ack, acked);
+                return ProbeStreamExit::Ended { acked };
+            }
         }
         maybe_send_probe_blackout(events, window, blackout_latched, *seen_ack);
 
@@ -605,10 +623,7 @@ fn run_probe_stream(
             let probe = LinkProbe::new(*seq, sent_at_ms, window.stats());
             window.record_sent(*seq, sent_at_ms);
             *seq = (*seq).saturating_add(1);
-            if serde_json::to_writer(&mut stdin, &probe).is_err()
-                || writeln!(stdin).is_err()
-                || stdin.flush().is_err()
-            {
+            if write_link_probe(&mut stdin, &probe).is_err() {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
@@ -622,6 +637,12 @@ fn run_probe_stream(
     }
 }
 
+fn write_link_probe(stdin: &mut impl Write, probe: &LinkProbe) -> std::io::Result<()> {
+    serde_json::to_writer(&mut *stdin, probe).map_err(std::io::Error::other)?;
+    writeln!(stdin)?;
+    stdin.flush()
+}
+
 fn finish_probe_stream(
     ack_rx: &mpsc::Receiver<u64>,
     events: &mpsc::Sender<LinkEvent>,
@@ -630,7 +651,7 @@ fn finish_probe_stream(
     seen_ack: &mut bool,
     acked: bool,
 ) -> bool {
-    drain_probe_acks(ack_rx, events, window, blackout_latched, seen_ack) || acked
+    drain_probe_acks(ack_rx, events, window, blackout_latched, seen_ack).acked || acked
 }
 
 fn maybe_send_probe_blackout(
@@ -661,20 +682,29 @@ fn maybe_send_probe_blackout_at(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct ProbeAckDrain {
+    acked: bool,
+    reported_rtt_changed: bool,
+}
+
 fn drain_probe_acks(
     ack_rx: &mpsc::Receiver<u64>,
     events: &mpsc::Sender<LinkEvent>,
     window: &mut ProbeWindow,
     blackout_latched: &mut bool,
     seen_ack: &mut bool,
-) -> bool {
-    let mut acked = false;
+) -> ProbeAckDrain {
+    let mut drained = ProbeAckDrain::default();
     while let Ok(seq) = ack_rx.try_recv() {
         let now_ms = rimz::sidebar::cache::unix_now_ms();
+        let before_rtt = window.reported_rtt_ms();
         if !window.record_ack(seq, now_ms) {
             continue;
         }
-        acked = true;
+        let after_rtt = window.reported_rtt_ms();
+        drained.acked = true;
+        drained.reported_rtt_changed |= before_rtt != after_rtt;
         if !*seen_ack {
             *seen_ack = true;
             let _ = events.send(LinkEvent::FirstAck);
@@ -684,7 +714,7 @@ fn drain_probe_acks(
             let _ = events.send(LinkEvent::Recovered);
         }
     }
-    acked
+    drained
 }
 
 fn sleep_until_next_tick(next_tick: Instant, stop: &AtomicBool) {

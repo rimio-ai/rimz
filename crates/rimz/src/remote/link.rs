@@ -24,13 +24,26 @@ pub const LINK_WINDOW: usize = 30;
 const PROBE_INTERVAL_ENV: &str = "RIMZ_REMOTE_PROBE_MS";
 const PROBE_TIMEOUT_ENV: &str = "RIMZ_REMOTE_PROBE_TIMEOUT_MS";
 
-/// Link-health tier for the footer badge and notifications.
+/// Link-health tier for notifications, diagnostics, and CLI health output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum LinkTier {
     Good,
     Degraded,
     Bad,
+}
+
+/// Four-rung display gradient for the sidebar link badge.
+///
+/// Alerting uses [`LinkTier`]. The badge keeps a calmer ladder so a healthy
+/// remote link recedes while latency and loss still move visibly through
+/// yellow, amber, and red.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum LinkBadgeLevel {
+    Calm,
+    Minor,
+    Major,
+    Critical,
 }
 
 /// Rolling link measurements published by the local probe stream and folded by
@@ -130,6 +143,27 @@ pub fn link_tier(rtt_ms: Option<u32>, miss_pct: u16) -> LinkTier {
         LinkTier::Good
     };
     rtt.max(miss)
+}
+
+/// Display level for the footer badge, computed as the worse of latency and
+/// probe-loss display bands.
+pub fn link_badge_level(rtt_ms: Option<u32>, miss_pct: u16) -> LinkBadgeLevel {
+    let rtt = match rtt_ms {
+        Some(ms) if ms > 500 => LinkBadgeLevel::Critical,
+        Some(ms) if ms > 300 => LinkBadgeLevel::Major,
+        Some(ms) if ms > 150 => LinkBadgeLevel::Minor,
+        _ => LinkBadgeLevel::Calm,
+    };
+    let loss = if miss_pct > 30 {
+        LinkBadgeLevel::Critical
+    } else if miss_pct > 20 {
+        LinkBadgeLevel::Major
+    } else if miss_pct > 10 {
+        LinkBadgeLevel::Minor
+    } else {
+        LinkBadgeLevel::Calm
+    };
+    rtt.max(loss)
 }
 
 impl Ord for LinkTier {
@@ -252,6 +286,8 @@ enum ProbeOutcome {
 pub struct ProbeWindow {
     outcomes: VecDeque<ProbeOutcome>,
     ewma_ms: Option<f64>,
+    reported_ms: Option<u32>,
+    discard_next_ack_sample: bool,
     last_ack_at_ms: Option<u64>,
     timeout: Duration,
 }
@@ -267,9 +303,21 @@ impl ProbeWindow {
         Self {
             outcomes: VecDeque::new(),
             ewma_ms: None,
+            reported_ms: None,
+            discard_next_ack_sample: true,
             last_ack_at_ms: None,
             timeout,
         }
+    }
+
+    /// Start a fresh probe-stream process while preserving the settled window.
+    ///
+    /// Each stream execs a new remote ingest process, so its first ack can pay
+    /// cold spawn cost. Re-arm the single-sample discard without clearing the
+    /// EWMA or displayed RTT; a reconnect keeps showing the last steady value
+    /// until real samples arrive.
+    pub fn begin_stream(&mut self) {
+        self.discard_next_ack_sample = true;
     }
 
     pub fn record_sent(&mut self, seq: u64, at_ms: u64) {
@@ -293,7 +341,7 @@ impl ProbeWindow {
             ProbeOutcome::Ack { .. } | ProbeOutcome::Miss { .. } => return false,
         };
         let rtt = at_ms.saturating_sub(sent_at_ms);
-        self.update_ewma(rtt.min(u64::from(u32::MAX)) as u32);
+        self.update_rtt(rtt.min(u64::from(u32::MAX)) as u32);
         self.last_ack_at_ms = Some(at_ms);
         self.outcomes[index] = ProbeOutcome::Ack { sent_at_ms };
         true
@@ -329,11 +377,15 @@ impl ProbeWindow {
             ((u32::from(misses) * 100) / u32::from(settled)) as u16
         };
         LinkStats {
-            rtt_ms: self.ewma_ms.map(round_ewma),
+            rtt_ms: self.reported_ms,
             miss_pct,
             window: settled,
             bandwidth_bps: None,
         }
+    }
+
+    pub fn reported_rtt_ms(&self) -> Option<u32> {
+        self.reported_ms
     }
 
     pub fn blackout_ms(&self, now_ms: u64) -> u64 {
@@ -352,12 +404,33 @@ impl ProbeWindow {
             .unwrap_or(0)
     }
 
-    fn update_ewma(&mut self, rtt_ms: u32) {
-        const ALPHA: f64 = 0.3;
-        self.ewma_ms = Some(match self.ewma_ms {
-            Some(prev) => prev.mul_add(1.0 - ALPHA, f64::from(rtt_ms) * ALPHA),
-            None => f64::from(rtt_ms),
-        });
+    fn update_rtt(&mut self, rtt_ms: u32) {
+        if std::mem::take(&mut self.discard_next_ack_sample) {
+            return;
+        }
+
+        let sample = f64::from(rtt_ms);
+        let ewma = match self.ewma_ms {
+            Some(prev) => {
+                let alpha = ewma_alpha(prev, sample);
+                prev.mul_add(1.0 - alpha, sample * alpha)
+            }
+            None => sample,
+        };
+        self.ewma_ms = Some(ewma);
+        self.update_reported_ms(ewma);
+    }
+
+    fn update_reported_ms(&mut self, ewma: f64) {
+        const REPORTED_MS_HYSTERESIS: u32 = 8;
+
+        let rounded = round_ewma(ewma);
+        if self
+            .reported_ms
+            .is_none_or(|reported| reported.abs_diff(rounded) >= REPORTED_MS_HYSTERESIS)
+        {
+            self.reported_ms = Some(rounded);
+        }
     }
 
     fn trim(&mut self) {
@@ -365,6 +438,21 @@ impl ProbeWindow {
             self.outcomes.pop_front();
         }
     }
+}
+
+fn ewma_alpha(prev: f64, sample: f64) -> f64 {
+    const STABLE_ALPHA: f64 = 0.15;
+    const FAST_ALPHA: f64 = 0.60;
+    const STABLE_RELATIVE_DELTA: f64 = 0.08;
+    const FAST_RELATIVE_DELTA: f64 = 0.50;
+
+    let relative_delta = ((sample - prev).abs() / prev.max(1.0)).clamp(0.0, FAST_RELATIVE_DELTA);
+    if relative_delta <= STABLE_RELATIVE_DELTA {
+        return STABLE_ALPHA;
+    }
+    let ramp =
+        (relative_delta - STABLE_RELATIVE_DELTA) / (FAST_RELATIVE_DELTA - STABLE_RELATIVE_DELTA);
+    STABLE_ALPHA + (FAST_ALPHA - STABLE_ALPHA) * ramp
 }
 
 fn round_ewma(value: f64) -> u32 {
@@ -392,32 +480,121 @@ mod tests {
     }
 
     #[test]
+    fn badge_level_boundaries_are_exact() {
+        assert_eq!(link_badge_level(None, 0), LinkBadgeLevel::Calm);
+        assert_eq!(link_badge_level(Some(150), 0), LinkBadgeLevel::Calm);
+        assert_eq!(link_badge_level(Some(151), 0), LinkBadgeLevel::Minor);
+        assert_eq!(link_badge_level(Some(300), 0), LinkBadgeLevel::Minor);
+        assert_eq!(link_badge_level(Some(301), 0), LinkBadgeLevel::Major);
+        assert_eq!(link_badge_level(Some(500), 0), LinkBadgeLevel::Major);
+        assert_eq!(link_badge_level(Some(501), 0), LinkBadgeLevel::Critical);
+        assert_eq!(link_badge_level(Some(10), 10), LinkBadgeLevel::Calm);
+        assert_eq!(link_badge_level(Some(10), 11), LinkBadgeLevel::Minor);
+        assert_eq!(link_badge_level(Some(10), 20), LinkBadgeLevel::Minor);
+        assert_eq!(link_badge_level(Some(10), 21), LinkBadgeLevel::Major);
+        assert_eq!(link_badge_level(Some(10), 30), LinkBadgeLevel::Major);
+        assert_eq!(link_badge_level(Some(10), 31), LinkBadgeLevel::Critical);
+        assert_eq!(link_badge_level(Some(180), 31), LinkBadgeLevel::Critical);
+    }
+
+    #[test]
     fn probe_window_tracks_ack_miss_late_ack_and_blackout() {
         let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
         window.record_sent(1, 1_000);
         assert!(window.record_ack(1, 1_050));
-        assert_eq!(window.stats().rtt_ms, Some(50));
+        assert_eq!(window.stats().rtt_ms, None);
         assert_eq!(window.stats().miss_pct, 0);
+        assert_eq!(window.stats().window, 1);
 
-        window.record_sent(2, 1_100);
+        window.record_sent(2, 1_060);
+        assert!(window.record_ack(2, 1_115));
+        assert_eq!(window.stats().rtt_ms, Some(55));
+
+        window.record_sent(3, 1_100);
         window.expire(1_201);
-        assert_eq!(window.stats().miss_pct, 50);
+        assert_eq!(window.stats().miss_pct, 33);
         assert!(
-            !window.record_ack(2, 1_230),
+            !window.record_ack(3, 1_230),
             "late ack after miss is ignored"
         );
-        assert_eq!(window.blackout_ms(1_250), 200);
+        assert_eq!(window.blackout_ms(1_250), 135);
     }
 
     #[test]
-    fn ewma_is_smoothed_and_window_is_capped() {
+    fn first_ack_is_accounted_but_not_reported() {
+        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+        window.record_sent(1, 0);
+        assert!(window.record_ack(1, 740));
+        assert_eq!(
+            window.stats(),
+            LinkStats {
+                rtt_ms: None,
+                miss_pct: 0,
+                window: 1,
+                bandwidth_bps: None,
+            }
+        );
+        window.record_sent(2, 1_000);
+        assert!(window.record_ack(2, 1_210));
+        assert_eq!(window.stats().rtt_ms, Some(210));
+    }
+
+    #[test]
+    fn begin_stream_rearms_cold_ack_discard_without_resetting_reported_rtt() {
+        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+        window.record_sent(1, 0);
+        assert!(window.record_ack(1, 740));
+        window.record_sent(2, 1_000);
+        assert!(window.record_ack(2, 1_210));
+        assert_eq!(window.stats().rtt_ms, Some(210));
+
+        window.begin_stream();
+        window.record_sent(3, 2_000);
+        assert!(window.record_ack(3, 2_700));
+        assert_eq!(
+            window.stats().rtt_ms,
+            Some(210),
+            "a new stream discards its cold first ack and holds the prior display"
+        );
+
+        window.record_sent(4, 3_000);
+        assert!(window.record_ack(4, 3_210));
+        assert_eq!(window.stats().rtt_ms, Some(210));
+    }
+
+    #[test]
+    fn adaptive_ewma_holds_small_wander_and_snaps_on_jump() {
         let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
         window.record_sent(1, 0);
         assert!(window.record_ack(1, 100));
         window.record_sent(2, 200);
-        assert!(window.record_ack(2, 400));
-        assert_eq!(window.stats().rtt_ms, Some(130));
+        assert!(window.record_ack(2, 300));
+        assert_eq!(window.stats().rtt_ms, Some(100));
 
+        window.record_sent(3, 400);
+        assert!(window.record_ack(3, 505));
+        assert_eq!(
+            window.stats().rtt_ms,
+            Some(100),
+            "small jitter stays inside the display hysteresis"
+        );
+
+        window.record_sent(4, 600);
+        assert!(window.record_ack(4, 1_200));
+        assert_eq!(
+            window.stats().rtt_ms,
+            Some(400),
+            "large deviation uses fast alpha and updates the reported value"
+        );
+    }
+
+    #[test]
+    fn ewma_window_is_capped() {
+        let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+        window.record_sent(1, 0);
+        assert!(window.record_ack(1, 100));
+        window.record_sent(2, 200);
+        assert!(window.record_ack(2, 300));
         for seq in 3..=(LINK_WINDOW as u64 + 5) {
             window.record_sent(seq, seq * 10);
             assert!(window.record_ack(seq, seq * 10 + 1));

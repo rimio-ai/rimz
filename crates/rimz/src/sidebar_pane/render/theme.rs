@@ -46,6 +46,8 @@ pub(crate) struct Palette {
     good: Color,
     /// gold — waiting / mid gauge (`Color::Yellow`).
     warn: Color,
+    /// muted amber — elevated caution between warning and alarm (`Color::LightRed`).
+    caution: Color,
     /// balanced red — failed / high gauge / fresh input (`Color::Red`).
     alarm: Color,
     /// teal — worktree headers and the lane spine (`Color::Cyan`).
@@ -75,6 +77,7 @@ impl Palette {
     pub(crate) const BUILTIN: Palette = Palette {
         good: Color::Indexed(108),
         warn: Color::Indexed(179),
+        caution: Color::Indexed(173),
         alarm: Color::Indexed(167),
         accent: Color::Indexed(73),
         cool: Color::Indexed(75),
@@ -93,6 +96,7 @@ impl Palette {
         Palette {
             good: slot(theme.good, Self::BUILTIN.good),
             warn: slot(theme.warn, Self::BUILTIN.warn),
+            caution: slot(theme.caution, Self::BUILTIN.caution),
             alarm: slot(theme.alarm, Self::BUILTIN.alarm),
             accent: slot(theme.accent, Self::BUILTIN.accent),
             cool: slot(theme.cool, Self::BUILTIN.cool),
@@ -304,6 +308,7 @@ impl Theme {
         match color {
             Color::Green => self.palette.good,
             Color::Yellow => self.palette.warn,
+            Color::LightRed => self.palette.caution,
             Color::Red => self.palette.alarm,
             Color::Cyan => self.palette.accent,
             Color::Blue => self.palette.cool,
@@ -361,8 +366,33 @@ mod tests {
             Some(Color::Indexed(167))
         );
         assert_eq!(
+            theme.style(Color::LightRed, Modifier::empty()).fg,
+            Some(Color::Indexed(173))
+        );
+        assert_eq!(
             theme.style(ORANGE, Modifier::empty()).fg,
             Some(Color::Indexed(173))
+        );
+    }
+
+    #[test]
+    fn caution_slot_maps_the_amber_semantic_color() {
+        let theme = Theme {
+            palette: Palette::resolve(&SidebarThemeConfig {
+                caution: Some(214),
+                ..SidebarThemeConfig::default()
+            }),
+            ..Theme::default()
+        };
+
+        assert_eq!(
+            theme.style(Color::LightRed, Modifier::empty()).fg,
+            Some(Color::Indexed(214))
+        );
+        assert_eq!(
+            theme.style(Color::Yellow, Modifier::empty()).fg,
+            Some(Color::Indexed(179)),
+            "warning stays separate from elevated caution"
         );
     }
 

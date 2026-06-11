@@ -22,7 +22,7 @@ When reconnect is enabled, the local supervisor starts a long-lived probe stream
 ssh -S <control-sock> -o BatchMode=yes -- <host> '<PATH repair>; exec rimz remote link-stats ingest --session <name>|--dir <path>'
 ```
 
-The local probe writes one JSON line every two seconds and the remote ingest command replies with one JSON ack. RTT is an EWMA of probe send-to-ack time. Loss is the probe miss percentage over the latest 30 settled probes; this measures the SSH session path rather than ICMP.
+The local probe writes one JSON line every two seconds and the remote ingest command replies with one JSON ack. RTT is an EWMA of probe send-to-ack time, seeded from the second acknowledged probe so the cold remote ingest spawn does not become the first displayed number. Loss is the probe miss percentage over the latest 30 settled probes; this measures the SSH session path rather than ICMP.
 
 The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<workspace>/link-stats.json` with temp-file-plus-rename cache semantics, including the remote `received_at_ms`, the SSH client identity, and the latest stats. The sidebar reads that file on every enrichment fold. Stats are fresh for 10 seconds, stale until 120 seconds, and ignored after that. Local rooms never have the file, so their footer is unchanged.
 
@@ -30,7 +30,9 @@ The schema is versioned as `rimz.link.v1`. The remote ingest writes `<runtime>/<
 
 ## User Signals
 
-The footer shows a link badge when fresh or stale stats exist: `⇅ 42ms 0%` for fresh stats and `⇅ ?` for stale stats. Tiers are color-only: good at RTT `<=150ms` and `0%` misses, degraded at RTT `151-400ms` or `1-10%` misses, and bad above those thresholds.
+The footer shows a link badge when fresh or stale stats exist: `⇄ remote 210ms` for fresh stats, `⇄ remote …` while the RTT warms, and `⇄ remote ?` for stale stats. Clean links omit loss; the badge appends `{n}%` only when loss is above `10%`.
+
+The badge display ladder is separate from alerting. It renders the worse of latency and loss: calm soft gray at RTT `<=150ms` and loss `<=10%`, yellow at RTT `151-300ms` or loss `11-20%`, amber at RTT `301-500ms` or loss `21-30%`, and bold red above those bands. Alerting keeps the stricter `LinkTier` thresholds, so low nonzero loss can notify while the badge stays visually calm.
 
 The local supervisor emits terminal-local OSC/BEL and `[notifications].command` alerts for confirmed link lost and restored edges. Probe blackout emits terminal-local OSC/BEL only, because it is a local stall signal and the configured command is reserved for confirmed link drops and recoveries. These alerts are local because a dead link cannot rely on the remote-rendered sidebar to reach the user.
 

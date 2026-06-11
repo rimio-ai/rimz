@@ -8,6 +8,7 @@ use super::fmt::age_short;
 use super::labels::{status_glyph, thinking_glyph};
 use super::theme::Theme;
 use super::{Alert, GateNotice};
+use crate::remote::link::{LinkBadgeLevel, link_badge_level};
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
 /// glyph in bold on the left, and — when the project root is known — its
@@ -152,72 +153,125 @@ pub(super) fn footer_lines(
             row.status()
                 .is_some_and(crate::feed::AgentStatus::is_actionable)
         });
-    // Faint chrome — the deepest legible gray, so the footer recedes to pure
-    // scaffolding without vanishing. `? for help` is the resting hint; the
-    // `␣ next ?!` triage key joins it only when something actually needs you,
-    // so the signature key stays discoverable without shouting at rest. The
-    // full key model lives behind the `?` overlay.
-    let text = if needs_attention {
-        "␣ next ?!   ? for help"
-    } else {
-        "? for help"
-    };
-    if let Some(link) = snapshot.link.as_ref() {
-        return vec![link_footer_line(link, text, theme, width)];
-    }
-    vec![center_line(
-        Line::styled(text.to_owned(), theme.faint()),
+    vec![footer_line(
+        snapshot.link.as_ref(),
+        needs_attention,
+        theme,
         width,
     )]
 }
 
-fn link_footer_line(
-    link: &SidebarLinkHealth,
-    help_text: &str,
+fn footer_line(
+    link: Option<&SidebarLinkHealth>,
+    needs_attention: bool,
     theme: &Theme,
     width: usize,
 ) -> Line<'static> {
-    let badge = link_badge(link, theme, width);
-    let badge_width = badge.content.chars().count();
-    if badge_width == 0 {
-        return center_line(Line::styled(help_text.to_owned(), theme.faint()), width);
+    const HELP_TEXT: &str = "? for help";
+    const TRIAGE_TEXT: &str = "␣ next ?!";
+
+    let badge = link.map(|link| link_badge(link, theme, width));
+    let help = Span::styled(HELP_TEXT.to_owned(), theme.faint());
+    let triage = needs_attention.then(|| Span::styled(TRIAGE_TEXT.to_owned(), theme.faint()));
+
+    let Some(help_start) = centered_start(width, span_width(&help)) else {
+        return badge
+            .map(|badge| Line::from(vec![badge]))
+            .unwrap_or_else(|| Line::from(vec![help]));
+    };
+    let triage_start = triage
+        .as_ref()
+        .and_then(|span| right_start(width, span_width(span)));
+    if let Some(line) = positioned_footer_line(
+        badge.clone(),
+        Some((help_start, help.clone())),
+        triage_start.zip(triage.clone()),
+    ) {
+        return line;
     }
-    let help_width = help_text.chars().count();
-    let help_start = width.saturating_sub(help_width) / 2;
-    if help_width == 0 || help_start <= badge_width {
-        return Line::from(vec![badge]);
+    if let Some(line) = positioned_footer_line(badge.clone(), Some((help_start, help)), None) {
+        return line;
     }
-    Line::from(vec![
-        badge,
-        Span::raw(" ".repeat(help_start - badge_width)),
-        Span::styled(help_text.to_owned(), theme.faint()),
-    ])
+    badge
+        .map(|badge| Line::from(vec![badge]))
+        .unwrap_or_else(|| center_line(Line::styled(HELP_TEXT.to_owned(), theme.faint()), width))
+}
+
+fn positioned_footer_line(
+    badge: Option<Span<'static>>,
+    help: Option<(usize, Span<'static>)>,
+    triage: Option<(usize, Span<'static>)>,
+) -> Option<Line<'static>> {
+    let mut placements = Vec::new();
+    if let Some(badge) = badge {
+        if span_width(&badge) == 0 {
+            return None;
+        }
+        placements.push((0, badge));
+    }
+    if let Some(help) = help {
+        placements.push(help);
+    }
+    if let Some(triage) = triage {
+        placements.push(triage);
+    }
+    placements.sort_by_key(|(start, _)| *start);
+
+    let mut cursor = 0;
+    let mut spans = Vec::new();
+    for (start, span) in placements {
+        if start <= cursor && !spans.is_empty() {
+            return None;
+        }
+        spans.push(Span::raw(" ".repeat(start.saturating_sub(cursor))));
+        cursor = start;
+        cursor += span_width(&span);
+        spans.push(span);
+    }
+    Some(Line::from(spans))
 }
 
 fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'static> {
-    let text = match link.freshness {
-        SidebarLinkFreshness::Stale => "⇅ ?".to_owned(),
+    let mut text = match link.freshness {
+        SidebarLinkFreshness::Stale => "⇄ remote ?".to_owned(),
         SidebarLinkFreshness::Fresh => match link.rtt_ms {
-            Some(rtt) => format!("⇅ {rtt}ms {}%", link.miss_pct),
-            None => format!("⇅ ? {}%", link.miss_pct),
+            Some(rtt) => format!("⇄ remote {rtt}ms"),
+            None => "⇄ remote …".to_owned(),
         },
     };
+    if link.freshness == SidebarLinkFreshness::Fresh && link.miss_pct > 10 {
+        let loss = format!(" {}%", link.miss_pct);
+        if text.chars().count() + loss.chars().count() <= width {
+            text.push_str(&loss);
+        }
+    }
     let text = if text.chars().count() > width {
         text.chars().take(width).collect()
     } else {
         text
     };
     let style = match link.freshness {
-        SidebarLinkFreshness::Stale => theme.style(Color::Yellow, Modifier::DIM),
-        SidebarLinkFreshness::Fresh => match link.tier {
-            crate::remote::link::LinkTier::Good => theme.style(Color::Green, Modifier::empty()),
-            crate::remote::link::LinkTier::Degraded => {
-                theme.style(Color::Yellow, Modifier::empty())
-            }
-            crate::remote::link::LinkTier::Bad => theme.style(Color::Red, Modifier::BOLD),
+        SidebarLinkFreshness::Stale => theme.dim(),
+        SidebarLinkFreshness::Fresh => match link_badge_level(link.rtt_ms, link.miss_pct) {
+            LinkBadgeLevel::Calm => theme.soft(),
+            LinkBadgeLevel::Minor => theme.style(Color::Yellow, Modifier::empty()),
+            LinkBadgeLevel::Major => theme.style(Color::LightRed, Modifier::empty()),
+            LinkBadgeLevel::Critical => theme.style(Color::Red, Modifier::BOLD),
         },
     };
     Span::styled(text, style)
+}
+
+fn centered_start(width: usize, content_width: usize) -> Option<usize> {
+    (content_width <= width).then(|| width.saturating_sub(content_width) / 2)
+}
+
+fn right_start(width: usize, content_width: usize) -> Option<usize> {
+    (content_width <= width).then(|| width - content_width)
+}
+
+fn span_width(span: &Span<'_>) -> usize {
+    span.content.chars().count()
 }
 
 /// Center a single line within `width` by prepending padding — used to pin the

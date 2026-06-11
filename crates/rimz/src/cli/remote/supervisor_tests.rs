@@ -56,10 +56,12 @@ fn finish_probe_stream_drains_tail_ack() {
     let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
     let mut blackout_latched = false;
     let mut seen_ack = false;
-    let sent_at_ms = rimz::sidebar::cache::unix_now_ms().saturating_sub(10);
+    let sent_at_ms = rimz::sidebar::cache::unix_now_ms().saturating_sub(20);
 
     window.record_sent(7, sent_at_ms);
+    window.record_sent(8, sent_at_ms + 10);
     ack_tx.send(7).expect("send tail ack");
+    ack_tx.send(8).expect("send second tail ack");
     drop(ack_tx);
 
     assert!(finish_probe_stream(
@@ -77,9 +79,56 @@ fn finish_probe_stream_drains_tail_ack() {
         other => panic!("expected first ack event, got {other:?}"),
     }
     let stats = window.stats();
-    assert_eq!(stats.window, 1);
+    assert_eq!(stats.window, 2);
     assert_eq!(stats.miss_pct, 0);
     assert!(stats.rtt_ms.is_some());
+    assert!(
+        event_rx.try_recv().is_err(),
+        "only the first ack emits an event"
+    );
+}
+
+#[test]
+fn ack_drain_reports_when_rtt_becomes_publishable() {
+    let (ack_tx, ack_rx) = std::sync::mpsc::channel::<u64>();
+    let (event_tx, _event_rx) = std::sync::mpsc::channel::<LinkEvent>();
+    let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
+    let mut blackout_latched = false;
+    let mut seen_ack = false;
+    let now_ms = rimz::sidebar::cache::unix_now_ms();
+
+    window.record_sent(1, now_ms.saturating_sub(50));
+    ack_tx.send(1).expect("send first ack");
+    let first = drain_probe_acks(
+        &ack_rx,
+        &event_tx,
+        &mut window,
+        &mut blackout_latched,
+        &mut seen_ack,
+    );
+    assert!(first.acked);
+    assert!(
+        !first.reported_rtt_changed,
+        "the first ack is accounted but keeps the badge warming"
+    );
+    assert_eq!(window.stats().rtt_ms, None);
+
+    window.record_sent(2, now_ms.saturating_sub(55));
+    ack_tx.send(2).expect("send second ack");
+    let second = drain_probe_acks(
+        &ack_rx,
+        &event_tx,
+        &mut window,
+        &mut blackout_latched,
+        &mut seen_ack,
+    );
+
+    assert!(second.acked);
+    assert!(
+        second.reported_rtt_changed,
+        "the second ack seeds the displayed RTT and should publish immediately"
+    );
+    assert!(window.stats().rtt_ms.is_some());
 }
 
 #[test]

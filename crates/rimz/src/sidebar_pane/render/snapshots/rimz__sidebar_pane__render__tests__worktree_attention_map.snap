@@ -22,4 +22,4 @@ expression: screen
  ? deploy.sh
    Deploy staging?
 
-        ␣ next ?!   ? for help
+              ? for help    ␣ next ?!

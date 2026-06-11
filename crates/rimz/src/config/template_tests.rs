@@ -33,6 +33,30 @@ fn template_covers_serialized_default_leaves() {
     }
 }
 
+#[test]
+fn template_lists_optional_sidebar_theme_slots() {
+    let template = MachineConfig::template();
+    for slot in [
+        "good",
+        "warn",
+        "caution",
+        "alarm",
+        "accent",
+        "cool",
+        "meta",
+        "soft",
+        "dim",
+        "faint",
+        "rule",
+        "selection",
+    ] {
+        assert!(
+            template.contains(&format!("## {slot} = ")),
+            "template is missing optional sidebar theme slot {slot}"
+        );
+    }
+}
+
 fn uncomment_default_lines(template: &str) -> String {
     let mut out = String::new();
     for line in template.lines() {

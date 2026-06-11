@@ -49,7 +49,7 @@ Between questions, you steer. `rimz steer claude -- "focus on the failing parser
 
 ## Run it on a server
 
-Your dev box lives on a server. You start agents, close the laptop, and reopen from a tablet on the train: `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the ledger, with every agent where you left it and every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇅ 42ms 0%` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/reach/remote.md)).
+Your dev box lives on a server. You start agents, close the laptop, and reopen from a tablet on the train: `rimz remote connect dev-box:query-engine` reconstructs the sidebar from the ledger, with every agent where you left it and every pending question still waiting. Saved aliases carry the target and reconnect defaults (`rimz remote add dev dev-box:~/code/query-engine`, then `rimz remote connect dev`), the link supervises itself with automatic reconnects, and a `⇄ remote 210ms` badge in the sidebar footer reads link health at a glance ([remote internals](../internals/reach/remote.md)).
 
 The room outlives the host too. The ledger is a directory of flat files under `~/.local/state/rimz/`, and when the session must be reborn after a reboot or a multiplexer crash, Rimz re-seeds every prior agent idle in its own pane (`claude --resume`, `codex resume`, `pi --session`), so the fleet is one prompt away from where it stopped. `--no-resume` starts a clean room instead.
 

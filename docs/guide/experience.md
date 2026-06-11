@@ -133,7 +133,7 @@ This is the moment Rimz earns its place. Claude hits a permission prompt: a feed
 ▌  fix auth flow
 ▌  ▣ ━━━━━━━━━━━━━━────────────────────   41%
 
-           ␣ next ?!   ? for help
+                 ? for help        ␣ next ?!
 ```
 
 Even from another pane or another app, the OS notification reaches the reader:
@@ -184,7 +184,7 @@ The reader does what they came to do: spins up four more agents across two workt
  ? deploy.sh
    Deploy staging?
 
-           ␣ next ?!   ? for help
+                 ? for help        ␣ next ?!
 ```
 
 The cockpit make-up is the first thing the eye lands on: `? 2   ! 1`, two waiting and one failed, summed across every worktree, counting even rows hidden by a per-worktree cap. Ranking does the triage automatically: waiting and failed rows rise first, unread rows break ties inside the same status, idle agents and process rows settle below, and each worktree caps that tail with a dim `+K more` while keeping active, blocked, paused, finished, and focused rows on screen.

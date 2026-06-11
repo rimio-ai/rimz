@@ -82,6 +82,7 @@
 # tones, but stay double-commented because they are optional overrides, not config defaults.
 ## good = 108
 ## warn = 179
+## caution = 173
 ## alarm = 167
 ## accent = 73
 ## cool = 75
