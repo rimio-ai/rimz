@@ -624,10 +624,16 @@ impl AgentAdapter for ClaudeAdapter {
         account::probe()
     }
 
-    fn remote_control_status(&self) -> RemoteControlStatus {
+    fn remote_control_status(
+        &self,
+        account: Option<&crate::agents::AgentAccount>,
+    ) -> RemoteControlStatus {
         let (_, settings) = remote_control::read_rc_settings();
+        let version = account
+            .and_then(|account| account.version.as_deref())
+            .and_then(|version| version.parse().ok());
         RemoteControlStatus {
-            pane_auto: remote_control::pane_auto_enabled(&settings),
+            pane_auto: remote_control::pane_auto_enabled(&settings, version),
         }
     }
 

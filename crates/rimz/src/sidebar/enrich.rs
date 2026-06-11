@@ -43,7 +43,7 @@ pub(crate) use rate_limits::{
     project_idle_window, read_rate_limits_cache, write_rate_limits_cache,
 };
 
-use accounts::{produce_accounts, read_accounts_cache};
+use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
 use codex_refresh::refresh_codex_rate_limits;
 use live_spend::refresh_live_spend_baselines;
 
@@ -561,10 +561,12 @@ fn fold_machine_config_producing(
 }
 
 /// Fold the per-machine config and dashboard onto a *consumer* snapshot, reading
-/// the producer's published `accounts.json` instead of probing. A consumer forks
-/// zero subprocesses (the single-flight contract); a cold cache (no producer
-/// publish yet) carries no blocks until the elder's first publish. The cheap
-/// config read stays local so each tab honours its own display preferences.
+/// the producer's published `accounts.json` instead of probing, with live
+/// context versions merged into the current frame without writing the cache. A
+/// consumer forks zero subprocesses (the single-flight contract); a cold cache
+/// (no producer publish yet) carries no blocks until the elder's first publish.
+/// The cheap config read stays local so each tab honours its own display
+/// preferences.
 /// Returns the published spending cache whole — tally and stamp — so the caller
 /// folds the value tally and the live today-spend overlay from one read.
 fn fold_machine_config_cached(
@@ -572,7 +574,10 @@ fn fold_machine_config_cached(
     runtime: &RuntimePaths,
     config: crate::config::MachineConfig,
 ) -> (SidebarSnapshot, ProviderSpendingCache) {
-    let accounts = read_accounts_cache(&runtime.shared_accounts_path()).accounts;
+    let accounts = cached_accounts_for_snapshot(
+        read_accounts_cache(&runtime.shared_accounts_path()),
+        &snapshot,
+    );
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
@@ -614,7 +619,9 @@ fn fold_machine_config_with(
         let descriptor = adapter.descriptor();
         let config_toggle = remote_control_toggle(descriptor.kind, &remote_control);
         let pane_auto = descriptor.capabilities.remote_control.pane_sessions
-            && adapter.remote_control_status().pane_auto;
+            && adapter
+                .remote_control_status(accounts.get(descriptor.kind))
+                .pane_auto;
         remote_control_flags.insert(descriptor.kind.to_owned(), config_toggle || pane_auto);
     }
 

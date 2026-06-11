@@ -32,7 +32,7 @@ pub(super) fn produce_accounts(
     // Fast path: a young publish needs no lock and no fork.
     let cache = read_accounts_cache(&path);
     if cache.is_fresh(unix_now_ms()) {
-        return accounts_with_merged_versions(&path, cache, snapshot, &context_versions).accounts;
+        return cache_with_context_versions(cache, &context_versions).accounts;
     }
 
     // Slow path: elect one prober for this user's refresh window. The
@@ -43,7 +43,7 @@ pub(super) fn produce_accounts(
         let cache = read_accounts_cache(&path);
         cache
             .is_fresh(unix_now_ms())
-            .then(|| accounts_with_merged_versions(&path, cache, snapshot, &context_versions))
+            .then(|| cache_with_context_versions(cache, &context_versions))
     };
     match crate::ledger::single_flight::coalesce(
         &lock_path,
@@ -81,6 +81,13 @@ pub(super) fn produce_accounts(
             )
         }
     }
+}
+
+pub(super) fn cached_accounts_for_snapshot(
+    cache: AccountsCache,
+    snapshot: &SidebarSnapshot,
+) -> BTreeMap<String, AgentAccount> {
+    cache_with_context_versions(cache, &context_versions(snapshot)).accounts
 }
 
 /// Probe out-of-band login/account facts for every known provider plus any
@@ -145,24 +152,24 @@ fn probe_accounts(snapshot: &SidebarSnapshot) -> (BTreeMap<String, AgentAccount>
     (accounts, ok)
 }
 
-fn accounts_with_merged_versions(
-    path: &Path,
+fn cache_with_context_versions(
     mut cache: AccountsCache,
-    snapshot: &SidebarSnapshot,
     context_versions: &BTreeMap<String, String>,
 ) -> AccountsCache {
-    let active_kinds = active_provider_kinds(snapshot);
-    let accounts = merge_versions(
-        cache.accounts.clone(),
-        &cache.accounts,
-        &active_kinds,
-        context_versions,
-    );
-    if accounts != cache.accounts {
-        cache.accounts = accounts;
-        write_accounts_cache(path, &cache);
+    if !context_versions.is_empty() {
+        cache.accounts = merge_context_versions(cache.accounts, context_versions);
     }
     cache
+}
+
+fn merge_context_versions(
+    mut accounts: BTreeMap<String, AgentAccount>,
+    context_versions: &BTreeMap<String, String>,
+) -> BTreeMap<String, AgentAccount> {
+    for (kind, version) in context_versions {
+        accounts.entry(kind.clone()).or_default().version = Some(version.clone());
+    }
+    accounts
 }
 
 fn merge_versions(
@@ -186,10 +193,7 @@ fn merge_versions(
             }
         }
     }
-    for (kind, version) in context_versions {
-        accounts.entry(kind.clone()).or_default().version = Some(version.clone());
-    }
-    accounts
+    merge_context_versions(accounts, context_versions)
 }
 
 fn context_versions(snapshot: &SidebarSnapshot) -> BTreeMap<String, String> {
@@ -264,24 +268,11 @@ pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-    use std::path::Path;
-
-    use jiff::Timestamp;
 
     use super::*;
-    use crate::ids::WorkspaceId;
 
     fn active_kinds(kinds: &[&str]) -> BTreeSet<String> {
         kinds.iter().map(|kind| (*kind).to_owned()).collect()
-    }
-
-    fn empty_snapshot() -> SidebarSnapshot {
-        SidebarSnapshot::build(
-            WorkspaceId::from_project_root(Path::new("/tmp/accounts-version-test")),
-            Vec::new(),
-            Vec::new(),
-            Timestamp::from_second(1_700_000_100).unwrap(),
-        )
     }
 
     #[test]
@@ -350,7 +341,7 @@ mod tests {
     }
 
     #[test]
-    fn live_context_versions_publish_without_extending_account_ttl() {
+    fn live_context_versions_merge_without_writing_fresh_cache() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("accounts.json");
         let mut accounts = BTreeMap::new();
@@ -372,17 +363,25 @@ mod tests {
         let cache = read_accounts_cache(&path);
         let versions = BTreeMap::from([("codex".to_owned(), "0.135.0".to_owned())]);
 
-        let merged = accounts_with_merged_versions(&path, cache, &empty_snapshot(), &versions);
+        let merged = cache_with_context_versions(cache, &versions);
         let persisted = read_accounts_cache(&path);
 
         assert_eq!(merged.refreshed_at_ms, 42);
         assert_eq!(persisted.refreshed_at_ms, 42);
         assert_eq!(
-            persisted
+            merged
                 .accounts
                 .get("codex")
                 .and_then(|account| account.version.as_deref()),
             Some("0.135.0")
+        );
+        assert_eq!(
+            persisted
+                .accounts
+                .get("codex")
+                .and_then(|account| account.version.as_deref()),
+            None,
+            "fresh-cache context merges stay local to the frame"
         );
     }
 }

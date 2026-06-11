@@ -142,10 +142,11 @@ pub struct AgentAccount {
     /// the dashboard infers metering from whether rate-limit windows are present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub metered: Option<bool>,
-    /// The agent binary's version, when the out-of-band probe reads one (Pi's
-    /// `pi --version`). The panel header's fallback for a provider whose sessions
-    /// carry no `agent_version` in their rich context; a live session's
-    /// reading still wins.
+    /// The agent binary's version, when the out-of-band probe reads one. The
+    /// panel header's fallback for a provider whose sessions carry no
+    /// `agent_version` in their rich context, and the version input for
+    /// display-only provider capability badges; a live session's reading still
+    /// wins.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// The raw subscription-provider id the account runs on, for a

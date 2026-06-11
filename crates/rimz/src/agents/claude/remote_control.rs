@@ -3,10 +3,8 @@
 //! This module owns upstream facts so the pane launch pin, daemon host strip,
 //! `rimz start` preflight, doctor, and sidebar badge all read one source.
 
-use std::path::PathBuf;
-use std::sync::OnceLock;
-
 use serde_json::{Map, Value};
+use std::path::PathBuf;
 
 use crate::agents::version::{CliVersion, probe_cli_version};
 
@@ -21,8 +19,6 @@ pub(crate) const AGENT_VIEW_HOSTS_RC_SINCE: CliVersion = CliVersion::new(2, 1, 1
 const FALLBACK_SETTINGS_PATH: &str = "~/.claude/settings.json";
 const ANTHROPIC_API_KEY: &str = "ANTHROPIC_API_KEY";
 const ANTHROPIC_AUTH_TOKEN: &str = "ANTHROPIC_AUTH_TOKEN";
-
-static CACHED_PROBED_VERSION: OnceLock<Option<CliVersion>> = OnceLock::new();
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ClaudeRcSettings {
@@ -90,22 +86,16 @@ pub(crate) fn probed_version() -> Option<CliVersion> {
     probe_cli_version("claude")?.parse().ok()
 }
 
-pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings) -> bool {
+pub(crate) fn pane_auto_enabled(settings: &ClaudeRcSettings, version: Option<CliVersion>) -> bool {
     if !settings.remote_control_at_startup || settings.disable_remote_control {
         return false;
     }
     let auth_conflict =
         settings.api_key_helper || settings.env_auth_conflict || launch_env_auth_conflict();
-    if auth_conflict
-        && cached_probed_version().is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE)
-    {
+    if auth_conflict && version.is_some_and(|found| found >= AUTH_ENV_BLOCKS_RC_SINCE) {
         return false;
     }
     true
-}
-
-fn cached_probed_version() -> Option<CliVersion> {
-    *CACHED_PROBED_VERSION.get_or_init(probed_version)
 }
 
 fn launch_env_auth_conflict() -> bool {
@@ -187,12 +177,34 @@ mod tests {
             disable_remote_control: true,
             ..ClaudeRcSettings::default()
         };
-        assert!(!pane_auto_enabled(&disabled));
+        assert!(!pane_auto_enabled(&disabled, None));
 
         let off = ClaudeRcSettings {
             remote_control_at_startup: false,
             ..ClaudeRcSettings::default()
         };
-        assert!(!pane_auto_enabled(&off));
+        assert!(!pane_auto_enabled(&off, None));
+    }
+
+    #[test]
+    fn pane_auto_status_uses_account_version_for_auth_gate() {
+        let conflict = ClaudeRcSettings {
+            remote_control_at_startup: true,
+            api_key_helper: true,
+            ..ClaudeRcSettings::default()
+        };
+
+        assert!(
+            pane_auto_enabled(&conflict, None),
+            "unknown versions apply only version-independent gates"
+        );
+        assert!(pane_auto_enabled(
+            &conflict,
+            Some(CliVersion::new(2, 1, 156))
+        ));
+        assert!(!pane_auto_enabled(
+            &conflict,
+            Some(CliVersion::new(2, 1, 157))
+        ));
     }
 }

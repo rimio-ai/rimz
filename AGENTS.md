@@ -39,6 +39,7 @@ Markdown prose uses one logical line per paragraph, list item, and blockquote pa
 - Root docs stay short and authoritative; detail lives in `docs/` and is linked.
 - Update [ARCHITECTURE.md](./ARCHITECTURE.md) when modules move. Update [DESIGN.md](./DESIGN.md) only when a product or runtime invariant changes.
 - Contributor automation lives in `xtask/`; command surface and gate stack live in [docs/contributing/rust-conventions.md](./docs/contributing/rust-conventions.md).
+- Use `uv` for Python helpers when Python is needed.
 
 ## Testing requirements
 

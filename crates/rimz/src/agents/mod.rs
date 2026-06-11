@@ -293,7 +293,8 @@ pub struct RefreshSpawn {
 }
 
 /// Dynamic remote-control state read from the agent's own machine-local
-/// settings. Static capability still lives in [`AgentDescriptor`].
+/// settings and the already-published account cache. Static capability still
+/// lives in [`AgentDescriptor`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RemoteControlStatus {
     /// Existing pane sessions auto-enable their own remote-control surface.
@@ -479,10 +480,11 @@ pub trait AgentAdapter: Send + Sync {
         account::AccountProbe::LoggedOut
     }
 
-    /// Dynamic remote-control state from this provider's own settings.
+    /// Dynamic remote-control state from this provider's own settings and
+    /// account facts.
     /// Best-effort and read-only: failures return the default "off/unknown"
     /// state. The sidebar uses this only to light a capability-gated flag.
-    fn remote_control_status(&self) -> RemoteControlStatus {
+    fn remote_control_status(&self, _account: Option<&AgentAccount>) -> RemoteControlStatus {
         RemoteControlStatus::default()
     }
 

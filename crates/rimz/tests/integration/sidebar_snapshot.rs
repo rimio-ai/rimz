@@ -89,7 +89,9 @@ fn claude_remote_control_value(
             env.workspace_id.as_str(),
             "--json",
         ])
-        .env("RIMZ_CLAUDE_SETTINGS", settings);
+        .env("RIMZ_CLAUDE_SETTINGS", settings)
+        .env_remove("ANTHROPIC_API_KEY")
+        .env_remove("ANTHROPIC_AUTH_TOKEN");
     if let Some(path) = path {
         command.env("PATH", path);
     }
