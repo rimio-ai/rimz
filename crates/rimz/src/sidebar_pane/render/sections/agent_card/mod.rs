@@ -56,11 +56,13 @@ const SUBAGENTS_GLYPH: &str = "⧉";
 const NAME_MAX: usize = 12;
 
 /// A just-started agent: idle, sitting on the `Some(0)` baseline context gauge
-/// with no real usage behind it yet. Its 0% bar and zeroed stat lines are noise,
-/// so the card collapses to identity + description (+ the last-activity age).
+/// with no real usage or spend history behind it yet. Its 0% bar and zeroed stat
+/// lines are noise, so the card collapses to identity + description (+ the
+/// last-activity age).
 fn idle_unstarted(row: &SidebarRow) -> bool {
     matches!(row.status().unwrap_or(AgentStatus::Idle), AgentStatus::Idle)
         && gauge_percent(row).unwrap_or(0) == 0
+        && !row.as_agent().is_some_and(AgentCard::has_session_history)
 }
 
 fn agent(row: &SidebarRow) -> Option<&AgentCard> {
@@ -122,11 +124,11 @@ pub(super) fn row_lines(
             }
         } else {
             inner.push(description_line(theme, row, tier, cw, animation_phase));
-            // A just-started idle agent sits on the 0% baseline gauge with
-            // nothing behind it, so it rests at identity + description alone.
-            // Once an agent has real context, the bar and the context line —
-            // the per-card `▤ · ◌ ◍ ↘ ↗` breakdown with the clock-fill
-            // last-activity age — join the resting card.
+            // A just-started idle agent sits on the 0% baseline gauge with no
+            // history behind it, so it rests at identity + description alone.
+            // Once an agent has real context, spend, or compaction history, the
+            // bar and the context line — the per-card `▤ · ◌ ◍ ↘ ↗` breakdown
+            // with the clock-fill last-activity age — join the resting card.
             if !idle_unstarted(row) {
                 if let Some(line) = gauge_line(theme, row, bands, cw) {
                     inner.push(line);

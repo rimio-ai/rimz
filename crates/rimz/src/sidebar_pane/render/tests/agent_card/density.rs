@@ -104,10 +104,6 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
         0,
     );
     running.context_pct = None;
-    running.cache_read_input_tokens = None;
-    running.fresh_input_tokens = None;
-    running.output_tokens = None;
-    running.total_tokens = None;
 
     let mut waiting = density_agent(
         "wait-1",
@@ -117,10 +113,6 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
         0,
     );
     waiting.context_pct = None;
-    waiting.cache_read_input_tokens = None;
-    waiting.fresh_input_tokens = None;
-    waiting.output_tokens = None;
-    waiting.total_tokens = None;
 
     let mut selected = density_agent(
         "selected-1",
@@ -323,9 +315,11 @@ fn density_agent(
     agent.effort = Some("high".to_owned());
     agent.context_pct = Some(context_pct);
     agent.context_window = Some(200_000);
-    agent.cache_read_input_tokens = Some(24_000);
-    agent.fresh_input_tokens = Some(6_000);
-    agent.output_tokens = Some(1_000);
-    agent.total_tokens = Some(31_000);
+    if context_pct > 0 {
+        agent.cache_read_input_tokens = Some(24_000);
+        agent.fresh_input_tokens = Some(6_000);
+        agent.output_tokens = Some(1_000);
+        agent.total_tokens = Some(31_000);
+    }
     agent
 }

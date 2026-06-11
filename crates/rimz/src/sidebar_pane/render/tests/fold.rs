@@ -371,6 +371,89 @@ fn just_started_idle_agent_sheds_the_gauge_and_zeroed_stats() {
         running.join("\n")
     );
 }
+
+#[test]
+fn compacted_idle_agent_keeps_the_gauge_and_context_line() {
+    let theme = Theme::fixed(true);
+    let mut state = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("warm up"),
+    );
+    state.context_pct = Some(100);
+    state.total_tokens = Some(283_900);
+    state.compaction_count = 1;
+    let mut context = claude_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: Some(0),
+        remaining_percentage: Some(100),
+        current_usage: None,
+    });
+    state.context = Some(context);
+
+    let snapshot = snapshot_with(Vec::new(), vec![state]);
+    let rendered = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
+
+    assert_eq!(rendered.len(), 5, "{rendered:?}");
+    let gauge = rendered
+        .iter()
+        .find(|line| line.contains('▢'))
+        .expect("the compacted idle agent keeps its hollow 0% gauge");
+    assert!(gauge.contains("0%"), "{gauge}");
+    assert!(!gauge.contains("100%"), "{gauge}");
+    let context = rendered
+        .iter()
+        .find(|line| line.contains('▤'))
+        .expect("the compacted idle agent keeps its context line");
+    assert!(context.contains("▤ 283k"), "{context}");
+    assert!(context.contains("↻ 1"), "{context}");
+    for marker in ['◌', '◍', '↘', '↗'] {
+        assert!(
+            !context.contains(marker),
+            "post-compact context line falls back to the bare total:\n{context}"
+        );
+    }
+}
+
+#[test]
+fn idle_agent_with_cost_history_keeps_the_gauge() {
+    let theme = Theme::fixed(true);
+    let mut state = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("warm up"),
+    );
+    let mut context = claude_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: Some(0),
+        remaining_percentage: Some(100),
+        current_usage: None,
+    });
+    state.context = Some(context);
+
+    let snapshot = snapshot_with(Vec::new(), vec![state]);
+    let rendered = line_texts(&group_lines(&snapshot, &theme, usize::MAX));
+
+    assert_eq!(rendered.len(), 4, "{rendered:?}");
+    let gauge = rendered
+        .iter()
+        .find(|line| line.contains('▢'))
+        .expect("cost history keeps the 0% gauge visible");
+    assert!(gauge.contains("0%"), "{gauge}");
+    assert!(
+        rendered.iter().all(|line| !line.contains('▤')),
+        "cost-only history has no token context line:\n{}",
+        rendered.join("\n")
+    );
+}
 /// Consecutive cards in a group stack without a blank separator. Different
 /// worktrees still get their group-level gap in the scroll composer.
 #[test]

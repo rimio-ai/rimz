@@ -1,4 +1,5 @@
 use super::*;
+use crate::agents::AgentCost;
 
 fn row_time() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
@@ -77,4 +78,70 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
 
     assert_eq!(value["unread"], true);
     assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), unread);
+}
+
+#[test]
+fn agent_card_session_history_requires_positive_evidence() {
+    assert!(!AgentCard::default().has_session_history());
+    assert!(
+        !AgentCard {
+            total_tokens: Some(0),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        AgentCard {
+            total_tokens: Some(1),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        AgentCard {
+            compaction_count: 1,
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        AgentCard {
+            context: Some(context_with_cost(0.01)),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+    assert!(
+        !AgentCard {
+            context: Some(context_with_cost(0.0)),
+            ..AgentCard::default()
+        }
+        .has_session_history()
+    );
+}
+
+fn context_with_cost(total_cost_usd: f64) -> AgentContext {
+    AgentContext {
+        source: "claude".to_owned(),
+        session_name: None,
+        session_preview: None,
+        model_id: None,
+        model_display_name: None,
+        effort: None,
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: None,
+        exceeds_200k_tokens: None,
+        cost: Some(AgentCost {
+            total_cost_usd: Some(total_cost_usd),
+            ..AgentCost::default()
+        }),
+        tokens: None,
+        rate_limits: None,
+        pr: None,
+        account: None,
+        turn_error: None,
+        observed_at: row_time(),
+    }
 }

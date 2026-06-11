@@ -253,6 +253,20 @@ impl AgentCard {
             output: self.output_tokens.unwrap_or(0),
         })
     }
+
+    /// Evidence that the session has already done work. A compacted session may
+    /// rest at a 0% context gauge, but token, compaction, or spend history keeps
+    /// it distinct from a never-started agent.
+    pub fn has_session_history(&self) -> bool {
+        self.total_tokens.is_some_and(|total| total > 0)
+            || self.compaction_count > 0
+            || self
+                .context
+                .as_ref()
+                .and_then(|context| context.cost.as_ref())
+                .and_then(|cost| cost.total_cost_usd)
+                .is_some_and(|cost| cost > 0.0)
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
