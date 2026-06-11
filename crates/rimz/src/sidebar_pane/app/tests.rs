@@ -26,31 +26,16 @@ fn focus_fixture() -> (SidebarSnapshot, PaneId, PaneId, PaneId) {
 }
 
 #[test]
-fn tick_for_honours_above_two_seconds() {
+fn tick_for_clamps_zero_and_honours_explicit_seconds() {
     assert_eq!(tick_for(5), Duration::from_secs(5));
-}
-
-#[test]
-fn tick_for_clamps_zero_to_one() {
     assert_eq!(tick_for(0), Duration::from_secs(1));
 }
 
 #[test]
-fn frame_grid_advances_one_frame_when_on_time() {
+fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
     let base = Instant::now();
     let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);
-    // Painted at the scheduled boundary: the next boundary is exactly one
-    // frame later, holding the fixed cadence.
     assert_eq!(next_frame_after(base, base, frame), base + frame);
-}
-
-#[test]
-fn frame_grid_snaps_forward_when_behind() {
-    let base = Instant::now();
-    let frame = crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS);
-    // Scheduled several frames in the past relative to `now`: rather than
-    // replaying every missed boundary, the grid snaps to one frame ahead of
-    // `now`, so a slow paint never spirals into a burst of catch-up paints.
     let now = base + frame * 5;
     assert_eq!(next_frame_after(base, now, frame), now + frame);
 }
@@ -144,7 +129,7 @@ fn suppressed_produce_panic_hook_chains_without_renderer_diagnostic() {
 }
 
 #[test]
-fn notification_targets_only_matching_own_view() {
+fn notification_targeting_matches_mux_reachability_rules() {
     let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
     assert!(notification_targets_own_view(
         &targeted_snapshot,
@@ -159,12 +144,11 @@ fn notification_targets_only_matching_own_view() {
     ));
 
     let no_own_view = snapshot(&workspace());
-    assert!(!notification_targets_own_view(&no_own_view, &[first_work]));
-}
+    assert!(!notification_targets_own_view(
+        &no_own_view,
+        std::slice::from_ref(&first_work)
+    ));
 
-#[test]
-fn desktop_notification_targets_tmux_own_view_for_reachability() {
-    let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
     assert!(desktop_notification_targets_renderer(
         MuxName::Tmux,
         &targeted_snapshot,
@@ -182,13 +166,9 @@ fn desktop_notification_targets_tmux_own_view_for_reachability() {
     assert!(!desktop_notification_targets_renderer(
         MuxName::Tmux,
         &no_own_view,
-        &[first_work]
+        std::slice::from_ref(&first_work)
     ));
-}
 
-#[test]
-fn desktop_notification_targets_zellij_matching_own_view() {
-    let (targeted_snapshot, _sidebar, first_work, _second_work) = focus_fixture();
     assert!(desktop_notification_targets_renderer(
         MuxName::Zellij,
         &targeted_snapshot,
@@ -209,7 +189,7 @@ fn desktop_notification_targets_zellij_matching_own_view() {
 }
 
 #[test]
-fn focus_stranded_own_pane_match_targets_baseline() {
+fn focus_stranded_targets_recent_own_pane_events_only() {
     let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let ui = UiState {
         baseline_pane: Some(second_work.clone()),
@@ -218,34 +198,20 @@ fn focus_stranded_own_pane_match_targets_baseline() {
 
     assert_eq!(
         focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
-        Some(second_work),
+        Some(second_work.clone()),
     );
-}
 
-#[test]
-fn focus_stranded_foreign_pane_id_is_ignored() {
-    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
     let ui = UiState {
-        baseline_pane: Some(second_work),
+        baseline_pane: Some(second_work.clone()),
         ..UiState::default()
     };
-
     assert_eq!(
         focus_stranded_target(&snapshot, &ui, &sidebar, Some(&foreign), 1_000, 1_050),
         None,
     );
-}
 
-#[test]
-fn focus_stranded_stale_event_is_ignored() {
-    let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
-    let ui = UiState {
-        baseline_pane: Some(second_work),
-        ..UiState::default()
-    };
     let now = 1_000 + duration_millis(FOCUS_STRANDED_EVENT_TTL) + 1;
-
     assert_eq!(
         focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, now),
         None,
@@ -253,7 +219,7 @@ fn focus_stranded_stale_event_is_ignored() {
 }
 
 #[test]
-fn focus_stranded_falls_back_to_first_working_sibling() {
+fn focus_stranded_falls_back_to_working_sibling_when_baseline_is_missing() {
     let (snapshot, sidebar, first_work, _second_work) = focus_fixture();
     let ui = UiState {
         baseline_pane: Some(PaneId::from_parts(MuxName::Zellij, "terminal_99")),
@@ -264,10 +230,7 @@ fn focus_stranded_falls_back_to_first_working_sibling() {
         focus_stranded_target(&snapshot, &ui, &sidebar, Some(&sidebar), 1_000, 1_050),
         Some(first_work),
     );
-}
 
-#[test]
-fn focus_stranded_noops_without_working_sibling() {
     let (mut snapshot, sidebar, _first_work, _second_work) = focus_fixture();
     if let Some(view) = &mut snapshot.own_view {
         view.working_pane_ids.clear();

@@ -17,10 +17,8 @@ fn process_on(ws: &WorkspaceId, raw: &str) -> SidebarSnapshot {
 }
 
 #[test]
-fn gate_accepts_first_frame_against_placeholder() {
+fn gate_commit_covers_first_frame_and_regression_rules() {
     let ws = workspace();
-    // The placeholder prev has no panes; the first real frame is never a
-    // regression to hold.
     assert_eq!(
         gate_commit(
             &snapshot(&ws),
@@ -30,13 +28,7 @@ fn gate_accepts_first_frame_against_placeholder() {
         ),
         CommitDecision::Accept
     );
-}
 
-#[test]
-fn gate_holds_transient_agent_to_process_demotion() {
-    let ws = workspace();
-    // Same pane set {terminal_9}, but the agent row became a bare process —
-    // the phantom flicker. Held until the escape hatch opens.
     assert_eq!(
         gate_commit(
             &agent_snapshot(&ws),
@@ -46,11 +38,7 @@ fn gate_holds_transient_agent_to_process_demotion() {
         ),
         CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess)
     );
-}
 
-#[test]
-fn gate_holds_frameless_snapshot_over_prior_frame() {
-    let ws = workspace();
     let mut frameless = snapshot(&ws);
     frameless.agents = agent_snapshot(&ws).agents;
     assert_eq!(
@@ -63,11 +51,7 @@ fn gate_holds_frameless_snapshot_over_prior_frame() {
         CommitDecision::KeepPrior(GateRule::FramelessOverFrame),
         "a no-frame fallback must not replace a jumpable frame-backed render"
     );
-}
 
-#[test]
-fn gate_holds_empty_stamped_frame_over_populated_frame() {
-    let ws = workspace();
     let mut empty_stamped = snapshot(&ws);
     empty_stamped.panes_produced_at_ms = Some(
         agent_snapshot(&ws)
@@ -85,11 +69,7 @@ fn gate_holds_empty_stamped_frame_over_populated_frame() {
         ),
         CommitDecision::KeepPrior(GateRule::EmptyStampedFrame),
     );
-}
 
-#[test]
-fn gate_accepts_frameless_cold_start_against_placeholder() {
-    let ws = workspace();
     let frameless = snapshot(&ws);
     assert_eq!(
         gate_commit(
@@ -100,10 +80,30 @@ fn gate_accepts_frameless_cold_start_against_placeholder() {
         ),
         CommitDecision::Accept
     );
+
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &process_on(&ws, "terminal_8"),
+            &GateState::default(),
+            gate_now()
+        ),
+        CommitDecision::Accept
+    );
+
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &agent_snapshot(&ws),
+            &GateState::default(),
+            gate_now()
+        ),
+        CommitDecision::Accept
+    );
 }
 
 #[test]
-fn gate_releases_demotion_after_reject_count() {
+fn gate_releases_held_regression_by_count_or_timeout() {
     let ws = workspace();
     let gate = GateState {
         reject_streak: ACCEPT_REGRESSION_AFTER_REJECTS,
@@ -120,11 +120,7 @@ fn gate_releases_demotion_after_reject_count() {
         CommitDecision::AcceptViaEscapeHatch,
         "a stuck demotion must surface, not freeze forever"
     );
-}
 
-#[test]
-fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
-    let ws = workspace();
     let base = 1_700_000_000;
     let gate = GateState {
         reject_streak: 1,
@@ -155,40 +151,9 @@ fn gate_releases_demotion_after_timeout_but_holds_while_brief() {
 }
 
 #[test]
-fn gate_accepts_when_the_panel_set_changes() {
-    let ws = workspace();
-    // A pane closed (the demotion is on a different id): the room genuinely
-    // changed, so accept rather than hold against a stale baseline.
-    assert_eq!(
-        gate_commit(
-            &agent_snapshot(&ws),
-            &process_on(&ws, "terminal_8"),
-            &GateState::default(),
-            gate_now()
-        ),
-        CommitDecision::Accept
-    );
-}
-
-#[test]
-fn gate_accepts_a_non_regression() {
-    let ws = workspace();
-    assert_eq!(
-        gate_commit(
-            &agent_snapshot(&ws),
-            &agent_snapshot(&ws),
-            &GateState::default(),
-            gate_now()
-        ),
-        CommitDecision::Accept
-    );
-}
-
-#[test]
 fn reject_holds_prior_frame_as_render_and_baseline() {
     let ws = workspace();
     let prior = agent_snapshot(&ws);
-    // A fresh fetch that demoted the agent on terminal_9 to a process row.
     let computed = compute_next_state(
         &ws,
         None,
@@ -211,12 +176,7 @@ fn reject_holds_prior_frame_as_render_and_baseline() {
     // never arms the degraded alert nor counts toward self-close.
     assert!(state.health.alert.is_none());
     assert_eq!(state.health.failure_streak, 0);
-}
 
-#[test]
-fn reject_holds_prior_frame_over_frameless_fetch() {
-    let ws = workspace();
-    let prior = agent_snapshot(&ws);
     let computed = compute_next_state(
         &ws,
         None,

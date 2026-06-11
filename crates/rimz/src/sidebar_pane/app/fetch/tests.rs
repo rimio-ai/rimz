@@ -7,7 +7,7 @@ use crate::sidebar_pane::app::fixtures::{pane, workspace};
 use crate::{MuxName, SidebarInstanceId, SidebarOwnView, WorkspaceId};
 
 #[test]
-fn produce_guard_maps_failures_to_degraded_outcomes() {
+fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
     let mut cursor = RollupCursor::new();
     let result = run_produce_guarded(&mut cursor, |_| {
         Err(crate::sidebar::produce::ProduceErr::Fixture {
@@ -20,20 +20,6 @@ fn produce_guard_maps_failures_to_degraded_outcomes() {
     let _hook_guard = crate::sidebar_pane::app::PANIC_HOOK_TEST_LOCK
         .lock()
         .unwrap();
-    let previous_hook = std::panic::take_hook();
-    // Silence the default hook's backtrace spew; the guard catches the unwind.
-    std::panic::set_hook(Box::new(|_| {}));
-    let result = run_produce_guarded(&mut cursor, |_| panic!("boom"));
-    std::panic::set_hook(previous_hook);
-    assert_eq!(result.unwrap_err(), "sidebar produce panicked: boom");
-}
-
-#[test]
-fn produce_guard_suppresses_renderer_panic_diagnostics_for_caught_panics() {
-    let _hook_guard = crate::sidebar_pane::app::PANIC_HOOK_TEST_LOCK
-        .lock()
-        .unwrap();
-    let mut cursor = RollupCursor::new();
     let observed = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let observed_hook = observed.clone();
     let previous_hook = std::panic::take_hook();
@@ -122,7 +108,7 @@ fn notification_panes_target_agents_or_the_current_view() {
 }
 
 #[test]
-fn producer_transition_diagnostics_name_peer_instances() {
+fn diagnostics_name_producer_transitions_and_link_alerts() {
     let dir = tempfile::tempdir().unwrap();
     let sink =
         crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
@@ -158,13 +144,6 @@ fn producer_transition_diagnostics_name_peer_instances() {
         crate::schema::diag::DiagEvent::ProducerDemoted { new_elder: observed }
             if observed == &new_elder
     ));
-}
-
-#[test]
-fn link_alert_diagnostics_are_typed() {
-    let dir = tempfile::tempdir().unwrap();
-    let sink =
-        crate::diag::DiagSink::under(dir.path().to_path_buf(), workspace(), "rimz-test", None);
 
     emit_link_alert(
         Some(&sink),
@@ -179,14 +158,14 @@ fn link_alert_diagnostics_are_typed() {
 
     let events = diagnostic_events(&sink);
     assert!(matches!(
-        &events[..],
-        [crate::schema::diag::DiagEvent::LinkAlert {
+        &events[2],
+        crate::schema::diag::DiagEvent::LinkAlert {
             tier: crate::remote::link::LinkTier::Degraded,
             rtt_ms: Some(230),
             miss_pct: 4,
             since_ms: 10,
             recovered_after_ms: None,
-        }]
+        }
     ));
 }
 
@@ -401,16 +380,88 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::D
         .collect()
 }
 
+struct ConsumerFixture {
+    _dir: tempfile::TempDir,
+    workspace_id: WorkspaceId,
+    state: StatePaths,
+    runtime: RuntimePaths,
+    younger: SidebarInstanceId,
+}
+
+impl ConsumerFixture {
+    fn new() -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = workspace();
+        let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
+        let runtime =
+            RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
+        state.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
+        let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
+        crate::sidebar::write_heartbeat(
+            &runtime,
+            workspace_id.clone(),
+            &elder,
+            MuxName::Zellij,
+            "rimz-test",
+            &runtime.sock_dir.join("elder.sock"),
+            None,
+        )
+        .unwrap();
+        Self {
+            _dir: dir,
+            workspace_id,
+            state,
+            runtime,
+            younger,
+        }
+    }
+
+    fn run(&self, request: FetchRequest) -> Vec<FetchOutcome> {
+        let config = test_config(self.workspace_id.clone(), self.younger.clone());
+        let mut cursor = RollupCursor::new();
+        let mut notifications = NotificationState::default();
+        let mut link_notifications = LinkNotificationState::default();
+        let mut outcomes = Vec::new();
+        let mut last_election = None;
+        run_fetch_cycle(
+            FetchCycle {
+                config: &config,
+                runtime: &self.runtime,
+                state: &self.state,
+                notification_prefs: &NotificationsPrefs::default(),
+                notifications: &mut notifications,
+                link_notifications: &mut link_notifications,
+                diag: None,
+                last_election: &mut last_election,
+            },
+            request,
+            &mut cursor,
+            &mut |outcome| outcomes.push(outcome),
+        );
+        outcomes
+    }
+
+    fn write_pane_frame(&self) {
+        let frame = crate::sidebar::snapshot::assemble_frame(
+            vec![pane("terminal_7", "tab_1", false)],
+            crate::sidebar::snapshot::unix_now_ms(),
+            "rimz-test",
+        );
+        std::fs::write(
+            self.runtime.root.join("snapshot.json"),
+            serde_json::to_vec(&frame).unwrap(),
+        )
+        .unwrap();
+    }
+}
+
 #[test]
 fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = workspace();
-    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
-    state.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
+    let fixture = ConsumerFixture::new();
     let mut rollup = SidebarSnapshot::build(
-        workspace_id.clone(),
+        fixture.workspace_id.clone(),
         Vec::new(),
         Vec::new(),
         jiff::Timestamp::now(),
@@ -420,44 +471,13 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
         generation: 0,
         offset: 0,
     });
-    // A plain test-fixture write: the renderer's import graph stays free of
-    // ledger writer APIs (`cargo xtask invariants`).
-    std::fs::write(&state.latest_snapshot, serde_json::to_vec(&rollup).unwrap()).unwrap();
-
-    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-    crate::sidebar::write_heartbeat(
-        &runtime,
-        workspace_id.clone(),
-        &elder,
-        MuxName::Zellij,
-        "rimz-test",
-        &runtime.sock_dir.join("elder.sock"),
-        None,
+    std::fs::write(
+        &fixture.state.latest_snapshot,
+        serde_json::to_vec(&rollup).unwrap(),
     )
     .unwrap();
 
-    let config = test_config(workspace_id, younger);
-    let mut cursor = RollupCursor::new();
-    let mut notifications = NotificationState::default();
-    let mut link_notifications = LinkNotificationState::default();
-    let mut outcomes = Vec::new();
-    let mut last_election = None;
-    run_fetch_cycle(
-        FetchCycle {
-            config: &config,
-            runtime: &runtime,
-            state: &state,
-            notification_prefs: &NotificationsPrefs::default(),
-            notifications: &mut notifications,
-            link_notifications: &mut link_notifications,
-            diag: None,
-            last_election: &mut last_election,
-        },
-        FetchRequest::default(),
-        &mut cursor,
-        &mut |outcome| outcomes.push(outcome),
-    );
+    let mut outcomes = fixture.run(FetchRequest::default());
 
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
@@ -476,50 +496,9 @@ fn cold_consumer_posts_frameless_rollup_while_waiting_for_first_publish() {
 
 #[test]
 fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = workspace();
-    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
-    state.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    // A directory where the event log should be: the row scan's read fails,
-    // and with no `latest.json` the rollup read has no fallback.
-    std::fs::create_dir_all(&state.events_log).unwrap();
-
-    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-    crate::sidebar::write_heartbeat(
-        &runtime,
-        workspace_id.clone(),
-        &elder,
-        MuxName::Zellij,
-        "rimz-test",
-        &runtime.sock_dir.join("elder.sock"),
-        None,
-    )
-    .unwrap();
-
-    let config = test_config(workspace_id, younger);
-    let mut cursor = RollupCursor::new();
-    let mut notifications = NotificationState::default();
-    let mut link_notifications = LinkNotificationState::default();
-    let mut outcomes = Vec::new();
-    let mut last_election = None;
-    run_fetch_cycle(
-        FetchCycle {
-            config: &config,
-            runtime: &runtime,
-            state: &state,
-            notification_prefs: &NotificationsPrefs::default(),
-            notifications: &mut notifications,
-            link_notifications: &mut link_notifications,
-            diag: None,
-            last_election: &mut last_election,
-        },
-        FetchRequest::default(),
-        &mut cursor,
-        &mut |outcome| outcomes.push(outcome),
-    );
+    let fixture = ConsumerFixture::new();
+    std::fs::create_dir_all(&fixture.state.events_log).unwrap();
+    let mut outcomes = fixture.run(FetchRequest::default());
 
     assert_eq!(outcomes.len(), 1);
     let outcome = outcomes.pop().unwrap();
@@ -529,13 +508,13 @@ fn consumer_miss_posts_the_rollup_error_as_the_final_outcome() {
         .snapshot
         .expect_err("an unreadable ledger rollup is the one failed consumer read");
     assert!(
-        reason.contains(&state.events_log.display().to_string()),
+        reason.contains(&fixture.state.events_log.display().to_string()),
         "the outcome names the unreadable path, got: {reason}"
     );
 }
 
 #[test]
-fn fetch_request_sends_immediately_when_idle() {
+fn fetch_dispatcher_sends_idle_and_coalesces_strongest_pending_request() {
     let (tx, rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     let request = FetchRequest::producer_fresh_panes();
@@ -545,10 +524,7 @@ fn fetch_request_sends_immediately_when_idle() {
     assert!(dispatcher.in_flight);
     assert_eq!(rx.try_recv().unwrap().mode, FetchMode::ProducerFreshPanes);
     assert!(dispatcher.pending_refetch.is_none());
-}
 
-#[test]
-fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
@@ -561,10 +537,7 @@ fn fetch_request_preserves_forced_pane_refresh_while_in_flight() {
     let pending = dispatcher.take_pending().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::ProducerFreshPanes);
     assert_eq!(pending.min_pane_cache_ms, min_pane_cache_ms);
-}
 
-#[test]
-fn hard_refresh_dominates_pending_producer_only_refresh() {
     let (tx, _rx) = std::sync::mpsc::channel();
     let mut dispatcher = FetchDispatcher::new(tx);
     dispatcher.request(FetchRequest::default(), false);
@@ -577,69 +550,17 @@ fn hard_refresh_dominates_pending_producer_only_refresh() {
     let pending = dispatcher.take_pending().expect("pending refetch");
     assert_eq!(pending.mode, FetchMode::HardRefresh);
     assert!(pending.min_pane_cache_ms.is_some());
-}
 
-#[test]
-fn pane_frame_published_request_is_read_only_but_marks_the_fold_fresh() {
     let request = FetchRequest::pane_frame_published();
-
     assert_eq!(request.mode, FetchMode::Normal);
     assert!(request.published_frame_hint);
 }
 
 #[test]
 fn pane_frame_published_refolds_a_consumer_from_cache() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = workspace();
-    let state = StatePaths::under(workspace_id.clone(), &dir.path().join("state")).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), &dir.path().join("runtime")).unwrap();
-    state.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let frame = crate::sidebar::snapshot::assemble_frame(
-        vec![pane("terminal_7", "tab_1", false)],
-        crate::sidebar::snapshot::unix_now_ms(),
-        "rimz-test",
-    );
-    std::fs::write(
-        runtime.root.join("snapshot.json"),
-        serde_json::to_vec(&frame).unwrap(),
-    )
-    .unwrap();
-    let elder = SidebarInstanceId::parse("sb_019e8c565bbd708097fce9514f79da04").unwrap();
-    let younger = SidebarInstanceId::parse("sb_019e8c565bbd7b22854f93a905e1034c").unwrap();
-    crate::sidebar::write_heartbeat(
-        &runtime,
-        workspace_id.clone(),
-        &elder,
-        MuxName::Zellij,
-        "rimz-test",
-        &runtime.sock_dir.join("elder.sock"),
-        None,
-    )
-    .unwrap();
-
-    let config = test_config(workspace_id, younger);
-    let mut cursor = RollupCursor::new();
-    let mut notifications = NotificationState::default();
-    let mut link_notifications = LinkNotificationState::default();
-    let mut outcomes = Vec::new();
-    let mut last_election = None;
-    run_fetch_cycle(
-        FetchCycle {
-            config: &config,
-            runtime: &runtime,
-            state: &state,
-            notification_prefs: &NotificationsPrefs::default(),
-            notifications: &mut notifications,
-            link_notifications: &mut link_notifications,
-            diag: None,
-            last_election: &mut last_election,
-        },
-        FetchRequest::pane_frame_published(),
-        &mut cursor,
-        &mut |outcome| outcomes.push(outcome),
-    );
+    let fixture = ConsumerFixture::new();
+    fixture.write_pane_frame();
+    let mut outcomes = fixture.run(FetchRequest::pane_frame_published());
 
     assert_eq!(outcomes.len(), 1, "consumer folds once from cache");
     let outcome = outcomes.pop().unwrap();

@@ -114,14 +114,14 @@ fn mouse_click_fires_focus_without_moving_selection() {
 
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
 
-    assert_eq!(outcome, InputOutcome::focus(target));
+    assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert!(!outcome.redraw, "a jump changes nothing to repaint");
     assert_eq!(ui.selected_index, 0, "the click moves no selection");
     assert_eq!(ui.selected_pane, None);
     assert_eq!(ui.browse, None);
 }
 #[test]
-fn digit_fires_focus_at_the_ordinal_row_without_selecting() {
+fn focus_keys_fire_without_mutating_selection() {
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
@@ -135,12 +135,32 @@ fn digit_fires_focus_at_the_ordinal_row_without_selecting() {
 
     let outcome = handle_key(KeyAction::Digit(2), &mut ui, &snapshot);
 
-    assert_eq!(outcome, InputOutcome::focus(target));
+    assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, 0, "the digit moves no selection");
     assert_eq!(ui.selected_pane, None);
 
     // An out-of-range ordinal resolves no pane and does nothing.
     let outcome = handle_key(KeyAction::Digit(9), &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default());
+
+    let mut ui = UiState {
+        selected_index: 1,
+        selected_pane: Some(target.clone()),
+        help_visible: false,
+        animation_phase: 0,
+        line_map: Vec::new(),
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
+
+    assert_eq!(outcome, InputOutcome::focus(target.clone()));
+    assert_eq!(ui.selected_index, 1);
+    assert_eq!(ui.selected_pane, Some(target), "Enter reads, never writes");
+
+    // With nothing selected there is no target and nothing happens.
+    ui.selected_pane = None;
+    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 }
 #[test]
@@ -234,41 +254,6 @@ fn dismiss_key_requests_alert_dismissal() {
     assert!(outcome.redraw);
     // Dismiss never moves the selection.
     assert_eq!(ui.selected_index, 0);
-}
-#[test]
-fn enter_fires_focus_at_the_selected_pane_without_mutating_ui() {
-    let ws = workspace();
-    let selected = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
-    );
-    let mut ui = UiState {
-        selected_index: 1,
-        selected_pane: Some(selected.clone()),
-        help_visible: false,
-        animation_phase: 0,
-        line_map: Vec::new(),
-        ..Default::default()
-    };
-
-    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-
-    assert_eq!(outcome, InputOutcome::focus(selected.clone()));
-    assert_eq!(ui.selected_index, 1);
-    assert_eq!(
-        ui.selected_pane,
-        Some(selected),
-        "Enter reads, never writes"
-    );
-
-    // With nothing selected there is no target and nothing happens.
-    ui.selected_pane = None;
-    let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::default());
 }
 #[test]
 fn wheel_scroll_pins_the_viewport_and_steps_the_offset() {

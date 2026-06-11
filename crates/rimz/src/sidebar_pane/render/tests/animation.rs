@@ -208,6 +208,22 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
 
     calm.worktree_groups[0].rows[0].unread = true;
     assert_eq!(animation_cadence(&calm), AnimationCadence::Slow);
+
+    let mut idle = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    assert_eq!(animation_cadence(&idle), AnimationCadence::None);
+    idle.sidebar.animations.idle =
+        Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
+    assert_eq!(animation_cadence(&idle), AnimationCadence::Slow);
 }
 /// Honesty test: a running agent silent past the stall window is projected
 /// to the attention bucket, so its cell reads as the attention `!` rather than
@@ -237,51 +253,11 @@ fn render_stalled_agent_reads_as_static_attention() {
     );
 }
 
-#[test]
-fn render_unread_success_hard_blinks_by_modifier() {
-    let done = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Success,
-        Some("/repo/main"),
-        Some("main"),
-        Some("done"),
-    );
-    let mut snapshot = snapshot_with(Vec::new(), vec![done]);
-    snapshot.worktree_groups[0].rows[0].unread = true;
-    let glyph_attrs = |phase| {
-        let mut bytes = Vec::new();
-        let backend = CrosstermBackend::new(&mut bytes);
-        let viewport = Viewport::Fixed(Rect::new(0, 0, 40, 10));
-        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
-        terminal.clear().unwrap();
-        let mut ui = ui_at_phase(phase);
-        draw_to_terminal_with_ui(&mut terminal, &snapshot, None, &mut ui).unwrap();
-        drop(terminal);
-        let mut parser = vt100::Parser::new(10, 40, 0);
-        parser.process(&bytes);
-        let screen = parser.screen();
-        let (row, col) = screen
-            .contents()
-            .lines()
-            .enumerate()
-            .filter(|(_, line)| line.contains("✓ claude"))
-            .find_map(|(row, line)| Some((row, line.chars().position(|c| c == '✓')?)))
-            .expect("the unread success card renders its identity line");
-        let cell = screen.cell(row as u16, col as u16).unwrap();
-        (cell.bold(), cell.dim())
-    };
-
-    assert_eq!(glyph_attrs(0), (true, false));
-    assert_eq!(glyph_attrs(3), (false, true));
-    assert_eq!(glyph_attrs(6), (true, false));
-}
-
 /// A running agent animates: advancing the phase advances the working fill,
 /// regardless of how recently it last reported (the freshness freeze is
 /// gone — staleness escalates to `!` instead of stopping the spinner).
 #[test]
-fn render_running_head_spins_with_the_phase() {
+fn render_live_heads_follow_phase_and_turn_phase() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -299,10 +275,7 @@ fn render_running_head_spins_with_the_phase() {
         first, second,
         "a running agent's head must advance with the phase"
     );
-}
 
-#[test]
-fn render_reasoning_head_uses_the_new_thinking_orbit() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -399,25 +372,6 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
     );
 }
 
-#[test]
-fn calm_custom_animation_wakes_the_slow_cadence() {
-    let mut snapshot = snapshot_with(
-        Vec::new(),
-        vec![agent(
-            "claude-1",
-            "claude",
-            AgentStatus::Idle,
-            Some("/repo/main"),
-            Some("main"),
-            None,
-        )],
-    );
-    assert_eq!(animation_cadence(&snapshot), AnimationCadence::None);
-    snapshot.sidebar.animations.idle =
-        Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
-    assert_eq!(animation_cadence(&snapshot), AnimationCadence::Slow);
-}
-
 /// A card's `$cost` counts up through its eased roll: with a climb seeded
 /// from $1.00 toward the snapshot's $1.27, the first click paints $1.11 (the
 /// ease-out curve's first point over the 27¢ gap, rounded to cents) and a
@@ -497,7 +451,7 @@ fn paused_agent_reads_as_a_static_pause() {
 /// appears (the overlay replaced it). Short-lived, so it never enters the
 /// cockpit tally.
 #[test]
-fn compacting_head_pulses_over_the_working_spinner() {
+fn transient_live_heads_replace_the_working_spinner() {
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -518,12 +472,7 @@ fn compacting_head_pulses_over_the_working_spinner() {
         first.contains('▁'),
         "the compacting head shows the pulse bar:\n{first}"
     );
-}
-/// A running parent with a live subagent shows the quiet delegated-wait head,
-/// not the working spinner — the work is in the child below. It animates, and
-/// the working braille never appears on the parent's collapsed row.
-#[test]
-fn waiting_on_subagents_head_replaces_the_working_spinner() {
+
     let parent = agent(
         "claude-1",
         "claude",

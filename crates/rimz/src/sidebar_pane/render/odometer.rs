@@ -249,14 +249,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn first_value_snaps_then_increase_sweeps() {
+    fn roll_snaps_first_and_decrease_but_sweeps_increases() {
         let mut r = Roll::default();
         r.observe(100.0, 0);
-        // First observation snaps — no boot roll from zero.
         assert_eq!(r.value_at_cents(0), 10_000);
         assert!(!r.rolling(0));
 
-        // A genuine increase sweeps from the painted value to the new target.
         r.observe(200.0, 10);
         assert_eq!(r.value_at_cents(10), 10_000, "starts at the prior value");
         let settle = r.clicks_to_settle();
@@ -273,11 +271,7 @@ mod tests {
             20_000,
             "lands exactly"
         );
-    }
 
-    #[test]
-    fn decrease_snaps_without_a_countdown() {
-        let mut r = Roll::default();
         r.observe(40.0, 0);
         r.observe(0.5, 5); // UTC-midnight today reset
         assert_eq!(r.value_at_cents(5), 50, "snaps down, never rolls backward");
@@ -285,13 +279,11 @@ mod tests {
     }
 
     #[test]
-    fn the_curve_front_loads_then_lands_gently() {
+    fn roll_curve_is_front_loaded_bounded_and_click_quantized() {
         let mut r = Roll::default();
         r.observe(0.0, 0);
         r.observe(10.0, 0);
         let settle = r.clicks_to_settle();
-        // Sample one value per click — consecutive phases inside a click
-        // repeat the same painted value by design.
         let values: Vec<u64> = (0..=settle)
             .map(|click| r.value_at_cents(click * CLICK_PHASES))
             .collect();
@@ -306,10 +298,7 @@ mod tests {
             "the landing click is gentle"
         );
         assert_eq!(values[settle as usize], 1_000, "lands exactly on target");
-    }
 
-    #[test]
-    fn every_jump_lands_inside_the_fixed_window() {
         for target in [0.01, 0.05, 0.20, 1.0, 5.0, 123.45] {
             let mut r = Roll::default();
             r.observe(0.0, 0);
@@ -325,21 +314,15 @@ mod tests {
                 "${target} lands exactly"
             );
         }
-        // A small gap lands early: rounding reaches the target before the
-        // curve's window does.
+
         let mut r = Roll::default();
         r.observe(0.0, 0);
         r.observe(0.01, 0);
         assert!(r.clicks_to_settle() < CLIMB_CLICKS, "a penny lands early");
-    }
 
-    #[test]
-    fn a_click_holds_across_its_phases() {
         let mut r = Roll::default();
         r.observe(0.0, 0);
         r.observe(1.0, 0);
-        // Phases 0..CLICK_PHASES all paint the click's starting value; the
-        // first eased step lands exactly on the click boundary.
         for phase in 0..CLICK_PHASES {
             assert_eq!(r.value_at_cents(phase), 0, "value holds within a click");
         }
@@ -351,7 +334,7 @@ mod tests {
     }
 
     #[test]
-    fn flash_lands_after_the_climb_then_clears() {
+    fn flash_reobserve_and_retarget_keep_the_roll_continuous() {
         let mut r = Roll::default();
         r.observe(1.0, 0);
         r.observe(2.0, 0); // increase at phase 0
@@ -366,24 +349,14 @@ mod tests {
             !r.rolling((settle + FLASH_CLICKS + 1) * CLICK_PHASES),
             "then releases the tick"
         );
-    }
 
-    #[test]
-    fn equal_target_reobserve_leaves_the_roll_in_flight() {
-        let mut r = Roll::default();
-        r.observe(1.0, 0);
-        r.observe(2.0, 0); // climb starts at phase 0
-        let settle = r.clicks_to_settle();
         let painted = r.value_at_cents(CLICK_PHASES);
         assert!(painted > 100 && painted < 200, "mid-climb");
 
-        // A refold carrying the unchanged target — any ledger wakeup — is a
-        // no-op: the climb keeps sweeping from where it began, never snaps.
         r.observe(2.0, CLICK_PHASES);
         assert_eq!(r.value_at_cents(CLICK_PHASES), painted, "climb unbroken");
         assert!(r.rolling(CLICK_PHASES), "still holds the tick");
 
-        // And a refold inside the flash window leaves the brighten in place.
         let flash_phase = settle * CLICK_PHASES;
         r.observe(2.0, flash_phase);
         assert!(
@@ -391,10 +364,7 @@ mod tests {
             "flash survives an equal-target refold"
         );
         assert_eq!(r.value_at_cents(flash_phase), 200, "settled on target");
-    }
 
-    #[test]
-    fn retarget_mid_climb_continues_from_painted() {
         let mut r = Roll::default();
         r.observe(1.0, 0);
         r.observe(5.0, 0);

@@ -1,12 +1,10 @@
 use super::*;
 
 #[test]
-fn cold_start_derives_from_first_active_pane() {
-    // No baseline and no local layer: the first frame's active-pane
-    // derivation seeds both the baseline and the highlight.
+fn cold_start_derives_from_active_pane_or_holds_unseated() {
     let ws = workspace();
     let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
+    let active_snapshot = snapshot_with_panes(
         &ws,
         vec![
             pane("terminal_1", "tab_0", false),
@@ -15,19 +13,12 @@ fn cold_start_derives_from_first_active_pane() {
     );
     let mut ui = UiState::default();
 
-    reconcile_selection(&mut ui, &snapshot, Some(active.clone()));
+    reconcile_selection(&mut ui, &active_snapshot, Some(active.clone()));
 
     assert_eq!(ui.selected_index, 1);
     assert_eq!(ui.selected_pane, Some(active.clone()));
     assert_eq!(ui.baseline_pane, Some(active));
-}
-#[test]
-fn cold_start_with_no_derivation_holds_none() {
-    // No baseline, no local layer, a None derivation: nothing to follow, so
-    // the highlight stays unseated (index clamped to row 0) until a frame
-    // derives an active row — never a fleet-row guess that may sit in
-    // another tab.
-    let ws = workspace();
+
     let snapshot = snapshot_with_panes(
         &ws,
         vec![
@@ -43,10 +34,7 @@ fn cold_start_with_no_derivation_holds_none() {
     assert_eq!(ui.selected_index, 0);
 }
 #[test]
-fn baseline_change_moves_the_highlight() {
-    // No local layer: the highlight follows the derived baseline, so a
-    // genuine external move (the user focused terminal_3) lands on the very
-    // next fold.
+fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
     let ws = workspace();
     let was = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let now_active = PaneId::from_parts(MuxName::Zellij, "terminal_3");
@@ -70,13 +58,7 @@ fn baseline_change_moves_the_highlight() {
     assert_eq!(ui.selected_index, 2);
     assert_eq!(ui.selected_pane, Some(now_active.clone()));
     assert_eq!(ui.baseline_pane, Some(now_active));
-}
-#[test]
-fn none_derivation_holds_last_baseline() {
-    // The sidebar itself is the view's active pane (the user focused it to
-    // type), or the active pane is not a row: the derivation is None, the
-    // baseline holds, and the highlight stays put.
-    let ws = workspace();
+
     let held = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let snapshot = snapshot_with_panes(
         &ws,

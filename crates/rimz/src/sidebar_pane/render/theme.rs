@@ -334,19 +334,13 @@ fn truecolor_env() -> bool {
 mod tests {
     use super::*;
 
-    /// The golden-safety contract behind every existing snapshot: an absent
-    /// `[sidebar.theme]` resolves to exactly the built-in palette, so the
-    /// default render is byte-identical to the pre-config era.
     #[test]
-    fn unset_theme_resolves_to_the_builtin_palette() {
+    fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
         assert_eq!(
             Palette::resolve(&SidebarThemeConfig::default()),
             Palette::BUILTIN
         );
-    }
 
-    #[test]
-    fn configured_slot_overrides_only_its_semantic_color() {
         let theme = Theme {
             palette: Palette::resolve(&SidebarThemeConfig {
                 good: Some(34),
@@ -354,13 +348,10 @@ mod tests {
             }),
             ..Theme::default()
         };
-        // The overridden slot re-tones its semantic ANSI name…
         assert_eq!(
             theme.style(Color::Green, Modifier::empty()).fg,
             Some(Color::Indexed(34))
         );
-        // …while an untouched slot keeps the built-in tone, and an explicit
-        // indexed brand color passes through unmapped.
         assert_eq!(
             theme.style(Color::Red, Modifier::empty()).fg,
             Some(Color::Indexed(167))
@@ -373,10 +364,7 @@ mod tests {
             theme.style(ORANGE, Modifier::empty()).fg,
             Some(Color::Indexed(173))
         );
-    }
 
-    #[test]
-    fn caution_slot_maps_the_amber_semantic_color() {
         let theme = Theme {
             palette: Palette::resolve(&SidebarThemeConfig {
                 caution: Some(214),
@@ -396,13 +384,6 @@ mod tests {
         );
     }
 
-    /// The gray ladder steps by color index alone when lit — soft, dim, and
-    /// faint paint plain palette grays at *normal* weight (a `DIM` modifier
-    /// would hand each tone back to the terminal's attenuation and collapse
-    /// the steps); only the darkest rung `rule` keeps `DIM`, dropping the
-    /// faint gray one further step. Under `NO_COLOR` every rung collapses to
-    /// the bare `DIM` modifier, so the de-emphasis still carries as weight.
-    /// Each slot re-tunes from its `[sidebar.theme]` key.
     #[test]
     fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
         let lit = Theme::fixed(false);
@@ -433,7 +414,19 @@ mod tests {
     }
 
     #[test]
-    fn chip_suppresses_both_fg_and_bg_under_no_color() {
+    fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
+        let theme = Theme {
+            no_color: true,
+            palette: Palette::resolve(&SidebarThemeConfig {
+                alarm: Some(196),
+                ..SidebarThemeConfig::default()
+            }),
+            ..Theme::default()
+        };
+        let style = theme.style(Color::Red, Modifier::BOLD);
+        assert_eq!(style.fg, None, "NO_COLOR suppresses even a themed tone");
+        assert!(style.add_modifier.contains(Modifier::BOLD));
+
         let lit = Theme::fixed(false).chip(Color::Indexed(16), Color::Indexed(173), Modifier::BOLD);
         assert_eq!(lit.fg, Some(Color::Indexed(16)));
         assert_eq!(
@@ -450,26 +443,7 @@ mod tests {
     }
 
     #[test]
-    fn no_color_strips_the_palette_but_keeps_modifiers() {
-        let theme = Theme {
-            no_color: true,
-            palette: Palette::resolve(&SidebarThemeConfig {
-                alarm: Some(196),
-                ..SidebarThemeConfig::default()
-            }),
-            ..Theme::default()
-        };
-        let style = theme.style(Color::Red, Modifier::BOLD);
-        assert_eq!(style.fg, None, "NO_COLOR suppresses even a themed tone");
-        assert!(style.add_modifier.contains(Modifier::BOLD));
-    }
-
-    /// The effects gate, mode by mode: `auto` follows the terminal's
-    /// truecolor advertisement, `always` overrides a missing one, `never`
-    /// pins the pass off — and `NO_COLOR` beats every mode, since the pass
-    /// is color-only.
-    #[test]
-    fn effects_follow_the_glow_mode_and_no_color_beats_it() {
+    fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
         let theme = |no_color, truecolor, glow| Theme {
             no_color,
             truecolor,
@@ -494,13 +468,7 @@ mod tests {
             !theme(true, true, GlowMode::Always).effects_enabled(),
             "NO_COLOR beats every mode, the forced one included"
         );
-    }
 
-    /// The mode travels: `[sidebar] glow` resolves producer-side onto the
-    /// snapshot and lands in the theme, so every renderer of the workspace
-    /// switches tiers together.
-    #[test]
-    fn the_glow_mode_rides_the_snapshot_into_the_theme() {
         assert_eq!(
             Theme::for_sidebar(&SidebarConfig::default()).glow,
             GlowMode::Auto

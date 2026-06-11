@@ -72,14 +72,11 @@ fn observe_with_marks(
 }
 
 #[test]
-fn startup_records_without_flagging() {
+fn unread_transitions_only_start_from_working_states() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
     assert!(!tracker.is_unread("a"));
-}
 
-#[test]
-fn running_to_needs_a_look_flags_unread() {
     for status in [
         AgentStatus::Success,
         AgentStatus::Failed,
@@ -91,18 +88,12 @@ fn running_to_needs_a_look_flags_unread() {
         observe(&mut tracker, vec![row("a", status)], None);
         assert!(tracker.is_unread("a"), "{status:?}");
     }
-}
 
-#[test]
-fn idle_to_waiting_does_not_flag_unread() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Idle)], None);
     observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
     assert!(!tracker.is_unread("a"));
-}
 
-#[test]
-fn paused_to_waiting_preserves_unread_but_does_not_create_it() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Paused)], None);
     observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
@@ -131,7 +122,7 @@ fn running_or_idle_clears_unread() {
 }
 
 #[test]
-fn focused_row_clears_after_transition() {
+fn focused_rows_clear_and_emit_receipts_once() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
     let cleared = observe(
@@ -151,10 +142,7 @@ fn focused_row_clears_after_transition() {
         cleared_again.is_empty(),
         "the folded-back receipt suppresses duplicate writes"
     );
-}
 
-#[test]
-fn focused_baseline_row_emits_receipt_for_peers() {
     let stamp = Timestamp::from_second(1_700_000_100).unwrap();
     let mut tracker = UnreadTracker::default();
 
@@ -184,17 +172,14 @@ fn focused_baseline_row_emits_receipt_for_peers() {
 }
 
 #[test]
-fn departed_row_is_pruned() {
+fn departed_rows_and_receipts_only_clear_matching_current_episodes() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
     observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
     assert!(tracker.is_unread("a"));
     observe(&mut tracker, vec![row("b", AgentStatus::Idle)], None);
     assert!(!tracker.is_unread("a"));
-}
 
-#[test]
-fn receipts_clear_only_the_episode_they_reach() {
     let stamp = Timestamp::from_second(1_700_000_100).unwrap();
     let older = stamp.as_millisecond() - 1;
     let exact = stamp.as_millisecond();
@@ -226,10 +211,7 @@ fn receipts_clear_only_the_episode_they_reach() {
         !tracker.is_unread("a"),
         "a receipt at the episode stamp clears it"
     );
-}
 
-#[test]
-fn unknown_row_receipts_are_ignored() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
     observe_with_marks(

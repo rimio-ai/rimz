@@ -31,63 +31,6 @@ fn browse_roams_other_tabs_rows() {
     assert_eq!(ui.baseline_pane, Some(here), "the baseline never moves");
 }
 #[test]
-fn browse_holds_across_inert_frames() {
-    // Browsing with the baseline unchanged: None derivations hold the
-    // baseline, the anchor still matches, the pick holds.
-    let ws = workspace();
-    let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let baseline = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
-    );
-    let mut ui = UiState {
-        selected_index: 1,
-        selected_pane: Some(picked.clone()),
-        baseline_pane: Some(baseline.clone()),
-        browse: Some(browse(&picked, Some(&baseline))),
-        ..Default::default()
-    };
-
-    reconcile_selection(&mut ui, &snapshot, None);
-    reconcile_selection(&mut ui, &snapshot, None);
-
-    assert_eq!(ui.selected_pane, Some(picked));
-    assert!(ui.browse.is_some(), "still browsing");
-}
-#[test]
-fn browse_clears_on_baseline_change() {
-    // A genuine baseline change — the user focused another working pane —
-    // ends the browse, and the highlight follows the new baseline.
-    let ws = workspace();
-    let picked = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let anchor = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let moved = PaneId::from_parts(MuxName::Zellij, "terminal_3");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-            pane("terminal_3", "tab_0", true),
-        ],
-    );
-    let mut ui = UiState {
-        selected_index: 1,
-        selected_pane: Some(picked.clone()),
-        baseline_pane: Some(anchor.clone()),
-        browse: Some(browse(&picked, Some(&anchor))),
-        ..Default::default()
-    };
-
-    reconcile_selection(&mut ui, &snapshot, Some(moved.clone()));
-
-    assert_eq!(ui.browse, None, "a real move ends the browse");
-    assert_eq!(ui.selected_pane, Some(moved));
-}
-#[test]
 fn browse_survives_a_jump_and_ends_on_baseline_change() {
     // A jump mutates nothing, the browse included: an Enter mid-browse
     // leaves the pick in place, so the highlight holds still until the

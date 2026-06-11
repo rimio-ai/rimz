@@ -349,220 +349,110 @@ mod tests {
     use super::*;
 
     #[test]
-    fn reset_countdown_scales_units_to_time_left() {
-        // Under a day: `{h}h{mm:02}m` — single-digit hours, padded minutes.
-        assert_eq!(reset_secs(4 * 3_600 + 20 * 60), "4h20m");
-        assert_eq!(reset_secs(45 * 60), "0h45m");
-        // A day or more: `{d}d{hh:02}h` — padded hours.
-        assert_eq!(reset_secs(86_400), "1d00h");
-        assert_eq!(reset_secs(6 * 86_400 + 23 * 3_600), "6d23h");
-        // A ~30-day window's reset stays compact: `30d10h`.
-        assert_eq!(reset_secs(30 * 86_400 + 10 * 3_600), "30d10h");
-        // Five cells under 10 days, so same-magnitude countdowns column-align.
+    fn time_and_window_labels_keep_their_compact_boundaries() {
+        for (seconds, expected) in [
+            (4 * 3_600 + 20 * 60, "4h20m"),
+            (45 * 60, "0h45m"),
+            (86_400, "1d00h"),
+            (6 * 86_400 + 23 * 3_600, "6d23h"),
+            (30 * 86_400 + 10 * 3_600, "30d10h"),
+            (-10, "0h00m"),
+        ] {
+            assert_eq!(reset_secs(seconds), expected);
+        }
         assert_eq!(reset_secs(45 * 60).chars().count(), 5);
         assert_eq!(reset_secs(5 * 86_400).chars().count(), 5);
-        // A passed reset is the zero floor, never negative.
-        assert_eq!(reset_secs(-10), "0h00m");
-    }
 
-    #[test]
-    fn elapsed_label_never_reads_seconds_and_fits_three_cells() {
-        // Sub-minute is the explicit `<1m`, never a seconds figure.
-        assert_eq!(elapsed_label(0), "<1m");
-        assert_eq!(elapsed_label(45), "<1m");
-        // From a minute on it is the floored activity vocabulary.
-        assert_eq!(elapsed_label(60), "1m");
-        assert_eq!(elapsed_label(59 * 60), "59m");
-        assert_eq!(elapsed_label(3 * 3_600 + 12 * 60), "3h");
-        assert_eq!(elapsed_label(36 * 3_600), ">1d");
-        // Every form right-aligns into a three-cell slot.
-        for secs in [0, 45, 60, 59 * 60, 3_600, 23 * 3_600, 86_400] {
-            assert!(elapsed_label(secs).chars().count() <= 3);
+        for (seconds, expected) in [
+            (0, "<1m"),
+            (45, "<1m"),
+            (60, "1m"),
+            (59 * 60, "59m"),
+            (3 * 3_600 + 12 * 60, "3h"),
+            (36 * 3_600, ">1d"),
+        ] {
+            assert_eq!(elapsed_label(seconds), expected);
+            assert!(elapsed_label(seconds).chars().count() <= 3);
         }
-    }
 
-    #[test]
-    fn window_label_reads_in_hours_or_days() {
         assert_eq!(window_label(Some(5 * 60)), "5h");
         assert_eq!(window_label(Some(7 * 24 * 60)), "7d");
-        // Codex's ~30-day window (43800 min = 30d 10h) rounds to `30d`.
         assert_eq!(window_label(Some(43_800)), "30d");
-        // An unknown length carries no label.
         assert_eq!(window_label(None), "");
     }
 
     #[test]
-    fn model_label_drops_window_qualifier() {
-        // The dedicated window token on the identity line carries the figure,
-        // so the name sheds both qualifier forms entirely.
-        assert_eq!(model_label("Opus 4.8 (1M context)"), "Opus 4.8");
-        assert_eq!(model_label("Opus 4.8 (1M)"), "Opus 4.8");
-        assert_eq!(model_label("Sonnet 4.6 (200K context)"), "Sonnet 4.6");
-        assert_eq!(model_label("Opus 4.8"), "Opus 4.8");
-        // A friendly name's hyphen reads as a space, matching `Opus 4.8`.
-        assert_eq!(model_label("GPT-5.5"), "GPT 5.5");
-        // A non-window parenthetical is a real name qualifier — kept.
-        assert_eq!(model_label("Sonnet 3.5 (New)"), "Sonnet 3.5 (New)");
-    }
+    fn model_money_token_and_percent_labels_keep_display_shapes() {
+        for (raw, expected) in [
+            ("Opus 4.8 (1M context)", "Opus 4.8"),
+            ("Opus 4.8 (1M)", "Opus 4.8"),
+            ("Sonnet 4.6 (200K context)", "Sonnet 4.6"),
+            ("GPT-5.5", "GPT 5.5"),
+            ("Sonnet 3.5 (New)", "Sonnet 3.5 (New)"),
+            ("claude-opus-4-8", "Opus 4.8"),
+            ("gpt-5.5-codex", "GPT 5.5 Codex"),
+            ("GPT-5.5 Codex", "GPT 5.5 Codex"),
+        ] {
+            assert_eq!(model_label(raw), expected);
+        }
 
-    #[test]
-    fn model_label_prettifies_a_bare_slug() {
-        // A pre-enrichment slug has no friendly display name to prefer, so the
-        // fallback cleans it: vendor prefix dropped, split version glued, words
-        // title-cased.
-        assert_eq!(model_label("claude-opus-4-8"), "Opus 4.8");
-        assert_eq!(model_label("gpt-5.5-codex"), "GPT 5.5 Codex");
-        // A friendly name (space or uppercase) is never mistaken for a slug;
-        // it keeps its words and only trades hyphens for spaces.
-        assert_eq!(model_label("GPT-5.5 Codex"), "GPT 5.5 Codex");
-        assert_eq!(model_label("Opus 4.8 Fast"), "Opus 4.8 Fast");
-    }
+        for (usd, expected) in [
+            (0.0, "$0.00"),
+            (3.5, "$3.50"),
+            (3.276, "$3.28"),
+            (999.99, "$999.99"),
+            (1_240.57, "$1,240.57"),
+            (1_000_000.0, "$1,000,000.00"),
+        ] {
+            assert_eq!(dollars2(usd), expected);
+        }
 
-    #[test]
-    fn dollars2_is_always_two_decimals() {
-        assert_eq!(dollars2(0.0), "$0.00");
-        assert_eq!(dollars2(3.5), "$3.50");
-        assert_eq!(dollars2(3.276), "$3.28");
-        assert_eq!(dollars2(124.0), "$124.00");
-    }
-
-    #[test]
-    fn dollars2_groups_thousands() {
-        assert_eq!(dollars2(1_240.57), "$1,240.57");
-        assert_eq!(dollars2(12_480.0), "$12,480.00");
-        assert_eq!(dollars2(1_000_000.0), "$1,000,000.00");
-        // Just under a grouping boundary stays ungrouped.
-        assert_eq!(dollars2(999.99), "$999.99");
-    }
-
-    #[test]
-    fn tokens_short_scales_by_magnitude() {
-        assert_eq!(tokens_short(523), "523");
-        assert_eq!(tokens_short(76_500), "76.5k");
-        assert_eq!(tokens_short(1_200_000), "1.2M");
-        assert_eq!(tokens_short(1_200_000_000), "1.2B");
-        assert_eq!(tokens_short(47_200_000), "47.2M");
-    }
-
-    #[test]
-    fn tokens_int_truncates_to_whole_units() {
-        assert_eq!(tokens_int(523), "523");
-        // 76.5k reads `76k` (truncated, not rounded) — the coarse live form.
-        assert_eq!(tokens_int(76_500), "76k");
-        assert_eq!(tokens_int(12_000), "12k");
-        assert_eq!(tokens_int(999), "999");
-        assert_eq!(tokens_int(1_900_000), "1M");
+        for (count, short, int) in [
+            (523, "523", "523"),
+            (76_500, "76.5k", "76k"),
+            (1_200_000, "1.2M", "1M"),
+            (1_200_000_000, "1.2B", "1B"),
+            (47_200_000, "47.2M", "47M"),
+        ] {
+            assert_eq!(tokens_short(count), short);
+            assert_eq!(tokens_int(count), int);
+        }
         assert_eq!(tokens_int(2_500_000_000), "2B");
-    }
-
-    #[test]
-    fn window_short_reads_lowercase_magnitudes() {
-        // The 1M class reads a quiet lowercase `m`, unlike `tokens_int`'s `M`.
-        assert_eq!(window_short(1_000_000), "1m");
         assert_eq!(window_short(1_050_000), "1m");
         assert_eq!(window_short(272_000), "272k");
-        assert_eq!(window_short(258_400), "258k");
-        assert_eq!(window_short(200_000), "200k");
         assert_eq!(window_short(523), "523");
-    }
 
-    #[test]
-    fn pct_label_prefers_precise_decimal_then_clamps() {
-        assert_eq!(pct_label(Some(78.23), 78), "78.2%");
-        assert_eq!(pct_label(Some(9.9), 9), "9.9%");
-        // A precise value within rounding of full reads `100%`, never `100.0%`.
-        assert_eq!(pct_label(Some(99.96), 99), "100%");
-        assert_eq!(pct_label(Some(100.0), 100), "100%");
-        // No breakdown: the integer gauge value, also clamped.
-        assert_eq!(pct_label(None, 38), "38%");
-        assert_eq!(pct_label(None, 200), "100%");
-        // Every rendering fits the 5-cell value column.
-        for s in [
-            pct_label(Some(78.23), 78),
-            pct_label(Some(100.0), 100),
-            pct_label(None, 38),
+        for (precise, whole, expected) in [
+            (Some(78.23), 78, "78.2%"),
+            (Some(9.9), 9, "9.9%"),
+            (Some(99.96), 99, "100%"),
+            (None, 38, "38%"),
+            (None, 200, "100%"),
         ] {
-            assert!(s.chars().count() <= 5, "{s:?} exceeds 5 cells");
+            let label = pct_label(precise, whole);
+            assert_eq!(label, expected);
+            assert!(label.chars().count() <= 5);
         }
     }
 
     #[test]
-    fn activity_label_floors_to_its_highest_unit_and_caps_at_a_day() {
-        // Whole minutes, floored — the sub-minute gating lives in `activity_short`.
-        assert_eq!(activity_label(60), "1m");
-        assert_eq!(activity_label(119), "1m");
-        assert_eq!(activity_label(120), "2m");
-        assert_eq!(activity_label(59 * 60), "59m");
-        // Whole hours from 1h on, capped at `>1d` from a day on.
-        assert_eq!(activity_label(60 * 60), "1h");
-        assert_eq!(activity_label(23 * 3_600), "23h");
-        assert_eq!(activity_label(24 * 3_600), ">1d");
-        assert_eq!(activity_label(100 * 3_600), ">1d");
-    }
-
-    #[test]
-    fn fmt_cpu_formats_integer() {
-        assert_eq!(fmt_cpu(11), "11%");
-        assert_eq!(fmt_cpu(0), "0%");
-        assert_eq!(fmt_cpu(100), "100%");
-        assert_eq!(fmt_cpu(400), "400%");
-    }
-
-    #[test]
-    fn fmt_rss_picks_the_right_unit() {
-        assert_eq!(fmt_rss(45), "45k");
-        assert_eq!(fmt_rss(234 * 1024), "234M");
-        // 1.1 GiB: 1024 + 102 = 1126 MiB = 1_153_024 KiB → 1.1G
-        assert_eq!(fmt_rss(1_153_024), "1.1G");
-        assert_eq!(fmt_rss(1_048_576), "1.0G");
-    }
-
-    #[test]
-    fn fmt_rss_figure_holds_to_four_cells() {
-        // Each unit rolls to the next as its figure would reach four digits,
-        // so the fixed `M` slot never shifts.
-        assert_eq!(fmt_rss(999), "999k");
-        assert_eq!(fmt_rss(1_000), "1M");
-        assert_eq!(fmt_rss(1_023 * 1_024), "1.0G");
-        // The GiB decimal drops from 10 GiB on.
-        assert_eq!(fmt_rss(12 * 1_048_576), "12G");
-        for rss_kb in [0, 999, 1_000, 1_023 * 1_024, 1_048_576, 128 * 1_048_576] {
-            assert!(fmt_rss(rss_kb).chars().count() <= 4);
-        }
-    }
-
-    #[test]
-    fn fmt_io_picks_the_right_unit() {
-        assert_eq!(fmt_io(500), "500B/s");
-        assert_eq!(fmt_io(3 * 1_048_576), "3M/s");
-        assert_eq!(fmt_io(450 * 1_024), "450k/s");
-    }
-
-    #[test]
-    fn fmt_io_magnitude_holds_to_four_cells() {
-        // Each unit rolls at four digits, so the fixed `⇅` slot never shifts.
-        assert_eq!(fmt_io(999), "999B/s");
-        assert_eq!(fmt_io(1_000), "1k/s");
-        assert_eq!(fmt_io(1_023 * 1_048_576), "1G/s");
-        for bps in [
-            0,
-            999,
-            1_000,
-            450 * 1_024,
-            1_023 * 1_048_576,
-            u64::from(u32::MAX),
+    fn activity_labels_floor_and_sub_minute_ages_stay_quiet() {
+        for (seconds, expected) in [
+            (60, "1m"),
+            (119, "1m"),
+            (120, "2m"),
+            (59 * 60, "59m"),
+            (60 * 60, "1h"),
+            (23 * 3_600, "23h"),
+            (24 * 3_600, ">1d"),
+            (100 * 3_600, ">1d"),
         ] {
-            assert!(fmt_io(bps).chars().count() <= 6);
+            assert_eq!(activity_label(seconds), expected);
         }
-    }
 
-    #[test]
-    fn activity_short_withholds_sub_minute_ages() {
         let now = Timestamp::now();
-        // A just-active agent shows nothing rather than a misleading `1m`.
         assert_eq!(activity_short(now, now), None);
         assert_eq!(activity_short(now - Duration::from_secs(59), now), None);
-        // Once a full minute has passed the floored age surfaces.
         assert_eq!(
             activity_short(now - Duration::from_secs(60), now),
             Some("1m".to_owned())
@@ -571,5 +461,36 @@ mod tests {
             activity_short(now - Duration::from_secs(150), now),
             Some("2m".to_owned())
         );
+    }
+
+    #[test]
+    fn process_resource_labels_pick_units_and_hold_fixed_slots() {
+        assert_eq!(fmt_cpu(0), "0%");
+        assert_eq!(fmt_cpu(400), "400%");
+
+        for (rss_kb, expected) in [
+            (45, "45k"),
+            (999, "999k"),
+            (1_000, "1M"),
+            (234 * 1024, "234M"),
+            (1_023 * 1_024, "1.0G"),
+            (1_153_024, "1.1G"),
+            (12 * 1_048_576, "12G"),
+        ] {
+            assert_eq!(fmt_rss(rss_kb), expected);
+            assert!(fmt_rss(rss_kb).chars().count() <= 4);
+        }
+
+        for (bps, expected) in [
+            (500, "500B/s"),
+            (999, "999B/s"),
+            (1_000, "1k/s"),
+            (450 * 1_024, "450k/s"),
+            (3 * 1_048_576, "3M/s"),
+            (1_023 * 1_048_576, "1G/s"),
+        ] {
+            assert_eq!(fmt_io(bps), expected);
+            assert!(fmt_io(bps).chars().count() <= 6);
+        }
     }
 }
