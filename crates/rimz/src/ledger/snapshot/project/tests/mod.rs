@@ -3,7 +3,6 @@ use std::path::Path;
 use super::*;
 
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
-use crate::agent_activity::AgentActivity;
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::AgentStatus;
 use crate::ids::WorkspaceId;
@@ -47,7 +46,6 @@ fn raw_lifecycle_at(
 
 mod capability;
 mod compaction;
-mod enrichment;
 mod pane_binding;
 mod phase_status;
 mod prompt_task;

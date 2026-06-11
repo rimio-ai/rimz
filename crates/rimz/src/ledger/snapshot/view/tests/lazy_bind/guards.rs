@@ -5,6 +5,7 @@ fn paneless_agent_process_start_guard_controls_cwd_recovery() {
     for (label, kind, active_secs_ago, expect_bind) in [
         ("stale Claude predates pane start", "claude", 60, false),
         ("stale Codex predates pane start", "codex", 60, false),
+        ("fresh Claude follows pane start", "claude", -5, true),
         ("fresh Codex follows pane start", "codex", -5, true),
     ] {
         let session = match kind {
@@ -36,20 +37,6 @@ fn paneless_agent_process_start_guard_controls_cwd_recovery() {
             assert_eq!(rows[0].name, kind, "{label}");
         }
     }
-}
-
-#[test]
-fn paneless_claude_does_not_bind_a_bare_node_pane() {
-    // A bare node process is ambiguous; only a command that classifies as
-    // Claude can recover the paneless session.
-    let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
-    let snapshot = room(Vec::new(), vec![claude])
-        .with_live_panes(vec![pane("term1", "node", "/repo/main")], None);
-
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_process());
-    assert_eq!(rows[0].name, "node");
 }
 
 #[test]

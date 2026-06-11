@@ -5,8 +5,8 @@ fn row_time() -> Timestamp {
 }
 
 #[test]
-fn serde_keeps_agent_card_flat_with_row_kind_key() {
-    let row = SidebarRow {
+fn serde_keeps_cards_flat_with_row_kind_key() {
+    let agent = SidebarRow {
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -21,18 +21,15 @@ fn serde_keeps_agent_card_flat_with_row_kind_key() {
         })),
     };
 
-    let value = serde_json::to_value(&row).unwrap();
+    let value = serde_json::to_value(&agent).unwrap();
 
     assert_eq!(value["row_kind"], "agent");
     assert!(value.get("card").is_none());
     assert!(value.get("unread").is_none());
     assert_eq!(value["prompt"], "fix auth flow");
-    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), row);
-}
+    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), agent);
 
-#[test]
-fn serde_keeps_process_card_flat_with_row_kind_key() {
-    let row = SidebarRow {
+    let process = SidebarRow {
         id: "process:%1".to_owned(),
         name: "cargo".to_owned(),
         pane: None,
@@ -50,19 +47,19 @@ fn serde_keeps_process_card_flat_with_row_kind_key() {
         }),
     };
 
-    let value = serde_json::to_value(&row).unwrap();
+    let value = serde_json::to_value(&process).unwrap();
 
     assert_eq!(value["row_kind"], "process");
     assert!(value.get("card").is_none());
     assert!(value.get("status").is_none());
     assert_eq!(value["state"], "stuck");
     assert_eq!(value["command_detail"], "cargo build --release");
-    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), row);
-}
+    assert_eq!(
+        serde_json::from_value::<SidebarRow>(value).unwrap(),
+        process
+    );
 
-#[test]
-fn unread_round_trips_only_when_true() {
-    let row = SidebarRow {
+    let unread = SidebarRow {
         id: "agent:s1".to_owned(),
         name: "claude".to_owned(),
         pane: None,
@@ -76,8 +73,8 @@ fn unread_round_trips_only_when_true() {
         })),
     };
 
-    let value = serde_json::to_value(&row).unwrap();
+    let value = serde_json::to_value(&unread).unwrap();
 
     assert_eq!(value["unread"], true);
-    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), row);
+    assert_eq!(serde_json::from_value::<SidebarRow>(value).unwrap(), unread);
 }

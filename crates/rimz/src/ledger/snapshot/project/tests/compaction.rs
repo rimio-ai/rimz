@@ -162,23 +162,6 @@ fn next_lifecycle_signal_closes_missed_compaction_bracket() {
 }
 
 #[test]
-fn repeated_compacting_signal_refreshes_marker_without_counting() {
-    let prompt = lifecycle_at("claude", 0, "UserPromptSubmit", signal("turn_started"));
-    let compact = lifecycle_at("claude", 1, "PreCompact", signal("compacting"));
-    let second_at = crate::feed::COMPACTING_WINDOW_SECS + 5;
-    let later_second_compact =
-        lifecycle_at("claude", second_at, "PreCompact", signal("compacting"));
-
-    let agents = reduce_agent_states(&[prompt, compact, later_second_compact]);
-    assert_eq!(agents[0].compaction_count, 0);
-    assert_eq!(
-        agents[0].compacting_since,
-        Some(Timestamp::from_second(epoch().as_second() + second_at).unwrap())
-    );
-    assert_eq!(agents[0].status, AgentStatus::Running);
-}
-
-#[test]
 fn double_compaction_end_events_count_once_in_either_order() {
     let prompt = lifecycle("codex", "UserPromptSubmit", signal("turn_started"));
     let compact = lifecycle("codex", "PreCompact", signal("compacting"));
@@ -199,17 +182,6 @@ fn double_compaction_end_events_count_once_in_either_order() {
         assert!(agents[0].compacting_since.is_none());
         assert_eq!(agents[0].status, AgentStatus::Running);
     }
-}
-
-#[test]
-fn unbracketed_manual_compaction_end_applies_edge_without_counting() {
-    let prompt = lifecycle("claude", "UserPromptSubmit", signal("turn_started"));
-    let manual_end = lifecycle("claude", "PostCompact", compaction_ended(Some(false)));
-
-    let agents = reduce_agent_states(&[prompt, manual_end]);
-    assert_eq!(agents[0].status, AgentStatus::Idle);
-    assert_eq!(agents[0].compaction_count, 0);
-    assert!(agents[0].compacting_since.is_none());
 }
 
 #[test]

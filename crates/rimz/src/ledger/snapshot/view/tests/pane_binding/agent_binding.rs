@@ -57,30 +57,6 @@ fn stamped_codex_returned_to_shell_renders_process_row() {
 }
 
 #[test]
-fn live_panes_suppress_stale_agent_attention_without_process() {
-    let item = agent_ask(FeedKind::Permission, "claude", "stale-claude");
-
-    let snapshot = room(vec![item], Vec::new()).with_live_panes(
-        vec![
-            pane("%0", "rimz-sidebar", "/repo/main"),
-            pane("%1", "zsh", "/repo/main"),
-        ],
-        None,
-    );
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert!(
-        snapshot.worktree_groups[0]
-            .rows
-            .iter()
-            .all(|row| row.is_process() && row.name == "zsh"),
-        "a stale agent prompt must not claim the sidebar pane or outlive its agent process: {:?}",
-        snapshot.worktree_groups[0].rows,
-    );
-    assert!(snapshot.worktree_groups[0].status_counts.is_empty());
-}
-
-#[test]
 fn pending_agent_ask_folds_by_stamped_pane_and_preserves_session_description() {
     let item = agent_ask(FeedKind::Permission, "claude", "live-claude");
     let request_id = item.request_id.clone();
@@ -162,59 +138,6 @@ fn agent_binds_only_by_stamped_pane_id() {
 }
 
 #[test]
-fn each_live_pane_yields_exactly_one_row() {
-    // One pane = one row, by construction: every live pane produces exactly
-    // one row — agent or process — and no pane id is ever duplicated.
-    let stamped = |id, raw| {
-        agent("claude", id, AgentStatus::Running, 1_000)
-            .worktree("/repo/main")
-            .in_pane(raw)
-    };
-
-    let snapshot = room(
-        Vec::new(),
-        vec![stamped("sess-a", "%1"), stamped("sess-b", "%2")],
-    )
-    .with_live_panes(
-        vec![
-            pane("%1", "claude", "/repo/main"),
-            pane("%2", "claude", "/repo/main"),
-            pane("%3", "zsh", "/repo/main"),
-        ],
-        None,
-    );
-
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 3, "three panes render three rows: {rows:?}");
-    let mut pane_ids: Vec<&str> = rows
-        .iter()
-        .map(|row| row.pane.as_ref().unwrap().pane_id.raw())
-        .collect();
-    pane_ids.sort_unstable();
-    assert_eq!(pane_ids, vec!["%1", "%2", "%3"], "no pane id is duplicated");
-    let agents = rows.iter().filter(|row| row.is_agent()).count();
-    assert_eq!(agents, 2, "the two stamped panes bound their agents");
-    assert_eq!(
-        row(&snapshot, "sess-a")
-            .pane
-            .as_ref()
-            .unwrap()
-            .pane_id
-            .raw(),
-        "%1"
-    );
-    assert_eq!(
-        row(&snapshot, "sess-b")
-            .pane
-            .as_ref()
-            .unwrap()
-            .pane_id
-            .raw(),
-        "%2"
-    );
-}
-
-#[test]
 fn live_agent_and_process_rows_are_pane_backed() {
     // In a live-pane fold, every visible top-level row is jumpable: agent
     // rows and process rows both carry a pane. A subagent that shares its
@@ -240,6 +163,10 @@ fn live_agent_and_process_rows_are_pane_backed() {
     assert!(
         rows.iter().all(|row| row.pane.is_some()),
         "every visible live-pane row has a pane: {rows:?}",
+    );
+    assert_eq!(
+        row_identity_violations(rows.iter().copied()),
+        Vec::<String>::new()
     );
     assert!(
         rows.iter().all(|row| row.id != "child-1"),

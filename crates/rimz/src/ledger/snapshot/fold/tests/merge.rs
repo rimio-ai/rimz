@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn merge_carryover_prefers_newer_observation() {
+fn merge_carryover_prefers_newer_observation_and_preserves_orphans() {
     for (label, carried_seen, live_seen) in [
         ("strictly newer live observation wins", 1_000, 2_000),
         ("live wins an equal last_seen tie", 2_000, 2_000),
@@ -21,10 +21,7 @@ fn merge_carryover_prefers_newer_observation() {
             "{label}"
         );
     }
-}
 
-#[test]
-fn merge_carryover_preserves_orphaned_entries() {
     let only_in_carryover = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
     let only_live = agent("codex", "agent-2", AgentStatus::Running, 2_000);
     let merged = merge_agent_rollups(

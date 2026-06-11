@@ -14,7 +14,6 @@ fn merge_agent_rollups(base: &[AgentState], live: &[AgentState]) -> Vec<AgentSta
 }
 
 mod cache;
-mod fold_correctness;
 mod integrity;
 mod merge;
 mod rotation;

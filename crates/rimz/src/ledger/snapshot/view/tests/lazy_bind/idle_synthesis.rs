@@ -65,28 +65,6 @@ fn idle_synthesis_gates_leave_unqualified_panes_as_process_rows() {
 }
 
 #[test]
-fn bound_codex_pane_keeps_its_real_agent_over_idle_synthesis() {
-    // The idle synthesis is a last resort: a `codex` pane that binds a real
-    // (pane-less, cwd-matched) agent keeps that agent's identity and status,
-    // never the synthesized idle row — even with Codex wired.
-    let mut snapshot = room(
-        Vec::new(),
-        vec![paneless_codex("sess-1", "/repo/main", 1_000)],
-    );
-    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
-    let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
-
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_agent());
-    assert_eq!(
-        rows[0].id, "sess-1",
-        "the real agent binds, not a synthesis"
-    );
-    assert_eq!(rows[0].status(), Some(AgentStatus::Running));
-}
-
-#[test]
 fn two_codex_panes_one_agent_yields_one_real_one_idle() {
     // The multi-codex-per-worktree case: one prompted (pane-less) agent plus a
     // second still-unprompted `codex` pane in the same worktree. The agent

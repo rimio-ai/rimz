@@ -3,7 +3,7 @@ use super::*;
 // ── Rate-limit window stabilizers (the dashboard bars) ───────────────────────
 
 #[test]
-fn stable_window_keeps_the_conservative_live_or_undated_reading() {
+fn stable_windows_keep_conservative_readings_per_duration() {
     // A stale window (reset already passed) reads low; two live windows
     // report 50% and 80%. The stale one is dropped, and the most-drained
     // live survivor (80%) wins — never over-promising remaining budget.
@@ -38,10 +38,7 @@ fn stable_window_keeps_the_conservative_live_or_undated_reading() {
     let pick = stable_window([window(90, -10), undated].into_iter(), epoch())
         .expect("the undated reading backstops the stale one");
     assert_eq!(pick.used_percentage, Some(33));
-}
 
-#[test]
-fn stable_windows_picks_one_per_duration_sorted_short_to_long() {
     let mk = |used: u8, mins: u32| RateLimitWindow {
         used_percentage: Some(used),
         resets_at: Some(epoch() + std::time::Duration::from_secs(3_600)),
@@ -68,7 +65,7 @@ fn stable_windows_picks_one_per_duration_sorted_short_to_long() {
 // ── The per-call split: the context line's row-level fallback ────────────────
 
 #[test]
-fn call_split_projects_the_lifecycle_rail_composition() {
+fn call_split_projects_only_with_known_input_sides() {
     // The per-call split a rollout's `last_token_usage` feeds onto the
     // lifecycle rail projects onto the row, and its `filled()` — cache reads +
     // fresh input, exactly the window numerator the `▣` percent scales —
@@ -89,10 +86,7 @@ fn call_split_projects_the_lifecycle_rail_composition() {
     assert_eq!(split.output, 800);
     assert_eq!(split.filled(), 129_200);
     assert_eq!(projected.context_used_tokens(), Some(129_200));
-}
 
-#[test]
-fn call_split_waits_for_a_known_input_side() {
     // Until the input side of a call is known the row keeps the bare total —
     // a pre-first-turn agent never legends a partial composition.
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");

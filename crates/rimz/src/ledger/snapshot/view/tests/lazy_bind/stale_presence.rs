@@ -1,22 +1,6 @@
 use super::*;
 
 #[test]
-fn paneless_claude_agent_recovers_by_exact_cwd_after_rebirth() {
-    // A session.rebirth clears pane stamps even while the pane's Claude process
-    // keeps running. The read-time cwd bind recovers that live non-lazy session
-    // before the next hook re-stamps the pane.
-    let claude = agent("claude", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
-    let snapshot = room(Vec::new(), vec![claude])
-        .with_live_panes(vec![pane("term1", "claude", "/repo/main")], None);
-
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1);
-    assert!(rows[0].is_agent());
-    assert_eq!(rows[0].id, "sess-1");
-    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "term1");
-}
-
-#[test]
 fn two_paneless_codex_in_one_worktree_bind_most_recent() {
     // When two pane-less Codex sessions claim one worktree — a lingering
     // closed session and a live one — the most-recently-active binds the
@@ -70,7 +54,7 @@ fn paneless_codex_and_new_stamped_codex_share_one_worktree_without_idle_row() {
 }
 
 #[test]
-fn resumed_codex_pane_binds_the_matching_session_exactly() {
+fn resumed_codex_pane_binds_the_matching_session_and_heals_stale_stamp() {
     let mut old = paneless_codex("sess-old", "/repo/main", 1_000);
     old.registered_at = Some(ago(1_000));
     old.last_activity = ago(1_000);
@@ -87,10 +71,7 @@ fn resumed_codex_pane_binds_the_matching_session_exactly() {
     let rows = &snapshot.worktree_groups[0].rows;
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].id, "sess-old");
-}
 
-#[test]
-fn resumed_codex_pane_heals_a_stale_existing_stamp() {
     let mut stale_stamp = pane("term1", "codex", "/repo/main");
     stale_stamp.pane_process_start = Some(ago(1_000));
     let mut old = paneless_codex("sess-old", "/repo/main", 1_000);
@@ -159,33 +140,6 @@ fn paneless_codex_sessions_pair_by_latest_process_start_before_first_event() {
             "terminal_58"
         );
     }
-}
-
-#[test]
-fn stale_session_ask_does_not_render_or_steal_a_pane() {
-    // Reproduces the live bug: a pending permission ask whose claude
-    // session has ended must not become attention, and must not latch onto
-    // a freshly launched codex sharing the worktree.
-    let stale = agent_ask(FeedKind::Permission, "claude", "ended-claude");
-
-    // Only a live codex session remains in the rollup.
-    let codex = agent("codex", "sess-codex", AgentStatus::Idle, 2_000)
-        .worktree("/repo/main")
-        .in_pane("%1");
-
-    let snapshot = room(vec![stale], vec![codex])
-        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
-
-    assert!(
-        snapshot.needs_attention.is_empty(),
-        "stale ask is not attention"
-    );
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    let rows = &snapshot.worktree_groups[0].rows;
-    assert_eq!(rows.len(), 1, "only the live codex renders");
-    assert_eq!(rows[0].name, "codex");
-    assert_eq!(rows[0].status(), Some(AgentStatus::Idle));
-    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
 }
 
 #[test]

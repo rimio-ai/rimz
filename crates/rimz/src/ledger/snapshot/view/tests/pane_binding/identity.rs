@@ -57,22 +57,15 @@ fn commandless_panes_require_an_agent_or_spawn_identity() {
 }
 
 #[test]
-fn duplicate_live_pane_ids_project_one_row_identity() {
+fn duplicate_pane_or_agent_id_projects_one_row_identity() {
     let claude = agent("claude", "sess-a", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
     let duplicate = pane("%1", "claude", "/repo/main");
     let snapshot =
         room(Vec::new(), vec![claude]).with_live_panes(vec![duplicate.clone(), duplicate], None);
+    assert_single_clean_row(&snapshot, "duplicate pane ids fold once");
 
-    let projected = rows(&snapshot);
-    assert_eq!(projected.len(), 1, "duplicate pane ids fold once");
-    assert_eq!(projected[0].id, "sess-a");
-    assert_eq!(row_identity_violations(projected), Vec::<String>::new());
-}
-
-#[test]
-fn duplicate_stamped_agent_identity_suppresses_second_pane() {
     let first = agent("claude", "sess-a", AgentStatus::Running, 1_000)
         .worktree("/repo/main")
         .in_pane("%1");
@@ -86,14 +79,16 @@ fn duplicate_stamped_agent_identity_suppresses_second_pane() {
         ],
         None,
     );
-
-    let projected = rows(&snapshot);
-    assert_eq!(
-        projected.len(),
-        1,
-        "the conflicting stamped pane is suppressed rather than rendered as process: {projected:?}"
+    assert_single_clean_row(
+        &snapshot,
+        "conflicting stamped pane suppresses the second pane",
     );
-    assert_eq!(projected[0].id, "sess-a");
+}
+
+fn assert_single_clean_row(snapshot: &SidebarSnapshot, label: &str) {
+    let projected = rows(snapshot);
+    assert_eq!(projected.len(), 1, "{label}: {projected:?}");
+    assert_eq!(projected[0].id, "sess-a", "{label}");
     assert_eq!(row_identity_violations(projected), Vec::<String>::new());
 }
 

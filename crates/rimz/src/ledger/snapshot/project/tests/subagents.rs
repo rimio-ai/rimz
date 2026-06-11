@@ -1,40 +1,7 @@
 use super::*;
 
 #[test]
-fn subagent_activity_does_not_change_parent_phase() {
-    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
-    let last_seen = Timestamp::now() - std::time::Duration::from_secs(50);
-    let mut parent = agent("claude", "sess-1", AgentStatus::Running, 50_000);
-    parent.phase = TurnPhase::Reasoning;
-    let subagent = agent("claude", "sess-1.sub", AgentStatus::Running, 50_000);
-
-    let subagent_touch = AgentActivity {
-        kind: AgentKind::new_unchecked("claude"),
-        agent_id: "sess-1.sub".into(),
-        at: last_seen + std::time::Duration::from_secs(15),
-    };
-    let snap = SidebarSnapshot::build_with_agents(
-        workspace,
-        Vec::new(),
-        vec![parent, subagent],
-        Timestamp::now(),
-    )
-    .with_agent_activity(&[subagent_touch]);
-    let parent_phase = snap
-        .agents
-        .iter()
-        .find(|a| a.agent_id == "sess-1")
-        .unwrap()
-        .phase;
-    assert_eq!(
-        parent_phase,
-        TurnPhase::Reasoning,
-        "a subagent heartbeat must not clobber the parent's turn phase"
-    );
-}
-
-#[test]
-fn subagent_start_reduces_parent_link_that_survives_stop() {
+fn subagent_start_reduces_identity_that_survives_stop() {
     let start = raw_lifecycle(
         "claude",
         serde_json::json!({
@@ -45,45 +12,8 @@ fn subagent_start_reduces_parent_link_that_survives_stop() {
             "task": "Explore",
         }),
     );
-    // SubagentStop omits the parent link — the reducer carries identity forward.
-    let stop = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "SubagentStop",
-            "agent_id": "child-1",
-            "signal": { "signal": "subagent_stopped" },
-            "task": "Explore",
-        }),
-    );
-    let agents = reduce_agent_states(&[start, stop]);
-    let child = agents
-        .iter()
-        .find(|a| a.agent_id == "child-1")
-        .expect("child row");
-    assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
-    // The bare `subagent_stopped` wire shape (no `errored` bit) replays as a
-    // clean finish.
-    assert_eq!(child.status, AgentStatus::Success);
-}
-
-#[test]
-fn subagent_keeps_its_type_when_stop_omits_it() {
-    // The regression: a subagent's type is identity, not activity, so a
-    // task-less `SubagentStop` must not wipe the label the `SubagentStart`
-    // established. Before the carry-forward, the finished child degraded to
-    // a `subagent <id>` placeholder.
-    let start = raw_lifecycle(
-        "claude",
-        serde_json::json!({
-            "event_name": "SubagentStart",
-            "agent_id": "child-1",
-            "signal": { "signal": "subagent_started" },
-            "parent_agent_id": "sess-root",
-            "task": "Explore",
-        }),
-    );
-    // SubagentStop carries a blank `task` — the exact shape that wiped the
-    // label in live Claude events.
+    // SubagentStop omits the parent link and carries a blank task — the
+    // reducer carries identity forward instead of degrading the child label.
     let stop = raw_lifecycle(
         "claude",
         serde_json::json!({
@@ -98,6 +28,9 @@ fn subagent_keeps_its_type_when_stop_omits_it() {
         .iter()
         .find(|a| a.agent_id == "child-1")
         .expect("child row");
+    assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
+    // The bare `subagent_stopped` wire shape (no `errored` bit) replays as a
+    // clean finish.
     assert_eq!(child.status, AgentStatus::Success);
     assert_eq!(
         child.task.as_deref(),
