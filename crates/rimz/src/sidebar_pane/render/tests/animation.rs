@@ -314,7 +314,7 @@ fn render_reasoning_head_uses_the_new_thinking_orbit() {
     claude.phase = crate::agents::TurnPhase::Reasoning;
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
     let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(3), 40, 10);
+    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
 
     assert!(
         first.contains("⢄ claude"),
@@ -322,7 +322,7 @@ fn render_reasoning_head_uses_the_new_thinking_orbit() {
     );
     assert!(
         second.contains("⢂ claude"),
-        "slow thinking speed advances after three ticks:\n{second}"
+        "fast thinking speed advances on the next tick:\n{second}"
     );
 }
 

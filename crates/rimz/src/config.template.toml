@@ -108,7 +108,7 @@
 ## frames = "⢄⢂⢁⡁⡈⡐⡠"
 ## color = "clay"
 ## effect = "static"
-## speed = "slow"
+## speed = "fast"
 ## [sidebar.animations.working]
 ## frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
 ## color = "clay"

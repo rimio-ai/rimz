@@ -238,7 +238,7 @@ fn builtin(role: AnimationRole) -> Animation {
             vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
             ORANGE,
             Effect::Static,
-            Speed::Slow,
+            Speed::Fast,
         ),
         AnimationRole::Working => (
             vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
@@ -312,8 +312,8 @@ mod tests {
         assert_eq!(thinking.frames(), ["a", "b"]);
         assert_eq!(thinking.color(), ORANGE);
         assert_eq!(frame_at(thinking, 0), "a");
-        assert_eq!(frame_at(thinking, 1), "a", "slow holds for three ticks");
-        assert_eq!(frame_at(thinking, 3), "b");
+        assert_eq!(frame_at(thinking, 1), "b", "fast advances every tick");
+        assert_eq!(frame_at(thinking, 2), "a");
     }
 
     #[test]

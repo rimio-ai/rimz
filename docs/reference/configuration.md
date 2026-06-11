@@ -183,7 +183,7 @@ trunk = "develop"
 frames = "⢄⢂⢁⡁⡈⡐⡠"
 color = "clay"
 effect = "static"
-speed = "slow"
+speed = "fast"
 
 [sidebar.animations.idle]
 effect = "breathe"

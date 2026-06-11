@@ -198,15 +198,9 @@ fn animations_cycle_and_wrap() {
     assert_eq!(working_glyph(&theme, working.len() as u64), working[0]);
     let thinking = ["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"];
     for (phase, expected) in thinking.iter().enumerate() {
-        let held_phase = phase as u64 * 3;
-        assert_eq!(thinking_glyph(&theme, held_phase), *expected);
-        assert_eq!(thinking_glyph(&theme, held_phase + 1), *expected);
-        assert_eq!(thinking_glyph(&theme, held_phase + 2), *expected);
+        assert_eq!(thinking_glyph(&theme, phase as u64), *expected);
     }
-    assert_eq!(
-        thinking_glyph(&theme, thinking.len() as u64 * 3),
-        thinking[0]
-    );
+    assert_eq!(thinking_glyph(&theme, thinking.len() as u64), thinking[0]);
     let resolving = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
     assert_eq!(resolver_glyph(&theme, resolving.len() as u64), resolving[0]);
     // The two transient heads cycle and wrap on the same shared phase.
