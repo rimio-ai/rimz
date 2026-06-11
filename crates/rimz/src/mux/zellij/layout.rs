@@ -106,7 +106,7 @@ pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String>
     let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
     let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached, None)?;
     // Every tab carries the same shape — the sidebar on the left and a focused
-    // terminal on the right — in the spelling that fits where it instantiates:
+    // work area on the right — in the spelling that fits where it instantiates:
     // the `default_tab_template` wraps the explicit birth tab on the detached
     // session, and the `new_tab_template` sizes each tab the user opens from an
     // attached client ([`BirthGeometry`]). The bare `tab` node is load-bearing:
@@ -120,20 +120,17 @@ pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String>
     // on Zellij 0.44.3 it creates the right terminal but leaves focus stranded
     // on the sidebar in newly-created tabs. Spelling out the terminal makes the
     // product contract explicit and pins focus on the user's working pane.
+    let work_pane = render_plain_terminal_pane(16);
+    let birth_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
+    let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &work_pane, 8);
     Ok(format!(
         r#"layout {{
     default_tab_template {{
-        pane split_direction="vertical" {{
-            {sidebar}
-            pane focus=true
-        }}
+{birth_body}
         {COMPACT_BAR_KDL}
     }}
     new_tab_template {{
-        pane split_direction="vertical" {{
-            {new_tab_sidebar}
-            pane focus=true
-        }}
+{new_tab_body}
         {COMPACT_BAR_KDL}
     }}
     tab focus=true
@@ -179,13 +176,12 @@ pub(super) fn render_session_layout(
                 .hosts
                 .iter()
                 .enumerate()
-                .map(|(index, host)| render_host_pane(host, index == 0))
+                .map(|(index, host)| render_host_pane(host, index == 0, 16))
                 .collect::<Result<String>>()?;
+            let body = render_sidebar_work_area(&sidebar, &host_panes, 8);
             format!(
                 r#"    tab name={daemon_name} {{
-        pane split_direction="vertical" {{
-            {sidebar}
-{host_panes}        }}
+{body}
         {COMPACT_BAR_KDL}
     }}
 "#,
@@ -198,13 +194,12 @@ pub(super) fn render_session_layout(
     let mut agent_tabs = String::new();
     for (index, pane) in resume.iter().enumerate() {
         let tab_name = kdl_string(&pane.label)?;
-        let agent_pane = render_command_pane(&pane.command, &pane.cwd, true)?;
+        let agent_pane = render_command_pane(&pane.command, &pane.cwd, true, 16)?;
+        let body = render_sidebar_work_area(&sidebar, &agent_pane, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };
         agent_tabs.push_str(&format!(
             r#"    tab name={tab_name}{focus_attr} {{
-        pane split_direction="vertical" {{
-            {sidebar}
-{agent_pane}        }}
+{body}
         {COMPACT_BAR_KDL}
     }}
 "#,
@@ -213,20 +208,18 @@ pub(super) fn render_session_layout(
 
     // The free working terminal: focused only when no resumed agent took focus.
     let work_focus = if resume.is_empty() { " focus=true" } else { "" };
+    let work_pane = render_plain_terminal_pane(16);
+    let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
+    let new_tab_pane = render_plain_terminal_pane(16);
+    let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &new_tab_pane, 8);
     Ok(format!(
         r#"layout {{
     new_tab_template {{
-        pane split_direction="vertical" {{
-            {new_tab_sidebar}
-            pane focus=true
-        }}
+{new_tab_body}
         {COMPACT_BAR_KDL}
     }}
 {daemon_tab}{agent_tabs}    tab{work_focus} {{
-        pane split_direction="vertical" {{
-            {sidebar}
-            pane focus=true
-        }}
+{work_body}
         {COMPACT_BAR_KDL}
     }}
 }}
@@ -268,15 +261,14 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         .hosts
         .iter()
         .enumerate()
-        .map(|(index, host)| render_host_pane(host, index == 0))
+        .map(|(index, host)| render_host_pane(host, index == 0, 12))
         .collect::<Result<String>>()?;
-    // The body (sidebar + hosts) is a nested vertical split above the one-row
-    // compact-bar.
+    let body = render_sidebar_work_area(&sidebar, &host_panes, 4);
+    // The body (sidebar + work area) is a nested vertical split above the
+    // one-row compact-bar.
     Ok(format!(
         r#"layout {{
-    pane split_direction="vertical" {{
-        {sidebar}
-{host_panes}    }}
+{body}
     {COMPACT_BAR_KDL}
 }}
 "#,
@@ -305,20 +297,41 @@ pub(super) fn render_tab_layout(
     let mut focused = false;
     let mut columns = String::new();
     for column in &opts.panes.columns {
-        columns.push_str(&render_tab_column(column, &opts.cwd, &mut focused)?);
+        columns.push_str(&render_tab_column(column, &opts.cwd, &mut focused, 12)?);
     }
+    let body = render_sidebar_work_area(&sidebar, &columns, 4);
     Ok(format!(
         r#"layout {{
-    pane split_direction="vertical" {{
-        {sidebar}
-{columns}    }}
+{body}
     {COMPACT_BAR_KDL}
 }}
 "#,
     ))
 }
 
-fn render_tab_column(column: &[PaneCmd], cwd: &Path, focused: &mut bool) -> Result<String> {
+fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> String {
+    let base = " ".repeat(indent);
+    let child = " ".repeat(indent + 4);
+    format!(
+        r#"{base}pane split_direction="vertical" {{
+{child}{sidebar}
+{child}pane split_direction="vertical" {{
+{work_panes}{child}}}
+{base}}}
+"#,
+    )
+}
+
+fn render_plain_terminal_pane(indent: usize) -> String {
+    format!("{}pane focus=true\n", " ".repeat(indent))
+}
+
+fn render_tab_column(
+    column: &[PaneCmd],
+    cwd: &Path,
+    focused: &mut bool,
+    indent: usize,
+) -> Result<String> {
     match column {
         [] => Err(MuxErr::Output {
             program: "zellij".to_owned(),
@@ -327,18 +340,19 @@ fn render_tab_column(column: &[PaneCmd], cwd: &Path, focused: &mut bool) -> Resu
         [pane] => {
             let focus = !*focused;
             *focused = true;
-            render_command_pane(&pane.argv, cwd, focus)
+            render_command_pane(&pane.argv, cwd, focus, indent)
         }
         rows => {
             let mut rendered = String::new();
             for pane in rows {
                 let focus = !*focused;
                 *focused = true;
-                rendered.push_str(&render_command_pane(&pane.argv, cwd, focus)?);
+                rendered.push_str(&render_command_pane(&pane.argv, cwd, focus, indent + 4)?);
             }
+            let base = " ".repeat(indent);
             Ok(format!(
-                r#"        pane split_direction="horizontal" {{
-{rendered}        }}
+                r#"{base}pane split_direction="horizontal" {{
+{rendered}{base}}}
 "#,
             ))
         }
@@ -350,7 +364,7 @@ fn render_tab_column(column: &[PaneCmd], cwd: &Path, focused: &mut bool) -> Resu
 /// closing with its process — an exit means the pane is gone. `focus` pins the
 /// tab's focus on it. Shared by the daemon hosts and the resumed agents, so both
 /// render identically.
-fn render_command_pane(argv: &[String], cwd: &Path, focus: bool) -> Result<String> {
+fn render_command_pane(argv: &[String], cwd: &Path, focus: bool, indent: usize) -> Result<String> {
     let (program, args) = argv.split_first().ok_or_else(|| MuxErr::Output {
         program: "zellij".to_owned(),
         reason: "command pane has no program".to_owned(),
@@ -366,22 +380,24 @@ fn render_command_pane(argv: &[String], cwd: &Path, focus: bool) -> Result<Strin
             .map(|arg| kdl_string(arg))
             .collect::<Result<Vec<_>>>()?
             .join(" ");
-        format!("\n            args {rendered}")
+        format!("\n{}args {rendered}", " ".repeat(indent + 4))
     };
+    let base = " ".repeat(indent);
+    let child = " ".repeat(indent + 4);
     Ok(format!(
-        r#"        pane{focus_attr} cwd={cwd} {{
-            command {program}{args_line}
-            start_suspended false
-            close_on_exit true
-        }}
+        r#"{base}pane{focus_attr} cwd={cwd} {{
+{child}command {program}{args_line}
+{child}start_suspended false
+{child}close_on_exit true
+{base}}}
 "#,
     ))
 }
 
 /// One host pane in the daemon view's right side. Thin wrapper over
 /// [`render_command_pane`] for the daemon hosts.
-fn render_host_pane(host: &HostPane, focus: bool) -> Result<String> {
-    render_command_pane(&host.argv, &host.cwd, focus)
+fn render_host_pane(host: &HostPane, focus: bool, indent: usize) -> Result<String> {
+    render_command_pane(&host.argv, &host.cwd, focus, indent)
 }
 
 #[cfg(test)]

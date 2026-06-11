@@ -21,8 +21,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    MuxBackend, PaneListOptions, SessionHealth, SidebarPaneOptions, SidebarWidth, ZellijBackend,
-    zellij,
+    LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth, SidebarPaneOptions,
+    SidebarWidth, TabOptions, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -959,6 +959,53 @@ fn list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
         .unwrap_or_else(|| serde_json::Value::Array(Vec::new()))
 }
 
+#[derive(Debug)]
+struct PaneGeometry {
+    id: u64,
+    x: u64,
+    columns: u64,
+}
+
+fn named_work_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Vec<PaneGeometry> {
+    let panes = list_panes_json(xdg, session);
+    let mut work: Vec<PaneGeometry> = panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|pane| pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false))
+        .filter(|pane| {
+            pane.get("tab_name").and_then(|value| value.as_str()) == Some(tab_name)
+                && pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar")
+        })
+        .filter_map(|pane| {
+            Some(PaneGeometry {
+                id: pane.get("id")?.as_u64()?,
+                x: pane.get("pane_x")?.as_u64()?,
+                columns: pane.get("pane_columns")?.as_u64()?,
+            })
+        })
+        .collect();
+    work.sort_by_key(|pane| pane.x);
+    work
+}
+
+fn wait_for_named_work_pane_count(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+    want: usize,
+) -> Vec<PaneGeometry> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let work = named_work_pane_geometry(xdg, session, tab_name);
+        if work.len() == want || Instant::now() >= deadline {
+            return work;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
     let panes = list_panes_json(xdg, session);
     let sidebars: Vec<&serde_json::Value> = panes
@@ -1272,6 +1319,144 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
         "a tab opened from an attached client must be born at exactly the \
          72-column cap, got {:?}",
         sidebar_columns_by_tab(xdg.path(), &name),
+    );
+}
+
+/// A tab layout keeps the fixed sidebar outside the user's work area. Closing
+/// back to `sidebar | one work pane` and then opening a new terminal must split
+/// the work area, not rebalance a flat root that still carries the fixed sidebar
+/// constraint.
+#[test]
+fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("worksplit");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let width = SidebarWidth::default();
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-worksplit")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(298)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let _client = AttachedClient::attach(xdg.path(), &name, 298, 68);
+    wait_for_attached_client(xdg.path(), &name);
+
+    let tab_name = "work split";
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: tab_name.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![
+                    vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    }],
+                    vec![PaneCmd {
+                        argv: vec!["sleep".to_owned(), "600".to_owned()],
+                    }],
+                ],
+            },
+            focus: true,
+            sidebar,
+        })
+        .expect("open tab layout");
+
+    let work = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 2);
+    assert_eq!(
+        work.len(),
+        2,
+        "tab should start with two work panes: {work:?}"
+    );
+    let close = format!("terminal_{}", work[1].id);
+    let closed = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "close-pane",
+            "--pane-id",
+            &close,
+        ])
+        .bounded_output()
+        .expect("close-pane");
+    assert!(
+        closed.status.success(),
+        "close-pane failed: {}",
+        String::from_utf8_lossy(&closed.stderr),
+    );
+
+    let survivor = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 1);
+    assert_eq!(
+        survivor.len(),
+        1,
+        "closing one work pane should leave one survivor: {survivor:?}",
+    );
+    let focus = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "focus-pane-id",
+            &format!("terminal_{}", survivor[0].id),
+        ])
+        .bounded_output()
+        .expect("focus-pane-id");
+    assert!(
+        focus.status.success(),
+        "focus-pane-id failed: {}",
+        String::from_utf8_lossy(&focus.stderr),
+    );
+
+    let spawned = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "new-pane",
+            "--direction",
+            "right",
+            "--cwd",
+        ])
+        .arg(cwd.path())
+        .args(["--", "sleep", "600"])
+        .bounded_output()
+        .expect("new-pane");
+    assert!(
+        spawned.status.success(),
+        "new-pane failed: {}",
+        String::from_utf8_lossy(&spawned.stderr),
+    );
+
+    let split = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 2);
+    assert_eq!(
+        split.len(),
+        2,
+        "new terminal should land in the same work tab: {split:?}",
+    );
+    let diff = split[0].columns.abs_diff(split[1].columns);
+    assert!(
+        diff <= 5,
+        "work panes should split evenly after reopening from one pane, got {split:?}",
     );
 }
 
