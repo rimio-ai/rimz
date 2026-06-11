@@ -134,7 +134,7 @@ fn directory_room_enumeration_forks_no_git() {
     assert!(
         fixture.git_forks("rev-parse") >= 1,
         "the child-repo pod still pays its diff-stats probes:\n{}",
-        fixture.git_log_contents(),
+        cadence_debug(&fixture, &cold.stdout),
     );
 }
 
@@ -168,7 +168,8 @@ fn idle_room_produce_runs_no_enrichment_io() {
     let mut diff_stats = rimz::sidebar::snapshot::read_diff_stats_cache(&diff_stats_path);
     assert!(
         !diff_stats.entries.is_empty(),
-        "the cold produce cached the worktree's git facts"
+        "the cold produce cached the worktree's git facts:\n{}",
+        cadence_debug(&fixture, &cold.stdout),
     );
     for entry in diff_stats.entries.values_mut() {
         entry.refreshed_at_ms = now_ms - 10_000;
@@ -205,4 +206,49 @@ fn idle_room_produce_runs_no_enrichment_io() {
         spending_bytes,
         "the spending gate serves the published walk without re-stamping"
     );
+}
+
+fn cadence_debug(fixture: &Fixture, stdout: &[u8]) -> String {
+    let worktree = fixture.env.project_root.join("worktree");
+    let worktree_git = worktree.join(".git");
+    let groups = serde_json::from_slice::<serde_json::Value>(stdout)
+        .ok()
+        .and_then(|snapshot| serde_json::to_string_pretty(&snapshot["worktree_groups"]).ok())
+        .unwrap_or_else(|| String::from("<snapshot json unavailable>"));
+    let entries = std::fs::read_dir(&fixture.env.project_root)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| {
+                    let path = entry.path();
+                    let git = path.join(".git");
+                    format!(
+                        "{} dir={} git_exists={} git_dir={}",
+                        path.display(),
+                        path.is_dir(),
+                        git.exists(),
+                        git.is_dir()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_else(|err| format!("<read_dir failed: {err}>"));
+    let diff_stats =
+        std::fs::read_to_string(fixture.env.runtime_paths().root.join("diff-stats.json"))
+            .unwrap_or_else(|err| format!("<diff-stats unavailable: {err}>"));
+    format!(
+        "project_root: {}\nworktree: {} exists={} dir={}\nworktree_git: {} exists={} dir={}\nproject entries:\n{}\nworktree_groups:\n{}\ndiff-stats.json:\n{}\ngit trace:\n{}",
+        fixture.env.project_root.display(),
+        worktree.display(),
+        worktree.exists(),
+        worktree.is_dir(),
+        worktree_git.display(),
+        worktree_git.exists(),
+        worktree_git.is_dir(),
+        entries,
+        groups,
+        diff_stats,
+        fixture.git_log_contents()
+    )
 }
