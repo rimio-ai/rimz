@@ -36,11 +36,26 @@ jobs:
           shared-key: rimz-ci
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
-      # cache miss (rust-cache does not cache ~/.cargo/bin).
+      # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
+      # script directly with GitHub-compatible runner env values.
       - name: Install cargo plugins
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
+        env:
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
+        run: |
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
 
       - name: cargo xtask ci
         run: cargo xtask ci
@@ -76,9 +91,23 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
 
       - name: Install cargo-nextest (prebuilt)
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
+        env:
+          INPUT_TOOL: cargo-nextest
+        run: |
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
 
       - name: cargo xtask test
         run: cargo xtask test
