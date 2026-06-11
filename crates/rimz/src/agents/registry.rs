@@ -57,7 +57,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_resolves_each_kind_to_its_own_descriptor() {
+    fn registry_kinds_are_unique_and_resolve_to_their_descriptors() {
         for adapter in ADAPTERS {
             let kind = adapter.descriptor().kind;
             assert_eq!(
@@ -67,10 +67,7 @@ mod tests {
             );
         }
         assert!(adapter_by_kind("unknown-agent").is_err());
-    }
 
-    #[test]
-    fn kinds_are_unique() {
         let mut kinds: Vec<_> = known_kinds().collect();
         kinds.sort_unstable();
         let before = kinds.len();
@@ -79,17 +76,14 @@ mod tests {
     }
 
     #[test]
-    fn sub_providers_resolve_to_their_metering_kind() {
+    fn sub_providers_are_unique_and_resolve_to_their_metering_kind() {
         // The credential keys Pi's auth file uses, resolved through each
         // descriptor's declaration — the dashboard's window-borrow mapping.
         assert_eq!(kind_for_sub_provider("anthropic"), Some("claude"));
         assert_eq!(kind_for_sub_provider("openai"), Some("codex"));
         assert_eq!(kind_for_sub_provider("openai-codex"), Some("codex"));
         assert_eq!(kind_for_sub_provider("github-copilot"), None);
-    }
 
-    #[test]
-    fn sub_providers_are_claimed_by_one_kind_only() {
         let mut providers: Vec<_> = ADAPTERS
             .iter()
             .flat_map(|adapter| adapter.descriptor().sub_providers)

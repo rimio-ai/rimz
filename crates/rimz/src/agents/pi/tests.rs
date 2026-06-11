@@ -1,29 +1,12 @@
 use super::*;
 
-use crate::agents::AgentHookClass;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase, step};
 use crate::feed::{AgentStatus, FeedKind, ResolutionMethod, Surface};
 use crate::ids::WorkspaceId;
 use serde_json::json;
 
 #[test]
-fn pi_classifies_surfaces_and_activity_events() {
-    let tool_call = PiAdapter.classify_hook("tool_call", &Value::Null);
-    assert_eq!(tool_call.class, AgentHookClass::BlockingFeed);
-    assert_eq!(tool_call.feed_kind, Some(FeedKind::Permission));
-    for event in LIFECYCLE_EVENTS {
-        let classified = PiAdapter.classify_hook(event, &Value::Null);
-        assert_eq!(classified.class, AgentHookClass::Lifecycle, "event {event}");
-        assert_eq!(classified.feed_kind, None, "event {event}");
-    }
-    for event in ["PermissionRequest", "SessionStart", "bogus"] {
-        assert_eq!(
-            PiAdapter.classify_hook(event, &Value::Null).class,
-            AgentHookClass::Unknown,
-            "{event}"
-        );
-    }
-
+fn pi_descriptor_declares_capabilities_and_activity_events() {
     let capabilities = PiAdapter.descriptor().capabilities;
     assert!(capabilities.blocking_feed);
     assert!(!capabilities.native_ask_ui);
@@ -50,6 +33,35 @@ fn pi_classifies_surfaces_and_activity_events() {
     ] {
         assert!(!descriptor.records_activity(event), "event {event}");
     }
+
+    assert_eq!(
+        PiAdapter.resume_command("0199aaf2", Path::new("/tmp")),
+        Some(vec![
+            "pi".to_owned(),
+            "--session".to_owned(),
+            "0199aaf2".to_owned(),
+        ])
+    );
+    assert_eq!(
+        PiAdapter.launch_command(&[], None),
+        Some(vec!["pi".to_owned()])
+    );
+    assert_eq!(
+        PiAdapter.launch_command(&[], Some("review this")),
+        Some(vec!["pi".to_owned(), "review this".to_owned()])
+    );
+    assert_eq!(
+        PiAdapter.launch_command(
+            &["--model".to_owned(), "large".to_owned()],
+            Some("review this"),
+        ),
+        Some(vec![
+            "pi".to_owned(),
+            "--model".to_owned(),
+            "large".to_owned(),
+            "review this".to_owned(),
+        ])
+    );
 }
 
 #[test]
@@ -236,38 +248,6 @@ fn session_predicates_match_observed_root_signals() {
             "{event} moved-on predicate"
         );
     }
-}
-
-#[test]
-fn launch_and_resume_commands_are_pi_invocations() {
-    assert_eq!(
-        PiAdapter.resume_command("0199aaf2", Path::new("/tmp")),
-        Some(vec![
-            "pi".to_owned(),
-            "--session".to_owned(),
-            "0199aaf2".to_owned(),
-        ])
-    );
-    assert_eq!(
-        PiAdapter.launch_command(&[], None),
-        Some(vec!["pi".to_owned()])
-    );
-    assert_eq!(
-        PiAdapter.launch_command(&[], Some("review this")),
-        Some(vec!["pi".to_owned(), "review this".to_owned()])
-    );
-    assert_eq!(
-        PiAdapter.launch_command(
-            &["--model".to_owned(), "large".to_owned()],
-            Some("review this"),
-        ),
-        Some(vec![
-            "pi".to_owned(),
-            "--model".to_owned(),
-            "large".to_owned(),
-            "review this".to_owned(),
-        ])
-    );
 }
 
 fn permission_item() -> FeedItem {

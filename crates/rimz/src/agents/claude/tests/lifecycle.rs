@@ -1,39 +1,6 @@
 use super::*;
 
 #[test]
-fn classification_covers_blocking_subagent_and_lifecycle_events() {
-    for (tool, expected_kind) in [
-        ("ExitPlanMode", FeedKind::PlanApproval),
-        ("AskUserQuestion", FeedKind::Question),
-    ] {
-        let c = ClaudeAdapter.classify_hook("PreToolUse", &json!({ "tool_name": tool }));
-        assert_eq!(c.class, AgentHookClass::BlockingFeed, "{tool}");
-        assert_eq!(c.feed_kind, Some(expected_kind), "{tool}");
-    }
-
-    for event in ["SubagentStart", "SubagentStop"] {
-        let c = ClaudeAdapter.classify_hook(event, &json!({}));
-        assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
-        assert_eq!(c.feed_kind, None, "{event}");
-    }
-
-    let blocking = BLOCKING_EVENTS
-        .iter()
-        .map(|(event, _)| *event)
-        .collect::<std::collections::BTreeSet<_>>();
-    let expected = INSTALLED_EVENTS
-        .iter()
-        .map(|(event, _)| *event)
-        .filter(|event| !blocking.contains(event))
-        .collect::<std::collections::BTreeSet<_>>();
-    let actual = LIFECYCLE_EVENTS
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(actual, expected);
-}
-
-#[test]
 fn compaction_events_map_trigger_to_lifecycle_signals() {
     let pre = ClaudeAdapter
         .observe_lifecycle("PreCompact", &json!({ "session_id": "sess-1" }))

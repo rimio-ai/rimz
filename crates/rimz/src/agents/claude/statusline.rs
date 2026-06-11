@@ -510,7 +510,7 @@ mod tests {
     }
 
     #[test]
-    fn sparse_payload_tolerates_missing_fields() {
+    fn payload_tolerates_sparse_null_unknown_and_clamped_fields() {
         let ctx = parse(json!({ "session_id": "s", "model": {} }));
         assert_eq!(ctx.source, "claude");
         assert!(ctx.model_id.is_none());
@@ -518,10 +518,7 @@ mod tests {
         assert!(ctx.tokens.is_none());
         assert!(ctx.rate_limits.is_none());
         assert!(ctx.pr.is_none());
-    }
 
-    #[test]
-    fn null_current_usage_drops_only_that_field() {
         // `current_usage` is null before the first API call; the rest of the
         // context window still projects.
         let ctx = parse(json!({
@@ -530,33 +527,21 @@ mod tests {
         let tokens = ctx.tokens.unwrap();
         assert_eq!(tokens.used_percentage, Some(12));
         assert!(tokens.current_usage.is_none());
-    }
 
-    #[test]
-    fn empty_current_usage_collapses_to_none() {
         // An all-null usage object carries nothing, so it collapses rather than
         // serializing as `{}`.
         let ctx = parse(json!({
             "context_window": { "used_percentage": 5, "current_usage": {} }
         }));
         assert!(ctx.tokens.unwrap().current_usage.is_none());
-    }
 
-    #[test]
-    fn unknown_fields_are_ignored() {
         // A newer Claude that adds keys must still parse.
         let ctx = parse(json!({ "model": { "id": "m" }, "brand_new_field": { "x": 1 } }));
         assert_eq!(ctx.model_id.as_deref(), Some("m"));
-    }
 
-    #[test]
-    fn out_of_range_percentage_is_clamped() {
         let ctx = parse(json!({ "context_window": { "used_percentage": 250 } }));
         assert_eq!(ctx.tokens.unwrap().used_percentage, Some(100));
-    }
 
-    #[test]
-    fn unparseable_resets_at_drops_only_that_field() {
         // i64::MIN is out of Timestamp's range; the reset drops, the pct stays.
         let ctx = parse(json!({
             "rate_limits": { "five_hour": { "used_percentage": 10, "resets_at": i64::MIN } }
@@ -565,10 +550,7 @@ mod tests {
         let five = window_by_mins(&rate, CLAUDE_FIVE_HOUR_MINS);
         assert_eq!(five.used_percentage, Some(10));
         assert!(five.resets_at.is_none());
-    }
 
-    #[test]
-    fn rate_limit_percentage_keeps_near_full_sliver_live() {
         let ctx = parse(json!({
             "rate_limits": {
                 "five_hour": { "used_percentage": 99.5, "resets_at": 1738425600i64 },
@@ -640,21 +622,15 @@ mod tests {
     }
 
     #[test]
-    fn normal_newest_turn_yields_none() {
+    fn turn_error_scan_skips_recovered_sidechain_and_nonconversation_records() {
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n");
         assert!(detect_turn_error(&tail).is_none());
-    }
 
-    #[test]
-    fn recovered_turn_yields_none() {
         // A normal conversation entry newer than the error means the session
         // moved on (a resume, a rewind, a fresh prompt): alive, not dead.
         let tail = format!("{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n{NORMAL_ASSISTANT_ENTRY}\n");
         assert!(detect_turn_error(&tail).is_none());
-    }
 
-    #[test]
-    fn non_conversation_records_are_skipped_not_decisive() {
         // Rewind/fork artifacts (`file-history-snapshot`, no timestamp) and
         // `summary` records ride the tail; the scan passes over them to the
         // newest conversation entry.
@@ -662,10 +638,7 @@ mod tests {
             "{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n{{\"type\":\"file-history-snapshot\"}}\n{{\"type\":\"summary\",\"summary\":\"t\"}}\n"
         );
         assert!(detect_turn_error(&tail).is_some());
-    }
 
-    #[test]
-    fn sidechain_error_never_decides_the_parent() {
         // A subagent replay's API error is the child's problem; the parent's
         // newest own entry (older, normal) decides.
         let sidechain = r#"{"type":"assistant","isSidechain":true,"isApiErrorMessage":true,"timestamp":"2026-06-04T03:01:00.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
@@ -674,7 +647,7 @@ mod tests {
     }
 
     #[test]
-    fn last_assistant_message_reads_latest_main_thread_text() {
+    fn assistant_message_readers_keep_main_thread_signal() {
         let earlier = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"old"}]}}"#;
         let latest = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"},{"type":"text","text":"world"}]}}"#;
         let tail = format!("{earlier}\n{latest}\n");
@@ -683,66 +656,47 @@ mod tests {
             last_assistant_message(&tail).as_deref(),
             Some("hello\nworld")
         );
-    }
 
-    #[test]
-    fn stream_assistant_messages_reads_ordered_main_thread_text() {
-        let messages = assistant_messages(include_str!("tests/fixtures/stream-transcript.jsonl"));
-        assert_eq!(messages, vec!["first update", "second\nline"]);
-    }
-
-    #[test]
-    fn last_assistant_message_skips_sidechain_text() {
         let sidechain = r#"{"type":"assistant","isSidechain":true,"message":{"content":[{"type":"text","text":"child answer"}]}}"#;
         let tail = format!("{NORMAL_ASSISTANT_ENTRY}\n{sidechain}\n");
-
         assert_eq!(last_assistant_message(&tail).as_deref(), Some("done"));
-    }
 
-    #[test]
-    fn last_assistant_message_does_not_surface_api_error_text_or_prior_turn() {
         let prior_turn = r#"{"type":"assistant","message":{"content":[{"type":"text","text":"previous turn"}]}}"#;
         let user =
             r#"{"type":"user","message":{"content":[{"type":"text","text":"current prompt"}]}}"#;
         let tail = format!("{prior_turn}\n{user}\n{API_ERROR_ENTRY}\n{TURN_DURATION_ENTRY}\n");
 
         assert!(last_assistant_message(&tail).is_none());
+
+        let messages = assistant_messages(include_str!("tests/fixtures/stream-transcript.jsonl"));
+        assert_eq!(messages, vec!["first update", "second\nline"]);
     }
 
     #[test]
-    fn truncated_leading_line_is_skipped() {
+    fn turn_error_scan_tolerates_truncated_unclocked_and_empty_tail() {
         // The 64KB tail seek can split the first line mid-JSON; it fails to
         // parse and is passed over.
         let tail = format!("age\":{{\"truncated\":true}}}}\n{API_ERROR_ENTRY}\n");
         assert!(detect_turn_error(&tail).is_some());
-    }
 
-    #[test]
-    fn error_entry_without_timestamp_is_not_decisive() {
         // No clock, no self-clear guard: the scan passes over it rather than
         // emitting a marker the projection could never expire.
         let unclocked = r#"{"type":"assistant","isApiErrorMessage":true,"message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#;
         assert!(detect_turn_error(&format!("{unclocked}\n")).is_none());
-    }
 
-    #[test]
-    fn empty_tail_yields_none() {
         assert!(detect_turn_error("").is_none());
         assert!(detect_turn_error("\n\n").is_none());
     }
 
     #[test]
-    fn turn_error_label_is_length_capped() {
+    fn turn_error_labels_are_capped_and_accept_flat_content() {
         let long = "x".repeat(500);
         let entry = format!(
             r#"{{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{{"content":[{{"type":"text","text":"{long}"}}]}}}}"#
         );
         let error = detect_turn_error(&entry).expect("detected");
         assert_eq!(error.label.unwrap().chars().count(), TURN_ERROR_LABEL_MAX);
-    }
 
-    #[test]
-    fn flat_string_content_still_labels() {
         // Tolerate a flat-string `message.content` alongside the block array.
         let entry = r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T02:56:32.919Z","message":{"content":"API Error: Overloaded"}}"#;
         let error = detect_turn_error(entry).expect("detected");

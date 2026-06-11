@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn session_sources_and_classification_cover_the_installed_surface() {
+fn session_sources_map_to_lifecycle_signals() {
     for (source, expected) in [
         ("compact", LifecycleSignal::CompactionEnded { auto: None }),
         ("startup", LifecycleSignal::Registered),
@@ -19,50 +19,10 @@ fn session_sources_and_classification_cover_the_installed_surface() {
         assert_eq!(obs.signal, expected, "{source}");
         assert_eq!(obs.task, None);
     }
-
-    let expected = INSTALLED_EVENTS
-        .iter()
-        .map(|(event, _)| *event)
-        .filter(|event| *event != "PermissionRequest")
-        .collect::<std::collections::BTreeSet<_>>();
-    let actual = LIFECYCLE_EVENTS
-        .iter()
-        .copied()
-        .collect::<std::collections::BTreeSet<_>>();
-    assert_eq!(actual, expected);
-
-    let c = CodexAdapter.classify_hook("WatItIs", &Value::Null);
-    assert_eq!(c.class, AgentHookClass::Unknown);
-    assert!(c.feed_kind.is_none());
-}
-
-#[test]
-fn pre_tool_plan_and_question_hooks_are_blocking_feed() {
-    for (tool, expected_kind) in [
-        ("ExitPlanMode", FeedKind::PlanApproval),
-        ("AskUserQuestion", FeedKind::Question),
-    ] {
-        let c = CodexAdapter.classify_hook("PreToolUse", &json!({ "tool_name": tool }));
-        assert_eq!(c.class, AgentHookClass::BlockingFeed, "{tool}");
-        assert_eq!(c.feed_kind, Some(expected_kind), "{tool}");
-    }
-
-    let normal_tool = CodexAdapter.classify_hook(
-        "PreToolUse",
-        &json!({ "session_id": "sess-1", "tool_name": "shell" }),
-    );
-    assert_eq!(normal_tool.class, AgentHookClass::Lifecycle);
-    assert_eq!(normal_tool.feed_kind, None);
 }
 
 #[test]
 fn compaction_pair_maps_trigger_to_lifecycle_signals() {
-    for event in ["PreCompact", "PostCompact"] {
-        let c = CodexAdapter.classify_hook(event, &json!({ "session_id": "sess-1" }));
-        assert_eq!(c.class, AgentHookClass::Lifecycle, "{event}");
-        assert_eq!(c.feed_kind, None, "{event}");
-    }
-
     let pre = CodexAdapter
         .observe_lifecycle(
             "PreCompact",

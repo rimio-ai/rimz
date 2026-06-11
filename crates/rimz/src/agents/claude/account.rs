@@ -82,7 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_subscription_account_as_metered() {
+    fn parses_metered_subscription_unmetered_api_key_and_failure_states() {
         let json = br#"{
             "loggedIn": true,
             "authMethod": "claude.ai",
@@ -93,24 +93,15 @@ mod tests {
         let account = found(parse_claude_auth(json), "metered account");
         assert_eq!(account.plan.as_deref(), Some("max"));
         assert_eq!(account.metered, Some(true));
-    }
 
-    #[test]
-    fn parses_an_api_key_account_as_unmetered() {
         let json = br#"{ "loggedIn": true, "authMethod": "apiKey" }"#;
         let account = found(parse_claude_auth(json), "api-key account");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
-    }
 
-    #[test]
-    fn logged_out_is_logged_out_not_a_failure() {
         let json = br#"{ "loggedIn": false }"#;
         assert!(matches!(parse_claude_auth(json), AccountProbe::LoggedOut));
-    }
 
-    #[test]
-    fn garbage_output_is_unavailable_so_it_retries_soon() {
         assert!(matches!(
             parse_claude_auth(b"not json"),
             AccountProbe::Unavailable

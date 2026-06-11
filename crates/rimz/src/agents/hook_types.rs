@@ -70,19 +70,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn session_source_lowercase_variants() {
+    fn enum_deserializers_accept_known_values_and_fall_back_to_unknown() {
         let compact: SessionSource = serde_json::from_str(r#""compact""#).unwrap();
         assert_eq!(compact, SessionSource::Compact);
-    }
-
-    #[test]
-    fn session_source_unknown_variant() {
         let unknown: SessionSource = serde_json::from_str(r#""brandNewSource""#).unwrap();
         assert_eq!(unknown, SessionSource::Unknown);
-    }
 
-    #[test]
-    fn compact_trigger_variants() {
         let auto: CompactTrigger = serde_json::from_str(r#""auto""#).unwrap();
         assert_eq!(auto, CompactTrigger::Auto);
         let unknown: CompactTrigger = serde_json::from_str(r#""future""#).unwrap();
@@ -91,24 +84,18 @@ mod tests {
     }
 
     #[test]
-    fn hook_event_common_sparse() {
+    fn common_payloads_are_sparse_and_forward_compatible() {
         let c: HookEventCommon = serde_json::from_value(json!({})).unwrap();
         assert!(c.session_id.is_none());
         assert!(c.cwd.is_none());
-    }
 
-    #[test]
-    fn hook_event_common_unknown_fields_ignored() {
         let c: HookEventCommon = serde_json::from_value(json!({
             "session_id": "s1",
             "future_field": {"nested": 1}
         }))
         .unwrap();
         assert_eq!(c.session_id.as_deref(), Some("s1"));
-    }
 
-    #[test]
-    fn background_task_sparse() {
         let t: BackgroundTask = serde_json::from_value(json!({})).unwrap();
         assert!(t.id.is_none());
         assert!(t.status.is_none());

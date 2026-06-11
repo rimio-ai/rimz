@@ -1,32 +1,50 @@
 use super::*;
 
+use std::io::Write as _;
+
+use tempfile::TempDir;
+
 /// The line classifier feeding `parse_codex_session` — exercised here
 /// through the kind probe so each accepted/skipped shape stays pinned.
 fn token_line(line: &[u8]) -> bool {
     codex_line_kind(line).is_some()
 }
 
-#[test]
-fn token_line_accepts_each_known_shape() {
-    assert!(token_line(
-        br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#
-    ));
-    assert!(token_line(br#"{"type":"turn_context","payload":{}}"#));
-    assert!(token_line(
-        br#"{"usage":{"input_tokens":100,"output_tokens":50},"model":"gpt-5"}"#
-    ));
-    assert!(token_line(
-        br#"{"prompt_tokens":100,"completion_tokens":50,"model":"gpt-5"}"#
-    ));
+fn write_session(filename: &str, lines: &[&str]) -> (TempDir, std::path::PathBuf) {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join(filename);
+    let mut f = std::fs::File::create(&path).unwrap();
+    for line in lines {
+        writeln!(f, "{line}").unwrap();
+    }
+    (dir, path)
 }
 
 #[test]
-fn token_line_skips_non_usage_shapes() {
-    assert!(!token_line(
-        br#"{"type":"event_msg","payload":{"type":"tool_call"}}"#
-    ));
-    assert!(!token_line(br#"{"type":"other","foo":"bar"}"#));
-    assert!(!token_line(b"{}"));
+fn token_line_classifies_known_usage_shapes_only() {
+    for line in [
+        br#"{"type":"event_msg","payload":{"type":"token_count","info":{}}}"#.as_slice(),
+        br#"{"type":"turn_context","payload":{}}"#,
+        br#"{"usage":{"input_tokens":100,"output_tokens":50},"model":"gpt-5"}"#,
+        br#"{"prompt_tokens":100,"completion_tokens":50,"model":"gpt-5"}"#,
+    ] {
+        assert!(
+            token_line(line),
+            "accepted {}",
+            String::from_utf8_lossy(line)
+        );
+    }
+    for line in [
+        br#"{"type":"event_msg","payload":{"type":"tool_call"}}"#.as_slice(),
+        br#"{"type":"other","foo":"bar"}"#,
+        b"{}",
+    ] {
+        assert!(
+            !token_line(line),
+            "skipped {}",
+            String::from_utf8_lossy(line)
+        );
+    }
 }
 
 #[test]
@@ -43,36 +61,27 @@ fn millis_to_rfc3339_known_values() {
 }
 
 #[test]
-fn codex_raw_usage_field_aliases() {
+fn codex_raw_usage_accepts_aliases_strings_and_rejects_non_object_field() {
     // OpenAI alias names
     let s = r#"{"prompt_tokens":100,"completion_tokens":50,"total_tokens":150}"#;
     let u: CodexRawUsage = serde_json::from_str(s).unwrap();
     assert_eq!(u.input_tokens, 100);
     assert_eq!(u.output_tokens, 50);
     assert_eq!(u.total_tokens, 150);
-}
 
-#[test]
-fn codex_raw_usage_cached_aliases() {
     let s = r#"{"input_tokens":200,"cached_tokens":80,"output_tokens":30}"#;
     let u: CodexRawUsage = serde_json::from_str(s).unwrap();
     assert_eq!(u.input_tokens, 200);
     assert_eq!(u.cached_input_tokens, 80);
     assert_eq!(u.output_tokens, 30);
     assert_eq!(u.total_tokens, 230);
-}
 
-#[test]
-fn codex_raw_usage_string_token_count() {
     // Some Codex log variants write counts as strings.
     let s = r#"{"input_tokens":"100","output_tokens":"50"}"#;
     let u: CodexRawUsage = serde_json::from_str(s).unwrap();
     assert_eq!(u.input_tokens, 100);
     assert_eq!(u.output_tokens, 50);
-}
 
-#[test]
-fn codex_raw_usage_non_object_field_is_none() {
     // CodexLogEntry.usage may be a boolean in malformed logs — skip gracefully.
     let s = r#"{"timestamp":"2026-01-01T00:00:00Z","usage":true}"#;
     let e: CodexLogEntry<'_> = serde_json::from_str(s).unwrap();
@@ -97,74 +106,41 @@ fn subtract_raw_usage_computes_delta() {
 }
 
 #[test]
-fn parse_codex_session_event_msg() {
-    use std::io::Write as _;
-    use tempfile::TempDir;
-
-    let dir = TempDir::new().unwrap();
-    let sessions_dir = dir.path();
-    let path = sessions_dir.join("session-a.jsonl");
-
-    let mut f = std::fs::File::create(&path).unwrap();
-    writeln!(
-        f,
-        r#"{{"type":"turn_context","payload":{{"model":"gpt-5"}}}}"#
-    )
-    .unwrap();
-    writeln!(
-        f,
-        r#"{{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{{"type":"token_count","info":{{"last_token_usage":{{"input_tokens":100,"output_tokens":50}}}}}}}}"#
-    ).unwrap();
+fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
+    let (_dir, path) = write_session(
+        "session-a.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+        ],
+    );
 
     let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].input_tokens, 100);
     assert_eq!(events[0].output_tokens, 50);
     assert_eq!(events[0].model.as_deref(), Some("gpt-5"));
-}
 
-#[test]
-fn parse_codex_session_cumulative_total_subtracted() {
-    use std::io::Write as _;
-    use tempfile::TempDir;
-
-    let dir = TempDir::new().unwrap();
-    let sessions_dir = dir.path();
-    let path = sessions_dir.join("session-b.jsonl");
-
-    let mut f = std::fs::File::create(&path).unwrap();
-    // First event: total = 100/50
-    writeln!(
-        f,
-        r#"{{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":100,"output_tokens":50}}}}}}}}"#
-    ).unwrap();
-    // Second event: total = 300/120 → delta = 200/70
-    writeln!(
-        f,
-        r#"{{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{{"type":"token_count","info":{{"total_token_usage":{{"input_tokens":300,"output_tokens":120}}}}}}}}"#
-    ).unwrap();
+    let (_dir, path) = write_session(
+        "session-b.jsonl",
+        &[
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#,
+            r#"{"type":"event_msg","timestamp":"2026-01-01T10:01:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":300,"output_tokens":120}}}}"#,
+        ],
+    );
 
     let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
     assert_eq!(events.len(), 2);
     assert_eq!(events[0].input_tokens, 100);
     assert_eq!(events[1].input_tokens, 200);
     assert_eq!(events[1].output_tokens, 70);
-}
 
-#[test]
-fn parse_codex_session_headless() {
-    use std::io::Write as _;
-    use tempfile::TempDir;
-
-    let dir = TempDir::new().unwrap();
-    let sessions_dir = dir.path();
-    let path = sessions_dir.join("exec.jsonl");
-
-    let mut f = std::fs::File::create(&path).unwrap();
-    writeln!(
-        f,
-        r#"{{"model":"gpt-5","timestamp":"2026-01-01T10:00:00.000Z","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
-    ).unwrap();
+    let (_dir, path) = write_session(
+        "exec.jsonl",
+        &[
+            r#"{"model":"gpt-5","timestamp":"2026-01-01T10:00:00.000Z","usage":{"input_tokens":200,"output_tokens":80}}"#,
+        ],
+    );
 
     let events = parse_codex_session(&path, 0, &mut CodexSpendState::default()).0;
     assert_eq!(events.len(), 1);
@@ -176,18 +152,14 @@ fn parse_codex_session_headless() {
 #[test]
 fn unpriced_model_is_recorded_as_unknown() {
     use std::collections::BTreeMap;
-    use std::io::Write as _;
-    use tempfile::TempDir;
 
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("session.jsonl");
     let timestamp = "2026-01-01T10:00:00.000Z";
-    let mut f = std::fs::File::create(&path).unwrap();
-    writeln!(
-        f,
-        r#"{{"model":"new-codex-release","timestamp":"{timestamp}","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
-    )
-    .unwrap();
+    let (_dir, path) = write_session(
+        "session.jsonl",
+        &[&format!(
+            r#"{{"model":"new-codex-release","timestamp":"{timestamp}","usage":{{"input_tokens":200,"output_tokens":80}}}}"#
+        )],
+    );
 
     let parsed = parse_codex_spend(&path, None, &PriceBook::from_litellm_json("{}"));
 

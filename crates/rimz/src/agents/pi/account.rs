@@ -190,8 +190,9 @@ mod tests {
     }
 
     #[test]
-    fn oauth_credential_is_a_metered_subscription() {
+    fn credential_selection_reports_metered_api_key_and_session_provider_cases() {
         let dir = tempfile::tempdir().unwrap();
+
         let path = write_auth(
             dir.path(),
             r#"{ "anthropic": { "type": "oauth", "access": "a", "refresh": "r", "expires": 1 } }"#,
@@ -203,27 +204,7 @@ mod tests {
         // The raw credential key rides along, so the dashboard can borrow the
         // metering sibling's budget windows.
         assert_eq!(account.sub_provider.as_deref(), Some("anthropic"));
-    }
 
-    #[test]
-    fn api_key_credential_is_unmetered() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = write_auth(
-            dir.path(),
-            r#"{ "openai": { "type": "api_key", "key": "k" } }"#,
-        );
-        let account = found(probe_auth(&path, None), "api-key account");
-        assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
-        assert_eq!(account.metered, Some(false));
-        assert_eq!(account.version, None);
-        assert_eq!(account.sub_provider.as_deref(), Some("openai"));
-    }
-
-    #[test]
-    fn used_provider_picks_its_credential_over_the_oauth_lead() {
-        // Two credentials; the freshest session ran on the API-key provider,
-        // so the label follows the session, not the OAuth preference.
-        let dir = tempfile::tempdir().unwrap();
         let path = write_auth(
             dir.path(),
             r#"{
@@ -237,11 +218,7 @@ mod tests {
         );
         assert_eq!(account.plan.as_deref(), Some("OpenAI API Key"));
         assert_eq!(account.metered, Some(false));
-    }
 
-    #[test]
-    fn without_a_session_the_first_oauth_credential_leads() {
-        let dir = tempfile::tempdir().unwrap();
         let path = write_auth(
             dir.path(),
             r#"{
@@ -255,24 +232,16 @@ mod tests {
     }
 
     #[test]
-    fn missing_file_is_logged_out_not_a_failure() {
+    fn missing_empty_and_garbage_auth_states_are_explicit() {
         let dir = tempfile::tempdir().unwrap();
         assert!(matches!(
             probe_auth(&dir.path().join("auth.json"), None),
             AccountProbe::LoggedOut
         ));
-    }
 
-    #[test]
-    fn empty_credential_map_is_logged_out() {
-        let dir = tempfile::tempdir().unwrap();
         let path = write_auth(dir.path(), "{}");
         assert!(matches!(probe_auth(&path, None), AccountProbe::LoggedOut));
-    }
 
-    #[test]
-    fn garbage_auth_file_is_unavailable_so_it_retries_soon() {
-        let dir = tempfile::tempdir().unwrap();
         let path = write_auth(dir.path(), "not json");
         assert!(matches!(probe_auth(&path, None), AccountProbe::Unavailable));
     }

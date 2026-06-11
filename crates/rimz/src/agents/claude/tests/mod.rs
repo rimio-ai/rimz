@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::{AgentHookClass, TurnErrorClass};
+use crate::agents::TurnErrorClass;
 use crate::feed::ResolutionMethod;
 use crate::run::PermissionMode;
 use serde_json::json;
@@ -16,15 +16,12 @@ fn fixture(kind: FeedKind) -> FeedItem {
 }
 
 #[test]
-fn resume_command_is_claude_resume_with_the_session_id() {
+fn claude_commands_and_permission_args_match_run_posture() {
     let argv = ClaudeAdapter
         .resume_command("sess-123", Path::new("/code/query-engine"))
         .expect("claude resumes");
     assert_eq!(argv, vec!["claude", "--resume", "sess-123"]);
-}
 
-#[test]
-fn launch_command_is_claude_with_optional_prompt() {
     assert_eq!(
         ClaudeAdapter.launch_command(&[], None),
         Some(vec!["claude".to_owned()])
@@ -45,10 +42,7 @@ fn launch_command_is_claude_with_optional_prompt() {
             "review this".to_owned()
         ])
     );
-}
 
-#[test]
-fn claude_permission_args_match_run_posture() {
     assert_eq!(
         ClaudeAdapter.permission_args(PermissionMode::Auto),
         vec!["--permission-mode", "acceptEdits"]

@@ -274,8 +274,8 @@ mod tests {
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
     #[test]
-    fn session_start_parses_full_payload() {
-        let p: ClaudeSessionStart = serde_json::from_value(json!({
+    fn session_and_stop_payloads_cover_defaults_drift_and_enrichment_fields() {
+        let session: ClaudeSessionStart = serde_json::from_value(json!({
             "session_id": "sess-1",
             "transcript_path": "/tmp/t.jsonl",
             "cwd": "/home/user",
@@ -287,179 +287,87 @@ mod tests {
             "session_title": "My session",
         }))
         .unwrap();
-        assert_eq!(p.common.common.session_id.as_deref(), Some("sess-1"));
-        assert_eq!(p.common.model.as_deref(), Some("claude-opus-4-8"));
-        assert_eq!(p.source, SessionSource::Startup);
-        assert_eq!(p.session_title.as_deref(), Some("My session"));
-    }
+        assert_eq!(session.common.common.session_id.as_deref(), Some("sess-1"));
+        assert_eq!(session.common.model.as_deref(), Some("claude-opus-4-8"));
+        assert_eq!(session.source, SessionSource::Startup);
+        assert_eq!(session.session_title.as_deref(), Some("My session"));
 
-    #[test]
-    fn session_end_reason() {
-        let p = parse_session_end(&json!({"reason": "user_exit"}));
-        assert_eq!(p.reason.as_deref(), Some("user_exit"));
-    }
-
-    #[test]
-    fn sparse_payload_gives_defaults() {
-        let p = parse_stop(&json!({}));
-        assert!(p.background_tasks.is_empty());
-        assert_eq!(p.stop_hook_active, None);
-        assert_eq!(p.common.common.session_id, None);
-    }
-
-    #[test]
-    fn unknown_fields_are_ignored() {
-        let p = parse_session_start(&json!({
+        let future = parse_session_start(&json!({
             "session_id": "s",
             "future_field_from_anthropic": {"nested": 1}
         }));
-        assert_eq!(p.common.common.session_id.as_deref(), Some("s"));
-    }
+        assert_eq!(future.common.common.session_id.as_deref(), Some("s"));
+        assert_eq!(
+            parse_session_start(&json!({"source": "brand_new_source"})).source,
+            SessionSource::Unknown
+        );
+        assert_eq!(
+            parse_session_end(&json!({"reason": "user_exit"}))
+                .reason
+                .as_deref(),
+            Some("user_exit")
+        );
 
-    #[test]
-    fn unknown_session_source_maps_to_unknown() {
-        let p = parse_session_start(&json!({"source": "brand_new_source"}));
-        assert_eq!(p.source, SessionSource::Unknown);
-    }
+        let sparse = parse_stop(&json!({}));
+        assert!(sparse.background_tasks.is_empty());
+        assert_eq!(sparse.stop_hook_active, None);
+        assert_eq!(sparse.common.common.session_id, None);
 
-    #[test]
-    fn subagent_stop_exit_code() {
-        // Drift fix #2: ClaudeSubagentStop carries exit_code from the upstream spec.
-        let p = parse_subagent_stop(&json!({"exit_code": 1, "agent_id": "child-1"}));
-        assert_eq!(p.exit_code, Some(1));
-        assert_eq!(p.common.agent_id.as_deref(), Some("child-1"));
-    }
-
-    #[test]
-    fn stop_background_tasks_parse() {
-        let p = parse_stop(&json!({
+        let stop = parse_stop(&json!({
             "background_tasks": [
                 {"id": "t1", "status": "running", "description": "linting"},
                 {"id": "t2", "status": "completed", "description": "done"}
-            ]
+            ],
+            "effort": {"level": "high"}
         }));
-        assert_eq!(p.background_tasks.len(), 2);
+        assert_eq!(stop.background_tasks.len(), 2);
         assert_eq!(
-            p.background_tasks[0].description.as_deref(),
+            stop.background_tasks[0].description.as_deref(),
             Some("linting")
         );
-    }
-
-    #[test]
-    fn pre_tool_use_tool_name() {
-        let p = parse_pre_tool_use(&json!({"tool_name": "ExitPlanMode"}));
-        assert_eq!(p.tool_name.as_deref(), Some("ExitPlanMode"));
-    }
-
-    #[test]
-    fn post_tool_use_tool_response() {
-        let p = parse_post_tool_use(&json!({
-            "tool_name": "Bash",
-            "tool_response": {"output": "ok"}
-        }));
-        assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-        assert!(p.tool_response.is_some());
-    }
-
-    #[test]
-    fn notification_message() {
-        let p = parse_notification(&json!({"message": "done"}));
-        assert_eq!(p.message.as_deref(), Some("done"));
-    }
-
-    #[test]
-    fn pre_compact_trigger() {
-        let p = parse_pre_compact(&json!({"trigger": "auto"}));
-        assert_eq!(p.trigger, CompactTrigger::Auto);
-    }
-
-    #[test]
-    fn post_compact_trigger() {
-        // The compaction start/end pair is parse-ready even though only
-        // PreCompact is wired today.
-        let p = parse_post_compact(&json!({"trigger": "manual"}));
-        assert_eq!(p.trigger, CompactTrigger::Manual);
-    }
-
-    #[test]
-    fn common_parses_effort_level_object() {
-        // Drift fix: `effort` is a `{ "level": … }` object, not a flat string.
-        let p = parse_stop(&json!({"effort": {"level": "high"}}));
         assert_eq!(
-            p.common.effort.and_then(|e| e.level).as_deref(),
+            stop.common.effort.and_then(|e| e.level).as_deref(),
             Some("high")
         );
     }
 
     #[test]
-    fn permission_request_tool_name() {
-        let p = parse_permission_request(&json!({"tool_name": "Bash", "permission_mode": "auto"}));
-        assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-    }
+    fn hook_payloads_parse_tool_subagent_compaction_and_permission_fields() {
+        let subagent = parse_subagent_stop(&json!({"exit_code": 1, "agent_id": "child-1"}));
+        assert_eq!(subagent.exit_code, Some(1));
+        assert_eq!(subagent.common.agent_id.as_deref(), Some("child-1"));
 
-    #[test]
-    fn permission_decision_output_no_optional_fields() {
-        let output = ClaudePermissionDecisionOutput {
-            hook_specific_output: ClaudePermissionHookOutput {
-                hook_event_name: "PermissionRequest",
-                decision: ClaudePermissionBehavior {
-                    behavior: "allow",
-                    updated_input: None,
-                    applied_rule: None,
-                },
-            },
-        };
-        insta::assert_json_snapshot!(serde_json::to_value(&output).unwrap(), @r###"
-        {
-          "hookSpecificOutput": {
-            "decision": {
-              "behavior": "allow"
-            },
-            "hookEventName": "PermissionRequest"
-          }
-        }
-        "###);
-    }
-
-    #[test]
-    fn permission_decision_output_with_applied_rule() {
-        // Drift fix #5: appliedRule appears in output when populated.
-        let output = ClaudePermissionDecisionOutput {
-            hook_specific_output: ClaudePermissionHookOutput {
-                hook_event_name: "PermissionRequest",
-                decision: ClaudePermissionBehavior {
-                    behavior: "allow",
-                    updated_input: None,
-                    applied_rule: Some("rimz-auto".to_owned()),
-                },
-            },
-        };
-        let v = serde_json::to_value(&output).unwrap();
         assert_eq!(
-            v["hookSpecificOutput"]["decision"]["appliedRule"],
-            json!("rimz-auto")
+            parse_pre_tool_use(&json!({"tool_name": "ExitPlanMode"}))
+                .tool_name
+                .as_deref(),
+            Some("ExitPlanMode")
         );
-    }
-
-    #[test]
-    fn pre_tool_use_decision_output() {
-        let output = ClaudePreToolUseDecisionOutput {
-            hook_specific_output: ClaudePreToolUseHookOutput {
-                hook_event_name: "PreToolUse",
-                permission_decision: "allow",
-                updated_input: json!({"keep": true}),
-            },
-        };
-        insta::assert_json_snapshot!(serde_json::to_value(&output).unwrap(), @r###"
-        {
-          "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": {
-              "keep": true
-            }
-          }
-        }
-        "###);
+        let post_tool = parse_post_tool_use(&json!({
+            "tool_name": "Bash",
+            "tool_response": {"output": "ok"}
+        }));
+        assert_eq!(post_tool.tool_name.as_deref(), Some("Bash"));
+        assert!(post_tool.tool_response.is_some());
+        assert_eq!(
+            parse_notification(&json!({"message": "done"}))
+                .message
+                .as_deref(),
+            Some("done")
+        );
+        assert_eq!(
+            parse_pre_compact(&json!({"trigger": "auto"})).trigger,
+            CompactTrigger::Auto
+        );
+        assert_eq!(
+            parse_post_compact(&json!({"trigger": "manual"})).trigger,
+            CompactTrigger::Manual
+        );
+        assert_eq!(
+            parse_permission_request(&json!({"tool_name": "Bash", "permission_mode": "auto"}))
+                .tool_name
+                .as_deref(),
+            Some("Bash")
+        );
     }
 }

@@ -4,6 +4,10 @@ use super::*;
 fn install_into_empty_dir_creates_managed_entries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
+    assert!(
+        !hooks_installed_at(&path),
+        "a missing settings file reads as not installed"
+    );
     let report = install_into(&path).unwrap();
     assert!(!report.merged);
     assert_eq!(report.agent, "claude");
@@ -14,8 +18,17 @@ fn install_into_empty_dir_creates_managed_entries() {
             .installed_events
             .contains(&"PermissionRequest".to_owned())
     );
+    assert!(hooks_installed_at(&path));
 
     assert_managed_settings_json(&path);
+
+    let first = std::fs::read_to_string(&path).unwrap();
+    install_into(&path).unwrap();
+    let second = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        first, second,
+        "second install must produce identical config"
+    );
 }
 
 fn assert_managed_settings_json(path: &std::path::Path) {
@@ -121,42 +134,6 @@ fn install_preserves_user_hooks() {
 }
 
 #[test]
-fn install_wires_non_blocking_per_tool_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    let report = install_into(&path).unwrap();
-    assert!(report.installed_events.contains(&"PreToolUse".to_owned()));
-    assert!(report.installed_events.contains(&"PostToolUse".to_owned()));
-
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    let pre_tool = parsed["hooks"]["PreToolUse"].as_array().unwrap();
-    // Exactly 1 broad per-tool hook (no matcher); the blocking sub-events
-    // self-classify off it rather than getting a dedicated matcher entry.
-    assert_eq!(pre_tool.len(), 1);
-    // The broad per-tool hook has no matcher key and is non-blocking.
-    let broad = pre_tool
-        .iter()
-        .find(|e| !e.as_object().unwrap().contains_key("matcher"))
-        .unwrap();
-    assert_eq!(broad["_rimz_managed"], true);
-    assert_eq!(broad["_rimz_sync"], false);
-}
-
-#[test]
-fn install_is_idempotent() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    install_into(&path).unwrap();
-    let first = std::fs::read_to_string(&path).unwrap();
-    install_into(&path).unwrap();
-    let second = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(
-        first, second,
-        "second install must produce identical config"
-    );
-}
-
-#[test]
 fn install_reclaims_legacy_and_duplicate_entries() {
     // Reproduces a bloated real-world file: legacy *unmarked* rimz copies
     // (older builds wrote `--event` and no marker) stacked alongside an old
@@ -223,6 +200,11 @@ fn install_reclaims_legacy_and_duplicate_entries() {
 #[test]
 fn uninstall_removes_managed_entries_only() {
     let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing-settings.json");
+    let missing_report = uninstall_from(&missing).unwrap();
+    assert!(!missing_report.existed);
+    assert!(missing_report.removed_events.is_empty());
+
     let path = dir.path().join("settings.json");
     std::fs::write(
         &path,
@@ -240,6 +222,7 @@ fn uninstall_removes_managed_entries_only() {
     let report = uninstall_from(&path).unwrap();
     assert!(report.existed);
     assert!(!report.removed_events.is_empty());
+    assert!(!hooks_installed_at(&path));
 
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["model"], "claude-opus-4-7");
@@ -251,38 +234,10 @@ fn uninstall_removes_managed_entries_only() {
 }
 
 #[test]
-fn uninstall_on_missing_file_is_noop() {
+fn hooks_installed_at_accepts_command_marker_and_rejects_stale_or_user_only_configs() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    let report = uninstall_from(&path).unwrap();
-    assert!(!report.existed);
-    assert!(report.removed_events.is_empty());
-}
 
-#[test]
-fn hooks_installed_at_detects_managed_matcher() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    assert!(
-        !hooks_installed_at(&path),
-        "a missing settings file reads as not installed"
-    );
-    install_into(&path).unwrap();
-    assert!(
-        hooks_installed_at(&path),
-        "an installed settings file reads as installed"
-    );
-    uninstall_from(&path).unwrap();
-    assert!(
-        !hooks_installed_at(&path),
-        "an uninstalled settings file reads as not installed"
-    );
-}
-
-#[test]
-fn hooks_installed_at_requires_every_installed_event() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+    let path = dir.path().join("partial.json");
     install_into(&path).unwrap();
     let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     parsed["hooks"]
@@ -295,12 +250,8 @@ fn hooks_installed_at_requires_every_installed_event() {
         !hooks_installed_at(&path),
         "a partial managed hook set must re-offer install"
     );
-}
 
-#[test]
-fn hooks_installed_at_rejects_async_blocking_marker() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+    let path = dir.path().join("async.json");
     install_into(&path).unwrap();
     let mut parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     parsed["hooks"]["PermissionRequest"][0]["_rimz_sync"] = Value::Bool(false);
@@ -310,12 +261,15 @@ fn hooks_installed_at_rejects_async_blocking_marker() {
         !hooks_installed_at(&path),
         "a blocking Rimz hook marked async is not a usable install"
     );
-}
+    assert!(matches!(
+        install_into(&path).unwrap_err(),
+        AgentErr::Install {
+            agent: "claude",
+            ..
+        }
+    ));
 
-#[test]
-fn hooks_installed_at_ignores_user_only_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+    let path = dir.path().join("user-only.json");
     std::fs::write(
         &path,
         r#"{ "hooks": { "PreToolUse": [ { "matcher": "Bash", "hooks": [] } ] } }"#,
@@ -325,15 +279,11 @@ fn hooks_installed_at_ignores_user_only_hooks() {
         !hooks_installed_at(&path),
         "user-managed hooks with no _rimz_managed marker are not installed"
     );
-}
 
-#[test]
-fn hooks_installed_at_detects_by_command_marker_without_rimz_managed() {
     // Simulate a settings.json where an external tool (e.g. Claude Code
     // auto-migration) preserved the hook command but stripped _rimz_managed.
     // Detection must still succeed so the consent gate does not re-fire.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+    let path = dir.path().join("marker-only.json");
     let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
     let mut hooks = serde_json::Map::new();
     for (event, _) in INSTALLED_EVENTS {
@@ -352,13 +302,8 @@ fn hooks_installed_at_detects_by_command_marker_without_rimz_managed() {
         hooks_installed_at(&path),
         "a hook entry whose command contains the rimz marker reads as installed even without _rimz_managed"
     );
-}
 
-#[test]
-fn hooks_installed_at_requires_canonical_matcher() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    let command = format!(r#"RIMZ_AGENT_PID=$PPID exec {RIMZ_HOOK_MARKER}"#);
+    let path = dir.path().join("legacy-matcher.json");
     let mut hooks = serde_json::Map::new();
     for (event, matcher) in INSTALLED_EVENTS {
         let mut entry = serde_json::json!({
@@ -385,38 +330,6 @@ fn hooks_installed_at_requires_canonical_matcher() {
         !hooks_installed_at(&path),
         "a legacy managed PreToolUse matcher must not satisfy the broad canonical hook"
     );
-}
-
-#[test]
-fn install_rejects_async_blocking_marker() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    // A tampered config marks a rimz-managed PermissionRequest matcher
-    // with `_rimz_sync = false`. The installer must refuse — the source
-    // of truth for "must block" is BLOCKING_EVENTS, never the file.
-    std::fs::write(
-        &path,
-        r#"{
-              "hooks": {
-                "PermissionRequest": [
-                  {
-                    "_rimz_managed": true,
-                    "_rimz_sync": false,
-                    "hooks": [{ "type": "command", "command": "x" }]
-                  }
-                ]
-              }
-            }"#,
-    )
-    .unwrap();
-    let err = install_into(&path).unwrap_err();
-    assert!(matches!(
-        err,
-        AgentErr::Install {
-            agent: "claude",
-            ..
-        }
-    ));
 }
 
 #[test]

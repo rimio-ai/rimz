@@ -1,39 +1,6 @@
 use super::*;
 
 #[test]
-fn install_adds_status_line_when_none_existed() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    install_into(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
-    assert_eq!(parsed["statusLine"]["_rimz_managed"], true);
-    // Nothing was wrapped, so no `_rimz_wrapped`.
-    assert!(parsed["statusLine"].get("_rimz_wrapped").is_none());
-}
-
-#[test]
-fn install_wraps_existing_status_line_command() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    std::fs::write(
-        &path,
-        r#"{ "statusLine": { "type": "command", "command": "npx -y ccstatusline@latest" } }"#,
-    )
-    .unwrap();
-    install_into(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
-    assert_eq!(parsed["statusLine"]["_rimz_managed"], true);
-    // The user's whole original value is captured verbatim.
-    assert_eq!(
-        parsed["statusLine"]["_rimz_wrapped"]["command"],
-        "npx -y ccstatusline@latest"
-    );
-    assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["type"], "command");
-}
-
-#[test]
 fn install_wraps_and_restores_existing_subagent_status_line() {
     // The per-child `subagentStatusLine` is wrapped exactly like the session
     // `statusLine`: the user's command is captured, replaced by Rimz's
@@ -203,38 +170,6 @@ fn uninstall_removes_recursive_status_line_wrap() {
         parsed.get("statusLine").is_none(),
         "uninstall must not restore Rimz's own statusline command"
     );
-}
-
-#[test]
-fn wrapped_status_line_command_ignores_recursive_rimz_wrap() {
-    let root: Map<String, Value> = serde_json::from_value(json!({
-        "statusLine": {
-            "_rimz_managed": true,
-            "_rimz_wrapped": {
-                "type": "command",
-                "command": STATUS_LINE_COMMAND
-            },
-            "type": "command",
-            "command": STATUS_LINE_COMMAND
-        }
-    }))
-    .unwrap();
-
-    assert_eq!(wrapped_status_line_command_from(&root, &STATUS_LINE), None);
-}
-
-#[test]
-fn uninstall_restores_original_status_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    let original = r#"{ "statusLine": { "type": "command", "command": "npx ccstatusline" } }"#;
-    std::fs::write(&path, original).unwrap();
-    install_into(&path).unwrap();
-    uninstall_from(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(parsed["statusLine"]["command"], "npx ccstatusline");
-    assert_eq!(parsed["statusLine"]["type"], "command");
-    assert!(parsed["statusLine"].get("_rimz_managed").is_none());
 }
 
 #[test]

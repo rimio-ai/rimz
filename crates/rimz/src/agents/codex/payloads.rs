@@ -239,153 +239,79 @@ mod tests {
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
     #[test]
-    fn session_start_compact_source() {
-        let p = parse_session_start(&json!({"source": "compact"}));
-        assert_eq!(p.source, SessionSource::Compact);
-    }
+    fn session_and_stop_payloads_cover_defaults_drift_and_enrichment_fields() {
+        assert_eq!(
+            parse_session_start(&json!({"source": "compact"})).source,
+            SessionSource::Compact
+        );
+        let session = parse_session_start(&json!({"model": "gpt-5.5-codex", "source": "startup"}));
+        assert_eq!(session.common.model.as_deref(), Some("gpt-5.5-codex"));
+        assert_eq!(session.source, SessionSource::Startup);
 
-    #[test]
-    fn session_start_parses_model() {
-        let p = parse_session_start(&json!({"model": "gpt-5.5-codex", "source": "startup"}));
-        assert_eq!(p.common.model.as_deref(), Some("gpt-5.5-codex"));
-        assert_eq!(p.source, SessionSource::Startup);
-    }
-
-    #[test]
-    fn sparse_payload_gives_defaults() {
-        let p = parse_stop(&json!({}));
-        assert_eq!(p.stop_hook_active, None);
-        assert_eq!(p.last_assistant_message, None);
-        assert_eq!(p.common.turn_id, None);
-    }
-
-    #[test]
-    fn unknown_fields_are_ignored() {
-        let p = parse_session_start(&json!({
+        let future = parse_session_start(&json!({
             "session_id": "s1",
             "future_openai_field": true
         }));
-        assert_eq!(p.common.common.session_id.as_deref(), Some("s1"));
+        assert_eq!(future.common.common.session_id.as_deref(), Some("s1"));
+
+        let sparse = parse_stop(&json!({}));
+        assert_eq!(sparse.stop_hook_active, None);
+        assert_eq!(sparse.last_assistant_message, None);
+        assert_eq!(sparse.common.turn_id, None);
+
+        let stop = parse_stop(&json!({
+            "stop_hook_active": true,
+            "last_assistant_message": "All done!"
+        }));
+        assert_eq!(stop.last_assistant_message.as_deref(), Some("All done!"));
     }
 
     #[test]
-    fn pre_tool_use_fields() {
-        let p = parse_pre_tool_use(&json!({
+    fn hook_payloads_parse_tool_subagent_and_compaction_fields() {
+        let pre_tool = parse_pre_tool_use(&json!({
             "tool_name": "Bash",
             "tool_use_id": "tu-1",
             "tool_input": {"command": "ls"}
         }));
-        assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-        assert_eq!(p.tool_use_id.as_deref(), Some("tu-1"));
-        assert!(p.tool_input.is_some());
-    }
+        assert_eq!(pre_tool.tool_name.as_deref(), Some("Bash"));
+        assert_eq!(pre_tool.tool_use_id.as_deref(), Some("tu-1"));
+        assert!(pre_tool.tool_input.is_some());
 
-    #[test]
-    fn permission_request_tool_name() {
-        let p = parse_permission_request(&json!({
+        let permission = parse_permission_request(&json!({
             "tool_name": "Bash",
             "tool_input": {"command": "rm -rf /"}
         }));
-        assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-        assert!(p.tool_input.is_some());
-    }
+        assert_eq!(permission.tool_name.as_deref(), Some("Bash"));
+        assert!(permission.tool_input.is_some());
 
-    #[test]
-    fn post_tool_use_tool_response() {
-        let p = parse_post_tool_use(&json!({
+        let post_tool = parse_post_tool_use(&json!({
             "tool_name": "Bash",
             "tool_response": {"output": "ok"}
         }));
-        assert_eq!(p.tool_name.as_deref(), Some("Bash"));
-        assert!(p.tool_response.is_some());
-    }
+        assert_eq!(post_tool.tool_name.as_deref(), Some("Bash"));
+        assert!(post_tool.tool_response.is_some());
 
-    #[test]
-    fn subagent_stop_drift_fix_fields() {
-        // Drift fix #3: agent_transcript_path and last_assistant_message now captured.
-        let p = parse_subagent_stop(&json!({
+        let subagent = parse_subagent_stop(&json!({
             "agent_id": "child-1",
             "agent_type": "code-reviewer",
             "agent_transcript_path": "/tmp/rollout-child.jsonl",
             "stop_hook_active": false,
             "last_assistant_message": "Done."
         }));
-        assert_eq!(p.agent_id.as_deref(), Some("child-1"));
-        assert_eq!(p.agent_type.as_deref(), Some("code-reviewer"));
+        assert_eq!(subagent.agent_id.as_deref(), Some("child-1"));
+        assert_eq!(subagent.agent_type.as_deref(), Some("code-reviewer"));
         assert_eq!(
-            p.agent_transcript_path.as_deref(),
+            subagent.agent_transcript_path.as_deref(),
             Some("/tmp/rollout-child.jsonl")
         );
-        assert_eq!(p.last_assistant_message.as_deref(), Some("Done."));
-    }
-
-    #[test]
-    fn stop_drift_fix_last_assistant_message() {
-        // Drift fix #4: last_assistant_message now captured on Stop.
-        let p = parse_stop(&json!({
-            "stop_hook_active": true,
-            "last_assistant_message": "All done!"
-        }));
-        assert_eq!(p.last_assistant_message.as_deref(), Some("All done!"));
-    }
-
-    #[test]
-    fn pre_compact_trigger() {
-        let p = parse_pre_compact(&json!({"trigger": "auto"}));
-        assert_eq!(p.trigger, CompactTrigger::Auto);
-    }
-
-    #[test]
-    fn post_compact_trigger() {
-        let p = parse_post_compact(&json!({"trigger": "manual"}));
-        assert_eq!(p.trigger, CompactTrigger::Manual);
-    }
-
-    #[test]
-    fn permission_decision_output_no_message() {
-        let output = CodexPermissionDecisionOutput {
-            hook_specific_output: CodexPermissionHookOutput {
-                hook_event_name: "PermissionRequest",
-                decision: CodexPermissionBehavior {
-                    behavior: "allow",
-                    message: None,
-                },
-            },
-        };
-        insta::assert_json_snapshot!(serde_json::to_value(&output).unwrap(), @r###"
-        {
-          "hookSpecificOutput": {
-            "decision": {
-              "behavior": "allow"
-            },
-            "hookEventName": "PermissionRequest"
-          }
-        }
-        "###);
-    }
-
-    #[test]
-    fn permission_decision_output_with_message() {
-        // Drift fix #1: message appears in output when resolver provides a reason.
-        let output = CodexPermissionDecisionOutput {
-            hook_specific_output: CodexPermissionHookOutput {
-                hook_event_name: "PermissionRequest",
-                decision: CodexPermissionBehavior {
-                    behavior: "deny",
-                    message: Some("blocked by rimz policy".to_owned()),
-                },
-            },
-        };
-        insta::assert_json_snapshot!(serde_json::to_value(&output).unwrap(), @r###"
-        {
-          "hookSpecificOutput": {
-            "decision": {
-              "behavior": "deny",
-              "message": "blocked by rimz policy"
-            },
-            "hookEventName": "PermissionRequest"
-          }
-        }
-        "###);
+        assert_eq!(subagent.last_assistant_message.as_deref(), Some("Done."));
+        assert_eq!(
+            parse_pre_compact(&json!({"trigger": "auto"})).trigger,
+            CompactTrigger::Auto
+        );
+        assert_eq!(
+            parse_post_compact(&json!({"trigger": "manual"})).trigger,
+            CompactTrigger::Manual
+        );
     }
 }

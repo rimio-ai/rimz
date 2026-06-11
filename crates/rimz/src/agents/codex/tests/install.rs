@@ -192,6 +192,11 @@ fn uninstall_removes_legacy_block_and_preserves_user_keys() {
 #[test]
 fn uninstall_removes_rimz_hook_commands_and_preserves_user_hooks() {
     let dir = tempfile::tempdir().unwrap();
+    let missing = dir.path().join("missing-config.toml");
+    let missing_report = uninstall_from(&missing).unwrap();
+    assert!(!missing_report.existed);
+    assert!(missing_report.removed_events.is_empty());
+
     let path = dir.path().join("config.toml");
     install_into(&path).unwrap();
     std::fs::write(
@@ -304,21 +309,6 @@ command = "echo user"
     assert!(hooks_installed_at(&path));
 }
 
-#[test]
-fn uninstall_on_missing_file_is_noop() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
-    let report = uninstall_from(&path).unwrap();
-    assert!(!report.existed);
-    assert!(report.removed_events.is_empty());
-}
-
-// --- the hook trust gate ---
-//
-// Codex records trust per hook-definition hash under `[hooks.state]` and
-// silently skips an untrusted hook; these pin the presence-only detection
-// that lets `rimz start` and `rimz doctor` surface the dead channel.
-
 /// Append a `[hooks.state]` trust entry for `token`, key-shaped exactly as
 /// Codex writes it: `"<config-path>:<event_token>:<i>:<j>"`.
 fn trust_event(path: &std::path::Path, token: &str) {
@@ -388,20 +378,5 @@ fn untrusted_hooks_report_by_trust_state() {
         };
 
         assert_eq!(untrusted_hook_events_at(&path), expected, "{label}");
-    }
-}
-
-#[test]
-fn snake_event_token_matches_codex_state_keys() {
-    for (event, token) in [
-        ("PermissionRequest", "permission_request"),
-        ("PostCompact", "post_compact"),
-        ("PreCompact", "pre_compact"),
-        ("PreToolUse", "pre_tool_use"),
-        ("SessionStart", "session_start"),
-        ("Stop", "stop"),
-        ("SubagentStop", "subagent_stop"),
-    ] {
-        assert_eq!(snake_event_token(event), token, "{event}");
     }
 }

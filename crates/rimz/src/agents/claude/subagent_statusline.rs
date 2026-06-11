@@ -166,77 +166,33 @@ mod tests {
     }
 
     #[test]
-    fn task_without_id_is_dropped() {
-        let obs = observe(json!({ "tasks": [{ "description": "orphan", "tokenCount": 5 }] }));
-        assert!(obs.is_empty());
-    }
+    fn malformed_sparse_and_empty_tasks_are_tolerated() {
+        assert!(
+            observe(json!({ "tasks": [{ "description": "orphan", "tokenCount": 5 }] })).is_empty()
+        );
+        assert!(observe(json!({})).is_empty());
+        assert!(observe(json!({ "tasks": [] })).is_empty());
 
-    #[test]
-    fn sparse_task_keeps_only_present_fields() {
         let obs = observe(json!({ "tasks": [{ "id": "child-1" }] }));
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].context.agent_type, None);
         assert_eq!(obs[0].context.description, None);
         assert_eq!(obs[0].context.token_count, None);
         assert_eq!(obs[0].context.started_at, None);
-    }
 
-    #[test]
-    fn empty_type_is_dropped() {
         // An empty `type` string is not a useful label — treat it as absent so
         // fork agents without a type don't render as an empty name.
         let obs = observe(json!({ "tasks": [{ "id": "c", "type": "" }] }));
         assert_eq!(obs.len(), 1);
         assert_eq!(obs[0].context.agent_type, None);
-    }
 
-    #[test]
-    fn empty_payload_yields_nothing() {
-        assert!(observe(json!({})).is_empty());
-        assert!(observe(json!({ "tasks": [] })).is_empty());
-    }
-
-    #[test]
-    fn start_time_in_milliseconds_is_recognized() {
-        let obs = observe(json!({
-            "tasks": [{ "id": "c", "startTime": 1_700_000_000_000_i64 }]
-        }));
-        assert_eq!(
-            obs[0].context.started_at,
-            Some(Timestamp::from_second(1_700_000_000).unwrap())
-        );
-    }
-
-    #[test]
-    fn start_time_as_rfc3339_string_parses() {
-        let obs = observe(json!({
-            "tasks": [{ "id": "c", "startTime": "2023-11-14T22:13:20Z" }]
-        }));
-        assert_eq!(
-            obs[0].context.started_at,
-            Some(Timestamp::from_second(1_700_000_000).unwrap())
-        );
-    }
-
-    #[test]
-    fn start_time_as_numeric_string_parses() {
-        let obs = observe(json!({
-            "tasks": [{ "id": "c", "startTime": "1700000000" }]
-        }));
-        assert_eq!(
-            obs[0].context.started_at,
-            Some(Timestamp::from_second(1_700_000_000).unwrap())
-        );
-    }
-
-    #[test]
-    fn garbage_start_time_and_token_count_drop_only_themselves() {
         let obs = observe(json!({
             "tasks": [{
                 "id": "c",
                 "description": "still here",
                 "startTime": "not-a-date",
-                "tokenCount": "lots"
+                "tokenCount": "lots",
+                "tokenSamples": [1, 2]
             }]
         }));
         assert_eq!(obs.len(), 1);
@@ -246,11 +202,17 @@ mod tests {
     }
 
     #[test]
-    fn unknown_keys_ride_along() {
-        let obs = observe(json!({
-            "tasks": [{ "id": "c", "label": "x", "cwd": "/tmp", "tokenSamples": [1, 2] }]
-        }));
-        assert_eq!(obs.len(), 1);
-        assert_eq!(obs[0].agent_id, "c");
+    fn start_time_accepts_seconds_millis_and_rfc3339_strings() {
+        for start_time in [
+            json!(1_700_000_000_000_i64),
+            json!("2023-11-14T22:13:20Z"),
+            json!("1700000000"),
+        ] {
+            let obs = observe(json!({ "tasks": [{ "id": "c", "startTime": start_time }] }));
+            assert_eq!(
+                obs[0].context.started_at,
+                Some(Timestamp::from_second(1_700_000_000).unwrap())
+            );
+        }
     }
 }

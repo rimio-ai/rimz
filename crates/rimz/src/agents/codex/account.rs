@@ -92,15 +92,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_a_codex_api_key_login_as_unmetered() {
+    fn parses_codex_auth_metering_and_logged_out_states() {
         let json = br#"{ "OPENAI_API_KEY": "sk-abc", "tokens": null }"#;
         let account = found(parse_codex_auth(json), "api-key login");
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(false));
-    }
 
-    #[test]
-    fn parses_a_codex_chatgpt_login_as_metered() {
         let json = br#"{
             "OPENAI_API_KEY": null,
             "tokens": { "access_token": "ya29-token", "account_id": "acc_1" }
@@ -109,10 +106,7 @@ mod tests {
         // The plan tier and budgets ride the live app-server context, not the file.
         assert_eq!(account.plan, None);
         assert_eq!(account.metered, Some(true));
-    }
 
-    #[test]
-    fn codex_logged_out_or_garbage_is_logged_out() {
         // A codex auth file read is cheap and never a subprocess, so an absent
         // credential — or an unparseable file — is an authoritative logged-out,
         // not the transient `Unavailable` that drives a short retry.

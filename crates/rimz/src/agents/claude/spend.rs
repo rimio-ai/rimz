@@ -378,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_lines_without_usage_object() {
+    fn skips_lines_without_usage_object_and_captures_token_components() {
         let dir = TempDir::new().unwrap();
         let file = write_jsonl(
             dir.path(),
@@ -391,42 +391,12 @@ mod tests {
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
-    }
-
-    #[test]
-    fn captures_the_four_token_components() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[&claude_line("2026-01-01", 0.5, "msg-1", "req-1")],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1);
         // The components are kept apart here; window aggregation folds
         // cache-write into input/total downstream.
         assert_eq!(entries[0].input, 10);
         assert_eq!(entries[0].output, 5);
         assert_eq!(entries[0].cache_write, 3);
         assert_eq!(entries[0].cache_read, 7);
-    }
-
-    #[test]
-    fn captures_cache_tokens() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":200,"cache_read_input_tokens":800}}}"#,
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].input, 100);
-        assert_eq!(entries[0].output, 50);
-        assert_eq!(entries[0].cache_write, 200, "cache_creation_input_tokens");
-        assert_eq!(entries[0].cache_read, 800, "cache_read_input_tokens");
     }
 
     #[test]
@@ -462,38 +432,18 @@ mod tests {
     }
 
     #[test]
-    fn unpriced_or_modelless_costless_entry_is_dropped() {
-        // No `costUSD` and a model the table cannot price (here: no model at all,
-        // standing in for `<synthetic>` turns) contributes nothing rather than a
-        // zero-cost line.
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert!(
-            entries.is_empty(),
-            "an unpriced turn is dropped, not zeroed"
-        );
-    }
-
-    #[test]
-    fn unpriced_model_is_recorded_as_unknown() {
+    fn unknown_model_tracking_records_priceable_names_only() {
         let dir = TempDir::new().unwrap();
         let timestamp = "2026-01-01T10:00:00.000Z";
-        let file = write_jsonl(
+        let unknown = write_jsonl(
             dir.path(),
-            "chat.jsonl",
+            "unknown.jsonl",
             &[&format!(
                 r#"{{"timestamp":"{timestamp}","requestId":"req-1","message":{{"id":"msg-1","model":"claude-new-release","usage":{{"input_tokens":100,"output_tokens":50}}}}}}"#
             )],
         );
 
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
+        let parsed = parse_claude_spend(&unknown, 0, &no_prices());
 
         assert!(parsed.entries.is_empty());
         assert_eq!(
@@ -503,38 +453,26 @@ mod tests {
                 crate::agents::spending::iso_to_unix_secs(timestamp).unwrap()
             )])
         );
-    }
 
-    #[test]
-    fn synthetic_model_is_not_recorded_as_unknown() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
+        let synthetic = write_jsonl(
             dir.path(),
-            "chat.jsonl",
+            "synthetic.jsonl",
             &[
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","requestId":"req-1","message":{"id":"msg-1","model":"<synthetic>","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             ],
         );
-
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
-
+        let parsed = parse_claude_spend(&synthetic, 0, &no_prices());
         assert!(parsed.entries.is_empty());
         assert!(parsed.unknown_models.is_empty());
-    }
 
-    #[test]
-    fn logged_cost_usd_does_not_record_unknown() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
+        let logged_cost = write_jsonl(
             dir.path(),
-            "chat.jsonl",
+            "logged-cost.jsonl",
             &[
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.25,"requestId":"req-1","message":{"id":"msg-1","model":"claude-new-release","usage":{"input_tokens":100,"output_tokens":50}}}"#,
             ],
         );
-
-        let parsed = parse_claude_spend(&file, 0, &no_prices());
-
+        let parsed = parse_claude_spend(&logged_cost, 0, &no_prices());
         assert_eq!(parsed.entries.len(), 1);
         assert!(parsed.unknown_models.is_empty());
     }
@@ -576,7 +514,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_and_negative_costs_ignored() {
+    fn invalid_or_unsupported_cost_lines_are_skipped() {
         let dir = TempDir::new().unwrap();
         let file = write_jsonl(
             dir.path(),
@@ -584,73 +522,16 @@ mod tests {
             &[
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.0,"message":{"usage":{"input_tokens":1}}}"#,
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":-1.0,"message":{"usage":{"input_tokens":1}}}"#,
-                &claude_line("2026-01-01", 0.3, "msg-1", "req-1"),
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":null,"message":{"usage":{"input_tokens":1}}}"#,
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-1","model":null,"usage":{"input_tokens":1}}}"#,
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"requestId":"","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"version":"dev","message":{"id":"msg-3","usage":{"input_tokens":1}}}"#,
+                &claude_line("2026-01-01", 0.5, "msg-4", "req-4"),
             ],
         );
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
         assert_eq!(entries.len(), 1);
-        assert!((entries[0].cost_usd - 0.3).abs() < 1e-9);
-    }
-
-    #[test]
-    fn null_cost_usd_line_skipped() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":null,"message":{"usage":{"input_tokens":1}}}"#,
-                &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1, "costUSD:null line must be skipped");
-    }
-
-    #[test]
-    fn null_model_line_skipped() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"message":{"id":"msg-1","model":null,"usage":{"input_tokens":1}}}"#,
-                &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1, "model:null line must be skipped");
-    }
-
-    #[test]
-    fn empty_request_id_line_skipped() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"requestId":"","message":{"id":"msg-1","usage":{"input_tokens":1}}}"#,
-                &claude_line("2026-01-01", 0.5, "msg-2", "req-2"),
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1, "empty requestId must be rejected");
-    }
-
-    #[test]
-    fn non_semver_version_skipped() {
-        let dir = TempDir::new().unwrap();
-        let file = write_jsonl(
-            dir.path(),
-            "chat.jsonl",
-            &[
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.1,"version":"dev","message":{"id":"msg-1","usage":{"input_tokens":1}}}"#,
-                r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":0.2,"version":"1.2.3","message":{"id":"msg-2","usage":{"input_tokens":1}}}"#,
-            ],
-        );
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 1, "non-semver version rejected; semver kept");
-        assert!((entries[0].cost_usd - 0.2).abs() < 1e-9);
+        assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
     }
 
     #[test]

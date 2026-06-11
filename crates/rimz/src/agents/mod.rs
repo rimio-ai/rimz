@@ -845,31 +845,19 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn sanitize_rejects_each_control_tag() {
+    fn sanitize_user_prompt_accepts_real_text_and_rejects_control_payloads() {
         for tag in CONTROL_TAG_PREFIXES {
             let injected = format!("{tag}<task-id>afdc639e18e7ebdb9</...");
             assert_eq!(sanitize_user_prompt(Some(&injected)), None, "tag {tag}");
         }
-    }
-
-    #[test]
-    fn sanitize_rejects_embedded_control_tag() {
         assert_eq!(
             sanitize_user_prompt(Some("please fix <system-reminder>noise</system-reminder>")),
             None,
         );
-    }
-
-    #[test]
-    fn sanitize_passes_a_real_prompt_trimmed() {
         assert_eq!(
             sanitize_user_prompt(Some("  add a dark mode toggle  ")),
             Some("add a dark mode toggle".to_owned()),
         );
-    }
-
-    #[test]
-    fn sanitize_rejects_empty_and_whitespace() {
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
     }

@@ -1,10 +1,10 @@
 use super::*;
 
 #[test]
-fn permission_decision_has_no_reserved_keys() {
-    let item = fixture(FeedKind::Permission);
-    let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+fn codex_decision_stdout_shapes_are_pinned() {
+    let permission = fixture(FeedKind::Permission);
+    let allow = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
+    let rendered = CodexAdapter.render_decision(&permission, &allow).unwrap();
     insta::assert_json_snapshot!(rendered, @r###"
         {
           "hookSpecificOutput": {
@@ -22,31 +22,26 @@ fn permission_decision_has_no_reserved_keys() {
     assert!(rendered.get("updatedInput").is_none());
     assert!(rendered.get("updatedPermissions").is_none());
     assert!(rendered.get("interrupt").is_none());
-}
 
-#[test]
-fn permission_deny_shape_is_pinned() {
-    let item = fixture(FeedKind::Permission);
-    let resolution = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+    let mut deny = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+    deny.reason = Some("blocked by rimz policy".to_owned());
+    let rendered = CodexAdapter.render_decision(&permission, &deny).unwrap();
 
     insta::assert_json_snapshot!(rendered, @r###"
         {
           "hookSpecificOutput": {
             "decision": {
-              "behavior": "deny"
+              "behavior": "deny",
+              "message": "blocked by rimz policy"
             },
             "hookEventName": "PermissionRequest"
           }
         }
         "###);
-}
 
-#[test]
-fn plan_approval_allow_shape_is_pinned() {
-    let item = fixture(FeedKind::PlanApproval);
-    let resolution = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+    let plan = fixture(FeedKind::PlanApproval);
+    let plan_allow = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
+    let rendered = CodexAdapter.render_decision(&plan, &plan_allow).unwrap();
 
     insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -56,16 +51,13 @@ fn plan_approval_allow_shape_is_pinned() {
           }
         }
         "###);
-}
 
-#[test]
-fn ask_user_question_allow_shape_carries_updated_input_when_present() {
-    let item = fixture(FeedKind::Question);
-    let resolution = Resolution::new(
+    let question = fixture(FeedKind::Question);
+    let answer = Resolution::new(
         json!({ "choice": "allow", "updatedInput": { "question": "ready?" } }),
         ResolutionMethod::HookBridge,
     );
-    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+    let rendered = CodexAdapter.render_decision(&question, &answer).unwrap();
 
     insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -78,14 +70,10 @@ fn ask_user_question_allow_shape_carries_updated_input_when_present() {
           }
         }
         "###);
-}
 
-#[test]
-fn pre_tool_deny_shape_carries_reason() {
-    let item = fixture(FeedKind::PlanApproval);
-    let mut resolution = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-    resolution.reason = Some("plan needs narrower scope".to_owned());
-    let rendered = CodexAdapter.render_decision(&item, &resolution).unwrap();
+    let mut plan_deny = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+    plan_deny.reason = Some("plan needs narrower scope".to_owned());
+    let rendered = CodexAdapter.render_decision(&plan, &plan_deny).unwrap();
 
     insta::assert_json_snapshot!(rendered, @r###"
         {
@@ -96,12 +84,8 @@ fn pre_tool_deny_shape_carries_reason() {
           }
         }
         "###);
-}
 
-#[test]
-fn neutral_payload_is_empty_stdout() {
     let rendered = CodexAdapter.render_neutral("PermissionRequest").unwrap();
-
     insta::assert_snapshot!(
         serde_json::to_string(&rendered).unwrap(),
         @"null"
