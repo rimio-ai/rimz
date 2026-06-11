@@ -44,6 +44,28 @@ pub(super) fn report_zellij_capabilities() {
     }
 }
 
+#[expect(
+    clippy::print_stdout,
+    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
+)]
+pub(super) fn report_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) {
+    let headroom = zellij_mod::socket_headroom(&ws.session_name);
+    let status = if headroom.len < headroom.limit {
+        "OK"
+    } else {
+        "TOO LONG"
+    };
+    println!(
+        "  zellij socket : {status} ({}/{} bytes for {})",
+        headroom.len,
+        headroom.limit,
+        headroom.path.display(),
+    );
+    if headroom.len >= headroom.limit {
+        println!("  zellij socket : export ZELLIJ_SOCKET_DIR=/tmp/zellij and rerun rimz");
+    }
+}
+
 /// One presence row for the workspace: the pane-discovery mode its producer
 /// is actually in — the verdict comes from the same stamp helpers the
 /// producer reads, so doctor and producer always agree — and, when degraded

@@ -9,6 +9,7 @@ use super::raw_pane::{
     is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
     sidebar_width_off_spec, tab_extent_cols,
 };
+use super::socket::{socket_headroom_with_xdg_override, stderr_reports_socket_overflow};
 use super::{
     MOUNT_POLL_STEP, MOUNT_POLL_TIMEOUT, SIDEBAR_LAYOUT_TIMEOUT, SIDEBAR_PANE_NAME,
     TAB_NAMES_ATTEMPTS, TAB_NAMES_RETRY_DELAY, ZellijBackend,
@@ -91,6 +92,20 @@ impl ZellijBackend {
                 || (lower.contains("session") && lower.contains("exists"))
             {
                 return Ok(false);
+            }
+            if stderr_reports_socket_overflow(&stderr) {
+                let headroom = socket_headroom_with_xdg_override(
+                    &opts.session_name,
+                    self.runtime_dir.as_deref(),
+                );
+                if headroom.len < headroom.limit {
+                    return Err(MuxErr::SocketPathReportedTooLong { stderr });
+                }
+                return Err(MuxErr::SocketPathTooLong {
+                    path: headroom.path,
+                    len: headroom.len,
+                    limit: headroom.limit,
+                });
             }
 
             Err(MuxErr::Command {

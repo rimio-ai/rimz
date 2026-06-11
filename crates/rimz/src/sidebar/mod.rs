@@ -274,6 +274,18 @@ pub fn launch_sidebar_if_needed(
             wait_for_fresh_sidebar(runtime);
             SidebarLaunchOutcome::Opened
         }
+        Err(
+            err @ (crate::mux::MuxErr::SocketPathTooLong { .. }
+            | crate::mux::MuxErr::SocketPathReportedTooLong { .. }),
+        ) => {
+            tracing::debug!(
+                session = %opts.session_name,
+                mux = %backend.name(),
+                error = %err,
+                "sidebar pane launch hit zellij socket path limit; attach gate reports the fix",
+            );
+            SidebarLaunchOutcome::Failed
+        }
         Err(err) => {
             tracing::warn!(
                 session = %opts.session_name,

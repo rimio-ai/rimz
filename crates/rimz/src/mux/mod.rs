@@ -40,12 +40,30 @@ pub enum MuxErr {
     NotInstalled { program: String },
     #[error("no multiplexer found: install zellij or tmux")]
     NoMuxFound,
-    #[error("multiplexer command failed: {program} {args}: {stderr}")]
+    #[error(
+        "multiplexer command failed: {program} {}: {}",
+        args_summary(args),
+        stderr_summary(stderr)
+    )]
     Command {
         program: String,
         args: String,
         stderr: String,
     },
+    #[error(
+        "Zellij can't create this room's IPC socket: the path is {len} bytes and the AF_UNIX limit here is {limit}.\n    {}\nPoint Zellij at a shorter socket directory and re-run rimz:\n\n    export ZELLIJ_SOCKET_DIR=/tmp/zellij\n\nAdd the export to your shell profile to make it permanent. `rimz doctor` reports the socket headroom.",
+        path.display()
+    )]
+    SocketPathTooLong {
+        path: PathBuf,
+        len: usize,
+        limit: usize,
+    },
+    #[error(
+        "Zellij reported that this room's IPC socket path is too long:\n    {}\nPoint Zellij at a shorter socket directory and re-run rimz:\n\n    export ZELLIJ_SOCKET_DIR=/tmp/zellij\n\nAdd the export to your shell profile to make it permanent. `rimz doctor` reports the socket headroom.",
+        stderr_summary(stderr)
+    )]
+    SocketPathReportedTooLong { stderr: String },
     #[error("pane id `{pane_id}` belongs to `{actual}`, but `{expected}` backend was selected")]
     PaneBackendMismatch {
         pane_id: PaneId,
@@ -54,7 +72,10 @@ pub enum MuxErr {
     },
     #[error("could not parse mux output from `{program}`: {reason}")]
     Output { program: String, reason: String },
-    #[error("multiplexer command `{program} {args}` did not finish within {seconds}s; killed")]
+    #[error(
+        "multiplexer command `{program} {}` did not finish within {seconds}s; killed",
+        args_summary(args)
+    )]
     Timeout {
         program: String,
         args: String,
@@ -65,6 +86,71 @@ pub enum MuxErr {
 }
 
 pub type Result<T> = std::result::Result<T, MuxErr>;
+
+fn args_summary(args: &str) -> String {
+    let mut tokens = args.split_whitespace();
+    let total = tokens.clone().count();
+    let mut kept = Vec::new();
+    let mut skip_value_for_flag = false;
+    for token in &mut tokens {
+        if skip_value_for_flag {
+            skip_value_for_flag = false;
+            continue;
+        }
+        if token.starts_with('-') {
+            skip_value_for_flag = matches!(token, "--session");
+            continue;
+        }
+        kept.push(token);
+        if kept.len() == 2 {
+            break;
+        }
+    }
+    if kept.is_empty() {
+        kept.extend(args.split_whitespace().take(1));
+    }
+    if total > kept.len() {
+        kept.push("...");
+    }
+    kept.join(" ")
+}
+
+fn stderr_summary(stderr: &str) -> String {
+    let mut lines: Vec<&str> = stderr
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .take(5)
+        .collect();
+    let truncated_lines = lines.len() > 4;
+    if truncated_lines {
+        lines.truncate(4);
+    }
+    let mut summary = if lines.is_empty() {
+        "no stderr".to_owned()
+    } else {
+        lines.join("\n")
+    };
+    if summary.len() > 400 {
+        summary.truncate(last_char_boundary_at_or_before(&summary, 400));
+        summary.push_str("...");
+    } else if truncated_lines {
+        summary.push_str("\n...");
+    }
+    summary
+}
+
+fn last_char_boundary_at_or_before(value: &str, max: usize) -> usize {
+    if value.len() <= max {
+        return value.len();
+    }
+    value
+        .char_indices()
+        .map(|(idx, _)| idx)
+        .take_while(|idx| *idx <= max)
+        .last()
+        .unwrap_or(0)
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PaneCapture {
@@ -505,5 +591,72 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn command_display_summarizes_args_and_stderr() {
+        let args = [
+            "attach",
+            "--create-background",
+            "rimz-room",
+            "options",
+            "--default-mode",
+            "locked",
+            "--show-startup-tips",
+            "false",
+        ]
+        .join(" ");
+        let err = MuxErr::Command {
+            program: "zellij".to_owned(),
+            args: args.clone(),
+            stderr: "one\ntwo\nthree\nfour\nfive\n".to_owned(),
+        };
+
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("zellij attach rimz-room ..."));
+        assert!(!rendered.contains("--default-mode"));
+        assert!(rendered.contains("one\ntwo\nthree\nfour\n..."));
+        assert!(matches!(err, MuxErr::Command { args: stored, .. } if stored == args));
+    }
+
+    #[test]
+    fn timeout_display_summarizes_args() {
+        let err = MuxErr::Timeout {
+            program: "zellij".to_owned(),
+            args: "attach --create rimz-room options --default-mode locked".to_owned(),
+            seconds: 8,
+        };
+
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("zellij attach rimz-room ..."));
+        assert!(!rendered.contains("--default-mode"));
+    }
+
+    #[test]
+    fn command_display_truncates_stderr_on_char_boundaries() {
+        let err = MuxErr::Command {
+            program: "zellij".to_owned(),
+            args: "action list-panes".to_owned(),
+            stderr: "€".repeat(200),
+        };
+
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("..."));
+    }
+
+    #[test]
+    fn command_display_skips_session_flag_value_in_summary() {
+        let err = MuxErr::Command {
+            program: "zellij".to_owned(),
+            args: "--session rimz-room action list-panes --all".to_owned(),
+            stderr: "failed".to_owned(),
+        };
+
+        let rendered = err.to_string();
+
+        assert!(rendered.contains("zellij action list-panes ..."));
     }
 }

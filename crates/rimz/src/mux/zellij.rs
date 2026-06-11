@@ -17,8 +17,10 @@ mod presence;
 mod raw_pane;
 mod session;
 mod sidebar;
+pub mod socket;
 
 pub use presence::presence_plugin_path;
+pub use socket::{socket_headroom, socket_preflight};
 
 use std::env;
 use std::path::PathBuf;

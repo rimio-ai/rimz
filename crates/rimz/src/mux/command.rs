@@ -81,10 +81,17 @@ impl CommandSpec {
     pub fn run_with_timeout(&self, timeout: Duration) -> Result<Output> {
         let output = self.run_bounded(timeout)?;
         if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+            tracing::debug!(
+                program = %self.program,
+                args = ?self.args,
+                stderr = %stderr,
+                "mux command exited unsuccessfully",
+            );
             return Err(MuxErr::Command {
                 program: self.program.clone(),
                 args: self.args.join(" "),
-                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                stderr,
             });
         }
         Ok(output)

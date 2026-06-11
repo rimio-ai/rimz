@@ -5,19 +5,23 @@ fn ensure_clean_room(
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
-) -> SessionHealth {
+) -> Result<SessionHealth> {
     let opts = match build_sidebar_opts(target, resume_panes.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(error = %err, "session health gate skipped; attaching as-is");
-            return SessionHealth::Healthy;
+            return Ok(SessionHealth::Healthy);
         }
     };
     match backend.ensure_clean_session(&opts, daemon) {
-        Ok(health) => health,
+        Ok(health) => Ok(health),
+        Err(
+            err @ (rimz::mux::MuxErr::SocketPathTooLong { .. }
+            | rimz::mux::MuxErr::SocketPathReportedTooLong { .. }),
+        ) => Err(err.into()),
         Err(err) => {
             tracing::warn!(error = %err, "session health gate failed; attaching as-is");
-            SessionHealth::Healthy
+            Ok(SessionHealth::Healthy)
         }
     }
 }
@@ -31,7 +35,7 @@ pub(super) fn gate_room_before_attach(
     daemon: Option<&DaemonView>,
     resume_panes: &[rimz::mux::ResumePane],
 ) -> Result<()> {
-    if let SessionHealth::Stuck = ensure_clean_room(backend, target, daemon, resume_panes) {
+    if let SessionHealth::Stuck = ensure_clean_room(backend, target, daemon, resume_panes)? {
         recover_stuck_room(backend, target, daemon, resume_panes)?;
     }
     Ok(())
@@ -64,7 +68,7 @@ fn recover_stuck_room(
     );
     let records = reset_room_records(target.workspace_id, target.session_name, false)?;
     print_reset_report(&report, Some(&records))?;
-    match ensure_clean_room(backend, target, daemon, resume_panes) {
+    match ensure_clean_room(backend, target, daemon, resume_panes)? {
         SessionHealth::Stuck => {
             anyhow::bail!("the room is still stuck after a reset; inspect with `rimz doctor`")
         }

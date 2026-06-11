@@ -290,6 +290,16 @@ fn parse_mux(value: &str) -> std::result::Result<MuxName, String> {
     value.parse::<MuxName>().map_err(|err| err.to_string())
 }
 
+fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
+    match mux {
+        MuxName::Zellij => rimz::mux::zellij::socket_preflight(session_name)?,
+        // tmux sockets live under its own short per-user socket directory; the
+        // Rimz session name does not participate in an AF_UNIX path budget.
+        MuxName::Tmux => {}
+    }
+    Ok(())
+}
+
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
@@ -314,6 +324,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // launch here, with the fix, before any hook-install or session side
     // effects — never bring a workspace up around a doomed host.
     rimz::remote_control::preflight(remote_control)?;
+    mux_environment_preflight(mux, &workspace.session_name)?;
     ensure_detected_agent_hooks()?;
     let backend = rimz::mux::backend_for(mux);
     retire_renamed_session(backend.as_ref(), &workspace);
@@ -449,6 +460,7 @@ fn attach_cwd(
     let detected_size = rimz::mux::detect_terminal_size();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
+    mux_environment_preflight(mux, &workspace.session_name)?;
     retire_renamed_session(backend.as_ref(), &workspace);
     let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
     record_workspace(&workspace)?;
@@ -513,6 +525,7 @@ fn attach_named(
     let detected_size = rimz::mux::detect_terminal_size();
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
+    mux_environment_preflight(mux, session)?;
     // Captured before `ensure_session` so a tmux create never masks a reattach.
     let was_live = session_is_healthy_live(backend.as_ref(), session);
     match record {

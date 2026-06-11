@@ -37,3 +37,4 @@ mod wakeup_pipe;
 mod workspace;
 mod worktree;
 mod zellij_health;
+mod zellij_socket;

@@ -281,6 +281,9 @@ impl MuxBackend for ZellijBackend {
         };
         match rebirth() {
             Ok(()) => Ok(SessionHealth::Reborn),
+            Err(
+                err @ (MuxErr::SocketPathTooLong { .. } | MuxErr::SocketPathReportedTooLong { .. }),
+            ) => Err(err),
             Err(err) => {
                 tracing::warn!(
                     session = %opts.session_name,
