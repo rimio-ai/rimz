@@ -29,6 +29,8 @@ mod codex_refresh;
 mod live_spend;
 mod rate_limits;
 
+#[cfg(test)]
+pub(crate) use accounts::accounts_cache_missing_versions;
 pub use codex_refresh::refresh_codex_transcript_context;
 #[cfg(test)]
 pub(crate) use codex_refresh::{

@@ -339,7 +339,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `styled_underlines` | `true` \| `false` | |
 | `pane_frames` | `true` \| `false` | plus `ui { pane_frames { rounded_corners true; hide_session_name true } }` |
 | `simplified_ui` | `false` \| `true` | no arrow fonts in plugins |
-| `auto_layout` | `true` \| `false` | predefined swap-layout flow on new panes |
+| `auto_layout` | `true` \| `false` | predefined swap-layout flow on new panes; Rimz passes `true` by default so explicit tab layouts can apply the sidebar-and-compact-bar-pinning `rimz-work-area` swap layout |
 | `stacked_resize` | `true` \| `false` | non-directional resize stacks neighbours |
 | `visual_bell` | `true` \| `false` | |
 | `show_startup_tips` / `show_release_notes` | `true` \| `false` | Rimz suppresses both |
@@ -382,7 +382,7 @@ The surface Rimz's birth templates use ([multiplexers.md → Zellij backend](../
 
 **cwd composition** — relative paths chain pane ← tab ← global ← invocation dir (`/hi` + `there` + `friend` = `/hi/there/friend`); an absolute pane cwd overrides all parents.
 
-Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive the `auto_layout` flow and `next-/previous-swap-layout`; Rimz does not use them.
+Swap layouts (`*.swap.kdl`, `swap_tiled_layout` / `swap_floating_layout`) drive the `auto_layout` flow and `next-/previous-swap-layout`; Rimz includes a `rimz-work-area` `swap_tiled_layout` in explicit tab layouts so no-direction pane opens rebalance the work area while the sidebar and compact-bar plugin stay fixed. Two behaviours verified locally on 0.44.3: a template's `max_panes` budget counts plugin panes and assigns them to slots like terminals, so a template without a plugin slot re-tiles a status bar into the work area as a full-size pane; and without an applicable swap layout, closing the first pane of a split leaves the survivor holding the closed pane's logical share, so a later no-direction `NewPane` halves that stale share instead of the work area.
 
 ## Session serialization and resurrection
 

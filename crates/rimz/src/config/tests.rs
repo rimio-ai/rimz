@@ -391,6 +391,7 @@ fn zellij_room_defaults_are_agent_friendly() {
     assert!(config.zellij.copy_on_select);
     assert!(config.zellij.support_kitty_keyboard_protocol);
     assert!(config.zellij.osc8_hyperlinks);
+    assert!(config.zellij.auto_layout);
     assert!(!config.zellij.session_serialization);
 }
 
@@ -405,7 +406,8 @@ fn zellij_room_options_parse() {
              mouse_hover_effects = true\n\
              focus_follows_mouse = false\n\
              copy_clipboard = \"primary\"\n\
-             on_force_close = \"quit\"\n",
+             on_force_close = \"quit\"\n\
+             auto_layout = false\n",
     ))
     .expect("load");
     assert!(config.zellij.pane_frames);
@@ -414,6 +416,7 @@ fn zellij_room_options_parse() {
     assert!(!config.zellij.focus_follows_mouse);
     assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::Primary);
     assert_eq!(config.zellij.on_force_close, ZellijForceClose::Quit);
+    assert!(!config.zellij.auto_layout);
 }
 
 #[test]

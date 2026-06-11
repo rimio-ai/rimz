@@ -264,12 +264,14 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
         .map(|(index, host)| render_host_pane(host, index == 0, 12))
         .collect::<Result<String>>()?;
     let body = render_sidebar_work_area(&sidebar, &host_panes, 4);
+    let swap_layout = rimz_swap_layout_kdl(opts.sidebar.birth_size.cols.get());
     // The body (sidebar + work area) is a nested vertical split above the
     // one-row compact-bar.
     Ok(format!(
         r#"layout {{
 {body}
     {COMPACT_BAR_KDL}
+{swap_layout}
 }}
 "#,
     ))
@@ -294,6 +296,7 @@ pub(super) fn render_tab_layout(
         BirthGeometry::Attached,
         template_sidebar_cols,
     )?;
+    let sidebar_cols = template_sidebar_cols.unwrap_or(opts.sidebar.birth_size.cols);
     let mut focused = false;
     let mut columns = String::new();
     for column in &opts.panes.columns {
@@ -304,9 +307,60 @@ pub(super) fn render_tab_layout(
         r#"layout {{
 {body}
     {COMPACT_BAR_KDL}
+{swap_layout}
 }}
 "#,
+        swap_layout = rimz_swap_layout_kdl(sidebar_cols.get()),
     ))
+}
+
+/// The swap-layout shape Zellij's `auto_layout` flow applies after native
+/// no-direction pane opens and closes. The first tiled pane in a Rimz tab is the
+/// sidebar and the final tiled pane is the compact-bar plugin; keeping both
+/// explicit makes Zellij rebalance only the work area when users close one peer
+/// pane and open another. The plugin slot is load-bearing: `max_panes` counts
+/// plugin panes and Zellij assigns them to swap slots like terminals, so a
+/// template without one re-tiles the bar into the work area as a full-size pane
+/// (swap-layout semantics in `docs/externals/mux-adapter/zellij-reference.md`).
+fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
+    format!(
+        r#"    swap_tiled_layout name="rimz-work-area" {{
+        tab max_panes=3 {{
+            pane split_direction="vertical" {{
+                pane size={sidebar_cols}
+                pane
+            }}
+            pane size=1 borderless=true {{
+                plugin location="zellij:compact-bar"
+            }}
+        }}
+        tab max_panes=4 {{
+            pane split_direction="vertical" {{
+                pane size={sidebar_cols}
+                pane split_direction="vertical" {{
+                    pane
+                    pane
+                }}
+            }}
+            pane size=1 borderless=true {{
+                plugin location="zellij:compact-bar"
+            }}
+        }}
+        tab max_panes=6 {{
+            pane split_direction="vertical" {{
+                pane size={sidebar_cols}
+                pane split_direction="vertical" {{
+                    pane {{ children; }}
+                    pane
+                }}
+            }}
+            pane size=1 borderless=true {{
+                plugin location="zellij:compact-bar"
+            }}
+        }}
+    }}
+"#,
+    )
 }
 
 fn render_sidebar_work_area(sidebar: &str, work_panes: &str, indent: usize) -> String {
@@ -461,6 +515,11 @@ mod tests {
     fn sidebar_layout_renders_terminal_template_bar_and_runtime_args() {
         let layout = render_sidebar_layout(&sidebar_opts("rimz-contract", Some(50), None)).unwrap();
         assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(
+            !layout.contains("swap_tiled_layout"),
+            "session templates avoid swap layouts because Zellij then requires \
+             a `children` placeholder, which regresses new-tab focus:\n{layout}",
+        );
         assert!(layout.contains("pane focus=true"), "{layout}");
         assert!(layout.contains("tab focus=true"), "{layout}");
         assert!(!layout.contains("children"), "{layout}");
@@ -535,6 +594,21 @@ mod tests {
         assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
         assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
         assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}"
+        );
+        assert!(layout.contains("tab max_panes=3"), "{layout}");
+        assert!(layout.contains("tab max_panes=4"), "{layout}");
+        assert!(layout.contains("tab max_panes=6"), "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            4,
+            "the visible bar plus all three swap templates must carry the \
+             compact-bar plugin:\n{layout}",
+        );
         assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
         assert!(render_background_view_layout(&background_view_opts(vec![])).is_err());
@@ -578,6 +652,22 @@ mod tests {
         );
         assert!(layout.contains("compact-bar"), "{layout}");
         assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}"
+        );
+        assert!(layout.contains("tab max_panes=3"), "{layout}");
+        assert!(layout.contains("tab max_panes=4"), "{layout}");
+        assert!(layout.contains("tab max_panes=6"), "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            4,
+            "the visible bar plus all three swap templates must carry the \
+             compact-bar plugin:\n{layout}",
+        );
+        assert!(layout.contains("pane size=72"), "{layout}");
+        assert!(
             layout.contains(r#"pane split_direction="horizontal""#),
             "{layout}"
         );
@@ -589,6 +679,10 @@ mod tests {
             layout.contains(r#"pane size=60 name="rimz-sidebar""#),
             "custom tab layouts must be able to mirror the live \
              new_tab_template instead of this command's pane-width probe:\n{layout}",
+        );
+        assert!(
+            layout.contains("pane size=60\n"),
+            "the tab's swap layout must mirror the live sidebar width too:\n{layout}",
         );
     }
 

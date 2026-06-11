@@ -70,6 +70,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     assert!(has("--pane-frames", "false"));
     assert!(has("--copy-clipboard", "system"));
     assert!(has("--support-kitty-keyboard-protocol", "true"));
+    assert!(has("--auto-layout", "true"));
     assert!(has("--session-serialization", "false"));
 
     let unknown = zellij_options_args(&ZellijConfig::default(), None);
@@ -78,6 +79,7 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
             .windows(2)
             .any(|pair| pair[0] == flag && pair[1] == value)
     };
+    assert!(has_unknown("--auto-layout", "true"));
     assert!(has_unknown("--session-serialization", "false"));
     assert!(!unknown.iter().any(|arg| arg == "--mouse-click-through"));
     assert!(!unknown.iter().any(|arg| arg == "--advanced-mouse-actions"));
@@ -94,5 +96,18 @@ fn zellij_options_render_mouse_opt_out() {
     assert!(
         args.windows(2)
             .any(|pair| pair[0] == "--mouse-mode" && pair[1] == "false")
+    );
+}
+
+#[test]
+fn zellij_options_render_auto_layout_opt_out() {
+    let config = ZellijConfig {
+        auto_layout: false,
+        ..ZellijConfig::default()
+    };
+    let args = zellij_options_args(&config, Some((0, 44, 3)));
+    assert!(
+        args.windows(2)
+            .any(|pair| pair[0] == "--auto-layout" && pair[1] == "false")
     );
 }

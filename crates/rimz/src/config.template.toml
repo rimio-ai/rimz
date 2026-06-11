@@ -171,6 +171,7 @@
 # copy_on_select = true
 # support_kitty_keyboard_protocol = true
 # osc8_hyperlinks = true
+# auto_layout = true                  # use Rimz's swap layout for no-direction new panes
 # session_serialization = false       # Rimz owns rebirth instead of Zellij resurrection
 
 [tmux]

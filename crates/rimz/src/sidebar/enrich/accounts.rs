@@ -31,7 +31,7 @@ pub(super) fn produce_accounts(
 
     // Fast path: a young publish needs no lock and no fork.
     let cache = read_accounts_cache(&path);
-    if cache.is_fresh(unix_now_ms()) {
+    if cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot) {
         return cache_with_context_versions(cache, &context_versions).accounts;
     }
 
@@ -41,8 +41,7 @@ pub(super) fn produce_accounts(
     let lock_path = runtime.shared_accounts_lock();
     let fresh = || {
         let cache = read_accounts_cache(&path);
-        cache
-            .is_fresh(unix_now_ms())
+        (cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot))
             .then(|| cache_with_context_versions(cache, &context_versions))
     };
     match crate::ledger::single_flight::coalesce(
@@ -88,6 +87,28 @@ pub(super) fn cached_accounts_for_snapshot(
     snapshot: &SidebarSnapshot,
 ) -> BTreeMap<String, AgentAccount> {
     cache_with_context_versions(cache, &context_versions(snapshot)).accounts
+}
+
+pub(crate) fn accounts_cache_missing_versions(
+    cache: &AccountsCache,
+    snapshot: &SidebarSnapshot,
+) -> bool {
+    if !cache.ok {
+        return false;
+    }
+    let context_versions = context_versions(snapshot);
+    active_version_probe_kinds(snapshot).iter().any(|kind| {
+        context_versions
+            .get(kind)
+            .filter(|version| !version.is_empty())
+            .is_none()
+            && cache
+                .accounts
+                .get(kind)
+                .and_then(|account| account.version.as_ref())
+                .filter(|version| !version.is_empty())
+                .is_none()
+    })
 }
 
 /// Probe out-of-band login/account facts for every known provider plus any

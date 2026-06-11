@@ -39,6 +39,11 @@ pub struct ZellijConfig {
     pub copy_on_select: bool,
     pub support_kitty_keyboard_protocol: bool,
     pub osc8_hyperlinks: bool,
+    /// Whether Zellij applies swap layouts when panes open or close. Rimz keeps
+    /// it on because explicit Rimz-opened tab layouts carry a swap layout that
+    /// pins the fixed sidebar and rebalances the work area on no-direction
+    /// `NewPane`.
+    pub auto_layout: bool,
     /// Whether Zellij serializes this room to disk for later resurrection. Rimz
     /// keeps it off: a resurrected room comes back with every command pane
     /// `start_suspended` ("Waiting to run") and a dead mouse. Rimz owns rebirth,
@@ -65,6 +70,7 @@ impl Default for ZellijConfig {
             copy_on_select: true,
             support_kitty_keyboard_protocol: true,
             osc8_hyperlinks: true,
+            auto_layout: true,
             session_serialization: false,
         }
     }

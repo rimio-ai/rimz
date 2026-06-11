@@ -180,6 +180,8 @@ fn zellij_options_args(
         bool_value(config.support_kitty_keyboard_protocol),
         "--osc8-hyperlinks".to_owned(),
         bool_value(config.osc8_hyperlinks),
+        "--auto-layout".to_owned(),
+        bool_value(config.auto_layout),
         "--session-serialization".to_owned(),
         bool_value(config.session_serialization),
     ];

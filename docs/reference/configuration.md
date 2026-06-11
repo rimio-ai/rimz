@@ -89,6 +89,7 @@ Rimz applies room-scoped defaults when it creates or reattaches a session, so th
 ```toml
 [zellij]
 session_serialization = false
+auto_layout = true
 copy_clipboard = "system"
 
 [tmux]

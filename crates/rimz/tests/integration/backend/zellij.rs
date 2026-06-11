@@ -946,7 +946,9 @@ fn list_panes_json(xdg: &Path, session: &str) -> serde_json::Value {
 struct PaneGeometry {
     id: u64,
     x: u64,
+    y: u64,
     columns: u64,
+    rows: u64,
 }
 
 fn named_work_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Vec<PaneGeometry> {
@@ -965,12 +967,113 @@ fn named_work_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Vec<Pa
             Some(PaneGeometry {
                 id: pane.get("id")?.as_u64()?,
                 x: pane.get("pane_x")?.as_u64()?,
+                y: pane.get("pane_y")?.as_u64()?,
                 columns: pane.get("pane_columns")?.as_u64()?,
+                rows: pane.get("pane_rows")?.as_u64()?,
             })
         })
         .collect();
     work.sort_by_key(|pane| pane.x);
     work
+}
+
+fn named_sidebar_pane_geometry(xdg: &Path, session: &str, tab_name: &str) -> Option<PaneGeometry> {
+    let panes = list_panes_json(xdg, session);
+    panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .filter(|pane| pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false))
+        .find(|pane| {
+            pane.get("tab_name").and_then(|value| value.as_str()) == Some(tab_name)
+                && pane.get("title").and_then(|value| value.as_str()) == Some("rimz-sidebar")
+        })
+        .and_then(|pane| {
+            Some(PaneGeometry {
+                id: pane.get("id")?.as_u64()?,
+                x: pane.get("pane_x")?.as_u64()?,
+                y: pane.get("pane_y")?.as_u64()?,
+                columns: pane.get("pane_columns")?.as_u64()?,
+                rows: pane.get("pane_rows")?.as_u64()?,
+            })
+        })
+}
+
+fn named_compact_bar_pane_geometry(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+) -> Option<PaneGeometry> {
+    let panes = list_panes_json(xdg, session);
+    panes
+        .as_array()
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+        .iter()
+        .find(|pane| {
+            pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(true)
+                && pane.get("tab_name").and_then(|value| value.as_str()) == Some(tab_name)
+                && pane
+                    .get("title")
+                    .and_then(|value| value.as_str())
+                    .is_some_and(|title| title.contains("compact-bar"))
+        })
+        .and_then(|pane| {
+            Some(PaneGeometry {
+                id: pane.get("id")?.as_u64()?,
+                x: pane.get("pane_x")?.as_u64()?,
+                y: pane.get("pane_y")?.as_u64()?,
+                columns: pane.get("pane_columns")?.as_u64()?,
+                rows: pane.get("pane_rows")?.as_u64()?,
+            })
+        })
+}
+
+fn wait_for_named_sidebar_pane(xdg: &Path, session: &str, tab_name: &str) -> Option<PaneGeometry> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let sidebar = named_sidebar_pane_geometry(xdg, session, tab_name);
+        if sidebar.is_some() || Instant::now() >= deadline {
+            return sidebar;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn wait_for_named_compact_bar_pane(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+) -> Option<PaneGeometry> {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let bar = named_compact_bar_pane_geometry(xdg, session, tab_name);
+        if bar.is_some() || Instant::now() >= deadline {
+            return bar;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+fn wait_for_named_work_pane_state<F>(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+    want: usize,
+    mut ready: F,
+) -> Vec<PaneGeometry>
+where
+    F: FnMut(&[PaneGeometry]) -> bool,
+{
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let work = named_work_pane_geometry(xdg, session, tab_name);
+        if (work.len() == want && ready(&work)) || Instant::now() >= deadline {
+            return work;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn wait_for_named_work_pane_count(
@@ -979,14 +1082,7 @@ fn wait_for_named_work_pane_count(
     tab_name: &str,
     want: usize,
 ) -> Vec<PaneGeometry> {
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let work = named_work_pane_geometry(xdg, session, tab_name);
-        if work.len() == want || Instant::now() >= deadline {
-            return work;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
+    wait_for_named_work_pane_state(xdg, session, tab_name, want, |_| true)
 }
 
 fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
@@ -1281,9 +1377,9 @@ fn capped_birth_size_lands_the_cap_in_every_tab() {
 }
 
 /// A tab layout keeps the fixed sidebar outside the user's work area. Closing
-/// back to `sidebar | one work pane` and then opening a new terminal must split
-/// the work area, not rebalance a flat root that still carries the fixed sidebar
-/// constraint.
+/// back to `sidebar | one work pane` and then opening a no-direction terminal
+/// must split the work area, not rebalance a flat root that still carries the
+/// fixed sidebar constraint.
 #[test]
 fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
     require_zellij!();
@@ -1315,7 +1411,9 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
     backend.open_sidebar(&sidebar, None).expect("open_sidebar");
     wait_for_pane_count(xdg.path(), &name, 2);
 
-    let _client = AttachedClient::attach(xdg.path(), &name, 298, 68);
+    let client_columns: u16 = 380;
+    let client_rows: u16 = 46;
+    let _client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
     wait_for_attached_client(xdg.path(), &name);
 
     let tab_name = "work split";
@@ -1345,7 +1443,7 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         2,
         "tab should start with two work panes: {work:?}"
     );
-    let close = format!("terminal_{}", work[1].id);
+    let close = format!("terminal_{}", work[0].id);
     let closed = scoped_zellij(xdg.path())
         .args([
             "--session",
@@ -1363,11 +1461,23 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         String::from_utf8_lossy(&closed.stderr),
     );
 
-    let survivor = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 1);
+    let sidebar_after_close = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
+        .expect("work tab keeps its sidebar after close");
+    let expected_work_columns =
+        u64::from(client_columns).saturating_sub(sidebar_after_close.columns);
+    let survivor = wait_for_named_work_pane_state(xdg.path(), &name, tab_name, 1, |work| {
+        work[0].columns.abs_diff(expected_work_columns) <= 5
+    });
     assert_eq!(
         survivor.len(),
         1,
         "closing one work pane should leave one survivor: {survivor:?}",
+    );
+    let survivor_diff = survivor[0].columns.abs_diff(expected_work_columns);
+    assert!(
+        survivor_diff <= 5,
+        "surviving work pane should fill the work area after close; expected \
+         about {expected_work_columns} cols, got {survivor:?}",
     );
     let focus = scoped_zellij(xdg.path())
         .args([
@@ -1386,15 +1496,7 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
     );
 
     let spawned = scoped_zellij(xdg.path())
-        .args([
-            "--session",
-            &name,
-            "action",
-            "new-pane",
-            "--direction",
-            "right",
-            "--cwd",
-        ])
+        .args(["--session", &name, "action", "new-pane", "--cwd"])
         .arg(cwd.path())
         .args(["--", "sleep", "600"])
         .bounded_output()
@@ -1405,7 +1507,9 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         String::from_utf8_lossy(&spawned.stderr),
     );
 
-    let split = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 2);
+    let split = wait_for_named_work_pane_state(xdg.path(), &name, tab_name, 2, |work| {
+        work[0].columns.abs_diff(work[1].columns) <= 5
+    });
     assert_eq!(
         split.len(),
         2,
@@ -1415,5 +1519,29 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
     assert!(
         diff <= 5,
         "work panes should split evenly after reopening from one pane, got {split:?}",
+    );
+    let sidebar = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
+        .expect("work tab keeps its sidebar");
+    assert_eq!(sidebar.x, 0, "sidebar should stay docked left: {sidebar:?}");
+    assert!(
+        (68..=76).contains(&sidebar.columns),
+        "sidebar should stay near the 72-column cap: {sidebar:?}",
+    );
+    let bar = wait_for_named_compact_bar_pane(xdg.path(), &name, tab_name)
+        .expect("work tab keeps its compact-bar");
+    assert_eq!(
+        bar.x, 0,
+        "compact bar should span from the left edge: {bar:?}"
+    );
+    assert_eq!(
+        bar.columns,
+        u64::from(client_columns),
+        "compact bar should span the whole tab width: {bar:?}",
+    );
+    assert_eq!(bar.rows, 1, "compact bar should stay one row tall: {bar:?}");
+    assert_eq!(
+        bar.y + bar.rows,
+        u64::from(client_rows),
+        "compact bar should stay docked at the bottom: {bar:?}",
     );
 }
