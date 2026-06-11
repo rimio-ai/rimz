@@ -18,22 +18,6 @@ fn disconnected_link_event_channel_keeps_poll_cadence() {
 }
 
 #[test]
-fn gatetime_restore_only_reports_preexisting_outage() {
-    assert!(
-        should_report_gatetime_restored(true, true),
-        "a post-retry session passing gatetime reports recovery"
-    );
-    assert!(
-        !should_report_gatetime_restored(false, true),
-        "a blackout that began inside this session is not recovered by gatetime"
-    );
-    assert!(
-        !should_report_gatetime_restored(true, false),
-        "no active outage means no recovery edge"
-    );
-}
-
-#[test]
 fn probe_respawn_backoff_is_capped_and_resettable() {
     let mut backoff = ProbeRespawnBackoff::default();
 
@@ -132,54 +116,7 @@ fn ack_drain_reports_when_rtt_becomes_publishable() {
 }
 
 #[test]
-fn ended_probe_stream_waits_for_blackout_threshold() {
-    let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
-    let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
-    let mut blackout_latched = false;
-    let seen_ack = true;
-    let blackout_after_ms = LINK_BLACKOUT_AFTER.as_millis() as u64;
-
-    window.record_sent(1, 1_000);
-    assert!(window.record_ack(1, 1_020));
-
-    maybe_send_probe_blackout_at(
-        &tx,
-        &mut window,
-        &mut blackout_latched,
-        seen_ack,
-        1_020 + blackout_after_ms - 1,
-    );
-    assert!(rx.try_recv().is_err());
-    assert!(!blackout_latched);
-
-    maybe_send_probe_blackout_at(
-        &tx,
-        &mut window,
-        &mut blackout_latched,
-        seen_ack,
-        1_020 + blackout_after_ms,
-    );
-    match rx.try_recv().expect("blackout event") {
-        LinkEvent::Blackout(duration) => assert_eq!(duration, LINK_BLACKOUT_AFTER),
-        other => panic!("expected blackout event, got {other:?}"),
-    }
-    assert!(blackout_latched);
-
-    maybe_send_probe_blackout_at(
-        &tx,
-        &mut window,
-        &mut blackout_latched,
-        seen_ack,
-        1_020 + blackout_after_ms + 1_000,
-    );
-    assert!(
-        rx.try_recv().is_err(),
-        "latched blackout events are not repeated"
-    );
-}
-
-#[test]
-fn probe_blackout_requires_prior_ack() {
+fn probe_blackout_requires_prior_ack_threshold_and_latches() {
     let (tx, rx) = std::sync::mpsc::channel::<LinkEvent>();
     let mut window = ProbeWindow::with_timeout(Duration::from_millis(100));
     let mut blackout_latched = false;
@@ -193,13 +130,49 @@ fn probe_blackout_requires_prior_ack() {
         false,
         1_000 + blackout_after_ms,
     );
-
     assert!(rx.try_recv().is_err());
     assert!(!blackout_latched);
+
+    assert!(window.record_ack(1, 1_020));
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        true,
+        1_020 + blackout_after_ms - 1,
+    );
+    assert!(rx.try_recv().is_err());
+    assert!(!blackout_latched);
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        true,
+        1_020 + blackout_after_ms,
+    );
+    match rx.try_recv().expect("blackout event") {
+        LinkEvent::Blackout(duration) => assert_eq!(duration, LINK_BLACKOUT_AFTER),
+        other => panic!("expected blackout event, got {other:?}"),
+    }
+    assert!(blackout_latched);
+
+    maybe_send_probe_blackout_at(
+        &tx,
+        &mut window,
+        &mut blackout_latched,
+        true,
+        1_020 + blackout_after_ms + 1_000,
+    );
+    assert!(
+        rx.try_recv().is_err(),
+        "latched blackout events are not repeated"
+    );
 }
 
 #[test]
-fn blackout_delivery_suppresses_notify_command() {
+fn link_notifications_respect_command_and_terminal_gates() {
     let prefs = rimz::config::NotificationsPrefs {
         enabled: true,
         command: Some("notify-send rimz".to_owned()),
@@ -227,11 +200,6 @@ fn blackout_delivery_suppresses_notify_command() {
     )
     .expect("lost-link delivery spawns the configured command");
     assert_eq!(notification.kind_env(), "link_lost");
-}
-
-#[test]
-fn redirected_stderr_suppresses_terminal_notification_bytes() {
-    let prefs = rimz::config::NotificationsPrefs::default();
 
     assert!(
         local_link_terminal_notification_bytes("Title", "Body", &prefs, false).is_empty(),

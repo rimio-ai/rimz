@@ -304,7 +304,7 @@ mod tests {
     use rimz::{MuxName, PaneId};
 
     #[test]
-    fn other_live_user_pane_inside_ignores_sidebar_and_own_pane() {
+    fn other_live_user_pane_inside_filters_sidebar_own_and_counts_user_panes() {
         let worktree = Path::new("/repo-worktrees/demo");
         let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
         let panes = vec![
@@ -317,13 +317,8 @@ mod tests {
             !other_live_user_pane_inside(&panes, &own, worktree),
             "sidebar, outside pane, and own pane do not pin cleanup"
         );
-    }
 
-    #[test]
-    fn other_live_user_pane_inside_counts_agent_or_shell_under_worktree() {
-        let worktree = Path::new("/repo-worktrees/demo");
         let shell_dir = worktree.join("src");
-        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
         let agent = vec![pane("terminal_agent", Some("codex"), Some(worktree))];
         let shell = vec![pane("terminal_shell", Some("zsh"), Some(&shell_dir))];
 

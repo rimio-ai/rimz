@@ -650,15 +650,46 @@ mod tests {
         terminal.backend().to_string()
     }
 
+    fn key(code: KeyCode) -> KeyEvent {
+        KeyEvent::from(code)
+    }
+
+    fn ctrl_c() -> KeyEvent {
+        KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)
+    }
+
+    fn drive(
+        state: &mut ConsentState,
+        data: &ConsentData<'_>,
+        keys: impl IntoIterator<Item = KeyEvent>,
+    ) -> ConsentAction {
+        let mut action = ConsentAction::Continue;
+        for key in keys {
+            action = state.handle_key(key, data, 20);
+            if action != ConsentAction::Continue {
+                break;
+            }
+        }
+        action
+    }
+
+    fn selected_after(
+        previews: &[HookInstallPreview],
+        keys: impl IntoIterator<Item = KeyEvent>,
+    ) -> (ConsentAction, Vec<&'static str>, WizardStep) {
+        let data = ConsentData::new(previews);
+        let mut state = ConsentState::new(previews);
+        let action = drive(&mut state, &data, keys);
+        (action, state.selected_agents(&data), state.step)
+    }
+
     #[test]
-    fn diff_uses_unified_hunks_for_existing_file() {
-        let preview = preview(
+    fn preview_diff_covers_existing_and_new_config_files() {
+        let existing = preview(
             Some("alpha\nkeep\nold\nomega\n"),
             "alpha\nkeep\nnew\nomega\n",
         );
-
-        let diff = preview_diff(&preview);
-
+        let diff = preview_diff(&existing);
         assert!(diff.contains("--- /home/me/.claude/settings.json"));
         assert!(diff.contains("+++ /home/me/.claude/settings.json"));
         assert!(diff.contains("@@"));
@@ -666,14 +697,9 @@ mod tests {
         assert!(diff.contains("+new"));
         assert!(!diff.contains("@@ original @@"));
         assert!(!diff.contains("@@ candidate @@"));
-    }
 
-    #[test]
-    fn new_file_diff_is_framed_as_new_file() {
-        let preview = preview(None, "one\ntwo\n");
-
-        let diff = preview_diff(&preview);
-
+        let created = preview(None, "one\ntwo\n");
+        let diff = preview_diff(&created);
         assert!(
             diff.starts_with("--- /dev/null\n+++ /home/me/.claude/settings.json\n@@ new file @@\n")
         );
@@ -681,75 +707,41 @@ mod tests {
     }
 
     #[test]
-    fn enter_through_wizard_selects_agent() {
-        let previews = [preview(Some("{}\n"), "{\"hooks\": []}\n")];
-        let data = ConsentData::new(&previews);
-        let mut state = ConsentState::new(&previews);
+    fn wizard_key_flows_select_skip_and_stop() {
+        let one = [preview(Some("{}\n"), "{\"hooks\": []}\n")];
+        let (action, selected, step) =
+            selected_after(&one, [key(KeyCode::Enter), key(KeyCode::Enter)]);
+        assert_eq!(action, ConsentAction::Finish);
+        assert_eq!(step, WizardStep::Agent(0));
+        assert_eq!(selected, vec!["claude"]);
 
-        assert!(state.selected_agents(&data).is_empty());
-        let action = state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
-        assert_eq!(action, ConsentAction::Continue);
-        assert_eq!(state.step, WizardStep::Agent(0));
-        assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
-            ConsentAction::Finish
-        );
-        assert_eq!(state.selected_agents(&data), vec!["claude"]);
-    }
-
-    #[test]
-    fn no_skips_one_agent_and_advances() {
-        let previews = [
+        let two = [
             preview_for("claude", Some("{}\n"), "{\"hooks\": []}\n"),
             preview_for("codex", Some("{}\n"), "{\"hooks\": []}\n"),
         ];
-        let data = ConsentData::new(&previews);
-        let mut state = ConsentState::new(&previews);
-
-        assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
-            ConsentAction::Continue
+        let (action, selected, step) = selected_after(
+            &two,
+            [
+                key(KeyCode::Enter),
+                key(KeyCode::Char('n')),
+                key(KeyCode::Enter),
+            ],
         );
-        assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Char('n')), &data, 20),
-            ConsentAction::Continue
+        assert_eq!(action, ConsentAction::Finish);
+        assert_eq!(step, WizardStep::Agent(1));
+        assert_eq!(selected, vec!["codex"]);
+
+        let (action, selected, step) = selected_after(
+            &two,
+            [key(KeyCode::Enter), key(KeyCode::Enter), key(KeyCode::Esc)],
         );
-        assert_eq!(state.step, WizardStep::Agent(1));
-        assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20),
-            ConsentAction::Finish
-        );
-        assert_eq!(state.selected_agents(&data), vec!["codex"]);
-    }
+        assert_eq!(action, ConsentAction::Finish);
+        assert_eq!(step, WizardStep::Agent(1));
+        assert_eq!(selected, vec!["claude"]);
 
-    #[test]
-    fn esc_on_agent_keeps_prior_yeses_and_skips_rest() {
-        let previews = [
-            preview_for("claude", Some("{}\n"), "{\"hooks\": []}\n"),
-            preview_for("codex", Some("{}\n"), "{\"hooks\": []}\n"),
-        ];
-        let data = ConsentData::new(&previews);
-        let mut state = ConsentState::new(&previews);
-
-        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
-        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
-
-        assert_eq!(state.step, WizardStep::Agent(1));
-        assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Esc), &data, 20),
-            ConsentAction::Finish
-        );
-        assert_eq!(state.selected_agents(&data), vec!["claude"]);
-    }
-
-    #[test]
-    fn ctrl_c_skips_the_consent_gate() {
-        let previews = [preview(Some("{}\n"), "{\"hooks\": []}\n")];
-        let data = ConsentData::new(&previews);
-        let mut state = ConsentState::new(&previews);
-        let key = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
-
-        assert_eq!(state.handle_key(key, &data, 20), ConsentAction::SkipAll);
+        let (action, selected, _) = selected_after(&one, [ctrl_c()]);
+        assert_eq!(action, ConsentAction::SkipAll);
+        assert!(selected.is_empty());
     }
 
     #[test]
@@ -761,13 +753,19 @@ mod tests {
         let data = ConsentData::new(&previews);
         let mut state = ConsentState::new(&previews);
 
-        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
-        state.handle_key(KeyEvent::from(KeyCode::Enter), &data, 20);
-        state.handle_key(KeyEvent::from(KeyCode::Char('d')), &data, 20);
+        drive(
+            &mut state,
+            &data,
+            [
+                key(KeyCode::Enter),
+                key(KeyCode::Enter),
+                key(KeyCode::Char('d')),
+            ],
+        );
         assert!(state.show_diff);
 
         assert_eq!(
-            state.handle_key(KeyEvent::from(KeyCode::Left), &data, 20),
+            state.handle_key(key(KeyCode::Left), &data, 20),
             ConsentAction::Continue
         );
         assert_eq!(state.step, WizardStep::Agent(0));
@@ -775,7 +773,7 @@ mod tests {
     }
 
     #[test]
-    fn frame_composition_renders_agents_and_diff() {
+    fn frame_composition_renders_agent_diff_and_pins_footer() {
         let previews = [preview(Some("old\n"), "new\n")];
         let mut state = ConsentState::new(&previews);
         state.step = WizardStep::Agent(0);
@@ -789,22 +787,13 @@ mod tests {
         assert!(screen.contains("-old"));
         assert!(screen.contains("+new"));
         assert!(screen.contains("[Enter] add"));
-    }
-
-    #[test]
-    fn collapsed_view_pins_footer_to_bottom_of_reserved_viewport() {
-        let previews = [preview(Some("old\n"), "new\n")];
-        let state = ConsentState::new(&previews);
-
-        let screen = render(&previews, &state, 90, 24);
         let lines = screen.lines().collect::<Vec<_>>();
-
         assert!(
-            lines[23].contains("[Enter] set up"),
+            lines[23].contains("[Enter] add"),
             "footer should own the last reserved row:\n{screen}"
         );
         assert!(
-            !lines[22].contains("[Enter] set up"),
+            !lines[22].contains("[Enter] add"),
             "footer should not float above blank slack:\n{screen}"
         );
     }

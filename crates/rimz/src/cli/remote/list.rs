@@ -79,7 +79,7 @@ mod tests {
     use rimz::ids::MuxName;
 
     #[test]
-    fn list_json_emits_canonical_shape() {
+    fn list_renderers_emit_public_shapes() {
         let entries = vec![
             RemoteAlias {
                 name: "dev".to_owned(),
@@ -116,10 +116,6 @@ mod tests {
           ]
         }
         "#);
-    }
-
-    #[test]
-    fn list_human_emits_tab_separated_rows() {
         let entries = vec![RemoteAlias {
             name: "prod".to_owned(),
             target: "prod-box:query-engine".to_owned(),

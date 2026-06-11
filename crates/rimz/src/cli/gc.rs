@@ -178,16 +178,6 @@ mod tests {
     use rimz::{MuxName, PaneId};
 
     #[test]
-    fn parse_duration_accepts_short_units() {
-        assert_eq!(parse_duration("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_duration("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_duration("1h").unwrap(), Duration::from_secs(3600));
-        assert!(parse_duration("").is_err());
-        assert!(parse_duration("30").is_err());
-        assert!(parse_duration("30d").is_err());
-    }
-
-    #[test]
     fn live_user_cwds_excludes_sidebar_chrome() {
         let panes = vec![
             pane(

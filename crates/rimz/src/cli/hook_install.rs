@@ -282,12 +282,12 @@ mod tests {
     }
 
     #[test]
-    fn text_wizard_accepts_default_yes_and_explicit_no() {
+    fn text_wizard_accepts_yes_no_and_reasks_after_diff() {
         let previews = [
-            preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
+            preview("claude", Some("old\n"), "new\n"),
             preview("codex", Some("{}\n"), "{\"hooks\": []}\n"),
         ];
-        let mut input = Cursor::new(b"\nn\n".to_vec());
+        let mut input = Cursor::new(b"d\n\nn\n".to_vec());
         let mut out = Vec::new();
 
         let selected = wizard_text_flow(&previews, &mut input, &mut out).expect("wizard");
@@ -296,18 +296,6 @@ mod tests {
         let rendered = String::from_utf8(out).expect("utf8");
         assert!(rendered.contains("rimz - first-run setup - claude (1 of 2)"));
         assert!(rendered.contains("rimz - first-run setup - codex (2 of 2)"));
-    }
-
-    #[test]
-    fn text_wizard_prints_current_agent_diff_and_reasks() {
-        let previews = [preview("claude", Some("old\n"), "new\n")];
-        let mut input = Cursor::new(b"d\n\n".to_vec());
-        let mut out = Vec::new();
-
-        let selected = wizard_text_flow(&previews, &mut input, &mut out).expect("wizard");
-
-        assert_eq!(selected, vec!["claude"]);
-        let rendered = String::from_utf8(out).expect("utf8");
         assert!(rendered.contains("--- /home/me/.claude/config"));
         assert!(rendered.contains("-old"));
         assert!(rendered.contains("+new"));

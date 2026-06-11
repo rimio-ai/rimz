@@ -312,10 +312,16 @@ mod tests {
     }
 
     #[test]
-    fn connect_disambiguates_raw_targets_from_aliases() {
+    fn connect_resolution_applies_alias_reset_and_reconnect_policy() {
         let mut aliases = RemoteAliases::default();
         aliases
             .add(alias("prod", "prod-box:query-engine", true, false))
+            .unwrap();
+        aliases
+            .add(alias("fresh", "fresh-box:query-engine", true, true))
+            .unwrap();
+        aliases
+            .add(alias("default", "dev-box:query-engine", true, false))
             .unwrap();
 
         let raw = resolve_connect("raw-box:session", false, false, None, &aliases).unwrap();
@@ -325,31 +331,13 @@ mod tests {
         let named = resolve_connect("prod", false, false, None, &aliases).unwrap();
         let named_spec = ssh_attach_spec(&named.target, named.no_resume, named.mux);
         assert_eq!(named_spec.args[8], "prod-box");
-    }
-
-    #[test]
-    fn reset_and_alias_no_resume_force_no_resume() {
-        let mut aliases = RemoteAliases::default();
-        aliases
-            .add(alias("fresh", "prod-box:query-engine", true, true))
-            .unwrap();
-        aliases
-            .add(alias("default", "dev-box:query-engine", true, false))
-            .unwrap();
 
         let fresh = resolve_connect("fresh", false, false, None, &aliases).unwrap();
         assert!(fresh.no_resume);
 
         let reset = resolve_connect("default", true, false, None, &aliases).unwrap();
         assert!(reset.no_resume);
-    }
 
-    #[test]
-    fn no_reconnect_overrides_alias_default() {
-        let mut aliases = RemoteAliases::default();
-        aliases
-            .add(alias("prod", "prod-box:query-engine", true, false))
-            .unwrap();
         let remote = resolve_connect("prod", false, true, None, &aliases).unwrap();
         assert!(!remote.reconnect);
     }

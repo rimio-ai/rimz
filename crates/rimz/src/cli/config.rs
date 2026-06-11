@@ -396,46 +396,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn validates_static_and_dynamic_keys() {
-        validate_set_key(&parse_key("sidebar.max_cols").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.budget.pace.red").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.layouts.review").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.keywords.vim").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.keywords.codex-yolo.agent").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.keywords.codex-yolo.mode").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.keywords.codex-yolo.args").unwrap()).unwrap();
-        validate_set_key(&parse_key("tab.keywords.htop.command").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.providers.claude.color").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.animations.thinking.frames").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.animations.working.color").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.animations.idle.effect").unwrap()).unwrap();
-        validate_set_key(&parse_key("sidebar.animations.success.speed").unwrap()).unwrap();
+    fn validates_config_key_read_and_write_surfaces() {
+        for key in [
+            "sidebar.max_cols",
+            "sidebar.budget.pace.red",
+            "tab.layouts.review",
+            "tab.keywords.vim",
+            "tab.keywords.codex-yolo.agent",
+            "tab.keywords.codex-yolo.mode",
+            "tab.keywords.codex-yolo.args",
+            "tab.keywords.htop.command",
+            "sidebar.providers.claude.color",
+            "sidebar.animations.thinking.frames",
+            "sidebar.animations.working.color",
+            "sidebar.animations.idle.effect",
+            "sidebar.animations.success.speed",
+        ] {
+            validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
+        }
 
-        assert!(validate_set_key(&parse_key("sidebar.nope").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("tab.layouts.peer.shape").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("tab.keywords.codex-yolo.flags").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("sidebar.providers.claude.nope").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("sidebar.animations").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("sidebar.animations.nope.frames").unwrap()).is_err());
-        assert!(validate_set_key(&parse_key("sidebar.animations.thinking.nope").unwrap()).is_err());
-        assert!(
-            validate_set_key(&parse_key("sidebar.animations.thinking.frames.extra").unwrap())
-                .is_err()
-        );
-    }
+        for key in [
+            "sidebar.nope",
+            "tab.layouts.peer.shape",
+            "tab.keywords.codex-yolo.flags",
+            "sidebar.providers.claude.nope",
+            "sidebar.animations",
+            "sidebar.animations.nope.frames",
+            "sidebar.animations.thinking.nope",
+            "sidebar.animations.thinking.frames.extra",
+        ] {
+            assert!(validate_set_key(&parse_key(key).unwrap()).is_err(), "{key}");
+        }
 
-    #[test]
-    fn known_get_keys_include_animation_tables() {
-        assert!(is_known_get_key(&parse_key("sidebar.animations").unwrap()));
-        assert!(is_known_get_key(
-            &parse_key("sidebar.animations.thinking").unwrap()
-        ));
-        assert!(is_known_get_key(
-            &parse_key("sidebar.animations.thinking.frames").unwrap()
-        ));
-        assert!(!is_known_get_key(
-            &parse_key("sidebar.animations.nope").unwrap()
-        ));
+        for (key, known) in [
+            ("sidebar.animations", true),
+            ("sidebar.animations.thinking", true),
+            ("sidebar.animations.thinking.frames", true),
+            ("sidebar.animations.nope", false),
+        ] {
+            assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
+        }
     }
 
     #[test]

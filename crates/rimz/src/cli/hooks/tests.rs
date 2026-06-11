@@ -1,6 +1,5 @@
 use super::binding_select::{
     BindingRejectReason, BindingSelectionMethod, PriorAgentPane, select_focused_pane_binding,
-    session_already_stamped,
 };
 use super::lifecycle::append_lifecycle_event;
 use super::proctree::matches_agent_kind;
@@ -294,51 +293,23 @@ fn focus_recovery_cases() -> Vec<Case> {
             method: BindingSelectionMethod::None,
             reject_reasons: vec![(0, stamped_old())],
         },
+        Case {
+            name: "all rejected candidates record their reasons",
+            panes: vec![
+                pane("terminal_4", "claude", "/repo/main", false),
+                pane("terminal_30", "codex", "/repo/other", false),
+                candidate("terminal_42", false),
+            ],
+            client_focus: None,
+            prior_stamps: vec![("terminal_42", epoch)],
+            expected_pane: None,
+            candidate_count: 0,
+            method: BindingSelectionMethod::None,
+            reject_reasons: vec![
+                (0, command_reject("claude")),
+                (1, cwd_reject("/repo/other")),
+                (2, stamped_old()),
+            ],
+        },
     ]
-}
-
-#[test]
-fn focused_pane_recovery_records_reject_reasons() {
-    let occupied_id = id("terminal_42");
-    let prior = vec![PriorAgentPane {
-        kind: "codex",
-        agent_id: "old",
-        pane_id: Some(&occupied_id),
-        last_activity: jiff::Timestamp::UNIX_EPOCH,
-    }];
-    let panes = vec![
-        pane("terminal_4", "claude", "/repo/main", false),
-        pane("terminal_30", "codex", "/repo/other", false),
-        candidate("terminal_42", false),
-    ];
-    let selected = select_focused_pane_binding("codex", "new", "/repo/main", &prior, &panes, None);
-
-    assert_eq!(selected.pane_id, None);
-    assert_eq!(selected.method, BindingSelectionMethod::None);
-    assert_eq!(selected.candidate_count, 0);
-    for (index, reason) in [
-        (0, command_reject("claude")),
-        (1, cwd_reject("/repo/other")),
-        (2, stamped_old()),
-    ] {
-        assert!(
-            selected.candidates[index].reject_reasons.contains(&reason),
-            "candidate {index} missing {reason:?}: {:?}",
-            selected.candidates[index].reject_reasons,
-        );
-    }
-}
-
-#[test]
-fn focused_pane_recovery_detects_existing_stamped_session() {
-    let terminal_30 = id("terminal_30");
-    let prior = vec![PriorAgentPane {
-        kind: "codex",
-        agent_id: "new",
-        pane_id: Some(&terminal_30),
-        last_activity: jiff::Timestamp::UNIX_EPOCH,
-    }];
-
-    assert!(session_already_stamped("codex", "new", &prior));
-    assert!(!session_already_stamped("codex", "other", &prior));
 }

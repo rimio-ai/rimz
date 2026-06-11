@@ -38,34 +38,22 @@ mod tests {
     const SMH: &[(&str, u64)] = &[("s", 1), ("m", 60), ("h", 3600)];
 
     #[test]
-    fn parses_each_unit() {
-        assert_eq!(
-            parse_duration_units("30s", SMH).unwrap(),
-            Duration::from_secs(30)
-        );
-        assert_eq!(
-            parse_duration_units("5m", SMH).unwrap(),
-            Duration::from_secs(300)
-        );
-        assert_eq!(
-            parse_duration_units("1h", SMH).unwrap(),
-            Duration::from_secs(3600)
-        );
-        assert_eq!(
-            parse_duration_units("7d", SMHD).unwrap(),
-            Duration::from_secs(7 * 86_400)
-        );
-    }
+    fn duration_units_parse_and_reject_by_allowed_set() {
+        for (raw, allowed, expected) in [
+            ("30s", SMH, Duration::from_secs(30)),
+            ("5m", SMH, Duration::from_secs(300)),
+            ("1h", SMH, Duration::from_secs(3600)),
+            ("7d", SMHD, Duration::from_secs(7 * 86_400)),
+        ] {
+            assert_eq!(
+                parse_duration_units(raw, allowed).unwrap(),
+                expected,
+                "{raw}"
+            );
+        }
 
-    #[test]
-    fn rejects_unit_outside_allowed_set() {
-        assert!(parse_duration_units("30d", SMH).is_err());
-        assert!(parse_duration_units("30y", SMHD).is_err());
-    }
-
-    #[test]
-    fn rejects_missing_unit_or_empty() {
-        assert!(parse_duration_units("30", SMH).is_err());
-        assert!(parse_duration_units("", SMH).is_err());
+        for (raw, allowed) in [("30d", SMH), ("30y", SMHD), ("30", SMH), ("", SMH)] {
+            assert!(parse_duration_units(raw, allowed).is_err(), "{raw}");
+        }
     }
 }

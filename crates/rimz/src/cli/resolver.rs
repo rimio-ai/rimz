@@ -160,7 +160,6 @@ fn print_list(entries: &[AllowlistEntry], json: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::Duration;
 
     fn entry(id: &str, order: u32, secs: u64) -> AllowlistEntry {
         AllowlistEntry {
@@ -173,16 +172,7 @@ mod tests {
     }
 
     #[test]
-    fn parse_budget_accepts_short_units() {
-        assert_eq!(parse_budget("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_budget("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_budget("1h").unwrap(), Duration::from_secs(3600));
-        assert!(parse_budget("30").is_err());
-        assert!(parse_budget("30d").is_err());
-    }
-
-    #[test]
-    fn list_json_emits_canonical_shape() {
+    fn list_renderers_emit_public_shapes() {
         let entries = vec![
             entry("opus-policy", 10, 30),
             entry("slack-on-call", 20, 300),
@@ -208,10 +198,6 @@ mod tests {
           ]
         }
         "#);
-    }
-
-    #[test]
-    fn list_human_emits_tab_separated_rows() {
         let entries = vec![entry("opus-policy", 10, 30)];
         let rendered = render_list_human(&entries);
         insta::assert_snapshot!(rendered, @"  10	opus-policy	30s	-");

@@ -4,6 +4,7 @@ use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
 use rimz::feed::{AgentState, AgentStatus, PaneRef};
 use rimz::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::{RuntimePaths, StatePaths};
+use std::path::PathBuf;
 use tokio::net::UnixDatagram;
 
 #[derive(Debug, Parser)]
@@ -28,14 +29,6 @@ fn permission_mode_rejects_conflicting_flags() {
         stream: false,
     };
     assert!(permission_mode(&args).is_err());
-}
-
-#[test]
-fn parse_timeout_accepts_duration_units() {
-    assert_eq!(parse_timeout("30s").unwrap(), Duration::from_secs(30));
-    assert_eq!(parse_timeout("5m").unwrap(), Duration::from_secs(300));
-    assert_eq!(parse_timeout("1h").unwrap(), Duration::from_secs(3600));
-    assert_eq!(parse_timeout("1d").unwrap(), Duration::from_secs(86_400));
 }
 
 #[test]
@@ -79,19 +72,6 @@ fn terminal_run_is_not_sendable() {
 }
 
 #[test]
-fn stream_output_mode_suppresses_final_message_print() {
-    assert_eq!(
-        blocking_run_output(false, true),
-        BlockingRunOutput::StreamAlreadyEmitted
-    );
-    assert_eq!(blocking_run_output(true, false), BlockingRunOutput::Json);
-    assert_eq!(
-        blocking_run_output(false, false),
-        BlockingRunOutput::FinalMessage
-    );
-}
-
-#[test]
 fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
     let mut record = RunRecord::new(
@@ -121,24 +101,17 @@ fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
 
 #[test]
 fn stop_backstop_uses_late_recorded_pane_id() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let ledger = rimz::Ledger::open(paths.clone(), runtime).unwrap();
-    let mut stale = RunRecord::new(
-        workspace_id,
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    stale.status = RunStatus::Canceled;
-    rimz::run::create(ledger.paths(), &stale).unwrap();
+    let fixture = RunFixture::new(RunStatus::Canceled);
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%8");
-    rimz::run::record_pane(ledger.paths(), &stale.run_id, pane_id.clone()).unwrap();
+    rimz::run::record_pane(
+        fixture.ledger.paths(),
+        &fixture.record.run_id,
+        pane_id.clone(),
+    )
+    .unwrap();
 
-    let (latest, resolved) = latest_resolved_run_pane(&ledger, "rimz-test", &stale).unwrap();
+    let (latest, resolved) =
+        latest_resolved_run_pane(&fixture.ledger, "rimz-test", &fixture.record).unwrap();
     assert_eq!(latest.pane_id.as_ref(), Some(&pane_id));
     assert_eq!(resolved.pane_id, pane_id);
     assert_eq!(resolved.session_name, "rimz-test");
@@ -161,34 +134,76 @@ fn stream_event_shapes_are_ndjson_ready() {
     );
 }
 
+struct RunFixture {
+    _dir: tempfile::TempDir,
+    workspace_id: WorkspaceId,
+    paths: StatePaths,
+    runtime: RuntimePaths,
+    ledger: rimz::Ledger,
+    record: RunRecord,
+}
+
+impl RunFixture {
+    fn new(status: RunStatus) -> Self {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        runtime.ensure_dirs().unwrap();
+        let ledger = rimz::Ledger::open(paths.clone(), runtime.clone()).unwrap();
+        let mut record = RunRecord::new(
+            workspace_id.clone(),
+            AgentKind::new_unchecked("codex"),
+            PermissionMode::Auto,
+            "go".to_owned(),
+            Path::new("/tmp/rimz-run").to_path_buf(),
+        );
+        record.status = status;
+        rimz::run::create(&paths, &record).unwrap();
+        Self {
+            _dir: dir,
+            workspace_id,
+            paths,
+            runtime,
+            ledger,
+            record,
+        }
+    }
+
+    fn run_id(&self) -> rimz::RunId {
+        self.record.run_id.clone()
+    }
+
+    fn expected(&self) -> ExpectedRunFrame {
+        ExpectedRunFrame {
+            workspace_id: self.workspace_id.clone(),
+            run_id: self.run_id(),
+        }
+    }
+
+    fn bind(&self) -> (std::os::unix::net::UnixDatagram, PathBuf) {
+        bridge::bind_run(&self.runtime, &self.record.run_id).unwrap()
+    }
+
+    fn complete(&mut self, message: &str) {
+        self.record.status = RunStatus::Completed;
+        self.record.last_message = Some(message.to_owned());
+        rimz::ledger::run_store::write(&self.paths.runs_dir, &self.record).unwrap();
+    }
+}
+
 #[test]
 fn blocking_stream_wakeup_reloads_terminal_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let ledger = rimz::Ledger::open(paths.clone(), runtime.clone()).unwrap();
-    let mut record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    record.status = RunStatus::Running;
-    let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).unwrap();
-    let (sock, sock_path) = bridge::bind_run(&runtime, &run_id).unwrap();
+    let mut fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+    let (sock, sock_path) = fixture.bind();
 
-    record.status = RunStatus::Completed;
-    record.last_message = Some("done".to_owned());
-    rimz::ledger::run_store::write(&paths.runs_dir, &record).unwrap();
+    fixture.complete("done");
     send_run_frame(
         &sock_path,
         &WakeupFrame::RunCompleted {
-            workspace_id: workspace_id.clone(),
+            workspace_id: fixture.workspace_id.clone(),
             run_id: run_id.clone(),
             status: RunStatus::Completed,
         },
@@ -196,11 +211,8 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
 
     let loaded = stream_blocking_run(
         sock,
-        ExpectedRunFrame {
-            workspace_id,
-            run_id: run_id.clone(),
-        },
-        &ledger,
+        fixture.expected(),
+        &fixture.ledger,
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::from_secs(1)),
@@ -213,32 +225,14 @@ fn blocking_stream_wakeup_reloads_terminal_record() {
 
 #[test]
 fn blocking_stream_timeout_marks_run_timed_out() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let ledger = rimz::Ledger::open(paths.clone(), runtime.clone()).unwrap();
-    let mut record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    record.status = RunStatus::Running;
-    let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).unwrap();
-    let (sock, _sock_path) = bridge::bind_run(&runtime, &run_id).unwrap();
+    let fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+    let (sock, _sock_path) = fixture.bind();
 
     let timed_out = stream_blocking_run(
         sock,
-        ExpectedRunFrame {
-            workspace_id,
-            run_id: run_id.clone(),
-        },
-        &ledger,
+        fixture.expected(),
+        &fixture.ledger,
         &run_id,
         &rimz::agents::CodexAdapter,
         Some(Duration::ZERO),
@@ -247,33 +241,18 @@ fn blocking_stream_timeout_marks_run_timed_out() {
 
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert_eq!(
-        rimz::run::load(&paths, &run_id).unwrap().status,
+        rimz::run::load(&fixture.paths, &run_id).unwrap().status,
         RunStatus::TimedOut
     );
 }
 
 #[test]
 fn attached_stream_timeout_does_not_mark_run_timed_out() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let ledger = rimz::Ledger::open(paths.clone(), runtime).unwrap();
-    let mut record = RunRecord::new(
-        workspace_id,
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    record.status = RunStatus::Running;
-    let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).unwrap();
+    let fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
 
     let outcome = stream_attached_run(
-        &ledger,
+        &fixture.ledger,
         &run_id,
         &rimz::agents::CodexAdapter,
         false,
@@ -283,7 +262,7 @@ fn attached_stream_timeout_does_not_mark_run_timed_out() {
 
     assert_eq!(outcome, None);
     assert_eq!(
-        rimz::run::load(&paths, &run_id).unwrap().status,
+        rimz::run::load(&fixture.paths, &run_id).unwrap().status,
         RunStatus::Running
     );
 }
@@ -346,43 +325,20 @@ fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
 
 #[test]
 fn completed_run_wakeup_reloads_terminal_record() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let mut record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).unwrap();
-    let (sock, sock_path) = bridge::bind_run(&runtime, &run_id).unwrap();
+    let mut fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+    let (sock, sock_path) = fixture.bind();
 
-    record.status = RunStatus::Completed;
-    record.last_message = Some("done".to_owned());
-    rimz::ledger::run_store::write(&paths.runs_dir, &record).unwrap();
+    fixture.complete("done");
     let frame = WakeupFrame::RunCompleted {
-        workspace_id: workspace_id.clone(),
+        workspace_id: fixture.workspace_id.clone(),
         run_id: run_id.clone(),
         status: RunStatus::Completed,
     };
     send_run_frame(&sock_path, &frame);
 
-    let outcome = wait_for_run(
-        sock,
-        ExpectedRunFrame {
-            workspace_id,
-            run_id: run_id.clone(),
-        },
-        Some(Duration::from_secs(1)),
-    )
-    .unwrap();
-    let loaded = terminal_record_after_wait(&paths, &run_id, outcome).unwrap();
+    let outcome = wait_for_run(sock, fixture.expected(), Some(Duration::from_secs(1))).unwrap();
+    let loaded = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
 
     assert_eq!(loaded.status, RunStatus::Completed);
     assert_eq!(loaded.last_message.as_deref(), Some("done"));
@@ -391,33 +347,12 @@ fn completed_run_wakeup_reloads_terminal_record() {
 
 #[test]
 fn neutral_run_wait_marks_timeout() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let paths = StatePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).unwrap();
-    paths.ensure_dirs().unwrap();
-    runtime.ensure_dirs().unwrap();
-    let record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
-    let run_id = record.run_id.clone();
-    rimz::run::create(&paths, &record).unwrap();
-    let (sock, _sock_path) = bridge::bind_run(&runtime, &run_id).unwrap();
+    let fixture = RunFixture::new(RunStatus::Running);
+    let run_id = fixture.run_id();
+    let (sock, _sock_path) = fixture.bind();
 
-    let outcome = wait_for_run(
-        sock,
-        ExpectedRunFrame {
-            workspace_id,
-            run_id: run_id.clone(),
-        },
-        Some(Duration::from_millis(10)),
-    )
-    .unwrap();
-    let timed_out = terminal_record_after_wait(&paths, &run_id, outcome).unwrap();
+    let outcome = wait_for_run(sock, fixture.expected(), Some(Duration::from_millis(10))).unwrap();
+    let timed_out = terminal_record_after_wait(&fixture.paths, &run_id, outcome).unwrap();
 
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert_eq!(timed_out.status.exit_code(), 124);

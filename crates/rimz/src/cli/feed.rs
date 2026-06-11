@@ -451,19 +451,3 @@ fn attach_current_owner(item: &mut FeedItem) {
 fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> {
     super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_timeout_accepts_short_units() {
-        assert_eq!(parse_timeout("30s").unwrap(), Duration::from_secs(30));
-        assert_eq!(parse_timeout("5m").unwrap(), Duration::from_secs(300));
-        assert_eq!(parse_timeout("4h").unwrap(), Duration::from_secs(4 * 3600));
-        assert_eq!(parse_timeout("1d").unwrap(), Duration::from_secs(86_400));
-        assert!(parse_timeout("").is_err());
-        assert!(parse_timeout("30").is_err());
-        assert!(parse_timeout("30y").is_err());
-    }
-}

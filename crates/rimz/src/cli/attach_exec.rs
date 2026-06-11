@@ -114,7 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn attach_action_matrix() {
+    fn attach_action_matrix_and_nested_report_policy() {
         assert_eq!(
             attach_action(AttachMode::Auto, true, true, false),
             AttachAction::Exec,
@@ -139,10 +139,7 @@ mod tests {
             attach_action(AttachMode::Print, true, true, false),
             AttachAction::Print,
         );
-    }
 
-    #[test]
-    fn report_already_inside_only_when_auto_and_nested() {
         assert!(should_report_already_inside(AttachMode::Auto, true));
         assert!(!should_report_already_inside(AttachMode::Auto, false));
         assert!(!should_report_already_inside(AttachMode::Print, true));

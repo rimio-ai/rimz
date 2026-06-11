@@ -218,7 +218,7 @@ mod tests {
     }
 
     #[test]
-    fn workspace_record_for_session_prefers_fresh_matching_sidebar_heartbeat() {
+    fn workspace_record_for_session_prefers_live_heartbeat_then_sorted_fallback() {
         let dir = tempfile::tempdir().unwrap();
         let state_root = dir.path().join("state");
         let runtime_root = dir.path().join("run");
@@ -248,25 +248,12 @@ mod tests {
             .expect("session record");
 
         assert_eq!(record.workspace_id, live_id);
-    }
-
-    #[test]
-    fn workspace_record_for_session_keeps_sorted_fallback_without_live_heartbeat() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_root = dir.path().join("state");
-        let runtime_root = dir.path().join("run");
-        let first_id = WorkspaceId::parse("ws_000000000000000000000001").unwrap();
-        let second_id = WorkspaceId::parse("ws_ffffffffffffffffffffffff").unwrap();
-        let session = "rimz-room";
-
-        write_workspace_record(&state_root, first_id.clone(), session, "/repo/first");
-        write_workspace_record(&state_root, second_id, session, "/repo/second");
-
+        std::fs::remove_file(path).unwrap();
         let record = workspace_record_for_session_under(session, &state_root, &runtime_root)
             .unwrap()
             .expect("session record");
 
-        assert_eq!(record.workspace_id, first_id);
+        assert_eq!(record.workspace_id, stale_id);
     }
 
     fn write_workspace_record(

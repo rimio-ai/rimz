@@ -232,12 +232,15 @@ mod tests {
     use rimz::tab_layout::{Column, LayoutSpec};
 
     #[test]
-    fn layout_panes_wraps_agents_and_shells_terms() {
+    fn layout_panes_maps_agent_shell_and_command_cells() {
         let layout = LayoutSpec {
             columns: vec![Column {
                 rows: vec![
                     Cell::agent(AgentKind::new_unchecked("codex")),
                     Cell::shell(),
+                    Cell::Command {
+                        argv: vec!["nvim".to_owned(), "-p".to_owned()],
+                    },
                 ],
             }],
         };
@@ -250,34 +253,7 @@ mod tests {
         assert!(agent.iter().any(|arg| arg == "--worktree-path"));
         assert!(agent.iter().any(|arg| arg == "hi"));
         assert!(!panes.columns[0][1].argv.is_empty());
-    }
-
-    #[test]
-    fn layout_panes_passes_command_cells_verbatim() {
-        let layout = LayoutSpec {
-            columns: vec![Column {
-                rows: vec![Cell::Command {
-                    argv: vec!["nvim".to_owned(), "-p".to_owned()],
-                }],
-            }],
-        };
-        let panes =
-            layout_panes(&layout, Path::new("/repo-wt/a"), Some("hi"), true).expect("panes");
-
-        assert_eq!(panes.columns[0][0].argv, vec!["nvim", "-p"]);
-    }
-
-    #[test]
-    fn layout_panes_resolves_empty_command_to_shell() {
-        let layout = LayoutSpec {
-            columns: vec![Column {
-                rows: vec![Cell::shell()],
-            }],
-        };
-        let panes =
-            layout_panes(&layout, Path::new("/repo-wt/a"), Some("hi"), true).expect("panes");
-
-        assert!(!panes.columns[0][0].argv.is_empty());
+        assert_eq!(panes.columns[0][2].argv, vec!["nvim", "-p"]);
     }
 
     #[test]
@@ -341,7 +317,7 @@ mod tests {
     }
 
     #[test]
-    fn worktree_tab_title_uses_resolved_worktree_name() {
+    fn default_tab_title_distinguishes_worktree_from_plain_directory() {
         let layout = LayoutSpec {
             columns: vec![Column {
                 rows: vec![
@@ -357,15 +333,6 @@ mod tests {
         };
 
         assert_eq!(default_tab_title(&layout, &launch), "⑂ worktree-name");
-    }
-
-    #[test]
-    fn non_worktree_tab_title_uses_plain_directory_name() {
-        let layout = LayoutSpec {
-            columns: vec![Column {
-                rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
-            }],
-        };
         let launch = ResolvedCwd {
             cwd: PathBuf::from("/repo/main"),
             worktree_name: None,
