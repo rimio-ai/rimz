@@ -39,6 +39,11 @@ pub fn run(args: TabArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config.tab.keywords,
         &machine_config.tab.layouts,
     )?;
+    // Gate every agent cell's launch env here, before the worktree and tab
+    // side effects — a closed trust gate refuses the command, not the pane.
+    for kind in layout.agent_kinds() {
+        super::agents_cmd::agent_launch_env(&workspace.project_root, kind)?;
+    }
     if should_warn_worktree_without_agent(args.worktree.is_some(), args.layout.as_deref(), &layout)
     {
         warn_worktree_without_agent()?;

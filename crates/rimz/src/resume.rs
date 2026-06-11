@@ -70,7 +70,9 @@ impl ResumePlan {
 /// scopes to this workspace's session; `ended` is the `(kind, agent_id)` set the
 /// user closed cleanly ([`crate::ledger::snapshot::agent_tombstones_for_events`]);
 /// `max` caps the auto-launched panes; `worktree_exists` decides whether a
-/// candidate's worktree is still on disk (production passes `|p| p.is_dir()`).
+/// candidate's worktree is still on disk (production passes `|p| p.is_dir()`);
+/// `rimz_bin` is the `rimz` executable each pane's wrapper argv names
+/// (production passes `std::env::current_exe()`).
 ///
 /// A candidate qualifies when it is a root agent (subagents ride their parent),
 /// was bound to a pane in *this* session, still carries a session id and a
@@ -83,6 +85,7 @@ pub fn plan_resume(
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     max: usize,
     worktree_exists: impl Fn(&Path) -> bool,
+    rimz_bin: &Path,
 ) -> ResumePlan {
     // Root agents that were bound to a pane in this session, still identified,
     // and not cleanly ended. A subagent is paneless and rides its parent, so it
@@ -139,15 +142,15 @@ pub fn plan_resume(
             });
             continue;
         }
-        let Some(command) = find_adapter(&agent.kind)
-            .and_then(|adapter| adapter.resume_command(&agent.agent_id, &cwd))
-        else {
+        let supports_resume = find_adapter(&agent.kind)
+            .is_some_and(|adapter| adapter.resume_command(&agent.agent_id, &cwd).is_some());
+        if !supports_resume {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::NoResumeSupport,
             });
             continue;
-        };
+        }
         if plan.panes.len() >= max {
             plan.skipped.push(ResumeSkip {
                 label,
@@ -155,8 +158,19 @@ pub fn plan_resume(
             });
             continue;
         }
+        // The pane runs the supervised exec wrapper, not the agent CLI
+        // directly: every agent launch funnels through `rimz agents exec`,
+        // which applies trusted `[[agents]]` env and the adapter's launch
+        // pins before spawning the resume argv.
         plan.panes.push(ResumePane {
-            command,
+            command: vec![
+                rimz_bin.to_string_lossy().into_owned(),
+                "agents".to_owned(),
+                "exec".to_owned(),
+                agent.kind.as_str().to_owned(),
+                "--resume".to_owned(),
+                agent.agent_id.as_str().to_owned(),
+            ],
             cwd,
             label,
         });
@@ -272,22 +286,44 @@ mod tests {
                 5,
             ),
         ];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.skipped.is_empty());
         assert_eq!(plan.panes.len(), 2);
         // Most-recently-active leads (the focus target).
         assert_eq!(plan.panes[0].label, "claude:feature-migration");
-        assert_eq!(plan.panes[0].command, vec!["claude", "--resume", "a1"]);
+        // Wrapper argv: the pane funnels through `rimz agents exec`, which
+        // injects launch env before spawning the adapter's resume argv.
+        assert_eq!(
+            plan.panes[0].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
+        );
         assert_eq!(plan.panes[0].cwd, PathBuf::from("/code/qe-feature"));
         assert_eq!(plan.panes[1].label, "codex:main");
-        assert_eq!(plan.panes[1].command, vec!["codex", "resume", "c1"]);
+        assert_eq!(
+            plan.panes[1].command,
+            vec!["/bin/rimz", "agents", "exec", "codex", "--resume", "c1"]
+        );
     }
 
     #[test]
     fn skips_subagents() {
         let mut child = agent("claude", "kid", "/code/query-engine", Some("main"), 1);
         child.parent_agent_id = Some("parent".into());
-        let plan = plan_resume(&[child], SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &[child],
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.is_empty());
         assert!(plan.skipped.is_empty());
     }
@@ -296,7 +332,14 @@ mod tests {
     fn skips_agents_from_another_session() {
         let mut other = agent("claude", "a1", "/code/query-engine", Some("main"), 1);
         other.pane = Some(pane_in("rimz-some-other-room", "terminal_a1"));
-        let plan = plan_resume(&[other], SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &[other],
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.is_empty());
     }
 
@@ -310,6 +353,7 @@ mod tests {
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
+            Path::new("/bin/rimz"),
         );
         assert!(plan.is_empty());
     }
@@ -321,14 +365,28 @@ mod tests {
             [(AgentKind::new_unchecked("claude"), "a1".into())]
                 .into_iter()
                 .collect();
-        let plan = plan_resume(&agents, SESSION, &ended, DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &ended,
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.is_empty());
     }
 
     #[test]
     fn reports_a_missing_worktree() {
         let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| false);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| false,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.panes.is_empty());
         assert_eq!(
             plan.skipped,
@@ -345,9 +403,19 @@ mod tests {
             agent("claude", "old", "/code/query-engine", Some("main"), 60),
             agent("claude", "new", "/code/query-engine", Some("main"), 2),
         ];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert_eq!(plan.panes.len(), 1);
-        assert_eq!(plan.panes[0].command, vec!["claude", "--resume", "new"]);
+        assert_eq!(
+            plan.panes[0].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "new"]
+        );
         // The superseded relaunch is dropped silently, not reported as a skip.
         assert!(plan.skipped.is_empty());
     }
@@ -358,7 +426,14 @@ mod tests {
             agent("claude", "a1", "/code/query-engine", Some("main"), 5),
             agent("codex", "c1", "/code/query-engine", Some("main"), 5),
         ];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert_eq!(plan.panes.len(), 2);
     }
 
@@ -368,17 +443,34 @@ mod tests {
             agent("claude", "a1", "/code/wt-1", Some("b1"), 5),
             agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
         ];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), 1, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            1,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert_eq!(plan.panes.len(), 1);
         // The freshest survives the cap; the older overflows.
-        assert_eq!(plan.panes[0].command, vec!["claude", "--resume", "a1"]);
+        assert_eq!(
+            plan.panes[0].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
+        );
         assert_eq!(plan.skipped.len(), 1);
         assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
     }
 
     #[test]
     fn empty_when_no_agents() {
-        let plan = plan_resume(&[], SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &[],
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert!(plan.is_empty());
         assert!(plan.skipped.is_empty());
     }
@@ -386,7 +478,14 @@ mod tests {
     #[test]
     fn labels_fall_back_to_the_worktree_dir_without_a_branch() {
         let agents = vec![agent("codex", "c1", "/code/query-engine", None, 1)];
-        let plan = plan_resume(&agents, SESSION, &no_ended(), DEFAULT_RESUME_MAX, |_| true);
+        let plan = plan_resume(
+            &agents,
+            SESSION,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
         assert_eq!(plan.panes[0].label, "codex:query-engine");
     }
 }

@@ -32,12 +32,14 @@ pub(super) fn plan_room_resume(
         let ledger = Ledger::open(paths, runtime)?;
         let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
         let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+        let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
         Ok(rimz::resume::plan_resume(
             &projection.agents,
             session_name,
             &ended,
             resume_cfg.max,
             |path| path.is_dir(),
+            &rimz_bin,
         ))
     })();
     planned.unwrap_or_else(|err| {

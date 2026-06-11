@@ -50,6 +50,10 @@ enum AgentsSubcmd {
 #[derive(Debug, Args)]
 struct ExecArgs {
     kind: String,
+    /// Resume a prior agent session by id instead of launching fresh — the
+    /// argv resume-on-rebirth panes run ([`rimz::resume::plan_resume`]).
+    #[arg(long, value_name = "SESSION_ID", conflicts_with = "prompt")]
+    resume: Option<String>,
     #[arg(long)]
     run_id: Option<rimz::RunId>,
     #[arg(long, hide = true)]
@@ -166,9 +170,17 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
     let launch_env = agent_launch_env(&workspace.project_root, &args.kind)?;
-    let argv = adapter
-        .launch_command(&args.extra_args, args.prompt.as_deref())
-        .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?;
+    let argv = match args.resume.as_deref() {
+        Some(session_id) => {
+            let cwd = std::env::current_dir().context("reading the resume pane cwd")?;
+            adapter
+                .resume_command(session_id, &cwd)
+                .ok_or_else(|| anyhow::anyhow!("agent `{}` has no resume command", args.kind))?
+        }
+        None => adapter
+            .launch_command(&args.extra_args, args.prompt.as_deref())
+            .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?,
+    };
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
@@ -549,6 +561,23 @@ mod tests {
         assert_eq!(args.worktree_path, Some(PathBuf::from("/x")));
         assert_eq!(args.prompt.as_deref(), Some("hi"));
         assert_eq!(args.extra_args, ["--model", "gpt-5-codex"]);
+    }
+
+    #[test]
+    fn exec_subcommand_parses_a_resume_launch() {
+        let parsed = ExecHarness::try_parse_from(["rimz", "exec", "claude", "--resume", "sess-1"])
+            .expect("parse exec");
+        let AgentsSubcmd::Exec(args) = parsed.command;
+        assert_eq!(args.kind, "claude");
+        assert_eq!(args.resume.as_deref(), Some("sess-1"));
+
+        // A resume rehydrates idle; a fresh-launch prompt cannot ride along.
+        assert!(
+            ExecHarness::try_parse_from([
+                "rimz", "exec", "claude", "--resume", "sess-1", "--prompt", "hi",
+            ])
+            .is_err()
+        );
     }
 
     #[tokio::test(flavor = "current_thread")]

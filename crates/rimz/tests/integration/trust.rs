@@ -197,8 +197,76 @@ fn builtin_claude_launch_env_overrides_project_config() {
     );
 }
 
-/// Shim agent on PATH that dumps its environment to `$RIMZ_TEST_AGENT_ENV_DUMP`
-/// and exits — the probe proving launch-time env injection reaches the child.
+/// A resumed agent funnels through the same exec wrapper as a fresh launch:
+/// the pane runs `rimz agents exec <kind> --resume <id>`, so trusted project
+/// env and the adapter's built-in pins reach the resumed process, and the
+/// child receives the adapter's own resume argv.
+#[cfg(unix)]
+#[test]
+fn resumed_agent_env_funnels_through_the_exec_wrapper() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[[agents]]\nname = \"claude\"\nenv = { RIMZ_TEST_INJECTED = \"yes\" }\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+
+    let shim_dir = write_env_dump_shim(&env, "claude");
+    let dump = env.home_root.join("claude-resume.env");
+    env.rimz()
+        .args(["agents", "exec", "claude", "--resume", "sess-1"])
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert()
+        .success();
+
+    let dumped = std::fs::read_to_string(&dump).expect("read env dump");
+    assert!(
+        dumped.lines().any(|line| line == "ARGV=--resume sess-1"),
+        "resumed agent misses the resume argv:\n{dumped}"
+    );
+    assert!(
+        dumped.lines().any(|line| line == "RIMZ_TEST_INJECTED=yes"),
+        "resumed agent env misses the trusted project var:\n{dumped}"
+    );
+    assert!(
+        dumped
+            .lines()
+            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"),
+        "resumed agent env misses the built-in pin:\n{dumped}"
+    );
+}
+
+#[test]
+fn untrusted_agent_env_refuses_a_resume_launch() {
+    let env = Env::new();
+    env.write_config(&env.project_root, CODEX_ENV_CONFIG);
+
+    env.rimz()
+        .args(["agents", "exec", "codex", "--resume", "sess-1"])
+        .assert()
+        .failure()
+        .stderr(contains("rimz trust grant"));
+}
+
+/// `rimz tab` gates agent-cell env at the command entry point: an untrusted
+/// configured env refuses the whole command before the worktree is created or
+/// the tab opens, instead of leaving a failed agent pane behind.
+#[test]
+fn untrusted_agent_env_refuses_a_tab_launch_before_side_effects() {
+    let env = Env::new();
+    env.write_config(&env.project_root, CODEX_ENV_CONFIG);
+
+    env.rimz()
+        .args(["tab", "--layout", "codex", "--worktree", "wt-a"])
+        .assert()
+        .failure()
+        .stderr(contains("rimz trust grant"));
+}
+
+/// Shim agent on PATH that dumps its argv (`ARGV=` line) and environment to
+/// `$RIMZ_TEST_AGENT_ENV_DUMP` and exits — the probe proving launch-time env
+/// injection and the launch argv reach the child.
 #[cfg(unix)]
 fn write_env_dump_shim(env: &Env, agent: &str) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
@@ -206,8 +274,11 @@ fn write_env_dump_shim(env: &Env, agent: &str) -> std::path::PathBuf {
     let dir = env.home_root.join("agent-bin");
     std::fs::create_dir_all(&dir).expect("mkdir agent bin");
     let shim = dir.join(agent);
-    std::fs::write(&shim, "#!/bin/sh\nenv > \"$RIMZ_TEST_AGENT_ENV_DUMP\"\n")
-        .expect("write agent shim");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\n{ printf 'ARGV=%s\\n' \"$*\"; env; } > \"$RIMZ_TEST_AGENT_ENV_DUMP\"\n",
+    )
+    .expect("write agent shim");
     let mut perms = std::fs::metadata(&shim)
         .expect("shim metadata")
         .permissions();

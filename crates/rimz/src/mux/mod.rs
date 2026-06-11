@@ -294,7 +294,9 @@ pub struct SidebarPaneOptions {
 /// backend seeds `{command, cwd}` and knows nothing of agents or the ledger.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResumePane {
-    /// Resume argv, program first — e.g. `["claude", "--resume", "<uuid>"]`.
+    /// Resume argv, program first — the supervised exec wrapper, e.g.
+    /// `["<rimz>", "agents", "exec", "claude", "--resume", "<uuid>"]`, so the
+    /// resumed agent gets the same launch-env injection as a fresh launch.
     pub command: Vec<String>,
     /// The agent's worktree: the cwd the resumed pane runs in.
     pub cwd: PathBuf,

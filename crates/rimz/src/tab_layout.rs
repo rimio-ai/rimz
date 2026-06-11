@@ -28,13 +28,18 @@ impl LayoutSpec {
         }
     }
 
-    pub fn first_agent_kind(&self) -> Option<&str> {
-        self.columns.iter().find_map(|column| {
-            column.rows.iter().find_map(|cell| match cell {
+    /// Every agent cell's kind, in layout order (duplicates included).
+    pub fn agent_kinds(&self) -> impl Iterator<Item = &str> {
+        self.columns.iter().flat_map(|column| {
+            column.rows.iter().filter_map(|cell| match cell {
                 Cell::Agent { kind, .. } => Some(kind.as_str()),
                 Cell::Command { .. } => None,
             })
         })
+    }
+
+    pub fn first_agent_kind(&self) -> Option<&str> {
+        self.agent_kinds().next()
     }
 
     pub fn has_agent(&self) -> bool {
