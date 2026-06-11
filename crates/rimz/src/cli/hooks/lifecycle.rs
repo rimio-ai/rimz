@@ -30,7 +30,7 @@ pub(super) fn handle_lifecycle_hook(
         let observed_turn_error = recorded
             .as_ref()
             .and_then(|recorded| recorded.observation.turn_error.clone());
-        manage_agent_context(
+        manage_agent_context(AgentContextHook {
             workspace,
             ledger,
             agent,
@@ -39,7 +39,7 @@ pub(super) fn handle_lifecycle_hook(
             agent_id,
             model_hint,
             observed_turn_error,
-        );
+        });
     }
     if let Some(recorded) = recorded.as_ref() {
         record_run_lifecycle(ledger, agent, event_name, payload, recorded);
@@ -51,6 +51,17 @@ pub(super) fn handle_lifecycle_hook(
 struct RecordedLifecycle {
     model_hint: Option<String>,
     observation: AgentLifecycleObservation,
+}
+
+struct AgentContextHook<'a> {
+    workspace: &'a ResolvedWorkspace,
+    ledger: &'a Ledger,
+    agent: &'a dyn AgentAdapter,
+    event_name: &'a str,
+    payload: &'a Value,
+    agent_id: &'a str,
+    model_hint: Option<&'a str>,
+    observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
 
 /// Record the agent lifecycle observation and expire superseded asks in the
@@ -112,11 +123,7 @@ fn record_lifecycle_observation(
         // it reconciling a resting row or closing a compaction bracket. If the
         // transition read fails, the proof-of-work signal drops and the bracket
         // closes on the next durable lifecycle signal.
-        let append_lifecycle = !proof_of_work_pre_tool(&observation.signal)
-            || transition.is_some_and(|transition| {
-                transition.compaction_closed
-                    || matches!(transition.kind, TransitionKind::Reconciled { .. })
-            });
+        let append_lifecycle = append_lifecycle_event(&observation.signal, transition);
         let append_expiry = observation
             .agent_id
             .as_deref()
@@ -292,16 +299,18 @@ fn env_run_id() -> Option<rimz::RunId> {
     }
 }
 
-fn manage_agent_context(
-    workspace: &ResolvedWorkspace,
-    ledger: &Ledger,
-    agent: &dyn AgentAdapter,
-    event_name: &str,
-    payload: &Value,
-    agent_id: &str,
-    model_hint: Option<&str>,
-    observed_turn_error: Option<rimz::agents::AgentTurnError>,
-) {
+fn manage_agent_context(ctx: AgentContextHook<'_>) {
+    let AgentContextHook {
+        workspace,
+        ledger,
+        agent,
+        event_name,
+        payload,
+        agent_id,
+        model_hint,
+        observed_turn_error,
+    } = ctx;
+
     // Tombstone the session's statusline context sidecar so it cannot pin stale
     // enrichment to a session the rollup has dropped.
     if agent.ends_session(event_name)
@@ -543,4 +552,15 @@ pub(super) fn proof_of_work_pre_tool(signal: &LifecycleSignal) -> bool {
             edits: false
         }
     )
+}
+
+pub(super) fn append_lifecycle_event(
+    signal: &LifecycleSignal,
+    transition: Option<agent_lifecycle::Transition>,
+) -> bool {
+    !proof_of_work_pre_tool(signal)
+        || transition.is_some_and(|transition| {
+            transition.compaction_closed
+                || matches!(transition.kind, TransitionKind::Reconciled { .. })
+        })
 }

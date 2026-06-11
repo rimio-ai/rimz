@@ -2,9 +2,14 @@ use super::binding_select::{
     BindingRejectReason, BindingSelectionMethod, PriorAgentPane, select_focused_pane_binding,
     session_already_stamped,
 };
+use super::lifecycle::append_lifecycle_event;
 use super::proctree::matches_agent_kind;
 use BindingRejectReason::*;
 use BindingSelectionMethod::{ClientFocus, SingleCandidate, TabFocus};
+use rimz::agents::lifecycle::{
+    LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase,
+};
+use rimz::feed::AgentStatus;
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId};
 
@@ -55,6 +60,19 @@ fn started(raw: &str, start: jiff::Timestamp) -> PaneRef {
     }
 }
 
+fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
+    Transition {
+        next: LifecycleState {
+            status: AgentStatus::Running,
+            phase: TurnPhase::Reasoning,
+            compacting: false,
+        },
+        kind,
+        compaction_closed,
+        opened_turn: false,
+    }
+}
+
 fn cwd_reject(path: &str) -> BindingRejectReason {
     CwdMismatch {
         got: Some(path.to_owned()),
@@ -89,6 +107,54 @@ fn agent_kind_matches_known_launch_shapes() {
             "{comm}/{source}"
         );
     }
+}
+
+#[test]
+fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
+    let proof_of_work = LifecycleSignal::ToolUsed {
+        mutates: false,
+        edits: false,
+    };
+    let mutating_tool = LifecycleSignal::ToolUsed {
+        mutates: true,
+        edits: false,
+    };
+
+    assert!(
+        append_lifecycle_event(&mutating_tool, None),
+        "post-tool progress is durable even when transition inspection is unavailable"
+    );
+    assert!(
+        !append_lifecycle_event(&proof_of_work, None),
+        "pre-tool proof-of-work drops when the prior rollup cannot be inspected"
+    );
+    assert!(
+        !append_lifecycle_event(
+            &proof_of_work,
+            Some(transition(TransitionKind::Normal, false))
+        ),
+        "pre-tool proof-of-work does not fill the durable log during normal running turns"
+    );
+    assert!(
+        append_lifecycle_event(
+            &proof_of_work,
+            Some(transition(
+                TransitionKind::Reconciled {
+                    from: AgentStatus::Idle,
+                    reason: "tool used outside a running turn",
+                },
+                false,
+            )),
+        ),
+        "pre-tool proof-of-work is durable when it reconciles a stale resting row"
+    );
+    assert!(
+        append_lifecycle_event(
+            &proof_of_work,
+            Some(transition(TransitionKind::Normal, true))
+        ),
+        "pre-tool proof-of-work is durable when it closes an open compaction bracket"
+    );
 }
 
 #[test]
