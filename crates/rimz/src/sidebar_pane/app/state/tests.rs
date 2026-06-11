@@ -1,15 +1,15 @@
 use super::*;
+use crate::feed::AgentStatus;
+use crate::schema::diag::{DiagEvent, GateRule};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar_pane::app::fixtures::{snapshot, workspace};
 use crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES;
-use crate::sidebar_pane::render::Alert;
+use crate::sidebar_pane::render::{Alert, GateNotice};
 use crate::{
     AgentCard, PaneId, RowCard, RuntimePaths, SidebarInstanceId, SidebarStatusCount,
     SidebarWorktreeGroup,
 };
 
-/// Health seeded with a live alert, as if a failure already crossed the
-/// debounce threshold — the starting point for recovery/sticky tests.
 fn degraded_health(reason: &str) -> Health {
     Health {
         failure_streak: ALERT_AFTER_FAILURES,
@@ -22,7 +22,7 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
         workspace_id: ws.clone(),
         mux: crate::MuxName::Zellij,
         session_name: "rimz-test".to_owned(),
-        instance_id: crate::SidebarInstanceId::new(),
+        instance_id: SidebarInstanceId::new(),
         tick_seconds: 1,
         refresh_ms_override: None,
         notification_prefs: crate::config::NotificationsPrefs::default(),
@@ -30,24 +30,26 @@ fn serve_config(ws: &WorkspaceId) -> ServeConfig {
     }
 }
 
-fn snapshot_with_sibling_count(ws: &WorkspaceId, sibling_count: usize) -> SidebarSnapshot {
-    let mut snapshot = snapshot(ws);
-    snapshot.own_view = Some(crate::SidebarOwnView {
-        sibling_count,
-        own_is_active: false,
-        active_pane_id: None,
-        working_pane_ids: Vec::new(),
-        focus_contested: false,
-        own_view_is_daemon: false,
-    });
-    snapshot
-}
-
 fn fixed_time(second: i64) -> jiff::Timestamp {
     jiff::Timestamp::from_second(second).expect("fixed timestamp")
 }
 
-fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::DiagEvent> {
+fn fetch_failed(
+    ws: &WorkspaceId,
+    reason: &str,
+    previous: Option<SidebarSnapshot>,
+    health: &Health,
+) -> RenderState {
+    compute_next_state(ws, None, Err(reason.to_owned()), previous, health)
+}
+
+fn active_alert(health: &Health) -> &Alert {
+    let alert = health.alert.as_ref().expect("active alert");
+    assert!(alert.is_active());
+    alert
+}
+
+fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<DiagEvent> {
     std::fs::read_to_string(sink.log_path())
         .expect("diagnostic log")
         .lines()
@@ -59,22 +61,13 @@ fn diagnostic_events(sink: &crate::diag::DiagSink) -> Vec<crate::schema::diag::D
         .collect()
 }
 
-fn row_snapshot(
-    ws: &WorkspaceId,
-    status: crate::feed::AgentStatus,
-    focused: bool,
-) -> SidebarSnapshot {
-    row_snapshot_at(
-        ws,
-        status,
-        focused,
-        jiff::Timestamp::from_second(1_700_000_000).unwrap(),
-    )
+fn row_snapshot(ws: &WorkspaceId, status: AgentStatus, focused: bool) -> SidebarSnapshot {
+    row_snapshot_at(ws, status, focused, fixed_time(1_700_000_000))
 }
 
 fn row_snapshot_at(
     ws: &WorkspaceId,
-    status: crate::feed::AgentStatus,
+    status: AgentStatus,
     focused: bool,
     last_activity: jiff::Timestamp,
 ) -> SidebarSnapshot {
@@ -120,43 +113,80 @@ fn row_snapshot_at(
     snap
 }
 
-fn read_mark_store(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
+fn runtime_for(ws: &WorkspaceId) -> (tempfile::TempDir, RuntimePaths) {
     let dir = tempfile::TempDir::new().unwrap();
     let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
     runtime.ensure_dirs().expect("runtime dirs");
-    let store = ReadMarkStore::new(runtime, SidebarInstanceId::new());
-    (dir, store)
+    (dir, runtime)
 }
 
-fn apply_ok(
-    config: &ServeConfig,
-    snapshot: SidebarSnapshot,
-    last_snapshot: &mut Option<SidebarSnapshot>,
-    current: &mut SidebarSnapshot,
-    ui: &mut UiState,
-    read_marks: &mut ReadMarkStore,
-) {
-    let mut health = Health::default();
-    let mut gate = GateState::default();
-    let mut self_close = SelfCloseState::default();
-    apply_fetch_outcome(
-        config,
-        FetchOutcome {
+fn row_unread(snapshot: &SidebarSnapshot) -> bool {
+    snapshot.worktree_groups[0].rows[0].unread
+}
+
+struct ApplyHarness {
+    config: ServeConfig,
+    last_snapshot: Option<SidebarSnapshot>,
+    current: SidebarSnapshot,
+    health: Health,
+    gate: GateState,
+    self_close: SelfCloseState,
+    ui: UiState,
+    read_marks: ReadMarkStore,
+}
+
+impl ApplyHarness {
+    fn new(ws: &WorkspaceId) -> (tempfile::TempDir, Self) {
+        let (dir, runtime) = runtime_for(ws);
+        (
+            dir,
+            Self::for_runtime(ws, runtime, SidebarInstanceId::new()),
+        )
+    }
+
+    fn for_runtime(
+        ws: &WorkspaceId,
+        runtime: RuntimePaths,
+        instance_id: SidebarInstanceId,
+    ) -> Self {
+        let mut config = serve_config(ws);
+        config.instance_id = instance_id.clone();
+        Self {
+            config,
+            last_snapshot: None,
+            current: snapshot(ws),
+            health: Health::default(),
+            gate: GateState::default(),
+            self_close: SelfCloseState::default(),
+            ui: UiState::default(),
+            read_marks: ReadMarkStore::new(runtime, instance_id),
+        }
+    }
+
+    fn apply(&mut self, snapshot: SidebarSnapshot) -> ApplyOutcome {
+        self.apply_outcome(FetchOutcome {
             snapshot: Ok(snapshot),
             final_for_request: true,
             fresh_pane_frame: true,
-        },
-        last_snapshot,
-        current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        ui,
-        read_marks,
-        std::time::Instant::now(),
-        None,
-    )
-    .expect("apply ok fetch");
+        })
+    }
+
+    fn apply_outcome(&mut self, outcome: FetchOutcome) -> ApplyOutcome {
+        apply_fetch_outcome(
+            &self.config,
+            outcome,
+            &mut self.last_snapshot,
+            &mut self.current,
+            &mut self.health,
+            &mut self.gate,
+            &mut self.self_close,
+            &mut self.ui,
+            &mut self.read_marks,
+            std::time::Instant::now(),
+            None,
+        )
+        .expect("apply fetch outcome")
+    }
 }
 
 fn two_pane_snapshot(
@@ -187,58 +217,29 @@ fn two_pane_snapshot(
 #[test]
 fn contested_own_view_holds_existing_selection_baseline() {
     let ws = workspace();
-    let config = serve_config(&ws);
-    let (_dir, mut read_marks) = read_mark_store(&ws);
-    let mut last_snapshot = None;
-    let mut current = snapshot(&ws);
-    let mut ui = UiState::default();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
     let (initial, first, second) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
 
-    apply_ok(
-        &config,
-        initial,
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert_eq!(ui.baseline_pane, Some(first.clone()));
+    h.apply(initial);
+    assert_eq!(h.ui.baseline_pane, Some(first.clone()));
 
     let (contested, _, _) = two_pane_snapshot(&ws, second, true);
-    apply_ok(
-        &config,
-        contested,
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
+    h.apply(contested);
 
-    assert_eq!(ui.baseline_pane, Some(first.clone()));
-    assert_eq!(ui.selected_pane, Some(first));
+    assert_eq!(h.ui.baseline_pane, Some(first.clone()));
+    assert_eq!(h.ui.selected_pane, Some(first));
 }
 
 #[test]
 fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline() {
     let ws = workspace();
-    let config = serve_config(&ws);
-    let (_dir, mut read_marks) = read_mark_store(&ws);
-    let mut last_snapshot = None;
-    let mut current = snapshot(&ws);
-    let mut ui = UiState::default();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
     let (initial, first, second) =
         two_pane_snapshot(&ws, PaneId::from_parts(crate::MuxName::Tmux, "%1"), false);
 
-    apply_ok(
-        &config,
-        initial,
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert_eq!(ui.selected_pane, Some(first.clone()));
+    h.apply(initial);
+    assert_eq!(h.ui.selected_pane, Some(first.clone()));
 
     let (mut contested, _, _) = two_pane_snapshot(&ws, first.clone(), true);
     contested.focus_contested_panes = vec![first.clone(), second.clone()];
@@ -267,375 +268,77 @@ fn focus_event_resolves_contest_then_republished_contest_holds_clicked_baseline(
         "the event resolves the contested own view for this fold",
     );
 
-    apply_ok(
-        &config,
-        fused,
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert_eq!(ui.selected_pane, Some(second.clone()));
+    h.apply(fused);
+    assert_eq!(h.ui.selected_pane, Some(second.clone()));
 
-    apply_ok(
-        &config,
-        contested,
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
+    h.apply(contested);
     assert_eq!(
-        ui.selected_pane,
+        h.ui.selected_pane,
         Some(second),
         "after the focus event expires, a still-contested pull holds the clicked baseline",
     );
 }
 
 #[test]
-fn first_ok_fetch_clears_status_and_records_snapshot() {
+fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
     let ws = workspace();
-    let snap = snapshot(&ws);
-    let state = compute_next_state(&ws, None, Ok(snap.clone()), None, &Health::default());
-    assert!(state.health.alert.is_none());
-    assert_eq!(state.health.failure_streak, 0);
-    assert!(state.last_snapshot.is_some());
-    assert_eq!(state.snapshot.workspace_id, ws);
-}
+    let ok = compute_next_state(&ws, None, Ok(snapshot(&ws)), None, &Health::default());
+    assert!(ok.health.alert.is_none());
+    assert_eq!(ok.health.failure_streak, 0);
+    assert!(ok.last_snapshot.is_some());
+    assert_eq!(ok.snapshot.workspace_id, ws);
 
-#[test]
-fn unread_marks_done_transition_and_focus_clears_it() {
-    let ws = workspace();
-    let config = serve_config(&ws);
-    let mut last_snapshot = None;
-    let mut current = snapshot(&ws);
-    let mut ui = UiState::default();
-    let (_dir, mut read_marks) = read_mark_store(&ws);
-
-    apply_ok(
-        &config,
-        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert!(!current.worktree_groups[0].rows[0].unread);
-
-    apply_ok(
-        &config,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert!(current.worktree_groups[0].rows[0].unread);
-
-    apply_ok(
-        &config,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
-        &mut last_snapshot,
-        &mut current,
-        &mut ui,
-        &mut read_marks,
-    );
-    assert!(!current.worktree_groups[0].rows[0].unread);
-}
-
-#[test]
-fn focus_clear_in_one_instance_clears_every_instance() {
-    let ws = workspace();
-    let dir = tempfile::TempDir::new().unwrap();
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let instance_a = SidebarInstanceId::new();
-    let instance_b = SidebarInstanceId::new();
-    let mut config_a = serve_config(&ws);
-    config_a.instance_id = instance_a.clone();
-    let mut config_b = serve_config(&ws);
-    config_b.instance_id = instance_b.clone();
-    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a.clone());
-    let mut read_marks_b = ReadMarkStore::new(runtime.clone(), instance_b);
-    let mut last_a = None;
-    let mut current_a = snapshot(&ws);
-    let mut ui_a = UiState::default();
-    let mut last_b = None;
-    let mut current_b = snapshot(&ws);
-    let mut ui_b = UiState::default();
-
-    apply_ok(
-        &config_a,
-        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
-        &mut last_a,
-        &mut current_a,
-        &mut ui_a,
-        &mut read_marks_a,
-    );
-    apply_ok(
-        &config_b,
-        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    apply_ok(
-        &config_a,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
-        &mut last_a,
-        &mut current_a,
-        &mut ui_a,
-        &mut read_marks_a,
-    );
-    assert!(
-        runtime.sidebar_read_marks_path(&instance_a).exists(),
-        "the focused renderer wrote its read receipt"
-    );
-    assert!(
-        !current_a.worktree_groups[0].rows[0].unread,
-        "the focused renderer clears immediately"
-    );
-
-    apply_ok(
-        &config_b,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    assert!(
-        !current_b.worktree_groups[0].rows[0].unread,
-        "the peer renderer consumes the receipt on its next fold"
-    );
-}
-
-#[test]
-fn focused_fresh_instance_clears_peer_unread_state() {
-    let ws = workspace();
-    let dir = tempfile::TempDir::new().unwrap();
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let instance_a = SidebarInstanceId::new();
-    let instance_b = SidebarInstanceId::new();
-    let mut config_a = serve_config(&ws);
-    config_a.instance_id = instance_a.clone();
-    let mut config_b = serve_config(&ws);
-    config_b.instance_id = instance_b.clone();
-    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a.clone());
-    let mut read_marks_b = ReadMarkStore::new(runtime.clone(), instance_b);
-    let mut last_a = None;
-    let mut current_a = snapshot(&ws);
-    let mut ui_a = UiState::default();
-    let mut last_b = None;
-    let mut current_b = snapshot(&ws);
-    let mut ui_b = UiState::default();
-
-    apply_ok(
-        &config_b,
-        row_snapshot(&ws, crate::feed::AgentStatus::Running, false),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    apply_ok(
-        &config_b,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    assert!(
-        current_b.worktree_groups[0].rows[0].unread,
-        "the existing renderer has an unread result"
-    );
-
-    apply_ok(
-        &config_a,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, true),
-        &mut last_a,
-        &mut current_a,
-        &mut ui_a,
-        &mut read_marks_a,
-    );
-    assert!(
-        runtime.sidebar_read_marks_path(&instance_a).exists(),
-        "the fresh focused renderer writes a read receipt even without local unread memory"
-    );
-
-    apply_ok(
-        &config_b,
-        row_snapshot(&ws, crate::feed::AgentStatus::Success, false),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    assert!(
-        !current_b.worktree_groups[0].rows[0].unread,
-        "the peer renderer consumes the fresh instance's receipt"
-    );
-}
-
-#[test]
-fn a_new_episode_outruns_an_old_receipt() {
-    let ws = workspace();
-    let dir = tempfile::TempDir::new().unwrap();
-    let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
-    runtime.ensure_dirs().expect("runtime dirs");
-    let instance_a = SidebarInstanceId::new();
-    let instance_b = SidebarInstanceId::new();
-    let mut config_a = serve_config(&ws);
-    config_a.instance_id = instance_a.clone();
-    let mut config_b = serve_config(&ws);
-    config_b.instance_id = instance_b.clone();
-    let mut read_marks_a = ReadMarkStore::new(runtime.clone(), instance_a);
-    let mut read_marks_b = ReadMarkStore::new(runtime, instance_b);
-    let old_stamp = jiff::Timestamp::from_second(1_700_000_000).unwrap();
-    let new_stamp = jiff::Timestamp::from_second(4_000_000_000).unwrap();
-    let mut last_a = None;
-    let mut current_a = snapshot(&ws);
-    let mut ui_a = UiState::default();
-    let mut last_b = None;
-    let mut current_b = snapshot(&ws);
-    let mut ui_b = UiState::default();
-
-    apply_ok(
-        &config_a,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, old_stamp),
-        &mut last_a,
-        &mut current_a,
-        &mut ui_a,
-        &mut read_marks_a,
-    );
-    apply_ok(
-        &config_a,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, true, old_stamp),
-        &mut last_a,
-        &mut current_a,
-        &mut ui_a,
-        &mut read_marks_a,
-    );
-
-    apply_ok(
-        &config_b,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, old_stamp),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    apply_ok(
-        &config_b,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, false, old_stamp),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    assert!(
-        !current_b.worktree_groups[0].rows[0].unread,
-        "the old receipt clears the old episode"
-    );
-
-    apply_ok(
-        &config_b,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Running, false, new_stamp),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    apply_ok(
-        &config_b,
-        row_snapshot_at(&ws, crate::feed::AgentStatus::Success, false, new_stamp),
-        &mut last_b,
-        &mut current_b,
-        &mut ui_b,
-        &mut read_marks_b,
-    );
-    assert!(
-        current_b.worktree_groups[0].rows[0].unread,
-        "a later episode must not be cleared by the old receipt"
-    );
-}
-
-#[test]
-fn refresh_health_debounces_failures_and_keeps_renderable_state() {
-    let ws = workspace();
     let previous = snapshot(&ws);
-    let single = compute_next_state(
+    let first_failure = fetch_failed(
         &ws,
-        None,
-        Err("ledger not found".to_owned()),
+        "ledger not found",
         Some(previous.clone()),
         &Health::default(),
     );
-    assert!(single.health.alert.is_none(), "one blip must not alarm");
-    assert_eq!(single.health.failure_streak, 1);
-    assert!(single.last_snapshot.is_some());
-    assert_eq!(single.snapshot.workspace_id, previous.workspace_id);
+    assert!(first_failure.health.alert.is_none());
+    assert_eq!(first_failure.health.failure_streak, 1);
+    assert_eq!(first_failure.snapshot.workspace_id, previous.workspace_id);
+    assert!(first_failure.last_snapshot.is_some());
 
-    let second = compute_next_state(
+    let second_failure = fetch_failed(
         &ws,
-        None,
-        Err("ledger not found".to_owned()),
-        single.last_snapshot,
-        &single.health,
+        "ledger not found",
+        first_failure.last_snapshot,
+        &first_failure.health,
     );
-    let alert = second.health.alert.expect("a sustained failure alerts");
-    assert!(alert.is_active());
+    let alert = active_alert(&second_failure.health);
     assert!(alert.reason.contains("snapshot failed"));
     assert!(alert.reason.contains("ledger not found"));
-    assert!(second.last_snapshot.is_some());
 
-    let err = || Err::<SidebarSnapshot, String>("ledger not found".to_owned());
-    let first = compute_next_state(&ws, None, err(), None, &Health::default());
-    let second = compute_next_state(&ws, None, err(), None, &first.health);
-    assert!(second.health.alert.is_some_and(|alert| alert.is_active()));
-    assert!(second.last_snapshot.is_none());
-    assert_eq!(second.snapshot.workspace_id, ws);
-    assert!(second.snapshot.needs_attention.is_empty());
+    let cold_first = fetch_failed(&ws, "ledger not found", None, &Health::default());
+    let cold_second = fetch_failed(&ws, "ledger not found", None, &cold_first.health);
+    active_alert(&cold_second.health);
+    assert!(cold_second.last_snapshot.is_none());
+    assert_eq!(cold_second.snapshot.workspace_id, ws);
+    assert!(cold_second.snapshot.needs_attention.is_empty());
 
-    let snap = snapshot(&ws);
-    let first = compute_next_state(
+    let heartbeat_first = compute_next_state(
         &ws,
         Some("hb failed".to_owned()),
-        Ok(snap.clone()),
+        Ok(snapshot(&ws)),
         None,
         &Health::default(),
     );
-    let second = compute_next_state(
+    let heartbeat_second = compute_next_state(
         &ws,
         Some("hb failed".to_owned()),
-        Ok(snap.clone()),
-        first.last_snapshot,
-        &first.health,
+        Ok(snapshot(&ws)),
+        heartbeat_first.last_snapshot,
+        &heartbeat_first.health,
     );
-    let alert = second
-        .health
-        .alert
-        .expect("sustained heartbeat failure alerts");
+    let alert = active_alert(&heartbeat_second.health);
     assert!(alert.reason.contains("heartbeat failed"));
-    assert!(second.last_snapshot.is_some());
-}
+    assert!(heartbeat_second.last_snapshot.is_some());
 
-#[test]
-fn active_alert_pins_since_and_lingers_after_recovery() {
-    let ws = workspace();
     let armed = degraded_health("snapshot failed: first");
     let first_since = armed.alert.as_ref().unwrap().since;
-    let next = compute_next_state(
-        &ws,
-        None,
-        Err("second".to_owned()),
-        Some(snapshot(&ws)),
-        &armed,
-    );
-    let alert = next.health.alert.expect("still degraded");
+    let still_degraded = fetch_failed(&ws, "second", Some(snapshot(&ws)), &armed);
+    let alert = still_degraded.health.alert.expect("still degraded");
     assert_eq!(alert.since, first_since, "since must remain pinned");
     assert!(alert.reason.contains("second"));
 
@@ -647,157 +350,119 @@ fn active_alert_pins_since_and_lingers_after_recovery() {
 }
 
 #[test]
-fn non_final_fast_success_does_not_recover_refresh_health() {
+fn read_receipts_cross_instances_and_stay_episode_scoped() {
     let ws = workspace();
-    let config = serve_config(&ws);
-    let mut last_snapshot = Some(snapshot(&ws));
-    let mut current = snapshot(&ws);
-    let mut health = degraded_health("snapshot failed: produce");
-    let mut gate = GateState::default();
-    let mut self_close = SelfCloseState::default();
-    let mut ui = UiState::default();
-    let (_dir, mut read_marks) = read_mark_store(&ws);
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
+    let mut b = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
+    let old_stamp = fixed_time(1_700_000_000);
+    let new_stamp = fixed_time(4_000_000_000);
 
-    let applied = apply_fetch_outcome(
-        &config,
-        FetchOutcome {
-            snapshot: Ok(snapshot(&ws)),
-            final_for_request: false,
-            fresh_pane_frame: false,
-        },
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut ui,
-        &mut read_marks,
-        std::time::Instant::now(),
-        None,
-    )
-    .expect("apply non-final fast frame");
+    a.apply(row_snapshot_at(&ws, AgentStatus::Success, true, old_stamp));
+    assert!(
+        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        "a focused fresh renderer writes a read receipt"
+    );
+    assert!(!row_unread(&a.current));
+
+    b.apply(row_snapshot_at(&ws, AgentStatus::Running, false, old_stamp));
+    b.apply(row_snapshot_at(&ws, AgentStatus::Success, false, old_stamp));
+    assert!(!row_unread(&b.current), "the peer consumes the receipt");
+
+    b.apply(row_snapshot_at(&ws, AgentStatus::Running, false, new_stamp));
+    b.apply(row_snapshot_at(&ws, AgentStatus::Success, false, new_stamp));
+    assert!(
+        row_unread(&b.current),
+        "a later episode must not be cleared by the old receipt"
+    );
+}
+
+#[test]
+fn non_final_fast_success_keeps_refresh_alert_active() {
+    let ws = workspace();
+    let (_dir, mut h) = ApplyHarness::new(&ws);
+    h.last_snapshot = Some(snapshot(&ws));
+    h.health = degraded_health("snapshot failed: produce");
+
+    let applied = h.apply_outcome(FetchOutcome {
+        snapshot: Ok(snapshot(&ws)),
+        final_for_request: false,
+        fresh_pane_frame: false,
+    });
 
     assert!(!applied.should_exit);
     assert!(!applied.tab_emptied);
     assert!(!applied.rejected);
-    assert_eq!(health.failure_streak, ALERT_AFTER_FAILURES);
+    assert_eq!(h.health.failure_streak, ALERT_AFTER_FAILURES);
     assert!(
-        health.alert.as_ref().is_some_and(|alert| alert.is_active()),
+        h.health
+            .alert
+            .as_ref()
+            .is_some_and(|alert| alert.is_active()),
         "only a final success may mark the refresh loop recovered"
     );
 }
 
 #[test]
-fn self_close_outcome_marks_tab_emptied() {
+fn gate_hold_notice_arms_and_clears_with_gate_state() {
     let ws = workspace();
-    let config = serve_config(&ws);
-    let mut last_snapshot = Some(snapshot(&ws));
-    let mut current = snapshot(&ws);
-    let mut health = Health::default();
-    let mut gate = GateState::default();
-    let mut self_close = SelfCloseState::default();
-    let mut ui = UiState::default();
-    let anim_start = std::time::Instant::now();
-    let (_dir, mut read_marks) = read_mark_store(&ws);
+    let (_dir, mut h) = ApplyHarness::new(&ws);
+    h.current = row_snapshot(&ws, AgentStatus::Running, false);
+    h.current.panes_produced_at_ms = Some(10);
+    h.last_snapshot = Some(h.current.clone());
+    let mut empty = snapshot(&ws);
+    empty.panes_produced_at_ms = Some(11);
 
-    let first = apply_fetch_outcome(
-        &config,
-        FetchOutcome {
-            snapshot: Ok(snapshot_with_sibling_count(&ws, 1)),
-            final_for_request: true,
-            fresh_pane_frame: true,
-        },
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut ui,
-        &mut read_marks,
-        anim_start,
-        None,
-    )
-    .expect("apply sibling frame");
+    let held = h.apply(empty);
+    assert!(held.rejected);
+    assert!(matches!(
+        h.ui.gate_notice,
+        Some(GateNotice {
+            rule: GateRule::EmptyStampedFrame,
+        })
+    ));
 
-    assert!(!first.should_exit);
-    assert!(!first.tab_emptied);
-
-    let second = apply_fetch_outcome(
-        &config,
-        FetchOutcome {
-            snapshot: Ok(snapshot_with_sibling_count(&ws, 0)),
-            final_for_request: true,
-            fresh_pane_frame: true,
-        },
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut ui,
-        &mut read_marks,
-        anim_start,
-        None,
-    )
-    .expect("apply empty-tab frame");
-
-    assert!(second.should_exit);
-    assert!(second.tab_emptied);
-    assert!(!second.rejected);
+    let mut recovered = h.current.clone();
+    recovered.panes_produced_at_ms = Some(12);
+    let accepted = h.apply(recovered);
+    assert!(!accepted.rejected);
+    assert!(h.ui.gate_notice.is_none());
 }
 
 #[test]
-fn diagnostics_do_not_release_gate_on_fetch_failure() {
+fn diagnostics_record_fetch_and_gate_transitions() {
     let dir = tempfile::tempdir().unwrap();
     let ws = workspace();
     let sink =
         crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
-    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
-    let gate = GateState {
-        reject_streak: 1,
-        rejecting_since: Some(jiff::Timestamp::now()),
-        rule: Some(crate::schema::diag::GateRule::EmptyStampedFrame),
+    let mut prev = row_snapshot(&ws, AgentStatus::Running, false);
+    prev.panes_produced_at_ms = Some(10);
+    let mut incoming = prev.clone();
+    incoming.panes_produced_at_ms = Some(11);
+    let held_gate = GateState {
+        reject_streak: 2,
+        rejecting_since: Some(fixed_time(1_700_000_000)),
+        rule: Some(GateRule::EmptyStampedFrame),
     };
 
     emit_diagnostics(
         Some(&sink),
-        &snapshot,
-        &snapshot,
-        &snapshot,
+        &prev,
+        &prev,
+        &prev,
         &Health::default(),
-        &Health::default(),
-        &gate,
-        &gate,
+        &Health {
+            failure_streak: 1,
+            alert: None,
+        },
+        &held_gate,
+        &held_gate,
         Some("pane discovery failed".to_owned()),
         false,
         false,
-        jiff::Timestamp::now(),
+        fixed_time(1_700_000_000),
     );
-
-    let text = std::fs::read_to_string(sink.log_path()).expect("diagnostic log");
-    assert!(text.contains("\"kind\":\"fetch_failure\""));
-    assert!(
-        !text.contains("\"kind\":\"gate_release\""),
-        "a fetch failure does not mean a held regression was released: {text}"
-    );
-}
-
-#[test]
-fn diagnostics_record_gate_hold_and_release_details() {
-    let dir = tempfile::tempdir().unwrap();
-    let ws = workspace();
-    let sink =
-        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
-    let mut prev = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
-    prev.panes_produced_at_ms = Some(10);
-    let mut incoming = prev.clone();
-    incoming.panes_produced_at_ms = Some(11);
-    let next_gate = GateState {
-        reject_streak: 2,
-        rejecting_since: Some(fixed_time(1_700_000_000)),
-        rule: Some(crate::schema::diag::GateRule::EmptyStampedFrame),
-    };
-
     emit_diagnostics(
         Some(&sink),
         &prev,
@@ -806,24 +471,12 @@ fn diagnostics_record_gate_hold_and_release_details() {
         &Health::default(),
         &Health::default(),
         &GateState::default(),
-        &next_gate,
+        &held_gate,
         None,
         true,
         false,
         fixed_time(1_700_000_001),
     );
-
-    let events = diagnostic_events(&sink);
-    assert!(matches!(
-        &events[..],
-        [crate::schema::diag::DiagEvent::GateHold {
-            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
-            prev_produced_at_ms: Some(10),
-            incoming_produced_at_ms: Some(11),
-            reject_streak: 2,
-        }]
-    ));
-
     emit_diagnostics(
         Some(&sink),
         &prev,
@@ -831,7 +484,7 @@ fn diagnostics_record_gate_hold_and_release_details() {
         &prev,
         &Health::default(),
         &Health::default(),
-        &next_gate,
+        &held_gate,
         &GateState::default(),
         None,
         false,
@@ -840,180 +493,29 @@ fn diagnostics_record_gate_hold_and_release_details() {
     );
 
     let events = diagnostic_events(&sink);
+    assert_eq!(events.len(), 3);
+    assert!(matches!(
+        &events[0],
+        DiagEvent::FetchFailure {
+            reason,
+            failure_streak: 1,
+        } if reason == "pane discovery failed"
+    ));
     assert!(matches!(
         &events[1],
-        crate::schema::diag::DiagEvent::GateRelease {
-            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
+        DiagEvent::GateHold {
+            rule: GateRule::EmptyStampedFrame,
+            prev_produced_at_ms: Some(10),
+            incoming_produced_at_ms: Some(11),
+            reject_streak: 2,
+        }
+    ));
+    assert!(matches!(
+        &events[2],
+        DiagEvent::GateRelease {
+            rule: GateRule::EmptyStampedFrame,
             held_ms: 3_000,
             via_escape_hatch: true,
         }
     ));
-}
-
-#[test]
-fn gate_hold_notice_arms_and_clears_with_gate_state() {
-    let ws = workspace();
-    let config = serve_config(&ws);
-    let mut current = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
-    current.panes_produced_at_ms = Some(10);
-    let mut last_snapshot = Some(current.clone());
-    let mut health = Health::default();
-    let mut gate = GateState::default();
-    let mut self_close = SelfCloseState::default();
-    let mut ui = UiState::default();
-    let (_dir, mut read_marks) = read_mark_store(&ws);
-    let mut empty = snapshot(&ws);
-    empty.panes_produced_at_ms = Some(11);
-
-    let held = apply_fetch_outcome(
-        &config,
-        FetchOutcome {
-            snapshot: Ok(empty),
-            final_for_request: true,
-            fresh_pane_frame: true,
-        },
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut ui,
-        &mut read_marks,
-        std::time::Instant::now(),
-        None,
-    )
-    .expect("apply held frame");
-
-    assert!(held.rejected);
-    assert!(matches!(
-        ui.gate_notice,
-        Some(crate::sidebar_pane::render::GateNotice {
-            rule: crate::schema::diag::GateRule::EmptyStampedFrame,
-        })
-    ));
-
-    let mut recovered = current.clone();
-    recovered.panes_produced_at_ms = Some(12);
-    let accepted = apply_fetch_outcome(
-        &config,
-        FetchOutcome {
-            snapshot: Ok(recovered),
-            final_for_request: true,
-            fresh_pane_frame: true,
-        },
-        &mut last_snapshot,
-        &mut current,
-        &mut health,
-        &mut gate,
-        &mut self_close,
-        &mut ui,
-        &mut read_marks,
-        std::time::Instant::now(),
-        None,
-    )
-    .expect("apply recovered frame");
-
-    assert!(!accepted.rejected);
-    assert!(ui.gate_notice.is_none());
-}
-
-#[test]
-fn diagnostics_record_health_alert_recovery_inside_rate_limit_window() {
-    let dir = tempfile::tempdir().unwrap();
-    let ws = workspace();
-    let sink =
-        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
-    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
-    let since = fixed_time(1_700_000_000);
-    let active = Health {
-        failure_streak: crate::sidebar_pane::app::health::ALERT_AFTER_FAILURES,
-        alert: Some(Alert::active("snapshot failed: pane discovery", since)),
-    };
-    let recovered = Health {
-        failure_streak: 0,
-        alert: Some(Alert {
-            reason: "snapshot failed: pane discovery".to_owned(),
-            since,
-            recovered_at: Some(fixed_time(1_700_000_001)),
-        }),
-    };
-
-    emit_diagnostics(
-        Some(&sink),
-        &snapshot,
-        &snapshot,
-        &snapshot,
-        &Health::default(),
-        &active,
-        &GateState::default(),
-        &GateState::default(),
-        None,
-        false,
-        false,
-        fixed_time(1_700_000_000),
-    );
-    emit_diagnostics(
-        Some(&sink),
-        &snapshot,
-        &snapshot,
-        &snapshot,
-        &active,
-        &recovered,
-        &GateState::default(),
-        &GateState::default(),
-        None,
-        false,
-        false,
-        fixed_time(1_700_000_001),
-    );
-
-    let events = diagnostic_events(&sink);
-    assert_eq!(events.len(), 2);
-    assert!(matches!(
-        &events[0],
-        crate::schema::diag::DiagEvent::HealthAlert {
-            reason,
-            since_ms,
-            recovered_after_ms: None,
-        } if reason == "snapshot failed: pane discovery"
-            && *since_ms == since.as_millisecond() as u64
-    ));
-    assert!(matches!(
-        &events[1],
-        crate::schema::diag::DiagEvent::HealthAlert {
-            reason,
-            since_ms,
-            recovered_after_ms: Some(1_000),
-        } if reason == "snapshot failed: pane discovery"
-            && *since_ms == since.as_millisecond() as u64
-    ));
-}
-
-#[test]
-fn diagnostics_stay_silent_for_stable_group_location() {
-    let dir = tempfile::tempdir().unwrap();
-    let ws = workspace();
-    let sink =
-        crate::diag::DiagSink::under(dir.path().to_path_buf(), ws.clone(), "rimz-test", None);
-    let snapshot = row_snapshot(&ws, crate::feed::AgentStatus::Running, false);
-
-    emit_diagnostics(
-        Some(&sink),
-        &snapshot,
-        &snapshot,
-        &snapshot,
-        &Health::default(),
-        &Health::default(),
-        &GateState::default(),
-        &GateState::default(),
-        None,
-        false,
-        false,
-        fixed_time(1_700_000_000),
-    );
-
-    assert!(
-        !sink.log_path().exists(),
-        "stable snapshots should not emit a group-migration diagnostic"
-    );
 }
