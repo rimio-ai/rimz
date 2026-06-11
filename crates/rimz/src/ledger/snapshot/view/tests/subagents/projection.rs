@@ -40,76 +40,49 @@ fn sub_agent_projection_carries_enrichment_and_freezes_finished_elapsed() {
 }
 
 #[test]
-fn finished_sub_agent_drops_once_parent_starts_next_turn() {
-    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The current turn began AFTER the child finished — a past-turn child.
-    parent.turn_started_at = Some(ago(30));
-    let child = child_state("sess-root", "child-1", AgentStatus::Success, 60);
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert!(rows[0].sub_agents().is_empty());
-}
-
-#[test]
-fn running_sub_agent_of_current_turn_is_kept() {
-    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The turn began BEFORE the child's activity — live work of this turn.
-    parent.turn_started_at = Some(ago(90));
-    let child = child_state("sess-root", "child-1", AgentStatus::Running, 30);
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert_eq!(
-        rows[0].sub_agents().len(),
-        1,
-        "a live child of the current turn is kept"
-    );
-}
-
-#[test]
-fn superseded_running_sub_agent_is_reaped_as_ghost() {
-    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The parent moved to a newer turn than the child's last activity: the
-    // child never sent `SubagentStop` and is a leftover ghost — reaped so it
-    // can't freeze the parent's delegated-wait head.
-    parent.turn_started_at = Some(ago(30));
-    let child = child_state("sess-root", "child-1", AgentStatus::Running, 60);
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert!(
-        rows[0].sub_agents().is_empty(),
-        "a running child from a past turn is a ghost"
-    );
-}
-
-#[test]
-fn finished_sub_agent_of_current_turn_is_kept() {
-    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The turn began BEFORE the child finished — same-turn, so it stays.
-    parent.turn_started_at = Some(ago(90));
-    let child = child_state("sess-root", "child-1", AgentStatus::Success, 30);
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert_eq!(rows[0].sub_agents().len(), 1);
-}
-
-#[test]
-fn finished_sub_agent_of_current_turn_survives_ghost_ttl() {
-    let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The parent has a known current turn that began before the child
-    // finished. Finished children are scoped by that turn boundary, not by
-    // age, so an idle-between-turns parent keeps the verdict past the TTL.
-    parent.turn_started_at = Some(ago(GHOST_SESSION_TTL_SECS + 20));
-    let child = child_state(
-        "sess-root",
-        "child-1",
-        AgentStatus::Success,
-        GHOST_SESSION_TTL_SECS + 10,
-    );
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert_eq!(
-        rows[0].sub_agents().len(),
-        1,
-        "a finished child with a known same-turn boundary survives the ghost TTL"
-    );
+fn sub_agent_retention_tracks_the_parent_turn_boundary() {
+    for (label, parent_turn_started_secs, child_status, child_secs, expect_kept) in [
+        (
+            "finished child drops once parent starts next turn",
+            30,
+            AgentStatus::Success,
+            60,
+            false,
+        ),
+        (
+            "running child of current turn is kept",
+            90,
+            AgentStatus::Running,
+            30,
+            true,
+        ),
+        (
+            "running child from past turn is reaped",
+            30,
+            AgentStatus::Running,
+            60,
+            false,
+        ),
+        (
+            "finished child of current turn is kept",
+            90,
+            AgentStatus::Success,
+            30,
+            true,
+        ),
+        (
+            "finished child of known same turn survives ghost ttl",
+            GHOST_SESSION_TTL_SECS + 20,
+            AgentStatus::Success,
+            GHOST_SESSION_TTL_SECS + 10,
+            true,
+        ),
+    ] {
+        let mut parent = agent("claude", "sess-root", AgentStatus::Running, 100);
+        parent.turn_started_at = Some(ago(parent_turn_started_secs));
+        let child = child_state("sess-root", "child-1", child_status, child_secs);
+        let mut rows = vec![row_from_agent(&parent, epoch())];
+        attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
+        assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
+    }
 }

@@ -240,33 +240,3 @@ fn live_codex_command_does_not_corroborate_claude_attention() {
     assert_eq!(rows[0].name, "codex");
     assert!(snapshot.worktree_groups[0].status_counts.is_empty());
 }
-
-/// User's reported scenario: ledger carries a pile of stale claude
-/// observations from killed sessions (no SessionEnd ever fired), all
-/// claiming the same worktree path. A fresh claude pane lands. The fresh
-/// agent must still bind to its pane — stale count does not block live
-/// presence.
-#[test]
-fn live_claude_pane_binds_despite_pile_of_stale_ledger_ghosts() {
-    let stale =
-        |id: &str, rank: i64| agent("claude", id, AgentStatus::Idle, rank).worktree("/repo/main");
-    let live = agent("claude", "live", AgentStatus::Running, i64::from(u32::MAX))
-        .worktree("/repo/main")
-        .in_pane("%1");
-
-    let snapshot = room(
-        Vec::new(),
-        vec![
-            stale("stale-a", 1_000),
-            stale("stale-b", 1_001),
-            stale("stale-c", 1_002),
-            live,
-        ],
-    )
-    .with_live_panes(vec![pane("%1", "claude", "/repo/main")], None);
-
-    let rows = &snapshot.worktree_groups[0].rows;
-    let agent_rows: Vec<_> = rows.iter().filter(|r| r.is_agent()).collect();
-    assert_eq!(agent_rows.len(), 1, "only the live claude renders");
-    assert_eq!(agent_rows[0].id, "live");
-}

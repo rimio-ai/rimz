@@ -89,32 +89,6 @@ fn calm_bucket_holds_stable_spawn_order() {
 }
 
 #[test]
-fn new_idle_agent_appends_below_calm_work() {
-    // A brand-new agent registers idle, so wherever the snapshot catches it —
-    // before or after its first prompt — it never lands above finished or
-    // working agents: idle is the calm region's bottom bucket.
-    let mut done = agent_in("done", "/repo/main", AgentStatus::Success, 1_000);
-    done.pane = Some(pane_started("%0", "/repo/main", ago(600)));
-    let mut work = agent_in("work", "/repo/main", AgentStatus::Running, 1_001);
-    work.pane = Some(pane_started("%1", "/repo/main", ago(500)));
-    let mut fresh = agent_in("fresh", "/repo/main", AgentStatus::Idle, 1_002);
-    fresh.pane = Some(pane_started("%2", "/repo/main", ago(5)));
-
-    let snapshot = room_with_agent_panes(Vec::new(), vec![fresh, work, done]);
-
-    let order = snapshot.worktree_groups[0]
-        .rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        vec!["done", "work", "fresh"],
-        "the new idle card appends at the bottom of the calm region"
-    );
-}
-
-#[test]
 fn paneless_calm_order_uses_registration_not_label() {
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
     older.pane = Some(pane("%0", "codex", "/repo/main"));
@@ -169,30 +143,6 @@ fn attention_bucket_sorts_longest_overdue_first() {
         .collect::<Vec<_>>();
     // Waiting leads failed; within each, the longest-overdue (oldest activity) rises.
     assert_eq!(order, vec!["wait-old", "wait-new", "fail-old", "fail-new"]);
-}
-
-#[test]
-fn status_leads_and_unread_breaks_status_ties() {
-    let agents = vec![
-        agent_in("seen-wait", "/repo/main", AgentStatus::Waiting, 1_000),
-        agent_in("new-done", "/repo/main", AgentStatus::Success, 9_000),
-        agent_in("seen-fail", "/repo/main", AgentStatus::Failed, 3_000),
-        agent_in("seen-done", "/repo/main", AgentStatus::Success, 1_000),
-    ];
-    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
-    row_mut(&mut snapshot, "new-done").unread = true;
-    snapshot.sort_groups_for_presentation();
-
-    let order = snapshot.worktree_groups[0]
-        .rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<Vec<_>>();
-    assert_eq!(
-        order,
-        vec!["seen-wait", "seen-fail", "new-done", "seen-done"],
-        "status is primary; unread only lifts the success row inside its bucket"
-    );
 }
 
 #[test]

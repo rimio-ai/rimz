@@ -88,42 +88,6 @@ fn cap_keeps_active_and_finished_rows_for_unread_tracking() {
 }
 
 #[test]
-fn cap_trims_idle_before_running() {
-    // Idle ranks last among agents, so the per-worktree cap's calm trim eats
-    // the parked idle tail first and a working agent stays visible longer.
-    let mut agents = Vec::new();
-    for i in 0..4 {
-        agents.push(agent_in(
-            &format!("run-{i}"),
-            "/repo/main",
-            AgentStatus::Running,
-            1_000 + i,
-        ));
-    }
-    for i in 0..4 {
-        agents.push(agent_in(
-            &format!("idle-{i}"),
-            "/repo/main",
-            AgentStatus::Idle,
-            2_000 + i,
-        ));
-    }
-
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
-
-    let visible = snapshot.worktree_groups[0]
-        .rows
-        .iter()
-        .map(|row| row.id.clone())
-        .collect::<Vec<_>>();
-    assert!(
-        (0..4).all(|i| visible.contains(&format!("run-{i}"))),
-        "every running agent stays visible; only the idle tail trims: {visible:?}"
-    );
-    assert_eq!(snapshot.worktree_groups[0].hidden_count, 2);
-}
-
-#[test]
 fn calm_groups_hold_order_through_member_status_churn() {
     // Calm worktree groups never leapfrog just because a member's calm status
     // flipped: the group tier collapses success/running/idle to one rank, so

@@ -81,29 +81,7 @@ fn live_panes_suppress_stale_agent_attention_without_process() {
 }
 
 #[test]
-fn live_panes_keep_agent_attention_with_process() {
-    let item = agent_ask(FeedKind::Permission, "claude", "live-claude");
-    // The ask's session is live in the rollup, so it binds to that
-    // session's pane and renders as attention.
-    let session = agent("claude", "live-claude", AgentStatus::Idle, 1_000)
-        .worktree("/repo/main")
-        .in_pane("%1");
-
-    // The pane runs under a `node` wrapper, not a `claude` foreground — the
-    // bind is by the session's stamped pane id, so the command is moot.
-    let snapshot = room(vec![item], vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert!(row.is_agent());
-    assert_eq!(row.name, "claude");
-    assert_eq!(row.status(), Some(AgentStatus::Waiting));
-    assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
-}
-
-#[test]
-fn pending_agent_ask_preserves_session_prompt_description() {
+fn pending_agent_ask_folds_by_stamped_pane_and_preserves_session_description() {
     let item = agent_ask(FeedKind::Permission, "claude", "live-claude");
     let request_id = item.request_id.clone();
     let mut session = agent("claude", "live-claude", AgentStatus::Idle, 1_000)
@@ -116,6 +94,8 @@ fn pending_agent_ask_preserves_session_prompt_description() {
 
     let row = &snapshot.worktree_groups[0].rows[0];
     let agent = row.as_agent().expect("ask folds onto the agent card");
+    assert_eq!(row.name, "claude");
+    assert_eq!(row.pane.as_ref().unwrap().pane_id.raw(), "%1");
     assert_eq!(
         row.status(),
         Some(AgentStatus::Waiting),
@@ -159,63 +139,6 @@ fn answered_native_ui_ask_returns_to_running() {
         row.status(),
         Some(AgentStatus::Running),
         "an answered ask the agent moved past must not pin the row to waiting"
-    );
-}
-
-#[test]
-fn answered_native_ui_ask_without_panes_stays_metadata_only() {
-    // With no live frame, the rollup carries the pending ask as metadata but
-    // emits no row. The pane-backed path above owns the moved-past display
-    // recovery.
-    let mut item = agent_ask(FeedKind::Question, "claude", "live-claude");
-    item.updated_at = ago(600);
-    let session =
-        agent("claude", "live-claude", AgentStatus::Running, 2_000).worktree("/repo/main");
-
-    let snapshot = room(vec![item], vec![session]);
-
-    assert_eq!(snapshot.needs_attention.len(), 1);
-    assert!(snapshot.worktree_groups.is_empty());
-}
-
-#[test]
-fn two_same_kind_agents_bind_to_their_stamped_panes() {
-    // Two claude sessions in one worktree are indistinguishable by name and
-    // cwd alone; binding is by the hook-stamped pane id, so each session
-    // lands on exactly its own pane instead of cross-wiring the rows.
-    let older = agent("claude", "sess-a", AgentStatus::Idle, 1_000)
-        .worktree("/repo/main")
-        .in_pane("%1");
-    let newer = agent("claude", "sess-b", AgentStatus::Running, 2_000)
-        .worktree("/repo/main")
-        .in_pane("%2");
-
-    let snapshot = room(Vec::new(), vec![older, newer]).with_live_panes(
-        vec![
-            pane("%1", "claude", "/repo/main"),
-            pane("%2", "claude", "/repo/main"),
-        ],
-        None,
-    );
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    assert_eq!(
-        row(&snapshot, "sess-a")
-            .pane
-            .as_ref()
-            .unwrap()
-            .pane_id
-            .raw(),
-        "%1"
-    );
-    assert_eq!(
-        row(&snapshot, "sess-b")
-            .pane
-            .as_ref()
-            .unwrap()
-            .pane_id
-            .raw(),
-        "%2"
     );
 }
 
@@ -271,6 +194,24 @@ fn each_live_pane_yields_exactly_one_row() {
     assert_eq!(pane_ids, vec!["%1", "%2", "%3"], "no pane id is duplicated");
     let agents = rows.iter().filter(|row| row.is_agent()).count();
     assert_eq!(agents, 2, "the two stamped panes bound their agents");
+    assert_eq!(
+        row(&snapshot, "sess-a")
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .raw(),
+        "%1"
+    );
+    assert_eq!(
+        row(&snapshot, "sess-b")
+            .pane
+            .as_ref()
+            .unwrap()
+            .pane_id
+            .raw(),
+        "%2"
+    );
 }
 
 #[test]

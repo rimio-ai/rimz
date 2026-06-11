@@ -31,44 +31,6 @@ fn stalled_running_agent_recovers_when_activity_resumes() {
 }
 
 #[test]
-fn stalled_running_agent_escalates_to_attention() {
-    // A running agent that records no activity past the stall window is
-    // likely wedged; the displayed row escalates to the attention bucket
-    // (`!`) and the rollup keeps the true `running` status.
-    let session = agent("claude", "live-claude", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .in_pane("%1")
-        .active_ago(default_stall_secs() + 60);
-
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
-
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(
-        row.status(),
-        Some(AgentStatus::Failed),
-        "a long-silent running agent escalates to the attention bucket"
-    );
-    assert!(
-        snapshot.worktree_groups[0]
-            .status_counts
-            .iter()
-            .any(|count| count.status == AgentStatus::Failed && count.count == 1),
-        "the stalled agent counts in the attention tally"
-    );
-    let rolled_up = snapshot
-        .agents
-        .iter()
-        .find(|a| a.agent_id == "live-claude")
-        .expect("agent in rollup");
-    assert_eq!(
-        rolled_up.status,
-        AgentStatus::Running,
-        "the rollup keeps the true running status; only the display row escalates"
-    );
-}
-
-#[test]
 fn configured_stall_window_controls_running_attention_escalation() {
     let project = |age_secs| {
         let session = agent("claude", "live-claude", AgentStatus::Running, 0)

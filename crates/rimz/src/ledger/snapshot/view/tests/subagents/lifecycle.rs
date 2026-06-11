@@ -60,33 +60,31 @@ fn recently_finished_child_holds_off_the_stall() {
 }
 
 #[test]
-fn waiting_parent_keeps_its_ask_clock() {
-    // A `waiting` row's age measures how long the ask has needed a human, so
-    // child activity never re-clocks it.
-    let parent = agent("claude", "sess-root", AgentStatus::Waiting, 100).active_ago(120);
-    let child = child_state("sess-root", "child-1", AgentStatus::Running, 5);
-    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
+fn child_activity_does_not_reclock_parent_attention_or_dead_turns() {
+    for (label, parent, child_status, expected_status, expected_error) in [
+        (
+            "waiting parent keeps ask clock",
+            agent("claude", "sess-root", AgentStatus::Waiting, 100).active_ago(120),
+            AgentStatus::Running,
+            AgentStatus::Waiting,
+            None,
+        ),
+        (
+            "turn-dead parent keeps death certificate",
+            agent("claude", "sess-root", AgentStatus::Running, 100)
+                .active_ago(120)
+                .turn_error(60, "API Error: Overloaded"),
+            AgentStatus::Success,
+            AgentStatus::Failed,
+            Some("API Error: Overloaded"),
+        ),
+    ] {
+        let child = child_state("sess-root", "child-1", child_status, 5);
+        let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
 
-    assert_eq!(row(&snapshot, "sess-root").last_activity, ago(120));
-}
-
-#[test]
-fn turn_dead_parent_keeps_the_death_certificate() {
-    // A turn that died on a provider API error keeps its own clock: the
-    // marker postdates the parent's activity, so the fold abstains and the
-    // finished child's fresher activity can never mask the escalation.
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 100)
-        .active_ago(120)
-        .turn_error(60, "API Error: Overloaded");
-    let child = child_state("sess-root", "child-1", AgentStatus::Success, 5);
-    let snapshot = room_with_agent_panes(Vec::new(), vec![parent, child]);
-
-    let row = row(&snapshot, "sess-root");
-    assert_eq!(
-        row.status(),
-        Some(AgentStatus::Failed),
-        "the turn death holds"
-    );
-    assert_eq!(row.last_activity, ago(120), "the fold abstained");
-    assert_eq!(row.turn_error_label(), Some("API Error: Overloaded"));
+        let row = row(&snapshot, "sess-root");
+        assert_eq!(row.status(), Some(expected_status), "{label}");
+        assert_eq!(row.last_activity, ago(120), "{label}");
+        assert_eq!(row.turn_error_label(), expected_error, "{label}");
+    }
 }

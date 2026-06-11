@@ -64,6 +64,19 @@ fn daemon_session_reap_handles_loaded_set_edges() {
             agents: vec![daemon_codex("t-standalone", "/repo/b", 99)],
             expected: vec!["t-standalone"],
         },
+        Case {
+            label: "subagents and other kinds are not daemon-mode codex",
+            daemon_pids: vec![7],
+            loaded: Some(Vec::new()),
+            agents: {
+                let mut sub = daemon_codex("sub-1", "/repo/a", 7);
+                sub.parent_agent_id = Some("root-1".into());
+                let mut claude = daemon_codex("claude-1", "/repo/c", 7);
+                claude.kind = AgentKind::new_unchecked("claude");
+                vec![sub, claude]
+            },
+            expected: vec!["claude-1", "sub-1"],
+        },
     ] {
         let daemon_pids = case.daemon_pids.into_iter().collect::<BTreeSet<_>>();
         let loaded = case
@@ -73,22 +86,6 @@ fn daemon_session_reap_handles_loaded_set_edges() {
         snapshot.drop_dead_daemon_sessions(&daemon_pids, loaded.as_ref());
         assert_eq!(rollup_ids(&snapshot), case.expected, "{}", case.label);
     }
-}
-
-#[test]
-fn daemon_filter_spares_subagents_and_other_kinds() {
-    // A codex subagent id is never a root thread, and a non-codex agent is never
-    // daemon-mode — neither is reaped even sharing the daemon pid and absent from
-    // the loaded set.
-    let daemon_pids = BTreeSet::from([7]);
-    let loaded = BTreeSet::new();
-    let mut sub = daemon_codex("sub-1", "/repo/a", 7);
-    sub.parent_agent_id = Some("root-1".into());
-    let mut claude = daemon_codex("claude-1", "/repo/c", 7);
-    claude.kind = AgentKind::new_unchecked("claude");
-    let mut snapshot = room(Vec::new(), vec![sub, claude]);
-    snapshot.drop_dead_daemon_sessions(&daemon_pids, Some(&loaded));
-    assert_eq!(rollup_ids(&snapshot), vec!["claude-1", "sub-1"]);
 }
 
 // ── Ranking, caps, and bucket order ──────────────────────────────────────────

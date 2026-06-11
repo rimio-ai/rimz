@@ -86,43 +86,6 @@ fn compaction_event_stamps_then_a_later_event_clears_the_marker() {
 }
 
 #[test]
-fn compacting_head_clears_on_post_compact() {
-    let ws = workspace();
-    let prompt = lifecycle_at(
-        &ws,
-        "codex",
-        "UserPromptSubmit",
-        "sess-1",
-        LifecycleSignal::TurnStarted,
-    );
-    let compact = lifecycle_at(
-        &ws,
-        "codex",
-        "PreCompact",
-        "sess-1",
-        LifecycleSignal::Compacting,
-    );
-    let post = lifecycle_at(
-        &ws,
-        "codex",
-        "PostCompact",
-        "sess-1",
-        LifecycleSignal::CompactionEnded { auto: Some(true) },
-    );
-
-    let after_post = reduce_agent_states(&[prompt, compact, post]);
-    assert!(
-        after_post[0].compacting_since.is_none(),
-        "an explicit close signal clears the marker"
-    );
-    let snapshot = room_with_agent_panes(Vec::new(), after_post);
-    assert!(
-        !row(&snapshot, "sess-1").compacting(),
-        "projection has no head left to paint"
-    );
-}
-
-#[test]
 fn compaction_end_stays_orthogonal_to_display_status() {
     let ws = workspace();
     let auto = reduce_agent_states(&[

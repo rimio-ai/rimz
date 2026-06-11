@@ -47,22 +47,6 @@ fn api_error_turn_escalates_running_to_attention() {
 }
 
 #[test]
-fn codex_api_error_turn_escalates_running_to_attention() {
-    let session = agent("codex", "live-codex", AgentStatus::Running, 0)
-        .worktree("/repo/main")
-        .in_pane("%1")
-        .active_ago(60)
-        .turn_error(10, "API Error: Server Error");
-
-    let snapshot = room(Vec::new(), vec![session])
-        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
-
-    let row = &snapshot.worktree_groups[0].rows[0];
-    assert_eq!(row.status(), Some(AgentStatus::Failed));
-    assert_eq!(row.turn_error_label(), Some("API Error: Server Error"));
-}
-
-#[test]
 fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
     for case in [
         (

@@ -58,52 +58,52 @@ fn directory_room_groups_panes_by_child_repo() {
 }
 
 #[test]
-fn depth_two_repo_folds_into_the_root_pod() {
-    // The v1 depth rule: enumeration mints pods for depth-1 children only, so
-    // a deeper repo's panes belong to the room's root pod.
-    let snapshot = room(Vec::new(), Vec::new())
-        .with_root_class(RootClass::Directory)
-        .with_project_root(Some(PathBuf::from("/srv/agents")))
-        .with_worktree_roots(vec![PathBuf::from("/srv/agents/billing")])
-        .with_live_panes(vec![pane("%1", "zsh", "/srv/agents/org/repo")], None);
-
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    let group = &snapshot.worktree_groups[0];
-    assert_eq!(group.kind, SidebarWorktreeKind::Root);
-    assert_eq!(group.key, "/srv/agents");
-}
-
-#[test]
-fn scratch_room_is_one_root_pod() {
-    // The degenerate fleet room — a marker-less scratch dir: zero child
-    // repos, one flat name-only pod.
-    let snapshot = room(Vec::new(), Vec::new())
-        .with_root_class(RootClass::Directory)
-        .with_project_root(Some(PathBuf::from("/tmp/scratch")))
-        .with_live_panes(
+fn non_repo_room_variants_share_the_root_pod_rule() {
+    for (label, root_class, root, worktree_roots, panes, expect_label, expect_rows) in [
+        (
+            "depth-two repo folds into directory root",
+            RootClass::Directory,
+            "/srv/agents",
+            vec!["/srv/agents/billing"],
+            vec![pane("%1", "zsh", "/srv/agents/org/repo")],
+            "agents",
+            1,
+        ),
+        (
+            "scratch room is one flat root pod",
+            RootClass::Directory,
+            "/tmp/scratch",
+            Vec::new(),
             vec![
                 pane("%1", "claude", "/tmp/scratch"),
                 pane("%2", "zsh", "/tmp/scratch/logs"),
             ],
-            None,
-        );
+            "scratch",
+            2,
+        ),
+        (
+            "marker room reads like directory room",
+            RootClass::Marker,
+            "/srv/app",
+            Vec::new(),
+            vec![pane("%1", "zsh", "/srv/app/src")],
+            "app",
+            1,
+        ),
+    ] {
+        let snapshot = room(Vec::new(), Vec::new())
+            .with_root_class(root_class)
+            .with_project_root(Some(PathBuf::from(root)))
+            .with_worktree_roots(worktree_roots.into_iter().map(PathBuf::from).collect())
+            .with_live_panes(panes, None);
 
-    assert_eq!(snapshot.worktree_groups.len(), 1);
-    let group = &snapshot.worktree_groups[0];
-    assert_eq!(group.kind, SidebarWorktreeKind::Root);
-    assert_eq!(group.label, "scratch");
-    assert_eq!(group.rows.len(), 2);
-}
-
-#[test]
-fn marker_room_root_pod_reads_like_a_directory_room() {
-    let snapshot = room(Vec::new(), Vec::new())
-        .with_root_class(RootClass::Marker)
-        .with_project_root(Some(PathBuf::from("/srv/app")))
-        .with_live_panes(vec![pane("%1", "zsh", "/srv/app/src")], None);
-
-    assert_eq!(snapshot.worktree_groups[0].kind, SidebarWorktreeKind::Root);
-    assert_eq!(snapshot.worktree_groups[0].label, "app");
+        assert_eq!(snapshot.worktree_groups.len(), 1, "{label}");
+        let group = &snapshot.worktree_groups[0];
+        assert_eq!(group.kind, SidebarWorktreeKind::Root, "{label}");
+        assert_eq!(group.key, root, "{label}");
+        assert_eq!(group.label, expect_label, "{label}");
+        assert_eq!(group.rows.len(), expect_rows, "{label}");
+    }
 }
 
 #[test]

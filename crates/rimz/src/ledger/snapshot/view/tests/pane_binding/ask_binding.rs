@@ -14,7 +14,7 @@ fn script_ask_for_pane(pane: Option<PaneRef>) -> FeedItem {
 }
 
 #[test]
-fn standalone_script_ask_renders_only_from_matching_frame_pane() {
+fn standalone_script_ask_requires_matching_frame_pane_and_uses_frame_truth() {
     let stale_pane = PaneRef {
         view_id: Some("@stale".to_owned()),
         command: Some("old-deploy".to_owned()),
@@ -29,17 +29,14 @@ fn standalone_script_ask_renders_only_from_matching_frame_pane() {
 
     let snapshot = room(vec![item], Vec::new()).with_live_panes(vec![frame_pane.clone()], None);
 
-    let rows = rows(&snapshot);
-    assert_eq!(rows.len(), 1, "the ask owns the pane row slot");
-    let row = rows[0];
+    let projected = rows(&snapshot);
+    assert_eq!(projected.len(), 1, "the ask owns the pane row slot");
+    let row = projected[0];
     assert_eq!(row.request_id(), Some(&request_id));
     assert_eq!(row.task(), Some("approve deploy?"));
     assert_eq!(row.worktree_path.as_deref(), Some("/repo/main"));
     assert_eq!(row.pane.as_ref(), Some(&frame_pane));
-}
 
-#[test]
-fn standalone_script_ask_without_matching_frame_pane_does_not_render() {
     for case in [
         (
             "without pane",

@@ -57,62 +57,34 @@ fn typeless_child_renders_degraded_label_never_the_kind() {
 }
 
 #[test]
-fn running_child_past_ghost_ttl_is_reaped() {
-    // A running child that never sent `SubagentStop` and has been silent past
-    // the generous ghost TTL is a leftover — reaped so it can't freeze the
-    // parent's delegated-wait head, even with no fresh turn boundary.
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    assert!(parent.turn_started_at.is_none());
-    let child = child_state(
-        "sess-root",
-        "child-1",
-        AgentStatus::Running,
-        GHOST_SESSION_TTL_SECS + 10,
-    );
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert!(
-        rows[0].sub_agents().is_empty(),
-        "a running child silent past the ghost TTL is reaped"
-    );
-}
-
-#[test]
-fn finished_child_inside_ghost_ttl_is_kept_without_turn_boundary() {
-    // The regression: a finished child used to clear on a 5-minute TTL even
-    // mid-turn, vanishing from the list while its siblings still ran. A
-    // finished child stays through the parent's turn; the ghost TTL is only
-    // the age backstop when no turn boundary exists.
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    assert!(parent.turn_started_at.is_none());
-    let child = child_state("sess-root", "child-1", AgentStatus::Success, 60 * 60);
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert_eq!(
-        rows[0].sub_agents().len(),
-        1,
-        "a finished child inside the ghost TTL is kept without a turn boundary"
-    );
-}
-
-#[test]
-fn finished_child_without_turn_boundary_reaped_past_ghost_ttl() {
-    // If the parent never recorded a turn boundary, the ghost TTL is the
-    // fallback that keeps a finished child from becoming ledger-scoped.
-    let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    assert!(parent.turn_started_at.is_none());
-    let child = child_state(
-        "sess-root",
-        "child-1",
-        AgentStatus::Success,
-        GHOST_SESSION_TTL_SECS + 10,
-    );
-    let mut rows = vec![row_from_agent(&parent, epoch())];
-    attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
-    assert!(
-        rows[0].sub_agents().is_empty(),
-        "a finished child silent past the ghost TTL is reaped without a turn boundary"
-    );
+fn child_without_turn_boundary_uses_ghost_ttl_backstop() {
+    for (label, status, age_secs, expect_kept) in [
+        (
+            "running child past ttl is reaped",
+            AgentStatus::Running,
+            GHOST_SESSION_TTL_SECS + 10,
+            false,
+        ),
+        (
+            "finished child inside ttl is kept",
+            AgentStatus::Success,
+            60 * 60,
+            true,
+        ),
+        (
+            "finished child past ttl is reaped",
+            AgentStatus::Success,
+            GHOST_SESSION_TTL_SECS + 10,
+            false,
+        ),
+    ] {
+        let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
+        assert!(parent.turn_started_at.is_none());
+        let child = child_state("sess-root", "child-1", status, age_secs);
+        let mut rows = vec![row_from_agent(&parent, epoch())];
+        attach_sub_agents(&mut rows, &[parent.clone(), child], epoch());
+        assert_eq!(!rows[0].sub_agents().is_empty(), expect_kept, "{label}");
+    }
 }
 
 #[test]

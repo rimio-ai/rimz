@@ -10,8 +10,11 @@ fn idle_agent_in_spent_account_is_not_paused() {
         .limits(vec![window(100, 3_600)]);
     let fresh = agent("claude", "sess-fresh", AgentStatus::Idle, 1_100).worktree("/repo/main");
     let working = agent("claude", "sess-busy", AgentStatus::Running, 1_200).worktree("/repo/main");
+    let reset = agent("claude", "sess-reset", AgentStatus::Idle, 1_300)
+        .worktree("/repo/main")
+        .limits(vec![window(100, -60)]);
 
-    let snapshot = room_with_agent_panes(Vec::new(), vec![reporter, fresh, working]);
+    let snapshot = room_with_agent_panes(Vec::new(), vec![reporter, fresh, working, reset]);
     assert_eq!(
         row(&snapshot, "sess-spent").status(),
         Some(AgentStatus::Success)
@@ -26,19 +29,8 @@ fn idle_agent_in_spent_account_is_not_paused() {
         Some(AgentStatus::Running),
         "a live running session is not paused until it stalls or carries a marker"
     );
-}
-
-#[test]
-fn a_window_spent_but_already_reset_does_not_park() {
-    // A spent reading whose reset has passed is stale, not limiting — the
-    // budget has refilled, so a resting agent reads idle, not parked.
-    let idle = agent("claude", "sess-1", AgentStatus::Idle, 1_000)
-        .worktree("/repo/main")
-        .limits(vec![window(100, -60)]);
-
-    let snapshot = room_with_agent_panes(Vec::new(), vec![idle]);
     assert_eq!(
-        snapshot.worktree_groups[0].rows[0].status(),
+        row(&snapshot, "sess-reset").status(),
         Some(AgentStatus::Idle),
         "a passed reset means the budget refilled — not paused"
     );

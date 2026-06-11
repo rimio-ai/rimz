@@ -117,12 +117,8 @@ fn provider_list_filters_and_orders_dashboard_panels() {
 }
 
 #[test]
-fn spend_only_provider_does_not_create_a_panel() {
-    // No live agents and no probed accounts — only recorded fleet spend for
-    // Claude. Spend enriches a discovered provider, but it is not provider
-    // presence by itself, so the dashboard stays hidden.
+fn recorded_spend_attaches_only_after_provider_discovery() {
     let snapshot = room(Vec::new(), Vec::new());
-
     let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
     by_provider.insert(
         "claude".to_owned(),
@@ -141,18 +137,15 @@ fn spend_only_provider_does_not_create_a_panel() {
         },
     );
 
-    let snapshot =
-        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
-
+    let spend_only =
+        snapshot
+            .clone()
+            .with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
     assert!(
-        snapshot.providers.is_empty(),
+        spend_only.providers.is_empty(),
         "historical spend alone does not create the provider section"
     );
-}
 
-#[test]
-fn recorded_spend_attaches_to_a_probed_provider_panel() {
-    let snapshot = room(Vec::new(), Vec::new());
     let mut probed = BTreeMap::new();
     probed.insert(
         "claude".to_owned(),
@@ -163,24 +156,6 @@ fn recorded_spend_attaches_to_a_probed_provider_panel() {
             sub_provider: None,
         },
     );
-    let mut by_provider: BTreeMap<String, SpendTally> = BTreeMap::new();
-    by_provider.insert(
-        "claude".to_owned(),
-        SpendTally {
-            today: SpendWindow {
-                usd: 2.0,
-                tokens: 100,
-                ..Default::default()
-            },
-            year: SpendWindow {
-                usd: 9.0,
-                tokens: 900,
-                ..Default::default()
-            },
-            ..Default::default()
-        },
-    );
-
     let snapshot = snapshot.with_provider_aggregates(&probed, &BTreeMap::new(), &by_provider);
 
     let claude = snapshot

@@ -3,7 +3,7 @@ use super::*;
 // ── Feed classification: which pending items become attention ───────────────
 
 #[test]
-fn build_groups_by_surface_and_status() {
+fn pending_items_classify_to_metadata_until_a_live_frame_admits_rows() {
     let mut native = FeedItem::new(
         workspace(),
         Surface::NativeUi,
@@ -28,6 +28,22 @@ fn build_groups_by_surface_and_status() {
         "rimz",
         "cli",
     );
+    let mut cli_native = FeedItem::new(
+        workspace(),
+        Surface::NativeUi,
+        FeedKind::Generic,
+        "Should I proceed?",
+        "rimz",
+        "cli",
+    );
+    let mut script = FeedItem::new(
+        workspace(),
+        Surface::Script,
+        FeedKind::Question,
+        "approve deploy?",
+        "deploy",
+        "script",
+    );
     answered.status = FeedStatus::Resolved;
     let mut timed = FeedItem::new(
         workspace(),
@@ -39,49 +55,19 @@ fn build_groups_by_surface_and_status() {
     );
     timed.status = FeedStatus::TimedOut;
     native.updated_at += std::time::Duration::from_secs(1);
+    cli_native.updated_at += std::time::Duration::from_secs(2);
+    script.worktree_path = Some("/repo/rimz".to_owned());
 
-    let snap = room(vec![native, bridge, answered, timed], Vec::new());
-    // Pending native + bridge asks surface as attention/working metadata; the
-    // resolved and timed-out items are history, so they are dropped. Without a
-    // live frame, none of them become rows.
-    assert_eq!(snap.needs_attention.len(), 1);
+    let snap = room(
+        vec![native, bridge, answered, timed, cli_native, script],
+        Vec::new(),
+    );
+    // Agent-native and script asks survive as attention metadata; bridge asks
+    // remain resolver-working metadata. CLI native asks, resolved items, and
+    // timed-out items are history for the sidebar. Without a live frame, none
+    // of the metadata becomes a row.
+    assert_eq!(snap.needs_attention.len(), 2);
     assert_eq!(snap.resolver_working.len(), 1);
-    assert!(snap.worktree_groups.is_empty());
-}
-
-#[test]
-fn pending_cli_native_items_do_not_become_sidebar_attention() {
-    let item = FeedItem::new(
-        workspace(),
-        Surface::NativeUi,
-        FeedKind::Generic,
-        "Should I proceed?",
-        "rimz",
-        "cli",
-    );
-
-    let snap = room(vec![item], Vec::new());
-
-    assert!(snap.needs_attention.is_empty());
-    assert!(snap.worktree_groups.is_empty());
-}
-
-#[test]
-fn pending_script_items_wait_for_a_live_frame() {
-    let mut item = FeedItem::new(
-        workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "Should I proceed?",
-        "rimz",
-        "cli",
-    );
-    item.worktree_path = Some("/repo/rimz".to_owned());
-    item.worktree_branch = Some("main".to_owned());
-
-    let snap = room(vec![item], Vec::new());
-
-    assert_eq!(snap.needs_attention.len(), 1);
     assert!(snap.worktree_groups.is_empty());
 }
 
@@ -109,23 +95,6 @@ fn multiple_pending_asks_for_one_session_render_one_row() {
         "two pending asks for one session collapse to one row: {rows:?}"
     );
     assert_eq!(agent_rows[0].status(), Some(AgentStatus::Waiting));
-}
-
-#[test]
-fn pending_attention_survives_as_metadata_without_pane_fold_in() {
-    let item = FeedItem::new(
-        workspace(),
-        Surface::Script,
-        FeedKind::Question,
-        "approve deploy?",
-        "deploy",
-        "script",
-    );
-
-    let snapshot = room(vec![item], Vec::new());
-
-    assert_eq!(snapshot.needs_attention.len(), 1);
-    assert!(snapshot.worktree_groups.is_empty());
 }
 
 // ── Activity heartbeat fold ─────────────────────────────────────────────────

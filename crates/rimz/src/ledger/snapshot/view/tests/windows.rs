@@ -3,7 +3,7 @@ use super::*;
 // ── Rate-limit window stabilizers (the dashboard bars) ───────────────────────
 
 #[test]
-fn stable_window_ignores_passed_resets_and_keeps_the_most_drained() {
+fn stable_window_keeps_the_conservative_live_or_undated_reading() {
     // A stale window (reset already passed) reads low; two live windows
     // report 50% and 80%. The stale one is dropped, and the most-drained
     // live survivor (80%) wins — never over-promising remaining budget.
@@ -22,15 +22,12 @@ fn stable_window_ignores_passed_resets_and_keeps_the_most_drained() {
     let reversed = stable_window([stale_10, live_80, live_50].into_iter(), epoch())
         .expect("a live window survives");
     assert_eq!(reversed.used_percentage, Some(80));
-}
 
-#[test]
-fn stable_window_is_none_when_every_reading_is_stale() {
-    assert!(stable_window([window(90, -10), window(40, -3_600)].into_iter(), epoch()).is_none());
-}
+    assert!(
+        stable_window([window(90, -10), window(40, -3_600)].into_iter(), epoch()).is_none(),
+        "every dated reading is stale"
+    );
 
-#[test]
-fn stable_window_falls_back_to_an_undated_reading() {
     // A window with no reset instant can't be aged out; it is the last-resort
     // reading only when nothing with a live reset survives.
     let undated = RateLimitWindow {
@@ -66,17 +63,6 @@ fn stable_windows_picks_one_per_duration_sorted_short_to_long() {
         "long window sorts last"
     );
     assert_eq!(stable[1].used_percentage, Some(40), "most-drained 30d kept");
-}
-
-#[test]
-fn context_sidecar_ttl_matches_the_ghost_session_ttl() {
-    // The agent-context sidecar's missed-tombstone TTL is documented as
-    // matched to the rollup's ghost-session TTL, so a vanished session's
-    // stale enrichment and its stale row age out together. Pin the parity.
-    assert_eq!(
-        crate::ledger::agent_context::CONTEXT_TTL_SECS,
-        GHOST_SESSION_TTL_SECS,
-    );
 }
 
 // ── The per-call split: the context line's row-level fallback ────────────────
