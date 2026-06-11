@@ -93,7 +93,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [trust.md](./docs/internals/sidebar/trust.md) — executable-surface hash, trust states, auto-revoke.
 - **`health/`** — is the running system correct and within budget.
   - [observe.md](./docs/internals/health/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/health/diagnostics.md) channel.
-  - [diagnostics.md](./docs/internals/health/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow.
+  - [diagnostics.md](./docs/internals/health/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow; plus the live-state read path for card-content questions.
   - [performance.md](./docs/internals/health/performance.md) — render-thread budget, the cost map, the CPU/RAM/IO/storage/network overhead estimated for a 20-100 agent fleet, and the rules a performance change follows.
 - **`reach/`** — how clients reach the room.
   - [remote.md](./docs/internals/reach/remote.md) — SSH remote attach, reconnect policy, ControlMaster probe stream, and link-health sidecar.

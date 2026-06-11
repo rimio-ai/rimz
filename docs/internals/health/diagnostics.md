@@ -1,6 +1,6 @@
 # Sidebar Diagnostics
 
-Sidebar diagnostics are typed anomaly records written to the workspace state directory so a live glitch leaves post-hoc evidence. They are diagnostic state only: no correctness path reads them, and the sidebar keeps unstructured tracing off by default.
+Sidebar diagnostics are typed anomaly records written to the workspace state directory so a live glitch leaves post-hoc evidence. They are diagnostic state only: no correctness path reads them, and the sidebar keeps unstructured tracing off by default. The log answers rendered-frame questions; a card showing wrong *content* takes the [live-state read path](#inspecting-live-card-state) instead.
 
 ## Location
 
@@ -76,3 +76,31 @@ A recorded partial-read episode reads like this — a pane source reports fourte
 The carry-forward guard answers this shape before publication, so the same fault now records `pane_carry_forward` under a steady roster — `row_presence_flap` records beside carry records mean the guard missed. This episode persists as the recorded-episode regression test in [`observe/detect/tests.rs`](../../../crates/rimz/src/sidebar/observe/detect/tests.rs).
 
 Frame captures may contain command lines, cwd values, and other pane metadata. They receive the same local filesystem privacy boundary as the rest of the workspace state directory.
+
+## Inspecting Live Card State
+
+Card-content questions — a wrong gauge, a missing cost, a card resting in the wrong shape — are answered from the same read path the renderer runs, before any raw file is opened.
+
+`rimz workspace resolve <path>` names the workspace for any project path and prints its `workspace_id`. Every worktree of a repository resolves to the repository's own workspace, so a `rimz-worktrees/<branch>` checkout maps to the main repository's state and runtime directories. State lives under `$XDG_STATE_HOME/rimz/workspaces/<id>/`, runtime files under `$XDG_RUNTIME_DIR/rimz/<id>/`; the layout is owned by [`ledger/paths.rs`](../../../crates/rimz/src/ledger/paths.rs).
+
+`rimz sidebar snapshot --json --no-produce`, run from anywhere inside the workspace (or with `--workspace-id` from outside it), prints the fused `SidebarSnapshot` a node renders — the event-fresh rollup folded over the published pane frame plus the per-session sidecars ([state.md](../sidebar/state.md)). `--no-produce` keeps the read passive (no mux or git forks), so inspection never perturbs the room; omit it to pay one producing refresh when no fresh producer cache exists.
+
+```sh
+rimz sidebar snapshot --json --no-produce | jq '
+  .agents[] | select(.worktree_branch == "truecolor") | {
+    agent_id, kind, status, context_pct, total_tokens, compaction_count,
+    tokens: .context.tokens, cost: .context.cost.total_cost_usd,
+    observed_at: .context.observed_at }'
+```
+
+The split inside that one object is the provenance map: bare row fields (`status`, `context_pct`, `total_tokens`, `compaction_count`) are rollup truth derived from hooks and transcript tails, while everything under `context` is the latest statusline/app-server sidecar, stamped `observed_at`. A figure wrong in only one of the two halves names the half to debug.
+
+Raw sidecars confirm what a producer actually wrote. Filenames are digests because session ids are free strings, so scan by record content:
+
+```sh
+cd "$XDG_RUNTIME_DIR/rimz/<workspace_id>"
+jq -r '[.kind, .agent_id, .context.session_name] | @tsv' agent_context/ctx.*.json   # find a session's record
+jq . agent_context/ctx.<digest>.json                                                # the full record
+```
+
+The ledger's own view without the sidecar fold is the published checkpoint plus log tail ([ledger.md](../sidebar/ledger.md#runtime-projection)); comparing it against the snapshot attributes a wrong figure to the rollup, the sidecar, or the fold. The renderer-side derivations a card dispute usually hinges on live on the view model: the gauge-source preference is [`AgentCard::context_gauge_percent`](../../../crates/rimz/src/ledger/snapshot/row.rs) and the card-shape predicates sit in the agent-card section ([`agent_card/mod.rs`](../../../crates/rimz/src/sidebar_pane/render/sections/agent_card/mod.rs)). Rendered-frame anomalies — flicker, duplicate rows, missing tabs — take the [episode workflow](#investigating-an-episode) above instead.

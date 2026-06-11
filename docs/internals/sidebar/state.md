@@ -1,6 +1,6 @@
 # Sidebar State And Timing
 
-This doc owns the sidebar data plane: the node model every renderer runs, the per-lane files the elected producer publishes, the push channels that wake the nodes, and the timing that binds them. Product commitments live in [DESIGN.md](../../../DESIGN.md), presence/ranking/recovery live in [sidebar.md](./sidebar.md), and render-thread budgets live in [performance.md](../health/performance.md).
+This doc owns the sidebar data plane: the node model every renderer runs, the per-lane files the elected producer publishes, the push channels that wake the nodes, and the timing that binds them. Product commitments live in [DESIGN.md](../../../DESIGN.md), presence/ranking/recovery live in [sidebar.md](./sidebar.md), render-thread budgets live in [performance.md](../health/performance.md), and the live-state inspection workflow lives in [diagnostics.md](../health/diagnostics.md#inspecting-live-card-state).
 
 ## The Node Model
 
