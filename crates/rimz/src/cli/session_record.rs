@@ -1,3 +1,5 @@
+use std::time::SystemTime;
+
 use super::*;
 
 pub(super) fn pick_mux_for_session(
@@ -80,7 +82,19 @@ pub(super) fn retire_renamed_session(
 }
 
 pub(super) fn workspace_record_for_session(session: &str) -> Result<Option<WorkspaceRecord>> {
-    let root = workspaces_dir();
+    workspace_record_for_session_under(
+        session,
+        &rimz::ledger::paths::state_home(),
+        &rimz::ledger::paths::runtime_home(),
+    )
+}
+
+fn workspace_record_for_session_under(
+    session: &str,
+    state_root: &Path,
+    runtime_root: &Path,
+) -> Result<Option<WorkspaceRecord>> {
+    let root = rimz::ledger::paths::workspaces_dir_under(state_root);
     let entries = match std::fs::read_dir(&root) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
@@ -95,6 +109,7 @@ pub(super) fn workspace_record_for_session(session: &str) -> Result<Option<Works
         }
     }
     record_paths.sort();
+    let mut matches = Vec::new();
     for path in record_paths {
         let record = match workspace_record::read(&path) {
             Ok(record) => record,
@@ -104,10 +119,79 @@ pub(super) fn workspace_record_for_session(session: &str) -> Result<Option<Works
             }
         };
         if record.session_name == session {
-            return Ok(Some(record));
+            matches.push(record);
         }
     }
-    Ok(None)
+    if matches.len() <= 1 {
+        return Ok(matches.into_iter().next());
+    }
+    Ok(Some(prefer_live_session_record(
+        session,
+        matches,
+        runtime_root,
+    )))
+}
+
+fn prefer_live_session_record(
+    session: &str,
+    records: Vec<WorkspaceRecord>,
+    runtime_root: &Path,
+) -> WorkspaceRecord {
+    let mut fallback = None;
+    let mut live = None;
+    for record in records {
+        if fallback.is_none() {
+            fallback = Some(record.clone());
+        }
+        if let Some(last_seen) = freshest_matching_sidebar_heartbeat(session, &record, runtime_root)
+        {
+            let replace = live
+                .as_ref()
+                .is_none_or(|(prior, _): &(SystemTime, WorkspaceRecord)| last_seen > *prior);
+            if replace {
+                live = Some((last_seen, record));
+            }
+        }
+    }
+    live.map(|(_, record)| record)
+        .or(fallback)
+        .expect("caller only passes non-empty records")
+}
+
+fn freshest_matching_sidebar_heartbeat(
+    session: &str,
+    record: &WorkspaceRecord,
+    runtime_root: &Path,
+) -> Option<SystemTime> {
+    let runtime = RuntimePaths::under(record.workspace_id.clone(), runtime_root).ok()?;
+    let entries = std::fs::read_dir(&runtime.heartbeat_dir).ok()?;
+    entries
+        .flatten()
+        .filter_map(|entry| matching_sidebar_heartbeat_mtime(session, record, &entry.path()))
+        .max()
+}
+
+fn matching_sidebar_heartbeat_mtime(
+    session: &str,
+    record: &WorkspaceRecord,
+    path: &Path,
+) -> Option<SystemTime> {
+    if !rimz::schema::heartbeat::SidebarHeartbeat::is_heartbeat_file(path) {
+        return None;
+    }
+    let modified = std::fs::metadata(path).ok()?.modified().ok()?;
+    let fresh = match SystemTime::now().duration_since(modified) {
+        Ok(age) => age <= rimz::sidebar::timing::SIDEBAR_HEARTBEAT_TTL,
+        Err(_) => true,
+    };
+    if !fresh {
+        return None;
+    }
+    let heartbeat = rimz::schema::heartbeat::SidebarHeartbeat::read_from(path).ok()?;
+    (heartbeat.protocol_version == rimz::schema::SIDEBAR_PROTOCOL_VERSION
+        && heartbeat.session_name == session
+        && heartbeat.workspace_id == record.workspace_id)
+        .then_some(modified)
 }
 
 #[cfg(test)]
@@ -131,5 +215,75 @@ mod tests {
             None,
         );
         assert_eq!(renamed_session_to_retire(None, "rimz-new", &live), None);
+    }
+
+    #[test]
+    fn workspace_record_for_session_prefers_fresh_matching_sidebar_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir.path().join("state");
+        let runtime_root = dir.path().join("run");
+        let stale_id = WorkspaceId::parse("ws_000000000000000000000001").unwrap();
+        let live_id = WorkspaceId::parse("ws_ffffffffffffffffffffffff").unwrap();
+        let session = "rimz-room";
+
+        write_workspace_record(&state_root, stale_id.clone(), session, "/repo/stale");
+        write_workspace_record(&state_root, live_id.clone(), session, "/repo/live");
+
+        let runtime = RuntimePaths::under(live_id.clone(), &runtime_root).unwrap();
+        runtime.ensure_dirs().unwrap();
+        let instance = rimz::SidebarInstanceId::new();
+        let heartbeat = rimz::schema::heartbeat::SidebarHeartbeat::new(
+            live_id.clone(),
+            instance.clone(),
+            MuxName::Zellij,
+            session,
+            runtime.sock_dir.join("sidebar.sock"),
+            None,
+        );
+        let path = runtime.sidebar_heartbeat_path(&instance);
+        std::fs::write(&path, serde_json::to_vec(&heartbeat).unwrap()).unwrap();
+
+        let record = workspace_record_for_session_under(session, &state_root, &runtime_root)
+            .unwrap()
+            .expect("session record");
+
+        assert_eq!(record.workspace_id, live_id);
+    }
+
+    #[test]
+    fn workspace_record_for_session_keeps_sorted_fallback_without_live_heartbeat() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_root = dir.path().join("state");
+        let runtime_root = dir.path().join("run");
+        let first_id = WorkspaceId::parse("ws_000000000000000000000001").unwrap();
+        let second_id = WorkspaceId::parse("ws_ffffffffffffffffffffffff").unwrap();
+        let session = "rimz-room";
+
+        write_workspace_record(&state_root, first_id.clone(), session, "/repo/first");
+        write_workspace_record(&state_root, second_id, session, "/repo/second");
+
+        let record = workspace_record_for_session_under(session, &state_root, &runtime_root)
+            .unwrap()
+            .expect("session record");
+
+        assert_eq!(record.workspace_id, first_id);
+    }
+
+    fn write_workspace_record(
+        state_root: &Path,
+        workspace_id: WorkspaceId,
+        session_name: &str,
+        project_root: &str,
+    ) {
+        let paths = StatePaths::under(workspace_id.clone(), state_root).unwrap();
+        paths.ensure_dirs().unwrap();
+        let record = WorkspaceRecord {
+            workspace_id,
+            project_root: project_root.into(),
+            session_name: session_name.to_owned(),
+            root_class: rimz::workspace::RootClass::Repo,
+            updated_at: jiff::Timestamp::now(),
+        };
+        workspace_record::write(&paths, &record).unwrap();
     }
 }

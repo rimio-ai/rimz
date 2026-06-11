@@ -42,7 +42,6 @@ use clap::{Args, Parser, Subcommand};
 
 use rimz::agents::{HookInstallPreview, StatusLineChange};
 use rimz::ids::{MuxName, WorkspaceId};
-use rimz::ledger::paths::workspaces_dir;
 use rimz::ledger::workspace_record;
 use rimz::mux::{
     BackgroundViewLaunch, BackgroundViewOptions, DaemonView, HostPane, MuxBackend,
