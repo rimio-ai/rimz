@@ -242,7 +242,7 @@ This is the designed model. Today the per-machine layer is live, CLI/env overrid
 
 ## Project Config
 
-The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz reads it today to compute the executable-surface trust hash; launch-time application of the declared layout, agents, hooks, and env is planned project-config behaviour.
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz computes the executable-surface trust hash from it, and on a trusted workspace injects each `[[agents]]` `env` table into that agent's process at launch; launch-time application of the declared layout, hooks, agent `launch_command`, and top-level `[env]` is planned project-config behaviour.
 
 ```toml
 [[layout.initial_panes]]
@@ -253,13 +253,14 @@ cwd = "$RIMZ_PROJECT_ROOT"
 [[agents]]
 name = "claude"
 launch_command = "claude"
+env = { CLAUDE_CODE_DISABLE_AGENT_VIEW = "1" }
 
 [[hooks]]
 event = "PreToolUse"
 command = "notify-send rimz"
 ```
 
-Command-running fields enter the trust hash, so a clone with project config shows `untrusted` until `rimz trust grant` pins the current executable surface on this machine. The hash contract is in [internals/sidebar/trust.md](../internals/sidebar/trust.md); the threat model is in [security.md](../guide/security.md).
+Command-running fields enter the trust hash, so a clone with project config shows `untrusted` until `rimz trust grant` pins the current executable surface on this machine. An `untrusted` or `stale` workspace with `[[agents]]` `env` configured refuses the agent launch with the `rimz trust grant` fix. The hash contract and launch-time enforcement are in [internals/sidebar/trust.md](../internals/sidebar/trust.md); the threat model is in [security.md](../guide/security.md).
 
 ## Sidecars And Privacy
 

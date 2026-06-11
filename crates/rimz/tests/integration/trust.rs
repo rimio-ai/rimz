@@ -125,3 +125,101 @@ fn trust_no_config_reports_no_config() {
         .success()
         .stdout(contains("trust: no project config"));
 }
+
+/// One agent env var on the codex kind — the fixture for the launch-time
+/// env-injection gate.
+const CODEX_ENV_CONFIG: &str =
+    "[[agents]]\nname = \"codex\"\nenv = { RIMZ_TEST_INJECTED = \"yes\" }\n";
+
+#[cfg(unix)]
+#[test]
+fn trusted_agent_env_reaches_the_spawned_agent() {
+    let env = Env::new();
+    env.write_config(&env.project_root, CODEX_ENV_CONFIG);
+    env.rimz().args(["trust", "grant"]).assert().success();
+
+    let shim_dir = write_env_dump_shim(&env, "codex");
+    let dump = env.home_root.join("codex.env");
+    env.rimz()
+        .args(["agents", "exec", "codex"])
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert()
+        .success();
+
+    let dumped = std::fs::read_to_string(&dump).expect("read env dump");
+    assert!(
+        dumped.lines().any(|line| line == "RIMZ_TEST_INJECTED=yes"),
+        "agent process env misses the injected var:\n{dumped}"
+    );
+}
+
+#[test]
+fn untrusted_agent_env_refuses_the_launch() {
+    let env = Env::new();
+    env.write_config(&env.project_root, CODEX_ENV_CONFIG);
+
+    env.rimz()
+        .args(["agents", "exec", "codex"])
+        .assert()
+        .failure()
+        .stderr(contains("rimz trust grant"));
+}
+
+/// The Claude launch pin is an adapter built-in, applied over project config:
+/// a trusted workspace declaring the var cannot switch the pane back into the
+/// agents dashboard the integration cannot drive.
+#[cfg(unix)]
+#[test]
+fn builtin_claude_launch_env_overrides_project_config() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[[agents]]\nname = \"claude\"\nenv = { CLAUDE_CODE_DISABLE_AGENT_VIEW = \"0\" }\n",
+    );
+    env.rimz().args(["trust", "grant"]).assert().success();
+
+    let shim_dir = write_env_dump_shim(&env, "claude");
+    let dump = env.home_root.join("claude.env");
+    env.rimz()
+        .args(["agents", "exec", "claude"])
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
+        .assert()
+        .success();
+
+    let dumped = std::fs::read_to_string(&dump).expect("read env dump");
+    assert!(
+        dumped
+            .lines()
+            .any(|line| line == "CLAUDE_CODE_DISABLE_AGENT_VIEW=1"),
+        "claude launch env misses the built-in pin:\n{dumped}"
+    );
+}
+
+/// Shim agent on PATH that dumps its environment to `$RIMZ_TEST_AGENT_ENV_DUMP`
+/// and exits — the probe proving launch-time env injection reaches the child.
+#[cfg(unix)]
+fn write_env_dump_shim(env: &Env, agent: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let shim = dir.join(agent);
+    std::fs::write(&shim, "#!/bin/sh\nenv > \"$RIMZ_TEST_AGENT_ENV_DUMP\"\n")
+        .expect("write agent shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod shim");
+    dir
+}
+
+#[cfg(unix)]
+fn path_with_front(dir: &std::path::Path) -> std::ffi::OsString {
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&original));
+    std::env::join_paths(paths).expect("join PATH")
+}

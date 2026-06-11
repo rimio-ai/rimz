@@ -193,6 +193,56 @@ pub fn revoke_with_roots(project_root: &Path, config_root: &Path) -> Result<Trus
     status_with_roots(project_root, config_root)
 }
 
+/// Launch-time `[[agents]]` env for one agent kind, resolved under the trust
+/// gate. [`AgentEnv::Apply`] carries the vars an agent launcher injects into
+/// the agent process; [`AgentEnv::Blocked`] names the trust state so the
+/// launcher refuses at the entry point with the fix.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentEnv {
+    /// No `[[agents]]` entry with env vars names this kind.
+    Unconfigured,
+    /// The workspace is trusted; inject these vars into the agent process.
+    Apply(BTreeMap<String, String>),
+    /// Env is configured but the trust gate is closed.
+    Blocked(TrustState),
+}
+
+/// Resolve the `[[agents]]` env for `kind` under the trust gate. Entries
+/// sharing a name merge in declaration order; later entries win on key
+/// collisions. Values are injected literally — no shell expansion.
+pub fn agent_env(project_root: &Path, kind: &str) -> Result<AgentEnv> {
+    agent_env_with_roots(project_root, &config_home(), kind)
+}
+
+pub fn agent_env_with_roots(
+    project_root: &Path,
+    config_root: &Path,
+    kind: &str,
+) -> Result<AgentEnv> {
+    let Some(config) = read_project_config(&project_root.join(CONFIG_REL))? else {
+        return Ok(AgentEnv::Unconfigured);
+    };
+    let mut env = BTreeMap::new();
+    for agent in config.agents.iter().filter(|agent| agent.name == kind) {
+        env.extend(
+            agent
+                .env
+                .iter()
+                .map(|(key, value)| (key.clone(), value.clone())),
+        );
+    }
+    if env.is_empty() {
+        return Ok(AgentEnv::Unconfigured);
+    }
+    match status_with_roots(project_root, config_root)?.state {
+        TrustState::Trusted => Ok(AgentEnv::Apply(env)),
+        // The config vanished between the read above and the status re-read;
+        // nothing remains to apply.
+        TrustState::NoConfig => Ok(AgentEnv::Unconfigured),
+        state => Ok(AgentEnv::Blocked(state)),
+    }
+}
+
 fn trust_record_path(config_root: &Path, workspace_id: &WorkspaceId) -> PathBuf {
     let mut path = config_root.to_path_buf();
     for segment in PROJECTS_SUBDIR {
@@ -510,6 +560,73 @@ mod tests {
         let config = tempdir().expect("config root");
         let report = revoke_with_roots(dir.path(), config.path()).expect("revoke");
         assert_eq!(report.state, TrustState::Untrusted);
+    }
+
+    #[test]
+    fn agent_env_is_unconfigured_without_a_matching_entry() {
+        let config = tempdir().expect("config root");
+
+        let empty = tempdir().expect("tempdir");
+        assert_eq!(
+            agent_env_with_roots(empty.path(), config.path(), "claude").expect("agent env"),
+            AgentEnv::Unconfigured,
+        );
+
+        let other_kind = project_with("[[agents]]\nname = \"claude\"\nenv = { FOO = \"1\" }\n");
+        grant_with_roots(other_kind.path(), config.path()).expect("grant");
+        assert_eq!(
+            agent_env_with_roots(other_kind.path(), config.path(), "codex").expect("agent env"),
+            AgentEnv::Unconfigured,
+        );
+
+        let no_env = project_with("[[agents]]\nname = \"claude\"\nlaunch_command = \"claude\"\n");
+        grant_with_roots(no_env.path(), config.path()).expect("grant");
+        assert_eq!(
+            agent_env_with_roots(no_env.path(), config.path(), "claude").expect("agent env"),
+            AgentEnv::Unconfigured,
+        );
+    }
+
+    #[test]
+    fn agent_env_applies_merged_entries_when_trusted() {
+        let dir = project_with(
+            "[[agents]]\nname = \"claude\"\nenv = { A = \"1\", B = \"1\" }\n\n[[agents]]\nname = \"claude\"\nenv = { B = \"2\" }\n",
+        );
+        let config = tempdir().expect("config root");
+        grant_with_roots(dir.path(), config.path()).expect("grant");
+
+        let env = match agent_env_with_roots(dir.path(), config.path(), "claude") {
+            Ok(AgentEnv::Apply(env)) => env,
+            other => panic!("expected Apply, got {other:?}"),
+        };
+        assert_eq!(
+            env,
+            BTreeMap::from([
+                ("A".to_owned(), "1".to_owned()),
+                ("B".to_owned(), "2".to_owned())
+            ]),
+        );
+    }
+
+    #[test]
+    fn agent_env_blocks_untrusted_and_stale_workspaces() {
+        let dir = project_with("[[agents]]\nname = \"claude\"\nenv = { FOO = \"1\" }\n");
+        let config = tempdir().expect("config root");
+        assert_eq!(
+            agent_env_with_roots(dir.path(), config.path(), "claude").expect("agent env"),
+            AgentEnv::Blocked(TrustState::Untrusted),
+        );
+
+        grant_with_roots(dir.path(), config.path()).expect("grant");
+        std::fs::write(
+            dir.path().join(CONFIG_REL),
+            "[[agents]]\nname = \"claude\"\nenv = { FOO = \"2\" }\n",
+        )
+        .expect("rewrite");
+        assert_eq!(
+            agent_env_with_roots(dir.path(), config.path(), "claude").expect("agent env"),
+            AgentEnv::Blocked(TrustState::Stale),
+        );
     }
 
     #[test]

@@ -538,6 +538,14 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Env vars pinned onto every spawn of this agent — the launch contract
+    /// the integration depends on. Applied last at spawn, over any configured
+    /// env, so configuration cannot switch the agent into a mode the
+    /// integration cannot drive.
+    fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
+        Vec::new()
+    }
+
     /// Write or merge the adapter's hook config into the agent's per-user
     /// config file. Defaults to an explicit "not implemented" error until an
     /// adapter owns installation.

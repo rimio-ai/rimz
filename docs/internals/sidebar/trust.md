@@ -30,6 +30,12 @@ The hash input is canonical JSON over `ExecutableSurface`. Struct field order is
 
 Per-machine commands such as `[notifications].command` in `~/.config/rimz/config.toml` are outside this hash. They are personal machine policy, not cloned project policy.
 
+## Launch-time application
+
+`[[agents]]` `env` is the applied surface: on a `trusted` workspace, the `rimz agents exec` wrapper injects each matching entry's vars into the agent process it spawns, and every launcher (`rimz agents`, `rimz run`, agent cells in tab layouts) funnels through that wrapper. Entries sharing a name merge in declaration order, later entries win on key collisions, and values pass literally — no shell expansion. On an `untrusted` or `stale` workspace a configured agent env refuses the launch with the `rimz trust grant` fix — a configured capability fails at the entry point rather than spawning an agent without the env the project declares. The remaining executable-surface fields are hash-only today; their planned application is tracked in [reference/configuration.md](../../reference/configuration.md#project-config).
+
+Adapter launch built-ins ([`AgentAdapter::launch_env`](../../../crates/rimz/src/agents/mod.rs), e.g. the Claude classic-REPL pin in [claude-reference.md → Agent view](../../externals/agent-adapter/claude-reference.md#agent-view)) apply after the project env: a trusted config tunes an agent's launch, and the integration's own launch contract stays pinned.
+
 Adding a command-running field that isn't projected into `ExecutableSurface` is a CI invariant violation — the `hash_covers_every_documented_surface_field` unit test will collide and the `docs/guide/security.md` doc gate will not match.
 
 ## Storage

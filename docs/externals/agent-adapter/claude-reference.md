@@ -15,7 +15,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Hooks reference (events, payloads, decision schema, exit codes) | <https://code.claude.com/docs/en/hooks> |
 | Statusline (full JSON schema, `subagentStatusLine`) | <https://code.claude.com/docs/en/statusline> |
 | Subagents | <https://code.claude.com/docs/en/sub-agents> |
-| Settings (`statusLine` / `hooks` config keys) | <https://code.claude.com/docs/en/settings> |
+| Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
 | Transcript JSONL | no official schema published — see [Transcript JSONL](#transcript-jsonl) below |
 
 ## Hooks
@@ -276,6 +276,12 @@ Claude `exec`s the configured `statusLine` command on every render and pipes thi
 **`subagentStatusLine`.** A separate command (`"subagentStatusLine": { "type": "command", "command": "…" }`) renders each subagent row in the agent panel, replacing the default `name · description · token count` body with whatever the script prints. The command runs once per refresh tick with **all visible subagent rows as a single JSON object on stdin**. The input includes the [common hook fields](#common-input) plus `columns` (usable row width) and a `tasks` array, each task carrying `id`, `name`, `type`, `status`, `description`, `label`, `startTime`, `tokenCount`, `tokenSamples`, and `cwd`. Write one JSON line to stdout per row to override: `{"id": "<task id>", "content": "<row body>"}`. The `content` string is rendered as-is, including ANSI escape codes and OSC 8 hyperlinks. Omit a task's `id` to keep its default rendering; emit an empty `content` to hide the row. The same trust and `disableAllHooks` gates that apply to `statusLine` apply here. Plugins can ship a default `subagentStatusLine` in their `settings.json`.
 
 Rimz wraps this command like the session `statusLine` and harvests each task's `description`, `tokenCount`, and `startTime` (keyed by `id`, the child `agent_id`) into a per-subagent sidecar the sidebar folds onto the child's row. It overrides no rows, so Claude's own panel renders unchanged. The harvest path is [`subagent_statusline.rs`](../../../crates/rimz/src/agents/claude/subagent_statusline.rs); the sidebar projection is in [sidebar.md](../../internals/sidebar/sidebar.md).
+
+## Agent view
+
+A bare `claude` launch (≥ 2.1.173) opens the agents dashboard — a background-session supervisor, not the interactive REPL. The `disableAgentView` settings key turns the surface off (`claude agents`, `--bg`, `/background`, and the on-demand supervisor), and `CLAUDE_CODE_DISABLE_AGENT_VIEW=1` is its documented environment equivalent (settings page above).
+
+Rimz pins that variable on every Claude spawn ([`ClaudeAdapter::launch_env`](../../../crates/rimz/src/agents/claude/mod.rs)): the pane contract — hooks, transcript tail, steer/queue sends — drives the classic REPL, and multi-agent supervision is Rimz's own job.
 
 ## Auth surface
 

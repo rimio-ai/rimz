@@ -273,6 +273,13 @@ impl AgentAdapter for ClaudeAdapter {
         Some(argv)
     }
 
+    fn launch_env(&self) -> Vec<(&'static str, &'static str)> {
+        // Claude Code ≥2.1.173 opens its agents dashboard by default; the
+        // Rimz pane contract (hooks, transcript tail, steer/queue sends)
+        // drives the classic interactive REPL.
+        vec![("CLAUDE_CODE_DISABLE_AGENT_VIEW", "1")]
+    }
+
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),

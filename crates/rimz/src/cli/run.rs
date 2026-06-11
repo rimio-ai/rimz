@@ -124,6 +124,7 @@ fn run_prompt(args: RunArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("expected a prompt, or `rimz run status|list`"))?;
     let workspace = resolve_run_workspace(globals)?;
     let (adapter, permission_args) = resolve_run_adapter(args.agent.as_deref(), mode, &prompt)?;
+    super::agents_cmd::agent_launch_env(&workspace.project_root, adapter.descriptor().kind)?;
 
     let machine_config = super::machine_config();
     let launch = super::tab::resolve_cwd(

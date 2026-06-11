@@ -1,5 +1,6 @@
 //! `rimz agents` — launcher sugar plus the hidden supervised exec wrapper.
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
@@ -86,6 +87,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     for kind in args.kinds {
         let adapter = rimz::agents::find_adapter(&kind)
             .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+        agent_launch_env(&workspace.project_root, &kind)?;
         let launch = super::tab::resolve_cwd(
             &workspace,
             &machine_config.worktree,
@@ -123,17 +125,47 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     Ok(())
 }
 
+/// Trust-gated `[[agents]]` env for an agent launch, ready to inject into the
+/// agent process. A closed trust gate fails here — at the entry point — with
+/// the fix, so an agent never launches without the env the project declares.
+pub(crate) fn agent_launch_env(
+    project_root: &Path,
+    kind: &str,
+) -> Result<BTreeMap<String, String>> {
+    use rimz::trust::{AgentEnv, TrustState};
+    match rimz::trust::agent_env(project_root, kind)? {
+        AgentEnv::Apply(env) => Ok(env),
+        AgentEnv::Unconfigured => Ok(BTreeMap::new()),
+        AgentEnv::Blocked(state) => {
+            let fix = match state {
+                TrustState::Stale => {
+                    "the executable surface changed since the grant; review it and rerun `rimz trust grant`"
+                }
+                _ => "run `rimz trust grant` to apply it",
+            };
+            bail!(
+                "agent `{kind}` env is configured in {root}/.rimz/config.toml but the project is {state}; {fix}",
+                root = project_root.display(),
+                state = state.as_str(),
+            )
+        }
+    }
+}
+
 fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     if args.worktree_path.is_some() {
         reset_cleanup_signal_flag();
         install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
     }
-    let run_context = run_exec_context(&args, globals)?;
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving the agent launch workspace")?;
+    let run_context = run_exec_context(&args, &workspace)?;
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
     let adapter = rimz::agents::find_adapter(&args.kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", args.kind))?;
+    let launch_env = agent_launch_env(&workspace.project_root, &args.kind)?;
     let argv = adapter
         .launch_command(&args.extra_args, args.prompt.as_deref())
         .ok_or_else(|| anyhow::anyhow!("agent `{}` has no launch command", args.kind))?;
@@ -142,6 +174,8 @@ fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
     let mut command = Command::new(program);
     command.args(rest);
+    command.envs(launch_env);
+    command.envs(adapter.launch_env());
     if let Some(run_id) = args.run_id.as_ref() {
         command.env(rimz::run::ENV_RUN_ID, run_id.as_str());
     }
@@ -269,21 +303,22 @@ impl RunExecContext {
     }
 }
 
-fn run_exec_context(args: &ExecArgs, globals: &GlobalFlags) -> Result<Option<RunExecContext>> {
+fn run_exec_context(
+    args: &ExecArgs,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<Option<RunExecContext>> {
     if args.exit_on_run_completion && args.run_id.is_none() {
         bail!("--exit-on-run-completion requires --run-id");
     }
     let Some(run_id) = args.run_id.clone() else {
         return Ok(None);
     };
-    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
-        .context("resolving supervised run workspace")?;
-    let ledger = super::open_ledger(&workspace).context("opening supervised run ledger")?;
+    let ledger = super::open_ledger(workspace).context("opening supervised run ledger")?;
     Ok(Some(RunExecContext {
         run_id,
         paths: ledger.paths().clone(),
         runtime: ledger.runtime_paths().clone(),
-        session_name: workspace.session_name,
+        session_name: workspace.session_name.clone(),
     }))
 }
 
