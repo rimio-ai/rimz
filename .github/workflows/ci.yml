@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   pull_request:
   push:
     branches: [main, master]
@@ -20,7 +21,7 @@ env:
 jobs:
   ci:
     name: cargo xtask ci
-    runs-on: ubuntu-latest
+    runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
@@ -38,8 +39,12 @@ jobs:
 
       - name: Install fast linker (mold + clang)
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mold clang
+          SUDO=
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO=sudo
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y mold clang
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
       # cache miss (rust-cache does not cache ~/.cargo/bin).
@@ -53,7 +58,7 @@ jobs:
 
   mux-tests:
     name: mux backends (zellij + tmux)
-    runs-on: ubuntu-latest
+    runs-on: [linux_amd64, debian-13]
     timeout-minutes: 20
     continue-on-error: true
     needs: ci
@@ -69,10 +74,14 @@ jobs:
 
       - name: Install tmux, Zellij, and the fast linker
         run: |
-          sudo apt-get update
-          sudo apt-get install -y tmux mold clang
+          SUDO=
+          if command -v sudo >/dev/null 2>&1; then
+            SUDO=sudo
+          fi
+          $SUDO apt-get update
+          $SUDO apt-get install -y tmux mold clang curl ca-certificates
           curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
-            | sudo tar -xz -C /usr/local/bin
+            | $SUDO tar -xz -C /usr/local/bin
 
       - name: Install cargo-nextest (prebuilt)
         uses: taiki-e/install-action@v2
