@@ -10,7 +10,7 @@ The raw auth surfaces it reads — `claude auth status`, `~/.codex/auth.json`, `
 [opencode-reference.md → Auth file](../../externals/agent-adapter/opencode-reference.md#auth-file) mirrors OpenCode's auth surface ahead of its adapter — credential types only, with the same missing balance surface.
 
 Account and balance are **enrichment, never correctness** — the no-transcript-correctness rule.
-A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label or a blank bar, never a failed snapshot or a wrong decision.
+A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track, never a failed snapshot or a wrong decision.
 
 ## The model
 
@@ -45,7 +45,7 @@ Each provider maps its native account and balance surfaces onto the two internal
 | --- | --- | --- |
 | **Claude** | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → `plan` + `metered`; `apiKey` login is unmetered. | Statusline [`rate_limits`](../../externals/agent-adapter/claude-reference.md#statusline-json) 5h/7d windows, parsed by [`observe_context`](../../../crates/rimz/src/agents/claude/statusline.rs). |
 | **Codex** | Live: [`account/rateLimits/read`](../../externals/agent-adapter/codex-reference.md#app-server-api) `planType` → `plan`, riding `AgentContext.account`. Idle: [`~/.codex/auth.json`](../../externals/agent-adapter/codex-reference.md#auth-file) — API key → unmetered, `tokens` → metered ChatGPT (plan tier filled once a session reports it). | [`account/rateLimits/read`](../../externals/agent-adapter/codex-reference.md#app-server-api) `primary`/`secondary` windows, each with `windowDurationMins` ([`app_server.rs`](../../../crates/rimz/src/agents/codex/app_server.rs)). |
-| **Pi** | [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads [`auth.json`](../../externals/agent-adapter/pi-reference.md#auth-file): oauth → metered subscription, api_key → unmetered. The plan names the sub the fleet uses (`Anthropic OAuth`, `OpenAI API Key`) — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — the raw credential key rides `sub_provider`; the shared CLI version probe attaches `pi --version`, the panel header's fallback for a provider whose sessions report none. | Borrowed — pi exposes no rate-limit window surface of its own (declared off via `rate_limit_windows`), but a metered OAuth sub *is* a sibling kind's account, so the producer maps `sub_provider` to the kind metering it ([`kind_for_sub_provider`](../../../crates/rimz/src/agents/registry.rs): each descriptor declares its `sub_providers` — `anthropic` → claude, `openai` → codex) and the Pi panel paints that kind's stable windows. Nothing to borrow (no sibling kind, no readings) renders no bars; an API key the `∞` bar. |
+| **Pi** | [`pi/account.rs`](../../../crates/rimz/src/agents/pi/account.rs) reads [`auth.json`](../../externals/agent-adapter/pi-reference.md#auth-file): oauth → metered subscription, api_key → unmetered. The plan names the sub the fleet uses (`Anthropic OAuth`, `OpenAI API Key`) — the freshest session's `message.provider` picks among several credentials, else the first OAuth entry — the raw credential key rides `sub_provider`; the shared display-only version probe attaches `pi --version`, the panel header's fallback for a provider whose sessions report none. | Borrowed — pi exposes no rate-limit window surface of its own (declared off via `rate_limit_windows`), but a metered OAuth sub *is* a sibling kind's account, so the producer maps `sub_provider` to the kind metering it ([`kind_for_sub_provider`](../../../crates/rimz/src/agents/registry.rs): each descriptor declares its `sub_providers` — `anthropic` → claude, `openai` → codex) and the Pi panel paints that kind's stable windows. Nothing to borrow (no sibling kind, no readings) renders the unknown-track placeholder for a metered account; an API key the `∞` bar. |
 
 One asymmetry shapes the producer below: **Claude's balance has no source outside a live statusline**, while **Codex's rides a read-only out-of-band app-server call**, so a logged-in idle Codex account can still refresh its windows but an idle Claude account cannot.
 
@@ -59,7 +59,8 @@ One asymmetry shapes the producer below: **Claude's balance has no source outsid
 
 The probe is a **pure read**; cross-process memoization lives one layer up in the producer (below).
 Claude forks `claude auth status`, capturing stdout with stdin and stderr nulled (never inherited, so it stays quiet in a TUI); Codex reads `~/.codex/auth.json` — a cheap file read, no subprocess, so an absent or corrupt file is an authoritative `LoggedOut`, not a retry-worthy `Unavailable`.
-Pi reads `~/.pi/agent/auth.json` the same way (absent file → `LoggedOut`, unparseable → `Unavailable`) and receives its binary version through the shared display-only CLI probe.
+Pi reads `~/.pi/agent/auth.json` the same way (absent file → `LoggedOut`, unparseable → `Unavailable`).
+Claude, Codex, and Pi expose a separate display-only binary version probe (`<program> --version`) that feeds the same account cache and repairs entries whose login facts are fresh but whose version field is absent.
 An unknown kind has no probe arm yet and reads as `LoggedOut`.
 
 Every registered adapter exposes a display-only version probe by default: run `<kind> --version`, capture stdout, and treat any failure as no version. Rich context transports still win when present — Claude's statusline and Codex's app-server context can report fresher versions for live sessions — while the CLI probe fills idle or older account-cache entries. A future adapter overrides only when its binary name differs from its kind or when it has a cheaper/richer idle version source.
@@ -71,7 +72,7 @@ It is **producer-only**: it needs per-machine config and the out-of-band probe t
 
 Per panel:
 
-- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`, the version falling back to the shared CLI probe when no session reports one. A kind with no live session still earns a panel when it has a probed login; recorded spend enriches an existing panel but never creates the provider section by itself.
+- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`, the version falling back to the display-only binary probe when no session reports one. A kind with no live session still earns a panel when it has a probed login; recorded spend enriches an existing panel but never creates the provider section by itself.
 - **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
 - **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [configuration.md](../../reference/configuration.md#provider-dashboard).
 - **Balance windows** — the per-duration set chosen by `stable_windows` (below). A kind that declares no window surface but runs on a metered sibling subscription (Pi on OAuth, above) borrows the sibling kind's stable windows instead — same account, same bars, so the Pi block and the sibling's block read identically when both show.
@@ -119,7 +120,7 @@ The work mirrors [transcript.md → Adding a provider](./transcript.md#adding-a-
 1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or override [`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) for the logged-in-but-idle case.
 2. **Fill `AgentRateLimits`** (the windows, each with a `used_percentage`, reset instant, and `duration_mins`) on `AgentContext` from the transport.
 3. **Optionally** register `[sidebar.providers.<kind>]` defaults (emblem, color, name).
-4. **Stay best-effort** throughout: a missing fact is an omitted label or a blank bar, never an error.
+4. **Stay best-effort** throughout: a missing fact is an omitted label, a `v?` placeholder, or an unknown budget track, never an error.
 
 Golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in each adapter's `account.rs` are the model).
 

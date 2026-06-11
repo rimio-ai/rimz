@@ -61,8 +61,8 @@ impl SidebarSnapshot {
                 .filter_map(|agent| agent.context.as_ref())
                 .max_by_key(|context| context.observed_at);
             // A live session's rich-context version wins; the out-of-band
-            // probe's binary read (Pi's `pi --version`) covers a provider whose
-            // sessions never report one.
+            // binary probe covers a provider whose sessions have not reported
+            // one.
             let version = freshest
                 .and_then(|context| context.agent_version.clone())
                 .or_else(|| {

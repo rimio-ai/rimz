@@ -1,6 +1,57 @@
 use super::*;
 
 #[test]
+fn account_cache_missing_probeable_versions_forces_refresh() {
+    for kind in ["claude", "codex", "pi"] {
+        let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
+        let snapshot = SidebarSnapshot::build_with_agents(
+            workspace.clone(),
+            Vec::new(),
+            vec![root_agent(kind, "active", None)],
+            Timestamp::now(),
+        );
+        let mut accounts = BTreeMap::new();
+        accounts.insert(
+            kind.to_owned(),
+            crate::agents::AgentAccount {
+                plan: Some("Pro".to_owned()),
+                metered: Some(true),
+                version: None,
+                sub_provider: None,
+            },
+        );
+        let cache = AccountsCache {
+            refreshed_at_ms: unix_now_ms(),
+            accounts,
+            ok: true,
+        };
+        assert!(
+            accounts_cache_missing_versions(&cache, &snapshot),
+            "an old successful {kind} account cache without a version re-probes immediately"
+        );
+
+        let empty_cache = AccountsCache {
+            refreshed_at_ms: unix_now_ms(),
+            accounts: BTreeMap::new(),
+            ok: true,
+        };
+        assert!(
+            accounts_cache_missing_versions(&empty_cache, &snapshot),
+            "an active {kind} session can still get a version-only cache entry"
+        );
+
+        let failed_recent = AccountsCache {
+            ok: false,
+            ..empty_cache
+        };
+        assert!(
+            !accounts_cache_missing_versions(&failed_recent, &snapshot),
+            "a failed {kind} probe waits for the retry TTL instead of forking every tick"
+        );
+    }
+}
+
+#[test]
 fn idle_window_projection_ages_only_known_elapsed_windows() {
     let now = Timestamp::from_second(2_000_000_000).unwrap();
     let future = Timestamp::from_second(2_000_010_000).unwrap();

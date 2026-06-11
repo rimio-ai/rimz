@@ -239,3 +239,53 @@ fn render_single_provider_dashboard_has_no_tab_rail() {
         "{rendered}"
     );
 }
+
+#[test]
+fn render_provider_dashboard_shows_version_placeholder_when_unknown() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    snapshot.providers = two_provider_panels();
+    snapshot.providers[0].version = None;
+    snapshot.providers[0].plan = None;
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    let rendered = snapshot_to_screen(&snapshot, 54, 34);
+
+    assert!(
+        rendered.contains("v?"),
+        "the tabbed active header carries a version placeholder:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Claude Max ·"),
+        "unknown plan stays absent:\n{rendered}"
+    );
+
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    snapshot.providers = vec![provider_panel(
+        "claude",
+        "Claude",
+        173,
+        true,
+        false,
+        Some((25, 40)),
+    )];
+    snapshot.providers[0].version = None;
+    snapshot.providers[0].plan = None;
+    let rendered = snapshot_to_screen(&snapshot, 54, 34);
+
+    assert!(
+        rendered.contains("Claude v?"),
+        "the untabbed header carries the version placeholder:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("Claude Max"),
+        "unknown plan stays absent:\n{rendered}"
+    );
+}

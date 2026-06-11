@@ -4,8 +4,8 @@
 //! loop folds lives in its own submodule — [`fetch`] (the two-speed off-thread
 //! fetch cycle), [`state`] (the pure `compute_next_state` reducer and the fold
 //! integrator), [`gate`] (the last-known-good regression hold), [`health`]
-//! (failure debounce and give-up), [`lifecycle`] (self-close and resize-grow
-//! classification), [`reload`] (binary resolution and re-exec), and
+//! (failure debounce and give-up), [`lifecycle`] (self-close and the bounded
+//! resize-grow paint hold), [`reload`] (binary resolution and re-exec), and
 //! [`selection`] (the identity-keyed highlight and input handlers).
 
 use std::cell::Cell;
@@ -56,7 +56,7 @@ use self::{notify::*, socket::*, timing::*};
 use fetch::{FetchDispatcher, FetchOutcome, FetchRequest, spawn_fetch_worker};
 use gate::GateState;
 use input::{Wakeup, encode_key, encode_mouse, wait_for_wakeup};
-use lifecycle::{SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
+use lifecycle::{PaintHold, SELF_CLOSE_WATCHDOG, SelfCloseState, resize_grew};
 use reload::{ReloadAction, reexec_self, reload_action};
 use selection::{InputOutcome, handle_key, handle_mouse_click, handle_scroll, row_index_of_pane};
 use state::{apply_fetch_outcome, placeholder_snapshot};

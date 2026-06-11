@@ -260,6 +260,37 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
     );
 
     let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
+    claude.windows.clear();
+    let rows = metered_bar_rows(&theme, &claude);
+    assert_eq!(
+        rows.len(),
+        1,
+        "a metered account without reported windows still paints one placeholder row"
+    );
+    let label = rows[0]
+        .spans
+        .first()
+        .expect("a label span")
+        .content
+        .trim()
+        .to_owned();
+    assert_eq!(label, "", "the no-window placeholder has no fake label");
+    let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
+    assert_eq!(
+        label_fg, glyph_fg,
+        "placeholder label slot mirrors the track"
+    );
+    assert!(!has_reset, "placeholder rows have no reset countdown");
+    assert!(
+        !rows[0].spans.iter().any(|span| span.content.contains('▰')),
+        "placeholder rows have no filled budget cells"
+    );
+    assert!(
+        rows[0].spans.iter().any(|span| span.content.contains('▱')),
+        "placeholder rows keep the unknown empty track"
+    );
+
+    let mut claude = provider_panel("claude", "Claude", 173, true, false, None);
     claude.windows = vec![RateLimitWindow {
         used_percentage: Some(1),
         resets_at: Some(now + Duration::from_secs(4 * 3_600)),

@@ -158,18 +158,19 @@ fn tmux_room_shows_agent_after_hook() {
 ///
 /// Closing the working pane first grows the sidebar to the whole window (a
 /// SIGWINCH), and the renderer holds that grow-repaint until the sibling-count
-/// verdict lands — a "close" verdict exits without ever painting the grown
-/// frame. This drives the real path end to end: split a sidebar beside a live
-/// command, let it latch `seen_sibling`, kill the command, then sample the
-/// sidebar pane until it vanishes.
+/// verdict lands — a "close" verdict exits without painting the grown frame on
+/// the healthy path. The hold is bounded, so a verdict that never arrives may
+/// paint after `RESIZE_PAINT_HOLD_CEILING`. This drives the real path end to
+/// end: split a sidebar beside a live command, let it latch `seen_sibling`, kill
+/// the command, then sample the sidebar pane until it vanishes.
 ///
 /// Best-effort on the flash itself: the flash (if the guard regressed) is a
-/// single sub-frame paint, so a poll may miss it — but a correct renderer never
-/// paints wide, so this never false-fails, and a sampled wide frame is a real
-/// regression. The authoritative guards are the `resize_grew` unit test and the
-/// frame-phase `!should_exit`/`!paint_held` gate; this closes the loop in a real
-/// mux. The path is backend-agnostic (the decision is the same on Zellij), so
-/// one backend smoke is representative.
+/// single sub-frame paint, so a poll may miss it. Before the hold ceiling, a
+/// sampled wide frame is a real regression; after the ceiling, painting wide is
+/// the bounded recovery behavior. The authoritative guards are the `resize_grew`
+/// and `PaintHold` unit tests plus the frame-phase `!should_exit`/hold-blocked
+/// gate; this closes the loop in a real mux. The path is backend-agnostic (the
+/// decision is the same on Zellij), so one backend smoke is representative.
 #[test]
 fn tmux_sidebar_self_closes_without_full_width_flash() {
     if which::which("tmux").is_err() {
@@ -256,9 +257,11 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let flash_ceiling = split_width + 5;
 
     tmux(&socket, &["kill-pane", "-t", &codex_pane]);
+    let flash_guard_deadline = Instant::now() + rimz::sidebar::timing::RESIZE_PAINT_HOLD_CEILING;
 
     // Sample fast until the sidebar pane is gone (it self-closed) or the budget
-    // elapses. Every frame we do see must stay within the split width.
+    // elapses. Every frame we see before the hold ceiling must stay within the
+    // split width; after the ceiling, wide paint is the designed escape hatch.
     let deadline = Instant::now() + CAPTURE_BUDGET;
     let mut closed = false;
     while Instant::now() < deadline {
@@ -266,13 +269,16 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
             closed = true;
             break;
         }
+        let sampled_at = Instant::now();
         let frame = capture_until(&socket, &sidebar_pane, |_| true, Duration::from_millis(0));
         let widest = max_line_width(&frame);
-        assert!(
-            widest <= flash_ceiling,
-            "sidebar painted {widest} cols wide before self-close (split was \
-             {split_width}); it flashed toward the freed full width:\n{frame}"
-        );
+        if sampled_at < flash_guard_deadline {
+            assert!(
+                widest <= flash_ceiling,
+                "sidebar painted {widest} cols wide before self-close (split was \
+                 {split_width}); it flashed toward the freed full width:\n{frame}"
+            );
+        }
         std::thread::sleep(Duration::from_millis(30));
     }
     assert!(

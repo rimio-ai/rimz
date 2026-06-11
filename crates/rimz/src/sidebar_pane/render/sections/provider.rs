@@ -353,9 +353,9 @@ fn tab_label(kind: &str) -> String {
 /// name drops and the line reads `Claude Max · v2.1.158` — plan first, the
 /// version demoted to trailing trivia — indented to the stats column
 /// (the art column's width, zero when the narrow pane drops the emblem) so it
-/// sits over the `◎` line as the right-column grid's title row. Fields drop
-/// out when unknown; a tabbed account with neither plan nor version leaves a
-/// near-empty header, acceptable since the rail names it.
+/// sits over the `◎` line as the right-column grid's title row. Plan drops out
+/// when unknown; version renders as `v?` until an out-of-band probe or live
+/// context fills it.
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -363,6 +363,11 @@ fn provider_header_line(
     tabbed: bool,
 ) -> Line<'static> {
     let mut left = Vec::new();
+    let version = panel
+        .version
+        .as_deref()
+        .map(|version| format!("v{version}"))
+        .unwrap_or_else(|| "v?".to_owned());
     if tabbed {
         let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
         if show_art {
@@ -370,21 +375,15 @@ fn provider_header_line(
         }
         if let Some(plan) = panel.plan.as_deref() {
             left.push(Span::styled(plan.to_owned(), theme.dim()));
+            left.push(Span::styled(" · ", theme.faint()));
         }
-        if let Some(version) = panel.version.as_deref() {
-            if panel.plan.is_some() {
-                left.push(Span::styled(" · ", theme.faint()));
-            }
-            left.push(Span::styled(format!("v{version}"), theme.dim()));
-        }
+        left.push(Span::styled(version, theme.dim()));
     } else {
         left.push(Span::styled(
             panel.product_name.clone(),
             theme.style(theme.brand_tone(panel), Modifier::BOLD),
         ));
-        if let Some(version) = panel.version.as_deref() {
-            left.push(Span::styled(format!(" v{version}"), theme.dim()));
-        }
+        left.push(Span::styled(format!(" {version}"), theme.dim()));
         if let Some(plan) = panel.plan.as_deref() {
             left.push(Span::styled(" · ", theme.faint()));
             left.push(Span::styled(plan.to_owned(), theme.dim()));
@@ -487,9 +486,10 @@ fn provider_stats_spans(
 
 /// The provider's budget bars within `region`: a metered account drains one
 /// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
-/// an unmetered account shows the single `∞` bar. Each reset reads a two-unit
-/// countdown scaled to its magnitude. Each row aligns front and back within
-/// `region`, so they line up across providers too.
+/// a metered account whose windows have not arrived yet shows one anonymous
+/// unknown-track row; an unmetered account shows the single `∞` bar. Each reset
+/// reads a two-unit countdown scaled to its magnitude. Each row aligns front and
+/// back within `region`, so they line up across providers too.
 fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -499,6 +499,9 @@ fn provider_bar_rows(
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
         return vec![infinite_bar_row(theme, theme.brand_tone(panel), region)];
+    }
+    if panel.windows.is_empty() {
+        return vec![unknown_bar_row(theme, "", region)];
     }
     panel
         .windows
@@ -579,14 +582,7 @@ fn metered_bar_row(
     let label = window_label(window.duration_mins);
     let bar_width = provider_bar_width(region);
     if !force_exhausted && window.used_percentage.is_none() {
-        let mut spans = vec![
-            Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.dim()),
-            Span::raw(" "),
-        ];
-        spans.extend(unknown_mana_bar_spans(theme, bar_width));
-        spans.push(Span::raw(" "));
-        spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
-        return Some(spans);
+        return Some(unknown_bar_row(theme, &label, region));
     }
 
     let not_started = !force_exhausted && window_not_started(window, now);
@@ -641,6 +637,21 @@ fn metered_bar_row(
         reset_marker_style,
     ));
     Some(spans)
+}
+
+/// Unknown metered budget row: the same bar geometry as a reported window with
+/// no usage, with either the known window label or a blank label while the
+/// provider has not reported any windows yet.
+fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
+    let bar_width = provider_bar_width(region);
+    let mut spans = vec![
+        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.dim()),
+        Span::raw(" "),
+    ];
+    spans.extend(unknown_mana_bar_spans(theme, bar_width));
+    spans.push(Span::raw(" "));
+    spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
+    spans
 }
 
 /// The right-aligned reset value column. Only the reset marker carries a hot

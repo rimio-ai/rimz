@@ -165,6 +165,11 @@ pub const RELOAD_CONVERGE_POLL: Duration = Duration::from_millis(150);
 /// so cleanup stays prompt even when a caller configured a much slower data tick.
 pub const SELF_CLOSE_WATCHDOG: Duration = Duration::from_secs(2);
 
+/// Maximum time a grow-resize paint hold may suppress frames while waiting for
+/// a post-resize pane observation. Matched to [`SELF_CLOSE_WATCHDOG`] so the
+/// close-verdict refresh and the hold expiry share one user-visible ceiling.
+pub const RESIZE_PAINT_HOLD_CEILING: Duration = Duration::from_secs(2);
+
 /// How long the refresh loop may stay continuously degraded before the renderer
 /// gives up and exits. Generous so a transient mux hiccup or the sub-second gap
 /// while `cargo install` swaps `rimz` never closes a healthy sidebar; short

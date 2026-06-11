@@ -14,7 +14,7 @@ pub(super) struct LoopState {
     ui: UiState,
     read_marks: ReadMarkStore,
     dirty: bool,
-    paint_held: bool,
+    paint_hold: PaintHold,
     next_frame: Instant,
     fetched_at: Instant,
     last_self_close_check: Instant,
@@ -47,7 +47,7 @@ impl LoopState {
             ui: UiState::default(),
             read_marks,
             dirty: true,
-            paint_held: false,
+            paint_hold: PaintHold::default(),
             next_frame: now,
             fetched_at: now,
             last_self_close_check: now,
@@ -108,12 +108,18 @@ impl LoopState {
             if snapshot_ok {
                 self.last_self_close_check = Instant::now();
             }
-            if !self.should_exit && !rejected && fresh_pane_frame {
+            if !self.should_exit
+                && !rejected
+                && (fresh_pane_frame
+                    || self
+                        .paint_hold
+                        .releases_on_stamp(self.current.panes_observed_at_ms))
+            {
                 // The snapshot folded a post-signal pane frame. Its own-view
                 // verdict has decided the resize-grow case: exit without
                 // painting when alone, or release the hold and paint at the new
                 // size when siblings remain.
-                self.paint_held = false;
+                self.paint_hold.release();
             }
         }
         if !self.should_exit
@@ -249,7 +255,8 @@ impl LoopState {
         };
         if grew {
             self.dirty = true;
-            self.paint_held = true;
+            self.paint_hold
+                .engage(Instant::now(), crate::sidebar::cache::unix_now_ms());
         } else {
             if apply_input(
                 Wakeup::Resize,
@@ -265,7 +272,7 @@ impl LoopState {
             }
             // A safe-width paint just landed; drop any stale hold a prior grow
             // left pending so it cannot suppress this frame.
-            self.paint_held = false;
+            self.paint_hold.release();
         }
         self.last_self_close_check = Instant::now();
         // A resize is the mux telling us topology changed. Pull a fresh pane
@@ -351,10 +358,14 @@ impl LoopState {
                 self.next_frame = dirty_deadline;
             }
         }
+        let hold_was_engaged = self.paint_hold.is_engaged();
+        let paint_blocked = self.paint_hold.blocks_paint(now);
+        if hold_was_engaged && !paint_blocked {
+            debug!("resize paint hold expired");
+        }
         // Once the tab has emptied, never paint again. A grow resize also
         // defers its paint until the sibling-count verdict releases the hold.
-        if !self.should_exit && !self.paint_held && (active || self.dirty) && now >= self.next_frame
-        {
+        if !self.should_exit && !paint_blocked && (active || self.dirty) && now >= self.next_frame {
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
             let animating = is_animating(&self.current, &self.ui, self.ui.animation_phase);
@@ -481,13 +492,168 @@ impl LoopState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sidebar_pane::app::fixtures::{agent_snapshot, workspace};
+    use crate::sidebar_pane::app::fixtures::{
+        agent_snapshot, pane, snapshot_with_panes, workspace,
+    };
 
     fn read_marks(ws: &WorkspaceId) -> (tempfile::TempDir, ReadMarkStore) {
         let dir = tempfile::TempDir::new().expect("tempdir");
         let runtime = RuntimePaths::under(ws.clone(), dir.path()).expect("runtime");
         let store = ReadMarkStore::new(runtime, SidebarInstanceId::new());
         (dir, store)
+    }
+
+    fn serve_config(ws: &WorkspaceId) -> ServeConfig {
+        ServeConfig {
+            workspace_id: ws.clone(),
+            mux: crate::MuxName::Zellij,
+            session_name: "rimz-test".to_owned(),
+            instance_id: SidebarInstanceId::new(),
+            tick_seconds: 1,
+            refresh_ms_override: None,
+            notification_prefs: crate::config::NotificationsPrefs::default(),
+            own_pane: None,
+        }
+    }
+
+    fn loop_state(ws: &WorkspaceId) -> (tempfile::TempDir, LoopState) {
+        let (tx, _rx) = std::sync::mpsc::sync_channel(64);
+        let (dir, store) = read_marks(ws);
+        (dir, LoopState::new(ws.clone(), None, tx, store))
+    }
+
+    fn process_snapshot(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
+        let mut snapshot = snapshot_with_panes(ws, vec![pane("terminal_9", "tab_0", false)]);
+        snapshot.panes_observed_at_ms = Some(observed_at_ms);
+        snapshot
+    }
+
+    fn agent_snapshot_observed(ws: &WorkspaceId, observed_at_ms: u64) -> SidebarSnapshot {
+        let mut snapshot = agent_snapshot(ws);
+        snapshot.panes_observed_at_ms = Some(observed_at_ms);
+        snapshot
+    }
+
+    fn fold_snapshot(
+        state: &mut LoopState,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        snapshot: SidebarSnapshot,
+        fresh_pane_frame: bool,
+    ) {
+        let (result_tx, result_rx) = std::sync::mpsc::channel();
+        result_tx
+            .send(FetchOutcome {
+                snapshot: Ok(snapshot),
+                final_for_request: true,
+                fresh_pane_frame,
+            })
+            .expect("send fetch outcome");
+        state
+            .on_snapshot(config, fetch, &result_rx, Instant::now(), None)
+            .expect("fold snapshot");
+    }
+
+    fn fetch_dispatcher() -> (FetchDispatcher, std::sync::mpsc::Receiver<FetchRequest>) {
+        let (request_tx, request_rx) = std::sync::mpsc::channel();
+        (FetchDispatcher::new(request_tx), request_rx)
+    }
+
+    #[test]
+    fn resize_hold_releases_on_escape_hatch_accepting_post_engage_stamp() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        let config = serve_config(&ws);
+        let (mut fetch, _request_rx) = fetch_dispatcher();
+        let mut prior = agent_snapshot(&ws);
+        prior.panes_observed_at_ms = Some(90);
+        state.last_snapshot = Some(prior.clone());
+        state.current = prior;
+        state.paint_hold.engage(Instant::now(), 100);
+
+        fold_snapshot(
+            &mut state,
+            &config,
+            &mut fetch,
+            process_snapshot(&ws, 150),
+            false,
+        );
+        assert!(
+            state.paint_hold.is_engaged(),
+            "the rejected fold stays held"
+        );
+        assert_eq!(state.gate.reject_streak, 1);
+
+        fold_snapshot(
+            &mut state,
+            &config,
+            &mut fetch,
+            process_snapshot(&ws, 151),
+            false,
+        );
+        assert!(
+            state.paint_hold.is_engaged(),
+            "the second rejected fold still stays held"
+        );
+        assert_eq!(state.gate.reject_streak, 2);
+
+        fold_snapshot(
+            &mut state,
+            &config,
+            &mut fetch,
+            process_snapshot(&ws, 152),
+            false,
+        );
+        assert!(
+            !state.paint_hold.is_engaged(),
+            "the escape-hatch accepted fold releases by pane stamp"
+        );
+    }
+
+    #[test]
+    fn resize_hold_releases_on_accepted_default_fetch_with_post_engage_stamp() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        let config = serve_config(&ws);
+        let (mut fetch, _request_rx) = fetch_dispatcher();
+        state.current = agent_snapshot(&ws);
+        state.paint_hold.engage(Instant::now(), 100);
+
+        fold_snapshot(
+            &mut state,
+            &config,
+            &mut fetch,
+            agent_snapshot_observed(&ws, 101),
+            false,
+        );
+
+        assert!(
+            !state.paint_hold.is_engaged(),
+            "a normal accepted fetch releases when it carries a post-resize pane stamp"
+        );
+    }
+
+    #[test]
+    fn resize_hold_stays_held_on_accepted_default_fetch_with_pre_engage_stamp() {
+        let ws = workspace();
+        let (_dir, mut state) = loop_state(&ws);
+        let config = serve_config(&ws);
+        let (mut fetch, _request_rx) = fetch_dispatcher();
+        state.current = agent_snapshot(&ws);
+        state.paint_hold.engage(Instant::now(), 100);
+
+        fold_snapshot(
+            &mut state,
+            &config,
+            &mut fetch,
+            agent_snapshot_observed(&ws, 99),
+            false,
+        );
+
+        assert!(
+            state.paint_hold.is_engaged(),
+            "an old pane stamp is not proof the resize verdict landed"
+        );
     }
 
     #[test]
