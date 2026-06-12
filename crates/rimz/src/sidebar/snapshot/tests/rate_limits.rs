@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn account_cache_missing_probeable_versions_forces_refresh() {
+fn account_cache_missing_probeable_versions_refreshes_on_retry_cadence() {
     for kind in ["claude", "codex", "pi"] {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
         let snapshot = SidebarSnapshot::build_with_agents(
@@ -20,33 +20,43 @@ fn account_cache_missing_probeable_versions_forces_refresh() {
                 sub_provider: None,
             },
         );
-        let cache = AccountsCache {
-            refreshed_at_ms: unix_now_ms(),
+        let now_ms = unix_now_ms();
+        let fresh_cache = AccountsCache {
+            refreshed_at_ms: now_ms,
             accounts,
             ok: true,
         };
         assert!(
-            accounts_cache_missing_versions(&cache, &snapshot),
-            "an old successful {kind} account cache without a version re-probes immediately"
+            !accounts_cache_version_refresh_due(&fresh_cache, &snapshot, now_ms),
+            "a just-refreshed successful {kind} cache missing a display version waits for the retry window"
+        );
+
+        let stale_cache = AccountsCache {
+            refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
+            ..fresh_cache
+        };
+        assert!(
+            accounts_cache_version_refresh_due(&stale_cache, &snapshot, now_ms),
+            "a successful {kind} account cache missing a display version re-probes after the retry window"
         );
 
         let empty_cache = AccountsCache {
-            refreshed_at_ms: unix_now_ms(),
+            refreshed_at_ms: now_ms.saturating_sub(ACCOUNTS_RETRY_TTL.as_millis() as u64 + 1),
             accounts: BTreeMap::new(),
             ok: true,
         };
         assert!(
-            accounts_cache_missing_versions(&empty_cache, &snapshot),
+            accounts_cache_version_refresh_due(&empty_cache, &snapshot, now_ms),
             "an active {kind} session can still get a version-only cache entry"
         );
 
-        let failed_recent = AccountsCache {
+        let failed_cache = AccountsCache {
             ok: false,
             ..empty_cache
         };
         assert!(
-            !accounts_cache_missing_versions(&failed_recent, &snapshot),
-            "a failed {kind} probe waits for the retry TTL instead of forking every tick"
+            !accounts_cache_version_refresh_due(&failed_cache, &snapshot, now_ms),
+            "a failed {kind} probe uses the failure TTL, not the missing-version bypass"
         );
     }
 }

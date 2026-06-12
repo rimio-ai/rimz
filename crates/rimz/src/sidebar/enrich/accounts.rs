@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::RuntimePaths;
 use crate::agents::AgentAccount;
-use crate::sidebar::cache::{AccountsCache, unix_now_ms};
+use crate::sidebar::cache::{ACCOUNTS_RETRY_TTL, AccountsCache, unix_now_ms};
 
 use super::SidebarSnapshot;
 
@@ -31,7 +31,8 @@ pub(super) fn produce_accounts(
 
     // Fast path: a young publish needs no lock and no fork.
     let cache = read_accounts_cache(&path);
-    if cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot) {
+    let now_ms = unix_now_ms();
+    if cache.is_fresh(now_ms) && !accounts_cache_version_refresh_due(&cache, snapshot, now_ms) {
         return cache_with_context_versions(cache, &context_versions).accounts;
     }
 
@@ -41,7 +42,8 @@ pub(super) fn produce_accounts(
     let lock_path = runtime.shared_accounts_lock();
     let fresh = || {
         let cache = read_accounts_cache(&path);
-        (cache.is_fresh(unix_now_ms()) && !accounts_cache_missing_versions(&cache, snapshot))
+        let now_ms = unix_now_ms();
+        (cache.is_fresh(now_ms) && !accounts_cache_version_refresh_due(&cache, snapshot, now_ms))
             .then(|| cache_with_context_versions(cache, &context_versions))
     };
     match crate::ledger::single_flight::coalesce(
@@ -89,11 +91,14 @@ pub(super) fn cached_accounts_for_snapshot(
     cache_with_context_versions(cache, &context_versions(snapshot)).accounts
 }
 
-pub(crate) fn accounts_cache_missing_versions(
+pub(crate) fn accounts_cache_version_refresh_due(
     cache: &AccountsCache,
     snapshot: &SidebarSnapshot,
+    now_ms: u64,
 ) -> bool {
-    if !cache.ok {
+    if !cache.ok
+        || now_ms.saturating_sub(cache.refreshed_at_ms) <= ACCOUNTS_RETRY_TTL.as_millis() as u64
+    {
         return false;
     }
     let context_versions = context_versions(snapshot);

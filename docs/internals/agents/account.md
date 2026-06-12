@@ -60,7 +60,7 @@ One asymmetry shapes the producer below: **Claude's balance has no source outsid
 The probe is a **pure read**; cross-process memoization lives one layer up in the producer (below).
 Claude forks `claude auth status`, capturing stdout with stdin and stderr nulled (never inherited, so it stays quiet in a TUI); Codex reads `~/.codex/auth.json` — a cheap file read, no subprocess, so an absent or corrupt file is an authoritative `LoggedOut`, not a retry-worthy `Unavailable`.
 Pi reads `~/.pi/agent/auth.json` the same way (absent file → `LoggedOut`, unparseable → `Unavailable`).
-Claude, Codex, and Pi expose a separate display-only binary version probe (`<program> --version`) that feeds the same account cache and repairs entries whose login facts are fresh but whose version field is absent.
+Claude, Codex, and Pi expose a separate display-only binary version probe (`<program> --version`) that feeds the same account cache and repairs entries whose login facts are fresh but whose version field is absent; an absent version bypasses the long success TTL only after the short retry TTL, so a binary that cannot report `--version` does not re-fork on every producer frame.
 An unknown kind has no probe arm yet and reads as `LoggedOut`.
 
 Every registered adapter exposes a display-only version probe by default: run `<kind> --version`, capture stdout, and treat any failure as no version. Rich context transports still win when present — Claude's statusline and Codex's app-server context can report fresher versions for live sessions — while the CLI probe fills idle or older account-cache entries. A future adapter overrides only when its binary name differs from its kind or when it has a cheaper/richer idle version source.

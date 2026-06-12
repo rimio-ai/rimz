@@ -29,8 +29,6 @@ mod codex_refresh;
 mod live_spend;
 mod rate_limits;
 
-#[cfg(test)]
-pub(crate) use accounts::accounts_cache_missing_versions;
 pub use codex_refresh::refresh_codex_transcript_context;
 #[cfg(test)]
 pub(crate) use codex_refresh::{
@@ -45,6 +43,8 @@ pub(crate) use rate_limits::{
     project_idle_window, read_rate_limits_cache, write_rate_limits_cache,
 };
 
+#[cfg(test)]
+pub(crate) use accounts::accounts_cache_version_refresh_due;
 use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
 use codex_refresh::refresh_codex_rate_limits;
 use live_spend::refresh_live_spend_baselines;
