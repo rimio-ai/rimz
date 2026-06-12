@@ -12,6 +12,7 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/ci
   # `-D warnings` is the deny-warnings gate.
   RUSTFLAGS: -D warnings
   RUST_BACKTRACE: 1
@@ -21,10 +22,8 @@ jobs:
     name: cargo xtask ci
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 30
-    env:
-      CARGO_TARGET_DIR: /tmp/rimz-ci-target-${{ github.run_id }}-ci
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # `rust-toolchain.toml` pins the channel + components; this action
       # respects it.
@@ -32,6 +31,51 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Compute Cargo cache key
+        id: cargo-cache-key
+        shell: bash
+        run: |
+          cache_key_input="${RUNNER_TEMP:-/tmp}/rimz-cargo-cache-key"
+          {
+            printf 'runner-os=%s\n' "${RUNNER_OS:-unknown}"
+            printf 'runner-arch=%s\n' "${RUNNER_ARCH:-unknown}"
+            printf 'cargo-target-dir=%s\n' "$CARGO_TARGET_DIR"
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            rustc -vV
+            cargo -vV
+            find . -type f \( \
+              -name Cargo.lock \
+              -o -name Cargo.toml \
+              -o -name rust-toolchain \
+              -o -name rust-toolchain.toml \
+              -o -path '*/.cargo/config.toml' \
+            \) -print | LC_ALL=C sort | while IFS= read -r file; do
+              sha256sum "$file"
+            done
+          } > "$cache_key_input"
+
+          runner_os="$(printf '%s' "${RUNNER_OS:-linux}" | tr '[:upper:]' '[:lower:]')"
+          runner_arch="$(printf '%s' "${RUNNER_ARCH:-x64}" | tr '[:upper:]' '[:lower:]')"
+          key_hash="$(sha256sum "$cache_key_input" | awk '{print $1}')"
+          prefix="cargo-${runner_os}-${runner_arch}-${key_hash}"
+          echo "key=$prefix" >> "$GITHUB_OUTPUT"
+          echo "fallback_prefix=cargo-${runner_os}-${runner_arch}-" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Cargo cache directories
+        run: mkdir -p ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db "$CARGO_TARGET_DIR"
+
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/ci
+          key: ${{ steps.cargo-cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
       # cache miss. Gitea 1.25 lower-cases runner.os, so invoke install-action's
@@ -58,22 +102,61 @@ jobs:
       - name: cargo xtask ci
         run: cargo xtask ci
 
-      - name: Clean cargo target
-        if: always()
-        run: rm -rf "$CARGO_TARGET_DIR"
-
   mux-tests:
     name: mux backends (zellij + tmux)
     runs-on: [linux_amd64, debian-13]
     timeout-minutes: 20
     needs: ci
-    env:
-      CARGO_TARGET_DIR: /tmp/rimz-ci-target-${{ github.run_id }}-mux
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute Cargo cache key
+        id: cargo-cache-key
+        shell: bash
+        run: |
+          cache_key_input="${RUNNER_TEMP:-/tmp}/rimz-cargo-cache-key"
+          {
+            printf 'runner-os=%s\n' "${RUNNER_OS:-unknown}"
+            printf 'runner-arch=%s\n' "${RUNNER_ARCH:-unknown}"
+            printf 'cargo-target-dir=%s\n' "$CARGO_TARGET_DIR"
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            rustc -vV
+            cargo -vV
+            find . -type f \( \
+              -name Cargo.lock \
+              -o -name Cargo.toml \
+              -o -name rust-toolchain \
+              -o -name rust-toolchain.toml \
+              -o -path '*/.cargo/config.toml' \
+            \) -print | LC_ALL=C sort | while IFS= read -r file; do
+              sha256sum "$file"
+            done
+          } > "$cache_key_input"
+
+          runner_os="$(printf '%s' "${RUNNER_OS:-linux}" | tr '[:upper:]' '[:lower:]')"
+          runner_arch="$(printf '%s' "${RUNNER_ARCH:-x64}" | tr '[:upper:]' '[:lower:]')"
+          key_hash="$(sha256sum "$cache_key_input" | awk '{print $1}')"
+          prefix="cargo-${runner_os}-${runner_arch}-${key_hash}"
+          echo "key=$prefix" >> "$GITHUB_OUTPUT"
+          echo "fallback_prefix=cargo-${runner_os}-${runner_arch}-" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Cargo cache directories
+        run: mkdir -p ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db "$CARGO_TARGET_DIR"
+
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/ci
+          key: ${{ steps.cargo-cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
       - name: Check tmux
         run: |
@@ -121,7 +204,3 @@ jobs:
             exit 0
           fi
           cargo xtask test
-
-      - name: Clean cargo target
-        if: always()
-        run: rm -rf "$CARGO_TARGET_DIR"
