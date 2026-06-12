@@ -63,6 +63,44 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
             sessions: 980,
         },
     });
+    snapshot.workspace_value_tally = Some(crate::SpendTally {
+        today: crate::SpendWindow {
+            usd: 8.25,
+            tokens: 1_210_000,
+            input: 210_000,
+            output: 1_000_000,
+            cache_write: 80_000,
+            cache_read: 2_400_000,
+            sessions: 4,
+        },
+        week: crate::SpendWindow {
+            usd: 8.25,
+            tokens: 1_210_000,
+            input: 210_000,
+            output: 1_000_000,
+            cache_write: 80_000,
+            cache_read: 2_400_000,
+            sessions: 4,
+        },
+        month: crate::SpendWindow {
+            usd: 8.25,
+            tokens: 1_210_000,
+            input: 210_000,
+            output: 1_000_000,
+            cache_write: 80_000,
+            cache_read: 2_400_000,
+            sessions: 4,
+        },
+        year: crate::SpendWindow {
+            usd: 8.25,
+            tokens: 1_210_000,
+            input: 210_000,
+            output: 1_000_000,
+            cache_write: 80_000,
+            cache_read: 2_400_000,
+            sessions: 4,
+        },
+    });
     let rendered = snapshot_to_screen(&snapshot, 60, 34);
 
     // The `W:` and `M:` rows: each labelled left, the `$` spend pinned right.

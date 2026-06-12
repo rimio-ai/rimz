@@ -148,6 +148,7 @@ pub(crate) fn parse_codex_spend(
             message_id: None,
             request_id: None,
             is_sidechain: false,
+            origin_path: None,
         });
     }
     SpendParse {

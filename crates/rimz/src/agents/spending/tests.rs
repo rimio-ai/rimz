@@ -40,6 +40,13 @@ fn claude_line_ts(ts: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
     )
 }
 
+fn claude_line_ts_in(ts: &str, cost: f64, msg_id: &str, req_id: &str, cwd: &Path) -> String {
+    format!(
+        r#"{{"timestamp":"{ts}","cwd":"{}","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#,
+        cwd.display()
+    )
+}
+
 fn claude_line(date: &str, cost: f64, msg_id: &str, req_id: &str) -> String {
     claude_line_ts(&format!("{date}T10:00:00.000Z"), cost, msg_id, req_id)
 }
@@ -120,13 +127,14 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
 
     let path = dir.path().join("spending.json");
     let stale = SpendingDiskCache {
-        version: 0,
+        version: SPENDING_CACHE_VERSION - 1,
         files: HashMap::from([(
             "/old/chat.jsonl".to_string(),
             FileCacheEntry {
                 mtime_secs: 123,
                 len: 0,
                 cursor: SpendCursor::default(),
+                origin_path: None,
                 entries: vec![CachedEntry {
                     ts_secs: NOW_SECS,
                     cost_usd: 9.0,
@@ -137,6 +145,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     message_id: Some("msg-old".to_string()),
                     request_id: Some("req-old".to_string()),
                     is_sidechain: false,
+                    origin_path: None,
                 }],
                 unknown_models: BTreeMap::new(),
             },
@@ -175,6 +184,80 @@ fn token_split_and_session_counts_populate_windows() {
     assert_eq!(total.today.cache_read, 70_000);
     assert_eq!(total.today.sessions, 1);
     assert_eq!(total.year.sessions, 1);
+}
+
+#[test]
+fn scoped_tally_includes_project_and_linked_worktree_roots_only() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let ts = format!("{today}T10:00:00.000Z");
+    let project = dir.path().join("repo");
+    let linked = dir.path().join("linked-worktree");
+    let other = dir.path().join("other-project");
+    let project_session = dir.path().join("sessions/project");
+    let linked_session = dir.path().join("sessions/linked");
+    let other_session = dir.path().join("sessions/other");
+    let unknown_session = dir.path().join("sessions/unknown");
+    std::fs::create_dir_all(&project_session).unwrap();
+    std::fs::create_dir_all(&linked_session).unwrap();
+    std::fs::create_dir_all(&other_session).unwrap();
+    std::fs::create_dir_all(&unknown_session).unwrap();
+
+    let project_file = write_jsonl(
+        &project_session,
+        "chat.jsonl",
+        &[&claude_line_ts_in(
+            &ts,
+            1.0,
+            "msg-project",
+            "req-project",
+            &project.join("src"),
+        )],
+    );
+    let linked_file = write_jsonl(
+        &linked_session,
+        "chat.jsonl",
+        &[&claude_line_ts_in(
+            &ts,
+            2.0,
+            "msg-linked",
+            "req-linked",
+            &linked,
+        )],
+    );
+    let other_file = write_jsonl(
+        &other_session,
+        "chat.jsonl",
+        &[&claude_line_ts_in(
+            &ts,
+            4.0,
+            "msg-other",
+            "req-other",
+            &other,
+        )],
+    );
+    let unknown_file = write_jsonl(
+        &unknown_session,
+        "chat.jsonl",
+        &[&claude_line_ts(&ts, 8.0, "msg-unknown", "req-unknown")],
+    );
+    let files = vec![
+        (claude_adapter(), project_file),
+        (claude_adapter(), linked_file),
+        (claude_adapter(), other_file),
+        (claude_adapter(), unknown_file),
+    ];
+    let mut cache = SpendingDiskCache::default();
+    let global = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
+    let scope = SpendScope::from_roots(Some(&project), std::slice::from_ref(&linked));
+
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+
+    assert!((global.total.today.usd - 15.0).abs() < 1e-9);
+    assert!((scoped.today.usd - 3.0).abs() < 1e-9);
+    assert_eq!(scoped.today.tokens, 30);
+    assert_eq!(scoped.today.sessions, 2);
+    assert_eq!(scoped.week, scoped.today);
 }
 
 #[test]
@@ -401,6 +484,159 @@ fn codex_pricing_resume_state_and_provider_breakdown_stay_intact() {
 }
 
 #[test]
+fn codex_origin_overrides_scope_rollout_entries() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let project = dir.path().join("repo");
+    let codex_file = write_codex(
+        dir.path(),
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-4o"}}"#,
+            &codex_token_line(&today, 1000, 400, 500),
+        ],
+    );
+    let files = vec![(codex_adapter(), codex_file.clone())];
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+
+    let mut cache = SpendingDiskCache::default();
+    let _ =
+        compute_spending_with_origins(&files, &mut cache, &gpt4o_book(), NOW_SECS, &HashMap::new());
+    assert!(
+        compute_scoped_tally(&files, &cache, &scope, NOW_SECS).is_zero(),
+        "unknown-origin Codex rollout is omitted from cockpit scope"
+    );
+
+    let _ = compute_spending_with_origins(
+        &files,
+        &mut cache,
+        &gpt4o_book(),
+        NOW_SECS,
+        &HashMap::from([(codex_file.clone(), project.clone())]),
+    );
+    assert_eq!(
+        cache.files[&codex_file.to_string_lossy().into_owned()]
+            .origin_path
+            .as_deref(),
+        Some(project.as_path())
+    );
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+    assert!((scoped.today.usd - 0.00164).abs() < 1e-9);
+    assert_eq!(scoped.today.input, 600);
+    assert_eq!(scoped.today.output, 500);
+    assert_eq!(scoped.today.cache_read, 400);
+    assert_eq!(scoped.today.sessions, 1);
+}
+
+#[test]
+fn codex_file_origin_survives_unknown_model_cold_reparse() {
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let project = dir.path().join("repo");
+    let model = "gpt-rimz-new";
+    let codex_file = write_codex(
+        dir.path(),
+        &[
+            &format!(r#"{{"type":"turn_context","payload":{{"model":"{model}"}}}}"#),
+            &codex_token_line(&today, 1000, 400, 500),
+        ],
+    );
+    let files = vec![(codex_adapter(), codex_file.clone())];
+    let scope = SpendScope::from_roots(Some(&project), &[]);
+    let mut cache = SpendingDiskCache::default();
+
+    let first = compute_spending_with_origins(
+        &files,
+        &mut cache,
+        &PriceBook::from_litellm_json("{}"),
+        NOW_SECS,
+        &HashMap::from([(codex_file.clone(), project.clone())]),
+    );
+    assert!(first.total.is_zero());
+    let cache_key = codex_file.to_string_lossy().into_owned();
+    assert_eq!(
+        cache.files[&cache_key].origin_path.as_deref(),
+        Some(project.as_path()),
+        "the learned Codex origin is stored even before priced entries exist"
+    );
+
+    let priced = PriceBook::from_litellm_json(&format!(
+        r#"{{"{model}": {{"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                          "cache_read_input_token_cost": 1e-7}}}}"#
+    ));
+    let healed =
+        compute_spending_with_origins(&files, &mut cache, &priced, NOW_SECS, &HashMap::new());
+    assert!((healed.total.today.usd - 0.00164).abs() < 1e-9);
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+    assert!((scoped.today.usd - 0.00164).abs() < 1e-9);
+    assert_eq!(
+        cache.files[&cache_key].entries[0].origin_path.as_deref(),
+        Some(project.as_path())
+    );
+}
+
+#[test]
+fn cache_prune_keeps_existing_transcripts_missing_from_discovery() {
+    let dir = TempDir::new().unwrap();
+    let existing = write_jsonl(dir.path(), "existing.jsonl", &[]);
+    let missing = dir.path().join("missing.jsonl");
+    let origin = dir.path().join("repo");
+    let entry = CachedEntry {
+        ts_secs: NOW_SECS,
+        cost_usd: 1.0,
+        input: 10,
+        output: 5,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: None,
+        request_id: None,
+        is_sidechain: false,
+        origin_path: Some(origin.clone()),
+    };
+    let mut cache = SpendingDiskCache {
+        files: HashMap::from([
+            (
+                existing.to_string_lossy().into_owned(),
+                FileCacheEntry {
+                    mtime_secs: 1,
+                    len: 1,
+                    cursor: SpendCursor::default(),
+                    origin_path: Some(origin.clone()),
+                    entries: vec![entry.clone()],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+            (
+                missing.to_string_lossy().into_owned(),
+                FileCacheEntry {
+                    mtime_secs: 1,
+                    len: 1,
+                    cursor: SpendCursor::default(),
+                    origin_path: Some(origin),
+                    entries: vec![entry],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+        ]),
+        ..Default::default()
+    };
+
+    let _ = compute_spending(&[], &mut cache, &PriceBook::default(), NOW_SECS);
+
+    assert!(
+        cache
+            .files
+            .contains_key(&existing.to_string_lossy().into_owned()),
+        "an existing file survives a transient discovery miss"
+    );
+    assert!(
+        !cache
+            .files
+            .contains_key(&missing.to_string_lossy().into_owned()),
+        "a truly missing transcript is still pruned"
+    );
+}
+
+#[test]
 fn unknown_model_chase_records_and_heals_active_files() {
     assert!(!is_priceable_model_name("<synthetic>"));
     assert!(!is_priceable_model_name("   "));
@@ -449,6 +685,7 @@ fn unknown_model_chase_records_and_heals_active_files() {
             mtime_secs: 0,
             len: 0,
             cursor: SpendCursor::default(),
+            origin_path: None,
             entries: Vec::new(),
             unknown_models: BTreeMap::from([(
                 "stale-model".to_owned(),
@@ -520,6 +757,32 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     assert!(fresh.is_fresh(1_000 + ttl_ms));
     assert!(!fresh.is_fresh(1_001 + ttl_ms));
     assert!(fresh.is_fresh(500));
+}
+
+#[test]
+fn workspace_spending_cache_is_scope_keyed_and_ttl_gated() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("workspace-spending.json");
+    let mut tally = SpendTally::default();
+    tally.today.usd = 3.21;
+    tally.today.tokens = 1234;
+
+    write_workspace_spending_cache(&path, 10_000, "scope-a", &tally);
+    let cache = read_workspace_spending_cache(&path);
+
+    assert_eq!(cache.version, WORKSPACE_SPENDING_VERSION);
+    assert_eq!(cache.refreshed_at_ms, 10_000);
+    assert_eq!(cache.scope_hash, "scope-a");
+    assert_eq!(cache.tally, tally);
+    assert!(cache.is_fresh(10_000, "scope-a"));
+    assert!(!cache.is_fresh(10_000, "scope-b"));
+    assert!(!cache.is_fresh(10_001 + SPENDING_TTL.as_millis() as u64, "scope-a"));
+
+    std::fs::write(&path, b"not json").unwrap();
+    assert_eq!(
+        read_workspace_spending_cache(&path),
+        WorkspaceSpendingCache::default()
+    );
 }
 
 #[test]

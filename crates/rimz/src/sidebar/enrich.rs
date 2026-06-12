@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
-use crate::agents::spending::{ProviderSpendingCache, read_provider_spending_cache};
+use crate::agents::spending::{
+    SpendScope, SpendingCaches, read_provider_spending_cache, read_workspace_spending_cache,
+};
 use crate::feed::AgentStatus;
 use crate::ids::{PaneId, WorkspaceId};
 use crate::ledger::snapshot::{LazyAgentPairingDiagnostic, LazyAgentPairingResult};
@@ -280,7 +282,7 @@ pub enum EnrichMode<'a> {
         /// The fleet spending walk. The shared publish is account-global;
         /// per-workspace live-cost baselines are refreshed by the fold after
         /// the walk cache is available and rows hold their latest context.
-        compute_spending: &'a dyn Fn(&SidebarSnapshot) -> ProviderSpendingCache,
+        compute_spending: &'a dyn Fn(&SidebarSnapshot) -> SpendingCaches,
         /// The per-machine config, loaded once by the caller — the config
         /// fold consumes it here and the git refresh closure has already
         /// taken the preferred trunk from it. Boxed to keep the enum the size
@@ -439,13 +441,13 @@ pub fn enrich(
     // refreshes the per-worktree facts (single-flighted), a consumer projects
     // the cached ones.
     let is_producer = matches!(&mode, EnrichMode::Producing { .. });
-    let spending_cache = match mode {
+    let spending_caches = match mode {
         EnrichMode::Cached => {
-            let cache;
-            (snapshot, cache) = fold_machine_config_cached(snapshot, runtime, machine_config);
+            let caches;
+            (snapshot, caches) = fold_machine_config_cached(snapshot, runtime, machine_config);
             let diff_cache = read_diff_stats_cache(&runtime.root.join("diff-stats.json"));
             project_diff_stats(&mut snapshot, &diff_cache);
-            cache
+            caches
         }
         EnrichMode::Producing {
             compute_spending,
@@ -457,7 +459,7 @@ pub fn enrich(
             snapshot = fold_machine_config_producing(
                 snapshot,
                 runtime,
-                &spending.spending.by_provider,
+                &spending.provider.spending.by_provider,
                 *config,
             );
             refresh_git(&mut snapshot);
@@ -467,8 +469,10 @@ pub fn enrich(
     // The fleet `value_tally` — the JSONL today / month / all-time pile read
     // by the cockpit's today figure and the bottom value corner — attaches
     // once, after every fold; `None` when nothing has ever been recorded.
-    snapshot.value_tally =
-        (!spending_cache.spending.total.is_zero()).then_some(spending_cache.spending.total.clone());
+    snapshot.value_tally = (!spending_caches.provider.spending.total.is_zero())
+        .then_some(spending_caches.provider.spending.total.clone());
+    snapshot.workspace_value_tally = (!spending_caches.workspace.tally.is_zero())
+        .then_some(spending_caches.workspace.tally.clone());
     // The live overlay rides the same fold: a context sidecar push wakes the
     // consumer, the refold lands the session's fresh cost on its row, and the
     // cockpit's headline retargets in the same frame — no waiting out the
@@ -476,10 +480,15 @@ pub fn enrich(
     let baselines = refresh_live_spend_baselines(
         runtime,
         &snapshot,
-        spending_cache.refreshed_at_ms,
+        spending_caches.workspace.refreshed_at_ms,
         is_producer,
     );
-    apply_live_today_spend(&mut snapshot, &spending_cache, &baselines.baselines);
+    apply_live_today_spend(
+        &mut snapshot,
+        spending_caches.workspace.tally.today.usd,
+        spending_caches.workspace.refreshed_at_ms,
+        &baselines.baselines,
+    );
     snapshot
 }
 
@@ -586,7 +595,7 @@ fn fold_machine_config_cached(
     snapshot: SidebarSnapshot,
     runtime: &RuntimePaths,
     config: crate::config::MachineConfig,
-) -> (SidebarSnapshot, ProviderSpendingCache) {
+) -> (SidebarSnapshot, SpendingCaches) {
     let accounts_config = config.accounts.clone();
     let accounts = cached_accounts_for_snapshot(
         read_accounts_cache(&runtime.shared_accounts_path()),
@@ -595,13 +604,33 @@ fn fold_machine_config_cached(
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
+    let workspace = if scope.is_empty() {
+        Default::default()
+    } else {
+        let hash = scope.hash();
+        let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&hash));
+        if workspace.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+            && workspace.scope_hash == hash
+        {
+            workspace
+        } else {
+            Default::default()
+        }
+    };
     let mut snapshot =
         fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
     apply_rate_limit_cache(&mut snapshot, runtime, false);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
-    (snapshot, cache)
+    (
+        snapshot,
+        SpendingCaches {
+            provider: cache,
+            workspace,
+        },
+    )
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:

@@ -41,6 +41,7 @@ runtime directory ($XDG_RUNTIME_DIR/rimz/<id>/, or /tmp/rimz-<uid>/rimz/<id>/ wh
   read-marks/sidebar.<instance_id>.json
   snapshot.json  pane-topology.json  presence.stamp    runtime caches
   diff-stats.json  metrics-sample.json  live-spend-baselines.json
+  workspace-spending.<scope_hash>.json
   link-stats.json  binding.log.jsonl
   agent_context/  subagent_context/  agent-activity/   per-session sidecars
 

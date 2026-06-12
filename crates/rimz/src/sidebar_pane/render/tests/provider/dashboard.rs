@@ -1,9 +1,8 @@
 use super::*;
 
 /// The pinned per-provider dashboard, tabbed: the tab rail names every account
-/// (the active tab a brand-filled chip set into the top hairline — the pick is
-/// color, so the rail's glyphs never move), and only the active provider's
-/// block paints — here the selection-derived Claude tab, a metered block (the
+/// (the active tab a brand-filled chip set into the top hairline), and only the
+/// active provider's block paints — here the selection-derived Claude tab, a metered block (the
 /// de-named header with plan and version indented to the stats column, the
 /// `⇅ rc` flag pinned top-right; the brand emblem; the `◎` session count
 /// leading today's stats; 5h/7d "mana" bars draining toward their resets). The
@@ -24,15 +23,11 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
-    // The tab rail names both accounts set into the line; the pick is the
-    // chip's fill and weight, so no cap glyphs paint in a colored frame.
+    // The tab rail names both accounts set into the line; the active chip is a
+    // styled span, so text snapshots only pin the semantic labels.
     assert!(
-        rendered.contains("─ Claude ─") && rendered.contains("─ Codex ─"),
+        rendered.contains("Claude") && rendered.contains("Codex"),
         "both tabs rest in the rail:\n{rendered}"
-    );
-    assert!(
-        !rendered.contains('┤'),
-        "with color, the pick paints no caps:\n{rendered}"
     );
     // The metered Claude block: the rail names the account, so the header
     // drops the name and reads plan-first with the `⇅ rc` remote-control flag

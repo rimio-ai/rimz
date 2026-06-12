@@ -12,8 +12,8 @@
 //!
 //! [`compute_spending`] returns a [`Spending`]: one fleet-wide trailing
 //! 24h / 7d / 30d / 365d [`SpendTally`] plus a per-provider breakdown, so the
-//! fleet ledger and cockpit read the fleet pile and each dashboard panel reads
-//! its own.
+//! fleet ledger and each dashboard panel read account-global piles. The cockpit
+//! reads a workspace-scoped [`SpendTally`] derived from the same cached entries.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 use super::AgentAdapter;
 use super::descriptor::ThreadKey;
@@ -103,13 +104,22 @@ impl SpendTally {
 }
 
 /// The result of a spending pass: the fleet-wide total plus a per-provider
-/// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The cockpit and
-/// the fleet ledger read [`Spending::total`]; each provider dashboard panel reads
-/// its own entry from [`Spending::by_provider`].
+/// breakdown keyed by agent kind (`"claude"`, `"codex"`, `"pi"`). The fleet
+/// ledger reads [`Spending::total`]; each provider dashboard panel reads its own
+/// entry from [`Spending::by_provider`]. The cockpit uses a separate
+/// workspace-scoped tally.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Spending {
     pub total: SpendTally,
     pub by_provider: BTreeMap<String, SpendTally>,
+}
+
+/// Spending data published for one sidebar enrichment fold: account-global
+/// provider totals plus the room-local cockpit tally.
+#[derive(Clone, Debug, Default)]
+pub struct SpendingCaches {
+    pub provider: ProviderSpendingCache,
+    pub workspace: WorkspaceSpendingCache,
 }
 
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
@@ -123,10 +133,14 @@ pub struct Spending {
 /// `len`/`cursor` would read as "grown from offset 0" and append a duplicate
 /// full parse, so the pre-cursor shape must cold-rebuild. v6 records per-file
 /// unknown model names; the cold rebuild also heals entries silently dropped
-/// while unpriced under v5. A cache stamped with an older version is discarded
-/// on read, forcing a clean re-parse under the current shape. `0` is the
-/// implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 6;
+/// while unpriced under v5. v7 records per-entry origin paths so workspace
+/// scoped cockpit tallies can be exact; old entries would otherwise read as
+/// unknown-origin and disappear from the cockpit. The later per-file learned
+/// origin is additive and backfilled from Codex overrides or already-stamped
+/// entries, so it does not need another cold rebuild. A cache stamped with an
+/// older version is discarded on read, forcing a clean re-parse under the
+/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
+const SPENDING_CACHE_VERSION: u32 = 7;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -134,6 +148,11 @@ const SPENDING_CACHE_VERSION: u32 = 6;
 /// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`. v2:
 /// live-session baselines moved to a per-workspace sidecar.
 pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 2;
+
+/// Aggregate version for the per-workspace cockpit tally cache. This is
+/// independent of the shared raw-entry cache version: a semantic change here
+/// can force a cheap re-aggregate without re-reading transcripts.
+pub(crate) const WORKSPACE_SPENDING_VERSION: u32 = 1;
 
 /// On-disk cache persisted at the shared runtime `spending.json`.
 ///
@@ -164,6 +183,11 @@ pub struct FileCacheEntry {
     /// Where the last parse left off — the next incremental parse resumes here.
     #[serde(default)]
     pub cursor: SpendCursor,
+    /// Durable per-file origin learned outside the parser. Codex rollout paths
+    /// do not encode a workspace, so Rimz stamps the file once from live
+    /// snapshot metadata and reuses that origin across cold re-parses.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_path: Option<PathBuf>,
     /// One entry per JSONL line with a positive cost. Duplicates within a file
     /// (retry writes) are kept raw here; the aggregation pass owns all dedup.
     pub entries: Vec<CachedEntry>,
@@ -236,6 +260,11 @@ pub struct CachedEntry {
     /// `isSidechain` flag from Claude entries.
     #[serde(default)]
     pub is_sidechain: bool,
+    /// Working-directory origin for workspace-scoped tallies. `None` means the
+    /// parser could not prove the transcript's workspace; scoped aggregation
+    /// omits it rather than guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_path: Option<PathBuf>,
 }
 
 // ── Spending computation ──────────────────────────────────────────────────────
@@ -267,37 +296,89 @@ pub fn compute_spending(
     prices: &PriceBook,
     now_secs: u64,
 ) -> Spending {
+    compute_spending_with_origins(files, cache, prices, now_secs, &HashMap::new())
+}
+
+/// Compute fleet spending, applying trusted transcript-path → origin overrides
+/// before aggregation. The overrides are currently used for Codex rollout files,
+/// whose path does not encode the workspace; Claude and Pi parsers stamp their
+/// own origins from transcript contents.
+pub fn compute_spending_with_origins(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+) -> Spending {
+    compute_spending_with_origins_and_scope(files, cache, prices, now_secs, origin_overrides, None)
+        .0
+}
+
+/// Compute account-global spending and, when `scope` is present, the cockpit's
+/// workspace-scoped tally from the same refreshed cache and the same dedup pass.
+pub fn compute_spending_with_origins_and_scope(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+    scope: Option<&SpendScope>,
+) -> (Spending, SpendTally) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
     for (adapter, file) in files {
         let (mtime, len) = file_stat(file);
         let key = file.to_string_lossy().into_owned();
+        let override_origin = origin_overrides
+            .get(file)
+            .and_then(|origin| normalized_absolute_path(origin));
+        let prior_origin = cache
+            .files
+            .get(&key)
+            .and_then(|entry| file_cache_origin(entry, adapter.descriptor().kind == "codex"));
+        let file_origin = override_origin.or(prior_origin);
         let heals = cache
             .files
             .get(&key)
             .is_some_and(|entry| has_healed_unknown(entry, prices, now_secs));
         match cache.files.get_mut(&key) {
             // Unchanged: nothing to read.
-            Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {}
+            Some(entry) if !heals && entry.mtime_secs == mtime && entry.len == len => {
+                if let Some(origin) = file_origin.as_deref()
+                    && stamp_file_origin(entry, origin)
+                {
+                    cache.dirty = true;
+                }
+            }
             // Grown in place: parse only the appended suffix and extend.
             Some(entry) if !heals && len > entry.len => {
-                let parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
+                let mut parsed = adapter.parse_spend(file, Some(&entry.cursor), prices);
+                if let Some(origin) = file_origin.as_deref() {
+                    stamp_entries_origin(&mut parsed.entries, origin);
+                }
                 entry.entries.extend(parsed.entries);
                 entry.unknown_models.extend(parsed.unknown_models);
                 entry.cursor = parsed.cursor;
                 entry.mtime_secs = mtime;
                 entry.len = len;
+                if let Some(origin) = file_origin.as_deref() {
+                    stamp_file_origin(entry, origin);
+                }
                 cache.dirty = true;
             }
             // New, truncated/rotated, or rewritten in place: parse cold.
             _ => {
-                let parsed = adapter.parse_spend(file, None, prices);
+                let mut parsed = adapter.parse_spend(file, None, prices);
+                if let Some(origin) = file_origin.as_deref() {
+                    stamp_entries_origin(&mut parsed.entries, origin);
+                }
                 cache.files.insert(
-                    key,
+                    key.clone(),
                     FileCacheEntry {
                         mtime_secs: mtime,
                         len,
                         cursor: parsed.cursor,
+                        origin_path: file_origin,
                         entries: parsed.entries,
                         unknown_models: parsed.unknown_models,
                     },
@@ -305,6 +386,9 @@ pub fn compute_spending(
                 cache.dirty = true;
             }
         }
+    }
+    if prune_spending_cache(files, cache, now_secs) {
+        cache.dirty = true;
     }
 
     // Second pass: aggregate with cross-file Claude deduplication.
@@ -315,7 +399,20 @@ pub fn compute_spending(
     // suppressed.  ID-free entries (Codex, Pi) carry their file's provider so
     // they bucket under the right kind.
     let deduped = dedup_cached_entries(files, cache);
+    let spending = aggregate_spending(files, cache, &deduped, now_secs);
+    let workspace = scope
+        .map(|scope| aggregate_scoped_tally(files, cache, &deduped, scope, now_secs))
+        .unwrap_or_default();
 
+    (spending, workspace)
+}
+
+fn aggregate_spending(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    deduped: &DedupedCachedEntries,
+    now_secs: u64,
+) -> Spending {
     let mut spending = Spending::default();
     let mut add = |provider: &str, entry: &CachedEntry| {
         accum(&mut spending.total, entry, now_secs);
@@ -377,6 +474,191 @@ pub fn compute_spending(
     spending
 }
 
+/// The roots that define one cockpit scope: the project root plus grouped
+/// worktree roots. Roots are lexical absolute paths; unreadable or relative
+/// origins do not enter the scope.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SpendScope {
+    roots: Vec<PathBuf>,
+}
+
+impl SpendScope {
+    pub fn from_roots(project_root: Option<&Path>, worktree_roots: &[PathBuf]) -> Self {
+        let mut roots: Vec<PathBuf> = project_root
+            .into_iter()
+            .chain(worktree_roots.iter().map(PathBuf::as_path))
+            .map(normalize_path_lexical)
+            .filter(|root| root.is_absolute())
+            .collect();
+        roots.sort();
+        roots.dedup();
+        Self { roots }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.roots.is_empty()
+    }
+
+    pub fn hash(&self) -> String {
+        let mut hasher = Sha256::new();
+        for root in &self.roots {
+            hasher.update(root.to_string_lossy().as_bytes());
+            hasher.update([0]);
+        }
+        hex::encode(hasher.finalize())
+    }
+
+    pub(crate) fn contains(&self, origin: &Path) -> bool {
+        if !origin.is_absolute() {
+            return false;
+        }
+        let origin = normalize_path_lexical(origin);
+        if !origin.is_absolute() {
+            return false;
+        }
+        self.roots.iter().any(|root| origin.starts_with(root))
+    }
+}
+
+/// Compute the cockpit's workspace-scoped tally from an already-refreshed
+/// spending cache. Unknown-origin entries are skipped.
+pub fn compute_scoped_tally(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    scope: &SpendScope,
+    now_secs: u64,
+) -> SpendTally {
+    if scope.is_empty() {
+        return SpendTally::default();
+    }
+    let deduped = dedup_cached_entries(files, cache);
+    aggregate_scoped_tally(files, cache, &deduped, scope, now_secs)
+}
+
+fn aggregate_scoped_tally(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+    deduped: &DedupedCachedEntries,
+    scope: &SpendScope,
+    now_secs: u64,
+) -> SpendTally {
+    let mut tally = SpendTally::default();
+
+    for ((msg_id, _), (_, entry)) in &deduped.by_exact_key {
+        let is_sidechain_replay = entry.is_sidechain
+            && deduped
+                .msg_has_non_sidechain
+                .get(msg_id.as_str())
+                .copied()
+                .unwrap_or(false);
+        if !is_sidechain_replay && entry_in_scope(entry, scope) {
+            accum(&mut tally, entry, now_secs);
+        }
+    }
+    for (_, entry) in &deduped.free_entries {
+        if entry_in_scope(entry, scope) {
+            accum(&mut tally, entry, now_secs);
+        }
+    }
+
+    let mut threads: HashMap<String, u64> = HashMap::new();
+    for (adapter, file) in files {
+        let cache_key = file.to_string_lossy().into_owned();
+        let Some(cached_file) = cache.files.get(&cache_key) else {
+            continue;
+        };
+        let Some(youngest) = cached_file
+            .entries
+            .iter()
+            .filter(|entry| entry_in_scope(entry, scope))
+            .map(|entry| entry.ts_secs)
+            .max()
+        else {
+            continue;
+        };
+        threads
+            .entry(session_key(*adapter, file))
+            .and_modify(|ts| *ts = (*ts).max(youngest))
+            .or_insert(youngest);
+    }
+    for youngest in threads.values() {
+        bump_sessions(&mut tally, *youngest, now_secs);
+    }
+
+    tally
+}
+
+fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
+    let origin = normalize_path_lexical(origin);
+    let mut changed = false;
+    if entry.origin_path.as_ref() != Some(&origin) {
+        entry.origin_path = Some(origin.clone());
+        changed = true;
+    }
+    changed | stamp_entries_origin(&mut entry.entries, &origin)
+}
+
+fn stamp_entries_origin(entries: &mut [CachedEntry], origin: &Path) -> bool {
+    let origin = normalize_path_lexical(origin);
+    let mut changed = false;
+    for cached in entries {
+        if cached.origin_path.as_ref() != Some(&origin) {
+            cached.origin_path = Some(origin.clone());
+            changed = true;
+        }
+    }
+    changed
+}
+
+fn file_cache_origin(entry: &FileCacheEntry, infer_from_entries: bool) -> Option<PathBuf> {
+    entry.origin_path.clone().or_else(|| {
+        infer_from_entries
+            .then(|| single_cached_origin(entry))
+            .flatten()
+    })
+}
+
+fn single_cached_origin(entry: &FileCacheEntry) -> Option<PathBuf> {
+    let mut origins = entry
+        .entries
+        .iter()
+        .filter_map(|entry| entry.origin_path.as_deref());
+    let first = origins.next()?;
+    origins
+        .all(|origin| origin == first)
+        .then(|| first.to_path_buf())
+}
+
+fn entry_in_scope(entry: &CachedEntry, scope: &SpendScope) -> bool {
+    entry
+        .origin_path
+        .as_deref()
+        .is_some_and(|origin| scope.contains(origin))
+}
+
+pub(crate) fn origin_path(raw: Option<&str>) -> Option<PathBuf> {
+    normalized_absolute_path(&PathBuf::from(raw?.trim()))
+}
+
+fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
+    let normalized = normalize_path_lexical(path);
+    normalized.is_absolute().then_some(normalized)
+}
+
+fn normalize_path_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 /// Whether a model name from a transcript should feed the pricing refresh
 /// chase. Claude sentinel turns such as `<synthetic>` are not API model names
 /// and would otherwise keep the chase pending forever.
@@ -430,6 +712,35 @@ fn has_healed_unknown(entry: &FileCacheEntry, prices: &PriceBook, now_secs: u64)
     entry.unknown_models.iter().any(|(model, ts_secs)| {
         within_widest_window(*ts_secs, now_secs) && prices.price(model).is_some()
     })
+}
+
+fn prune_spending_cache(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    now_secs: u64,
+) -> bool {
+    let discovered: BTreeSet<String> = files
+        .iter()
+        .map(|(_, file)| file.to_string_lossy().into_owned())
+        .collect();
+    let before_files = cache.files.len();
+    cache
+        .files
+        .retain(|key, _| discovered.contains(key) || Path::new(key.as_str()).exists());
+    let mut changed = cache.files.len() != before_files;
+    for entry in cache.files.values_mut() {
+        let before_entries = entry.entries.len();
+        entry
+            .entries
+            .retain(|entry| within_widest_window(entry.ts_secs, now_secs));
+        changed |= entry.entries.len() != before_entries;
+        let before_unknowns = entry.unknown_models.len();
+        entry
+            .unknown_models
+            .retain(|_, ts_secs| within_widest_window(*ts_secs, now_secs));
+        changed |= entry.unknown_models.len() != before_unknowns;
+    }
+    changed
 }
 
 struct DedupedCachedEntries {
@@ -641,6 +952,51 @@ pub fn read_provider_spending_cache(path: &Path) -> ProviderSpendingCache {
     fs::read(path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ProviderSpendingCache>(&bytes).ok())
+        .unwrap_or_default()
+}
+
+/// The published per-workspace cockpit spending cache. The filename is keyed by
+/// the scope hash; the hash rides in the file too so a stale or renamed file
+/// cannot satisfy a different scope.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct WorkspaceSpendingCache {
+    #[serde(default)]
+    pub version: u32,
+    #[serde(default)]
+    pub refreshed_at_ms: u64,
+    #[serde(default)]
+    pub scope_hash: String,
+    #[serde(default)]
+    pub tally: SpendTally,
+}
+
+impl WorkspaceSpendingCache {
+    pub fn is_fresh(&self, now_ms: u64, scope_hash: &str) -> bool {
+        self.version == WORKSPACE_SPENDING_VERSION
+            && self.scope_hash == scope_hash
+            && now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
+    }
+}
+
+pub fn write_workspace_spending_cache(
+    path: &Path,
+    refreshed_at_ms: u64,
+    scope_hash: &str,
+    tally: &SpendTally,
+) {
+    let cache = WorkspaceSpendingCache {
+        version: WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms,
+        scope_hash: scope_hash.to_owned(),
+        tally: tally.clone(),
+    };
+    let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &cache);
+}
+
+pub fn read_workspace_spending_cache(path: &Path) -> WorkspaceSpendingCache {
+    fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<WorkspaceSpendingCache>(&bytes).ok())
         .unwrap_or_default()
 }
 

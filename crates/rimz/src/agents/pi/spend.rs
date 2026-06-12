@@ -30,9 +30,9 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
-use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse};
+use crate::agents::spending::{CachedEntry, SpendCursor, SpendParse, origin_path};
 
 use crate::agents::transcript_fs::{collect_jsonl, home_dir, read_spend_lines};
 
@@ -44,6 +44,19 @@ struct PiEntry {
     #[serde(rename = "type")]
     entry_type: Option<String>,
     message: Option<PiMessage>,
+}
+
+#[derive(Deserialize)]
+struct PiSessionHeader {
+    #[serde(rename = "type")]
+    entry_type: Option<String>,
+    cwd: Option<String>,
+}
+
+#[derive(Default, Deserialize, Serialize)]
+struct PiSpendState {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    cwd: Option<PathBuf>,
 }
 
 #[derive(Deserialize)]
@@ -115,21 +128,27 @@ pub(crate) fn pi_config_dir() -> PathBuf {
 
 // ── Parser ────────────────────────────────────────────────────────────────────
 
-/// Parse a Pi JSONL file into `CachedEntry` values from `from_offset` (0 =
-/// the whole file). Lines are independent — no cross-line state — so the
-/// cursor is just the consumed-byte offset.
+/// Parse a Pi JSONL file into `CachedEntry` values, resuming from `resume` when
+/// given. The first line is a session header carrying `cwd`; the cursor stores
+/// that origin so appended usage entries keep their workspace scope without
+/// re-reading the header.
 ///
 /// Accepts only lines where `"type":"message"` (or `type` is absent) and
 /// `message.role == "assistant"`.  Cost is read from `message.usage.cost.total`.
 /// Lines without both `"usage"` and `"message"` keywords are skipped before
 /// deserialization.
-pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
+pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
+    let from_offset = resume.map_or(0, |cursor| cursor.offset);
+    let mut state: PiSpendState = resume
+        .and_then(|cursor| cursor.state.clone())
+        .and_then(|value| serde_json::from_value(value).ok())
+        .unwrap_or_default();
     let Some((content, next_offset)) = read_spend_lines(path, from_offset) else {
         return SpendParse {
             entries: Vec::new(),
             cursor: SpendCursor {
                 offset: from_offset,
-                state: None,
+                state: serde_json::to_value(&state).ok(),
             },
             unknown_models: BTreeMap::new(),
         };
@@ -138,6 +157,13 @@ pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
     let mut out = Vec::new();
 
     for line in content.lines() {
+        if state.cwd.is_none()
+            && let Ok(header) = serde_json::from_str::<PiSessionHeader>(line)
+            && header.entry_type.as_deref() == Some("session")
+        {
+            state.cwd = origin_path(header.cwd.as_deref());
+            continue;
+        }
         if !line.contains(r#""usage""#) || !line.contains(r#""message""#) {
             continue;
         }
@@ -177,13 +203,14 @@ pub fn parse_pi_spend(path: &Path, from_offset: u64) -> SpendParse {
             message_id: None,
             request_id: None,
             is_sidechain: false,
+            origin_path: state.cwd.clone(),
         });
     }
     SpendParse {
         entries: out,
         cursor: SpendCursor {
             offset: next_offset,
-            state: None,
+            state: serde_json::to_value(&state).ok(),
         },
         unknown_models: BTreeMap::new(),
     }
@@ -208,7 +235,7 @@ mod tests {
         )
         .unwrap();
 
-        let entries = parse_pi_spend(&path, 0).entries;
+        let entries = parse_pi_spend(&path, None).entries;
         assert_eq!(entries.len(), 1);
         assert!((entries[0].cost_usd - 0.42).abs() < 1e-9);
         assert_eq!(entries[0].input, 100);
@@ -222,6 +249,47 @@ mod tests {
     }
 
     #[test]
+    fn carries_session_header_cwd_through_incremental_cursor() {
+        let dir = TempDir::new().unwrap();
+        let cwd = dir.path().join("repo");
+        let path = dir.path().join("session.jsonl");
+        let mut f = std::fs::File::create(&path).unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"session","version":3,"id":"sess","timestamp":"2026-06-02T09:00:00.000Z","cwd":"{}"}}"#,
+            cwd.display()
+        )
+        .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
+        )
+        .unwrap();
+
+        let first = parse_pi_spend(&path, None);
+        assert_eq!(first.entries.len(), 1);
+        assert_eq!(first.entries[0].origin_path.as_deref(), Some(cwd.as_path()));
+
+        let mut f = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        writeln!(
+            f,
+            r#"{{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{{"role":"assistant","usage":{{"input":200,"output":75,"cost":{{"total":0.84}}}}}}}}"#
+        )
+        .unwrap();
+
+        let second = parse_pi_spend(&path, Some(&first.cursor));
+        assert_eq!(second.entries.len(), 1);
+        assert!((second.entries[0].cost_usd - 0.84).abs() < 1e-9);
+        assert_eq!(
+            second.entries[0].origin_path.as_deref(),
+            Some(cwd.as_path())
+        );
+    }
+
+    #[test]
     fn skips_user_role_lines() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("session.jsonl");
@@ -232,7 +300,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(parse_pi_spend(&path, 0).entries.is_empty());
+        assert!(parse_pi_spend(&path, None).entries.is_empty());
     }
 
     #[test]
@@ -246,7 +314,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(parse_pi_spend(&path, 0).entries.is_empty());
+        assert!(parse_pi_spend(&path, None).entries.is_empty());
     }
 
     #[test]
@@ -257,6 +325,6 @@ mod tests {
         writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":0.0}}}}}}}}"#).unwrap();
         writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":-1.0}}}}}}}}"#).unwrap();
 
-        assert!(parse_pi_spend(&path, 0).entries.is_empty());
+        assert!(parse_pi_spend(&path, None).entries.is_empty());
     }
 }

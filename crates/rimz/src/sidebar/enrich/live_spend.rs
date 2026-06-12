@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use crate::agents::spending::{
-    LiveSpendBaselines, ProviderSpendingCache, read_live_spend_baselines, today_spend_live_usd,
+    LiveSpendBaselines, SpendScope, origin_path, read_live_spend_baselines, today_spend_live_usd,
     write_live_spend_baselines,
 };
 use crate::{RuntimePaths, SidebarSnapshot};
@@ -15,14 +15,15 @@ use crate::{RuntimePaths, SidebarSnapshot};
 /// cockpit keeps its bare `¤` line.
 pub fn apply_live_today_spend(
     snapshot: &mut SidebarSnapshot,
-    cache: &ProviderSpendingCache,
+    walked_today_usd: f64,
+    published_at_ms: u64,
     baselines: &BTreeMap<String, f64>,
 ) {
     let live = today_spend_live_usd(
-        cache.spending.total.today.usd,
+        walked_today_usd,
         live_row_costs(snapshot),
         baselines,
-        cache.refreshed_at_ms,
+        published_at_ms,
     );
     snapshot.today_spend_live_usd = (live > 0.0).then_some(live);
 }
@@ -49,18 +50,25 @@ pub(super) fn refresh_live_spend_baselines(
     baselines
 }
 
-/// Every agent row's live statusline cost: `(row id, total_cost_usd,
-/// registered-at ms)` triples — the overlay's per-session input, and
-/// (collected to a map) the baseline set the producer stamps at each walk
-/// publish.
+/// Every in-scope agent row's live statusline cost: `(row id,
+/// total_cost_usd, registered-at ms)` triples — the overlay's per-session
+/// input, and (collected to a map) the baseline set the producer stamps at each
+/// walk publish. Rows without an absolute worktree path, or whose path sits
+/// outside the room's project root plus grouped worktree roots, are omitted so
+/// the overlay stays aligned with the workspace-scoped transcript tally.
 pub fn live_row_costs(
     snapshot: &SidebarSnapshot,
 ) -> impl Iterator<Item = (&str, f64, Option<u64>)> {
+    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
-        .filter_map(|row| {
+        .filter_map(move |row| {
+            let origin = origin_path(row.worktree_path.as_deref())?;
+            if !scope.contains(&origin) {
+                return None;
+            }
             let usd = row
                 .as_agent()
                 .and_then(|agent| agent.context.as_ref())

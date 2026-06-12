@@ -4,7 +4,7 @@ expression: strip_sgr(&ansi)
 ---
  ⌘ query-engine                /srv/code/query-engine
 
- ◎ 8                       ◇ 712k ↘ 498k ↗ 142k ◌ 71k
+ ◎ 5                        ◇ 481k ↘ 336k ↗ 96k ◌ 48k
  ¤ 3                                           $10.08
  ────────────────────────────────────────────────────
  ? 1   ! 1   ⏸︎ 0   ✓ 0                      ⢿ 1   ○ 0

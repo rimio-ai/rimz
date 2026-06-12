@@ -78,6 +78,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         sidebar: crate::config::SidebarConfig::default(),
         providers: Vec::new(),
         value_tally: None,
+        workspace_value_tally: None,
         today_spend_live_usd: None,
         link: None,
         reflects_log: None,
@@ -228,9 +229,10 @@ pub(super) fn apply_fetch_outcome(
     // carrying neither leaves the roll untouched, so a transient missing
     // snapshot never snaps the figure to zero. The serve loop paints the
     // folded state on its next frame boundary; this path never draws.
-    let today_usd = current
-        .today_spend_live_usd
-        .or(current.value_tally.as_ref().map(|tally| tally.today.usd));
+    let today_usd = current.today_spend_live_usd.or(current
+        .workspace_value_tally
+        .as_ref()
+        .map(|tally| tally.today.usd));
     if let Some(usd) = today_usd {
         ui.tally.observe(usd, ui.animation_phase);
     }

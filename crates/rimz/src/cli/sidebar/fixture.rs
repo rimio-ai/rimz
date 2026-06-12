@@ -28,6 +28,7 @@ pub(super) fn sidebar_fixture_snapshot(
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),
         value_tally: None,
+        workspace_value_tally: None,
         today_spend_live_usd: None,
         link: None,
         reflects_log: None,
@@ -148,6 +149,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         },
     ];
     snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));
+    snapshot.workspace_value_tally = Some(spend_tally(6.84, 481_000, 5));
     snapshot.today_spend_live_usd = Some(10.08);
 }
 

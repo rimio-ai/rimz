@@ -394,9 +394,12 @@ pub(super) fn top_lines(
     // with today's accumulated token breakdown pinned right — both halves read
     // today's window; line 2 is `¤` live agents on the left with today's spend
     // pinned right. The counts read from the live fleet and the JSONL
-    // `value_tally`'s today window, so the cockpit reflects all of today's
-    // sessions rather than only the live statusline sum.
-    let today = snapshot.value_tally.as_ref().map(|tally| &tally.today);
+    // `workspace_value_tally`'s today window, so the cockpit reflects this
+    // room's sessions rather than account-global provider history.
+    let today = snapshot
+        .workspace_value_tally
+        .as_ref()
+        .map(|tally| &tally.today);
     let sessions = today.map(|window| window.sessions).unwrap_or(0);
     header.push(cockpit_summary_line(theme, sessions, today, inner));
     // Line 2 is always present — an empty room reads `¤ 0` — with the spend

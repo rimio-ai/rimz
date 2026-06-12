@@ -187,7 +187,8 @@ fn enrich_producing(
     });
     let config = crate::config::MachineConfig::load().unwrap_or_default();
     let trunk = config.sidebar.trunk.clone();
-    let compute_spending = |_snapshot: &SidebarSnapshot| spending::compute_fleet_spending(runtime);
+    let compute_spending =
+        |snapshot: &SidebarSnapshot| spending::compute_fleet_spending(runtime, snapshot);
     let refresh_git = |snapshot: &mut SidebarSnapshot| {
         git::enrich_worktree_groups(snapshot, runtime, trunk.as_deref());
     };

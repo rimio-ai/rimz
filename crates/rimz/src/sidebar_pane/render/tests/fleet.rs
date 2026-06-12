@@ -80,6 +80,39 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
         "the selected worktree shows the lane spine:\n{screen}"
     );
 }
+
+#[test]
+fn cockpit_reads_workspace_tally_while_ledger_reads_global_tally() {
+    let mut snapshot = snapshot_with(Vec::new(), Vec::new());
+    snapshot.value_tally = Some(bottom_tally());
+    let today = crate::SpendWindow {
+        usd: 1.23,
+        tokens: 30_000,
+        input: 20_000,
+        output: 10_000,
+        cache_read: 5_000,
+        sessions: 2,
+        ..Default::default()
+    };
+    snapshot.workspace_value_tally = Some(crate::SpendTally {
+        today,
+        week: today,
+        month: today,
+        year: today,
+    });
+
+    let rendered = snapshot_to_screen(&snapshot, 60, 14);
+    let summary = rendered.lines().nth(2).unwrap();
+    let spend = rendered.lines().nth(3).unwrap();
+
+    assert!(summary.contains("◎ 2"), "scoped sessions:\n{rendered}");
+    assert!(summary.contains("30k"), "scoped tokens:\n{rendered}");
+    assert!(spend.contains("$1.23"), "scoped today spend:\n{rendered}");
+    assert!(
+        rendered.contains("$12.34") && rendered.contains("$56.78"),
+        "global ledger week/month stay visible:\n{rendered}"
+    );
+}
 /// The cockpit `?`/`!` buckets echo the per-row glyph escalation: each
 /// wears its oldest contributing row's age heat over the same yellow floor
 /// — warm while fresh, sliding until full alarm at the hour.

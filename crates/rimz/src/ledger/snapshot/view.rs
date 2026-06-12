@@ -180,22 +180,30 @@ pub struct SidebarSnapshot {
     /// snapshot leaves it empty.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub providers: Vec<SidebarProviderPanel>,
-    /// Fleet-wide JSONL-computed spend and token tally — today / week / month /
-    /// all-time — summing every provider (Claude scoped to the visible worktrees,
-    /// Codex and Pi fleet-wide). Attached by the sidebar enrichment spine
+    /// Account-global JSONL-computed spend and token tally — today / week /
+    /// month / trailing-year — summing every provider across every workspace.
+    /// Attached by the sidebar enrichment spine
     /// (`sidebar::enrich::enrich`) from the producer's fleet spending walk
     /// (`sidebar::produce`, via [`crate::agents::spending::compute_spending`]);
     /// `None` until the cache is seeded (the first producer tick after startup)
-    /// or when nothing has been recorded. The cockpit reads `today` (sessions,
-    /// the token split, and the count-up `$`); the fleet ledger reads the
-    /// trailing `week` and `month` rows.
+    /// or when nothing has been recorded. The fleet ledger reads the trailing
+    /// `week` and `month` rows; provider dashboard panels read the per-provider
+    /// entries produced alongside this total.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_tally: Option<SpendTally>,
-    /// The cockpit's live today-spend: the walked `value_tally.today` figure
-    /// plus each live session's overshoot over the baseline captured at the
-    /// walk's publish ([`crate::agents::spending::today_spend_live_usd`]), so
-    /// the headline climbs the instant a session's statusline cost moves while
-    /// the tally stays the exact walked record the W/M ledger rows read.
+    /// Workspace-scoped spend and token tally for the cockpit, limited to the
+    /// room's project root plus grouped worktree roots. Unknown-origin
+    /// transcript entries are omitted. This is cached under the workspace
+    /// runtime root and folded beside [`Self::value_tally`] so the provider
+    /// dashboard and fleet ledger stay account-global.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workspace_value_tally: Option<SpendTally>,
+    /// The cockpit's live today-spend: the walked
+    /// `workspace_value_tally.today` figure plus each live session's overshoot
+    /// over the baseline captured at the workspace cache publish
+    /// ([`crate::agents::spending::today_spend_live_usd`]), so the headline
+    /// climbs the instant a session's statusline cost moves while the global
+    /// tally stays the exact walked record the W/M ledger rows read.
     /// Stamped where the spending cache folds onto the snapshot — the
     /// producing CLI and the consumer fold alike; `None` on the pure-reducer
     /// path and any pre-overlay snapshot, where the cockpit falls back to the
@@ -299,6 +307,7 @@ impl SidebarSnapshot {
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
             value_tally: None,
+            workspace_value_tally: None,
             today_spend_live_usd: None,
             link: None,
             reflects_log: None,

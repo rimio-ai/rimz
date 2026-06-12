@@ -282,6 +282,11 @@ impl RuntimePaths {
         self.root.join("live-spend-baselines.json")
     }
 
+    pub fn workspace_spending_path(&self, scope_hash: &str) -> PathBuf {
+        let prefix = scope_hash.get(..32).unwrap_or(scope_hash);
+        self.root.join(format!("workspace-spending.{prefix}.json"))
+    }
+
     pub fn ensure_dirs(&self) -> Result<()> {
         let rimz_root = self
             .root

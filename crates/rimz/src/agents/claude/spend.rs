@@ -32,7 +32,7 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendParse, record_unknown_model};
+use crate::agents::spending::{CachedEntry, SpendParse, origin_path, record_unknown_model};
 
 use crate::agents::transcript_fs::{
     bytes_contains, collect_jsonl, expand_tilde, home_dir, read_spend_lines,
@@ -46,6 +46,7 @@ use crate::agents::transcript_fs::{
 #[serde(rename_all = "camelCase")]
 struct ClaudeEntry {
     timestamp: Option<String>,
+    cwd: Option<String>,
     #[serde(rename = "costUSD")]
     cost_usd: Option<f64>,
     #[serde(default)]
@@ -142,7 +143,6 @@ pub fn all_jsonl_files() -> Vec<PathBuf> {
 fn has_unsupported_null_field(line: &[u8]) -> bool {
     const NULL_PATTERNS: &[&[u8]] = &[
         b"\"id\":null",
-        b"\"cwd\":null",
         b"\"model\":null",
         b"\"speed\":null",
         b"\"costUSD\":null",
@@ -305,6 +305,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
             is_sidechain: entry.is_sidechain == Some(true),
+            origin_path: origin_path(entry.cwd.as_deref()),
         });
     }
 
@@ -380,12 +381,16 @@ mod tests {
     #[test]
     fn skips_lines_without_usage_object_and_captures_token_components() {
         let dir = TempDir::new().unwrap();
+        let cwd = dir.path().join("repo");
         let file = write_jsonl(
             dir.path(),
             "chat.jsonl",
             &[
                 r#"{"timestamp":"2026-01-01T10:00:00.000Z","costUSD":99.0}"#,
-                &claude_line("2026-01-01", 0.5, "msg-1", "req-1"),
+                &format!(
+                    r#"{{"timestamp":"2026-01-01T10:00:00.000Z","cwd":"{}","costUSD":0.5,"requestId":"req-1","message":{{"id":"msg-1","usage":{{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":3,"cache_read_input_tokens":7}}}}}}"#,
+                    cwd.display()
+                ),
             ],
         );
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
@@ -397,6 +402,25 @@ mod tests {
         assert_eq!(entries[0].output, 5);
         assert_eq!(entries[0].cache_write, 3);
         assert_eq!(entries[0].cache_read, 7);
+        assert_eq!(entries[0].origin_path.as_deref(), Some(cwd.as_path()));
+    }
+
+    #[test]
+    fn cwd_null_keeps_global_spend_with_unknown_origin() {
+        let dir = TempDir::new().unwrap();
+        let file = write_jsonl(
+            dir.path(),
+            "chat.jsonl",
+            &[
+                r#"{"timestamp":"2026-01-01T10:00:00.000Z","cwd":null,"costUSD":0.5,"requestId":"req-1","message":{"id":"msg-1","usage":{"input_tokens":10,"output_tokens":5}}}"#,
+            ],
+        );
+
+        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
+
+        assert_eq!(entries.len(), 1);
+        assert!((entries[0].cost_usd - 0.5).abs() < 1e-9);
+        assert_eq!(entries[0].origin_path, None);
     }
 
     #[test]

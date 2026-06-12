@@ -354,15 +354,16 @@ impl AgentAdapter for PiAdapter {
         spend::pi_session_files()
     }
 
-    /// Pi logs `costUSD` directly, so the price book is unused. Lines are
-    /// independent, so a resume is a plain offset.
+    /// Pi logs `costUSD` directly, so the price book is unused. The resume
+    /// cursor carries the session header cwd so appended usage entries retain
+    /// their workspace origin.
     fn parse_spend(
         &self,
         path: &Path,
         resume: Option<&crate::agents::spending::SpendCursor>,
         _prices: &PriceBook,
     ) -> crate::agents::spending::SpendParse {
-        spend::parse_pi_spend(path, resume.map_or(0, |cursor| cursor.offset))
+        spend::parse_pi_spend(path, resume)
     }
 
     /// `pi --session <id>` resolves the session (a partial UUID suffices) and

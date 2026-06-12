@@ -34,8 +34,6 @@ pub(crate) use super::enrich::{
     write_rate_limits_cache,
 };
 #[cfg(test)]
-use crate::agents::spending::ProviderSpendingCache;
-#[cfg(test)]
 use crate::agents::{AgentRateLimits, RateLimitWindow};
 #[cfg(test)]
 use crate::feed::PaneRef;

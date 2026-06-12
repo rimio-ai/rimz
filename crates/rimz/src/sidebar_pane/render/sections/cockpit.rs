@@ -24,8 +24,8 @@ const ACTIVE_AGENTS_GLYPH: &str = "¤";
 /// shares with the W/M ledger rows — on the left, with today's accumulated
 /// token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the live coarse form)
 /// pinned to the right edge: both halves read today's window, so the line is
-/// the day at a glance. The breakdown reads the JSONL `value_tally`'s today
-/// window and drops when today recorded no tokens, leaving `◎ {sessions}`
+/// the day at a glance. The breakdown reads the workspace-scoped JSONL tally's
+/// today window and drops when today recorded no tokens, leaving `◎ {sessions}`
 /// alone. The live-agent count and the spend ride the second line
 /// ([`cockpit_spend_line`]).
 pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
@@ -54,7 +54,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// The cockpit's second summary line: `¤ {live}` — the agents in the room right
 /// now, the glyph in the agents' own working clay — on the left, with today's
 /// fleet spend pinned to the right edge, counting up as a turn lands. The
-/// figure ticks toward the `value_tally` today total via the shared
+/// figure ticks toward the workspace tally's today total via the shared
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
 /// figure — and brightens for a beat the instant it settles (the W/M ledger
 /// rows below stay static). Always present — an empty room reads `¤ 0`; the
