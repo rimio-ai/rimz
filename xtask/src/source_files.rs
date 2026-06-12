@@ -1,0 +1,55 @@
+use std::ffi::OsStr;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+
+pub(crate) fn tracked_text_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let output = Command::new("git")
+        .args(["ls-files"])
+        .current_dir(root)
+        .output()
+        .context("running `git ls-files`")?;
+    if !output.status.success() {
+        bail!("git ls-files failed");
+    }
+    let files: Vec<_> = String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter(|path| {
+            path.ends_with(".rs")
+                || path.ends_with(".toml")
+                || path.ends_with(".md")
+                || path.ends_with(".json")
+        })
+        .map(|path| root.join(path))
+        .collect();
+    if files.is_empty() {
+        return walk_text_files(root);
+    }
+    Ok(files)
+}
+
+fn walk_text_files(root: &Path) -> Result<Vec<PathBuf>> {
+    let mut files = Vec::new();
+    walk_text_files_inner(root, root, &mut files)?;
+    Ok(files)
+}
+
+fn walk_text_files_inner(root: &Path, dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
+    for entry in std::fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry?;
+        let path = entry.path();
+        if path.starts_with(root.join(".git")) || path.starts_with(root.join("target")) {
+            continue;
+        }
+        if path.is_dir() {
+            walk_text_files_inner(root, &path, files)?;
+        } else if matches!(
+            path.extension().and_then(OsStr::to_str),
+            Some("rs" | "toml" | "md" | "json")
+        ) {
+            files.push(path);
+        }
+    }
+    Ok(())
+}

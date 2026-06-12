@@ -1,0 +1,118 @@
+use serde_json::{Value, json};
+
+use super::*;
+
+fn pane_list(panes: Value) -> Vec<u8> {
+    serde_json::to_vec(&panes).unwrap()
+}
+
+#[test]
+fn live_sidebar_selection_prefers_the_single_focused_sidebar() {
+    let panes = pane_list(json!([
+        {
+            "pane_id": "zellij:terminal_1",
+            "view_id": "tab_1",
+            "command": "rimz-sidebar",
+            "is_focused": true
+        },
+        {
+            "pane_id": "zellij:terminal_2",
+            "view_id": "tab_2",
+            "command": "rimz-sidebar"
+        }
+    ]));
+
+    assert_eq!(
+        select_live_sidebar_pane(&panes).unwrap(),
+        "zellij:terminal_1"
+    );
+}
+
+#[test]
+fn live_sidebar_selection_uses_the_focused_work_panes_view() {
+    let panes = pane_list(json!([
+        {
+            "pane_id": "zellij:terminal_1",
+            "view_id": "tab_1",
+            "command": "rimz-sidebar"
+        },
+        {
+            "pane_id": "zellij:terminal_2",
+            "view_id": "tab_2",
+            "spawn_command": "rimz sidebar serve --workspace-id ws_1"
+        },
+        {
+            "pane_id": "zellij:terminal_3",
+            "view_id": "tab_2",
+            "command": "zsh",
+            "is_focused": true
+        }
+    ]));
+
+    assert_eq!(
+        select_live_sidebar_pane(&panes).unwrap(),
+        "zellij:terminal_2"
+    );
+}
+
+#[test]
+fn live_sidebar_selection_falls_back_to_the_only_sidebar() {
+    let panes = pane_list(json!([
+        {
+            "pane_id": "zellij:terminal_1",
+            "view_id": "tab_1",
+            "command": "rimz-sidebar"
+        },
+        {
+            "pane_id": "zellij:terminal_2",
+            "view_id": "tab_2",
+            "command": "zsh",
+            "is_focused": true
+        }
+    ]));
+
+    assert_eq!(
+        select_live_sidebar_pane(&panes).unwrap(),
+        "zellij:terminal_1"
+    );
+}
+
+#[test]
+fn live_sidebar_selection_bails_when_ambiguous() {
+    let panes = pane_list(json!([
+        {
+            "pane_id": "zellij:terminal_1",
+            "view_id": "tab_1",
+            "command": "rimz-sidebar"
+        },
+        {
+            "pane_id": "zellij:terminal_2",
+            "view_id": "tab_2",
+            "command": "rimz-sidebar"
+        }
+    ]));
+
+    let err = select_live_sidebar_pane(&panes).unwrap_err().to_string();
+    assert!(
+        err.contains("multiple rimz-sidebar panes matched"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
+fn live_sidebar_selection_bails_when_no_sidebar_exists() {
+    let panes = pane_list(json!([
+        {
+            "pane_id": "zellij:terminal_1",
+            "view_id": "tab_1",
+            "command": "zsh",
+            "is_focused": true
+        }
+    ]));
+
+    let err = select_live_sidebar_pane(&panes).unwrap_err().to_string();
+    assert!(
+        err.contains("no rimz-sidebar pane found"),
+        "unexpected error: {err}"
+    );
+}
