@@ -60,6 +60,8 @@ pub trait CommandTimeoutExt {
     fn bounded_output(&mut self) -> io::Result<Output>;
 
     fn bounded_status(&mut self) -> io::Result<ExitStatus>;
+
+    fn assert_success_within_timeout(&mut self, label: &str) -> ExitStatus;
 }
 
 impl CommandTimeoutExt for Command {
@@ -95,7 +97,11 @@ impl CommandTimeoutExt for Command {
 
     fn bounded_status(&mut self) -> io::Result<ExitStatus> {
         let debug = format!("{self:?}");
-        let mut child = self.spawn()?;
+        let mut child = self
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()?;
         let deadline = Instant::now() + COMMAND_TIMEOUT;
         loop {
             if let Some(status) = child.try_wait()? {
@@ -108,6 +114,14 @@ impl CommandTimeoutExt for Command {
             }
             thread::sleep(POLL_STEP);
         }
+    }
+
+    fn assert_success_within_timeout(&mut self, label: &str) -> ExitStatus {
+        let status = self
+            .bounded_status()
+            .unwrap_or_else(|err| panic!("{label} did not finish: {err}"));
+        assert!(status.success(), "{label} exited with {status}");
+        status
     }
 }
 

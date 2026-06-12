@@ -4,10 +4,10 @@
 use assert_cmd::assert::OutputAssertExt;
 
 #[cfg(unix)]
-use crate::common::{Env, path_with_front, write_env_dump_shim, write_fake_login_shell};
-
-#[cfg(unix)]
-use std::path::Path;
+use crate::common::{
+    CommandTimeoutExt, Env, path_with_front, write_env_dump_shim, write_fake_bash_shell,
+    write_fake_login_shell,
+};
 
 #[cfg(unix)]
 #[test]
@@ -26,8 +26,7 @@ fn shell_rc_env_reaches_the_spawned_agent() {
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("codex shell rc launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -41,10 +40,8 @@ fn shell_rc_env_reaches_the_spawned_agent() {
 #[cfg(unix)]
 #[test]
 fn bashrc_path_reaches_the_spawned_agent() {
-    if !Path::new("/bin/bash").is_file() {
-        return;
-    }
     let env = Env::new();
+    let shell = write_fake_bash_shell(&env);
     let shim_dir = write_env_dump_shim(&env, "codex");
     std::fs::write(
         env.home_root.join(".bashrc"),
@@ -58,11 +55,10 @@ fn bashrc_path_reaches_the_spawned_agent() {
 
     env.rimz()
         .args(["agents", "exec", "codex"])
-        .env("SHELL", "/bin/bash")
+        .env("SHELL", &shell)
         .env("PATH", "/usr/bin:/bin")
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("codex bashrc launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -90,8 +86,7 @@ fn adapter_pin_overrides_shell_rc_env() {
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("claude adapter pin launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -120,8 +115,7 @@ fn trusted_agent_env_overrides_shell_rc_env() {
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("codex trusted env launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -144,8 +138,7 @@ fn missing_shell_path_falls_back_to_direct_exec() {
         .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("codex direct launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -168,8 +161,7 @@ fn prompt_with_shell_metacharacters_stays_one_argument() {
         .env("SHELL", &shell)
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("codex prompt launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(

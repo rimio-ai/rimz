@@ -26,4 +26,6 @@ pub use payloads::{
     pi_tool_call_payload, skip_preconditions, spawn_example_resolver, wait_for_heartbeat,
 };
 #[cfg(unix)]
-pub use shim::{path_with_front, write_env_dump_shim, write_fake_login_shell};
+pub use shim::{
+    path_with_front, write_env_dump_shim, write_fake_bash_shell, write_fake_login_shell,
+};

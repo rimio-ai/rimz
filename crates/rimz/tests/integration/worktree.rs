@@ -1,5 +1,7 @@
 //! Integration coverage for `rimz worktree`.
 
+#[cfg(unix)]
+use std::io::Read;
 use std::path::Path;
 #[cfg(unix)]
 use std::process::{Child, ExitStatus};
@@ -153,7 +155,11 @@ fn agents_exec_sighup_removes_clean_worktree() {
     let path = env.home_root.join("project-worktrees").join("demo");
     let mut child = spawn_agent_exec(&env, &path, "clean");
 
-    wait_for_file(&env.home_root.join("clean.ready"));
+    wait_for_ready(
+        &mut child,
+        &env.home_root.join("clean.ready"),
+        &env.home_root.join("clean.pid"),
+    );
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join("clean.pid"));
 
@@ -205,7 +211,11 @@ fn assert_sighup_keeps_worktree(label: &str, setup: impl FnOnce(&Env, &Path)) {
     setup(&env, &path);
     let mut child = spawn_agent_exec(&env, &path, label);
 
-    wait_for_file(&env.home_root.join(format!("{label}.ready")));
+    wait_for_ready(
+        &mut child,
+        &env.home_root.join(format!("{label}.ready")),
+        &env.home_root.join(format!("{label}.pid")),
+    );
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join(format!("{label}.pid")));
 
@@ -319,7 +329,11 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
     );
 
     let mut child = spawn_agent_exec(&env, &path, "explicit-base");
-    wait_for_file(&env.home_root.join("explicit-base.ready"));
+    wait_for_ready(
+        &mut child,
+        &env.home_root.join("explicit-base.ready"),
+        &env.home_root.join("explicit-base.pid"),
+    );
     signal_child(&child, nix::sys::signal::Signal::SIGHUP);
     let _status = wait_for_exit(&mut child, &env.home_root.join("explicit-base.pid"));
 
@@ -414,6 +428,7 @@ fn spawn_agent_exec_command(
     cmd.args(["agents", "exec", "codex", "--worktree-path"])
         .arg(worktree_arg)
         .current_dir(cwd)
+        .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
         .env("RIMZ_TEST_AGENT_PID", &pid_file)
@@ -434,6 +449,7 @@ fn write_codex_shim(env: &Env) -> std::path::PathBuf {
     std::fs::write(
         &shim,
         "#!/bin/sh\n\
+         exec >/dev/null 2>/dev/null\n\
          printf '%s\\n' \"$$\" > \"$RIMZ_TEST_AGENT_PID\"\n\
          : > \"$RIMZ_TEST_AGENT_READY\"\n\
          if [ \"$RIMZ_TEST_AGENT_TRAP_SIGNALS\" = 1 ]; then\n\
@@ -461,15 +477,59 @@ fn path_with_front(dir: &Path) -> std::ffi::OsString {
 }
 
 #[cfg(unix)]
-fn wait_for_file(path: &Path) {
+fn wait_for_ready(child: &mut Child, path: &Path, agent_pid_file: &Path) {
     let start = Instant::now();
-    while start.elapsed() < Duration::from_secs(5) {
+    let timeout = ready_timeout();
+    while start.elapsed() < timeout {
         if path.exists() {
             return;
         }
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                panic!(
+                    "agents exec exited with {status} before writing {}\n{}",
+                    path.display(),
+                    child_output(child)
+                );
+            }
+            Ok(None) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(err) => panic!("wait failed before {} was ready: {err}", path.display()),
+        }
         std::thread::sleep(Duration::from_millis(20));
     }
-    panic!("timed out waiting for {}", path.display());
+    signal_child(child, nix::sys::signal::Signal::SIGKILL);
+    kill_agent_pid(agent_pid_file);
+    let _ = child.wait();
+    panic!(
+        "timed out after {timeout:?} waiting for {}\n{}",
+        path.display(),
+        child_output(child)
+    );
+}
+
+#[cfg(unix)]
+fn ready_timeout() -> Duration {
+    if std::env::var_os("LLVM_PROFILE_FILE").is_some()
+        || std::env::var_os("CARGO_LLVM_COV").is_some()
+    {
+        Duration::from_secs(30)
+    } else {
+        Duration::from_secs(5)
+    }
+}
+
+#[cfg(unix)]
+fn child_output(child: &mut Child) -> String {
+    let mut stdout = String::new();
+    if let Some(pipe) = child.stdout.as_mut() {
+        let _ = pipe.read_to_string(&mut stdout);
+    }
+    let mut stderr = String::new();
+    if let Some(pipe) = child.stderr.as_mut() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    format!("stdout:\n{stdout}\nstderr:\n{stderr}")
 }
 
 #[cfg(unix)]
@@ -494,6 +554,13 @@ fn wait_for_exit(child: &mut Child, agent_pid_file: &Path) -> ExitStatus {
         }
     }
     signal_child(child, nix::sys::signal::Signal::SIGKILL);
+    kill_agent_pid(agent_pid_file);
+    let _ = child.wait();
+    panic!("timed out waiting for agents exec to exit");
+}
+
+#[cfg(unix)]
+fn kill_agent_pid(agent_pid_file: &Path) {
     if let Ok(raw) = std::fs::read_to_string(agent_pid_file)
         && let Ok(pid) = raw.trim().parse::<i32>()
     {
@@ -502,8 +569,6 @@ fn wait_for_exit(child: &mut Child, agent_pid_file: &Path) -> ExitStatus {
             nix::sys::signal::Signal::SIGKILL,
         );
     }
-    let _ = child.wait();
-    panic!("timed out waiting for agents exec to exit");
 }
 
 #[cfg(unix)]

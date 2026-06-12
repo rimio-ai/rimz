@@ -65,6 +65,38 @@ pub fn write_fake_login_shell(env: &Env, name: &str, exports: &[(&str, &str)]) -
 }
 
 #[cfg(unix)]
+pub fn write_fake_bash_shell(env: &Env) -> PathBuf {
+    let dir = env.home_root.join("shell-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir shell bin");
+    let shell = dir.join("bash");
+    std::fs::write(
+        &shell,
+        "#!/bin/sh\n\
+         while [ \"$#\" -gt 0 ]; do\n\
+           case \"$1\" in\n\
+             -i)\n\
+               if [ -f \"$HOME/.bashrc\" ]; then\n\
+                 . \"$HOME/.bashrc\"\n\
+               fi\n\
+               shift\n\
+               ;;\n\
+             -c)\n\
+               shift\n\
+               script=$1\n\
+               shift\n\
+               exec /bin/sh -c \"$script\" \"$@\"\n\
+               ;;\n\
+             *) shift ;;\n\
+           esac\n\
+         done\n\
+         exit 127\n",
+    )
+    .expect("write bash shell shim");
+    chmod_executable(&shell);
+    shell
+}
+
+#[cfg(unix)]
 pub fn path_with_front(dir: &Path) -> OsString {
     let original = std::env::var_os("PATH").unwrap_or_default();
     let mut paths = vec![dir.to_path_buf()];

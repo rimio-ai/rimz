@@ -6,7 +6,7 @@ use predicates::str::contains;
 
 use crate::common::Env;
 #[cfg(unix)]
-use crate::common::{path_with_front, write_env_dump_shim};
+use crate::common::{CommandTimeoutExt, path_with_front, write_env_dump_shim};
 
 /// A minimal project config carrying one command-executing hook field — the
 /// fixture the trust-surface tests grant against.
@@ -144,10 +144,10 @@ fn trusted_agent_env_reaches_the_spawned_agent() {
     let dump = env.home_root.join("codex.env");
     env.rimz()
         .args(["agents", "exec", "codex"])
+        .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("trusted codex env launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -185,10 +185,10 @@ fn builtin_claude_launch_env_overrides_project_config() {
     let dump = env.home_root.join("claude.env");
     env.rimz()
         .args(["agents", "exec", "claude"])
+        .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("trusted claude env launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
@@ -217,10 +217,10 @@ fn resumed_agent_env_funnels_through_the_exec_wrapper() {
     let dump = env.home_root.join("claude-resume.env");
     env.rimz()
         .args(["agents", "exec", "claude", "--resume", "sess-1"])
+        .env("SHELL", "/definitely/not/a/shell")
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_ENV_DUMP", &dump)
-        .assert()
-        .success();
+        .assert_success_within_timeout("trusted claude resume launch");
 
     let dumped = std::fs::read_to_string(&dump).expect("read env dump");
     assert!(
