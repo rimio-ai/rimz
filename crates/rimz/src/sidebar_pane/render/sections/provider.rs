@@ -32,10 +32,11 @@ const PROVIDER_ART_MIN_WIDTH: usize = 34;
 
 /// The provider bar's label slot (`5h` / `7d` / `30d` / `∞`) and reset-value
 /// column, shared by every provider bar so they align front and back. The label
-/// fits three cells (`30d`); the value holds `↻ ` plus a two-unit reset countdown
-/// and a one-cell right gutter (up to `↻ 20h20m `).
+/// fits three cells (`30d`); the value holds `↻ ` plus a six-cell reset countdown
+/// slot and a one-cell right gutter (`↻  4h50m ` / `↻ 20h20m `).
 const PROVIDER_LABEL_WIDTH: usize = 3;
-const PROVIDER_VALUE_WIDTH: usize = 9;
+const PROVIDER_RESET_WIDTH: usize = 6;
+const PROVIDER_VALUE_WIDTH: usize = 1 + 1 + PROVIDER_RESET_WIDTH + 1;
 
 /// How close to a full window-length a reset must read to count as "not started".
 /// A not-started window keeps its reset slid to `now + duration`, but a live
@@ -654,9 +655,10 @@ fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'stati
     spans
 }
 
-/// The right-aligned reset value column. Only the reset marker carries a hot
-/// pace tone; the countdown text stays at the neutral soft tier, and one
-/// trailing gutter cell keeps six-cell hour countdowns off the chrome edge.
+/// The fixed-width reset value column. Only the reset marker carries a hot
+/// pace tone; the countdown text stays at the neutral soft tier in a fixed
+/// six-cell slot, and one trailing gutter cell keeps wide hour countdowns off
+/// the chrome edge.
 fn reset_value_spans(
     theme: &Theme,
     countdown: Option<&str>,
@@ -665,14 +667,21 @@ fn reset_value_spans(
     let Some(countdown) = countdown.filter(|value| !value.is_empty()) else {
         return vec![Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH))];
     };
-    let value_width = 3 + countdown.chars().count();
-    let pad = PROVIDER_VALUE_WIDTH.saturating_sub(value_width);
+    let countdown = pad_countdown(countdown);
     vec![
-        Span::raw(" ".repeat(pad)),
         Span::styled("↻", marker_style),
         Span::styled(format!(" {countdown}"), theme.soft()),
         Span::raw(" "),
     ]
+}
+
+fn pad_countdown(countdown: &str) -> String {
+    let chars = countdown.chars().count();
+    if chars >= PROVIDER_RESET_WIDTH {
+        countdown.to_owned()
+    } else {
+        format!("{countdown:>PROVIDER_RESET_WIDTH$}")
+    }
 }
 
 /// The unmetered `∞` bar row: the infinity icon rides the label slot (aligned

@@ -86,6 +86,15 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
 
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 1);
+    let text = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(
+        text.contains("↻  4h00m "),
+        "five-cell timers sit in the six-cell reset slot: {text:?}"
+    );
     let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
     assert!(has_reset, "started windows keep their reset countdown");
     assert_eq!(
@@ -365,7 +374,7 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
     assert_eq!(
         text.chars().position(|ch| ch == '↻'),
         Some(21),
-        "the reset marker moves one cell left for the wide hour form: {text:?}"
+        "the reset marker stays at the left edge of the fixed reset slot: {text:?}"
     );
     assert!(text.contains("↻ 20h20m"), "{text:?}");
 }

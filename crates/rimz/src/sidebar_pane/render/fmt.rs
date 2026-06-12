@@ -89,10 +89,10 @@ pub(super) fn clip(value: &str, max_chars: usize) -> String {
 
 /// A budget window's reset countdown, two units scaled to how much time is left:
 /// `{d}d{hh:02}h` at a day or more (`30d10h`, `6d23h`, `1d02h`), `{h}h{mm:02}m`
-/// under a day (`5h00m`, `0h45m`). Both forms hold to five cells under a 99-day
-/// reset, so countdowns in one panel column-align. A passed reset reads `0h00m`
-/// (the stable-window selection drops expired readings upstream, so a rendered
-/// window is live).
+/// under a day (`20h20m`, `5h00m`, `0h45m`). The provider panel right-aligns the
+/// result in a six-cell slot, so five- and six-cell countdowns share one right
+/// edge. A passed reset reads `0h00m` (the stable-window selection drops expired
+/// readings upstream, so a rendered window is live).
 pub(super) fn reset_countdown(deadline: Timestamp, now: Timestamp) -> String {
     reset_secs(deadline.duration_since(now).as_secs())
 }
