@@ -213,6 +213,17 @@ The stable channel is pinned in `rust-toolchain.toml`. No Cargo.toml carries `ru
 
 Repo-local Cargo config stays installation-safe: `.cargo/config.toml` defines only the `xtask` alias, so source installs use each host's platform linker. CI uses `clang` + `mold` on Linux through job-local `RUSTFLAGS`; contributors may opt into the same setup in their user Cargo config for faster local relinks. mold replaces the default bfd linker on the link-heavy integration-test binary, which relinks on every incremental change; it is a build-time tool only — no runtime or transitive footprint — and is the SOTA Unix linker.
 
+Release packaging uses extra host tools. `cargo xtask dist` builds packaged macOS archives for both Apple targets through `cargo-zigbuild`, so release maintainers keep `cargo-zigbuild` and `zig` on `PATH`. Install `cargo-zigbuild` with Cargo and install Zig from the host package manager or Zig's official bundle:
+
+```sh
+cargo install --locked cargo-zigbuild
+# install zig, then verify both tools
+cargo zigbuild --help
+zig version
+```
+
+`rust-toolchain.toml` provisions the Apple Rust standard libraries for rustup-managed toolchains. On Linux, the dist task supplies the SDKROOT shape current `rustc` expects while Zig supplies the Darwin linker stubs for Rimz's release binary.
+
 ### Quality gates
 
 Every gate runs in CI with warnings treated as errors. Local equivalents are `cargo xtask <task>`; `cargo xtask ci` composes the full stack when a change calls for full validation.

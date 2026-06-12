@@ -533,7 +533,7 @@ fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
 }
 
 fn build_darwin_artifacts(root: &Path) -> Result<()> {
-    let envs = presence_plugin_embed_env(root);
+    let envs = darwin_zigbuild_env(root)?;
     for target in DARWIN_TARGETS {
         ensure_rust_target(root, target)?;
         run_with_env(
@@ -559,6 +559,51 @@ fn build_darwin_artifacts(root: &Path) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+fn darwin_zigbuild_env(root: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
+    let mut envs = presence_plugin_embed_env(root);
+    if cfg!(target_os = "macos")
+        || env::var_os("SDKROOT")
+            .as_deref()
+            .is_some_and(rustc_accepts_macos_sdkroot)
+    {
+        return Ok(envs);
+    }
+
+    // `rustc` shells out to `xcrun` for Apple SDK discovery unless SDKROOT is
+    // an existing absolute path. Zig supplies the Darwin linker stubs here, so
+    // the placeholder only satisfies rustc's discovery precondition.
+    let sdkroot = target_dir(root)
+        .join("xtask")
+        .join("darwin-zigbuild-sdkroot");
+    fs::create_dir_all(&sdkroot).with_context(|| format!("creating {}", sdkroot.display()))?;
+    envs.push(("SDKROOT", sdkroot));
+    Ok(envs)
+}
+
+fn rustc_accepts_macos_sdkroot(sdkroot: &OsStr) -> bool {
+    let path = Path::new(sdkroot);
+    path.is_absolute()
+        && path != Path::new("/")
+        && path.exists()
+        && !macos_sdkroot_points_at_other_apple_platform(sdkroot)
+}
+
+fn macos_sdkroot_points_at_other_apple_platform(sdkroot: &OsStr) -> bool {
+    let sdkroot = sdkroot.to_string_lossy();
+    [
+        "iPhoneOS.platform",
+        "iPhoneSimulator.platform",
+        "AppleTVOS.platform",
+        "AppleTVSimulator.platform",
+        "WatchOS.platform",
+        "WatchSimulator.platform",
+        "XROS.platform",
+        "XRSimulator.platform",
+    ]
+    .iter()
+    .any(|platform| sdkroot.contains(platform))
 }
 
 fn package_darwin_artifacts(root: &Path) -> Result<()> {
@@ -2733,5 +2778,27 @@ mod tests {
 
         assert!(target_list_contains(installed, "wasm32-wasip1"));
         assert!(!target_list_contains(installed, "wasm32-wasi"));
+    }
+
+    #[test]
+    fn macos_sdkroot_acceptance_matches_rustc_shape() {
+        let cwd = env::current_dir().unwrap();
+
+        assert!(rustc_accepts_macos_sdkroot(cwd.as_os_str()));
+        assert!(!rustc_accepts_macos_sdkroot(OsStr::new("/")));
+        assert!(!rustc_accepts_macos_sdkroot(OsStr::new("relative-sdk")));
+        assert!(!rustc_accepts_macos_sdkroot(OsStr::new(
+            "/definitely/missing/MacOSX.sdk"
+        )));
+    }
+
+    #[test]
+    fn macos_sdkroot_rejects_other_apple_platforms() {
+        assert!(macos_sdkroot_points_at_other_apple_platform(OsStr::new(
+            "/Xcode/Platforms/iPhoneOS.platform/Developer/SDKs/iPhoneOS.sdk"
+        )));
+        assert!(!macos_sdkroot_points_at_other_apple_platform(OsStr::new(
+            "/Xcode/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk"
+        )));
     }
 }
