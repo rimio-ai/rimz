@@ -110,8 +110,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "pricing-refresh",
-        summary: "Refresh the vendored pricing snapshot.",
-        runs: "fetch LiteLLM pricing JSON plus authoritative models.dev fillers, compact them, and rewrite the vendored snapshot atomically",
+        summary: "Refresh the generated pricing snapshot.",
+        runs: "fetch LiteLLM pricing JSON plus authoritative models.dev fillers, compact them, and rewrite the ignored snapshot atomically",
     },
     TaskInfo {
         name: "screenshot",
@@ -333,6 +333,7 @@ fn build(root: &Path) -> Result<()> {
 }
 
 fn dist(root: &Path) -> Result<()> {
+    pricing_refresh(root)?;
     build_plugin(root)?;
     build_darwin_artifacts(root)?;
     package_darwin_artifacts(root)
@@ -1396,10 +1397,9 @@ fn print_screenshot_path(path: &Path) {
 
 // ── Pricing snapshot refresh ────────────────────────────────────────────────
 
-const LITELLM_URL: &str =
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const LITELLM_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json";
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
-const VENDORED_SNAPSHOT: &str = "crates/rimz/pricing/litellm-pricing.json";
+const GENERATED_SNAPSHOT: &str = "crates/rimz/pricing/litellm-pricing.json";
 const KEPT_FIELDS: [&str; 4] = [
     "input_cost_per_token",
     "output_cost_per_token",
@@ -1407,11 +1407,10 @@ const KEPT_FIELDS: [&str; 4] = [
     "cache_creation_input_token_cost",
 ];
 
-/// Regenerate the checked-in pricing snapshot that `crates/rimz/build.rs`
-/// embeds as the tier-1 table (and falls back to for offline builds). Fetches
-/// LiteLLM first, fills missing models from authoritative models.dev provider
-/// catalogues, compacts to the kept prefixes/fields, and writes a sorted,
-/// pretty-printed JSON so the diff is reviewable. `RIMZ_PRICING_JSON_PATH`
+/// Regenerate the ignored pricing snapshot that `crates/rimz/build.rs` embeds
+/// as the tier-1 table when present. Fetches LiteLLM first, fills missing
+/// models from authoritative models.dev provider catalogues, compacts to the
+/// fields Rimz reads, and writes a sorted JSON document. `RIMZ_PRICING_JSON_PATH`
 /// overrides the LiteLLM network fetch with a local raw document;
 /// `RIMZ_PRICING_MODELS_DEV_JSON_PATH` supplies a local models.dev document.
 /// Without the models.dev override, a local LiteLLM override keeps the task
@@ -1435,8 +1434,8 @@ fn pricing_refresh(root: &Path) -> Result<()> {
             snapshot.entry(model).or_insert(pricing);
         }
     }
-    let snapshot = compact_pretty(&snapshot).context("serializing pricing JSON")?;
-    let dest = root.join(VENDORED_SNAPSHOT);
+    let snapshot = compact_json(&snapshot).context("serializing pricing JSON")?;
+    let dest = root.join(GENERATED_SNAPSHOT);
     write_atomically(&dest, snapshot.as_bytes())?;
     Ok(())
 }
@@ -1478,9 +1477,6 @@ fn compact_litellm(json: &str) -> Result<BTreeMap<String, Value>> {
     };
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
     for (model, pricing) in raw {
-        if !is_kept_model(&model) {
-            continue;
-        }
         let Value::Object(fields) = pricing else {
             continue;
         };
@@ -1506,16 +1502,13 @@ fn compact_models_dev(json: &str) -> Result<BTreeMap<String, Value>> {
     };
     let mut out = BTreeMap::new();
     for (provider_id, provider) in providers {
-        if !is_kept_models_dev_provider(&provider_id) {
+        if !is_authoritative_models_dev_provider(&provider_id) {
             continue;
         }
         let Some(models) = provider.get("models").and_then(Value::as_object) else {
             continue;
         };
         for (model, details) in models {
-            if !is_kept_model(model) {
-                continue;
-            }
             let Some(cost) = details.get("cost").and_then(Value::as_object) else {
                 continue;
             };
@@ -1545,7 +1538,7 @@ fn compact_models_dev(json: &str) -> Result<BTreeMap<String, Value>> {
     Ok(out)
 }
 
-fn is_kept_models_dev_provider(provider_id: &str) -> bool {
+fn is_authoritative_models_dev_provider(provider_id: &str) -> bool {
     matches!(provider_id, "anthropic" | "openai")
 }
 
@@ -1553,19 +1546,10 @@ fn per_token_value(per_million: f64) -> Option<Value> {
     serde_json::Number::from_f64(per_million / 1e6).map(Value::Number)
 }
 
-fn compact_pretty(out: &BTreeMap<String, Value>) -> Result<String> {
-    let mut pretty = serde_json::to_string_pretty(&out).context("serializing snapshot")?;
-    pretty.push('\n');
-    Ok(pretty)
-}
-
-fn is_kept_model(model: &str) -> bool {
-    model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("codex")
-        || model.starts_with("claude-")
+fn compact_json(out: &BTreeMap<String, Value>) -> Result<String> {
+    let mut json = serde_json::to_string(&out).context("serializing snapshot")?;
+    json.push('\n');
+    Ok(json)
 }
 
 fn run<I, S>(root: &Path, program: &str, args: I) -> Result<()>

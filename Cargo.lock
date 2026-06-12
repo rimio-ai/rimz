@@ -2827,6 +2827,7 @@ dependencies = [
  "assert_cmd",
  "clap 4.6.1",
  "crc32fast",
+ "flate2",
  "fs4",
  "hex",
  "insta",

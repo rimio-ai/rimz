@@ -8,8 +8,9 @@
 //!
 //! Three layers feed one [`PriceBook`], the later ones winning:
 //!
-//! 1. **Embedded snapshot** ([`embedded`]) — the LiteLLM table `build.rs` compacts
-//!    into the binary, available the instant the process starts.
+//! 1. **Embedded snapshot** ([`embedded`]) — the generated LiteLLM table
+//!    `build.rs` compacts and gzips into release binaries. Fresh clones without
+//!    the generated file embed an empty table.
 //! 2. **Remote refresh** ([`remote`]) — a fresh LiteLLM pull plus the models.dev
 //!    catalogue (filling models the snapshot lacks), cached on disk with a TTL so
 //!    the one-shot `rimz sidebar snapshot` process fetches at most once per day.

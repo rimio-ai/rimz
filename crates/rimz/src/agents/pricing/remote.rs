@@ -15,8 +15,7 @@ use serde_json::Value;
 use super::Pricing;
 
 /// LiteLLM's canonical pricing document (`main`).
-const LITELLM_URL: &str =
-    "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json";
+const LITELLM_URL: &str = "https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json";
 /// models.dev's aggregate model catalogue.
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 

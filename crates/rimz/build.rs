@@ -1,26 +1,29 @@
 //! Build-time tier-1 pricing embed.
 //!
-//! Compacts the checked-in pricing snapshot
+//! Compacts the generated pricing snapshot
 //! (`pricing/litellm-pricing.json`) — or a `RIMZ_PRICING_JSON_PATH` override —
-//! down to the model prefixes and per-token fields the binary reads, and writes
-//! `$OUT_DIR/litellm-pricing.json` for `include_str!` (see
+//! down to the per-token fields the binary reads, and writes
+//! `$OUT_DIR/litellm-pricing.json.gz` for `include_bytes!` (see
 //! `src/agents/pricing/embedded.rs`).
 //!
 //! The build never touches the network, so every build is reproducible and
-//! hermetic. The vendored snapshot is the embed source, kept current by `cargo
-//! xtask pricing-refresh` (which fetches LiteLLM plus authoritative models.dev
-//! fillers and rewrites a reviewable, committed snapshot); the runtime refresh
-//! (`src/agents/pricing/remote.rs`) keeps prices fresh between releases. The
-//! compaction here mirrors `cargo xtask pricing-refresh` — keep the two in step.
+//! hermetic. Release packaging runs `cargo xtask pricing-refresh` first, which
+//! fetches LiteLLM plus authoritative models.dev fillers and rewrites the
+//! ignored snapshot; the runtime refresh (`src/agents/pricing/remote.rs`) keeps
+//! prices fresh between releases. The compaction here mirrors `cargo xtask
+//! pricing-refresh` — keep the two in step.
 
 use std::collections::BTreeMap;
 use std::env;
 use std::fs;
+use std::io::Write;
 use std::path::PathBuf;
 
+use flate2::Compression;
+use flate2::write::GzEncoder;
 use serde_json::{Map, Value};
 
-const VENDORED: &str = "pricing/litellm-pricing.json";
+const GENERATED_SNAPSHOT: &str = "pricing/litellm-pricing.json";
 const PRESENCE_PLUGIN_ENV: &str = "RIMZ_EMBED_PRESENCE_PLUGIN";
 const PRESENCE_PLUGIN_OUT: &str = "rimz-presence-zellij.wasm";
 const KEPT_FIELDS: [&str; 4] = [
@@ -33,13 +36,14 @@ const KEPT_FIELDS: [&str; 4] = [
 fn main() {
     println!("cargo:rerun-if-env-changed=RIMZ_PRICING_JSON_PATH");
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
-    println!("cargo:rerun-if-changed={VENDORED}");
+    println!("cargo:rerun-if-changed={GENERATED_SNAPSHOT}");
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
-    let out_path = out_dir.join("litellm-pricing.json");
+    let out_path = out_dir.join("litellm-pricing.json.gz");
     let raw = resolve_raw_json();
     let compact = compact(&raw).expect("compact pricing JSON");
-    fs::write(&out_path, compact).expect("write embedded pricing snapshot");
+    let compressed = gzip(&compact).expect("gzip embedded pricing snapshot");
+    fs::write(&out_path, compressed).expect("write embedded pricing snapshot");
     write_presence_plugin_embed(&out_dir);
 }
 
@@ -62,8 +66,9 @@ fn write_presence_plugin_embed(out_dir: &std::path::Path) {
 }
 
 /// Resolve the raw LiteLLM-shaped document: a `RIMZ_PRICING_JSON_PATH` override,
-/// else the checked-in vendored snapshot. No network — the snapshot is the
-/// source of truth, refreshed deliberately by `cargo xtask pricing-refresh`.
+/// else the generated snapshot when present. No network — release packaging
+/// refreshes the ignored snapshot before it builds. A missing snapshot embeds an
+/// empty table; builtins and the runtime refresh still populate usable prices.
 fn resolve_raw_json() -> String {
     if let Some(path) = env::var_os("RIMZ_PRICING_JSON_PATH") {
         let path = PathBuf::from(path);
@@ -72,28 +77,28 @@ fn resolve_raw_json() -> String {
     }
 
     let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
-    let vendored = manifest.join(VENDORED);
-    fs::read_to_string(&vendored).unwrap_or_else(|err| {
-        panic!(
-            "no embedded pricing source: {} is unreadable ({err}) — run \
-             `cargo xtask pricing-refresh` or set RIMZ_PRICING_JSON_PATH",
-            vendored.display()
-        )
-    })
+    let generated = manifest.join(GENERATED_SNAPSHOT);
+    match fs::read_to_string(&generated) {
+        Ok(raw) => raw,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => "{}".to_owned(),
+        Err(err) => {
+            panic!(
+                "generated pricing source {} is unreadable ({err})",
+                generated.display()
+            )
+        }
+    }
 }
 
-/// Filter to the kept model prefixes and per-token fields; require both input
-/// and output costs. Sorted (`BTreeMap`) and compact so the embed is small and
-/// the vendored snapshot diffs stably.
+/// Filter to the per-token fields Rimz reads; require both input and output
+/// costs. Sorted (`BTreeMap`), compact, and gzipped so the embedded full-model
+/// table stays small.
 fn compact(json: &str) -> Option<String> {
     let Value::Object(raw) = serde_json::from_str::<Value>(json).ok()? else {
         return None;
     };
     let mut out: BTreeMap<String, Value> = BTreeMap::new();
     for (model, pricing) in raw {
-        if !is_kept_model(&model) {
-            continue;
-        }
         let Value::Object(fields) = pricing else {
             continue;
         };
@@ -112,11 +117,8 @@ fn compact(json: &str) -> Option<String> {
     serde_json::to_string(&out).ok()
 }
 
-fn is_kept_model(model: &str) -> bool {
-    model.starts_with("gpt-")
-        || model.starts_with("o1")
-        || model.starts_with("o3")
-        || model.starts_with("o4")
-        || model.starts_with("codex")
-        || model.starts_with("claude-")
+fn gzip(json: &str) -> Option<Vec<u8>> {
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::best());
+    encoder.write_all(json.as_bytes()).ok()?;
+    encoder.finish().ok()
 }

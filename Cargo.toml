@@ -28,6 +28,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
+flate2 = "1"
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = "0.25"
@@ -60,9 +61,9 @@ terminal_size = "0.4"
 similar = "2"
 
 # HTTP — pricing refresh: the runtime LiteLLM/models.dev fetch and the
-# build-time embed both GET a static JSON document. `ureq` is a small,
-# synchronous, rustls-backed client — the right shape for a one-shot
-# background fetch and a build script, with no async-runtime drag.
+# release-time generated snapshot both GET static JSON documents. `ureq` is a
+# small, synchronous, rustls-backed client — the right shape for a one-shot
+# background fetch and an xtask, with no async-runtime drag.
 ureq = "3"
 
 # Filesystem and locking
@@ -80,8 +81,8 @@ notify = { version = "8", default-features = false, features = ["macos_kqueue"] 
 sha2 = "0.11"
 hex = "0.4"
 # Event-log frame checksum: hardware CRC32 for the per-frame validate and the
-# repair scan. Already in the tree transitively (ureq -> flate2) and already
-# carries a supply-chain exemption, so the direct dep adds zero footprint.
+# repair scan. Already in the tree through flate2 and already carries a
+# supply-chain exemption, so the direct dep adds zero footprint.
 crc32fast = "1"
 
 # OS integration (cfg(unix))

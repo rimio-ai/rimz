@@ -135,8 +135,8 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 | Layer | When | Source |
 | --- | --- | --- |
-| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM-shaped snapshot, generated from LiteLLM plus authoritative models.dev fillers, compacted into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)) |
-| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
+| 1. Embedded snapshot | always, at process start | the ignored generated LiteLLM-shaped snapshot, produced from all priced LiteLLM rows plus authoritative models.dev fillers, compacted and gzipped into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_bytes!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)); a fresh clone with no generated snapshot embeds an empty table plus builtins |
+| 2. Remote refresh | once per TTL, on disk | a fresh full LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
 | 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../../crates/rimz/src/agents/pricing/builtins.rs)) |
 
 `gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
@@ -147,7 +147,7 @@ The book is assembled from three sources, the later ones winning, so a stale or 
 
 An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before Rimz asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
 
-`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
+`build.rs` never touches the network: it embeds the ignored generated snapshot at `crates/rimz/pricing/litellm-pricing.json` when present (or a `RIMZ_PRICING_JSON_PATH` override), then writes a gzipped `OUT_DIR/litellm-pricing.json.gz`, so ordinary builds stay reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM from `https://raw.githubusercontent.com/BerriAI/litellm/refs/heads/main/model_prices_and_context_window.json`, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites the generated snapshot atomically; `cargo xtask dist` runs that refresh before release builds.
 
 ### Resolving a model
 

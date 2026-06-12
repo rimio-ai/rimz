@@ -74,6 +74,7 @@ jiff.workspace = true
 notify.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+flate2.workspace = true
 sha2.workspace = true
 shlex.workspace = true
 similar.workspace = true
@@ -102,10 +103,12 @@ tracing-subscriber.workspace = true
 nix.workspace = true
 signal-hook.workspace = true
 
-# build.rs compacts the checked-in LiteLLM pricing snapshot into `OUT_DIR` for
-# `include_str!` embedding (tier 1). Vendored-only and network-free, so builds
-# stay reproducible; `serde_json` does the field/prefix filtering.
+# build.rs compacts the generated LiteLLM pricing snapshot into a gzipped
+# `OUT_DIR` artifact for embedding (tier 1). Network-free: release packaging
+# generates the ignored snapshot before building; `serde_json` filters fields
+# and `flate2` keeps the embedded table small.
 [build-dependencies]
+flate2.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]
