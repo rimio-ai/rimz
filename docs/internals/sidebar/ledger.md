@@ -96,19 +96,20 @@ History and runtime are separate views over the same durable ledger.
 
 ## Runtime state
 
-Under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset (common inside containers and on minimal hosts):
+Under `${XDG_RUNTIME_DIR}/rimz/<workspace_id>/`, or `/tmp/rimz-<uid>/rimz/<workspace_id>/` at mode `0700` when `XDG_RUNTIME_DIR` is unset (common inside containers and on minimal hosts):
 
 ```text
 sock/feed.<short_id>.sock           per-request decision socket; bound by the
                                     waiting hook subprocess, torn down on exit
-sock/sidebar.<instance_id>.sock     per-instance wakeup socket; bound by each
+sock/sidebar.<short_instance_id>.sock
+                                    per-instance wakeup socket; bound by each
                                     live sidebar
 heartbeat/sidebar.<instance_id>.json
 heartbeat/resolver.<resolver_id>.json
 read-marks/sidebar.<instance_id>.json
 ```
 
-Sockets, heartbeats, and read-mark receipts are liveness/runtime hints, not durable state. They're split from the ledger directory because Linux's `AF_UNIX` path-length limit (108 bytes) makes deeply nested state paths fragile.
+Sockets, heartbeats, and read-mark receipts are liveness/runtime hints, not durable state. They're split from the ledger directory because `AF_UNIX` socket paths are short: 108 bytes on Linux and 104 bytes on macOS, including the terminator.
 
 `rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files, stale sidebar wakeup sockets named by those heartbeat files, and stale sidebar read-mark receipts whose owning sidebar heartbeat has expired. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
 
@@ -146,7 +147,7 @@ On hook-cap timeout (the per-agent ceiling — see [hooks.md](../agents/hooks.md
 After every ledger write the CLI or hook subprocess:
 
 1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
-2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each `sock/sidebar.<instance_id>.sock`.
+2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each socket path carried verbatim by a fresh heartbeat, normally `sock/sidebar.<short_instance_id>.sock`.
 
 The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance. The `MuxBackend::wake_sidebar` pipe primitive (`zellij --session <name> pipe --name rimz::feed`) is dormant: it has no consumer until the opt-in Zellij plugin rail is built, so the walk spawns no `zellij` subprocess per write. When that rail lands it re-arms the pipe, gated on rail presence (see [multiplexers.md](./multiplexers.md)).
 

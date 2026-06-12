@@ -161,12 +161,12 @@ macro_rules! uuid_v7_id {
             }
 
             /// Last 12 hex chars of the UUID portion. Used to name AF_UNIX
-            /// sockets, where the 108-byte path budget makes the full 32-char
-            /// UUID wasteful. The tail is the v7 UUID's random field, so two ids
-            /// minted in the same millisecond still differ — unlike the leading
-            /// 48 bits, which are the shared `now_v7` timestamp and would collide
-            /// for sidebars launched together, letting one `bind` steal the
-            /// other's path and strand a renderer with no wakeup socket.
+            /// sockets, where the platform path budget makes the full 32-char UUID
+            /// wasteful. The tail is the v7 UUID's random field, so two ids minted
+            /// in the same millisecond still differ — unlike the leading 48 bits,
+            /// which are the shared `now_v7` timestamp and would collide for
+            /// sidebars launched together, letting one `bind` steal the other's
+            /// path and strand a renderer with no wakeup socket.
             pub fn short(&self) -> &str {
                 // `new`/`parse` guarantee `<prefix>_<32 hex>`, so the last 12
                 // chars are always hex and this slice is always in bounds.

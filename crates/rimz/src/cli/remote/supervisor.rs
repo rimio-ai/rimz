@@ -321,54 +321,11 @@ fn prepare_control_path(path: &Path) -> Result<()> {
     let runtime_dir = rimz_dir
         .parent()
         .with_context(|| format!("SSH control directory {} has no parent", rimz_dir.display()))?;
-    ensure_private_control_dir(runtime_dir)?;
-    ensure_private_control_dir(rimz_dir)?;
-    ensure_private_control_dir(link_dir)?;
+    rimz::ledger::paths::ensure_private_runtime_dir(runtime_dir)?;
+    rimz::ledger::paths::ensure_private_runtime_dir(rimz_dir)?;
+    rimz::ledger::paths::ensure_private_runtime_dir(link_dir)?;
     remove_control_path(path);
     Ok(())
-}
-
-#[cfg(unix)]
-fn ensure_private_control_dir(path: &Path) -> Result<()> {
-    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
-
-    std::fs::DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(path)
-        .with_context(|| format!("creating SSH control directory {}", path.display()))?;
-    let metadata = std::fs::metadata(path)
-        .with_context(|| format!("checking SSH control directory {}", path.display()))?;
-    if !metadata.is_dir() {
-        bail!("SSH control path {} is not a directory", path.display());
-    }
-    let uid = nix::unistd::Uid::current().as_raw();
-    if metadata.uid() != uid {
-        bail!(
-            "SSH control directory {} is owned by uid {}, not uid {uid}",
-            path.display(),
-            metadata.uid()
-        );
-    }
-    if metadata.permissions().mode() & 0o077 != 0 {
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))
-            .with_context(|| format!("hardening SSH control directory {}", path.display()))?;
-        let metadata = std::fs::metadata(path)
-            .with_context(|| format!("checking SSH control directory {}", path.display()))?;
-        if metadata.permissions().mode() & 0o077 != 0 {
-            bail!(
-                "SSH control directory {} is accessible by group or other users",
-                path.display()
-            );
-        }
-    }
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn ensure_private_control_dir(path: &Path) -> Result<()> {
-    std::fs::create_dir_all(path)
-        .with_context(|| format!("creating SSH control directory {}", path.display()))
 }
 
 fn remove_control_path(path: &Path) {

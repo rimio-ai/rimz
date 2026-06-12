@@ -300,6 +300,12 @@ fn mux_environment_preflight(mux: MuxName, session_name: &str) -> Result<()> {
     Ok(())
 }
 
+fn rimz_socket_environment_preflight(workspace_id: &WorkspaceId) -> Result<()> {
+    RuntimePaths::for_workspace(workspace_id.clone())
+        .map(|_| ())
+        .context("checking Rimz runtime socket budget")
+}
+
 fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(&args.path, globals.root.clone())
         .with_context(|| format!("resolving workspace at {}", args.path.display()))?;
@@ -324,6 +330,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // launch here, with the fix, before any hook-install or session side
     // effects — never bring a workspace up around a doomed host.
     rimz::remote_control::preflight(remote_control)?;
+    rimz_socket_environment_preflight(&workspace.workspace_id)?;
     mux_environment_preflight(mux, &workspace.session_name)?;
     ensure_detected_agent_hooks()?;
     let backend = rimz::mux::backend_for(mux);
@@ -460,6 +467,7 @@ fn attach_cwd(
     let detected_size = rimz::mux::detect_terminal_size();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
+    rimz_socket_environment_preflight(&workspace.workspace_id)?;
     mux_environment_preflight(mux, &workspace.session_name)?;
     retire_renamed_session(backend.as_ref(), &workspace);
     let was_live = session_is_healthy_live(backend.as_ref(), &workspace.session_name);
@@ -526,6 +534,9 @@ fn attach_named(
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);
     mux_environment_preflight(mux, session)?;
+    if let Ok(Some(record)) = &record {
+        rimz_socket_environment_preflight(&record.workspace_id)?;
+    }
     // Captured before `ensure_session` so a tmux create never masks a reattach.
     let was_live = session_is_healthy_live(backend.as_ref(), session);
     match record {

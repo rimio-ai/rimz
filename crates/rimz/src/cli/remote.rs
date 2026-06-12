@@ -251,7 +251,8 @@ fn attach_remote(remote: RemoteConnect, mode: super::AttachMode) -> Result<()> {
                 )
             })?;
             if remote.reconnect {
-                let control = rimz::remote::link::control_path();
+                let control = rimz::remote::link::validated_control_path()
+                    .context("checking SSH ControlMaster socket path")?;
                 let control_spec = ssh_attach_spec_with_control(
                     &remote.target,
                     remote.no_resume,

@@ -25,13 +25,7 @@ use crate::feed::FeedStatus;
 use crate::ids::{RequestId, RunId, WorkspaceId};
 use crate::ledger::RuntimePaths;
 use crate::run::RunStatus;
-
-/// `AF_UNIX` socket paths hold at most 108 bytes including the NUL
-/// terminator. The socket names under `sock_dir` use 12-hex short ids
-/// (`RequestId::short`, `SidebarInstanceId::short`) precisely so the dir can
-/// be as long as possible; [`bind`] fails fast against this limit and
-/// `rimz doctor` reports the remaining headroom.
-pub const AF_UNIX_PATH_LIMIT: usize = 108;
+use crate::sock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum BridgeErr {
@@ -49,16 +43,8 @@ pub enum BridgeErr {
         source: std::io::Error,
     },
 
-    /// The derived socket path overflows the `AF_UNIX` budget — the runtime
-    /// dir (`XDG_RUNTIME_DIR`) is nested too deep. Named precondition so the
-    /// fix (shorten the runtime dir) reaches the user instead of an opaque
-    /// OS `EINVAL` from `bind(2)`.
-    #[error(
-        "bridge socket path {path} is {len} bytes; AF_UNIX allows {limit} including the \
-         terminator — shorten XDG_RUNTIME_DIR or the workspace id prefix",
-        limit = AF_UNIX_PATH_LIMIT
-    )]
-    SocketPathTooLong { path: PathBuf, len: usize },
+    #[error(transparent)]
+    SocketPathTooLong(#[from] crate::sock::SocketPathTooLong),
 
     #[error("recv on bridge socket: {0}")]
     Recv(#[source] std::io::Error),
@@ -123,7 +109,7 @@ pub enum WakeupFrame {
 
 /// Per-request socket path. Single source of truth shared by binder and
 /// resolver. Short id from [`RequestId::short`] keeps the path well under
-/// the 108-byte `AF_UNIX` budget.
+/// the platform `AF_UNIX` budget.
 pub fn feed_socket_path(rt: &RuntimePaths, request_id: &RequestId) -> PathBuf {
     rt.sock_dir
         .join(format!("feed.{}.sock", request_id.short()))
@@ -153,12 +139,7 @@ pub fn bind_run(rt: &RuntimePaths, run_id: &RunId) -> Result<(StdUnixDatagram, P
 }
 
 fn bind_path(path: PathBuf) -> Result<(StdUnixDatagram, PathBuf)> {
-    // Fail fast on the AF_UNIX length budget (the +1 is the NUL terminator):
-    // `bind(2)` would reject the same path with an opaque EINVAL.
-    let len = path.as_os_str().len();
-    if len + 1 > AF_UNIX_PATH_LIMIT {
-        return Err(BridgeErr::SocketPathTooLong { path, len });
-    }
+    sock::validate_socket_path(&path)?;
     if path.exists() {
         // Derived from a UUIDv7 — a leftover here means a previous waiter
         // crashed without cleanup. Safe to clear.
@@ -351,17 +332,17 @@ mod tests {
     /// opaque `EINVAL` — and the test needs no real socket or filesystem.
     #[test]
     fn bind_fails_fast_when_the_socket_path_overflows_af_unix() {
-        let deep_root = Path::new("/tmp").join("d".repeat(AF_UNIX_PATH_LIMIT));
+        let deep_root = Path::new("/tmp").join("d".repeat(sock::AF_UNIX_PATH_LIMIT));
         let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
         let rt = RuntimePaths::under(workspace_id, &deep_root).expect("paths");
         let request_id = RequestId::new();
 
         let err = bind(&rt, &request_id).expect_err("overlong path must fail fast");
         match err {
-            BridgeErr::SocketPathTooLong { path, len } => {
-                assert_eq!(path, feed_socket_path(&rt, &request_id));
-                assert_eq!(len, path.as_os_str().len());
-                assert!(len + 1 > AF_UNIX_PATH_LIMIT);
+            BridgeErr::SocketPathTooLong(source) => {
+                assert_eq!(source.path, feed_socket_path(&rt, &request_id));
+                assert_eq!(source.used, sock::path_len(&source.path) + 1);
+                assert!(source.used > sock::AF_UNIX_PATH_LIMIT);
             }
             other => panic!("expected SocketPathTooLong, got {other:?}"),
         }

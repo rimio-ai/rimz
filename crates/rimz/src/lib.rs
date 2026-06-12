@@ -34,6 +34,7 @@ pub mod run;
 pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
+pub mod sock;
 pub mod tab_layout;
 pub mod target;
 pub mod trust;

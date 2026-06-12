@@ -261,6 +261,7 @@ pub fn serve(info: BrokerInfo<'_>) -> std::io::Result<()> {
 
     // Unlink any stale socket (a previous broker that didn't clean up), then bind
     // and lock it down to the owner.
+    crate::sock::validate_socket_path(socket_path).map_err(std::io::Error::other)?;
     if socket_path.exists() {
         let _ = std::fs::remove_file(socket_path);
     }

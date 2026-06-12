@@ -2,7 +2,7 @@
 //!
 //! State paths live under `$XDG_STATE_HOME/rimz/workspaces/<id>/`.
 //! Runtime paths live under `$XDG_RUNTIME_DIR/rimz/<id>/`, falling back to
-//! `/tmp/rimz-<uid>/<id>/` at mode `0700` per `docs/internals/sidebar/ledger.md`.
+//! `/tmp/rimz-<uid>/rimz/<id>/` at mode `0700` per `docs/internals/sidebar/ledger.md`.
 
 use std::env;
 use std::fs;
@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::sock::SockBudget;
 
 #[derive(Debug, thiserror::Error)]
 pub enum PathErr {
@@ -21,6 +22,29 @@ pub enum PathErr {
         #[source]
         source: io::Error,
     },
+    #[error(transparent)]
+    SocketBudgetExceeded(#[from] crate::sock::SocketPathTooLong),
+    #[error("invalid Rimz runtime path layout under {path}")]
+    InvalidRuntimeLayout { path: PathBuf },
+    #[error("runtime path {path} is not a directory")]
+    RuntimePathNotDirectory { path: PathBuf },
+    #[cfg(unix)]
+    #[error(
+        "runtime directory {path} is a symbolic link; set XDG_RUNTIME_DIR to a real private directory"
+    )]
+    RuntimeDirSymlink { path: PathBuf },
+    #[cfg(unix)]
+    #[error(
+        "runtime directory {path} is owned by uid {owner}, not uid {current}; set XDG_RUNTIME_DIR to a private directory you own"
+    )]
+    RuntimeDirWrongOwner {
+        path: PathBuf,
+        owner: u32,
+        current: u32,
+    },
+    #[cfg(unix)]
+    #[error("runtime directory {path} is mode {mode:o}; expected no group or other permissions")]
+    RuntimeDirInsecure { path: PathBuf, mode: u32 },
 }
 
 pub type Result<T> = std::result::Result<T, PathErr>;
@@ -126,11 +150,14 @@ pub struct RuntimePaths {
 
 impl RuntimePaths {
     pub fn for_workspace(workspace_id: WorkspaceId) -> Result<Self> {
-        Self::under(workspace_id, &runtime_home())
+        Self::validated_under(workspace_id, &runtime_home())
     }
 
     /// Build runtime paths rooted at `runtime_root`. Tests prefer this so they
-    /// don't need to set `XDG_RUNTIME_DIR`.
+    /// don't need to set `XDG_RUNTIME_DIR`. This raw constructor deliberately
+    /// skips the socket budget; production callers use [`Self::for_workspace`] or
+    /// [`Self::validated_under`] so a long ambient runtime root fails before any
+    /// session side effect.
     pub fn under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
         let root = runtime_root.join("rimz").join(workspace_id.as_str());
         let shared_root = runtime_root.join("rimz").join("shared");
@@ -151,6 +178,13 @@ impl RuntimePaths {
             subagent_context_dir,
             agent_activity_dir,
         })
+    }
+
+    pub fn validated_under(workspace_id: WorkspaceId, runtime_root: &Path) -> Result<Self> {
+        let paths = Self::under(workspace_id, runtime_root)?;
+        let budget = SockBudget::for_sock_dir(&paths.sock_dir);
+        budget.validate()?;
+        Ok(paths)
     }
 
     /// Sidecar file for one agent session's rich context, keyed by
@@ -241,30 +275,27 @@ impl RuntimePaths {
     }
 
     pub fn ensure_dirs(&self) -> Result<()> {
+        let rimz_root = self
+            .root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        let runtime_root = rimz_root
+            .parent()
+            .ok_or_else(|| PathErr::InvalidRuntimeLayout {
+                path: self.root.clone(),
+            })?;
+        ensure_private_runtime_dir(runtime_root)?;
+        ensure_private_runtime_dir(rimz_root)?;
+        ensure_private_runtime_dir(&self.root)?;
+        ensure_private_runtime_dir(&self.shared_root)?;
         mkdir_p(&self.sock_dir)?;
         mkdir_p(&self.heartbeat_dir)?;
         mkdir_p(&self.read_marks_dir)?;
         mkdir_p(&self.agent_context_dir)?;
         mkdir_p(&self.subagent_context_dir)?;
         mkdir_p(&self.agent_activity_dir)?;
-        mkdir_p(&self.shared_root)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for path in [&self.root, &self.shared_root] {
-                let mut perms = fs::metadata(path)
-                    .map_err(|e| PathErr::Io {
-                        path: path.to_path_buf(),
-                        source: e,
-                    })?
-                    .permissions();
-                perms.set_mode(0o700);
-                fs::set_permissions(path, perms).map_err(|e| PathErr::Io {
-                    path: path.to_path_buf(),
-                    source: e,
-                })?;
-            }
-        }
         Ok(())
     }
 }
@@ -274,6 +305,77 @@ fn mkdir_p(path: &Path) -> Result<()> {
         path: path.to_path_buf(),
         source: e,
     })
+}
+
+#[cfg(unix)]
+pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(path)
+        .map_err(|e| PathErr::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+    let mut metadata = runtime_dir_metadata(path)?;
+    let current = nix::unistd::Uid::current().as_raw();
+    if metadata.uid() != current {
+        return Err(PathErr::RuntimeDirWrongOwner {
+            path: path.to_path_buf(),
+            owner: metadata.uid(),
+            current,
+        });
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(|e| PathErr::Io {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        metadata = runtime_dir_metadata(path)?;
+        if metadata.permissions().mode() & 0o077 != 0 {
+            return Err(PathErr::RuntimeDirInsecure {
+                path: path.to_path_buf(),
+                mode: metadata.permissions().mode() & 0o777,
+            });
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn runtime_dir_metadata(path: &Path) -> Result<fs::Metadata> {
+    let metadata = fs::symlink_metadata(path).map_err(|e| PathErr::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    if metadata.file_type().is_symlink() {
+        return Err(PathErr::RuntimeDirSymlink {
+            path: path.to_path_buf(),
+        });
+    }
+    if !metadata.is_dir() {
+        return Err(PathErr::RuntimePathNotDirectory {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(metadata)
+}
+
+#[cfg(not(unix))]
+pub fn ensure_private_runtime_dir(path: &Path) -> Result<()> {
+    mkdir_p(path)?;
+    let metadata = fs::metadata(path).map_err(|e| PathErr::Io {
+        path: path.to_path_buf(),
+        source: e,
+    })?;
+    if !metadata.is_dir() {
+        return Err(PathErr::RuntimePathNotDirectory {
+            path: path.to_path_buf(),
+        });
+    }
+    Ok(())
 }
 
 pub fn state_home() -> PathBuf {
@@ -290,11 +392,20 @@ pub fn runtime_home() -> PathBuf {
     if let Some(value) = env_path("XDG_RUNTIME_DIR") {
         return value;
     }
-    // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use a
-    // /tmp/rimz-<uid> namespace per the docs; the 0700 mode is applied to
-    // `RuntimePaths::root` after creation.
-    let uid = current_uid();
-    env::temp_dir().join(format!("rimz-{uid}"))
+    // Containers and minimal hosts often lack XDG_RUNTIME_DIR. Use the short
+    // /tmp/rimz-<uid> namespace per the docs; RuntimePaths::ensure_dirs verifies
+    // and hardens the fallback root, rimz root, workspace root, and shared root.
+    runtime_fallback_home()
+}
+
+#[cfg(unix)]
+fn runtime_fallback_home() -> PathBuf {
+    PathBuf::from("/tmp").join(format!("rimz-{}", current_uid()))
+}
+
+#[cfg(not(unix))]
+fn runtime_fallback_home() -> PathBuf {
+    env::temp_dir().join(format!("rimz-{}", current_uid()))
 }
 
 /// Per-user, per-machine config root. Hosts the resolver allowlist and any
@@ -407,5 +518,91 @@ mod tests {
             first_paths.shared_pricing_cache_path(),
             second_paths.shared_pricing_cache_path()
         );
+    }
+
+    #[test]
+    fn runtime_fallback_uses_short_tmp_root() {
+        let fallback = runtime_fallback_home();
+
+        #[cfg(unix)]
+        {
+            let expected = format!("rimz-{}", current_uid());
+            assert_eq!(fallback.parent(), Some(Path::new("/tmp")));
+            assert_eq!(
+                fallback.file_name().and_then(|name| name.to_str()),
+                Some(expected.as_str())
+            );
+        }
+
+        #[cfg(not(unix))]
+        assert!(fallback.starts_with(env::temp_dir()));
+    }
+
+    #[test]
+    fn validated_under_fails_fast_with_the_xdg_remedy() {
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let deep_root = Path::new("/tmp").join("d".repeat(crate::sock::AF_UNIX_PATH_LIMIT));
+
+        let err =
+            RuntimePaths::validated_under(workspace_id, &deep_root).expect_err("overlong root");
+        let rendered = err.to_string();
+
+        match err {
+            PathErr::SocketBudgetExceeded(source) => {
+                assert!(source.path.starts_with(&deep_root));
+                assert!(source.used > source.limit);
+                assert!(rendered.contains(crate::sock::XDG_REMEDY));
+            }
+            other => panic!("expected SocketBudgetExceeded, got {other:?}"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_dirs_hardens_runtime_root_before_workspace_children() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let runtime_root = dir.path().join("runtime");
+        let rimz_root = runtime_root.join("rimz");
+        fs::create_dir_all(&rimz_root).unwrap();
+        for path in [&runtime_root, &rimz_root] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o777)).unwrap();
+        }
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let runtime = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
+
+        runtime.ensure_dirs().unwrap();
+
+        for path in [
+            runtime_root.as_path(),
+            rimz_root.as_path(),
+            runtime.root.as_path(),
+            runtime.shared_root.as_path(),
+        ] {
+            let mode = fs::metadata(path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{} is private", path.display());
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn ensure_dirs_rejects_symlinked_runtime_root() {
+        use std::os::unix::fs::symlink;
+
+        let dir = tempfile::tempdir().unwrap();
+        let real_root = dir.path().join("real");
+        fs::create_dir(&real_root).unwrap();
+        let runtime_root = dir.path().join("runtime");
+        symlink(&real_root, &runtime_root).unwrap();
+        let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+        let runtime = RuntimePaths::under(workspace_id, &runtime_root).unwrap();
+
+        let err = runtime.ensure_dirs().expect_err("symlinked root");
+
+        match err {
+            PathErr::RuntimeDirSymlink { path } => assert_eq!(path, runtime_root),
+            other => panic!("expected RuntimeDirSymlink, got {other:?}"),
+        }
     }
 }

@@ -11,6 +11,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::mux::CommandSpec;
+use crate::sock;
 
 use super::{RemoteSpec, RemoteTarget, quote_remote_path, remote_path_prefix, sh_quote};
 
@@ -192,12 +193,31 @@ pub fn stats_path(runtime: &crate::RuntimePaths) -> PathBuf {
 }
 
 /// PID-scoped SSH ControlMaster socket path. Concurrent `rimz remote connect`
-/// invocations never share a master.
+/// invocations never share a master. This socket is independent of the workspace
+/// runtime budget, so callers that hand it to OpenSSH use
+/// [`validated_control_path`] to fail with Rimz's AF_UNIX remedy first.
 pub fn control_path() -> PathBuf {
-    crate::ledger::paths::runtime_home()
+    control_path_under(&crate::ledger::paths::runtime_home(), std::process::id())
+}
+
+pub fn validated_control_path() -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
+    validated_control_path_under(&crate::ledger::paths::runtime_home(), std::process::id())
+}
+
+fn validated_control_path_under(
+    runtime_root: &Path,
+    pid: u32,
+) -> std::result::Result<PathBuf, sock::SocketPathTooLong> {
+    let path = control_path_under(runtime_root, pid);
+    sock::validate_socket_path(&path)?;
+    Ok(path)
+}
+
+fn control_path_under(runtime_root: &Path, pid: u32) -> PathBuf {
+    runtime_root
         .join("rimz")
         .join("link")
-        .join(format!("link-{}.sock", std::process::id()))
+        .join(format!("link-{pid}.sock"))
 }
 
 pub fn control_options(path: &Path) -> Vec<String> {
@@ -666,5 +686,18 @@ mod tests {
                 "dev-box"
             ]
         );
+    }
+
+    #[test]
+    fn validated_control_path_rejects_overlong_runtime_roots() {
+        let runtime_root = Path::new("/tmp").join("d".repeat(sock::AF_UNIX_PATH_LIMIT));
+        let control = control_path_under(&runtime_root, 12345);
+
+        let err =
+            validated_control_path_under(&runtime_root, 12345).expect_err("overlong control path");
+
+        assert_eq!(err.path, control);
+        assert!(err.used > err.limit);
+        assert!(err.to_string().contains(sock::XDG_REMEDY));
     }
 }

@@ -10,10 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::mux::{MuxErr, Result};
 
-#[cfg(target_os = "macos")]
-pub const ZELLIJ_SOCKET_PATH_LIMIT: usize = 104;
-#[cfg(not(target_os = "macos"))]
-pub const ZELLIJ_SOCKET_PATH_LIMIT: usize = 108;
+pub const ZELLIJ_SOCKET_PATH_LIMIT: usize = crate::sock::AF_UNIX_PATH_LIMIT;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ZellijSocketHeadroom {
@@ -67,7 +64,7 @@ pub(crate) fn socket_headroom_from(
         uid,
     );
     ZellijSocketHeadroom {
-        len: path_len(&path),
+        len: crate::sock::path_len(&path),
         path,
         limit: ZELLIJ_SOCKET_PATH_LIMIT,
     }
@@ -107,18 +104,6 @@ fn env_path(key: &str) -> Option<PathBuf> {
     std::env::var_os(key)
         .filter(|value| !value.is_empty())
         .map(PathBuf::from)
-}
-
-#[cfg(unix)]
-fn path_len(path: &Path) -> usize {
-    use std::os::unix::ffi::OsStrExt as _;
-
-    path.as_os_str().as_bytes().len()
-}
-
-#[cfg(not(unix))]
-fn path_len(path: &Path) -> usize {
-    path.to_string_lossy().len()
 }
 
 #[cfg(unix)]
@@ -188,7 +173,7 @@ mod tests {
     #[test]
     fn path_equal_to_limit_is_rejected() {
         let base = Path::new("/tmp/z");
-        let fixed = path_len(&base.join("contract_version_1"));
+        let fixed = crate::sock::path_len(&base.join("contract_version_1"));
         let session_len = ZELLIJ_SOCKET_PATH_LIMIT - fixed - 1;
         let headroom = socket_headroom_from(
             &"s".repeat(session_len),

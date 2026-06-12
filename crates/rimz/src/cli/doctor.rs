@@ -28,12 +28,6 @@ pub struct DoctorArgs {
     audit: bool,
 }
 
-/// The longest socket name under `sock_dir` is the sidebar wakeup socket
-/// `<sock_dir>/sidebar.<12-hex>.sock`; the per-request `feed.<12-hex>.sock`
-/// is shorter. The budget itself is [`AF_UNIX_PATH_LIMIT`] — one authority
-/// shared with the bridge binder's fail-fast precondition.
-pub(super) const LONGEST_SOCKET_TAIL_LEN: usize = "/sidebar.123456789012.sock".len();
-
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
 

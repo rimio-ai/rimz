@@ -3,16 +3,13 @@ use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
 
-use rimz::bridge::AF_UNIX_PATH_LIMIT;
+use rimz::RuntimePaths;
 use rimz::config::MachineConfig;
 use rimz::mux::{
     MuxBackend, SessionHealth,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
-use rimz::{RuntimePaths, StatePaths};
-
-use super::LONGEST_SOCKET_TAIL_LEN;
 
 #[expect(
     clippy::print_stdout,
@@ -358,27 +355,30 @@ pub(super) fn report_tmux_capabilities() {
     reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
 )]
 pub(super) fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
-    if StatePaths::for_workspace(ws.workspace_id.clone()).is_err() {
-        return;
-    }
-    let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
+    let runtime = match RuntimePaths::under(
+        ws.workspace_id.clone(),
+        &rimz::ledger::paths::runtime_home(),
+    ) {
         Ok(r) => r,
         Err(err) => {
             println!("  sock headroom : unavailable ({err})");
             return;
         }
     };
-    let dir_len = runtime.sock_dir.as_os_str().len();
-    let total = dir_len + LONGEST_SOCKET_TAIL_LEN;
-    let status = if total < AF_UNIX_PATH_LIMIT {
-        "OK"
-    } else {
-        "TIGHT"
-    };
+    let budget = rimz::sock::SockBudget::for_sock_dir(&runtime.sock_dir);
+    let status = if budget.fits() { "OK" } else { "TOO LONG" };
     println!(
-        "  sock headroom : {status} ({total}/{AF_UNIX_PATH_LIMIT} bytes for {})",
-        runtime.sock_dir.display(),
+        "  sock headroom : {status} ({}/{} bytes for {})",
+        budget.used,
+        budget.limit,
+        budget.sock_dir.display(),
     );
+    if !budget.fits() {
+        println!(
+            "  sock headroom : {} and rerun rimz",
+            rimz::sock::XDG_REMEDY
+        );
+    }
 }
 
 #[expect(

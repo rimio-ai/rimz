@@ -30,7 +30,7 @@ pub(super) fn sidebar_socket_path(
     instance_id: &SidebarInstanceId,
 ) -> PathBuf {
     // Use the short (12-hex) id, not the full `sb_<32 hex>`: the bound path must
-    // fit the 108-byte AF_UNIX budget, same as the per-request feed socket. The
+    // fit the platform AF_UNIX budget, same as the per-request feed socket. The
     // heartbeat carries this path verbatim, so senders stay in sync.
     runtime
         .sock_dir
@@ -38,6 +38,7 @@ pub(super) fn sidebar_socket_path(
 }
 
 pub(super) fn bind_socket(path: &Path) -> io::Result<UnixDatagram> {
+    crate::sock::validate_socket_path(path).map_err(io::Error::other)?;
     match std::fs::remove_file(path) {
         Ok(()) => {}
         Err(err) if err.kind() == io::ErrorKind::NotFound => {}
