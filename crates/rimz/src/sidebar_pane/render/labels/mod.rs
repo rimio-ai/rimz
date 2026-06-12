@@ -12,7 +12,10 @@ use crate::feed::ContextSeverity;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
-use super::animation::{AnimationRole, effect_modifier, frame_at, still_frame};
+use super::animation::{
+    AnimationRole, BREATH_DEEP_AMPLITUDE, BREATH_SHALLOW_AMPLITUDE, BreathSample, effect_style,
+    effect_weight, frame_at, still_frame,
+};
 use super::theme::Theme;
 
 mod glyphs;
@@ -21,25 +24,10 @@ mod meters;
 pub(super) use self::{glyphs::*, meters::*};
 
 /// The shared idle-age signal: one continuous tone ramp for every age reader —
-/// the clock cluster, the breathing `?`/`!`, and the cockpit attention buckets
-/// — plus discrete cadence tiers for the attention breath. Color slides from
-/// warn through caution to alarm once the age leaves the first quarter hour;
-/// cadence stays slow through the half hour, double-time until the hour, and
-/// hard-blinks beyond it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum HeatCadence {
-    Amber,
-    Red,
-}
-
-pub(super) fn heat_cadence(age_secs: i64) -> Option<HeatCadence> {
-    match age_secs {
-        i64::MIN..=1800 => None,
-        1801..=3600 => Some(HeatCadence::Amber),
-        _ => Some(HeatCadence::Red),
-    }
-}
-
+/// the clock cluster, the breathing `?`/`!`, and the cockpit attention buckets.
+/// Color slides from warn through caution to alarm once the age leaves the
+/// first quarter hour; breath tempo follows a continuous clamped curve in
+/// [`super::animation::breath_tempo`].
 fn heat_fraction(age_secs: i64) -> Option<f32> {
     (age_secs > 900).then(|| ((age_secs - 900) as f32 / 2700.0).min(1.0))
 }

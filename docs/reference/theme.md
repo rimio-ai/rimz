@@ -50,7 +50,7 @@ A changed `scheme` value applies on the next snapshot; loaded theme files are ca
 
 ## Color Depth
 
-`[sidebar.theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that forward `TERM` but drop `COLORTERM` (pair it with [`glow = "always"`](#glow)); `256` pins indexed output.
+`[sidebar.theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that forward `TERM` but drop `COLORTERM`; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
 
 ```toml
 [sidebar.theme]
@@ -150,9 +150,9 @@ The built-in heads:
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static`, `breathe`, or `blink`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence.
+`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped pulse, `effect = "static"` quiets it, and `speed` tunes it when the pulse is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
 
-`waiting`, `failed`, and `paused` honor one `frames` value and `color`. The attention age heat, unread hard-blink, and held pause grammar are product behavior, so `effect` and `speed` on those roles are ignored, and multiple frames for those roles are rejected.
+Every role uses the same model: frames, color, effect, and speed. The built-in attention pulse still applies age heat and unread depth on row glyphs unless an explicit static effect quiets it; cockpit tallies use still representative frames.
 
 ## Provider Styling
 
@@ -169,14 +169,14 @@ ascii_art = "CLAUDE"
 
 ## Glow
 
-`[sidebar] glow` gates the truecolor effects tier — the attention glow and transition flashes layered over the base palette. `auto` (default) follows `COLORTERM`; `always` forces the tier when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"`; `never` keeps the plain render.
+`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The continuous attention/result pulse is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base pulse.
 
 ```toml
 [sidebar]
 glow = "auto"        # or "always", "never"
 ```
 
-Glyph shapes carry every state, so `NO_COLOR` suppresses all color and effects while each status, meter, and marker still reads by shape.
+Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping shape and depth modifiers where they add signal; each status, meter, and marker still reads by shape.
 
 ## Changing Values
 

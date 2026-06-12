@@ -1,21 +1,17 @@
-//! Post-render color effects — the truecolor "garnish" tier.
+//! Post-render transition effects — the truecolor "garnish" tier.
 //!
 //! After the paragraph renders, this pass mutates buffer cell *colors* in
-//! place: the attention glow (a smooth lightness swell on a `?`/`!` row's
-//! glyph, name, and gutter spine, phase-locked to the modifier breath in
-//! [`super::labels::attention_breath`]) and brief one-shot flashes on state
-//! transitions — a card entering `waiting`/`failed`, an ask resolving, a
-//! paused row lifting, a new card appearing, the spine lighting under a fresh
-//! selection. Color only, never a glyph: the composed text is untouched, so
-//! the golden frames and the `NO_COLOR` grammar cannot drift (locked by the
+//! place: brief one-shot flashes mark state transitions — a card entering
+//! `waiting`/`failed`, an ask resolving, a paused row lifting, a new card
+//! appearing, the spine lighting under a fresh selection. Color only, never a
+//! glyph: the composed text is untouched, so the golden frames and the
+//! `NO_COLOR` grammar cannot drift (locked by the
 //! `effects_pass_never_changes_the_composed_text` golden guard).
 //!
 //! The pass runs only when [`Theme::effects_enabled`] clears it — the
-//! `[sidebar] glow` mode over the terminal's 24-bit advertisement, since
-//! smooth interpolation quantizes into banding on a 256-color palette — and
-//! it obeys the design law: the glow rides rows that already breathe, the
-//! one-shots animate the moment of change and decay, and a calm room paints
-//! nothing here.
+//! `[sidebar] glow` mode over the terminal's 24-bit advertisement. The
+//! continuous row pulse is owned by base composition; this pass only animates
+//! the moment of change and decay, and a calm room paints nothing here.
 //!
 //! Geometry re-resolves every frame from `UiState::line_map` (the hit-test
 //! map, the renderer's one row-geometry authority), so an effect follows its
@@ -30,21 +26,13 @@ use std::time::Duration;
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::{SidebarRow, SidebarSnapshot};
-use jiff::Timestamp;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use tachyonfx::{CellFilter, Effect, EffectTimer, Interpolation, fx};
+use tachyonfx::{CellFilter, Effect, Interpolation, fx};
 
-use super::fmt::age_secs;
-use super::labels::{HeatCadence, heat_cadence, status_glyph};
 use super::row_passes_filter;
 use super::theme::Theme;
-
-/// The glow's peak lightness lift (HSL points over the painted tone). Strong
-/// enough to read as a swell on the muted palette, gentle enough to stay a
-/// breath rather than a strobe.
-const GLOW_MAX_LIGHTNESS: f32 = 16.0;
 
 /// Cap on the elapsed time fed into a one-shot per painted frame. A calm room
 /// paints rarely, so a raw phase delta can span seconds; clamping means a
@@ -59,8 +47,7 @@ const FLASH_SELECTED_MS: u32 = 180;
 const FLASH_MATERIALIZE_MS: u32 = 250;
 
 /// The state-transition cues the observer spawns. Each is a one-shot: it
-/// plays once over its row and expires; the continuous attention glow is not
-/// one of these (it is rebuilt per frame from the phase, stateless).
+/// plays once over its row and expires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum TransitionKind {
     EnteredWaiting,
@@ -101,8 +88,7 @@ struct Oneshot {
 
 /// The effects pass's whole memory, riding `UiState` like the spend tally's
 /// `TallyAnim`: the previous frame's per-row statuses and selection (the
-/// transition detector's diff base) and the live one-shots. The continuous
-/// glow holds no state here — it is a pure function of (age heat, phase).
+/// transition detector's diff base) and the live one-shots.
 #[derive(Clone, Default)]
 pub(crate) struct EffectState {
     /// The phase the pass last ran at; elapsed time derives from the delta.
@@ -132,9 +118,7 @@ impl std::fmt::Debug for EffectState {
 
 impl EffectState {
     /// Whether any one-shot is still decaying — the serve loop's gate hook:
-    /// while true the fast tick stays warm so the flash plays smoothly. The
-    /// continuous glow deliberately does not count; it rides the slow
-    /// cosmetic cadence the attention breath already keeps alive.
+    /// while true the fast tick stays warm so the flash plays smoothly.
     pub(crate) fn any_active(&self) -> bool {
         !self.oneshots.is_empty()
     }
@@ -185,8 +169,6 @@ impl EffectState {
             .filter(|row| row_passes_filter(row, filter))
             .collect();
 
-        // One-shots first, glyph glow second, so a card-wide flash never
-        // flattens the breath on the attention glyph it overlaps.
         self.oneshots.retain_mut(|shot| {
             let Some(rect) = target_rect(&visible, line_map, area, &shot.key, shot.target) else {
                 // The row left the screen (scrolled out, evicted, reranked
@@ -198,19 +180,6 @@ impl EffectState {
             shot.fx.process(step, buf, rect);
             shot.fx.running()
         });
-
-        for (index, row) in visible.iter().enumerate() {
-            let Some(delta) = glow_delta(row, snapshot.now, phase) else {
-                continue;
-            };
-            let Some(run) = row_run(line_map, index) else {
-                continue;
-            };
-            if let Some(word) = word_rect(buf, area, &run, row, theme) {
-                shift_lightness(delta, buf, word);
-            }
-            shift_lightness(delta, buf, spine_rect(area, &run));
-        }
     }
 
     /// Diff the frame's rows and selection against the last observed state and
@@ -321,55 +290,6 @@ fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
     (target, fx)
 }
 
-/// The glow's lightness lift for `row` at `phase`, or `None` when the row holds
-/// no glow: unresolved read actionable rows breathe, unread rows hard-blink
-/// without a smooth glow, the resolver spinner means the ask is being handled,
-/// and at red heat the hard modifier blink owns the cell — a smooth swell under
-/// a strobe would mush both. The wave is the breath's own triangle (same cycle,
-/// same amber double-time, see [`super::labels::attention_breath`]), so color
-/// and modifier swell as one motion.
-fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
-    if !row.is_agent() || row.resolver().is_some() || row.unread {
-        return None;
-    }
-    if !row.status().is_some_and(AgentStatus::is_actionable) {
-        return None;
-    }
-    let cadence = heat_cadence(age_secs(row.last_activity, now));
-    if cadence == Some(HeatCadence::Red) {
-        return None;
-    }
-    let level = breath_level(phase, cadence == Some(HeatCadence::Amber));
-    (level > 0.0).then_some(level * GLOW_MAX_LIGHTNESS)
-}
-
-/// One step of the breath triangle as a 0..1 level — the continuous twin of
-/// `labels::breath_wave`, on the same 24-tick cycle (12 at amber double-time)
-/// so the color swell peaks exactly when the modifier does.
-fn breath_level(phase: u64, double_time: bool) -> f32 {
-    const CYCLE: u64 = 24;
-    let phase = if double_time {
-        phase.wrapping_mul(2)
-    } else {
-        phase
-    };
-    let pos = phase % CYCLE;
-    let level = if pos <= CYCLE / 2 { pos } else { CYCLE - pos };
-    level as f32 / (CYCLE / 2) as f32
-}
-
-/// Lift the foreground lightness of every cell in `rect` by `delta` HSL
-/// points, this frame only: an instantaneous shift (a 1ms shader driven to
-/// completion), rebuilt next frame at the next phase's delta — stateless by
-/// construction.
-fn shift_lightness(delta: f32, buf: &mut Buffer, rect: Rect) {
-    let mut fx = fx::hsl_shift_fg(
-        [0.0, 0.0, delta],
-        EffectTimer::from_ms(1, Interpolation::Linear),
-    );
-    fx.process(Duration::from_millis(1), buf, rect);
-}
-
 /// The contiguous line run `line_map` assigns to visible row `index` — the
 /// row's card block, group header included when it leads its group, exactly
 /// the lines the hit-test would route to it.
@@ -418,46 +338,12 @@ fn spine_rect(area: Rect, run: &Range<usize>) -> Rect {
     )
 }
 
-/// The glow's word rect: the gutter cell, the status glyph, and the agent name
-/// on the card's identity line — found by scanning the row's run for the
-/// composed status glyph in the glyph column, which also skips the group header
-/// line sharing the run. `None` when the identity line is scrolled out or the
-/// glyph is not on screen this frame.
-fn word_rect(
-    buf: &Buffer,
-    area: Rect,
-    run: &Range<usize>,
-    row: &SidebarRow,
-    theme: &Theme,
-) -> Option<Rect> {
-    let glyph = row.status().map(|status| status_glyph(theme, status))?;
-    for line in run.clone() {
-        let y = area.y.saturating_add(line as u16);
-        let Some(cell) = buf.cell((area.x + 1, y)) else {
-            continue;
-        };
-        if cell.symbol() == glyph {
-            let label = 3 + row.name.chars().count() as u16;
-            return Some(Rect::new(
-                area.x,
-                y,
-                label.min(area.width.saturating_sub(1)),
-                1,
-            ));
-        }
-    }
-    None
-}
-
 #[cfg(test)]
 mod tests {
     use crate::config::SidebarConfig;
     use crate::feed::PaneRef;
-    use crate::ids::{MuxName, ResolverId, ViewKind};
-    use crate::{
-        AgentCard, RowCard, SidebarResolverState, SidebarWorktreeGroup, SidebarWorktreeKind,
-        WorkspaceId,
-    };
+    use crate::ids::{MuxName, ViewKind};
+    use crate::{AgentCard, RowCard, SidebarWorktreeGroup, SidebarWorktreeKind, WorkspaceId};
     use jiff::Timestamp;
 
     use super::*;
@@ -618,16 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn breath_level_is_the_breaths_own_triangle() {
-        assert_eq!(breath_level(0, false), 0.0);
-        assert_eq!(breath_level(12, false), 1.0);
-        assert_eq!(breath_level(24, false), 0.0);
-        assert_eq!(breath_level(6, false), 0.5);
-        // Amber double-time peaks twice as fast.
-        assert_eq!(breath_level(6, true), 1.0);
-    }
-
-    #[test]
     fn row_run_resolves_the_contiguous_line_block() {
         let map = vec![None, Some(0), Some(0), None, Some(1)];
         assert_eq!(row_run(&map, 0), Some(1..3));
@@ -759,85 +635,5 @@ mod tests {
         assert_eq!(state.oneshots[0].kind, TransitionKind::SelectionLanded);
         assert_eq!(state.oneshots[0].target, Target::Spine);
         assert_eq!(state.oneshots[0].key, "b");
-    }
-
-    #[test]
-    fn glow_rides_only_an_unhandled_actionable_row_below_red() {
-        let mid_breath = 6;
-        let now = Timestamp::now();
-        let waiting = row("a", AgentStatus::Waiting);
-        assert_eq!(
-            glow_delta(&waiting, now, mid_breath),
-            Some(GLOW_MAX_LIGHTNESS / 2.0)
-        );
-        assert_eq!(
-            glow_delta(&waiting, now, 0),
-            None,
-            "the swell's trough paints nothing"
-        );
-
-        let calm = row("a", AgentStatus::Running);
-        assert_eq!(glow_delta(&calm, now, mid_breath), None);
-
-        let mut unread_done = row("a", AgentStatus::Success);
-        unread_done.unread = true;
-        assert_eq!(
-            glow_delta(&unread_done, now, mid_breath),
-            None,
-            "unread calm rows blink instead of glowing"
-        );
-
-        let mut unread_waiting = row("a", AgentStatus::Waiting);
-        unread_waiting.unread = true;
-        assert_eq!(
-            glow_delta(&unread_waiting, now, mid_breath),
-            None,
-            "unread actionable rows blink instead of glowing"
-        );
-
-        let mut handled = row("a", AgentStatus::Waiting);
-        handled.as_agent_mut().unwrap().resolver = Some(SidebarResolverState {
-            resolver_id: ResolverId::new_unchecked("opus-policy"),
-            display_name: None,
-            budget_until: None,
-        });
-        assert_eq!(
-            glow_delta(&handled, now, mid_breath),
-            None,
-            "a resolver owns the ask"
-        );
-
-        let mut red = row("a", AgentStatus::Waiting);
-        red.last_activity = now - jiff::SignedDuration::from_secs(2 * 3_600);
-        assert_eq!(
-            glow_delta(&red, now, mid_breath),
-            None,
-            "the red blink owns the cell"
-        );
-
-        let mut amber = row("a", AgentStatus::Waiting);
-        amber.last_activity = now - jiff::SignedDuration::from_secs(2_000);
-        assert_eq!(
-            glow_delta(&amber, now, 3),
-            Some(GLOW_MAX_LIGHTNESS / 2.0),
-            "amber doubles the tempo, peaking at phase 6"
-        );
-    }
-
-    #[test]
-    fn lightness_shift_touches_the_color_never_the_glyph() {
-        let area = Rect::new(0, 0, 4, 1);
-        let mut buf = Buffer::empty(area);
-        let cell = buf.cell_mut((1, 0)).unwrap();
-        cell.set_symbol("?");
-        cell.set_fg(Color::Indexed(179));
-        shift_lightness(GLOW_MAX_LIGHTNESS, &mut buf, area);
-        let cell = buf.cell((1, 0)).unwrap();
-        assert_eq!(cell.symbol(), "?", "the shift is color-only");
-        assert_ne!(
-            cell.fg,
-            Color::Indexed(179),
-            "a full-delta shift visibly lifts the painted tone"
-        );
     }
 }

@@ -6,8 +6,9 @@
 //! palette tones, and other terminals get the same tones quantized to xterm
 //! 256-color indexes. `NO_COLOR` strips color but keeps Unicode and
 //! modifiers, so every gauge still reads by shape and fill. The color-only
-//! effects pass ([`super::effects`]) remains a separate tier controlled by
-//! `[sidebar] glow`: it runs only when glow permits it and `NO_COLOR` is off.
+//! transition effects pass ([`super::effects`]) remains a separate tier
+//! controlled by `[sidebar] glow`: it runs only when glow permits it and
+//! `NO_COLOR` is off.
 //!
 //! Palette choice is data in the snapshot's `[sidebar.theme]`: `scheme`
 //! selects a built-in palette, a Ghostty-format theme file, or Ghostty's
@@ -22,7 +23,7 @@ use crate::config::{
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
-use super::animation::ResolvedAnimations;
+use super::animation::{BreathSample, ResolvedAnimations};
 use super::scheme;
 
 pub(crate) const CLAUDE_CLAY_RGB: (u8, u8, u8) = (0xd9, 0x77, 0x57);
@@ -215,6 +216,53 @@ fn rgb_color((red, green, blue): (u8, u8, u8), depth: ColorDepth) -> Color {
     }
 }
 
+pub(super) fn color_to_rgb(color: Color) -> Option<(u8, u8, u8)> {
+    match color {
+        Color::Reset => None,
+        Color::Black => Some((0x00, 0x00, 0x00)),
+        Color::Red => Some((0x80, 0x00, 0x00)),
+        Color::Green => Some((0x00, 0x80, 0x00)),
+        Color::Yellow => Some((0x80, 0x80, 0x00)),
+        Color::Blue => Some((0x00, 0x00, 0x80)),
+        Color::Magenta => Some((0x80, 0x00, 0x80)),
+        Color::Cyan => Some((0x00, 0x80, 0x80)),
+        Color::Gray => Some((0xc0, 0xc0, 0xc0)),
+        Color::DarkGray => Some((0x80, 0x80, 0x80)),
+        Color::LightRed => Some((0xff, 0x00, 0x00)),
+        Color::LightGreen => Some((0x00, 0xff, 0x00)),
+        Color::LightYellow => Some((0xff, 0xff, 0x00)),
+        Color::LightBlue => Some((0x00, 0x00, 0xff)),
+        Color::LightMagenta => Some((0xff, 0x00, 0xff)),
+        Color::LightCyan => Some((0x00, 0xff, 0xff)),
+        Color::White => Some((0xff, 0xff, 0xff)),
+        Color::Indexed(index) if index < 16 => Some(ansi_index_rgb(index)),
+        Color::Indexed(index) => Some(xterm_rgb(index)),
+        Color::Rgb(red, green, blue) => Some((red, green, blue)),
+    }
+}
+
+fn ansi_index_rgb(index: u8) -> (u8, u8, u8) {
+    const ANSI: [(u8, u8, u8); 16] = [
+        (0x00, 0x00, 0x00),
+        (0x80, 0x00, 0x00),
+        (0x00, 0x80, 0x00),
+        (0x80, 0x80, 0x00),
+        (0x00, 0x00, 0x80),
+        (0x80, 0x00, 0x80),
+        (0x00, 0x80, 0x80),
+        (0xc0, 0xc0, 0xc0),
+        (0x80, 0x80, 0x80),
+        (0xff, 0x00, 0x00),
+        (0x00, 0xff, 0x00),
+        (0xff, 0xff, 0x00),
+        (0x00, 0x00, 0xff),
+        (0xff, 0x00, 0xff),
+        (0x00, 0xff, 0xff),
+        (0xff, 0xff, 0xff),
+    ];
+    ANSI[index as usize]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
@@ -310,6 +358,20 @@ impl Theme {
         } else {
             style.fg(self.resolve(fg))
         }
+    }
+
+    pub(crate) fn breathe(&self, fg: Color, sample: BreathSample) -> Style {
+        if self.no_color {
+            return Style::default().add_modifier(sample.modifier());
+        }
+        let resolved = self.resolve(fg);
+        let Some(rgb) = color_to_rgb(resolved) else {
+            return Style::default();
+        };
+        Style::default().fg(rgb_color(
+            scheme::lift_lightness(rgb, sample.lightness_delta()),
+            self.depth,
+        ))
     }
 
     pub(crate) fn chip(&self, fg: Color, bg: Color, modifier: Modifier) -> Style {
@@ -537,6 +599,64 @@ mod tests {
         assert_eq!(theme.heat_tone(0.5), Color::Indexed(173));
         assert_eq!(theme.heat_tone(1.0), Color::Indexed(167));
         assert_eq!(theme.heat_tone(1.1), Color::Indexed(167));
+    }
+
+    #[test]
+    fn breathe_emits_color_depth_fallbacks() {
+        let trough = BreathSample::new(
+            0,
+            24.0,
+            crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
+        );
+        let shallow_peak = BreathSample::new(
+            12,
+            24.0,
+            crate::sidebar_pane::render::animation::BREATH_SHALLOW_AMPLITUDE,
+        );
+        let peak = BreathSample::new(
+            12,
+            24.0,
+            crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
+        );
+
+        let truecolor = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    mode: ThemeMode::Truecolor,
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        let truecolor_trough = truecolor.breathe(Color::Yellow, trough);
+        let truecolor_peak = truecolor.breathe(Color::Yellow, peak);
+        assert!(matches!(truecolor_trough.fg, Some(Color::Rgb(..))));
+        assert!(matches!(truecolor_peak.fg, Some(Color::Rgb(..))));
+        assert_ne!(truecolor_trough.fg, truecolor_peak.fg);
+        assert!(truecolor_peak.add_modifier.is_empty());
+
+        let indexed = Theme::fixed(false);
+        let indexed_trough = indexed.breathe(Color::Yellow, trough);
+        let indexed_peak = indexed.breathe(Color::Yellow, peak);
+        assert!(matches!(indexed_trough.fg, Some(Color::Indexed(_))));
+        assert!(matches!(indexed_peak.fg, Some(Color::Indexed(_))));
+        assert_ne!(indexed_trough.fg, indexed_peak.fg);
+
+        let plain = Theme::fixed(true);
+        assert_eq!(plain.breathe(Color::Yellow, trough).fg, None);
+        assert_eq!(
+            plain.breathe(Color::Yellow, trough).add_modifier,
+            Modifier::DIM
+        );
+        assert_eq!(
+            plain.breathe(Color::Yellow, shallow_peak).add_modifier,
+            Modifier::empty()
+        );
+        assert_eq!(
+            plain.breathe(Color::Yellow, peak).add_modifier,
+            Modifier::BOLD
+        );
     }
 
     #[test]

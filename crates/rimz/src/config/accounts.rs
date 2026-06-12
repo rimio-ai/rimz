@@ -25,14 +25,8 @@ impl AccountsConfig {
     }
 }
 
-impl Default for UsageLimitUsd {
-    fn default() -> Self {
-        Self { cents: 0 }
-    }
-}
-
 /// A USD amount stored as integer cents so config structs keep `Eq`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct UsageLimitUsd {
     cents: u64,
 }

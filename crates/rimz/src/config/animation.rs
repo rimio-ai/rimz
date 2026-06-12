@@ -37,16 +37,11 @@ impl SidebarAnimationsConfig {
         *self == Self::default()
     }
 
-    /// Whether calm status heads need a slow cosmetic tick.
+    /// Whether calm status heads need a cosmetic animation tick.
     pub fn has_resting_motion(&self) -> bool {
-        self.idle.as_ref().is_some_and(AnimationSpec::has_motion)
+        self.paused.as_ref().is_some_and(AnimationSpec::has_motion)
+            || self.idle.as_ref().is_some_and(AnimationSpec::has_motion)
             || self.success.as_ref().is_some_and(AnimationSpec::has_motion)
-    }
-
-    fn validate(&self) -> Result<(), String> {
-        validate_single_frame_role("paused", &self.paused)?;
-        validate_single_frame_role("waiting", &self.waiting)?;
-        validate_single_frame_role("failed", &self.failed)
     }
 }
 
@@ -83,21 +78,8 @@ impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
             waiting: raw.waiting,
             failed: raw.failed,
         };
-        config.validate().map_err(de::Error::custom)?;
         Ok(config)
     }
-}
-
-fn validate_single_frame_role(role: &str, spec: &Option<AnimationSpec>) -> Result<(), String> {
-    let Some(frames) = spec.as_ref().and_then(|spec| spec.frames.as_ref()) else {
-        return Ok(());
-    };
-    if frames.len() == 1 {
-        return Ok(());
-    }
-    Err(format!(
-        "sidebar.animations.{role}.frames accepts exactly one frame; attention and paused roles keep motion fixed"
-    ))
 }
 
 /// One role override under `[sidebar.animations.<role>]`.
@@ -116,10 +98,18 @@ pub struct AnimationSpec {
 
 impl AnimationSpec {
     fn has_motion(&self) -> bool {
-        self.frames.as_ref().is_some_and(|frames| frames.len() > 1)
+        self.has_frame_motion()
             || self
                 .effect
                 .is_some_and(|effect| effect != AnimationEffect::Static)
+    }
+
+    pub(crate) fn has_frame_motion(&self) -> bool {
+        self.frames.as_ref().is_some_and(|frames| frames.len() > 1)
+    }
+
+    pub(crate) fn disables_effect_motion(&self) -> bool {
+        self.effect == Some(AnimationEffect::Static)
     }
 }
 
@@ -305,7 +295,6 @@ impl<'de> Deserialize<'de> for AnimationColor {
 pub enum AnimationEffect {
     Static,
     Breathe,
-    Blink,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -373,6 +362,7 @@ mod tests {
             toml::from_str("value = { effect = \"breathe\", speed = \"fast\" }").expect("spec");
         assert_eq!(parsed.value.effect, Some(AnimationEffect::Breathe));
         assert_eq!(parsed.value.speed, Some(AnimationSpeed::Fast));
+        assert!(toml::from_str::<SpecWrap>("value = { effect = \"blink\" }").is_err());
         assert!(toml::from_str::<SpecWrap>("value = { effect = \"pulse\" }").is_err());
         assert!(toml::from_str::<SpecWrap>("value = { speed = \"instant\" }").is_err());
     }
@@ -392,18 +382,17 @@ mod tests {
     }
 
     #[test]
-    fn attention_and_paused_roles_reject_multiple_frames() {
+    fn attention_and_paused_roles_accept_multiple_frames() {
         assert!(toml::from_str::<SidebarAnimationsConfig>("[waiting]\nframes = \"?\"\n").is_ok());
         assert!(toml::from_str::<SidebarAnimationsConfig>("[failed]\nframes = \"!\"\n").is_ok());
         assert!(toml::from_str::<SidebarAnimationsConfig>("[paused]\nframes = [\"⏸︎\"]\n").is_ok());
-        assert!(toml::from_str::<SidebarAnimationsConfig>("[waiting]\nframes = \"?!\"\n").is_err());
         assert!(
             toml::from_str::<SidebarAnimationsConfig>("[failed]\nframes = [\"!\", \"?\"]\n")
-                .is_err()
+                .is_ok()
         );
         assert!(
             toml::from_str::<SidebarAnimationsConfig>("[paused]\nframes = [\"⏸︎\", \"○\"]\n")
-                .is_err()
+                .is_ok()
         );
     }
 

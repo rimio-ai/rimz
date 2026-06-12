@@ -8,8 +8,7 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat_color, agent_style_at, attention_floor_color, hard_blink, status_chip_color,
-    status_glyph, status_rest_style, status_style_at, status_style_with_modifier,
+    age_heat_color, attention_floor_color, status_chip_color, status_glyph, status_rest_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -65,7 +64,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     groups: &[SidebarWorktreeGroup],
     now: Timestamp,
     filter: Option<AgentStatus>,
-    animation_phase: u64,
+    _animation_phase: u64,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
     let working = status_total(groups, AgentStatus::Running);
@@ -93,27 +92,13 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         status_chip_color(theme, AgentStatus::Waiting),
         waiting,
-        unread_bucket_style(
-            theme,
-            groups,
-            AgentStatus::Waiting,
-            now,
-            animation_phase,
-            attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
-        ),
+        attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
     );
     left.push_count(
         AgentStatus::Failed,
         status_chip_color(theme, AgentStatus::Failed),
         failed,
-        unread_bucket_style(
-            theme,
-            groups,
-            AgentStatus::Failed,
-            now,
-            animation_phase,
-            attention_bucket_style(theme, groups, AgentStatus::Failed, now),
-        ),
+        attention_bucket_style(theme, groups, AgentStatus::Failed, now),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
     // but still a row worth spotting. It renders like every other bucket — the
@@ -125,34 +110,20 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Paused,
         status_chip_color(theme, AgentStatus::Paused),
         paused,
-        unread_bucket_style(
-            theme,
-            groups,
-            AgentStatus::Paused,
-            now,
-            animation_phase,
-            status_style_at(theme, AgentStatus::Paused, animation_phase),
-        ),
+        status_rest_style(theme, AgentStatus::Paused),
     );
     left.push_count(
         AgentStatus::Success,
         status_chip_color(theme, AgentStatus::Success),
         success,
-        unread_bucket_style(
-            theme,
-            groups,
-            AgentStatus::Success,
-            now,
-            animation_phase,
-            status_style_at(theme, AgentStatus::Success, animation_phase),
-        ),
+        status_rest_style(theme, AgentStatus::Success),
     );
     let mut right = Cluster::new(theme, filter);
     right.push_count(
         AgentStatus::Running,
         status_chip_color(theme, AgentStatus::Running),
         working,
-        agent_style_at(theme, AgentStatus::Running, animation_phase),
+        status_rest_style(theme, AgentStatus::Running),
     );
     right.push_count(
         AgentStatus::Idle,
@@ -336,41 +307,6 @@ fn attention_bucket_style(
         age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
         Modifier::BOLD,
     )
-}
-
-fn unread_bucket_style(
-    theme: &Theme,
-    groups: &[SidebarWorktreeGroup],
-    status: AgentStatus,
-    now: Timestamp,
-    animation_phase: u64,
-    base: Style,
-) -> Style {
-    let Some(oldest) = oldest_unread_age(groups, status, now) else {
-        return base;
-    };
-    match status {
-        AgentStatus::Waiting | AgentStatus::Failed => theme.style(
-            age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
-            hard_blink(animation_phase),
-        ),
-        AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running | AgentStatus::Idle => {
-            status_style_with_modifier(theme, status, hard_blink(animation_phase))
-        }
-    }
-}
-
-fn oldest_unread_age(
-    groups: &[SidebarWorktreeGroup],
-    status: AgentStatus,
-    now: Timestamp,
-) -> Option<i64> {
-    groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.unread && row.status() == Some(status))
-        .map(|row| age_secs(row.last_activity, now))
-        .max()
 }
 
 /// The full-fleet count for one make-up bucket — the sum of every group's

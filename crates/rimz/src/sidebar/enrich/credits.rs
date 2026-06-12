@@ -65,9 +65,7 @@ pub fn merge_provider_credits_entry_if_due(
     entry: impl FnOnce() -> ProviderCreditsEntry,
 ) -> Option<ProviderCreditsEntry> {
     let path = runtime.shared_credits_path();
-    let Some(_guard) = try_credits_cache_lock(&runtime.shared_credits_lock()) else {
-        return None;
-    };
+    let _guard = try_credits_cache_lock(&runtime.shared_credits_lock())?;
     let mut cache = read_credits_cache(&path);
     let now_ms = unix_now_ms();
     if cache

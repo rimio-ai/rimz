@@ -4,9 +4,9 @@ use super::*;
 fn effects_pass_never_changes_the_composed_text() {
     // The color-only invariant behind every golden frame: the truecolor
     // effects pass at its busiest — a fresh `waiting` transition flash decaying
-    // over its card plus the attention glow mid-swell — must leave the composed
-    // text byte-identical to a render without it. A tachyonfx effect that
-    // mutated a glyph (dissolve, char evolution) would fail here.
+    // over its card — must leave the composed text byte-identical to a render
+    // without it. A tachyonfx effect that mutated a glyph (dissolve, char
+    // evolution) would fail here.
     let make = |status: AgentStatus| {
         snapshot_with(
             Vec::new(),
@@ -31,9 +31,9 @@ fn effects_pass_never_changes_the_composed_text() {
         terminal.clear().unwrap();
         let mut ui = UiState::default();
         // Frame 1 records the room; frame 2 flips the agent to `waiting`,
-        // spawning the flash at full tone; frame 3 paints it mid-decay with
-        // the glow at the breath's half-swell. The pass is driven directly so
-        // the guard holds whatever `COLORTERM` the test shell has.
+        // spawning the flash at full tone; frame 3 paints it mid-decay. The
+        // pass is driven directly so the guard holds whatever `COLORTERM` the
+        // test shell has.
         for (snapshot, phase) in [(&idle, 0), (&waiting, 6), (&waiting, 7)] {
             let mut effects = std::mem::take(&mut ui.effects);
             ui.animation_phase = phase;
@@ -82,15 +82,11 @@ fn effects_pass_never_changes_the_composed_text() {
     );
 }
 #[test]
-fn glow_always_recolors_the_attention_glyph_without_colorterm() {
-    // The golden guard above proves the pass never changes the text; this is
-    // its color twin — proof the pass actually paints. Driven end-to-end
-    // through the real in-draw gate (`Theme::for_sidebar` →
-    // `effects_enabled`): `glow = "always"` must lift the waiting glyph to a
-    // truecolor tone with no `COLORTERM` in the environment (the SSH case the
-    // mode exists for), and `never` must leave the composed indexed tone
-    // untouched.
-    use crate::config::GlowMode;
+fn glow_gates_transition_flashes_not_the_steady_pulse() {
+    // The steady attention pulse is owned by base composition. The post-render
+    // pass still handles transition flashes, gated end-to-end through
+    // `Theme::for_sidebar` -> `effects_enabled`.
+    use crate::config::{GlowMode, ThemeMode};
     // The end-to-end gate keeps one env coupling `always` honours: `NO_COLOR`
     // beats every mode. Surface a colorful-output-suppressing harness env as
     // itself rather than as a mysterious color assertion below.
@@ -109,6 +105,7 @@ fn glow_always_recolors_the_attention_glyph_without_colorterm() {
             Some("db migrate"),
         )],
     );
+    snapshot.sidebar.theme.mode = ThemeMode::Truecolor;
     let glyph_fg = |snapshot: &SidebarSnapshot| -> vt100::Color {
         let mut bytes = Vec::new();
         let backend = CrosstermBackend::new(&mut bytes);
@@ -139,21 +136,52 @@ fn glow_always_recolors_the_attention_glyph_without_colorterm() {
     };
 
     snapshot.sidebar.glow = GlowMode::Always;
-    let lifted = glyph_fg(&snapshot);
+    let always = glyph_fg(&snapshot);
     snapshot.sidebar.glow = GlowMode::Never;
-    let resting = glyph_fg(&snapshot);
-
-    assert!(
-        matches!(lifted, vt100::Color::Rgb(..)),
-        "the forced pass lifts the glyph to a truecolor tone, got {lifted:?}"
+    let never = glyph_fg(&snapshot);
+    assert_eq!(
+        always, never,
+        "glow no longer owns the continuous pulse; the base glyph color stays stable"
     );
-    assert_ne!(
-        lifted, resting,
-        "glow = \"always\" must visibly recolor what \"never\" leaves alone"
+
+    let flash_active = |glow| {
+        let mut idle = snapshot_with(
+            Vec::new(),
+            vec![agent(
+                "claude-1",
+                "claude",
+                AgentStatus::Idle,
+                Some("/repo/main"),
+                Some("main"),
+                Some("db migrate"),
+            )],
+        );
+        idle.sidebar.theme.mode = ThemeMode::Truecolor;
+        idle.sidebar.glow = glow;
+        let mut waiting = snapshot.clone();
+        waiting.sidebar.glow = glow;
+        let mut bytes = Vec::new();
+        let backend = CrosstermBackend::new(&mut bytes);
+        let viewport = Viewport::Fixed(Rect::new(0, 0, 44, 18));
+        let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
+        terminal.clear().unwrap();
+        let mut ui = UiState::default();
+        draw_to_terminal_with_ui(&mut terminal, &idle, None, &mut ui).unwrap();
+        ui.animation_phase = 1;
+        draw_to_terminal_with_ui(&mut terminal, &waiting, None, &mut ui).unwrap();
+        ui.effects.any_active()
+    };
+    assert!(
+        flash_active(GlowMode::Always),
+        "glow = \"always\" enables the transition flash tier"
+    );
+    assert!(
+        !flash_active(GlowMode::Never),
+        "glow = \"never\" skips transition observation and painting"
     );
 }
 #[test]
-fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
+fn animation_cadence_separates_fast_work_from_breath_motion() {
     let running = snapshot_with(
         Vec::new(),
         vec![agent(
@@ -167,7 +195,7 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     );
     assert_eq!(animation_cadence(&running), AnimationCadence::Fast);
 
-    let waiting = snapshot_with(
+    let mut waiting = snapshot_with(
         Vec::new(),
         vec![agent(
             "claude-1",
@@ -178,7 +206,15 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
             Some("allow cargo fmt"),
         )],
     );
-    assert_eq!(animation_cadence(&waiting), AnimationCadence::Slow);
+    assert_eq!(animation_cadence(&waiting), AnimationCadence::Breath);
+    waiting.sidebar.animations.waiting =
+        Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
+    assert_eq!(animation_cadence(&waiting), AnimationCadence::None);
+    waiting.sidebar.animations.waiting = Some(
+        toml::from_str::<AnimationSpec>("frames = \"?¿\"\neffect = \"static\"\n")
+            .expect("animation spec"),
+    );
+    assert_eq!(animation_cadence(&waiting), AnimationCadence::Breath);
 
     let idle_empty = snapshot_with(
         Vec::new(),
@@ -207,7 +243,10 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     assert_eq!(animation_cadence(&calm), AnimationCadence::None);
 
     calm.worktree_groups[0].rows[0].unread = true;
-    assert_eq!(animation_cadence(&calm), AnimationCadence::Slow);
+    assert_eq!(animation_cadence(&calm), AnimationCadence::Breath);
+    calm.sidebar.animations.success =
+        Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
+    assert_eq!(animation_cadence(&calm), AnimationCadence::None);
 
     let mut idle = snapshot_with(
         Vec::new(),
@@ -223,13 +262,12 @@ fn animation_cadence_separates_fast_work_from_slow_cosmetic_motion() {
     assert_eq!(animation_cadence(&idle), AnimationCadence::None);
     idle.sidebar.animations.idle =
         Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
-    assert_eq!(animation_cadence(&idle), AnimationCadence::Slow);
+    assert_eq!(animation_cadence(&idle), AnimationCadence::Breath);
 }
 /// Honesty test: a running agent silent past the stall window is projected
 /// to the attention bucket, so its cell reads as the attention `!` rather than
 /// the working spinner — a wedged agent stops spinning and asks for a look.
-/// (The `!` slowly blinks to draw the eye, but does not cycle the working
-/// braille; phases 0 and 2 both fall in the blink's shown window.)
+/// The `!` pulses to draw the eye, but does not cycle the working braille.
 #[test]
 fn render_stalled_agent_reads_as_static_attention() {
     let mut claude = agent(
@@ -304,7 +342,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
     let mut sidebar = crate::config::SidebarConfig::default();
     sidebar.animations.thinking = Some(
         toml::from_str::<AnimationSpec>(
-            "frames = \"AB\"\ncolor = 196\neffect = \"blink\"\nspeed = \"fast\"\n",
+            "frames = \"AB\"\ncolor = 196\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("animation spec"),
     );
@@ -319,21 +357,21 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         ),
         "B"
     );
-    let blink_on = labels::agent_role_style_at(
+    let pulse_trough = labels::agent_role_style_at(
         &lit,
         AgentStatus::Running,
         crate::agents::TurnPhase::Reasoning,
         0,
     );
-    assert_eq!(blink_on.fg, Some(Color::Indexed(196)));
-    assert!(blink_on.add_modifier.contains(Modifier::BOLD));
-    let blink_off = labels::agent_role_style_at(
+    assert!(matches!(pulse_trough.fg, Some(Color::Indexed(_))));
+    assert_eq!(pulse_trough.add_modifier, Modifier::empty());
+    let pulse_peak = labels::agent_role_style_at(
         &lit,
         AgentStatus::Running,
         crate::agents::TurnPhase::Reasoning,
-        2,
+        6,
     );
-    assert!(blink_off.add_modifier.contains(Modifier::DIM));
+    assert_ne!(pulse_trough.fg, pulse_peak.fg);
 
     let plain = Theme::fixed_for_sidebar(true, &sidebar);
     let plain_style = labels::agent_role_style_at(

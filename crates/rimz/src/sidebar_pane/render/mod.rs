@@ -43,7 +43,7 @@ pub(crate) use unread::UnreadTracker;
 
 use std::io::{self, Write};
 
-use crate::config::ProviderTabsMode;
+use crate::config::{AnimationSpec, ProviderTabsMode};
 use crate::feed::AgentStatus;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -70,12 +70,12 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
 /// real work (a build, a test, a `sudo` install), or a row whose lead glyph
-/// animates (`?`/`!` breathe, unread rows hard-blink). The serve loop uses this
-/// as the broad "does anything move?" gate; [`animation_cadence`] decides whether
-/// the movement needs the fast frame grid or the slower cosmetic cadence. A
-/// fully settled sidebar (only quiet read idle/done rows) keeps idling on the
-/// slow data tick. A stalled agent is projected to `failed` upstream, so it
-/// reads as a breathing `!` here. The cockpit's today-spend count-up rides a
+/// pulses (`?`/`!` attention and unread results). The serve loop uses this as
+/// the broad "does anything move?" gate; [`animation_cadence`] decides whether
+/// the movement needs the fast frame grid or the breath grid. A fully settled
+/// sidebar (only quiet read idle/done rows) keeps idling on the slow data tick.
+/// A stalled agent is projected to `failed`
+/// upstream, so it reads as a pulsing `!` here. The cockpit's today-spend count-up rides a
 /// separate gate
 /// (`UiState::tally`), so a finished-turn climb keeps the tick alive even when
 /// every row is otherwise static.
@@ -87,7 +87,7 @@ pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
 // buckets still animate (and the counts still tick) for rows a filter hides,
 // so the gate must track the whole room, not the narrowed body.
 pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
-    let mut slow = false;
+    let mut breath = false;
     for row in snapshot
         .worktree_groups
         .iter()
@@ -97,19 +97,42 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // `?`/`!` keep breathing until resolved. Unread rows hard-blink
-            // until the pane is focused.
-            if row.unread || row.status().is_some_and(AgentStatus::is_actionable) {
-                slow = true;
+            // `?`/`!` keep pulsing until resolved. Unread success rows pulse
+            // until the pane is focused; unread idle/running rows stay with
+            // their own still/travel vocabulary.
+            if let Some(status) = row.status()
+                && (status.is_actionable() || (row.unread && status == AgentStatus::Success))
+            {
+                breath |= status_needs_motion(&snapshot.sidebar.animations, status);
             }
         } else if row.process_is_busy() {
             return AnimationCadence::Fast;
         }
     }
-    if slow || snapshot.sidebar.animations.has_resting_motion() {
-        AnimationCadence::Slow
+    if breath || snapshot.sidebar.animations.has_resting_motion() {
+        AnimationCadence::Breath
     } else {
         AnimationCadence::None
+    }
+}
+
+fn status_needs_motion(
+    animations: &crate::config::SidebarAnimationsConfig,
+    status: AgentStatus,
+) -> bool {
+    let spec = match status {
+        AgentStatus::Waiting => animations.waiting.as_ref(),
+        AgentStatus::Failed => animations.failed.as_ref(),
+        AgentStatus::Success => animations.success.as_ref(),
+        _ => None,
+    };
+    spec_needs_motion(spec)
+}
+
+fn spec_needs_motion(spec: Option<&AnimationSpec>) -> bool {
+    match spec {
+        Some(spec) if spec.disables_effect_motion() => spec.has_frame_motion(),
+        _ => true,
     }
 }
 
@@ -137,8 +160,8 @@ pub fn draw_with_ui(
     ui.scroll_offset = composed.scroll_offset;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
-    // The truecolor garnish tier: a color-only effects pass over the buffer the
-    // paragraph just rendered, geometry-locked to the line map this draw wrote.
+    // The transition garnish tier: a color-only effects pass over the buffer
+    // the paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
     // `[sidebar] glow = "never"` opt-out — pays nothing, not even the
     // transition observation.

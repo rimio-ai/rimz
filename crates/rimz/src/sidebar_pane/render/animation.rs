@@ -3,15 +3,23 @@ use crate::config::{
     SidebarAnimationsConfig,
 };
 use crate::feed::AgentStatus;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::{Color, Modifier, Style};
 
-use super::labels::{breath_wave, hard_blink};
-use super::theme::Palette;
+use super::theme::{Palette, Theme};
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
     "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
 ];
+
+const DEFAULT_BREATH_PERIOD: f32 = 24.0;
+const FRESH_ATTENTION_PERIOD: f32 = 26.0;
+const HOT_ATTENTION_PERIOD: f32 = 12.0;
+const BREATH_MIDPOINT: f32 = 0.35;
+
+pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
+pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.18;
+const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimationRole {
@@ -31,7 +39,6 @@ pub(crate) enum AnimationRole {
 pub(crate) enum Effect {
     Static,
     Breathe,
-    Blink,
 }
 
 impl From<ConfigEffect> for Effect {
@@ -39,7 +46,6 @@ impl From<ConfigEffect> for Effect {
         match value {
             ConfigEffect::Static => Self::Static,
             ConfigEffect::Breathe => Self::Breathe,
-            ConfigEffect::Blink => Self::Blink,
         }
     }
 }
@@ -69,6 +75,64 @@ impl Speed {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BreathSample {
+    level: f32,
+    amplitude: f32,
+}
+
+impl BreathSample {
+    pub(crate) fn new(phase: u64, period: f32, amplitude: f32) -> Self {
+        Self {
+            level: breath_unit(breath_theta(phase, period)),
+            amplitude,
+        }
+    }
+
+    pub(crate) fn for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
+        Self::new(phase, breath_tempo(age_secs), amplitude)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn level(self) -> f32 {
+        self.level
+    }
+
+    pub(crate) fn lightness_delta(self) -> f32 {
+        (self.level - BREATH_MIDPOINT) * self.amplitude
+    }
+
+    pub(crate) fn modifier(self) -> Modifier {
+        if self.amplitude == 0.0 {
+            return Modifier::empty();
+        }
+        let depth = (self.amplitude / BREATH_DEEP_AMPLITUDE).clamp(0.0, 1.0);
+        let dim_cutoff = 0.20 * depth;
+        match self.level {
+            level if level <= dim_cutoff => Modifier::DIM,
+            level if self.amplitude >= BREATH_DEEP_AMPLITUDE * 0.75 && level >= 0.72 => {
+                Modifier::BOLD
+            }
+            _ => Modifier::empty(),
+        }
+    }
+}
+
+pub(crate) fn breath_tempo(age_secs: i64) -> f32 {
+    let heat = (age_secs.max(0) as f32 / 3_600.0).clamp(0.0, 1.0);
+    FRESH_ATTENTION_PERIOD - ((FRESH_ATTENTION_PERIOD - HOT_ATTENTION_PERIOD) * heat)
+}
+
+pub(crate) fn breath_theta(phase: u64, period: f32) -> f32 {
+    let period = period.max(1.0);
+    std::f32::consts::TAU * ((phase as f32 / period) % 1.0) - std::f32::consts::FRAC_PI_2
+}
+
+pub(crate) fn breath_unit(theta: f32) -> f32 {
+    let floor = (-1.0_f32).exp();
+    ((theta.sin().exp() - floor) / (std::f32::consts::E - floor)).clamp(0.0, 1.0)
+}
+
 impl From<ConfigSpeed> for Speed {
     fn from(value: ConfigSpeed) -> Self {
         match value {
@@ -85,6 +149,7 @@ pub(crate) struct Animation {
     color: Color,
     effect: Effect,
     speed: Speed,
+    effect_overridden: bool,
     color_overridden: bool,
 }
 
@@ -100,6 +165,13 @@ impl Animation {
 
     pub(crate) fn color_overridden(&self) -> bool {
         self.color_overridden
+    }
+
+    pub(crate) fn attention_breath_phase(&self, phase: u64) -> Option<u64> {
+        match (self.effect, self.effect_overridden) {
+            (Effect::Static, true) => None,
+            _ => Some(self.speed.effect_phase(phase)),
+        }
     }
 
     #[cfg(test)]
@@ -188,9 +260,13 @@ impl ResolvedAnimations {
 
     #[cfg(test)]
     pub(crate) fn has_resting_motion(&self) -> bool {
-        [AnimationRole::Idle, AnimationRole::Success]
-            .into_iter()
-            .any(|role| self.role(role).has_motion())
+        [
+            AnimationRole::Paused,
+            AnimationRole::Idle,
+            AnimationRole::Success,
+        ]
+        .into_iter()
+        .any(|role| self.role(role).has_motion())
     }
 }
 
@@ -203,12 +279,24 @@ pub(crate) fn still_frame(animation: &Animation) -> String {
     animation.frames[0].clone()
 }
 
-pub(crate) fn effect_modifier(animation: &Animation, phase: u64) -> Modifier {
+pub(crate) fn effect_style(theme: &Theme, animation: &Animation, phase: u64) -> Style {
+    let phase = animation.speed.effect_phase(phase);
+    match animation.effect {
+        Effect::Static => theme.style(animation.color, Modifier::empty()),
+        Effect::Breathe => theme.breathe(
+            animation.color,
+            BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_CONFIG_AMPLITUDE),
+        ),
+    }
+}
+
+pub(crate) fn effect_weight(animation: &Animation, phase: u64) -> Modifier {
     let phase = animation.speed.effect_phase(phase);
     match animation.effect {
         Effect::Static => Modifier::empty(),
-        Effect::Breathe => breath_wave(phase),
-        Effect::Blink => hard_blink(phase),
+        Effect::Breathe => {
+            BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_CONFIG_AMPLITUDE).modifier()
+        }
     }
 }
 
@@ -222,23 +310,15 @@ fn resolve_role(role: AnimationRole, spec: Option<&AnimationSpec>, palette: &Pal
             animation.color = palette.animation_color(color);
             animation.color_overridden = true;
         }
-        if role_allows_effect(role) {
-            if let Some(effect) = spec.effect {
-                animation.effect = effect.into();
-            }
-            if let Some(speed) = spec.speed {
-                animation.speed = speed.into();
-            }
+        if let Some(effect) = spec.effect {
+            animation.effect = effect.into();
+            animation.effect_overridden = true;
+        }
+        if let Some(speed) = spec.speed {
+            animation.speed = speed.into();
         }
     }
     animation
-}
-
-fn role_allows_effect(role: AnimationRole) -> bool {
-    !matches!(
-        role,
-        AnimationRole::Waiting | AnimationRole::Failed | AnimationRole::Paused
-    )
 }
 
 fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
@@ -309,6 +389,7 @@ fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
         color,
         effect,
         speed,
+        effect_overridden: false,
         color_overridden: false,
     }
 }
@@ -410,7 +491,7 @@ mod tests {
         let animations = ResolvedAnimations::resolve(&config, &palette);
         assert!(animations.has_resting_motion());
         assert_eq!(
-            effect_modifier(animations.role(AnimationRole::Idle), 0),
+            effect_weight(animations.role(AnimationRole::Idle), 0),
             Modifier::DIM
         );
     }
@@ -424,43 +505,77 @@ mod tests {
         let palette = test_palette();
         let animations = ResolvedAnimations::resolve(&config, &palette);
         assert_ne!(
-            effect_modifier(animations.role(AnimationRole::Idle), 5),
-            effect_modifier(animations.role(AnimationRole::Success), 5),
+            effect_weight(animations.role(AnimationRole::Idle), 5),
+            effect_weight(animations.role(AnimationRole::Success), 5),
             "slow and fast breathe effects must diverge on the same render phase"
-        );
-
-        let config: SidebarAnimationsConfig = toml::from_str(
-            "[idle]\neffect = \"blink\"\nspeed = \"slow\"\n\n[success]\neffect = \"blink\"\nspeed = \"fast\"\n",
-        )
-        .expect("config");
-        let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&config, &palette);
-        assert_ne!(
-            effect_modifier(animations.role(AnimationRole::Idle), 2),
-            effect_modifier(animations.role(AnimationRole::Success), 2),
-            "slow and fast blink effects must diverge on the same render phase"
         );
     }
 
     #[test]
-    fn attention_and_paused_roles_ignore_effect_and_speed() {
+    fn attention_and_paused_roles_accept_effect_and_speed() {
         let config: SidebarAnimationsConfig = toml::from_str(
-            "[waiting]\neffect = \"blink\"\nspeed = \"fast\"\n\n[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n",
+            "[waiting]\neffect = \"breathe\"\nspeed = \"fast\"\n\n[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
         let palette = test_palette();
         let animations = ResolvedAnimations::resolve(&config, &palette);
         assert_eq!(
-            effect_modifier(animations.role(AnimationRole::Waiting), 0),
-            Modifier::empty()
-        );
-        assert_eq!(
-            effect_modifier(animations.role(AnimationRole::Paused), 0),
-            Modifier::empty()
+            animations
+                .role(AnimationRole::Waiting)
+                .attention_breath_phase(3),
+            Some(6),
+            "configured speed reaches the attention pulse phase"
         );
         assert!(
-            !animations.has_resting_motion(),
-            "a paused effect override is ignored and should not wake cadence"
+            animations.has_resting_motion(),
+            "a paused effect override now participates in the uniform model"
         );
+
+        let quiet: SidebarAnimationsConfig =
+            toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
+        let animations = ResolvedAnimations::resolve(&quiet, &palette);
+        assert_eq!(
+            animations
+                .role(AnimationRole::Waiting)
+                .attention_breath_phase(3),
+            None,
+            "configured static quiets the default attention pulse"
+        );
+    }
+
+    #[test]
+    fn breath_curve_is_smooth_and_age_tempo_is_clamped() {
+        assert_eq!(breath_tempo(-1), FRESH_ATTENTION_PERIOD);
+        assert_eq!(breath_tempo(3_600), HOT_ATTENTION_PERIOD);
+        assert_eq!(breath_tempo(7_200), HOT_ATTENTION_PERIOD);
+        assert!(breath_tempo(1_800) < breath_tempo(0));
+
+        let trough = BreathSample::new(0, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        let middle = BreathSample::new(6, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        let peak = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        assert!(trough.level() < middle.level());
+        assert!(middle.level() < peak.level());
+        assert!(trough.lightness_delta() < 0.0);
+        assert!(peak.lightness_delta() > 0.0);
+
+        let old = BreathSample::for_age(0, 2 * 3_600, BREATH_DEEP_AMPLITUDE);
+        let next = BreathSample::for_age(1, 2 * 3_600, BREATH_DEEP_AMPLITUDE);
+        assert!(
+            (next.lightness_delta() - old.lightness_delta()).abs() < 0.05,
+            "hot attention still eases rather than strobing"
+        );
+    }
+
+    #[test]
+    fn no_color_modifier_preserves_pulse_depth_ordering() {
+        let shallow_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
+        let deep_lift = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        assert_eq!(shallow_lift.modifier(), Modifier::empty());
+        assert_eq!(deep_lift.modifier(), Modifier::BOLD);
+
+        let shallow_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_SHALLOW_AMPLITUDE);
+        let deep_fade = BreathSample::new(4, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
+        assert_eq!(shallow_fade.modifier(), Modifier::empty());
+        assert_eq!(deep_fade.modifier(), Modifier::DIM);
     }
 }

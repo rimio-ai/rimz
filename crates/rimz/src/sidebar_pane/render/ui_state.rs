@@ -168,13 +168,12 @@ impl Alert {
 }
 
 /// The fastest animation class currently visible in the snapshot. Fast motion
-/// changes every frame (working/thinking spinners, resolver work, active process
-/// rows). Slow motion is cosmetic attention movement whose visible state is
-/// held for several base frames, so the serve loop can redraw it less often
-/// without making the sidebar feel stale.
+/// changes every frame (working/thinking spinners, resolver work, active
+/// process rows). Breath motion is the smooth attention/result pulse, sampled
+/// near the base grid without paying the full spinner cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationCadence {
     None,
-    Slow,
+    Breath,
     Fast,
 }

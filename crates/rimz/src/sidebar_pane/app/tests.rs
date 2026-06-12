@@ -41,7 +41,7 @@ fn frame_grid_advances_one_frame_or_snaps_past_missed_frames() {
 }
 
 #[test]
-fn frame_interval_slows_cosmetic_animation_only() {
+fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     let ws = workspace();
     let mut slow = snapshot(&ws);
     slow.worktree_groups = vec![crate::SidebarWorktreeGroup {
@@ -75,7 +75,7 @@ fn frame_interval_slows_cosmetic_animation_only() {
 
     assert_eq!(
         frame_interval(&slow, &UiState::default()),
-        crate::sidebar::timing::SLOW_ANIMATION_FRAME
+        crate::sidebar::timing::BREATH_ANIMATION_FRAME
     );
 
     slow.worktree_groups[0].rows[0]

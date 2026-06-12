@@ -22,10 +22,9 @@ pub enum ScrollbarMode {
     Never,
 }
 
-/// `[sidebar] glow`: whether the truecolor effects tier — the attention glow
-/// and the brief transition flashes — runs over the composed frame.
-/// Display-only; with the tier off the modifier-based attention breath alone
-/// carries the cue.
+/// `[sidebar] glow`: whether the post-render transition flashes run over the
+/// composed frame. Display-only; with the tier off the base status-head
+/// rendering still carries the attention pulse.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GlowMode {
@@ -144,14 +143,12 @@ pub struct SidebarConfig {
     /// view settles; `always` keeps it up; `never` removes it. Resolved
     /// producer-side onto the snapshot like the rest of `[sidebar]`.
     pub scrollbar: ScrollbarMode,
-    /// Whether the truecolor glow tier runs — the attention glow and the
-    /// brief transition flashes the renderer layers over the composed frame.
-    /// `auto` (default) follows the terminal's 24-bit advertisement
-    /// (`COLORTERM`); `always` forces the pass where the advertisement is
-    /// missing — an SSH hop forwards `TERM` but drops `COLORTERM`; `never`
-    /// keeps the plain 256-color render with the modifier-based attention
-    /// breath. `NO_COLOR` beats every mode. Resolved producer-side onto the
-    /// snapshot like the rest of `[sidebar]`.
+    /// Whether the transition-flash tier runs over the composed frame. `auto`
+    /// (default) follows the terminal's 24-bit advertisement (`COLORTERM`);
+    /// `always` forces the pass where the advertisement is missing — an SSH
+    /// hop forwards `TERM` but drops `COLORTERM`; `never` keeps the plain base
+    /// render and pulse. `NO_COLOR` beats every mode. Resolved producer-side
+    /// onto the snapshot like the rest of `[sidebar]`.
     pub glow: GlowMode,
     /// How much detail resting agent cards show. `auto` keeps the standard
     /// card shape; `expanded` shows every card's subagent section; `compact`

@@ -251,9 +251,10 @@ pub const MIN_REFRESH_MS: u16 = 16;
 /// event latency visibly worse, so keep slow data polling on `--tick-seconds`.
 pub const MAX_REFRESH_MS: u16 = 1_000;
 
-/// Slow cosmetic animation cadence. It stays a human-perception constant and
-/// is clamped at runtime to never be faster than the configured base grid.
-pub const SLOW_ANIMATION_FRAME: Duration = Duration::from_millis(300);
+/// Smooth pulse animation cadence. It stays close to the base grid so the
+/// truecolor lightness ramp does not visibly band, and is clamped at runtime
+/// to never be faster than the configured base grid.
+pub const BREATH_ANIMATION_FRAME: Duration = Duration::from_millis(120);
 
 /// Cap on one visible effects step. A calm room can paint rarely; clamping
 /// makes a newly spawned flash play on visible frames instead of expiring.
@@ -356,10 +357,10 @@ pub fn animation_frame(refresh_ms: u16) -> Duration {
     Duration::from_millis(u64::from(refresh_ms))
 }
 
-/// Slow cosmetic frame, clamped so it never runs faster than the configured
+/// Smooth pulse frame, clamped so it never runs faster than the configured
 /// base grid.
-pub fn slow_animation_frame(refresh_ms: u16) -> Duration {
-    SLOW_ANIMATION_FRAME.max(animation_frame(refresh_ms))
+pub fn breath_animation_frame(refresh_ms: u16) -> Duration {
+    BREATH_ANIMATION_FRAME.max(animation_frame(refresh_ms))
 }
 
 /// Money roll frame. The odometer clicks every `click_phases` base phases, so

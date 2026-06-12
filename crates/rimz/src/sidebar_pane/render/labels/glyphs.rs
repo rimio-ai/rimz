@@ -32,53 +32,6 @@ pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'
     LOADING_DOTS
 }
 
-/// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
-/// frame, paced by the age cadence tier while color slides continuously. Below
-/// the half hour it is a slow triangle pulse — `DIM` at the troughs, normal
-/// through the middle, `BOLD` at the peak — so the marker swells and fades like
-/// a breath (~2.4s at the 100ms animation tick), pulling the eye back to an
-/// unanswered row without strobing. Amber doubles the tempo (~1.2s): the row
-/// sits past the half hour and the breath quickens with it. Red switches to
-/// [`hard_blink`] — past the hour the glyph earns the strobe the young breath
-/// avoids. Every tier holds the glyph in its cell (never blanking, so the
-/// column never shifts) and is modifier-only, so the urgency cadence survives
-/// under `NO_COLOR`.
-pub(in crate::sidebar_pane::render) fn attention_breath(
-    animation_phase: u64,
-    age_secs: i64,
-) -> Modifier {
-    match heat_cadence(age_secs) {
-        Some(HeatCadence::Red) => hard_blink(animation_phase),
-        // Amber: the same triangle at double-time.
-        Some(HeatCadence::Amber) => breath_wave(animation_phase.wrapping_mul(2)),
-        None => breath_wave(animation_phase),
-    }
-}
-
-/// A hard square-wave blink: `BOLD` for three phases, `DIM` for three, holding
-/// the glyph in place so the column stays fixed under color and `NO_COLOR`.
-pub(in crate::sidebar_pane::render) fn hard_blink(animation_phase: u64) -> Modifier {
-    if animation_phase % 6 < 3 {
-        Modifier::BOLD
-    } else {
-        Modifier::DIM
-    }
-}
-
-/// One step of the breath's triangle wave: rise `DIM` → normal → `BOLD` over
-/// the first half-cycle, fall back over the second.
-pub(in crate::sidebar_pane::render) fn breath_wave(phase: u64) -> Modifier {
-    const CYCLE: u64 = 24;
-    let pos = phase % CYCLE;
-    // Distance toward the peak at the half-cycle: rise 0→12, then fall 12→24.
-    let level = if pos <= CYCLE / 2 { pos } else { CYCLE - pos };
-    match level {
-        0..=3 => Modifier::DIM,
-        4..=8 => Modifier::empty(),
-        _ => Modifier::BOLD,
-    }
-}
-
 /// The clock-fill glyph for an elapsed span: the face fills a quarter per
 /// quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●` to the hour — and
 /// past the hour reads the ringed `◉`, so any time readout on a card carries
@@ -160,10 +113,11 @@ pub(in crate::sidebar_pane::render) fn agent_glyph(
             thinking_glyph(theme, animation_phase)
         }
         AgentStatus::Running => working_glyph(theme, animation_phase),
-        AgentStatus::Idle | AgentStatus::Success => {
-            frame_at(theme.animations.status(status), animation_phase)
-        }
-        other => status_glyph(theme, other),
+        AgentStatus::Idle
+        | AgentStatus::Success
+        | AgentStatus::Paused
+        | AgentStatus::Waiting
+        | AgentStatus::Failed => frame_at(theme.animations.status(status), animation_phase),
     }
 }
 
@@ -216,7 +170,11 @@ pub(in crate::sidebar_pane::render) fn status_chip_color(
 
 fn role_style(theme: &Theme, role: AnimationRole, animation_phase: u64) -> Style {
     let animation = theme.animations.role(role);
-    role_style_with_modifier(theme, role, effect_modifier(animation, animation_phase))
+    if role == AnimationRole::Idle && !animation.color_overridden() {
+        Style::default().add_modifier(effect_weight(animation, animation_phase))
+    } else {
+        effect_style(theme, animation, animation_phase)
+    }
 }
 
 fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifier) -> Style {
@@ -266,6 +224,7 @@ pub(in crate::sidebar_pane::render) fn working_style(theme: &Theme, animation_ph
 /// Style for an agent row's leading cell. A running agent's working spinner and
 /// its thinking head both paint in Claude clay by default, so the live head
 /// aligns with the agent's own UI; every other state takes its [`status_style`].
+#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn agent_style_at(
     theme: &Theme,
     status: AgentStatus,
@@ -292,16 +251,30 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
     unread: bool,
 ) -> Style {
     let role = agent_role(status, phase);
-    if unread && status.is_actionable() {
+    if status.is_actionable() {
+        let animation = theme.animations.status(status);
         let color =
             age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
-        theme.style(color, hard_blink(animation_phase))
-    } else if unread {
-        role_style_with_modifier(theme, role, hard_blink(animation_phase))
-    } else if status.is_actionable() {
-        let color =
-            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
-        theme.style(color, attention_breath(animation_phase, age_secs))
+        let amplitude = if unread {
+            BREATH_DEEP_AMPLITUDE
+        } else {
+            BREATH_SHALLOW_AMPLITUDE
+        };
+        if let Some(phase) = animation.attention_breath_phase(animation_phase) {
+            theme.breathe(color, BreathSample::for_age(phase, age_secs, amplitude))
+        } else {
+            theme.style(color, Modifier::empty())
+        }
+    } else if unread && status == AgentStatus::Success {
+        let animation = theme.animations.status(status);
+        if let Some(phase) = animation.attention_breath_phase(animation_phase) {
+            theme.breathe(
+                animation.color(),
+                BreathSample::for_age(phase, age_secs, BREATH_DEEP_AMPLITUDE),
+            )
+        } else {
+            theme.style(animation.color(), Modifier::empty())
+        }
     } else {
         role_style(theme, role, animation_phase)
     }

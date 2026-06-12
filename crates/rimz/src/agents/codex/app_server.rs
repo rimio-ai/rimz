@@ -86,6 +86,12 @@ pub(crate) struct AppServerObservation {
     pub(crate) extra_credits: Option<ExtraCredits>,
 }
 
+type RateLimitRead = (
+    Option<AgentRateLimits>,
+    Option<AgentAccount>,
+    Option<ExtraCredits>,
+);
+
 /// One way [`CodexAppServer::connect`] tries to reach an app-server, in
 /// preference order.
 #[derive(Debug)]
@@ -231,16 +237,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// metered subscription account on [`AgentAccount`]. An API-key account
     /// returns neither, so the account is left `None` and the dashboard infers
     /// the unmetered "infinite" bar.
-    fn rate_limits(
-        &mut self,
-    ) -> Result<
-        (
-            Option<AgentRateLimits>,
-            Option<AgentAccount>,
-            Option<ExtraCredits>,
-        ),
-        AppServerErr,
-    > {
+    fn rate_limits(&mut self) -> Result<RateLimitRead, AppServerErr> {
         let result = self
             .transport
             .request("account/rateLimits/read", Value::Null)?;

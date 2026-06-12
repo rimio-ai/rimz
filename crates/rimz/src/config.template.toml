@@ -64,7 +64,7 @@
 # provider_list = []                  # explicit provider order; include "all" to expand remaining providers
 # max_cols = 72                       # creation-time cap for sidebar pane width
 # scrollbar = "auto"                  # "auto", "always", or "never"
-# glow = "auto"                       # "auto", "always", or "never"
+# glow = "auto"                       # transition flashes: "auto", "always", or "never"
 # card_density = "auto"               # "auto", "expanded", or "compact"
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
@@ -111,9 +111,11 @@
 # every frame must occupy exactly one terminal cell.
 # Colors are palette slots ("good", "warn", "alarm", "accent", "cool", "meta",
 # "soft", "dim", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
-# effect is "static", "breathe", or "blink"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
-# waiting, failed, and paused honor one frame and color; attention heat, unread
-# blink, and the parked pause grammar are fixed product behavior.
+# effect is "static" or "breathe"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
+# Every role follows the same frames/color/effect/speed model. For waiting,
+# failed, and unread success rows, omitted effect keeps the shipped row pulse;
+# set effect to "static" to quiet it. A literal blink is a frame sequence such
+# as [" ", "!"].
 ## [sidebar.animations.thinking]
 ## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 ## color = "clay"

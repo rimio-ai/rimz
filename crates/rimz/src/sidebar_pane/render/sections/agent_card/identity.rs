@@ -1,9 +1,8 @@
 use super::*;
 
-/// The agent name's style: its provider's brand color (Claude clay, Codex blue,
-/// Provider match: the brand color at full weight so the name ties to the
-/// provider dashboard. Falls back to mid-gray chrome (no DIM modifier) when no
-/// provider matches the kind.
+/// The agent name's style: the matching provider brand color at full weight, so
+/// the name ties to the provider dashboard. Falls back to mid-gray chrome (no
+/// DIM modifier) when no provider matches the kind.
 pub(super) fn agent_name_style(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
@@ -123,11 +122,7 @@ fn agent_card_lead_style(
     animation_phase: u64,
 ) -> Style {
     if status == AgentStatus::Idle {
-        let mut style = theme.soft();
-        if row.unread {
-            style = style.add_modifier(hard_blink(animation_phase));
-        }
-        return style;
+        return theme.soft();
     }
     agent_lead_style(
         theme,

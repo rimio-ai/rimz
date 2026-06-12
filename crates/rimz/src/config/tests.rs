@@ -338,14 +338,15 @@ fn sidebar_animations_parse_as_partial_role_overrides() {
 }
 
 #[test]
-fn sidebar_animations_reject_bad_frame_shapes() {
+fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
     let dir = tempdir().expect("tempdir");
     assert!(
         MachineConfig::load_from(&write(
             &dir,
             "[sidebar.animations.waiting]\nframes = \"?!\"\n",
         ))
-        .is_err()
+        .is_ok(),
+        "waiting now follows the uniform frame model"
     );
     assert!(
         MachineConfig::load_from(&write(
@@ -362,7 +363,7 @@ fn sidebar_glow_parses_and_defaults_auto() {
     assert_eq!(
         MachineConfig::default().sidebar.glow,
         GlowMode::Auto,
-        "the glow tier ships following the terminal's advertisement",
+        "transition flashes ship following the terminal's advertisement",
     );
     let config =
         MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"always\"\n")).expect("load");

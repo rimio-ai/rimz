@@ -243,6 +243,12 @@ pub(super) fn blend_oklab(left: Rgb, right: Rgb, amount: f32) -> Rgb {
     .to_rgb()
 }
 
+pub(super) fn lift_lightness(rgb: Rgb, delta: f32) -> Rgb {
+    let mut color = Oklab::from_rgb(rgb);
+    color.l = (color.l + delta).clamp(0.0, 1.0);
+    color.to_rgb()
+}
+
 fn lerp(left: f32, right: f32, amount: f32) -> f32 {
     left + (right - left) * amount
 }
@@ -389,5 +395,17 @@ palette = 12=#268bd2
             active_theme_name("theme = Old\nfont-size = 14\ntheme = New\n").as_deref(),
             Some("New")
         );
+    }
+
+    #[test]
+    fn lift_lightness_preserves_oklab_hue_axes() {
+        let base = Oklab::from_rgb((0xdf, 0xb6, 0x6d));
+        let lifted = Oklab::from_rgb(lift_lightness((0xdf, 0xb6, 0x6d), 0.05));
+        assert!(
+            lifted.l > base.l,
+            "lightness should move upward through OKLab"
+        );
+        assert!((lifted.a - base.a).abs() < 0.01);
+        assert!((lifted.b - base.b).abs() < 0.01);
     }
 }

@@ -351,7 +351,7 @@ fn make_up_clipped_bucket_drops_its_hit() {
 }
 
 #[test]
-fn unread_bucket_hard_blinks_by_modifier() {
+fn unread_bucket_stays_still() {
     let theme = Theme::fixed(false);
     let mut snapshot = make_up_snapshot();
     let bucket_modifier =
@@ -380,17 +380,16 @@ fn unread_bucket_hard_blinks_by_modifier() {
         .find(|row| row.status() == Some(AgentStatus::Failed))
         .expect("failed row")
         .unread = true;
-    let on = bucket_modifier(&snapshot, 0, None);
-    let off = bucket_modifier(&snapshot, 3, None);
+    let first = bucket_modifier(&snapshot, 0, None);
+    let later = bucket_modifier(&snapshot, 3, None);
     let wrap = bucket_modifier(&snapshot, 6, None);
-    let picked_off = bucket_modifier(&snapshot, 3, Some(AgentStatus::Failed));
+    let picked = bucket_modifier(&snapshot, 3, Some(AgentStatus::Failed));
 
     assert_eq!(read, Modifier::BOLD);
-    assert_eq!(on, Modifier::BOLD);
-    assert_eq!(off, Modifier::DIM);
+    assert_eq!(first, Modifier::BOLD);
+    assert_eq!(later, Modifier::BOLD);
     assert_eq!(wrap, Modifier::BOLD);
-    assert_ne!(on, off);
-    assert_eq!(picked_off, Modifier::DIM);
+    assert_eq!(picked, Modifier::BOLD);
 }
 /// A make-up bucket click narrows the body to that status: only the `!` card
 /// remains — the running agent's worktree is skipped whole (header included),

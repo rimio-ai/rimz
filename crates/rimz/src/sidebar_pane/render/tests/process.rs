@@ -255,7 +255,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
     let mut sidebar = crate::config::SidebarConfig::default();
     sidebar.animations.working = Some(
         toml::from_str::<AnimationSpec>(
-            "frames = \"AB\"\ncolor = 196\neffect = \"blink\"\nspeed = \"fast\"\n",
+            "frames = \"AB\"\ncolor = 196\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("working animation spec"),
     );
@@ -290,8 +290,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         .flat_map(|line| line.spans.iter())
         .find(|span| span.content.as_ref() == "A")
         .expect("the process row uses the custom working frame");
-    assert_eq!(lead.style.fg, Some(Color::Indexed(196)));
-    assert!(lead.style.add_modifier.contains(Modifier::BOLD));
+    assert!(matches!(lead.style.fg, Some(Color::Indexed(_))));
     assert!(
         lead.style.add_modifier.contains(Modifier::DIM),
         "process rows stay one visual step below agent cards"

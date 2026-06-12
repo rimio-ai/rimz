@@ -26,8 +26,7 @@ pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Durati
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
     // A decaying one-shot flash needs the fast grid to read as motion; it is
     // brief and self-terminating, so the cost is bounded to the transition
-    // window. The continuous attention glow deliberately rides the slow
-    // cosmetic cadence below — the breath already keeps it warm.
+    // window. Continuous row pulse rides the breath cadence below.
     if ui.scrollbar.fading(ui.animation_phase) || ui.effects.any_active() {
         return base;
     }
@@ -45,7 +44,9 @@ pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Durati
         _ if money_rolling => {
             crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES)
         }
-        render::AnimationCadence::Slow => crate::sidebar::timing::slow_animation_frame(refresh_ms),
+        render::AnimationCadence::Breath => {
+            crate::sidebar::timing::breath_animation_frame(refresh_ms)
+        }
         render::AnimationCadence::None => base,
     }
 }

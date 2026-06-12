@@ -84,10 +84,8 @@ fn refresh_usage(
         })
         .is_some();
 
-    if merge_windows {
-        if let Some(rate_limits) = fetched_windows {
-            rimz::sidebar::enrich::merge_account_rate_limits(&runtime, "claude", rate_limits);
-        }
+    if merge_windows && let Some(rate_limits) = fetched_windows {
+        rimz::sidebar::enrich::merge_account_rate_limits(&runtime, "claude", rate_limits);
     }
     if wrote {
         let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
