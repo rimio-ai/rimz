@@ -50,8 +50,8 @@ const TASKS: &[TaskInfo] = &[
     },
     TaskInfo {
         name: "dist",
-        summary: "Build packaged macOS release archives into target/dist.",
-        runs: "build-plugin, cargo zigbuild for both apple-darwin targets, tar.gz + SHA256SUMS",
+        summary: "Build packaged release archives into target/dist.",
+        runs: "build-plugin, host release binary when non-Darwin, cargo zigbuild for both apple-darwin targets, tar.gz + SHA256SUMS",
     },
     TaskInfo {
         name: "fmt",
@@ -335,8 +335,20 @@ fn build(root: &Path) -> Result<()> {
 fn dist(root: &Path) -> Result<()> {
     pricing_refresh(root)?;
     build_plugin(root)?;
+    let mut artifacts = BTreeMap::new();
+    let host_target = rustc_host_target(root)?;
+    if !DARWIN_TARGETS.contains(&host_target.as_str()) {
+        build_host_release(root)?;
+        artifacts.insert(host_target, release_artifact(root, "rimz"));
+    }
     build_darwin_artifacts(root)?;
-    package_darwin_artifacts(root)
+    for target in DARWIN_TARGETS {
+        artifacts.insert(
+            target.to_owned(),
+            target_release_artifact(root, target, "rimz"),
+        );
+    }
+    package_dist_artifacts(root, &artifacts)
 }
 
 /// Build the Zellij presence plugin for its real target. The host-target
@@ -532,6 +544,42 @@ fn presence_plugin_embed_env(root: &Path) -> Vec<(&'static str, PathBuf)> {
     vec![("RIMZ_EMBED_PRESENCE_PLUGIN", plugin_artifact(root))]
 }
 
+fn rustc_host_target(root: &Path) -> Result<String> {
+    let output = Command::new("rustc")
+        .arg("-vV")
+        .current_dir(root)
+        .output()
+        .context("querying rustc host target")?;
+    if !output.status.success() {
+        bail!("rustc -vV failed");
+    }
+
+    let stdout = String::from_utf8(output.stdout).context("reading rustc -vV output")?;
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::to_owned)
+        .context("rustc -vV output did not include a host target")
+}
+
+fn build_host_release(root: &Path) -> Result<()> {
+    let envs = presence_plugin_embed_env(root);
+    run_with_env(
+        root,
+        "cargo",
+        [
+            "build",
+            "-p",
+            "rimz",
+            "--bin",
+            "rimz",
+            "--release",
+            "--locked",
+        ],
+        &envs,
+    )
+}
+
 fn build_darwin_artifacts(root: &Path) -> Result<()> {
     let envs = darwin_zigbuild_env(root)?;
     for target in DARWIN_TARGETS {
@@ -606,19 +654,17 @@ fn macos_sdkroot_points_at_other_apple_platform(sdkroot: &OsStr) -> bool {
     .any(|platform| sdkroot.contains(platform))
 }
 
-fn package_darwin_artifacts(root: &Path) -> Result<()> {
+fn package_dist_artifacts(root: &Path, artifacts: &BTreeMap<String, PathBuf>) -> Result<()> {
     let dist = dist_dir(root);
     fs::create_dir_all(&dist).with_context(|| format!("creating {}", dist.display()))?;
+    remove_stale_dist_archives(&dist)?;
     let mut checksums = String::new();
-    for target in DARWIN_TARGETS {
+    for (target, binary) in artifacts {
         let package = format!("rimz-{target}");
         let package_dir = dist.join(&package);
         fs::create_dir_all(&package_dir)
             .with_context(|| format!("creating {}", package_dir.display()))?;
-        copy_atomically(
-            &target_release_artifact(root, target, "rimz"),
-            &package_dir.join("rimz"),
-        )?;
+        copy_atomically(binary, &package_dir.join("rimz"))?;
 
         let archive = format!("{package}.tar.gz");
         let archive_path = dist.join(&archive);
@@ -627,6 +673,28 @@ fn package_darwin_artifacts(root: &Path) -> Result<()> {
         checksums.push_str(&format!("{digest}  {archive}\n"));
     }
     write_atomically(&dist.join("SHA256SUMS"), checksums.as_bytes())
+}
+
+fn remove_stale_dist_archives(dist: &Path) -> Result<()> {
+    for entry in fs::read_dir(dist).with_context(|| format!("reading {}", dist.display()))? {
+        let entry = entry.with_context(|| format!("reading {}", dist.display()))?;
+        let file_type = entry
+            .file_type()
+            .with_context(|| format!("reading {}", entry.path().display()))?;
+        if !file_type.is_file() {
+            continue;
+        }
+
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        if name == "SHA256SUMS" || (name.starts_with("rimz-") && name.ends_with(".tar.gz")) {
+            fs::remove_file(entry.path())
+                .with_context(|| format!("removing {}", entry.path().display()))?;
+        }
+    }
+    Ok(())
 }
 
 fn create_archive_atomically(work_dir: &Path, package: &str, dest: &Path) -> Result<()> {

@@ -1,0 +1,240 @@
+name: Release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master, ci-release]
+    tags: ["v*"]
+
+permissions:
+  code: write
+  releases: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_TARGET_DIR: target/release-ci
+  RUSTFLAGS: -D warnings
+  RUST_BACKTRACE: 1
+  ZIG_VERSION: 0.16.0
+  ZIG_X86_64_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+
+jobs:
+  dist:
+    name: build and publish dist archives
+    runs-on: [linux_amd64, debian-13]
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain (from rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Compute Cargo cache key
+        id: cargo-cache-key
+        shell: bash
+        run: |
+          set -euo pipefail
+          cache_key_input="${RUNNER_TEMP:-/tmp}/rimz-release-cargo-cache-key"
+          {
+            printf 'runner-os=%s\n' "${RUNNER_OS:-unknown}"
+            printf 'runner-arch=%s\n' "${RUNNER_ARCH:-unknown}"
+            printf 'cargo-target-dir=%s\n' "$CARGO_TARGET_DIR"
+            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
+            rustc -vV
+            cargo -vV
+            find . -type f \( \
+              -name Cargo.lock \
+              -o -name Cargo.toml \
+              -o -name rust-toolchain \
+              -o -name rust-toolchain.toml \
+              -o -path '*/.cargo/config.toml' \
+            \) -print | LC_ALL=C sort | while IFS= read -r file; do
+              sha256sum "$file"
+            done
+          } > "$cache_key_input"
+
+          runner_os="$(printf '%s' "${RUNNER_OS:-linux}" | tr '[:upper:]' '[:lower:]')"
+          runner_arch="$(printf '%s' "${RUNNER_ARCH:-x64}" | tr '[:upper:]' '[:lower:]')"
+          key_hash="$(sha256sum "$cache_key_input" | awk '{print $1}')"
+          prefix="cargo-release-${runner_os}-${runner_arch}-${key_hash}"
+          echo "key=$prefix" >> "$GITHUB_OUTPUT"
+          echo "fallback_prefix=cargo-release-${runner_os}-${runner_arch}-" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare Cargo cache directories
+        run: mkdir -p ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db "$CARGO_TARGET_DIR"
+
+      - name: Cargo cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target/release-ci
+          key: ${{ steps.cargo-cache-key.outputs.key }}
+          restore-keys: |
+            ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
+
+      - name: Install release packaging tools
+        env:
+          INPUT_TOOL: cargo-zigbuild
+        run: |
+          set -euo pipefail
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
+
+          zig_archive="zig-x86_64-linux-${ZIG_VERSION}.tar.xz"
+          zig_archive_path="${RUNNER_TEMP:-/tmp}/${zig_archive}"
+          curl -fsSL "https://ziglang.org/download/${ZIG_VERSION}/${zig_archive}" -o "$zig_archive_path"
+          printf '%s  %s\n' "$ZIG_X86_64_LINUX_SHA256" "$zig_archive_path" | sha256sum -c -
+          zig_dir="${RUNNER_TEMP:-/tmp}/zig-${ZIG_VERSION}"
+          rm -rf "$zig_dir"
+          mkdir -p "$zig_dir"
+          tar -xJf "$zig_archive_path" -C "$zig_dir" --strip-components=1
+          echo "$zig_dir" >> "$GITHUB_PATH"
+          "$zig_dir/zig" version
+          cargo zigbuild --help >/dev/null
+
+      - name: Build distribution archives
+        run: cargo xtask dist
+
+      - name: Prepare release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            release_tag="${GITHUB_REF_NAME}"
+            release_title="Rimz ${GITHUB_REF_NAME}"
+            release_prerelease=false
+            release_body="Automated release for ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+          elif [ "${GITHUB_REF_NAME}" = "main" ] || [ "${GITHUB_REF_NAME}" = "master" ]; then
+            release_tag=nightly
+            release_title="Rimz nightly"
+            release_prerelease=true
+            release_body="Automated nightly build from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+          else
+            release_tag="nightly-${GITHUB_REF_NAME//\//-}"
+            release_title="Rimz nightly (${GITHUB_REF_NAME})"
+            release_prerelease=true
+            release_body="Automated branch test build from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+          fi
+
+          {
+            echo "RELEASE_TAG=${release_tag}"
+            echo "RELEASE_TITLE=${release_title}"
+            echo "RELEASE_PRERELEASE=${release_prerelease}"
+            echo "RELEASE_BODY<<RIMZ_RELEASE_BODY"
+            printf '%s\n' "${release_body}"
+            echo "RIMZ_RELEASE_BODY"
+          } >> "$GITHUB_ENV"
+
+      - name: Move rolling release tag
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
+            exit 0
+          fi
+
+          git config user.name "gitea-actions"
+          git config user.email "gitea-actions@localhost"
+          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+          git -c "http.extraheader=Authorization: token ${TOKEN}" \
+            push origin "refs/tags/${RELEASE_TAG}" --force
+
+      - name: Publish Gitea release assets
+        env:
+          TOKEN: ${{ secrets.GITEA_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_bin="$(command -v python3 || command -v python)"
+          dist_dir="${CARGO_TARGET_DIR}/dist"
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          releases_url="${GITHUB_API_URL}/repos/${owner}/${repo}/releases"
+          auth_header="Authorization: token ${TOKEN}"
+
+          request_json() {
+            local method="$1"
+            local url="$2"
+            local body="${3:-}"
+            local response_file status
+            response_file="$(mktemp)"
+            if [ -n "$body" ]; then
+              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -X "$method" \
+                -H "$auth_header" \
+                -H 'Content-Type: application/json' \
+                --data "$body" \
+                "$url")"
+            else
+              status="$(curl -sS -o "$response_file" -w '%{http_code}' \
+                -X "$method" \
+                -H "$auth_header" \
+                "$url")"
+            fi
+            cat "$response_file"
+            rm -f "$response_file"
+            test "$status" -ge 200 -a "$status" -lt 300
+          }
+
+          release_body="$("$python_bin" <<'PY'
+          import json
+          import os
+
+          print(json.dumps({
+              "tag_name": os.environ["RELEASE_TAG"],
+              "target_commitish": os.environ["GITHUB_SHA"],
+              "name": os.environ["RELEASE_TITLE"],
+              "body": os.environ["RELEASE_BODY"],
+              "draft": False,
+              "prerelease": os.environ["RELEASE_PRERELEASE"] == "true",
+          }))
+          PY
+          )"
+
+          release_json=""
+          if release_json="$(request_json GET "${releases_url}/tags/${RELEASE_TAG}")"; then
+            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+            request_json PATCH "${releases_url}/${release_id}" "$release_body" >/dev/null
+          else
+            release_json="$(request_json POST "$releases_url" "$release_body")"
+            release_id="$(printf '%s' "$release_json" | "$python_bin" -c 'import json, sys; print(json.load(sys.stdin)["id"])')"
+          fi
+
+          assets_json="$(request_json GET "${releases_url}/${release_id}/assets")"
+
+          upload_artifact() {
+            local artifact="$1"
+            local asset_name="$2"
+            local asset_id
+            asset_id="$(printf '%s' "$assets_json" | "$python_bin" -c 'import json, sys; name = sys.argv[1]; print(next((str(asset["id"]) for asset in json.load(sys.stdin) if asset.get("name") == name), ""))' "$asset_name")"
+            if [ -n "$asset_id" ]; then
+              curl -fsS -X DELETE \
+                -H "$auth_header" \
+                "${releases_url}/${release_id}/assets/${asset_id}" >/dev/null
+            fi
+            curl -fsS -X POST \
+              -H "$auth_header" \
+              -F "attachment=@${artifact}" \
+              "${releases_url}/${release_id}/assets?name=${asset_name}" >/dev/null
+            echo "uploaded ${asset_name}"
+          }
+
+          while read -r _ asset_name; do
+            upload_artifact "${dist_dir}/${asset_name}" "$asset_name"
+          done < "${dist_dir}/SHA256SUMS"
+          upload_artifact "${dist_dir}/SHA256SUMS" SHA256SUMS
