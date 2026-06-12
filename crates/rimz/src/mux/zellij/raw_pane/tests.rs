@@ -286,7 +286,7 @@ fn tab_extent_cols_takes_extents_not_the_sum() {
     assert_eq!(tab_extent_cols(&panes, 9), 0, "an absent tab has no width");
 }
 #[test]
-fn sidebar_geometry_detects_repairable_mismounts_only() {
+fn sidebar_geometry_classifies_dock_shapes() {
     let json = r#"[
           {"id": 1, "is_plugin": false, "tab_id": 0, "title": "zsh",
            "pane_x": 0, "pane_columns": 149},
@@ -301,26 +301,137 @@ fn sidebar_geometry_detects_repairable_mismounts_only() {
           {"id": 6, "is_plugin": false, "tab_id": 2, "title": "zsh",
            "pane_x": 149, "pane_columns": 149},
           {"id": 7, "is_plugin": false, "tab_id": 3, "title": "rimz-sidebar"},
-          {"id": 8, "is_plugin": false, "tab_id": 3, "title": "zsh"}
+          {"id": 8, "is_plugin": false, "tab_id": 3, "title": "zsh"},
+          {"id": 9, "is_plugin": false, "tab_id": 4, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 10, "is_plugin": false, "tab_id": 4, "title": "codex",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 11, "is_plugin": false, "tab_id": 4, "title": "claude",
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 12, "is_plugin": false, "tab_id": 5, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 13, "is_plugin": false, "tab_id": 5, "title": "codex",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 14, "is_plugin": false, "tab_id": 5, "title": "claude",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 15, "is_plugin": false, "tab_id": 6, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 16, "is_plugin": false, "tab_id": 6, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 17, "is_plugin": false, "tab_id": 6, "title": "zsh",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 18, "is_plugin": false, "tab_id": 7, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 19, "is_plugin": true, "tab_id": 7, "title": "plugin",
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 20, "is_plugin": false, "is_floating": true, "tab_id": 7, "title": "float",
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 21, "is_plugin": false, "is_suppressed": true, "tab_id": 7, "title": "suppressed",
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 22, "is_plugin": false, "tab_id": 7, "title": "zsh",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 23, "is_plugin": false, "tab_id": 8, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 24, "is_plugin": false, "tab_id": 8, "title": "codex",
+           "pane_x": 60, "pane_columns": 238},
+          {"id": 25, "is_plugin": false, "exited": true, "tab_id": 8, "title": "claude",
+           "pane_x": 0, "pane_columns": 298},
+          {"id": 26, "is_plugin": false, "tab_id": 9, "title": "rimz-sidebar",
+           "pane_x": 0, "pane_columns": 60},
+          {"id": 27, "is_plugin": false, "tab_id": 9, "title": "codex",
+           "pane_x": 60, "pane_columns": 100},
+          {"id": 28, "is_plugin": false, "tab_id": 9, "title": "shell",
+           "pane_x": 160, "pane_columns": 138},
+          {"id": 29, "is_plugin": false, "tab_id": 9, "title": "claude",
+           "pane_x": 0, "pane_columns": 298}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let width = SidebarWidth::default();
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
+    let excluded = std::collections::HashSet::new();
     assert!(
-        sidebar_geometry_off_spec(by_id(2), &panes, width),
+        sidebar_geometry_off_spec(by_id(2), &panes, &excluded, width),
         "right-docked 50% sidebar is off-spec",
     );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(2), &panes, &excluded),
+        Some(SidebarDock::SwapReachable),
+    );
     assert!(
-        !sidebar_geometry_off_spec(by_id(3), &panes, width),
+        !sidebar_geometry_off_spec(by_id(3), &panes, &excluded, width),
         "a healthy ~21% layout-born sidebar is never churned",
     );
-    assert!(
-        sidebar_geometry_off_spec(by_id(5), &panes, width),
-        "left but 50%-wide still wants the resize",
+    assert_eq!(
+        sidebar_dock_verdict(by_id(3), &panes, &excluded),
+        Some(SidebarDock::Docked),
     );
     assert!(
-        !sidebar_geometry_off_spec(by_id(7), &panes, width),
+        sidebar_geometry_off_spec(by_id(5), &panes, &excluded, width),
+        "left but 50%-wide still wants the resize",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(5), &panes, &excluded),
+        Some(SidebarDock::Docked),
+        "a wide sidebar with a clear band is docked and only needs resizing",
+    );
+    assert!(
+        !sidebar_geometry_off_spec(by_id(7), &panes, &excluded, width),
         "missing geometry leaves nothing safe to repair",
+    );
+    assert_eq!(sidebar_dock_verdict(by_id(7), &panes, &excluded), None);
+    assert!(
+        sidebar_geometry_off_spec(by_id(9), &panes, &excluded, width),
+        "the live broken nested-row shape is off-spec",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(9), &panes, &excluded),
+        Some(SidebarDock::NestedRow),
+    );
+    assert_eq!(
+        stackable_nested_work_pane_ids(by_id(9), &panes, &excluded),
+        Some(vec![10, 11]),
+        "the narrow one-right-column nested shape can be repaired by stacking",
+    );
+    assert!(
+        !sidebar_geometry_off_spec(by_id(12), &panes, &excluded, width),
+        "a sidebar beside stacked right-hand work panes is docked",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(12), &panes, &excluded),
+        Some(SidebarDock::Docked),
+    );
+    let excluded_duplicate = std::collections::HashSet::from([16]);
+    assert_eq!(
+        sidebar_dock_verdict(by_id(15), &panes, &excluded_duplicate),
+        Some(SidebarDock::Docked),
+        "a closing duplicate sidebar must not fake a nested-row verdict",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(18), &panes, &excluded),
+        Some(SidebarDock::Docked),
+        "plugin, floating, and suppressed panes do not intrude into the dock band",
+    );
+    assert!(
+        sidebar_geometry_off_spec(by_id(23), &panes, &excluded, width),
+        "a dead pane still means the sidebar is not a full-height dock",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(23), &panes, &excluded),
+        Some(SidebarDock::NestedRow),
+    );
+    assert_eq!(
+        stackable_nested_work_pane_ids(by_id(23), &panes, &excluded),
+        None,
+        "a dead intruder is reportable but not a repair candidate",
+    );
+    assert_eq!(
+        sidebar_dock_verdict(by_id(26), &panes, &excluded),
+        Some(SidebarDock::NestedRow),
+    );
+    assert_eq!(
+        stackable_nested_work_pane_ids(by_id(26), &panes, &excluded),
+        None,
+        "multi-column work layouts are left untouched instead of collapsed",
     );
 
     let width = SidebarWidth::default();
@@ -378,6 +489,12 @@ fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(42)), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 3, &before, None), None);
     assert_eq!(mounted_sidebar_pane(&panes, 1, &before, None), Some(9));
+    let before_hinted: std::collections::HashSet<u64> = [7].into();
+    assert_eq!(
+        mounted_sidebar_pane(&panes, 0, &before_hinted, Some(7)),
+        None,
+        "a cross-talked hint for an existing sidebar is not a fresh add result",
+    );
     let before_existing: std::collections::HashSet<u64> = [10, 11].into();
     assert_eq!(
         mounted_sidebar_pane(&panes, 2, &before_existing, None),

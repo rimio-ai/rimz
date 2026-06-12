@@ -88,12 +88,16 @@ pub struct ReloadOutcome {
     pub reaped: usize,
     /// Leftover processes swept from workspaces whose session is gone.
     pub dead_swept: usize,
-    /// Views whose in-place add failed.
+    /// Views whose sidebar add or repair could not complete this pass.
     pub failed: usize,
-    /// Views whose in-place add was deferred (no attached client).
+    /// Views whose in-place add or geometry repair was deferred (no attached
+    /// client).
     pub deferred: usize,
     /// Kept sidebar panes whose geometry was repaired in place.
     pub redocked: usize,
+    /// Working sidebar panes that remain outside the verified full-height left
+    /// dock after the bounded repair path.
+    pub misdocked: usize,
 }
 
 /// Reload and reconcile every running sidebar across all of this user's
@@ -254,6 +258,7 @@ fn reconcile_live(
             outcome.failed += report.failed;
             outcome.deferred += report.deferred;
             outcome.redocked += report.redocked;
+            outcome.misdocked += report.misdocked;
         }
         Err(err) => {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: reconcile pass failed");

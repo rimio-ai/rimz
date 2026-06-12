@@ -1,6 +1,6 @@
 //! Raw Zellij pane projection, topology-cache reads, and sidebar classification.
 
-use std::env;
+use std::{collections::HashSet, env};
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -178,27 +178,136 @@ pub(super) fn sidebar_width_off_spec(cols: u64, total: u64, width: SidebarWidth)
     cols > cap || (cols < cap && cols * 100 > total * SIDEBAR_RESIZE_TRIGGER_PERCENT)
 }
 
-/// Whether a kept sidebar pane sits off the layout's dock: not in the left
-/// column, or past the width trigger ([`sidebar_width_off_spec`]). The
-/// mis-mounted shape (right side, ~50%) trips both; a healthy layout-born pane
-/// at or below the cap trips neither. Unknown geometry never reads off-spec.
-pub(super) fn sidebar_geometry_off_spec(
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum SidebarDock {
+    /// The sidebar occupies the tab's left column band: every other tiled
+    /// terminal begins at or to the right of the sidebar's width.
+    Docked,
+    /// The sidebar is to the right of the left column; `move-pane left` can
+    /// still reach the dock in a bounded swap loop.
+    SwapReachable,
+    /// The sidebar starts at `x=0`, but another tiled terminal also occupies
+    /// the sidebar's column band. Zellij's left swaps cannot restructure that
+    /// nested row into a full-height column.
+    NestedRow,
+}
+
+/// Classify whether a sidebar pane is a full-height left dock. Zellij reports
+/// only column geometry here, so the test is a band invariant: when a sidebar
+/// is a real left column of width `W`, every other tiled terminal in that tab
+/// starts at `x >= W`. A pane at `x < W` proves a nested-row layout. Panes
+/// already planned for close are ignored so a duplicate sidebar cannot fake a
+/// nested verdict. Missing sidebar geometry stays unknown and never triggers
+/// repair from this predicate.
+pub(super) fn sidebar_dock_verdict(
     pane: &RawPane,
     panes: &[RawPane],
-    width: SidebarWidth,
-) -> bool {
-    if pane.pane_x.is_some_and(|x| x != 0) {
-        return true;
+    excluded: &HashSet<u64>,
+) -> Option<SidebarDock> {
+    let x = pane.pane_x?;
+    let cols = pane.pane_columns?;
+    if x != 0 {
+        return Some(SidebarDock::SwapReachable);
     }
-    pane.pane_columns.is_some_and(|cols| {
-        sidebar_width_off_spec(cols, tab_extent_cols(panes, pane.tab_id), width)
+    let intrudes = panes.iter().any(|other| {
+        other.tab_id == pane.tab_id
+            && other.id != pane.id
+            && !excluded.contains(&other.id)
+            && other.is_terminal()
+            && other.pane_x.is_some_and(|other_x| other_x < cols)
+    });
+    Some(if intrudes {
+        SidebarDock::NestedRow
+    } else {
+        SidebarDock::Docked
     })
 }
 
-/// The mounted sidebar pane an add produced: a live, sidebar-titled terminal
-/// pane in `tab_id` matching the stdout hint, or — the hint being unreliable —
-/// the lowest such id absent from the before-set, so a cross-talk duplicate
-/// resolves deterministically and reconcile closes the rest.
+/// Pane ids in the narrow nested-sidebar shape that Rimz can safely repair:
+/// one right-side work column plus one or more live work panes intruding from
+/// `x=0`. Newer Zellij can stack these panes in place; older supported Zellij
+/// can close and verified-readd the sidebar. A real multi-column work layout is
+/// left untouched and reported as mis-docked.
+pub(super) fn repairable_nested_work_pane_ids(
+    sidebar: &RawPane,
+    panes: &[RawPane],
+    excluded: &HashSet<u64>,
+) -> Option<Vec<u64>> {
+    let sidebar_cols = sidebar.pane_columns?;
+    if sidebar_dock_verdict(sidebar, panes, excluded) != Some(SidebarDock::NestedRow) {
+        return None;
+    }
+
+    let mut work: Vec<&RawPane> = panes
+        .iter()
+        .filter(|pane| {
+            pane.tab_id == sidebar.tab_id
+                && pane.is_live_terminal()
+                && !is_sidebar_pane(pane)
+                && !excluded.contains(&pane.id)
+        })
+        .collect();
+    if work.len() < 2 {
+        return None;
+    }
+
+    let mut has_live_intruder = false;
+    let mut right_column_x = None;
+    for pane in &work {
+        let x = pane.pane_x?;
+        if x < sidebar_cols {
+            if x != 0 {
+                return None;
+            }
+            has_live_intruder = true;
+        } else {
+            match right_column_x {
+                Some(right_x) if right_x != x => return None,
+                Some(_) => {}
+                None => right_column_x = Some(x),
+            }
+        }
+    }
+    if !has_live_intruder || right_column_x.is_none() {
+        return None;
+    }
+
+    work.sort_by_key(|pane| (std::cmp::Reverse(pane.pane_x.unwrap_or(0)), pane.id));
+    Some(work.into_iter().map(|pane| pane.id).collect())
+}
+
+pub(super) fn stackable_nested_work_pane_ids(
+    sidebar: &RawPane,
+    panes: &[RawPane],
+    excluded: &HashSet<u64>,
+) -> Option<Vec<u64>> {
+    repairable_nested_work_pane_ids(sidebar, panes, excluded)
+}
+
+/// Whether a kept sidebar pane sits off the layout's dock: outside the
+/// full-height left column, nested beside a tiled pane that intrudes into its
+/// column band, or past the width trigger ([`sidebar_width_off_spec`]). Unknown
+/// geometry never reads off-spec.
+pub(super) fn sidebar_geometry_off_spec(
+    pane: &RawPane,
+    panes: &[RawPane],
+    excluded: &HashSet<u64>,
+    width: SidebarWidth,
+) -> bool {
+    let Some(verdict) = sidebar_dock_verdict(pane, panes, excluded) else {
+        return false;
+    };
+    matches!(verdict, SidebarDock::SwapReachable | SidebarDock::NestedRow)
+        || pane.pane_columns.is_some_and(|cols| {
+            sidebar_width_off_spec(cols, tab_extent_cols(panes, pane.tab_id), width)
+        })
+}
+
+/// The mounted sidebar pane an add produced: a fresh live, sidebar-titled
+/// terminal pane in `tab_id` matching the stdout hint, or — the hint being
+/// unreliable — the lowest fresh such id absent from the before-set, so a
+/// cross-talk duplicate resolves deterministically and reconcile closes the
+/// rest. A hinted pane already present before the add is never accepted.
 pub(super) fn mounted_sidebar_pane(
     panes: &[RawPane],
     tab_id: u64,
@@ -211,6 +320,7 @@ pub(super) fn mounted_sidebar_pane(
         .map(|pane| pane.id)
         .collect();
     if let Some(raw) = hint
+        && !before.contains(&raw)
         && ids.contains(&raw)
     {
         return Some(raw);

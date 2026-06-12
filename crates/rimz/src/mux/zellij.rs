@@ -71,6 +71,10 @@ const TAB_NAMES_RETRY_DELAY: Duration = Duration::from_millis(50);
 /// Minimum Zellij that loads the presence plugin.
 pub const PRESENCE_PLUGIN_MIN_ZELLIJ: (u32, u32, u32) = (0, 44, 0);
 
+/// Minimum Zellij that exposes explicit multi-pane stacking through
+/// `zellij action stack-panes`.
+const STACK_PANES_MIN_ZELLIJ: (u32, u32, u32) = (0, 42, 0);
+
 /// Pipe name the presence-plugin launch sends its boot message down.
 const PRESENCE_BOOT_PIPE: &str = "rimz_presence_boot";
 
@@ -213,6 +217,9 @@ pub struct ZellijBackend {
     runtime_dir: Option<PathBuf>,
     /// Memoized `zellij --version` stdout ([`MuxBackend::version`]).
     version: std::sync::OnceLock<String>,
+    /// Test-only command override that avoids process-global env mutation.
+    #[cfg(test)]
+    program: Option<PathBuf>,
 }
 
 impl ZellijBackend {
@@ -229,8 +236,24 @@ impl ZellijBackend {
         }
     }
 
+    #[cfg(test)]
+    fn with_program_for_test(program: impl Into<PathBuf>) -> Self {
+        Self {
+            program: Some(program.into()),
+            ..Self::default()
+        }
+    }
+
     /// Base `CommandSpec` for every Zellij invocation — the single chokepoint.
     pub(super) fn cmd(&self) -> CommandSpec {
+        #[cfg(test)]
+        let program = self
+            .program
+            .as_ref()
+            .map(|path| path.to_string_lossy().into_owned())
+            .or_else(|| env::var("RIMZ_ZELLIJ_BIN").ok())
+            .unwrap_or_else(|| "zellij".to_owned());
+        #[cfg(not(test))]
         let program = env::var("RIMZ_ZELLIJ_BIN").unwrap_or_else(|_| "zellij".to_owned());
         let mut spec = CommandSpec::new(program);
         if let Some(dir) = &self.runtime_dir {

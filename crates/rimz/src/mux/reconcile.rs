@@ -23,17 +23,21 @@ pub struct SidebarRecovery {
     /// Duplicate or unresponsive sidebar panes closed so each view keeps exactly
     /// one live sidebar.
     pub closed: usize,
-    /// Views that needed a sidebar but whose in-place add failed — logged and
-    /// skipped, never retried.
+    /// Views whose sidebar add or repair could not complete this pass — logged
+    /// and left for a later reconcile.
     pub failed: usize,
-    /// Views whose in-place add was deferred for want of an attached client —
-    /// Zellij drops the mount on a detached session while the spawned renderer
-    /// keeps running, so adding there would only leak. The next reconcile on an
-    /// attached session adds them.
+    /// Views whose in-place add or geometry repair was deferred for want of an
+    /// attached client — Zellij drops pane mounts and relayouts without a screen
+    /// thread, so the next reconcile on an attached session performs them.
     pub deferred: usize,
     /// Kept sidebar panes whose geometry was repaired in place — moved to the
     /// left column and/or resized toward the layout width — renderer untouched.
     pub redocked: usize,
+    /// Working sidebar panes that remain outside the verified full-height left
+    /// dock after the bounded repair path. The renderer is kept so the view
+    /// still has a sidebar, and the user-facing reload report surfaces the
+    /// geometry failure.
+    pub misdocked: usize,
 }
 
 /// The live sidebars the runtime knows about when a reconcile runs: the panes a

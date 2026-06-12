@@ -1,6 +1,7 @@
 //! Zellij [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
 use super::ZellijBackend;
 use super::layout::{TempLayoutFile, render_background_view_layout, render_tab_layout};
@@ -8,9 +9,11 @@ use super::parse::{
     SessionState, live_session_name_from_line, parse_focused_client_panes, trim_capture,
 };
 use super::raw_pane::{
-    RawPane, SessionCleanliness, floating_panes_in_anchor_view, is_sidebar_pane,
-    own_zellij_pane_id, sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
+    RawPane, SessionCleanliness, SidebarDock, floating_panes_in_anchor_view, is_sidebar_pane,
+    own_zellij_pane_id, repairable_nested_work_pane_ids, sidebar_dock_verdict,
+    sidebar_geometry_off_spec, tabs_with_sidebars, views_with_sidebars,
 };
+use super::sidebar::DockOutcome;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
@@ -348,21 +351,19 @@ impl MuxBackend for ZellijBackend {
         // above are safe detached). An unanswerable probe reads detached —
         // deferring one run is recoverable, a leaked pair is not. tmux splits
         // fine detached, so the gate is Zellij-internal.
-        let attached = (!plan.add.is_empty() || !off_spec.is_empty())
-            && self.session_has_attached_client(&opts.session_name);
+        let needs_attached = !plan.add.is_empty() || !off_spec.is_empty();
+        let attached = !needs_attached || self.session_has_attached_client(&opts.session_name);
         if attached {
             for (tab_id, raw_id) in &off_spec {
-                if self.converge_sidebar_geometry(opts, *tab_id, *raw_id) {
-                    report.redocked += 1;
-                }
+                repair_sidebar_geometry(self, opts, *tab_id, *raw_id, &focused_in_tab, &mut report);
             }
         }
-        if !plan.add.is_empty() && !attached {
-            report.deferred = plan.add.len();
+        if needs_attached && !attached {
+            report.deferred = plan.add.len() + off_spec.len();
             tracing::info!(
                 session = %opts.session_name,
                 deferred = report.deferred,
-                "sidebar reconcile: no attached client; deferring in-place adds",
+                "sidebar reconcile: no attached client; deferring in-place adds and geometry repairs",
             );
         } else {
             add_missing_sidebars(
@@ -502,25 +503,119 @@ fn off_spec_sidebars(
     closing: &[PaneId],
     width: SidebarWidth,
 ) -> Vec<(u64, u64)> {
-    let closing: std::collections::HashSet<&PaneId> = closing.iter().collect();
+    let closing: std::collections::HashSet<u64> =
+        closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
-        .filter(|pane| {
-            let id = PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id));
-            !closing.contains(&id)
-        })
-        .filter(|pane| sidebar_geometry_off_spec(pane, panes, width))
+        .filter(|pane| !closing.contains(&pane.id))
+        .filter(|pane| sidebar_geometry_off_spec(pane, panes, &closing, width))
         .map(|pane| (pane.tab_id, pane.id))
         .collect()
 }
 
+fn parse_zellij_raw(pane: &PaneId) -> Option<u64> {
+    (pane.mux() == MuxName::Zellij)
+        .then(|| pane.raw().strip_prefix("terminal_")?.parse().ok())
+        .flatten()
+}
+
 fn focused_work_panes(panes: &[RawPane]) -> std::collections::HashMap<u64, u64> {
-    panes
+    let mut focused = std::collections::HashMap::new();
+    for pane in panes
         .iter()
         .filter(|pane| pane.is_focused && !pane.is_plugin)
-        .map(|pane| (pane.tab_id, pane.id))
-        .collect()
+    {
+        focused.entry(pane.tab_id).or_insert(pane.id);
+    }
+    focused
+}
+
+fn repair_sidebar_geometry(
+    backend: &ZellijBackend,
+    opts: &SidebarPaneOptions,
+    tab_id: u64,
+    raw_id: u64,
+    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    report: &mut SidebarRecovery,
+) {
+    let repaired = backend.converge_sidebar_geometry(opts, tab_id, raw_id);
+    match backend.sidebar_dock_outcome(&opts.session_name, tab_id, raw_id) {
+        DockOutcome::Docked => {
+            if repaired {
+                report.redocked += 1;
+                restore_tab_focus(backend, &opts.session_name, tab_id, focused_in_tab);
+            }
+        }
+        DockOutcome::Misdocked => {
+            if repairable_nested_sidebar_remains(backend, &opts.session_name, tab_id, raw_id) {
+                rebuild_misdocked_sidebar(backend, opts, tab_id, raw_id, focused_in_tab, report);
+            } else {
+                report.misdocked += 1;
+            }
+        }
+    }
+}
+
+fn repairable_nested_sidebar_remains(
+    backend: &ZellijBackend,
+    session_name: &str,
+    tab_id: u64,
+    raw_id: u64,
+) -> bool {
+    let Ok(panes) = backend.list_panes_with_session(Some(session_name)) else {
+        return false;
+    };
+    let Some(sidebar) = panes
+        .iter()
+        .find(|pane| pane.is_terminal() && pane.tab_id == tab_id && pane.id == raw_id)
+    else {
+        return false;
+    };
+    let excluded = std::collections::HashSet::new();
+    sidebar_dock_verdict(sidebar, &panes, &excluded) == Some(SidebarDock::NestedRow)
+        && repairable_nested_work_pane_ids(sidebar, &panes, &excluded).is_some()
+}
+
+fn rebuild_misdocked_sidebar(
+    backend: &ZellijBackend,
+    opts: &SidebarPaneOptions,
+    tab_id: u64,
+    raw_id: u64,
+    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    report: &mut SidebarRecovery,
+) {
+    let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw_id}"));
+    if let Err(err) = backend.close_pane(&opts.session_name, &pane) {
+        tracing::warn!(
+            session = %opts.session_name,
+            tab = tab_id,
+            pane = %pane.as_str(),
+            error = %err,
+            "sidebar reconcile: closing a nested sidebar for rebuild failed; leaving it",
+        );
+        report.failed += 1;
+        return;
+    }
+    match backend.add_sidebar_to_tab(opts, tab_id) {
+        Ok(DockOutcome::Docked) => {
+            report.redocked += 1;
+            restore_tab_focus(backend, &opts.session_name, tab_id, focused_in_tab);
+        }
+        Ok(DockOutcome::Misdocked) => {
+            report.misdocked += 1;
+            restore_tab_focus(backend, &opts.session_name, tab_id, focused_in_tab);
+        }
+        Err(err) => {
+            tracing::warn!(
+                session = %opts.session_name,
+                tab = tab_id,
+                error = %err,
+                "sidebar reconcile: rebuilding a nested sidebar failed",
+            );
+            report.failed += 1;
+        }
+    }
 }
 
 fn close_planned_sidebars(
@@ -628,16 +723,17 @@ fn add_sidebar_to_tab(
     report: &mut SidebarRecovery,
 ) {
     match backend.add_sidebar_to_tab(opts, tab_id) {
-        Ok(()) => {
+        Ok(outcome) => {
             if restart {
                 report.restarted += 1;
             } else {
                 report.recovered += 1;
             }
-            occupied_tabs.insert(tab_id.to_string());
-            if let Some(work) = focused_in_tab.get(&tab_id) {
-                let _ = backend.focus_terminal(&opts.session_name, *work);
+            if outcome == DockOutcome::Misdocked {
+                report.misdocked += 1;
             }
+            occupied_tabs.insert(tab_id.to_string());
+            restore_tab_focus(backend, &opts.session_name, tab_id, focused_in_tab);
         }
         Err(err) => {
             tracing::warn!(
@@ -649,6 +745,49 @@ fn add_sidebar_to_tab(
             report.failed += 1;
         }
     }
+}
+
+fn restore_tab_focus(
+    backend: &ZellijBackend,
+    session_name: &str,
+    tab_id: u64,
+    focused_in_tab: &std::collections::HashMap<u64, u64>,
+) {
+    const ATTEMPTS: u32 = 5;
+    const CYCLE_STEPS: u32 = 8;
+    const RETRY_DELAY: Duration = Duration::from_millis(50);
+
+    let Some(work) = focused_in_tab.get(&tab_id).copied() else {
+        return;
+    };
+    for attempt in 0..ATTEMPTS {
+        let _ = backend.focus_terminal(session_name, work);
+        if tab_focus_is(backend, session_name, tab_id, work) {
+            return;
+        }
+        if attempt + 1 < ATTEMPTS {
+            std::thread::sleep(RETRY_DELAY);
+        }
+    }
+    for action in ["focus-previous-pane", "focus-next-pane"] {
+        for _ in 0..CYCLE_STEPS {
+            let _ = backend.zellij_action(session_name).arg(action).run();
+            std::thread::sleep(RETRY_DELAY);
+            if tab_focus_is(backend, session_name, tab_id, work) {
+                return;
+            }
+        }
+    }
+}
+
+fn tab_focus_is(backend: &ZellijBackend, session_name: &str, tab_id: u64, raw_id: u64) -> bool {
+    backend
+        .list_panes_with_session(Some(session_name))
+        .is_ok_and(|panes| {
+            panes.iter().any(|pane| {
+                pane.is_terminal() && pane.tab_id == tab_id && pane.id == raw_id && pane.is_focused
+            })
+        })
 }
 
 fn warn_sidebar_add_skipped(session_name: &str, tab_id: u64) {

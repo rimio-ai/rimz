@@ -70,6 +70,12 @@ fn report(outcome: &ReloadOutcome) {
     if outcome.redocked > 0 {
         println!("Repaired {} geometry.", count(outcome.redocked, "sidebar"));
     }
+    if outcome.misdocked > 0 {
+        println!(
+            "{} still working but not docked.",
+            count(outcome.misdocked, "sidebar"),
+        );
+    }
     if outcome.reaped > 0 {
         println!(
             "Reaped {}.",
@@ -85,12 +91,12 @@ fn report(outcome: &ReloadOutcome) {
     if outcome.deferred > 0 {
         println!(
             "Deferred {} (no attached client); attach and re-run `rimz reload`.",
-            count(outcome.deferred, "sidebar add"),
+            count(outcome.deferred, "sidebar repair"),
         );
     }
     if outcome.failed > 0 {
         println!(
-            "{} could not be re-added; run `rimz attach` to rebirth the session.",
+            "{} could not be repaired; attach and re-run `rimz reload`.",
             count(outcome.failed, "sidebar"),
         );
     }

@@ -1,5 +1,88 @@
 use super::*;
 
+#[cfg(unix)]
+#[test]
+fn add_sidebar_timeout_never_closes_stdout_only_hint() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+
+    use crate::config::MultiplexerConfig;
+    use crate::ids::WorkspaceId;
+    use crate::mux::{SidebarPaneOptions, SidebarWidth};
+
+    let temp = tempfile::TempDir::new().expect("tempdir");
+    let project_root = temp.path().join("project");
+    std::fs::create_dir_all(&project_root).expect("mkdir project");
+    let shim = temp.path().join("zellij");
+    let log = temp.path().join("zellij.log");
+    let script = r#"#!/bin/sh
+dir=$(dirname "$0")
+log="$dir/zellij.log"
+state="$dir/new-pane-count"
+printf '%s\n' "$*" >> "$log"
+
+if [ "$1" = "--version" ]; then
+  printf 'zellij 0.44.3\n'
+  exit 0
+fi
+
+case " $* " in
+  *" action list-panes "*)
+    count=$(cat "$state" 2>/dev/null || printf '0')
+    if [ "$count" -ge 2 ]; then
+      printf '%s\n' '[{"id":7,"is_plugin":false,"tab_id":1,"title":"zsh","pane_x":30,"pane_columns":90},{"id":8,"is_plugin":false,"tab_id":1,"title":"rimz-sidebar","pane_x":0,"pane_columns":30}]'
+    else
+      printf '%s\n' '[{"id":7,"is_plugin":false,"tab_id":1,"title":"zsh","pane_x":0,"pane_columns":120}]'
+    fi
+    exit 0
+    ;;
+  *" action new-pane "*)
+    count=$(cat "$state" 2>/dev/null || printf '0')
+    count=$((count + 1))
+    printf '%s\n' "$count" > "$state"
+    if [ "$count" -eq 1 ]; then
+      printf 'terminal_7\n'
+    else
+      printf 'terminal_8\n'
+    fi
+    exit 0
+    ;;
+esac
+"#;
+    let mut file = std::fs::File::create(&shim).expect("create shim");
+    file.write_all(script.as_bytes()).expect("write shim");
+    let mut perms = file.metadata().expect("shim metadata").permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod shim");
+    drop(file);
+
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-test".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(&project_root),
+        project_root: project_root.clone(),
+        cwd: project_root,
+        width,
+        birth_size: width.birth_size(Some(120)),
+        rimz_bin: std::path::PathBuf::from("rimz"),
+        replace_existing: false,
+        config: MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let backend = ZellijBackend::with_program_for_test(&shim);
+    assert_eq!(
+        backend.add_sidebar_to_tab(&opts, 1).expect("add sidebar"),
+        super::sidebar::DockOutcome::Docked,
+    );
+    let log = std::fs::read_to_string(log).expect("read shim log");
+    assert!(
+        !log.contains("close-pane --pane-id terminal_7"),
+        "stdout-only hint for a pre-existing work pane must not be closed:\n{log}",
+    );
+}
+
 #[test]
 fn version_parser_and_floor_hold() {
     assert_eq!(parse_version("zellij 0.41.2"), Some((0, 41, 2)));
@@ -10,6 +93,11 @@ fn version_parser_and_floor_hold() {
     assert!((0, 41, 0) >= MIN_ZELLIJ_VERSION);
     assert!((0, 44, 3) >= MIN_ZELLIJ_VERSION);
     assert!((0, 40, 9) < MIN_ZELLIJ_VERSION);
+    assert_eq!(STACK_PANES_MIN_ZELLIJ, (0, 42, 0));
+    assert!(STACK_PANES_MIN_ZELLIJ >= MIN_ZELLIJ_VERSION);
+    assert!((0, 42, 0) >= STACK_PANES_MIN_ZELLIJ);
+    assert!((0, 44, 3) >= STACK_PANES_MIN_ZELLIJ);
+    assert!((0, 41, 9) < STACK_PANES_MIN_ZELLIJ);
 }
 
 #[test]
