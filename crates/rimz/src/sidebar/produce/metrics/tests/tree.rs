@@ -53,6 +53,42 @@ fn pane_tree_sample_aggregates_root_children_and_grandchildren() {
 }
 
 #[test]
+fn pane_tree_sample_walk_free_recurses_through_proc_children() {
+    let proc_children = HashMap::from([(10, vec![20, 30]), (20, vec![40])]);
+    let stats = HashMap::from([
+        (10, stat('S', 5, 100, 1_000, 100)),
+        (20, stat('R', 7, 3, 2_000, 200)),
+        (30, stat('S', 11, 0, 3_000, 300)),
+        (40, stat('S', 13, 0, 4_000, 400)),
+    ]);
+    let io = HashMap::from([(10, 100), (20, 200), (30, 300), (40, 400)]);
+
+    let sample = sample_pane_tree(
+        10,
+        &HashMap::new(),
+        false,
+        &|pid| stats.get(&pid).copied(),
+        &|pid| io.get(&pid).copied(),
+        &|pid| proc_children.get(&pid).cloned().unwrap_or_default(),
+    )
+    .expect("root stat exists");
+
+    assert_eq!(sample.direct_children, vec![20, 30]);
+    assert_eq!(sample.process_count, 4);
+    assert_eq!(sample.cpu_ticks, 139);
+    assert_eq!(sample.rss_kb, 10_000);
+    assert_eq!(sample.io_bytes, Some(1_000));
+    assert_eq!(
+        sample
+            .state_samples
+            .iter()
+            .map(|sample| sample.pid)
+            .collect::<Vec<_>>(),
+        vec![10, 30, 20, 40]
+    );
+}
+
+#[test]
 fn pane_tree_rates_on_stable_root_when_children_churn() {
     let mut frame = frame_from_panes(vec![pane(
         "terminal_1",

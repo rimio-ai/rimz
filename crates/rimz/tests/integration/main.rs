@@ -24,6 +24,7 @@ mod list;
 mod message_queue;
 mod performance;
 mod presence_wake;
+mod proc;
 mod reload;
 mod remote_attach;
 mod reset;

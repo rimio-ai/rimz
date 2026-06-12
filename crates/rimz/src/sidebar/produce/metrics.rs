@@ -181,7 +181,7 @@ pub(super) fn pane_metrics_due(frame: &PaneFrame, runtime: &crate::RuntimePaths)
 /// Zellij pane's root pid restores from the prior window's guarded binding
 /// ([`restore_cached_bindings`]), then descendants come from the full
 /// process-table child map when it was already paid for, or from each sampled
-/// process's `/proc/<pid>/task/<pid>/children` file. The full process-table
+/// process's per-task `/proc/<pid>/task/<tid>/children` files. The full process-table
 /// walk runs only while some due pane's binding is unknown — pane churn or a
 /// foreground change, exactly the moments a fresh `list-panes` was already
 /// paid for.
@@ -220,8 +220,8 @@ pub(super) fn enrich_pane_metrics(
         crate::proc::stat_metrics(pid).map(|stat| stat.start_ticks)
     });
 
-    // The walk's ppid→children map also serves the shell→single-child descent;
-    // a walk-free tick reads each shell's direct children file instead.
+    // The walk's ppid→children map also serves the shell→tree descent;
+    // a walk-free tick reads each process's per-task children files instead.
     let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
     if needs_walk {
         children = backfill_zellij_pane_pids_from_proc(frame, session_name);

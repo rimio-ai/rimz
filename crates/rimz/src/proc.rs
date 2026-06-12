@@ -346,18 +346,36 @@ fn parse_btime(stat: &str) -> Option<i64> {
         .ok()
 }
 
-/// Direct children of `pid`'s main thread, from
-/// `/proc/<pid>/task/<pid>/children` — the O(1) sibling of walking the whole
-/// process table to build a ppid map, for the sidebar's shell→single-child
-/// stats descent on a walk-free tick. Needs `CONFIG_PROC_CHILDREN` (mainstream
-/// kernels enable it); an unreadable file — exotic kernel, vanished pid —
-/// yields the empty list, so the descent falls back to the shell's own stats,
-/// exactly the fallback a zero- or multi-child shell already takes.
+/// Direct children of `pid`, unioned from every
+/// `/proc/<pid>/task/<tid>/children` file. Linux records the child under the
+/// task that forked it, so a process spawned by a worker thread — cargo job
+/// threads and tokio runtimes included — appears under that thread's tid rather
+/// than the process leader. This is the O(threads) sibling of walking the whole
+/// process table to build a ppid map, for the sidebar's shell→tree stats
+/// descent on a walk-free tick. Needs `CONFIG_PROC_CHILDREN` (mainstream kernels
+/// enable it); an unreadable task dir yields the empty list for that process,
+/// and an unreadable task file skips that task's child edge for the sample.
 #[cfg(target_os = "linux")]
 pub fn children(pid: u32) -> Vec<u32> {
-    std::fs::read_to_string(format!("/proc/{pid}/task/{pid}/children"))
-        .map(|raw| parse_children(&raw))
-        .unwrap_or_default()
+    let Ok(entries) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
+        return Vec::new();
+    };
+
+    let mut children = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        if name
+            .to_str()
+            .and_then(|name| name.parse::<u32>().ok())
+            .is_none()
+        {
+            continue;
+        }
+        if let Ok(raw) = std::fs::read_to_string(entry.path().join("children")) {
+            children.extend(parse_children(&raw));
+        }
+    }
+    children
 }
 
 #[cfg(not(target_os = "linux"))]
