@@ -59,6 +59,7 @@ fn agent_row(group: usize, index: usize) -> SidebarRow {
         worktree_path: Some(format!("/repo/wt{group}")),
         worktree_branch: Some(format!("feature-{group}")),
         unread: false,
+        inactive: false,
         last_activity: super::fixed_now(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(crate::feed::AgentStatus::Running),

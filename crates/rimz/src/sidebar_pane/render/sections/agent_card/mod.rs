@@ -113,17 +113,38 @@ pub(super) fn row_lines(
             match row.status().unwrap_or(AgentStatus::Idle) {
                 AgentStatus::Idle => {}
                 AgentStatus::Running | AgentStatus::Waiting => {
-                    inner.push(description_line(theme, row, tier, cw, animation_phase));
+                    inner.push(description_line(
+                        theme,
+                        row,
+                        tier,
+                        cw,
+                        selected,
+                        animation_phase,
+                    ));
                     if let Some(line) = gauge_line(theme, row, bands, cw) {
                         inner.push(line);
                     }
                 }
                 AgentStatus::Paused | AgentStatus::Success | AgentStatus::Failed => {
-                    inner.push(description_line(theme, row, tier, cw, animation_phase));
+                    inner.push(description_line(
+                        theme,
+                        row,
+                        tier,
+                        cw,
+                        selected,
+                        animation_phase,
+                    ));
                 }
             }
         } else {
-            inner.push(description_line(theme, row, tier, cw, animation_phase));
+            inner.push(description_line(
+                theme,
+                row,
+                tier,
+                cw,
+                selected,
+                animation_phase,
+            ));
             // A just-started idle agent sits on the 0% baseline gauge with no
             // history behind it, so it rests at identity + description alone.
             // Once an agent has real context, spend, or compaction history, the

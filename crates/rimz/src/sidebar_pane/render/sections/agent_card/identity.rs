@@ -7,12 +7,18 @@ pub(super) fn agent_name_style(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     kind: &str,
+    unread: bool,
 ) -> Style {
-    providers
+    let style = providers
         .iter()
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.style(theme.brand_tone(panel), Modifier::empty()))
-        .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()))
+        .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()));
+    if unread {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
+    }
 }
 
 pub(super) struct IdentityLineContext<'a> {
@@ -188,7 +194,7 @@ pub(super) fn agent_identity_line(
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),
-            agent_name_style(theme, providers, &row.name),
+            agent_name_style(theme, providers, &row.name, row.unread),
         ),
     ];
     if tier != Tier::L0 {

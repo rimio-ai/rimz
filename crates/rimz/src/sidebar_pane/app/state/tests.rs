@@ -85,6 +85,7 @@ fn row_snapshot_at(
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             unread: false,
+            inactive: false,
             last_activity,
             card: RowCard::Agent(Box::new(AgentCard {
                 status: Some(status),

@@ -246,7 +246,11 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     assert_eq!(animation_cadence(&calm), AnimationCadence::Breath);
     calm.sidebar.animations.success =
         Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
-    assert_eq!(animation_cadence(&calm), AnimationCadence::None);
+    assert_eq!(
+        animation_cadence(&calm),
+        AnimationCadence::Breath,
+        "unread rows keep the breath grid alive for the cockpit unread counter"
+    );
 
     let mut idle = snapshot_with(
         Vec::new(),
@@ -364,7 +368,10 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         0,
     );
     assert!(matches!(pulse_trough.fg, Some(Color::Indexed(_))));
-    assert_eq!(pulse_trough.add_modifier, Modifier::empty());
+    assert!(
+        pulse_trough.add_modifier.contains(Modifier::DIM),
+        "indexed color may need the fallback modifier when quantization hides the pulse"
+    );
     let pulse_peak = labels::agent_role_style_at(
         &lit,
         AgentStatus::Running,

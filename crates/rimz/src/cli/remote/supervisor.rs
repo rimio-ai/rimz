@@ -308,6 +308,7 @@ fn local_link_command_notification(
         notification_kind: kind,
         title: title.to_owned(),
         body: body.to_owned(),
+        unread_count: None,
     })
 }
 

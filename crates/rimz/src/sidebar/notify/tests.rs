@@ -4,8 +4,12 @@ use jiff::Timestamp;
 
 use super::*;
 use crate::agents::lifecycle::TurnPhase;
-use crate::feed::PaneRef;
+use crate::feed::{AgentState, FeedItem, FeedKind, PaneRef, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+
+fn workspace() -> WorkspaceId {
+    WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-notify"))
+}
 
 fn prefs() -> NotificationsPrefs {
     NotificationsPrefs {
@@ -15,12 +19,16 @@ fn prefs() -> NotificationsPrefs {
 }
 
 fn snapshot(agents: Vec<AgentState>) -> SidebarSnapshot {
-    SidebarSnapshot::build_with_agents(
-        WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-notify")),
-        Vec::new(),
-        agents,
-        Timestamp::now(),
-    )
+    snapshot_with_items(Vec::new(), agents)
+}
+
+fn snapshot_with_items(items: Vec<FeedItem>, agents: Vec<AgentState>) -> SidebarSnapshot {
+    let panes = agents
+        .iter()
+        .filter_map(|agent| agent.pane.clone())
+        .collect::<Vec<_>>();
+    SidebarSnapshot::build_with_agents(workspace(), items, agents, Timestamp::now())
+        .with_live_panes(panes, None)
 }
 
 fn link_snapshot(tier: LinkTier, freshness: SidebarLinkFreshness) -> SidebarSnapshot {
@@ -98,6 +106,33 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
     }
 }
 
+fn agent_ask(source: &str, session_id: &str) -> FeedItem {
+    let mut item = FeedItem::new(
+        workspace(),
+        Surface::NativeUi,
+        FeedKind::Question,
+        format!("{source} needs attention"),
+        source,
+        "agent-hook",
+    );
+    item.worktree_path = Some("/tmp/rimz-notify".to_owned());
+    item.payload = serde_json::json!({ "session_id": session_id });
+    item
+}
+
+fn script_ask_for_pane(pane: PaneRef) -> FeedItem {
+    let mut item = FeedItem::new(
+        workspace(),
+        Surface::Script,
+        FeedKind::Question,
+        "approve deploy?",
+        "deploy",
+        "script",
+    );
+    item.pane = Some(pane);
+    item
+}
+
 #[test]
 fn configured_transition_edges_fire() {
     let mut state = NotificationState::default();
@@ -129,6 +164,76 @@ fn configured_transition_edges_fire() {
     );
     assert_eq!(failed.len(), 1);
     assert_eq!(failed[0].notification_kind, NotificationKind::Failed);
+}
+
+#[test]
+fn projected_pending_agent_ask_notifies_as_waiting() {
+    let mut state = NotificationState::default();
+    let prefs = prefs();
+    state.evaluate(
+        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
+        &prefs,
+        0,
+    );
+
+    let agent = agent("a1", AgentStatus::Running, false);
+    let mut ask = agent_ask("claude", "a1");
+    ask.updated_at = agent.last_activity + Duration::from_secs(1);
+    let next = snapshot_with_items(vec![ask], vec![agent]);
+    assert_eq!(
+        next.agents[0].status,
+        AgentStatus::Running,
+        "the rollup keeps the raw lifecycle state"
+    );
+    assert_eq!(
+        next.worktree_groups[0].rows[0].status(),
+        Some(AgentStatus::Waiting),
+        "the row carries the displayed status the sidebar paints"
+    );
+
+    let out = state.evaluate(&next, &prefs, 100);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
+    assert_eq!(out[0].agents[0].agent_id, AgentSessionId::from("a1"));
+}
+
+#[test]
+fn projected_standalone_ask_row_notifies_after_seed() {
+    let mut state = NotificationState::default();
+    let prefs = prefs();
+    state.evaluate(&snapshot(Vec::new()), &prefs, 0);
+
+    let pane = PaneRef {
+        pane_id: PaneId::from_parts(MuxName::Tmux, "%deploy"),
+        session_name: "rimz-test".to_owned(),
+        view_id: Some("view-1".to_owned()),
+        view_kind: None,
+        view_name: None,
+        is_focused: false,
+        command: Some("deploy".to_owned()),
+        spawn_command: None,
+        cwd: Some("/tmp/rimz-notify".to_owned()),
+        pane_pid: None,
+        pane_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    };
+    let item = script_ask_for_pane(pane.clone());
+    let request_id = item.request_id.to_string();
+    let next =
+        SidebarSnapshot::build_with_agents(workspace(), vec![item], Vec::new(), Timestamp::now())
+            .with_live_panes(vec![pane], None);
+
+    assert_eq!(next.worktree_groups[0].rows[0].id, request_id);
+    assert_eq!(
+        next.worktree_groups[0].rows[0].status(),
+        Some(AgentStatus::Waiting)
+    );
+    let out = state.evaluate(&next, &prefs, 100);
+    assert_eq!(out.len(), 1);
+    assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
+    assert_eq!(out[0].agents[0].label, "approve deploy?");
 }
 
 #[test]
@@ -548,7 +653,7 @@ fn command_spawn_receives_notification_env() {
     let dir = tempfile::tempdir().expect("tempdir");
     let out = dir.path().join("env.txt");
     let command = format!(
-        "printf '%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" > {}",
+        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"${{RIMZ_NOTIFY_UNREAD-unset}}\" > {}",
         sh_quote(&out)
     );
     let notification = Notification {
@@ -561,13 +666,50 @@ fn command_spawn_receives_notification_env() {
         notification_kind: NotificationKind::Waiting,
         title: "Rimz: claude needs you".to_owned(),
         body: "claude sess-1 is waiting for input.".to_owned(),
+        unread_count: None,
     };
 
     let pid = spawn_notify_command(&command, &notification).expect("spawn command");
     assert!(pid > 0);
 
-    let expected =
-        "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\n";
+    let expected = "Rimz: claude needs you\nclaude sess-1 is waiting for input.\nclaude sess-1\nwaiting\nunset\n";
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut text = String::new();
+    while Instant::now() < deadline {
+        if let Ok(current) = std::fs::read_to_string(&out) {
+            text = current;
+            if text == expected {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    if text.is_empty() {
+        text = std::fs::read_to_string(&out).expect("command wrote env file");
+    }
+    assert_eq!(text, expected);
+}
+
+#[test]
+fn command_spawn_receives_unread_env_for_reminders() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let out = dir.path().join("env.txt");
+    let command = format!(
+        "printf '%s\\n%s\\n%s\\n%s\\n%s\\n' \"$RIMZ_NOTIFY_TITLE\" \"$RIMZ_NOTIFY_BODY\" \"$RIMZ_NOTIFY_AGENT\" \"$RIMZ_NOTIFY_KIND\" \"$RIMZ_NOTIFY_UNREAD\" > {}",
+        sh_quote(&out)
+    );
+    let notification = Notification {
+        agents: Vec::new(),
+        notification_kind: NotificationKind::Reminder,
+        title: "Rimz: 2 unread need you".to_owned(),
+        body: "2 unread rows still need you.".to_owned(),
+        unread_count: Some(2),
+    };
+
+    let pid = spawn_notify_command(&command, &notification).expect("spawn command");
+    assert!(pid > 0);
+
+    let expected = "Rimz: 2 unread need you\n2 unread rows still need you.\n\nreminder\n2\n";
     let deadline = Instant::now() + Duration::from_secs(2);
     let mut text = String::new();
     while Instant::now() < deadline {

@@ -1,3 +1,4 @@
+use super::remind::RemindState;
 use super::*;
 use crate::sidebar::read_marks::ReadMarkStore;
 
@@ -13,6 +14,7 @@ pub(super) struct LoopState {
     self_close: SelfCloseState,
     ui: UiState,
     read_marks: ReadMarkStore,
+    remind: RemindState,
     dirty: bool,
     paint_hold: PaintHold,
     next_frame: Instant,
@@ -46,6 +48,7 @@ impl LoopState {
             self_close: SelfCloseState::default(),
             ui: UiState::default(),
             read_marks,
+            remind: RemindState::default(),
             dirty: true,
             paint_hold: PaintHold::default(),
             next_frame: now,
@@ -165,7 +168,7 @@ impl LoopState {
                 fetch.request(FetchRequest::pane_frame_published(), true);
             }
             SidebarEvent::Notify { title, body, panes } => {
-                if let Err(err) = emit_terminal_notification(
+                match emit_terminal_notification(
                     config,
                     terminal,
                     &self.current,
@@ -174,7 +177,9 @@ impl LoopState {
                     &body,
                     &panes,
                 ) {
-                    debug!(error = %err, "terminal notification emit failed");
+                    Ok(true) => self.remind.note_ring(crate::sidebar::cache::unix_now_ms()),
+                    Ok(false) => {}
+                    Err(err) => debug!(error = %err, "terminal notification emit failed"),
                 }
             }
             SidebarEvent::FocusStranded { pane_id } => {
@@ -343,6 +348,14 @@ impl LoopState {
             self.last_self_close_check = Instant::now();
             fetch.request(FetchRequest::default(), false);
         }
+    }
+
+    pub(super) fn maybe_remind(
+        &mut self,
+        config: &ServeConfig,
+        terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+    ) {
+        self.remind.maybe_remind(config, terminal, &self.current);
     }
 
     pub(super) fn paint_frame_if_due(

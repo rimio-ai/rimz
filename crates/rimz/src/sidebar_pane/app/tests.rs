@@ -56,6 +56,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             unread: false,
+            inactive: false,
             last_activity: Timestamp::now(),
             card: crate::RowCard::Agent(Box::new(crate::AgentCard {
                 status: Some(crate::feed::AgentStatus::Waiting),

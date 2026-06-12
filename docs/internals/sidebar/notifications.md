@@ -14,15 +14,19 @@ Rimz sends best-effort attention alerts from the same state that drives the side
 
 ## Producer And Renderer Split
 
-The elected sidebar producer is the notification brain. Each fetch cycle folds the latest agent rollup, compares each root agent's current `AgentStatus` with the previous observation, applies the per-machine `[notifications]` policy, and emits notifications only from that elected process.
+The elected sidebar producer is the notification brain. Each fetch cycle folds the latest snapshot, compares each projected sidebar row's displayed `AgentStatus` with the previous observation, applies the per-machine `[notifications]` policy, and emits notifications only from that elected process.
 
 The first observation after election seeds the baseline without firing. That prevents a renderer restart or producer handoff from replaying every existing `waiting`, `failed`, `paused`, or `success` state as a fresh transition.
 
 The producer applies trigger filtering, per-agent debounce, burst coalescing, and focus suppression. Focus suppression reads the same live pane focus bit the sidebar already folds into snapshots; it is a conservative visibility hint, not ledger truth.
 
-For each notification, the producer spawns `[notifications].command` if configured and broadcasts `SidebarEvent::Notify` to the sidebar socket with the triggering agent pane ids. The command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`, inherits no hook stdout, and is handed to the global child reaper.
+For each notification, the producer spawns `[notifications].command` if configured and broadcasts `SidebarEvent::Notify` to the sidebar socket with the triggering agent pane ids. The command receives `RIMZ_NOTIFY_TITLE`, `RIMZ_NOTIFY_BODY`, `RIMZ_NOTIFY_AGENT`, and `RIMZ_NOTIFY_KIND`; reminders also receive `RIMZ_NOTIFY_UNREAD` with the unread actionable count. The child inherits no hook stdout and is handed to the global child reaper.
 
 The renderer is the terminal mouth. On `SidebarEvent::Notify`, BEL is emitted only by a pane-resident renderer whose tab or window contains one of the triggering agent panes, so mux tab and window bell markers point at the work that needs you. Desktop OSC is a reachability channel: under tmux, pane-resident renderers with their own view emit the DCS-wrapped OSC 777 banner so the active client stream can carry it even when the agent is in a background window. Detached sessions have no attached terminal stream, and inactive-pane passthrough is mux/client-defined, so command delivery is the deterministic off-screen path.
+
+Unread reminders are renderer-local. A renderer starts or refreshes the reminder clock when it relays an initial terminal notification, and also starts it when unread `waiting`/`failed` scope first appears in the renderer's folded snapshot; `success` and `paused` remain unread visually but do not re-ring. Pane-backed rows ring only in views that own the row's pane. Paneless rows ring through non-focused working panes in the same visible worktree when such panes exist; fully detached paneless asks still rely on the sidebar row and notify-command path. The reminder respects `suppress_focused`, stops when the scope is empty, emits terminal OSC/BEL through the same renderer path, and spawns the notify command with `RIMZ_NOTIFY_KIND=reminder` and `RIMZ_NOTIFY_UNREAD=N`. No reminder is broadcast back through `SidebarEvent::Notify`, so multiple sidebar views dedupe by pane ownership rather than by a global producer lock.
+
+Unread and notifications share the same projected status-edge shape after their first baselines: transitions into `waiting`, `failed`, `paused`, or `success` are eligible to stamp unread and eligible to notify when enabled by the trigger set. They can still diverge by design: trigger filtering, debounce, coalescing, and focus suppression can swallow a push while unread still stamps; producer-global notifications are one-per-room while unread is renderer-local with read receipts; reminders narrow the unread set to actionable `waiting`/`failed` rows.
 
 `rimz remote connect` is the notification brain for remote-link loss and recovery. It emits local OSC/BEL and `[notifications].command` directly with `RIMZ_NOTIFY_KIND=link_lost` or `link_restored`; it does not broadcast a sidebar event, because the remote stream may be stalled or gone. Probe blackout emits only local OSC/BEL, so ingest-side failures do not fire the command hook.
 
@@ -47,7 +51,10 @@ sound = "bell"            # "bell" | "off"
 suppress_focused = true
 debounce_ms = 5000
 coalesce_ms = 1000
+remind_secs = 60
 command = "ntfy publish rimz"
 ```
+
+`remind_secs = 0` disables reminders. Desktop badge APIs are terminal- and OS-specific, so Rimz exports the unread count to the command path instead of writing a dock badge escape itself.
 
 The command is per-machine and outside project trust. It is personal routing, often carrying host-specific push credentials, and a cloned repository never inherits it.

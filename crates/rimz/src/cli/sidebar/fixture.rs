@@ -103,6 +103,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
         worktree_path: Some("/srv/code/query-engine".to_owned()),
         worktree_branch: Some("main".to_owned()),
         unread: false,
+        inactive: false,
         last_activity: now,
         card: rimz::RowCard::Process(rimz::ProcessCard {
             state: rimz::ProcessState::Busy,
@@ -237,6 +238,7 @@ fn agent_row(
         worktree_path: Some(cwd.to_owned()),
         worktree_branch: Some(branch.to_owned()),
         unread: false,
+        inactive: false,
         last_activity: now,
         card: rimz::RowCard::Agent(Box::new(card)),
     }

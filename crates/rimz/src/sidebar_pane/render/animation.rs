@@ -2,7 +2,7 @@ use crate::config::{
     AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
     SidebarAnimationsConfig,
 };
-use crate::feed::AgentStatus;
+use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
 
 use super::theme::{Palette, Theme};
@@ -12,13 +12,13 @@ const THINKING_FRAMES: &[&str] = &[
     "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
 ];
 
-const DEFAULT_BREATH_PERIOD: f32 = 24.0;
+pub(crate) const DEFAULT_BREATH_PERIOD: f32 = 24.0;
 const FRESH_ATTENTION_PERIOD: f32 = 26.0;
 const HOT_ATTENTION_PERIOD: f32 = 12.0;
 const BREATH_MIDPOINT: f32 = 0.35;
 
 pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
-pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.18;
+pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.25;
 const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -119,7 +119,7 @@ impl BreathSample {
 }
 
 pub(crate) fn breath_tempo(age_secs: i64) -> f32 {
-    let heat = (age_secs.max(0) as f32 / 3_600.0).clamp(0.0, 1.0);
+    let heat = (age_secs.max(0) as f32 / ATTENTION_AGE_CEILING_SECS as f32).clamp(0.0, 1.0);
     FRESH_ATTENTION_PERIOD - ((FRESH_ATTENTION_PERIOD - HOT_ATTENTION_PERIOD) * heat)
 }
 
@@ -546,8 +546,14 @@ mod tests {
     #[test]
     fn breath_curve_is_smooth_and_age_tempo_is_clamped() {
         assert_eq!(breath_tempo(-1), FRESH_ATTENTION_PERIOD);
-        assert_eq!(breath_tempo(3_600), HOT_ATTENTION_PERIOD);
-        assert_eq!(breath_tempo(7_200), HOT_ATTENTION_PERIOD);
+        assert_eq!(
+            breath_tempo(ATTENTION_AGE_CEILING_SECS),
+            HOT_ATTENTION_PERIOD
+        );
+        assert_eq!(
+            breath_tempo(2 * ATTENTION_AGE_CEILING_SECS),
+            HOT_ATTENTION_PERIOD
+        );
         assert!(breath_tempo(1_800) < breath_tempo(0));
 
         let trough = BreathSample::new(0, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
@@ -558,8 +564,8 @@ mod tests {
         assert!(trough.lightness_delta() < 0.0);
         assert!(peak.lightness_delta() > 0.0);
 
-        let old = BreathSample::for_age(0, 2 * 3_600, BREATH_DEEP_AMPLITUDE);
-        let next = BreathSample::for_age(1, 2 * 3_600, BREATH_DEEP_AMPLITUDE);
+        let old = BreathSample::for_age(0, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
+        let next = BreathSample::for_age(1, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
         assert!(
             (next.lightness_delta() - old.lightness_delta()).abs() < 0.05,
             "hot attention still eases rather than strobing"

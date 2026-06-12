@@ -16,7 +16,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ⌘ query-engine                    ~/code/query-engine    ← workspace identity
 
  ◎ 91                          ◇ 32M ↘ 28M ↗ 3M ◌ 472M    ← sessions today · today's tokens (right)
- ¤ 16                                          $420.00    ← live agents · today's fleet usd value
+ ¤ 16 (2)                                      $420.00    ← live agents · unread count · today's fleet usd value
  ─────────────────────────────────────────────────────
  ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
 
@@ -54,14 +54,14 @@ One vocabulary runs through the whole sidebar: a shape carries the meaning, colo
 
 | glyph | state | meaning | needs you |
 |-------|-------|---------|-----------|
-| `?`   | waiting    | the agent asked something; answer in its pane | yes — yellow floor, then a continuous age heat toward red; the breath quickens with age on a clamped smooth pulse; unread rows use a deeper pulse until focused |
-| `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the configurable stall window | yes — yellow floor, then a continuous age heat toward red; the breath quickens with age on a clamped smooth pulse; unread rows use a deeper pulse until focused |
+| `?`   | waiting    | the agent asked something; answer in its pane | yes — yellow floor, then a continuous age heat toward red; the breath quickens with age on a clamped smooth pulse; unread rows use a deeper pulse and bold card text until focused |
+| `!`   | attention  | a failed turn, a turn dead on a provider API error, or a working agent gone silent past the configurable stall window | yes — yellow floor, then a continuous age heat toward red; the breath quickens with age on a clamped smooth pulse; unread rows use a deeper pulse and bold card text until focused |
 | `⏸`   | paused | stopped mid-turn on a provider limit — rate-limit or overload; resumes after the provider recovers or the window resets | waiting on recovery — held amber, never heats |
 | `⢿`   | working    | running and editing — animates `⣾⣽⣻⢿⡿⣟⣯⣷` in clay | no |
 | `⠁`   | thinking   | running, before the turn's first file edit — animates `⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁` in clay | no |
 | `⠙`   | resolving  | a resolver is answering on the bridge — braille spin | pending, being handled |
 | `○`   | idle       | alive, nothing to do | no |
-| `✓`   | done       | finished cleanly | no; unread results pulse until focused |
+| `✓`   | done       | finished cleanly | no; unread results pulse with bold card text until focused |
 | `○`/`⢿`   | process | a pane with no agent (shell, editor); idle shows the hollow neutral `○`, real work the `⢿` spinner in the working clay — the whole row one soft step below the agent cards, never a cockpit tally | no |
 
 Three short-lived heads ride over the base status on the leading cell, so they never earn a cockpit bucket of their own:
@@ -74,7 +74,7 @@ Three short-lived heads ride over the base status on the leading cell, so they n
 
 Every running agent — whichever head rides its cell — counts as **working** (`⢿`) in the cockpit make-up. The status-head frames, base colors, effects, and speeds are themeable per machine through `[sidebar.animations]` ([theme](../reference/theme.md#animations)).
 
-The two actionable attention glyphs (`?` / `!`) **breathe**: a smooth brightness pulse swells and fades without blanking, pulling the eye to an unanswered row. They also **heat with the age clock** — a yellow floor immediately, then a continuous OKLab slide from warn through caution to alarm between 15 minutes and the hour. That is the same age ramp the `◔` age glyph beside them wears, so a fresh ask reads calm-urgent and a long-ignored one visibly heats up. The breath paces with age on one continuous clamped curve: fresh asks swell slowly, older asks quicken, and even red heat stays a pulse rather than a strobe. Unread actionable rows and unread results use the deeper pulse and render the description bold; both clear when the pane is focused in any tab. A working agent gone silent past the configurable stall window (30 minutes by default) escalates to a breathing `!`; the exception is a provider kind with a spent, unreset window, which pauses instead. The `⏸` paused head is attention-class but parked: it holds still in a held amber and never heats or breathes, because waiting for provider recovery is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work. An idle agent with no prompt yet shows a static `...` on line 2 in place of the em dash.
+The two actionable attention glyphs (`?` / `!`) **breathe**: a smooth brightness pulse swells and fades without blanking, pulling the eye to an unanswered row. They also **heat with the age clock** — a yellow floor immediately, then a continuous OKLab slide from warn through caution to alarm between 15 minutes and the hour. That is the same age ramp the `◔` age glyph beside them wears, so a fresh ask reads calm-urgent and a long-ignored one visibly heats up. The breath paces with age on one continuous clamped curve: fresh asks swell slowly, older asks quicken, and even red heat stays a pulse rather than a strobe. Unread actionable rows and unread results use the deeper pulse on the lead glyph and bold the card name and description; both clear when the pane is focused in any tab. A working agent gone silent past the configurable stall window (30 minutes by default) escalates to a breathing `!`; the exception is a provider kind with a spent, unreset window, which pauses instead. The `⏸` paused head is attention-class but parked: it holds still in a held amber and never heats or breathes, because waiting for provider recovery is the only move. A parent waiting on subagents is exempt from the stall escalation — its quiet wave is the children's work. An idle agent with no prompt yet shows a static `...` on line 2 in place of the em dash.
 
 On a truecolor terminal the pulse is an OKLab lightness ramp on the glyph itself; in 256-color mode it quantizes to the nearest xterm tone, and under `NO_COLOR` the deeper unread pulse falls back to DIM/BOLD weight while the shallow read pulse may rest at plain weight and let the `?`/`!`/`✓` shape carry the meaning. Brief color flashes mark the moments of change: a card lights as it enters `waiting`/`failed`, settles green as its ask resolves or a pause lifts, fades in on arrival, and the `▌` spine flicks under a freshly landed selection. The base pulse follows `[sidebar.theme].mode`; `[sidebar] glow` gates only the transition-flash tier. `NO_COLOR`, a `glow = "never"` opt-out, or a terminal where truecolor is unavailable still reads the same shapes and the deeper fallback pulse. `glow = "always"` forces transition flashes on a truecolor terminal whose `COLORTERM` an SSH hop dropped; `[sidebar.theme].mode = "truecolor"` is the matching lever for the base palette (mechanics in [internals/sidebar/sidebar.md → The runtime loop](../internals/sidebar/sidebar.md#the-runtime-loop)).
 
@@ -132,16 +132,16 @@ The top block. Fixed height, so the rows below it never jump as agents change st
  ⌘ query-engine                    ~/code/query-engine
 
  ◎ 12                          ◇ 88k ↘ 24k ↗ 64k ◌ 68k
- ¤ 6                                             $4.20
+ ¤ 6 (2)                                         $4.20
  ─────────────────────────────────────────────────────
  ? 2   ! 1   ⏸ 0   ✓ 0                       ⢿ 2   ○ 1
 ```
 
 - **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
-- **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
+- **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today, with today's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, followed by a breathing unread count like `(2)` when unseen rows exist, with today's spend pinned right. The counts read from the live fleet and the JSONL `value_tally`'s today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The fleet's total spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once today records spend.
-- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (each wearing its oldest row's continuous age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. The tally holds still: unread and pulse depth live on the row glyph you act on. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking animation and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows; colored statuses wear their semantic tone, the idle glyph and count rest at the soft stat tier, and zero counts use the same soft tier beside their glyphs.
-- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets: `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight. Under `NO_COLOR`, reverse video marks the same fixed `glyph count` cells. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
+- **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed (each wearing its oldest row's continuous age heat over a yellow floor), then `⏸` paused (held amber, parked) and `✓` done. The tally holds still: unread count lives on the `¤` summary line, while unread pulse depth and bolding live on the row you act on. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking animation and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent. Every bucket always shows; colored statuses wear their semantic tone, the idle glyph and count rest at the soft stat tier, and zero counts use the same soft tier beside their glyphs.
+- **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets and add the unread lens: `u` unread, `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight; the unread lens is keyboard-only and leaves the cockpit buckets unpicked. Under `NO_COLOR`, reverse video marks the same fixed `glyph count` cells. The counts always span the full fleet, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
 
@@ -157,7 +157,7 @@ An **empty room** has no make-up line at all — just identity and the `◎ 0` /
 
 The body: one card per pane, grouped under the worktree it lives in. A worktree is total isolation — only same-worktree agents collaborate — so each group reads as one bounded block.
 
-While a [make-up bucket](#zone-1--the-cockpit) is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
+While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
 
 **The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin while the viewport is moving: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The bar follows the motion — a wheel scroll or the selection-driven auto-follow — and settles away about a second after the view stops, so a resting column stays clean; `[sidebar] scrollbar = "always" | "never"` pins it up or removes it ([configuration](../reference/configuration.md#sidebar-rendering)). The viewport follows the selection: picking any row — `j`/`k` or arrows, `J`/`K` worktree jumps, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
 
@@ -310,8 +310,8 @@ You don't read where to go; you go. Selecting a row focuses that pane — no mux
 
 - `↑`/`↓` or `k`/`j` select a row; `K`/`J` select the previous or next worktree's first visible row; `↵` or `l` jumps to the selected pane.
 - `1`–`9` jump by the row's visible position.
-- `␣` jump to the **next thing that needs you** — the oldest waiting/failed row, without selecting first. One key tames a fleet; press again for the next.
-- `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to waiting/attention/paused/done/working/idle; the active status key toggles back to all, and `a` clears to all directly.
+- `␣` jump to the **next thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first, without selecting first. One key tames a fleet; press again for the next.
+- `u`, `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `a` clears to all directly.
 - `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
@@ -439,7 +439,9 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 | clear worktree header (`✓`) | `worktree_clear_safe_to_remove` |
 | dirty tree blocks the markers | `worktree_dirty_tree_keeps_the_cluster` |
 | per-worktree cap | `group_cap_with_overflow` |
+| cockpit unread count | `cockpit_unread_count` |
 | make-up bucket picked, body filtered | `make_up_filter_failed` |
+| unread lens picked, body filtered | `make_up_filter_unread` |
 | cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |
 | selection-driven scroll to bottom, bar settled away | `scroll_offset_follows_selection_to_bottom` |
 | tall expanded card pinned to top | `scroll_pins_tall_expanded_card_top` |

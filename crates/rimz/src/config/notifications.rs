@@ -15,6 +15,7 @@ pub struct NotificationsPrefs {
     pub suppress_focused: bool,
     pub debounce_ms: u64,
     pub coalesce_ms: u64,
+    pub remind_secs: u64,
     #[serde(default)]
     pub command: Option<String>,
 }
@@ -29,6 +30,7 @@ impl Default for NotificationsPrefs {
             suppress_focused: true,
             debounce_ms: 5_000,
             coalesce_ms: 1_000,
+            remind_secs: 60,
             command: None,
         }
     }

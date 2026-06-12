@@ -3,12 +3,12 @@
 //! hit-test map entries.
 
 use crate::config::{CardDensityMode, ContextSeverityConfig};
-use crate::feed::AgentStatus;
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 use jiff::Timestamp;
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
+use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::CostRolls;
 use crate::sidebar_pane::render::fmt::clip;
 use crate::sidebar_pane::render::labels::{
@@ -39,7 +39,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     width: usize,
     bands: &ContextSeverityConfig,
     card_density: CardDensityMode,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
     row_index: &mut usize,
     selected_index: usize,
     animation_phase: u64,

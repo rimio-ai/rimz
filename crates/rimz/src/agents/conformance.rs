@@ -195,6 +195,7 @@ fn agent_row(kind: &str) -> SidebarRow {
         worktree_path: None,
         worktree_branch: None,
         unread: false,
+        inactive: false,
         last_activity: Timestamp::from_second(1).unwrap(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(AgentStatus::Running),

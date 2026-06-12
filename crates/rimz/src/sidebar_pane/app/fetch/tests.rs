@@ -75,6 +75,7 @@ fn notification_panes_target_agents_or_the_current_view() {
         notification_kind: NotificationKind::Coalesced,
         title: "Rimz: 3 agents need attention".to_owned(),
         body: "a1: waiting | a2: failed | a3: waiting".to_owned(),
+        unread_count: None,
     };
 
     let snapshot = super::super::state::placeholder_snapshot(workspace());
@@ -99,6 +100,7 @@ fn notification_panes_target_agents_or_the_current_view() {
         notification_kind: NotificationKind::LinkDegraded,
         title: "Rimz: remote link degraded".to_owned(),
         body: "RTT 230ms, 4% loss.".to_owned(),
+        unread_count: None,
     };
 
     assert_eq!(

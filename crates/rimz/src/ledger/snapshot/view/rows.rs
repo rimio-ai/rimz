@@ -22,6 +22,7 @@ pub(in crate::ledger::snapshot) fn row_from_agent(
         worktree_path: agent.worktree_path.clone(),
         worktree_branch: agent.worktree_branch.clone(),
         unread: false,
+        inactive: false,
         last_activity: agent.last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(agent.status),
@@ -88,6 +89,7 @@ pub(super) fn row_from_standalone_item(item: &FeedItem, pane: &PaneRef) -> Sideb
         worktree_path: item.worktree_path.clone().or_else(|| pane.cwd.clone()),
         worktree_branch: item.worktree_branch.clone(),
         unread: false,
+        inactive: false,
         last_activity: item.updated_at,
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(AgentStatus::Waiting),

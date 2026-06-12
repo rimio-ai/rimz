@@ -193,8 +193,8 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
         )
     };
     let (resting_lines, resting_hits) = compose(None);
-    let (failed_lines, failed_hits) = compose(Some(AgentStatus::Failed));
-    let (running_lines, running_hits) = compose(Some(AgentStatus::Running));
+    let (failed_lines, failed_hits) = compose(Some(BodyFilter::Status(AgentStatus::Failed)));
+    let (running_lines, running_hits) = compose(Some(BodyFilter::Status(AgentStatus::Running)));
     let resting = make_up_text(&resting_lines);
     let failed = make_up_text(&failed_lines);
     let running = make_up_text(&running_lines);
@@ -239,7 +239,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        Some(AgentStatus::Failed),
+        Some(BodyFilter::Status(AgentStatus::Failed)),
         0,
         38,
     );
@@ -287,7 +287,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         &theme,
         &snapshot.worktree_groups,
         snapshot.now,
-        Some(AgentStatus::Idle),
+        Some(BodyFilter::Status(AgentStatus::Idle)),
         0,
         38,
     );
@@ -355,7 +355,7 @@ fn unread_bucket_stays_still() {
     let theme = Theme::fixed(false);
     let mut snapshot = make_up_snapshot();
     let bucket_modifier =
-        |snapshot: &SidebarSnapshot, animation_phase, filter: Option<AgentStatus>| {
+        |snapshot: &SidebarSnapshot, animation_phase, filter: Option<BodyFilter>| {
             fleet_header_lines(
                 &theme,
                 &snapshot.worktree_groups,
@@ -383,7 +383,7 @@ fn unread_bucket_stays_still() {
     let first = bucket_modifier(&snapshot, 0, None);
     let later = bucket_modifier(&snapshot, 3, None);
     let wrap = bucket_modifier(&snapshot, 6, None);
-    let picked = bucket_modifier(&snapshot, 3, Some(AgentStatus::Failed));
+    let picked = bucket_modifier(&snapshot, 3, Some(BodyFilter::Status(AgentStatus::Failed)));
 
     assert_eq!(read, Modifier::BOLD);
     assert_eq!(first, Modifier::BOLD);
@@ -391,6 +391,26 @@ fn unread_bucket_stays_still() {
     assert_eq!(wrap, Modifier::BOLD);
     assert_eq!(picked, Modifier::BOLD);
 }
+
+#[test]
+fn render_cockpit_unread_count() {
+    let mut snapshot = make_up_snapshot();
+    snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.status() == Some(AgentStatus::Failed))
+        .expect("failed row")
+        .unread = true;
+
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    assert!(
+        screen.lines().any(|line| line.contains("¤ 2 (1)")),
+        "live-agent summary carries unread count:\n{screen}"
+    );
+    assert_snapshot("cockpit_unread_count", screen);
+}
+
 /// A make-up bucket click narrows the body to that status: only the `!` card
 /// remains — the running agent's worktree is skipped whole (header included),
 /// the status-less process tail drops, and the `+K more` line is suppressed —
@@ -413,11 +433,12 @@ fn render_make_up_filter_narrows_the_body() {
         worktree_path: Some("/home/me/query-engine".to_owned()),
         worktree_branch: Some("main".to_owned()),
         unread: false,
+        inactive: false,
         last_activity: fixed_now(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
     });
     let ui = UiState {
-        make_up_filter: Some(crate::feed::AgentStatus::Failed),
+        make_up_filter: Some(BodyFilter::Status(crate::feed::AgentStatus::Failed)),
         ..Default::default()
     };
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
@@ -443,6 +464,38 @@ fn render_make_up_filter_narrows_the_body() {
     );
     assert_snapshot("make_up_filter_failed", screen);
 }
+
+#[test]
+fn render_unread_filter_narrows_the_body() {
+    let mut snapshot = make_up_snapshot();
+    let failed = snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.status() == Some(AgentStatus::Failed))
+        .expect("failed row");
+    failed.unread = true;
+    let ui = UiState {
+        make_up_filter: Some(BodyFilter::Unread),
+        ..Default::default()
+    };
+
+    let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 38, 20);
+    assert!(
+        screen.contains("! claude"),
+        "the unread failed card is the body:\n{screen}"
+    );
+    assert!(
+        !screen.contains("codex") && !screen.contains("feature-migration"),
+        "read rows and groups with no unread row are skipped whole:\n{screen}"
+    );
+    assert!(
+        screen.contains("⢿ 1"),
+        "the make-up still counts the full fleet:\n{screen}"
+    );
+    assert_snapshot("make_up_filter_unread", screen);
+}
+
 /// A compacting agent counts as **working** (`⢿`) in the cockpit — the
 /// compaction pulse, like the thinking head, is a per-row head and never
 /// a bucket.

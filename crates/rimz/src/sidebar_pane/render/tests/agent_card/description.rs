@@ -105,7 +105,7 @@ fn unread_descriptor_renders_bold() {
 }
 
 #[test]
-fn unread_turn_error_label_stays_soft() {
+fn unread_turn_error_label_stays_soft_and_bold() {
     let agent = agent(
         "claude-1",
         "claude",
@@ -122,7 +122,11 @@ fn unread_turn_error_label_stays_soft() {
     let lines = rendered_group_lines(&snapshot);
     let span = span_for(&lines, "api error");
     assert!(
-        !span.style.add_modifier.contains(Modifier::BOLD),
-        "the error-label branch keeps the soft style"
+        span.style.add_modifier.contains(Modifier::BOLD),
+        "unread error labels keep the unread weight"
+    );
+    assert!(
+        span.style.add_modifier.contains(Modifier::ITALIC),
+        "the error-label branch keeps the soft italic style"
     );
 }

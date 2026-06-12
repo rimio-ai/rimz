@@ -23,6 +23,7 @@ fn row_at(id: &str, status: AgentStatus, last_activity: Timestamp) -> SidebarRow
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         unread: false,
+        inactive: false,
         last_activity,
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(status),
@@ -72,11 +73,96 @@ fn observe_with_marks(
 }
 
 #[test]
-fn unread_transitions_only_start_from_working_states() {
+fn transitions_into_needs_a_look_stamp_unread() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
     assert!(!tracker.is_unread("a"));
 
+    for (from, status) in [
+        (AgentStatus::Running, AgentStatus::Success),
+        (AgentStatus::Running, AgentStatus::Failed),
+        (AgentStatus::Running, AgentStatus::Waiting),
+        (AgentStatus::Running, AgentStatus::Paused),
+    ] {
+        let mut tracker = UnreadTracker::default();
+        observe(&mut tracker, vec![row("a", from)], None);
+        observe(&mut tracker, vec![row("a", status)], None);
+        assert!(tracker.is_unread("a"), "{from:?} -> {status:?}");
+    }
+}
+
+#[test]
+fn idle_to_waiting_stamps() {
+    let mut tracker = UnreadTracker::default();
+    observe(&mut tracker, vec![row("a", AgentStatus::Idle)], None);
+    observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
+    assert!(tracker.is_unread("a"));
+}
+
+#[test]
+fn success_to_waiting_restamps_new_episode() {
+    let first = Timestamp::from_second(1_700_000_100).unwrap();
+    let second = Timestamp::from_second(1_700_000_200).unwrap();
+    let mut tracker = UnreadTracker::default();
+    observe(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Running, fixed_now())],
+        None,
+    );
+    observe(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Success, first)],
+        None,
+    );
+    observe_with_marks(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Waiting, second)],
+        None,
+        &ReadMarks::from_entries([("a".to_owned(), first.as_millisecond())]),
+    );
+    assert!(
+        tracker.is_unread("a"),
+        "the newer waiting episode survives the older success receipt"
+    );
+}
+
+#[test]
+fn paused_to_waiting_restamps() {
+    let mut tracker = UnreadTracker::default();
+    observe(&mut tracker, vec![row("a", AgentStatus::Paused)], None);
+    observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
+    assert!(tracker.is_unread("a"));
+}
+
+#[test]
+fn same_status_frame_keeps_episode_stamp() {
+    let first = Timestamp::from_second(1_700_000_100).unwrap();
+    let second = Timestamp::from_second(1_700_000_200).unwrap();
+    let mut tracker = UnreadTracker::default();
+    observe(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Running, fixed_now())],
+        None,
+    );
+    observe(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Waiting, first)],
+        None,
+    );
+    observe_with_marks(
+        &mut tracker,
+        vec![row_at("a", AgentStatus::Waiting, second)],
+        None,
+        &ReadMarks::from_entries([("a".to_owned(), first.as_millisecond())]),
+    );
+    assert!(
+        !tracker.is_unread("a"),
+        "same-status frames do not restamp an existing episode"
+    );
+}
+
+#[test]
+fn fresh_tracker_baselines_attention_rows_without_stamping() {
     for status in [
         AgentStatus::Success,
         AgentStatus::Failed,
@@ -84,27 +170,47 @@ fn unread_transitions_only_start_from_working_states() {
         AgentStatus::Paused,
     ] {
         let mut tracker = UnreadTracker::default();
-        observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
         observe(&mut tracker, vec![row("a", status)], None);
-        assert!(tracker.is_unread("a"), "{status:?}");
+        assert!(!tracker.is_unread("a"), "{status:?}");
     }
+}
 
+#[test]
+fn first_seen_attention_after_seed_stamps_unread() {
     let mut tracker = UnreadTracker::default();
-    observe(&mut tracker, vec![row("a", AgentStatus::Idle)], None);
-    observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
-    assert!(!tracker.is_unread("a"));
+    observe(&mut tracker, vec![row("seed", AgentStatus::Idle)], None);
+    observe(
+        &mut tracker,
+        vec![
+            row("seed", AgentStatus::Idle),
+            row("ask", AgentStatus::Waiting),
+        ],
+        None,
+    );
+    assert!(tracker.is_unread("ask"));
+}
 
+#[test]
+fn first_seen_attention_after_empty_seed_stamps_unread() {
     let mut tracker = UnreadTracker::default();
-    observe(&mut tracker, vec![row("a", AgentStatus::Paused)], None);
-    observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
-    assert!(!tracker.is_unread("a"));
+    observe(&mut tracker, Vec::new(), None);
+    observe(&mut tracker, vec![row("ask", AgentStatus::Waiting)], None);
+    assert!(tracker.is_unread("ask"));
+}
 
+#[test]
+fn first_seen_calm_after_seed_stays_read() {
     let mut tracker = UnreadTracker::default();
-    observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
-    observe(&mut tracker, vec![row("a", AgentStatus::Paused)], None);
-    assert!(tracker.is_unread("a"));
-    observe(&mut tracker, vec![row("a", AgentStatus::Waiting)], None);
-    assert!(tracker.is_unread("a"));
+    observe(&mut tracker, vec![row("seed", AgentStatus::Idle)], None);
+    observe(
+        &mut tracker,
+        vec![
+            row("seed", AgentStatus::Idle),
+            row("new", AgentStatus::Idle),
+        ],
+        None,
+    );
+    assert!(!tracker.is_unread("new"));
 }
 
 #[test]

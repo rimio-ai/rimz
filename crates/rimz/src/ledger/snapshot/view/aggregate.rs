@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::feed::AgentState;
+use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentState, AgentStatus};
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -40,6 +40,7 @@ pub(super) fn build_worktree_groups_from_rows(
     // Project the displayed status now that each row knows its subagents and
     // the full agent set is in hand.
     status::project_display_status(&mut rows, agents, now, stalled_after_secs);
+    stamp_inactive(&mut rows, now);
 
     let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for row in &rows {
@@ -111,4 +112,11 @@ pub(super) fn build_worktree_groups_from_rows(
         .collect::<Vec<_>>();
     groups.sort_by(compare_groups);
     groups
+}
+
+fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp) {
+    for row in rows {
+        row.inactive = matches!(row.status(), Some(AgentStatus::Success | AgentStatus::Idle))
+            && now.duration_since(row.last_activity).as_secs() > ATTENTION_AGE_CEILING_SECS;
+    }
 }

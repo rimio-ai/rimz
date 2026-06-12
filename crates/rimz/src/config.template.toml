@@ -55,6 +55,7 @@
 # suppress_focused = true
 # debounce_ms = 5000
 # coalesce_ms = 1000
+# remind_secs = 60                   # seconds between local unread reminders; 0 disables reminders
 ## command = "ntfy publish rimz"       # optional shell command; receives RIMZ_NOTIFY_* environment variables
 
 [sidebar]

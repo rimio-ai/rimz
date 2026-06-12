@@ -7,8 +7,8 @@ use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 
 use crate::sidebar_pane::render::{
-    Browse, DashboardTab, ManualScroll, UiState, active_provider_kind, dashboard_tabbed,
-    row_passes_filter, selected_agent_kind, status_total,
+    BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_provider_kind,
+    dashboard_tabbed, row_passes_filter, selected_agent_kind, status_total, unread_total,
 };
 
 use super::input::{FilterAction, KeyAction};
@@ -191,7 +191,7 @@ pub(super) fn handle_mouse_click(
     // The cockpit's make-up buckets are the top block's only hit targets — a
     // click on one toggles the body's status filter in place, never a jump.
     if let Some(status) = make_up_status_at(ui, column, row) {
-        return if toggle_make_up_filter(ui, snapshot, status) {
+        return if toggle_make_up_filter(ui, snapshot, BodyFilter::Status(status)) {
             InputOutcome::redraw()
         } else {
             InputOutcome::default()
@@ -265,7 +265,10 @@ fn apply_make_up_filter(
 ) -> InputOutcome {
     let changed = match action {
         FilterAction::All => set_make_up_filter(ui, snapshot, None),
-        FilterAction::Status(status) => toggle_make_up_filter(ui, snapshot, status),
+        FilterAction::Status(status) => {
+            toggle_make_up_filter(ui, snapshot, BodyFilter::Status(status))
+        }
+        FilterAction::Unread => toggle_make_up_filter(ui, snapshot, BodyFilter::Unread),
     };
     if changed {
         InputOutcome::redraw()
@@ -274,15 +277,11 @@ fn apply_make_up_filter(
     }
 }
 
-fn toggle_make_up_filter(
-    ui: &mut UiState,
-    snapshot: &SidebarSnapshot,
-    status: AgentStatus,
-) -> bool {
-    let target = if ui.make_up_filter == Some(status) {
+fn toggle_make_up_filter(ui: &mut UiState, snapshot: &SidebarSnapshot, filter: BodyFilter) -> bool {
+    let target = if ui.make_up_filter == Some(filter) {
         None
-    } else if status_total(&snapshot.worktree_groups, status) > 0 {
-        Some(status)
+    } else if filter_total(snapshot, filter) > 0 {
+        Some(filter)
     } else {
         return false;
     };
@@ -292,7 +291,7 @@ fn toggle_make_up_filter(
 fn set_make_up_filter(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
 ) -> bool {
     if ui.make_up_filter == filter {
         return false;
@@ -354,7 +353,7 @@ impl VisibleGroupRange {
 
 fn visible_group_ranges(
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
 ) -> Vec<VisibleGroupRange> {
     let mut start = 0;
     let mut ranges = Vec::new();
@@ -387,7 +386,7 @@ fn select_row(ui: &mut UiState, snapshot: &SidebarSnapshot, index: usize) {
 /// out-of-range index.
 fn pane_at_row(
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
     index: usize,
 ) -> Option<PaneId> {
     visible_rows(snapshot, filter)
@@ -460,8 +459,8 @@ pub(super) fn reconcile_selection(
     //    full-fleet `status_counts` sum — exactly the figure the make-up line
     //    displays — so the filter clears in the same fold its bucket reads 0,
     //    and a click-then-fold race self-heals here.
-    if let Some(status) = ui.make_up_filter
-        && status_total(&snapshot.worktree_groups, status) == 0
+    if let Some(filter) = ui.make_up_filter
+        && filter_total(snapshot, filter) == 0
     {
         ui.make_up_filter = None;
     }
@@ -556,7 +555,7 @@ fn anchor_selection(ui: &mut UiState, snapshot: &SidebarSnapshot) {
 /// the rendered body (the highlight's).
 pub(super) fn row_index_of_pane(
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
     pane_id: &PaneId,
 ) -> Option<usize> {
     visible_rows(snapshot, filter).position(|row| {
@@ -578,7 +577,7 @@ fn row_index_at_screen_position(ui: &UiState, row: u16) -> Option<usize> {
     ui.line_map.get(usize::from(row)).copied().flatten()
 }
 
-fn visible_row_count(snapshot: &SidebarSnapshot, filter: Option<AgentStatus>) -> usize {
+fn visible_row_count(snapshot: &SidebarSnapshot, filter: Option<BodyFilter>) -> usize {
     visible_rows(snapshot, filter).count()
 }
 
@@ -587,7 +586,7 @@ fn visible_row_count(snapshot: &SidebarSnapshot, filter: Option<AgentStatus>) ->
 /// exactly the `line_map` ordinals the renderer builds.
 fn visible_rows(
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
 ) -> impl Iterator<Item = &crate::SidebarRow> {
     snapshot
         .worktree_groups
@@ -598,21 +597,42 @@ fn visible_rows(
 
 fn next_attention_index(
     snapshot: &SidebarSnapshot,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
     selected: usize,
 ) -> Option<usize> {
     let rows = visible_rows(snapshot, filter).collect::<Vec<_>>();
-    if rows.is_empty() {
+    let mut unread: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.unread && row.status().is_some_and(AgentStatus::needs_a_look))
+        .collect();
+    unread.sort_by_key(|(_, row)| row.last_activity);
+    let mut actionable: Vec<_> = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| !row.unread && row.status().is_some_and(AgentStatus::is_actionable))
+        .collect();
+    actionable.sort_by_key(|(_, row)| row.last_activity);
+    let candidates: Vec<usize> = unread
+        .into_iter()
+        .chain(actionable)
+        .map(|(index, _)| index)
+        .collect();
+    if candidates.is_empty() {
         return None;
     }
-    let start = selected.saturating_add(1);
-    (0..rows.len()).find_map(|offset| {
-        let index = (start + offset) % rows.len();
-        rows[index]
-            .status()
-            .is_some_and(AgentStatus::is_actionable)
-            .then_some(index)
-    })
+    candidates
+        .iter()
+        .position(|index| *index == selected)
+        .map(|position| candidates[(position + 1) % candidates.len()])
+        .or_else(|| candidates.first().copied())
+}
+
+fn filter_total(snapshot: &SidebarSnapshot, filter: BodyFilter) -> usize {
+    match filter {
+        BodyFilter::Status(status) => status_total(&snapshot.worktree_groups, status),
+        BodyFilter::Unread => unread_total(&snapshot.worktree_groups),
+    }
 }
 
 #[cfg(test)]

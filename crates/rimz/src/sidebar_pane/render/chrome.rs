@@ -270,9 +270,9 @@ pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
         Line::styled("move     j/k rows   J/K worktrees", faint),
         Line::styled("focus    l or ↵     1-9 direct", faint),
         Line::styled("accounts ←/→ tabs", faint),
-        Line::styled("filter   q waiting   !/e attention", faint),
-        Line::styled("         p paused   d done", faint),
-        Line::styled("         w working  o idle   a all", faint),
+        Line::styled("filter   u unread   q waiting   !/e attention", faint),
+        Line::styled("         p paused   d done      w working", faint),
+        Line::styled("         o idle     a all", faint),
         Line::styled("system   r reload   x dismiss", faint),
         Line::styled("help     ? close", faint),
         Line::styled(

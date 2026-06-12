@@ -24,6 +24,11 @@ pub struct SidebarRow {
     /// native sidebar stamps it in memory before painting.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unread: bool,
+    /// Producer-stamped staleness: a calm `success` or `idle` row whose latest
+    /// activity has aged past the attention heat ceiling. Renderer-local
+    /// unread still outranks this sink.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inactive: bool,
     pub last_activity: Timestamp,
     #[serde(flatten)]
     pub card: RowCard,

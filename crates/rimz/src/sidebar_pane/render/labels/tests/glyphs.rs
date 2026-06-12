@@ -324,6 +324,18 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     assert_eq!(
         agent_lead_style(
             &plain,
+            AgentStatus::Waiting,
+            TurnPhase::Idle,
+            5 * 60,
+            0,
+            true,
+        )
+        .add_modifier,
+        Modifier::DIM
+    );
+    assert_eq!(
+        agent_lead_style(
+            &plain,
             AgentStatus::Success,
             TurnPhase::Idle,
             5 * 60,
@@ -345,6 +357,30 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         .add_modifier,
         Modifier::BOLD
     );
+}
+
+#[test]
+fn unread_paused_is_bold_and_static() {
+    let theme = truecolor_theme();
+    let first = agent_lead_style(
+        &theme,
+        AgentStatus::Paused,
+        TurnPhase::Idle,
+        5 * 60,
+        0,
+        true,
+    );
+    let later = agent_lead_style(
+        &theme,
+        AgentStatus::Paused,
+        TurnPhase::Idle,
+        5 * 60,
+        12,
+        true,
+    );
+
+    assert_eq!(first, later);
+    assert!(first.add_modifier.contains(Modifier::BOLD));
 }
 
 #[test]
@@ -522,8 +558,8 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
     assert_eq!(agent_style_at(&theme, AgentStatus::Idle, 0).fg, None);
     assert_eq!(
         agent_lead_style(&theme, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
-        Style::default(),
-        "unread idle stays still without adding a color"
+        Style::default().add_modifier(Modifier::BOLD),
+        "unread idle stays still without adding a color and keeps the unread weight"
     );
 
     let mut sidebar = crate::config::SidebarConfig::default();
@@ -539,7 +575,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
     );
     assert_eq!(
         agent_lead_style(&custom, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
-        custom.style(Color::Green, Modifier::empty()),
-        "configured idle color stays still on unread idle"
+        custom.style(Color::Green, Modifier::BOLD),
+        "configured idle color stays still on unread idle and keeps the unread weight"
     );
 }

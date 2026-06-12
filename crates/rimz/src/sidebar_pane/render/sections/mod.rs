@@ -26,7 +26,7 @@ mod provider;
 mod worktree;
 
 pub(super) use cockpit::{cockpit_spend_line, cockpit_summary_line};
-pub(crate) use fleet::{MakeUpHit, status_total};
+pub(crate) use fleet::{MakeUpHit, status_total, unread_total};
 pub(super) use fleet::{fleet_header_lines, fleet_size};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;

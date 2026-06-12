@@ -305,6 +305,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "notifications.suppress_focused",
         "notifications.debounce_ms",
         "notifications.coalesce_ms",
+        "notifications.remind_secs",
         "notifications.command",
         "sidebar.refresh_ms",
         "sidebar.max_provider_blocks",

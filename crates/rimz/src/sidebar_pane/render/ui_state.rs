@@ -92,7 +92,7 @@ pub struct UiState {
     /// predicate. A pure toggle: a click on the active bucket clears it, and
     /// it auto-clears when its bucket's count drops to zero — the make-up
     /// twin of a dashboard tab pick ending when its panel leaves.
-    pub(crate) make_up_filter: Option<AgentStatus>,
+    pub(crate) make_up_filter: Option<BodyFilter>,
     /// Hit-test map of the cockpit make-up line in the most recently drawn
     /// frame: the absolute screen line and column range of each non-zero
     /// bucket's footprint, written as a byproduct of every draw like
@@ -176,4 +176,10 @@ pub enum AnimationCadence {
     None,
     Breath,
     Fast,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum BodyFilter {
+    Status(AgentStatus),
+    Unread,
 }

@@ -8,7 +8,7 @@ pub(super) fn emit_terminal_notification(
     title: &str,
     body: &str,
     panes: &[PaneId],
-) -> io::Result<()> {
+) -> io::Result<bool> {
     let mut bytes = Vec::new();
     if desktop_notification_targets_renderer(config.mux, snapshot, panes) {
         bytes.extend(osc::desktop_notification_bytes(
@@ -22,11 +22,12 @@ pub(super) fn emit_terminal_notification(
         bytes.extend(osc::sound_notification_bytes(prefs.sound));
     }
     if bytes.is_empty() {
-        return Ok(());
+        return Ok(false);
     }
     let backend = terminal.backend_mut();
     backend.write_all(&bytes)?;
-    backend.flush()
+    backend.flush()?;
+    Ok(true)
 }
 
 pub(super) fn desktop_notification_targets_renderer(

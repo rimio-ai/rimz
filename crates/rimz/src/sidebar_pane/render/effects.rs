@@ -31,8 +31,8 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tachyonfx::{CellFilter, Effect, Interpolation, fx};
 
-use super::row_passes_filter;
 use super::theme::Theme;
+use super::{BodyFilter, row_passes_filter};
 
 /// Cap on the elapsed time fed into a one-shot per painted frame. A calm room
 /// paints rarely, so a raw phase delta can span seconds; clamping means a
@@ -141,7 +141,7 @@ impl EffectState {
         &mut self,
         snapshot: &SidebarSnapshot,
         theme: &Theme,
-        filter: Option<AgentStatus>,
+        filter: Option<BodyFilter>,
         line_map: &[Option<usize>],
         selected_pane: Option<&PaneId>,
         phase: u64,
@@ -375,6 +375,7 @@ mod tests {
             worktree_path: Some("/repo/main".to_owned()),
             worktree_branch: Some("main".to_owned()),
             unread: false,
+            inactive: false,
             last_activity: Timestamp::now(),
             card: RowCard::Agent(Box::new(AgentCard {
                 status: Some(status),

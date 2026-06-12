@@ -1,4 +1,7 @@
 use super::*;
+use crate::SidebarWorktreeGroup;
+use crate::feed::ATTENTION_AGE_CEILING_SECS;
+use crate::ids::{MuxName, PaneId};
 
 #[test]
 fn bucket_order_puts_attention_first_and_idle_last() {
@@ -146,7 +149,7 @@ fn attention_bucket_sorts_longest_overdue_first() {
 }
 
 #[test]
-fn unread_breaks_ties_but_not_status_buckets() {
+fn unread_rows_lead_read_attention() {
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
@@ -156,7 +159,11 @@ fn unread_breaks_ties_but_not_status_buckets() {
     );
     row_mut(&mut snapshot, "new-done").unread = true;
     snapshot.sort_groups_for_presentation();
-    assert_eq!(group_labels(&snapshot), vec!["a", "b"]);
+    assert_eq!(
+        group_labels(&snapshot),
+        vec!["b", "a"],
+        "unread result rows form the top inbox tier, above read attention"
+    );
 
     let mut snapshot = room_with_agent_panes(
         Vec::new(),
@@ -186,6 +193,135 @@ fn unread_breaks_ties_but_not_status_buckets() {
     assert_eq!(order, vec!["new-wait", "read-old"]);
 }
 
+#[test]
+fn stale_attention_rows_do_not_enter_the_inactive_sink() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            agent_in("old-done", "/repo/main", AgentStatus::Success, 2_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        ],
+    );
+
+    let wait = row(&snapshot, "old-wait");
+    let done = row(&snapshot, "old-done");
+    assert!(
+        !wait.inactive,
+        "read attention remains in the attention tier"
+    );
+    assert!(done.inactive, "calm success crosses into the inactive sink");
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(order, vec!["old-wait", "old-done"]);
+}
+
+#[test]
+fn inactive_success_sinks_below_process_rows() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        ],
+    );
+    snapshot.worktree_groups[0]
+        .rows
+        .push(process_row("zsh", "/repo/main"));
+    snapshot.sort_groups_for_presentation();
+
+    let order = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        order,
+        vec!["zsh", "old-done"],
+        "process rows sit above inactive calm agent rows"
+    );
+}
+
+#[test]
+fn inactive_idle_uses_the_hour_boundary_strictly() {
+    let snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS),
+            agent_in("old-idle", "/repo/main", AgentStatus::Idle, 2_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+        ],
+    );
+
+    assert!(!row(&snapshot, "fresh-idle").inactive);
+    assert!(row(&snapshot, "old-idle").inactive);
+}
+
+#[test]
+fn inactive_groups_sink_below_process_groups() {
+    let mut snapshot = room_with_agent_panes(
+        Vec::new(),
+        vec![
+            agent_in("old-done", "/repo/a", AgentStatus::Success, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            agent_in("fresh-idle", "/repo/c", AgentStatus::Idle, 2_000),
+        ],
+    );
+    snapshot.worktree_groups.push(SidebarWorktreeGroup {
+        key: "/repo/b".to_owned(),
+        label: "b".to_owned(),
+        kind: SidebarWorktreeKind::Worktree,
+        status_counts: Vec::new(),
+        rows: vec![process_row("zsh", "/repo/b")],
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+    });
+    snapshot.sort_groups_for_presentation();
+
+    assert_eq!(
+        group_labels(&snapshot),
+        vec!["c", "b", "a"],
+        "fresh calm groups outrank process groups, and inactive calm groups sink below both"
+    );
+}
+
+#[test]
+fn cap_keeps_inactive_success_above_hidden_idle_tail() {
+    let mut agents = vec![
+        agent_in("old-done", "/repo/main", AgentStatus::Success, 1_000)
+            .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+    ];
+    agents.extend((0..10).map(|i| {
+        agent_in(
+            &format!("old-idle-{i}"),
+            "/repo/main",
+            AgentStatus::Idle,
+            2_000 + i,
+        )
+        .active_ago(ATTENTION_AGE_CEILING_SECS + 1)
+    }));
+    let snapshot = room_with_agent_panes(Vec::new(), agents);
+
+    assert!(
+        snapshot.worktree_groups[0]
+            .rows
+            .iter()
+            .any(|row| row.id == "old-done"),
+        "inactive success remains visible even when the inactive idle tail is capped"
+    );
+    assert!(snapshot.worktree_groups[0].hidden_count > 0);
+}
+
 fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRow {
     snapshot
         .worktree_groups
@@ -193,6 +329,20 @@ fn row_mut<'a>(snapshot: &'a mut SidebarSnapshot, id: &str) -> &'a mut SidebarRo
         .flat_map(|group| group.rows.iter_mut())
         .find(|row| row.id == id)
         .unwrap_or_else(|| panic!("row {id} present"))
+}
+
+fn process_row(id: &str, worktree: &str) -> SidebarRow {
+    SidebarRow {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        pane: Some(PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, id))),
+        worktree_path: Some(worktree.to_owned()),
+        worktree_branch: None,
+        unread: false,
+        inactive: false,
+        last_activity: epoch(),
+        card: crate::RowCard::Process(crate::ProcessCard::default()),
+    }
 }
 
 fn group_labels(snapshot: &SidebarSnapshot) -> Vec<String> {

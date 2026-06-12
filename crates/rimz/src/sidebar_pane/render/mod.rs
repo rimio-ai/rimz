@@ -35,7 +35,7 @@ pub(crate) use self::compose::compose_lines;
 #[cfg(test)]
 use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
-pub(crate) use self::ui_state::{Browse, DashboardTab, GateNotice, ManualScroll};
+pub(crate) use self::ui_state::{BodyFilter, Browse, DashboardTab, GateNotice, ManualScroll};
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
@@ -52,15 +52,17 @@ use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
-pub(crate) use self::sections::status_total;
 #[cfg(test)]
 pub(crate) use self::sections::{MakeUpHit, ProviderTabHit};
+pub(crate) use self::sections::{status_total, unread_total};
 use self::theme::Theme;
 
 #[cfg(test)]
 fn age_heat_amount_for_test(age_secs: i64) -> f32 {
-    debug_assert!(age_secs > 900);
-    ((age_secs - 900) as f32 / 2700.0).min(1.0)
+    let first_quarter = crate::feed::ATTENTION_AGE_CEILING_SECS / 4;
+    debug_assert!(age_secs > first_quarter);
+    let heat_span = crate::feed::ATTENTION_AGE_CEILING_SECS - first_quarter;
+    ((age_secs - first_quarter) as f32 / heat_span as f32).min(1.0)
 }
 
 pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
@@ -97,11 +99,13 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // `?`/`!` keep pulsing until resolved. Unread success rows pulse
-            // until the pane is focused; unread idle/running rows stay with
-            // their own still/travel vocabulary.
-            if let Some(status) = row.status()
-                && (status.is_actionable() || (row.unread && status == AgentStatus::Success))
+            // Read `?`/`!` rows honour configured static effects. Any unread
+            // row keeps the breath grid alive for the cockpit unread count,
+            // even when the row's own glyph is held still.
+            if row.unread {
+                breath = true;
+            } else if let Some(status) = row.status()
+                && status.is_actionable()
             {
                 breath |= status_needs_motion(&snapshot.sidebar.animations, status);
             }
@@ -186,8 +190,12 @@ pub fn draw_with_ui(
 /// ordinals in `line_map` can never drift from the indices selection counts.
 /// With no filter every row passes; with a bucket active only agent rows of
 /// that status pass, so process rows (status `None`) drop out entirely.
-pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<AgentStatus>) -> bool {
-    filter.is_none_or(|status| row.status() == Some(status))
+pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) -> bool {
+    match filter {
+        None => true,
+        Some(BodyFilter::Status(status)) => row.status() == Some(status),
+        Some(BodyFilter::Unread) => row.unread,
+    }
 }
 
 /// The provider kind the dashboard's tab focus derives from the selection: the

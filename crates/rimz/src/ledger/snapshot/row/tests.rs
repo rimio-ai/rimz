@@ -14,6 +14,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         unread: false,
+        inactive: false,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(AgentStatus::Running),
@@ -37,6 +38,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: None,
         unread: false,
+        inactive: false,
         last_activity: row_time(),
         card: RowCard::Process(ProcessCard {
             state: ProcessState::Stuck,
@@ -67,6 +69,7 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
         worktree_path: Some("/repo/main".to_owned()),
         worktree_branch: Some("main".to_owned()),
         unread: true,
+        inactive: false,
         last_activity: row_time(),
         card: RowCard::Agent(Box::new(AgentCard {
             status: Some(AgentStatus::Success),

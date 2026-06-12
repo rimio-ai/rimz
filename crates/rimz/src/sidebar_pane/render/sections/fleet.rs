@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
+use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
     age_heat_color, attention_floor_color, status_chip_color, status_glyph, status_rest_style,
@@ -63,10 +64,14 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     now: Timestamp,
-    filter: Option<AgentStatus>,
+    filter: Option<BodyFilter>,
     _animation_phase: u64,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
+    let status_filter = match filter {
+        Some(BodyFilter::Status(status)) => Some(status),
+        Some(BodyFilter::Unread) | None => None,
+    };
     let working = status_total(groups, AgentStatus::Running);
     let waiting = status_total(groups, AgentStatus::Waiting);
     let failed = status_total(groups, AgentStatus::Failed);
@@ -87,7 +92,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     // continuous heat over a yellow floor), parked `paused` `⏸`, then success. The right
     // cluster is the live-capacity tail: working, then idle. Every bucket shows
     // its count.
-    let mut left = Cluster::new(theme, filter);
+    let mut left = Cluster::new(theme, status_filter);
     left.push_count(
         AgentStatus::Waiting,
         status_chip_color(theme, AgentStatus::Waiting),
@@ -118,7 +123,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         success,
         status_rest_style(theme, AgentStatus::Success),
     );
-    let mut right = Cluster::new(theme, filter);
+    let mut right = Cluster::new(theme, status_filter);
     right.push_count(
         AgentStatus::Running,
         status_chip_color(theme, AgentStatus::Running),
@@ -320,4 +325,12 @@ pub(crate) fn status_total(groups: &[SidebarWorktreeGroup], status: AgentStatus)
         .filter(|count| count.status == status)
         .map(|count| count.count)
         .sum()
+}
+
+pub(crate) fn unread_total(groups: &[SidebarWorktreeGroup]) -> usize {
+    groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.unread)
+        .count()
 }

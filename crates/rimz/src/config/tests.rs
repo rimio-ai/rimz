@@ -146,6 +146,7 @@ fn notification_defaults_cover_attention_transitions() {
     assert!(config.notifications.suppress_focused);
     assert_eq!(config.notifications.debounce_ms, 5_000);
     assert_eq!(config.notifications.coalesce_ms, 1_000);
+    assert_eq!(config.notifications.remind_secs, 60);
     assert!(config.notifications.command().is_none());
 }
 
@@ -162,6 +163,7 @@ fn notifications_parse_per_machine_preferences() {
              suppress_focused = false\n\
              debounce_ms = 2500\n\
              coalesce_ms = 0\n\
+             remind_secs = 15\n\
              command = \"ntfy publish rimz\"\n",
     ))
     .expect("load");
@@ -175,6 +177,7 @@ fn notifications_parse_per_machine_preferences() {
     assert!(!config.notifications.suppress_focused);
     assert_eq!(config.notifications.debounce_ms, 2_500);
     assert_eq!(config.notifications.coalesce_ms, 0);
+    assert_eq!(config.notifications.remind_secs, 15);
     assert_eq!(config.notifications.command(), Some("ntfy publish rimz"));
 }
 

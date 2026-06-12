@@ -368,10 +368,16 @@ impl Theme {
         let Some(rgb) = color_to_rgb(resolved) else {
             return Style::default();
         };
-        Style::default().fg(rgb_color(
-            scheme::lift_lightness(rgb, sample.lightness_delta()),
-            self.depth,
-        ))
+        let lifted = scheme::lift_lightness(rgb, sample.lightness_delta());
+        let color = rgb_color(lifted, self.depth);
+        let mut style = Style::default().fg(color);
+        if self.depth == ColorDepth::Indexed
+            && sample.lightness_delta() != 0.0
+            && color == rgb_color(rgb, self.depth)
+        {
+            style = style.add_modifier(sample.modifier());
+        }
+        style
     }
 
     pub(crate) fn chip(&self, fg: Color, bg: Color, modifier: Modifier) -> Style {
@@ -656,6 +662,22 @@ mod tests {
         assert_eq!(
             plain.breathe(Color::Yellow, peak).add_modifier,
             Modifier::BOLD
+        );
+    }
+
+    #[test]
+    fn indexed_breathe_uses_modifier_when_quantization_hides_the_color_step() {
+        let indexed = Theme::fixed(false);
+        let trough = BreathSample::new(
+            0,
+            24.0,
+            crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
+        );
+        let style = indexed.breathe(Color::Indexed(16), trough);
+        assert_eq!(style.fg, Some(Color::Indexed(16)));
+        assert!(
+            style.add_modifier.contains(Modifier::DIM),
+            "the fallback modifier keeps a visible step when indexed color cannot move"
         );
     }
 

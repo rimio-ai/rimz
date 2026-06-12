@@ -57,6 +57,7 @@ pub(super) enum KeyAction {
 pub(super) enum FilterAction {
     All,
     Status(AgentStatus),
+    Unread,
 }
 
 /// The control word the background fetch worker sends to the loop's wakeup
@@ -78,6 +79,7 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Char(' ') => "key:space",
         KeyCode::Char('?') => "key:help",
         KeyCode::Char('a') => "key:filter:all",
+        KeyCode::Char('u') => "key:filter:unread",
         KeyCode::Char('q') => "key:filter:waiting",
         KeyCode::Char('!') => "key:filter:failed",
         KeyCode::Char('e') => "key:filter:failed",
@@ -141,6 +143,7 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:space" => Wakeup::Key(KeyAction::Space),
         "key:help" => Wakeup::Key(KeyAction::Help),
         "key:filter:all" => Wakeup::Key(KeyAction::Filter(FilterAction::All)),
+        "key:filter:unread" => Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
         "key:filter:waiting" => Wakeup::Key(KeyAction::Filter(FilterAction::Status(
             AgentStatus::Waiting,
         ))),
@@ -327,6 +330,7 @@ mod tests {
     fn filter_keys_round_trip() {
         let cases = [
             (KeyCode::Char('a'), KeyAction::Filter(FilterAction::All)),
+            (KeyCode::Char('u'), KeyAction::Filter(FilterAction::Unread)),
             (
                 KeyCode::Char('q'),
                 KeyAction::Filter(FilterAction::Status(AgentStatus::Waiting)),

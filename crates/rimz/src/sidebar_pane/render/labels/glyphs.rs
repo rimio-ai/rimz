@@ -251,7 +251,7 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
     unread: bool,
 ) -> Style {
     let role = agent_role(status, phase);
-    if status.is_actionable() {
+    let style = if status.is_actionable() {
         let animation = theme.animations.status(status);
         let color =
             age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
@@ -277,6 +277,12 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
         }
     } else {
         role_style(theme, role, animation_phase)
+    };
+    let uses_unread_pulse = status.is_actionable() || status == AgentStatus::Success;
+    if unread && !uses_unread_pulse {
+        style.add_modifier(Modifier::BOLD)
+    } else {
+        style
     }
 }
 

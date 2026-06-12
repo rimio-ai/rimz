@@ -11,10 +11,10 @@ use std::io;
 use std::process::{Command, Stdio};
 
 use crate::config::NotificationsPrefs;
-use crate::feed::{AgentState, AgentStatus};
+use crate::feed::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::remote::link::LinkTier;
-use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
+use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarRow, SidebarSnapshot, child_process};
 
 const LINK_DEGRADED_HOLD_MS: u64 = 10_000;
 const LINK_RECOVERY_HOLD_MS: u64 = 30_000;
@@ -25,6 +25,7 @@ pub struct Notification {
     pub notification_kind: NotificationKind,
     pub title: String,
     pub body: String,
+    pub unread_count: Option<usize>,
 }
 
 impl Notification {
@@ -60,6 +61,7 @@ pub enum NotificationKind {
     LinkRestored,
     LinkDegraded,
     LinkRecovered,
+    Reminder,
 }
 
 impl NotificationKind {
@@ -74,6 +76,7 @@ impl NotificationKind {
             Self::LinkRestored => "link_restored",
             Self::LinkDegraded => "link_degraded",
             Self::LinkRecovered => "link_recovered",
+            Self::Reminder => "reminder",
         }
     }
 }
@@ -311,11 +314,38 @@ struct AgentKey {
 }
 
 impl AgentKey {
-    fn from_agent(agent: &AgentState) -> Self {
-        Self {
-            kind: agent.kind.clone(),
-            agent_id: agent.agent_id.clone(),
-        }
+    fn new(kind: AgentKind, agent_id: AgentSessionId) -> Self {
+        Self { kind, agent_id }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NotificationRow {
+    key: AgentKey,
+    status: AgentStatus,
+    agent: NotificationAgent,
+    label: String,
+    focused: bool,
+}
+
+impl NotificationRow {
+    fn from_row(row: &SidebarRow) -> Option<Self> {
+        let status = row.status()?;
+        let kind = AgentKind::new_unchecked(row.name.clone());
+        let agent_id = AgentSessionId::from(row.id.clone());
+        let label = row_label(row);
+        Some(Self {
+            key: AgentKey::new(kind.clone(), agent_id.clone()),
+            status,
+            agent: NotificationAgent {
+                kind,
+                agent_id,
+                label: label.clone(),
+                pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+            },
+            label,
+            focused: row.pane.as_ref().is_some_and(|pane| pane.is_focused),
+        })
     }
 }
 
@@ -344,10 +374,10 @@ impl NotificationState {
         prefs: &NotificationsPrefs,
         now_ms: u64,
     ) -> Vec<Notification> {
-        let agents = root_agents(snapshot).collect::<Vec<_>>();
-        let current_statuses = agents
+        let rows = notification_rows(snapshot);
+        let current_statuses = rows
             .iter()
-            .map(|agent| (AgentKey::from_agent(agent), agent.status))
+            .map(|row| (row.key.clone(), row.status))
             .collect::<BTreeMap<_, _>>();
 
         self.last_notified_at_ms
@@ -370,9 +400,9 @@ impl NotificationState {
         }
 
         let pending_was_empty = self.pending.is_empty();
-        for agent in agents {
-            let key = AgentKey::from_agent(agent);
-            let status = agent.status;
+        for row in &rows {
+            let key = row.key.clone();
+            let status = row.status;
             if self.statuses.get(&key).copied() == Some(status) {
                 continue;
             }
@@ -382,7 +412,7 @@ impl NotificationState {
             let Some(notification_kind) = AgentNotificationKind::from_status(status) else {
                 continue;
             };
-            if prefs.suppress_focused && agent.pane.as_ref().is_some_and(|pane| pane.is_focused) {
+            if prefs.suppress_focused && row.focused {
                 continue;
             }
             if self
@@ -396,7 +426,7 @@ impl NotificationState {
                 continue;
             }
             self.pending
-                .push(pending_notification(agent, notification_kind));
+                .push(pending_notification(row, notification_kind));
         }
 
         if pending_was_empty && !self.pending.is_empty() {
@@ -445,6 +475,7 @@ impl NotificationState {
                 notification_kind: item.notification_kind.into(),
                 title: item.title,
                 body: item.body,
+                unread_count: None,
             }
         } else {
             coalesced_notification(pending)
@@ -462,21 +493,26 @@ pub fn spawn_notify_command(command: &str, notification: &Notification) -> io::R
         .env("RIMZ_NOTIFY_BODY", &notification.body)
         .env("RIMZ_NOTIFY_AGENT", notification.agent_env())
         .env("RIMZ_NOTIFY_KIND", notification.kind_env());
+    if let Some(unread_count) = notification.unread_count {
+        cmd.env("RIMZ_NOTIFY_UNREAD", unread_count.to_string());
+    }
     child_process::spawn_detached_reaped(&mut cmd, "notify-command")
 }
 
-fn root_agents(snapshot: &SidebarSnapshot) -> impl Iterator<Item = &AgentState> {
+fn notification_rows(snapshot: &SidebarSnapshot) -> Vec<NotificationRow> {
     snapshot
-        .agents
+        .worktree_groups
         .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
+        .flat_map(|group| &group.rows)
+        .filter_map(NotificationRow::from_row)
+        .collect()
 }
 
 fn pending_notification(
-    agent: &AgentState,
+    row: &NotificationRow,
     notification_kind: AgentNotificationKind,
 ) -> PendingNotification {
-    let label = agent_label(agent);
+    let label = row.label.clone();
     let title = match notification_kind {
         AgentNotificationKind::Waiting => format!("Rimz: {label} needs you"),
         AgentNotificationKind::Failed => format!("Rimz: {label} failed"),
@@ -490,14 +526,9 @@ fn pending_notification(
         AgentNotificationKind::Success => format!("{label} completed successfully."),
     };
     PendingNotification {
-        key: AgentKey::from_agent(agent),
+        key: row.key.clone(),
         notification_kind,
-        agent: NotificationAgent {
-            kind: agent.kind.clone(),
-            agent_id: agent.agent_id.clone(),
-            label,
-            pane_id: agent.pane.as_ref().map(|pane| pane.pane_id.clone()),
-        },
+        agent: row.agent.clone(),
         title,
         body,
     }
@@ -519,6 +550,7 @@ fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {
         notification_kind: NotificationKind::Coalesced,
         title: format!("Rimz: {count} agents need attention"),
         body,
+        unread_count: None,
     }
 }
 
@@ -528,6 +560,7 @@ fn link_degraded_notification(link: &SidebarLinkHealth) -> Notification {
         notification_kind: NotificationKind::LinkDegraded,
         title: "Rimz: remote link degraded".to_owned(),
         body: link_notification_body(link),
+        unread_count: None,
     }
 }
 
@@ -537,6 +570,7 @@ fn link_recovered_notification(link: &SidebarLinkHealth) -> Notification {
         notification_kind: NotificationKind::LinkRecovered,
         title: "Rimz: remote link recovered".to_owned(),
         body: link_notification_body(link),
+        unread_count: None,
     }
 }
 
@@ -548,14 +582,12 @@ fn link_notification_body(link: &SidebarLinkHealth) -> String {
     format!("{rtt}, {}% loss.", link.miss_pct)
 }
 
-fn agent_label(agent: &AgentState) -> String {
-    agent
-        .task
-        .as_deref()
-        .or(agent.prompt.as_deref())
+fn row_label(row: &SidebarRow) -> String {
+    row.task()
+        .or_else(|| row.as_agent().and_then(|agent| agent.prompt.as_deref()))
         .filter(|value| !value.trim().is_empty())
         .map(trim_label)
-        .unwrap_or_else(|| format!("{} {}", agent.kind, short_agent_id(&agent.agent_id)))
+        .unwrap_or_else(|| format!("{} {}", row.name, short_id(&row.id)))
 }
 
 fn trim_label(value: &str) -> String {
@@ -572,8 +604,7 @@ fn trim_label(value: &str) -> String {
     out
 }
 
-fn short_agent_id(id: &AgentSessionId) -> &str {
-    let raw = id.as_str();
+fn short_id(raw: &str) -> &str {
     raw.get(..8).unwrap_or(raw)
 }
 

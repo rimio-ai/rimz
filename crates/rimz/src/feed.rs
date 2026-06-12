@@ -13,6 +13,10 @@ use serde_json::Value;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
+/// One hour: the shared ceiling for attention heat, breath tempo, and stale
+/// calm-row sinking.
+pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
+
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -617,18 +621,24 @@ impl AgentStatus {
     /// and `Failed` are actionable; `Paused` is attention-class but parked. The
     /// producer's ranking buckets use the full set; the renderer's
     /// triage key and heat-breath use the actionable subset
-    /// ([`Self::is_actionable`]). The one authority behind both predicates —
-    /// every dispatch site delegates here rather than re-matching the enum.
+    /// ([`Self::is_actionable`]). Dispatch sites delegate to these predicates
+    /// rather than re-matching the enum.
     pub fn is_attention(self) -> bool {
         matches!(self, Self::Waiting | Self::Failed | Self::Paused)
     }
 
-    /// The actionable subset of [`Self::is_attention`] — a `?`/`!` the `␣`
-    /// triage key jumps to, the heat-breath escalates, and the per-worktree
-    /// cap never hides. Excludes the parked `Paused`, which wants the provider
-    /// or rate-limit window to recover.
+    /// The actionable subset of [`Self::is_attention`] — a read `?`/`!` the
+    /// `␣` triage key jumps to after unread rows, the heat-breath escalates,
+    /// and the per-worktree cap never hides. Excludes the parked `Paused`,
+    /// which wants the provider or rate-limit window to recover.
     pub fn is_actionable(self) -> bool {
         matches!(self, Self::Waiting | Self::Failed)
+    }
+
+    /// Rows that deserve one human look before returning to the read queue:
+    /// attention-class states plus a finished result.
+    pub fn needs_a_look(self) -> bool {
+        self.is_attention() || matches!(self, Self::Success)
     }
 }
 
@@ -1181,16 +1191,18 @@ mod tests {
         for status in [AgentStatus::Waiting, AgentStatus::Failed] {
             assert!(status.is_attention());
             assert!(status.is_actionable());
+            assert!(status.needs_a_look());
         }
         assert!(AgentStatus::Paused.is_attention());
         assert!(!AgentStatus::Paused.is_actionable());
-        for status in [
-            AgentStatus::Running,
-            AgentStatus::Idle,
-            AgentStatus::Success,
-        ] {
+        assert!(AgentStatus::Paused.needs_a_look());
+        assert!(!AgentStatus::Success.is_attention());
+        assert!(!AgentStatus::Success.is_actionable());
+        assert!(AgentStatus::Success.needs_a_look());
+        for status in [AgentStatus::Running, AgentStatus::Idle] {
             assert!(!status.is_attention());
             assert!(!status.is_actionable());
+            assert!(!status.needs_a_look());
         }
     }
 

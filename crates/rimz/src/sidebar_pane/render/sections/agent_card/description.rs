@@ -17,17 +17,24 @@ pub(super) fn description_line(
     row: &SidebarRow,
     tier: Tier,
     width: usize,
+    selected: bool,
     animation_phase: u64,
 ) -> Line<'static> {
     let body = if let Some(label) = agent(row).and_then(|agent| agent.turn_error_label.as_deref()) {
-        Span::styled(label.to_owned(), theme.soft())
+        let style = theme.soft().add_modifier(if row.unread {
+            Modifier::ITALIC | Modifier::BOLD
+        } else {
+            Modifier::ITALIC
+        });
+        Span::styled(label.to_owned(), style)
     } else {
         match descriptor(row) {
             Some(text) if row.unread => Span::styled(
                 text.to_owned(),
                 Style::default().add_modifier(Modifier::BOLD),
             ),
-            Some(text) => Span::raw(text.to_owned()),
+            Some(text) if selected => Span::raw(text.to_owned()),
+            Some(text) => Span::styled(text.to_owned(), theme.soft()),
             None if shows_loading_dots(row) => {
                 Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
             }

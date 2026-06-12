@@ -6,8 +6,11 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::TallyAnim;
+use crate::sidebar_pane::render::animation::{
+    BREATH_DEEP_AMPLITUDE, BreathSample, DEFAULT_BREATH_PERIOD,
+};
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
-use crate::sidebar_pane::render::labels::token_breakdown_spans;
+use crate::sidebar_pane::render::labels::{attention_floor_color, token_breakdown_spans};
 use crate::sidebar_pane::render::theme::Theme;
 
 use super::{SESSIONS_GLYPH, VALUE_FLASH, metric_spans, pin_right};
@@ -59,17 +62,27 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
+    unread_agents: usize,
     today_usd: f64,
     anim: &TallyAnim,
     phase: u64,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(
+    let mut left = metric_spans(
         theme,
         ACTIVE_AGENTS_GLYPH,
         theme.clay(),
         &live_agents.to_string(),
     );
+    if unread_agents > 0 {
+        left.push(Span::styled(
+            format!(" ({unread_agents})"),
+            theme.breathe(
+                attention_floor_color(theme, crate::feed::AgentStatus::Waiting),
+                BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE),
+            ),
+        ));
+    }
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {

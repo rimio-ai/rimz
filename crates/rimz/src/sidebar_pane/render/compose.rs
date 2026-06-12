@@ -8,7 +8,8 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, worktree_group_lines,
+    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, unread_total,
+    worktree_group_lines,
 };
 use super::theme::Theme;
 use super::{Alert, UiState, active_provider_kind, dashboard_tabbed, labels, row_passes_filter};
@@ -404,6 +405,7 @@ pub(super) fn top_lines(
     // each session's post-publish overshoot, so the headline moves with every
     // statusline push — and falls back to the tally on a pre-overlay snapshot.
     let live_agents = fleet_size(&snapshot.worktree_groups).0;
+    let unread_agents = unread_total(&snapshot.worktree_groups);
     let today_usd = snapshot
         .today_spend_live_usd
         .or(today.map(|window| window.usd))
@@ -411,6 +413,7 @@ pub(super) fn top_lines(
     header.push(cockpit_spend_line(
         theme,
         live_agents,
+        unread_agents,
         today_usd,
         &ui.tally,
         ui.animation_phase,
