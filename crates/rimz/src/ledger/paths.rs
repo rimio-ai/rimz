@@ -254,6 +254,14 @@ impl RuntimePaths {
         self.shared_root.join("rate_limits.lock")
     }
 
+    pub fn shared_credits_path(&self) -> PathBuf {
+        self.shared_root.join("credits.json")
+    }
+
+    pub fn shared_credits_lock(&self) -> PathBuf {
+        self.shared_root.join("credits.lock")
+    }
+
     pub fn shared_provider_spending_path(&self) -> PathBuf {
         self.shared_root.join("provider-spending.json")
     }

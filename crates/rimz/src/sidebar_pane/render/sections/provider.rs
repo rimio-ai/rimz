@@ -1,7 +1,7 @@
 //! The pinned provider dashboard — per-provider header, brand emblem, stats and
 //! budget bars — and the W/M fleet ledger rows that seal the bottom.
 
-use crate::agents::RateLimitWindow;
+use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::BudgetZonesConfig;
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
@@ -13,8 +13,8 @@ use crate::sidebar_pane::render::fmt::{
 };
 use crate::sidebar_pane::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_INPUT, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
-    TOKENS_TOTAL, infinite_bar_spans, mana_bar_spans, mana_style, pace_ratio, pace_style,
-    token_breakdown_spans, unknown_mana_bar_spans,
+    TOKENS_TOTAL, mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
+    unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -30,13 +30,16 @@ const PROVIDER_ART_WIDTH: usize = 9;
 /// the emblem is dropped so the bar keeps a legible length.
 const PROVIDER_ART_MIN_WIDTH: usize = 34;
 
-/// The provider bar's label slot (`5h` / `7d` / `30d` / `∞`) and reset-value
+/// The provider bar's label slot (`5h` / `7d` / `30d` / `ex` / `api`) and value
 /// column, shared by every provider bar so they align front and back. The label
 /// fits three cells (`30d`); the value holds `↻ ` plus a six-cell reset countdown
-/// slot and a one-cell right gutter (`↻  4h50m ` / `↻ 20h20m `).
+/// slot and a one-cell right gutter (`↻  4h50m ` / `↻ 20h20m `), or a compact
+/// paid-usage value.
 const PROVIDER_LABEL_WIDTH: usize = 3;
-const PROVIDER_RESET_WIDTH: usize = 6;
-const PROVIDER_VALUE_WIDTH: usize = 1 + 1 + PROVIDER_RESET_WIDTH + 1;
+const PROVIDER_VALUE_WIDTH: usize = 9;
+const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
+const PROVIDER_RESET_MARKER_PAD: usize =
+    PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
 
 /// How close to a full window-length a reset must read to count as "not started".
 /// A not-started window keeps its reset slid to `now + duration`, but a live
@@ -182,10 +185,11 @@ pub(crate) struct ProviderTabHit {
 /// the active provider's block alone, so the budgets read one account at a time;
 /// the header then drops the name the rail carries and indents to the stats
 /// column, sitting directly over the `◎` line as the right-column grid's title
-/// row. A metered account drains one "mana" bar per budget window toward its
-/// reset; an unmetered (API-key) account shows the `∞` "infinite power" bar in
-/// the label slot with no countdown. The bars share one start and one end
-/// column across every block, so the dashboard reads as one aligned grid.
+/// row. A metered account drains one "mana" bar per included budget window and
+/// may swap in an `ex` paid-usage row when an included cap is spent; an
+/// unmetered API-key account shows one `api` spend row. The bars share one start
+/// and one end column across every block, so the dashboard reads as one aligned
+/// grid.
 /// Bottom chrome — the tabs are its only hit targets, never a jump.
 pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     theme: &Theme,
@@ -488,9 +492,9 @@ fn provider_stats_spans(
 /// The provider's budget bars within `region`: a metered account drains one
 /// "mana" bar per reported window (`5h`, `7d`, `30d`, …, ordered short→long);
 /// a metered account whose windows have not arrived yet shows one anonymous
-/// unknown-track row; an unmetered account shows the single `∞` bar. Each reset
-/// reads a two-unit countdown scaled to its magnitude. Each row aligns front and
-/// back within `region`, so they line up across providers too.
+/// unknown-track row; an unmetered account shows the single `api` spend row.
+/// Each reset reads a two-unit countdown scaled to its magnitude. Each row
+/// aligns front and back within `region`, so they line up across providers too.
 fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -499,25 +503,88 @@ fn provider_bar_rows(
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
-        return vec![infinite_bar_row(theme, theme.brand_tone(panel), region)];
+        return vec![extra_credits_bar_row(
+            theme,
+            "api",
+            panel.extra_credits.as_ref(),
+            region,
+            zones,
+        )];
     }
     if panel.windows.is_empty() {
         return vec![unknown_bar_row(theme, "", region)];
     }
-    panel
-        .windows
-        .iter()
-        .filter_map(|window| {
-            metered_bar_row(
+    select_provider_bars(panel)
+        .into_iter()
+        .filter_map(|bar| match bar {
+            ProviderBar::Window(window) => metered_bar_row(
                 theme,
                 window,
                 region,
                 longer_window_spent(panel, window),
                 zones,
                 now,
-            )
+            ),
+            ProviderBar::Extra => Some(extra_credits_bar_row(
+                theme,
+                "ex",
+                panel.extra_credits.as_ref(),
+                region,
+                zones,
+            )),
         })
         .collect()
+}
+
+#[derive(Clone, Copy)]
+enum ProviderBar<'a> {
+    Window(&'a RateLimitWindow),
+    Extra,
+}
+
+fn select_provider_bars(panel: &SidebarProviderPanel) -> Vec<ProviderBar<'_>> {
+    let Some(first) = panel.windows.first() else {
+        return Vec::new();
+    };
+    let last = panel.windows.last().unwrap_or(first);
+    let first_and_last = || provider_window_pair(first, last);
+    let extra_disabled = panel
+        .extra_credits
+        .as_ref()
+        .is_some_and(ExtraCredits::is_disabled);
+    let extra_usable = panel
+        .extra_credits
+        .as_ref()
+        .is_none_or(ExtraCredits::is_usable);
+
+    if let Some(longest_spent) = panel
+        .windows
+        .iter()
+        .filter(|window| window.is_spent())
+        .max_by_key(|window| window.duration_mins.unwrap_or(0))
+    {
+        if !std::ptr::eq(first, longest_spent) {
+            if extra_disabled {
+                return provider_window_pair(first, longest_spent);
+            }
+            return vec![ProviderBar::Window(longest_spent), ProviderBar::Extra];
+        }
+        if extra_usable {
+            return vec![ProviderBar::Window(first), ProviderBar::Extra];
+        }
+    }
+    first_and_last()
+}
+
+fn provider_window_pair<'a>(
+    left: &'a RateLimitWindow,
+    right: &'a RateLimitWindow,
+) -> Vec<ProviderBar<'a>> {
+    if std::ptr::eq(left, right) {
+        vec![ProviderBar::Window(left)]
+    } else {
+        vec![ProviderBar::Window(left), ProviderBar::Window(right)]
+    }
 }
 
 /// Whether a window with a strictly longer duration is spent — a higher-level cap
@@ -677,31 +744,90 @@ fn reset_value_spans(
 
 fn pad_countdown(countdown: &str) -> String {
     let chars = countdown.chars().count();
-    if chars >= PROVIDER_RESET_WIDTH {
+    if chars >= PROVIDER_RESET_COUNTDOWN_WIDTH {
         countdown.to_owned()
     } else {
-        format!("{countdown:>PROVIDER_RESET_WIDTH$}")
+        format!("{countdown:>PROVIDER_RESET_COUNTDOWN_WIDTH$}")
     }
 }
 
-/// The unmetered `∞` bar row: the infinity icon rides the label slot (aligned
-/// with `5h`/`7d`), then the full infinite bar — icon and track in the one
-/// brand color, so the row reads as a single branded unmetered bar. The value
-/// column is reserved but empty — no countdown — so the bar's right edge still
-/// aligns with the metered bars'.
-fn infinite_bar_row(theme: &Theme, color: Color, region: usize) -> Vec<Span<'static>> {
+fn extra_credits_bar_row(
+    theme: &Theme,
+    label: &str,
+    credits: Option<&ExtraCredits>,
+    region: usize,
+    zones: &BudgetZonesConfig,
+) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
+    let remaining = credits.and_then(ExtraCredits::remaining_percentage);
+    let label_style = remaining
+        .map(|remaining| mana_style(theme, remaining, zones))
+        .unwrap_or_else(|| theme.dim());
     let mut spans = vec![
-        Span::styled(
-            format!("{:<PROVIDER_LABEL_WIDTH$}", "∞"),
-            theme.style(color, Modifier::BOLD),
-        ),
+        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), label_style),
         Span::raw(" "),
     ];
-    spans.extend(infinite_bar_spans(theme, color, bar_width));
+    if let Some(remaining) = remaining {
+        spans.extend(mana_bar_spans(theme, remaining, bar_width, zones));
+    } else {
+        spans.extend(unknown_mana_bar_spans(theme, bar_width));
+    }
     spans.push(Span::raw(" "));
-    spans.push(Span::raw(" ".repeat(PROVIDER_VALUE_WIDTH)));
+    spans.extend(extra_value_spans(theme, credits));
     spans
+}
+
+fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<'static>> {
+    let value = match credits {
+        Some(ExtraCredits::Disabled) => "off".to_owned(),
+        Some(credits) => extra_value_label(credits),
+        None => "∞".to_owned(),
+    };
+    if value == "∞" {
+        return vec![
+            Span::raw(" ".repeat(PROVIDER_RESET_MARKER_PAD)),
+            Span::styled(value, theme.style(Color::Green, Modifier::BOLD)),
+            Span::raw(
+                " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(PROVIDER_RESET_MARKER_PAD + 1)),
+            ),
+        ];
+    }
+    let value_width = PROVIDER_VALUE_WIDTH.saturating_sub(1);
+    let clipped: String = value.chars().take(value_width).collect();
+    let pad = value_width.saturating_sub(clipped.chars().count());
+    vec![
+        Span::raw(" ".repeat(pad)),
+        Span::styled(clipped, theme.style(Color::Green, Modifier::BOLD)),
+        Span::raw(" "),
+    ]
+}
+
+fn extra_value_label(credits: &ExtraCredits) -> String {
+    match (
+        credits.used_usd(),
+        credits.remaining_usd(),
+        credits.limit_usd(),
+    ) {
+        (Some(used), _, Some(limit)) => {
+            format!("{}/{}", dollars_compact(used), dollars_compact(limit))
+        }
+        (_, Some(remaining), _) => dollars_compact(remaining),
+        (Some(used), _, None) => format!("{}∞", dollars_compact(used)),
+        (None, None, Some(limit)) => format!("?/{}", dollars_compact(limit)),
+        (None, None, None) => "∞".to_owned(),
+    }
+}
+
+fn dollars_compact(usd: f64) -> String {
+    let usd = usd.max(0.0);
+    if usd >= 1_000.0 {
+        return format!("${:.0}k", usd / 1_000.0);
+    }
+    if (usd.fract()).abs() < f64::EPSILON {
+        format!("${usd:.0}")
+    } else {
+        format!("${usd:.2}")
+    }
 }
 
 /// The bar's cell width inside a provider `region`: the region less the label,

@@ -2043,6 +2043,8 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         "[tab.keywords]",
         "[tab.layouts]",
         "[remote_control]",
+        "[accounts]",
+        "[accounts.usage_limit_usd]",
         "[notifications]",
         "[sidebar]",
         "[sidebar.context]",

@@ -673,6 +673,7 @@ mod tests {
             metered: false,
             remote_control: false,
             spending: None,
+            extra_credits: None,
             windows: Vec::new(),
         };
 

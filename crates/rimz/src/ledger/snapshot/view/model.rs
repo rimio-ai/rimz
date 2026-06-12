@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{RateLimitWindow, SpendTally};
+use crate::agents::{ExtraCredits, RateLimitWindow, SpendTally};
 use crate::feed::AgentStatus;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::remote::link::LinkTier;
@@ -36,6 +36,10 @@ pub struct SidebarProviderPanel {
     /// provider, summed across all of its sessions' transcript history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spending: Option<SpendTally>,
+    /// Paid usage beyond subscription windows: provider extra credits or
+    /// API-key spend against an optional display ceiling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_credits: Option<ExtraCredits>,
     /// The account-scoped budget windows, ordered short→long by duration.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<RateLimitWindow>,

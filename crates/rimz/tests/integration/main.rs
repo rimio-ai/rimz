@@ -22,6 +22,7 @@ mod journey;
 mod ledger;
 mod list;
 mod message_queue;
+mod oauth_usage;
 mod performance;
 mod presence_wake;
 mod proc;

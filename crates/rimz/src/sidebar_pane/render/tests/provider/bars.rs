@@ -1,6 +1,6 @@
 use super::*;
 
-/// Every provider bar — `5h`, `7d` across blocks, and the unmetered `∞` —
+/// Every provider bar — `5h`, `7d` across blocks, and the API spend row —
 /// shares one front (bar-start) column and one end (bar-end) column, so the
 /// whole dashboard reads as one aligned grid. The structural payoff of the
 /// shared bar grammar, now that the budgets live in the panel.
@@ -38,7 +38,10 @@ fn provider_bars_share_one_front_and_end_column() {
         })
         .filter(|line| line.contains('▰') || line.contains('▱') || line.contains('▒'))
         .collect();
-    assert!(lines.len() >= 5, "two metered providers + one ∞: {lines:?}");
+    assert!(
+        lines.len() >= 5,
+        "two metered providers + one api row: {lines:?}"
+    );
     // Bar start: the first bar cell (tick or shade), by char column.
     let start = |line: &str| {
         line.chars()
@@ -167,6 +170,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
 
     let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     panel.windows = vec![RateLimitWindow {
         used_percentage: Some(100),
         resets_at: Some(now + Duration::from_secs(150 * 60)),
@@ -187,11 +191,128 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
 }
 
 #[test]
+fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent() {
+    let theme = Theme::fixed(false);
+    let labels = |panel: &crate::SidebarProviderPanel| -> Vec<String> {
+        metered_bar_rows(&theme, panel)
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .first()
+                    .expect("label span")
+                    .content
+                    .trim()
+                    .to_owned()
+            })
+            .collect()
+    };
+
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((25, 40)));
+    assert_eq!(labels(&panel), vec!["5h", "7d"]);
+
+    panel.windows[0].used_percentage = Some(100);
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(7.0),
+        None,
+        Some(50.0),
+    ));
+    assert_eq!(labels(&panel), vec!["5h", "ex"]);
+    let row_text = metered_bar_rows(&theme, &panel)[1]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(row_text.contains("$7/$50"), "{row_text:?}");
+
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+    assert_eq!(
+        labels(&panel),
+        vec!["5h", "7d"],
+        "disabled extra usage falls back to the included-window pair"
+    );
+
+    panel.windows[0].used_percentage = Some(5);
+    panel.windows[1].used_percentage = Some(100);
+    panel.extra_credits = None;
+    assert_eq!(
+        labels(&panel),
+        vec!["7d", "ex"],
+        "a spent long cap makes the extra track relevant even when unknown"
+    );
+
+    panel.windows = vec![
+        RateLimitWindow {
+            used_percentage: Some(5),
+            resets_at: None,
+            duration_mins: Some(5 * 60),
+        },
+        RateLimitWindow {
+            used_percentage: Some(100),
+            resets_at: None,
+            duration_mins: Some(7 * 24 * 60),
+        },
+        RateLimitWindow {
+            used_percentage: Some(10),
+            resets_at: None,
+            duration_mins: Some(30 * 24 * 60),
+        },
+    ];
+    assert_eq!(
+        labels(&panel),
+        vec!["7d", "ex"],
+        "a spent middle window stays visible even when a longer window exists"
+    );
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
+    assert_eq!(
+        labels(&panel),
+        vec!["5h", "7d"],
+        "disabled extra usage pairs the short window with the binding spent one"
+    );
+}
+
+#[test]
+fn api_key_provider_uses_month_spend_bar_with_optional_ceiling() {
+    let theme = Theme::fixed(false);
+    let mut panel = provider_panel("codex", "Codex", 33, false, false, None);
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(
+        Some(12.0),
+        None,
+        Some(25.0),
+    ));
+    let rows = metered_bar_rows(&theme, &panel);
+    assert_eq!(rows.len(), 1);
+    let text = rows[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.trim_start().starts_with("api"), "{text:?}");
+    assert!(text.contains("$12/$25"), "{text:?}");
+    assert!(
+        text.contains('▰'),
+        "known spend against a ceiling gets a filled remaining bar: {text:?}"
+    );
+
+    panel.extra_credits = Some(crate::agents::ExtraCredits::known(Some(12.0), None, None));
+    let text = metered_bar_rows(&theme, &panel)[0]
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert!(text.contains("$12∞"), "{text:?}");
+    assert!(
+        !text.contains('▰'),
+        "uncapped API spend shows dollars without claiming a fill: {text:?}"
+    );
+}
+
+#[test]
 fn provider_window_states_control_countdowns_and_empty_tracks() {
     let theme = Theme::fixed(false);
     let now = fixed_now();
 
-    let panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 100)));
+    let mut panel = provider_panel("claude", "Claude", 173, true, false, Some((0, 100)));
+    panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 2);
     let (five_label, _, five_has_reset) = bar_row_facts(&rows[0]);

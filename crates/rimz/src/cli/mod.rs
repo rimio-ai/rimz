@@ -3,6 +3,7 @@
 
 mod agents_cmd;
 mod attach_exec;
+mod claude;
 mod codex;
 mod config;
 mod daemon_view;
@@ -86,6 +87,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
+        Some(Subcmd::Claude(args)) => claude::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
@@ -196,6 +198,9 @@ enum Subcmd {
     Statusline(statusline::StatuslineArgs),
     /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
+    /// Claude helper API. The sidebar calls these; humans usually do not.
+    #[command(hide = true)]
+    Claude(claude::ClaudeArgs),
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
     Codex(codex::CodexArgs),

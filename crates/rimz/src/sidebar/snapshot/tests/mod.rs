@@ -65,6 +65,7 @@ fn provider_panel(kind: &str, windows: Vec<RateLimitWindow>) -> crate::SidebarPr
         metered: true,
         remote_control: false,
         spending: None,
+        extra_credits: None,
         windows,
     }
 }

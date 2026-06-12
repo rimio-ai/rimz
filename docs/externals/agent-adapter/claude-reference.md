@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../../internals/agents/hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../../internals/agents/transcript.md) maps the statusline and transcript onto `AgentContext`, [account.md](../../internals/agents/account.md) maps the auth surface onto account and balance.
 
-This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, and the auth surface. It is a hand-maintained mirror of Anthropic's published docs, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
+This is the single home for the **Claude Code upstream protocol surface** Rimz binds to — the hook events, their stdin payloads and stdout decision schema, the statusline JSON, the auth surface, and the local-OAuth usage endpoint. It is a hand-maintained mirror of Anthropic's published docs plus the credential-file surfaces Claude Code itself uses, kept for fast lookup and pinned to the source URLs below so it can be refreshed when upstream moves. The [`ClaudeAdapter`](../../../crates/rimz/src/agents/claude/mod.rs) adapter is the only code that reads this surface; everything downstream of it speaks Rimz's internal types.
 
 Coverage is **depth on what Rimz wires, breadth as an index**: the events, statusline fields, and decision shapes the adapter actually parses or emits are documented in full; the rest of the upstream catalog is listed so a contributor wiring a new event knows it exists.
 
@@ -17,6 +17,7 @@ Re-fetch these pages to refresh this mirror. `docs.claude.com/en/docs/claude-cod
 | Subagents | <https://code.claude.com/docs/en/sub-agents> |
 | Settings (`statusLine` / `hooks` config keys, `disableAgentView`) | <https://code.claude.com/docs/en/settings> |
 | Remote Control (`remote-control`, `--remote-control`, `/remote-control`, version floor, settings) | <https://code.claude.com/docs/en/remote-control> |
+| OAuth usage endpoint | Claude Code credential-file traffic; no public schema page |
 | Transcript JSONL | no official schema published — see [Transcript JSONL](#transcript-jsonl) below |
 
 ## Hooks
@@ -304,7 +305,29 @@ Rimz's remote-control preflight and badge read the user-level Claude `settings.j
 | `auth_method` | login type; `apiKey` is unmetered, anything else metered |
 | `subscription_type` | plan tier (`max`, `pro`, …) → the account `plan` label |
 
-The 5h/7d balance windows have no source outside a live statusline — there is no idle balance probe for Claude. The semantics (`metered` inference, plan→brand label) are in [account.md](../../internals/agents/account.md).
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/claude/oauth_usage.rs) reads `~/.claude/.credentials.json` (macOS may hold the same JSON in the `Claude Code-credentials` Keychain item) and uses the root `claudeAiOauth` object:
+
+| Field | Meaning |
+| --- | --- |
+| `accessToken` | Bearer token for the usage request |
+| `expiresAt` | epoch milliseconds; missing or expired tokens fail the probe |
+| `scopes[]` | must include `user:profile` |
+
+The helper calls `GET https://api.anthropic.com/api/oauth/usage` with `Authorization: Bearer <accessToken>`, `Accept: application/json`, `anthropic-beta: oauth-2025-04-20`, and a `claude-code/<claude-version>` user agent when the version is known. `RIMZ_CLAUDE_OAUTH_USAGE_URL` overrides the URL for tests. The parsed response shape:
+
+```jsonc
+{
+  "five_hour": { "utilization": 12.5, "resets_at": "2026-09-21T14:13:20Z" },
+  "seven_day": { "utilization": 7, "resets_at": "2026-09-27T09:06:40Z" },
+  "extra_usage": {
+    "is_enabled": true,
+    "used_credits": 725,     // cents
+    "monthly_limit": 5000    // cents
+  }
+}
+```
+
+`five_hour` and `seven_day` map to 300- and 10080-minute `RateLimitWindow`s. `utilization` is a 0–100 percentage and Rimz rounds/clamps it the same way as statusline `used_percentage`; `1.0` means 1%, not a fully spent window. `extra_usage.is_enabled = false` maps to `ExtraCredits::Disabled`; otherwise `used_credits` and `monthly_limit` are cents converted to USD. The semantics (`metered` inference, plan→brand label, cache cadence) are in [account.md](../../internals/agents/account.md).
 
 ## Transcript JSONL
 

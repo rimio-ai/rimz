@@ -213,6 +213,7 @@ fn is_known_get_key(path: &[String]) -> bool {
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "tab")
         || matches!(path, [root, child] if root == "tab" && matches!(child.as_str(), "keywords" | "layouts"))
+        || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || matches!(path, [root, child] if root == "sidebar" && child == "providers")
         || matches!(path, [root, child, _] if root == "sidebar" && child == "providers")
@@ -222,6 +223,7 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
     exact_set_keys().contains(&joined)
         || is_tab_key(path)
+        || is_account_usage_limit_key(path)
         || is_provider_style_key(path)
         || is_sidebar_animation_set_key(path)
 }
@@ -243,6 +245,18 @@ fn is_provider_style_key(path: &[String]) -> bool {
         && path[0] == "sidebar"
         && path[1] == "providers"
         && matches!(path[3].as_str(), "product_name" | "ascii_art" | "color")
+}
+
+fn is_account_usage_limit_key(path: &[String]) -> bool {
+    matches!(
+        path,
+        [root, child, provider] if root == "accounts" && child == "usage_limit_usd" && !provider.is_empty()
+    )
+}
+
+fn is_account_usage_limit_get_key(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "accounts" && child == "usage_limit_usd")
+        || is_account_usage_limit_key(path)
 }
 
 fn is_sidebar_animation_get_key(path: &[String]) -> bool {
@@ -281,6 +295,7 @@ fn exact_set_keys() -> BTreeSet<String> {
     [
         "worktree.dir",
         "worktree.base",
+        "accounts.oauth_usage",
         "remote_control.claude",
         "remote_control.codex",
         "notifications.enabled",
@@ -422,6 +437,8 @@ mod tests {
         for key in [
             "sidebar.max_cols",
             "sidebar.budget.pace.red",
+            "accounts.oauth_usage",
+            "accounts.usage_limit_usd.codex",
             "tab.layouts.review",
             "tab.keywords.vim",
             "tab.keywords.codex-yolo.agent",
@@ -443,6 +460,9 @@ mod tests {
 
         for key in [
             "sidebar.nope",
+            "accounts.nope",
+            "accounts.usage_limit_usd",
+            "accounts.usage_limit_usd.codex.extra",
             "tab.layouts.peer.shape",
             "tab.keywords.codex-yolo.flags",
             "sidebar.providers.claude.nope",
@@ -459,6 +479,9 @@ mod tests {
             ("sidebar.animations.thinking", true),
             ("sidebar.animations.thinking.frames", true),
             ("sidebar.animations.nope", false),
+            ("accounts", true),
+            ("accounts.usage_limit_usd", true),
+            ("accounts.usage_limit_usd.codex", true),
         ] {
             assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
         }

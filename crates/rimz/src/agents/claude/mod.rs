@@ -19,6 +19,7 @@
 
 pub(crate) mod account;
 mod install;
+pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod remote_control;
 pub(crate) mod spend;
@@ -59,11 +60,12 @@ use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation, AgentTurnError,
-    ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport, Result,
-    RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow, classify_agent_hook,
-    classify_pre_tool_use, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    AccountUsageSnapshot, AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation,
+    AgentTurnError, ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    Result, RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow,
+    classify_agent_hook, classify_pre_tool_use, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -72,6 +74,22 @@ use crate::run::PermissionMode;
 /// Claude's effective hook cap. The upstream cap is ~125s; we leave a small
 /// margin so the bridge never holds the hook past Claude's kill window.
 const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
+
+/// Fetch Claude account usage from the local OAuth credential file. Best-effort
+/// wrapper for detached helpers: errors stay in tracing and the caller records
+/// retry state in the shared cache.
+pub fn fetch_oauth_usage(cli_version: Option<&str>) -> Option<AccountUsageSnapshot> {
+    match oauth_usage::fetch_usage(cli_version) {
+        Ok(usage) => Some(AccountUsageSnapshot {
+            rate_limits: usage.rate_limits,
+            extra_credits: usage.extra_credits,
+        }),
+        Err(err) => {
+            tracing::debug!(error = %err, "claude OAuth usage fetch failed");
+            None
+        }
+    }
+}
 
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentDescriptor`] for the descriptor-vs-trait split.

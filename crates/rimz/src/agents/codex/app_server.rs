@@ -40,6 +40,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
+use crate::agents::ExtraCredits;
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits};
 
 #[cfg(test)]
@@ -54,7 +55,7 @@ pub(crate) use transport::{
 };
 use wire::{
     MatchedModel, ModelListResponse, RateLimitsResponse, ThreadListResponse, ThreadReadResponse,
-    ThreadSummary, codex_version_from_user_agent, collect_windows, into_context,
+    ThreadSummary, codex_version_from_user_agent, collect_credits, collect_windows, into_context,
     parse_loaded_threads, thread_matches_session, thread_summary_from_raw,
 };
 
@@ -78,6 +79,11 @@ pub(crate) struct CodexAppServer<T: JsonRpcTransport> {
     /// The `userAgent` the server returned at `initialize`, e.g.
     /// `"rimz/0.135.0 (Ubuntu ...)"` — its version token is the Codex version.
     user_agent: Option<String>,
+}
+
+pub(crate) struct AppServerObservation {
+    pub(crate) context: AgentContext,
+    pub(crate) extra_credits: Option<ExtraCredits>,
 }
 
 /// One way [`CodexAppServer::connect`] tries to reach an app-server, in
@@ -227,12 +233,20 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// the unmetered "infinite" bar.
     fn rate_limits(
         &mut self,
-    ) -> Result<(Option<AgentRateLimits>, Option<AgentAccount>), AppServerErr> {
+    ) -> Result<
+        (
+            Option<AgentRateLimits>,
+            Option<AgentAccount>,
+            Option<ExtraCredits>,
+        ),
+        AppServerErr,
+    > {
         let result = self
             .transport
             .request("account/rateLimits/read", Value::Null)?;
         let parsed: RateLimitsResponse = serde_json::from_value(result)
             .map_err(|err| AppServerErr::Protocol(err.to_string()))?;
+        let credits = collect_credits(&parsed);
         let windows = collect_windows(parsed.rate_limits.primary, parsed.rate_limits.secondary);
         let plan = parsed.rate_limits.plan_type.filter(|plan| !plan.is_empty());
         let account = (plan.is_some() || windows.is_some()).then_some(AgentAccount {
@@ -241,7 +255,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             version: None,
             sub_provider: None,
         });
-        Ok((windows, account))
+        Ok((windows, account, credits))
     }
 
     /// Match the session's model `hint` (a raw model id from the lifecycle
@@ -335,6 +349,7 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
     /// [`AgentContext`]. Each read is independent and best-effort: a failed
     /// `account/rateLimits/read` (e.g. API-key account) still yields the model
     /// and version. Assumes [`Self::handshake`] already ran.
+    #[cfg(test)]
     pub(crate) fn observe_context(
         &mut self,
         source: &str,
@@ -342,14 +357,25 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
         model_hint: Option<&str>,
         observed_at: Timestamp,
     ) -> AgentContext {
-        let (rate_limits, account) = self.rate_limits().unwrap_or_default();
+        self.observe(source, session_id, model_hint, observed_at)
+            .context
+    }
+
+    pub(crate) fn observe(
+        &mut self,
+        source: &str,
+        session_id: Option<&str>,
+        model_hint: Option<&str>,
+        observed_at: Timestamp,
+    ) -> AppServerObservation {
+        let (rate_limits, account, extra_credits) = self.rate_limits().unwrap_or_default();
         let model = model_hint.and_then(|hint| self.matched_model(hint).ok().flatten());
         let thread = session_id.and_then(|id| self.thread_summary(id));
         let agent_version = self
             .user_agent
             .as_deref()
             .and_then(codex_version_from_user_agent);
-        into_context(
+        let context = into_context(
             source,
             rate_limits,
             account,
@@ -357,7 +383,11 @@ impl<T: JsonRpcTransport> CodexAppServer<T> {
             thread,
             agent_version,
             observed_at,
-        )
+        );
+        AppServerObservation {
+            context,
+            extra_credits,
+        }
     }
 
     /// The thread ids the connected app-server currently holds in memory

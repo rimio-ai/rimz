@@ -6,6 +6,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::agents::ExtraCredits;
 use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow};
 
 use super::transport::AppServerErr;
@@ -17,6 +18,8 @@ use super::transport::AppServerErr;
 pub(super) struct RateLimitsResponse {
     #[serde(default)]
     pub(super) rate_limits: RateLimitSnapshot,
+    #[serde(default)]
+    pub(super) credits: Option<CreditsWire>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -31,6 +34,15 @@ pub(super) struct RateLimitSnapshot {
     /// freshest session and uses it to label the block + mark it metered.
     #[serde(default)]
     pub(super) plan_type: Option<String>,
+    #[serde(default)]
+    pub(super) credits: Option<CreditsWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(super) struct CreditsWire {
+    #[serde(default)]
+    balance: Option<Value>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -235,6 +247,33 @@ pub(super) fn collect_windows(
         })
         .collect();
     (!windows.is_empty()).then_some(AgentRateLimits { windows })
+}
+
+pub(super) fn collect_credits(parsed: &RateLimitsResponse) -> Option<ExtraCredits> {
+    let balance = parsed
+        .credits
+        .as_ref()
+        .and_then(CreditsWire::balance_usd)
+        .or_else(|| {
+            parsed
+                .rate_limits
+                .credits
+                .as_ref()
+                .and_then(CreditsWire::balance_usd)
+        });
+    balance.map(|remaining| ExtraCredits::known(None, Some(remaining), None))
+}
+
+impl CreditsWire {
+    fn balance_usd(&self) -> Option<f64> {
+        match self.balance.as_ref()? {
+            Value::Number(value) => value.as_f64().filter(|value| value.is_finite()),
+            Value::String(value) => value.trim().parse::<f64>().ok(),
+            _ => None,
+        }
+        .filter(|value| value.is_finite())
+        .map(|value| value.max(0.0))
+    }
 }
 
 fn clamp_pct(value: i64) -> u8 {

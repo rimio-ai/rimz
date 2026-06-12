@@ -178,6 +178,73 @@ fn rate_limits_and_account_shapes_map_tolerantly() {
 }
 
 #[test]
+fn rate_limits_response_maps_credits_balance_at_root_or_inside_rate_limits() {
+    for (label, result) in [
+        (
+            "root credits",
+            json!({
+                "rateLimits": {},
+                "credits": { "balance": 12.5 }
+            }),
+        ),
+        (
+            "nested credits",
+            json!({
+                "rateLimits": {
+                    "credits": { "balance": "7.25" }
+                }
+            }),
+        ),
+    ] {
+        let transport = CannedTransport::new().with("account/rateLimits/read", result);
+        let mut client = CodexAppServer::new(transport);
+        client.handshake().unwrap();
+        let observation = client.observe("codex", None, None, ts());
+        let credits = observation
+            .extra_credits
+            .unwrap_or_else(|| panic!("missing credits for {label}"));
+        assert!(credits.is_usable(), "{label}");
+    }
+
+    let transport = CannedTransport::new().with(
+        "account/rateLimits/read",
+        json!({
+            "rateLimits": {},
+            "credits": { "balance": "not money" }
+        }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    assert_eq!(
+        client.observe("codex", None, None, ts()).extra_credits,
+        None
+    );
+
+    let transport = CannedTransport::new().with(
+        "account/rateLimits/read",
+        json!({
+            "rateLimits": {
+                "primary": { "usedPercent": 42, "windowDurationMins": 300 }
+            },
+            "credits": { "balance": true }
+        }),
+    );
+    let mut client = CodexAppServer::new(transport);
+    client.handshake().unwrap();
+    let observation = client.observe("codex", None, None, ts());
+    assert_eq!(observation.extra_credits, None);
+    assert_eq!(
+        observation
+            .context
+            .rate_limits
+            .expect("windows survive malformed credits")
+            .windows[0]
+            .used_percentage,
+        Some(42)
+    );
+}
+
+#[test]
 fn context_enrichment_reads_model_thread_version_and_survives_partial_failures() {
     let transport = CannedTransport::new().with("model/list", model_list_result());
     let mut client = CodexAppServer::new(transport);

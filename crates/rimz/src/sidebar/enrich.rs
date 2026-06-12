@@ -26,7 +26,9 @@ pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 mod accounts;
 mod codex_refresh;
+mod credits;
 mod live_spend;
+mod oauth_refresh;
 mod rate_limits;
 
 pub use codex_refresh::refresh_codex_transcript_context;
@@ -34,6 +36,11 @@ pub use codex_refresh::refresh_codex_transcript_context;
 pub(crate) use codex_refresh::{
     CodexRateLimitRefresh, codex_rate_limit_probe_due, codex_rate_limit_probe_marker,
     codex_rate_limit_refreshes, provider_has_out_of_band_windows,
+};
+pub(crate) use credits::apply_credits_cache;
+pub use credits::{
+    CreditsCache, ProviderCreditsEntry, merge_provider_credits,
+    merge_provider_credits_entry_if_due, provider_credits_entry_fresh,
 };
 pub use live_spend::{apply_live_today_spend, live_row_costs};
 pub(crate) use rate_limits::apply_rate_limit_cache;
@@ -48,6 +55,7 @@ pub(crate) use accounts::accounts_cache_version_refresh_due;
 use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
 use codex_refresh::refresh_codex_rate_limits;
 use live_spend::refresh_live_spend_baselines;
+use oauth_refresh::refresh_oauth_usage;
 
 /// The repo's worktree checkout roots the producer last published, read-only
 /// (no `git worktree list` fork). A consumer reuses whatever the elder cached,
@@ -550,15 +558,18 @@ fn fold_machine_config_producing(
     provider_spending: &BTreeMap<String, crate::agents::SpendTally>,
     config: crate::config::MachineConfig,
 ) -> SidebarSnapshot {
+    let accounts_config = config.accounts.clone();
     let accounts = produce_accounts(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
     // The producer owns the account-scoped window cache: it writes live readings
     // back so the budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
+    apply_credits_cache(&mut snapshot, runtime, &accounts_config);
     // Codex's budget windows live behind the app-server. The producer refreshes
     // active session sidecars and the idle account cache on a coarse cadence so a
     // long-running task does not wait for the next turn boundary to repaint.
     refresh_codex_rate_limits(&snapshot, runtime);
+    refresh_oauth_usage(&snapshot, runtime, &accounts_config);
     snapshot
 }
 
@@ -576,6 +587,7 @@ fn fold_machine_config_cached(
     runtime: &RuntimePaths,
     config: crate::config::MachineConfig,
 ) -> (SidebarSnapshot, ProviderSpendingCache) {
+    let accounts_config = config.accounts.clone();
     let accounts = cached_accounts_for_snapshot(
         read_accounts_cache(&runtime.shared_accounts_path()),
         &snapshot,
@@ -588,6 +600,7 @@ fn fold_machine_config_cached(
     // A consumer reads the producer's published windows to fill idle gaps, but
     // never writes — the single-flight contract keeps the cache the producer's.
     apply_rate_limit_cache(&mut snapshot, runtime, false);
+    apply_credits_cache(&mut snapshot, runtime, &accounts_config);
     (snapshot, cache)
 }
 

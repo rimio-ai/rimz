@@ -474,6 +474,7 @@ pub(in crate::sidebar_pane::render) fn pace_style(
 /// unmetered bar; the empty `▱` shape keeps it from competing with a real
 /// draining fill, and under `NO_COLOR` the unbroken run still reads as an
 /// empty track by shape.
+#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn infinite_bar_spans(
     theme: &Theme,
     color: Color,

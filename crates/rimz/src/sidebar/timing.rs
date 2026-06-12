@@ -102,6 +102,19 @@ pub const ACCOUNTS_TTL: Duration = Duration::from_secs(10 * 60);
 /// pinning an empty dashboard for the full success window.
 pub const ACCOUNTS_RETRY_TTL: Duration = Duration::from_secs(10);
 
+/// How long an extra-credits/account-usage reading stays displayable. Paid
+/// usage is a coarse monthly signal; after a day without a refresh, the
+/// dashboard drops the provider-supplied figures rather than showing stale
+/// balance as current.
+pub const CREDITS_DISPLAY_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+
+/// How long a successful account-usage reading is considered fresh by detached
+/// helpers that can publish credits.
+pub const CREDITS_TTL: Duration = Duration::from_secs(60);
+
+/// Retry cadence after a failed account-usage reading.
+pub const CREDITS_RETRY_TTL: Duration = ACCOUNTS_RETRY_TTL;
+
 /// How often the producer samples an active or recently re-tenanted pane. Hot
 /// panes refresh fast enough that a new foreground command gets its first
 /// complete CPU/M/IO line on the next producer tick after warmup, while idle
@@ -323,6 +336,12 @@ pub const PULL_CADENCES: &[PullCadence] = &[
         ttl: CODEX_RATE_LIMIT_REFRESH_INTERVAL,
         idle_ttl: None,
         retry_ttl: None,
+    },
+    PullCadence {
+        name: "account.credits",
+        ttl: CREDITS_TTL,
+        idle_ttl: Some(CREDITS_DISPLAY_MAX_AGE),
+        retry_ttl: Some(CREDITS_RETRY_TTL),
     },
     PullCadence {
         name: "link.stats",

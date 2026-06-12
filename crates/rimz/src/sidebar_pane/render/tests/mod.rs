@@ -492,6 +492,7 @@ fn provider_panel(
             },
             ..Default::default()
         }),
+        extra_credits: None,
         windows: windows
             .map(|(five, seven)| {
                 vec![

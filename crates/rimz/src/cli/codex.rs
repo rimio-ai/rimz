@@ -18,6 +18,8 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentContext;
 use rimz::agents::codex;
 use rimz::ids::WorkspaceId;
+use rimz::sidebar::cache::unix_now_ms;
+use rimz::{agents, config::MachineConfig};
 
 use super::GlobalFlags;
 
@@ -166,17 +168,28 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // Prefer this session's warm broker socket; the app-server read falls back to
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(context) =
-        codex::refresh_app_server_context(Some(session_id), model, Some(&broker_socket))
+    let config = MachineConfig::load().unwrap_or_default();
+    let oauth_enabled = config.accounts.oauth_usage && !agents::credits::oauth_usage_offline();
+    let Some(enrichment) =
+        codex::refresh_app_server_enrichment(Some(session_id), model, Some(&broker_socket))
     else {
+        let oauth_wrote = oauth_enabled && merge_codex_oauth_usage_if_due(&runtime, true);
         // App-server unreachable / nothing to record. Transcript context, if it
         // changed, was already written above.
-        if wrote {
+        if wrote || oauth_wrote {
             let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
         }
         return Ok(());
     };
-    merge_app_server_context(&runtime, session_id, context)
+    if let (true, Some(extra_credits)) = (oauth_enabled, enrichment.extra_credits.clone()) {
+        rimz::sidebar::enrich::merge_provider_credits(&runtime, "codex", Some(extra_credits));
+    }
+    if oauth_enabled
+        && (enrichment.extra_credits.is_none() || enrichment.context.rate_limits.is_none())
+    {
+        merge_codex_oauth_usage_if_due(&runtime, enrichment.context.rate_limits.is_none());
+    }
+    merge_app_server_context(&runtime, session_id, enrichment.context)
         .context("writing app-server agent-context sidecar")?;
     let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
     Ok(())
@@ -194,15 +207,66 @@ fn refresh_rate_limits(workspace_id: &str) -> Result<()> {
         RuntimePaths::for_workspace(workspace_id.clone()).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
+    let config = MachineConfig::load().unwrap_or_default();
+    let oauth_enabled = config.accounts.oauth_usage && !agents::credits::oauth_usage_offline();
     let broker_socket = runtime.codex_app_server_socket_path();
-    let Some(context) = codex::refresh_app_server_context(None, None, Some(&broker_socket)) else {
+    let Some(enrichment) = codex::refresh_app_server_enrichment(None, None, Some(&broker_socket))
+    else {
+        if oauth_enabled {
+            let wrote = merge_codex_oauth_usage_if_due(&runtime, true);
+            if wrote {
+                let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
+            }
+        }
         return Ok(());
     };
-    if let Some(rate_limits) = context.rate_limits {
+    let mut wrote = false;
+    let app_windows_missing = enrichment.context.rate_limits.is_none();
+    let app_credits_missing = enrichment.extra_credits.is_none();
+    if let (true, Some(extra_credits)) = (oauth_enabled, enrichment.extra_credits.clone()) {
+        rimz::sidebar::enrich::merge_provider_credits(&runtime, "codex", Some(extra_credits));
+        wrote = true;
+    }
+    if let Some(rate_limits) = enrichment.context.rate_limits.clone() {
         rimz::sidebar::enrich::merge_account_rate_limits(&runtime, "codex", rate_limits);
+        wrote = true;
+    }
+    if oauth_enabled && (app_windows_missing || app_credits_missing) {
+        wrote |= merge_codex_oauth_usage_if_due(&runtime, app_windows_missing);
+    }
+    if wrote {
         let _ = rimz::ledger::wakeup::wake_sidebars(&runtime);
     }
     Ok(())
+}
+
+fn merge_codex_oauth_usage_if_due(runtime: &RuntimePaths, merge_windows: bool) -> bool {
+    let mut fetched_windows = None;
+    let Some(entry) =
+        rimz::sidebar::enrich::merge_provider_credits_entry_if_due(runtime, "codex", || {
+            match agents::codex::fetch_oauth_usage() {
+                Some(usage) => {
+                    fetched_windows = usage.rate_limits.clone();
+                    rimz::sidebar::enrich::ProviderCreditsEntry {
+                        observed_at_ms: unix_now_ms(),
+                        ok: true,
+                        extra_credits: usage.extra_credits,
+                    }
+                }
+                None => rimz::sidebar::enrich::ProviderCreditsEntry {
+                    observed_at_ms: unix_now_ms(),
+                    ok: false,
+                    extra_credits: None,
+                },
+            }
+        })
+    else {
+        return false;
+    };
+    if merge_windows && let Some(rate_limits) = fetched_windows {
+        rimz::sidebar::enrich::merge_account_rate_limits(runtime, "codex", rate_limits);
+    }
+    entry.ok
 }
 
 fn app_server_due(

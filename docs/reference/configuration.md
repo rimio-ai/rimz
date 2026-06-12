@@ -31,13 +31,14 @@ Per-machine settings load leniently: a missing file is the default config, and u
 
 ## `config.toml` Per Machine
 
-Eight sections make up the per-machine file:
+Nine sections make up the per-machine file:
 
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
 | `[tab]` | tab keywords and named tab layouts for `rimz tab --layout` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
+| `[accounts]` | provider account-usage enrichment and display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
 | `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, theme and glow, and display bands |
 | `[zellij]` | Rimz-owned Zellij room defaults |
@@ -81,6 +82,21 @@ These are per-machine opt-ins for background remote-control infrastructure. `cla
 Configured hosts are fail-fast preconditions for `rimz start`. Claude refuses when its own settings or version make the host impossible: Claude Code older than 2.1.51, `disableRemoteControl: true`, `disableAgentView: true` on Claude Code 2.1.173 or newer, or API-key auth sources active on Claude Code 2.1.157 or newer. Codex refuses when the managed standalone install is missing. `rimz doctor` reports the same refusal text and fix before launch.
 
 The sidebar's `⇅ rc` provider flag is broader than these auto-launch toggles: it also lights when a provider-owned pane-session setting enables remote control, such as Claude's `remoteControlAtStartup: true`. Reading provider settings is local enrichment and adds no project trust-hash field.
+
+### Accounts
+
+```toml
+[accounts]
+oauth_usage = true
+
+[accounts.usage_limit_usd]
+claude = 50.0
+codex = 25.0
+```
+
+Account enrichment is local and best-effort. `oauth_usage = true` lets Rimz use provider account-usage surfaces reached from local OAuth credentials or the local Codex app-server; turning it off suppresses those provider-reported paid-usage queries and caches. It does not disable transcript-derived spending totals, and it never writes provider credential files. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the same fetches for one process tree.
+
+`[accounts.usage_limit_usd]` sets display-only monthly USD ceilings by provider kind. A ceiling scales the provider dashboard's `ex` or `api` bar when the provider does not report a real cap; it is not a provider-enforced spending limit and does not stop agents. Leaving a provider unset means the paid/API row reads uncapped or unknown with `∞`.
 
 ### Multiplexer Room Options
 

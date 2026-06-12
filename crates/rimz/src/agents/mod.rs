@@ -19,6 +19,7 @@ pub mod codex;
 #[cfg(test)]
 pub(crate) mod conformance;
 pub mod context;
+pub mod credits;
 pub mod descriptor;
 pub(crate) mod hook_types;
 pub mod lifecycle;
@@ -48,6 +49,7 @@ pub use context::{
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
     TurnErrorClass,
 };
+pub use credits::{AccountUsageSnapshot, ExtraCredits};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
     ToolClassification,

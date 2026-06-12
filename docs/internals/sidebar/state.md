@@ -37,7 +37,8 @@ Consumers never produce for freshness on their own. They fold the published pane
 | shared `spending.json` | elected spending producer | elected spending producer | incremental `(mtime,len,cursor)` transcript parse cache, read and written only while holding shared `spending.lock` |
 | shared `pricing-cache.json` | elected spending producer's TTL-gated remote refresh ([pricing.md](../agents/pricing.md)) | elected spending producer | remote-refresh layer over the embedded snapshot, daily TTL with failure backoff |
 | shared `accounts.json` | producer account probe, single-flighted on shared `accounts.lock` | every node in every room | user-scoped success/retry TTL stamps |
-| shared `rate_limits.json` | producer and the detached `rimz codex refresh-rate-limits` helper, guarded by shared `rate_limits.lock` on writes | every node in every room | account-scoped budget windows, throttled per target |
+| shared `rate_limits.json` | producer and detached account-usage helpers, guarded by shared `rate_limits.lock` on writes | every node in every room | account-scoped budget windows, throttled per target |
+| shared `credits.json` | provider account-usage refresh helpers, guarded by shared `credits.lock` on writes | every node in every room | cached provider-reported paid extra usage, throttled per target; local API spend projections are read-time enrichment |
 | workspace `agent_context/`, `subagent_context/`, `agent-activity/` | CLI hook and statusline producers; the Codex transcript refresh from any of its [triggers](#push-channels) | every node | latest-wins per session, TTL-bound, stat-gated parse caches on the read side |
 | workspace `heartbeat/sidebar.<instance>.json` | each node | election, launch gate, wakeup fanout | written at startup, then throttled below the liveness TTL |
 | workspace `read-marks/sidebar.<instance>.json` | each node on a tab-local focus clear | every node's fold | max clear-time per row, kept past renderer exit for peer folds and swept after the owner heartbeat expires |
@@ -102,6 +103,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 | Spending walk | `SPENDING_TTL` | Fleet ledger and the walked floor under the live cockpit spend overlay |
 | Accounts | `ACCOUNTS_TTL` success, `ACCOUNTS_RETRY_TTL` failure | Provider dashboard login, plan, and account state |
 | Codex rate limits | `CODEX_RATE_LIMIT_REFRESH_INTERVAL` | Provider dashboard budget windows |
+| Account credits | `CREDITS_TTL` success, `CREDITS_RETRY_TTL` failure | Provider dashboard paid extra/API usage row |
 | Remote link stats | `LINK_STATS_STALE`, expiring at `LINK_STATS_EXPIRE` | Footer link badge for `rimz remote connect` rooms |
 
 ## Render Cadences

@@ -341,6 +341,7 @@ fn provider_panel(
         metered,
         remote_control,
         spending: Some(spending),
+        extra_credits: None,
         windows,
     }
 }

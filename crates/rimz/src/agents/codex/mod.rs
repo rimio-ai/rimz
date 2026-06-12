@@ -23,6 +23,7 @@ pub(crate) mod account;
 pub(crate) mod app_server;
 pub mod broker;
 mod install;
+pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 mod transcript;
@@ -68,10 +69,10 @@ use super::lifecycle::LifecycleSignal;
 use super::observation::{payload_context_pct, payload_total_tokens};
 use super::pricing::PriceBook;
 use super::{
-    AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError, ClassifiedHook,
-    HookInstallPreview, HookInstallReport, HookUninstallReport, LifecycleRefreshCtx,
-    LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result, RootIdentity,
-    SubagentIdentity, choice_is_allow, classify_agent_hook, classify_pre_tool_use,
+    AccountUsageSnapshot, AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError,
+    ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
+    LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result,
+    RootIdentity, SubagentIdentity, choice_is_allow, classify_agent_hook, classify_pre_tool_use,
     non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
@@ -90,6 +91,27 @@ const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 /// the window token.
 const DEFAULT_CONTEXT_WINDOW: u64 = 258_000;
 const DEFAULT_MODEL: &str = "GPT-5.5";
+
+/// Fetch Codex account usage from the local OAuth credential file. The app-server
+/// remains the preferred source; this is the detached-helper fallback when the
+/// app-server returns no account-usage reading.
+pub fn fetch_oauth_usage() -> Option<AccountUsageSnapshot> {
+    match oauth_usage::fetch_usage() {
+        Ok(usage) => {
+            if let Some(plan) = usage.plan.as_deref() {
+                tracing::debug!(plan, "codex OAuth usage returned plan");
+            }
+            Some(AccountUsageSnapshot {
+                rate_limits: usage.rate_limits,
+                extra_credits: usage.extra_credits,
+            })
+        }
+        Err(err) => {
+            tracing::debug!(error = %err, "codex OAuth usage fetch failed");
+            None
+        }
+    }
+}
 
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.
@@ -787,8 +809,26 @@ pub fn refresh_app_server_context(
     model_hint: Option<&str>,
     broker_socket: Option<&Path>,
 ) -> Option<AgentContext> {
+    refresh_app_server_enrichment(session_id, model_hint, broker_socket)
+        .map(|enrichment| enrichment.context)
+}
+
+pub struct AppServerEnrichment {
+    pub context: AgentContext,
+    pub extra_credits: Option<ExtraCredits>,
+}
+
+pub fn refresh_app_server_enrichment(
+    session_id: Option<&str>,
+    model_hint: Option<&str>,
+    broker_socket: Option<&Path>,
+) -> Option<AppServerEnrichment> {
     let mut client = CodexAppServer::connect(broker_socket)?;
-    Some(client.observe_context("codex", session_id, model_hint, Timestamp::now()))
+    let observation = client.observe("codex", session_id, model_hint, Timestamp::now());
+    Some(AppServerEnrichment {
+        context: observation.context,
+        extra_credits: observation.extra_credits,
+    })
 }
 
 /// Backwards-compatible name for the app-server-only context read. New callers

@@ -157,6 +157,7 @@ impl SidebarSnapshot {
                 metered,
                 remote_control,
                 spending,
+                extra_credits: None,
                 windows,
             });
         }

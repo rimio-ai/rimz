@@ -42,7 +42,7 @@ pub mod tui;
 pub mod workspace;
 pub mod worktree;
 
-pub use crate::agents::{SpendTally, SpendWindow};
+pub use crate::agents::{AccountUsageSnapshot, ExtraCredits, SpendTally, SpendWindow};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};
 pub use crate::feed::{
     AbandonReason, ElevatedAgent, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,

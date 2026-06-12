@@ -37,6 +37,16 @@
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon on start
 
+[accounts]
+# oauth_usage = true                   # enable local OAuth account-usage enrichment when available
+
+[accounts.usage_limit_usd]
+# Display-only monthly USD ceilings for the extra/API usage bar. These are not
+# provider-enforced spending limits; they only scale the dashboard bar when the
+# provider does not report a cap. Unset means infinite/uncapped display.
+## claude = 50.0
+## codex = 25.0
+
 [notifications]
 # enabled = true
 # triggers = ["waiting", "failed", "paused", "success"]

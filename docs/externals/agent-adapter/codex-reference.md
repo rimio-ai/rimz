@@ -2,7 +2,7 @@
 
 > The mapping onto Rimz's internal types lives beside this doc: [hooks.md](../../internals/agents/hooks.md) maps hook events to lifecycle/feed channels, [transcript.md](../../internals/agents/transcript.md) maps the rollout transcript and app-server onto `AgentContext`, [account.md](../../internals/agents/account.md) maps the auth surface onto account and balance.
 
-This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, and the auth file. It is a hand-maintained mirror of OpenAI's published docs and the open-source `codex-rs` types, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
+This is the single home for the **Codex upstream protocol surface** Rimz binds to — the hook events and their decision schema, the `notify` channel, the app-server JSON-RPC API, the rollout transcript, the auth file, and the local-OAuth usage endpoint. It is a hand-maintained mirror of OpenAI's published docs, the open-source `codex-rs` types, and the credential-file surfaces Codex itself uses, kept for fast lookup and pinned to the source URLs below. The [`CodexAdapter`](../../../crates/rimz/src/agents/codex/mod.rs) adapter and the [`codex::app_server`](../../../crates/rimz/src/agents/codex/app_server.rs) client are the only code that reads this surface.
 
 Coverage is **depth on what Rimz wires, breadth as an index**: the events, app-server methods, and rollout fields the code actually parses or emits are documented in full; the rest of the catalog is listed so a contributor wiring a new path knows it exists.
 
@@ -19,6 +19,7 @@ Re-fetch these pages — and, for the app-server, re-run the schema generators �
 | App-server API (protocol, methods, notifications) | <https://developers.openai.com/codex/app-server> |
 | App-server README + schema generation | <https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md> |
 | Rollout/session JSONL + `auth.json` shape | open-source `codex-rs` types — <https://github.com/openai/codex> |
+| OAuth usage endpoint | Codex credential-file traffic; no public schema page |
 
 The app-server protocol has no published version string; the canonical, version-exact schema is generated from the Codex binary itself:
 
@@ -179,7 +180,7 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
 { "method": "initialized", "params": {} }
 ```
 
-**`account/rateLimits/read`** → the 5h/7d balance windows and plan tier.
+**`account/rateLimits/read`** → the 5h/7d balance windows, plan tier, and optional paid-credit balance.
 
 ```jsonc
 // result — RateLimitsResponse { rateLimits: RateLimitSnapshot }
@@ -187,12 +188,14 @@ The reaper queries the per-user daemon **specifically** (never a cold-spawn, who
   "rateLimits": {
     "primary":   { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 300 },   // ~5h
     "secondary": { "usedPercent": 0-100, "resetsAt": <epoch s>, "windowDurationMins": 10080 }, // ~7d
-    "planType": "plus | pro | team | …"
-  }
+    "planType": "plus | pro | team | …",
+    "credits": { "balance": <USD number or string> } // optional, tolerated here or at the result root
+  },
+  "credits": { "balance": <USD number or string> } // optional
 }
 ```
 
-Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d.
+Fields are `camelCase` on the wire (`#[serde(rename_all = "camelCase")]`); `secondary` may be `null`, and a server-side change in window count or length renders gracefully off `windowDurationMins` rather than a hard-coded 5h/7d. The optional `credits.balance` field is parsed only when present and represents a remaining USD balance. Unknown `credits.balance` types are ignored so a credit-shape drift cannot poison valid windows.
 
 **`model/list`** (`{ "includeHidden": true }`) → the session model's display name. The payload also carries `defaultReasoningEffort`, but Rimz does not map it to row effort because it is a catalog default/recommendation, not the current session's configured value.
 
@@ -269,7 +272,32 @@ Unlike Claude (raw tokens, window derived from the payload model), Codex carries
 
 | Shape | Meaning |
 | --- | --- |
-| `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** (`∞`) |
+| `OPENAI_API_KEY` present, non-empty | API-key login → **unmetered** by subscription windows; the provider dashboard uses transcript-derived API spend plus any display ceiling |
 | `tokens.access_token` present | ChatGPT login → **metered** (plan tier filled once a session reports it) |
 
 The plan tier rides the app-server (`account/rateLimits/read` `plan_type`), not the idle file. The semantics are in [account.md](../../internals/agents/account.md#per-provider-mapping).
+
+[`oauth_usage.rs`](../../../crates/rimz/src/agents/codex/oauth_usage.rs) uses the same `tokens.access_token` for the direct account-usage fallback. An API-key-only auth file has no OAuth endpoint and skips this path. When `tokens.account_id` is present, the request also sends `ChatGPT-Account-Id`.
+
+The default URL is `GET https://chatgpt.com/backend-api/wham/usage`. A `chatgpt_base_url` value in `~/.codex/config.toml` overrides the base: bases ending in `/backend-api` append `/wham/usage`; other bases append `/api/codex/usage`. The parsed fallback response shape:
+
+```jsonc
+{
+  "plan_type": "plus | pro | team | …",
+  "rate_limit": {
+    "primary_window": {
+      "used_percent": 0-100,
+      "reset_at": <epoch s>,
+      "limit_window_seconds": 18000
+    },
+    "secondary_window": {
+      "used_percent": 0-100,
+      "reset_at": <epoch s>,
+      "limit_window_seconds": 604800
+    }
+  },
+  "credits": { "balance": <USD number or string> }
+}
+```
+
+Each window's `limit_window_seconds` maps to `duration_mins`; primary/secondary order is not semantic. `credits.balance` maps to `ExtraCredits::Known { remaining_usd }` when it parses as a number.

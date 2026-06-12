@@ -48,6 +48,7 @@ fn response_for(method: &str) -> Value {
                 "limitId": "codex",
                 "primary": { "usedPercent": 42, "windowDurationMins": 300, "resetsAt": 1_790_000_000_i64 },
                 "secondary": { "usedPercent": 7, "windowDurationMins": 10080, "resetsAt": 1_790_500_000_i64 },
+                "credits": { "balance": 18.5 },
                 "planType": "team"
             }
         }),

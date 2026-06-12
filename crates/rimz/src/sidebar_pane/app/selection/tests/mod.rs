@@ -112,6 +112,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         metered: false,
         remote_control: false,
         spending: None,
+        extra_credits: None,
         windows: Vec::new(),
     }
 }

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ledger::paths::config_home;
 
+mod accounts;
 mod animation;
 mod color;
 mod mux;
@@ -25,6 +26,7 @@ mod sidebar;
 mod tab;
 mod worktree;
 
+pub use accounts::{AccountsConfig, UsageLimitUsd};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig,
@@ -76,6 +78,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct MachineConfig {
+    pub accounts: AccountsConfig,
     pub worktree: WorktreeConfig,
     pub tab: TabConfig,
     pub remote_control: RemoteControlConfig,

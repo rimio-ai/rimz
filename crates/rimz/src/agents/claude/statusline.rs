@@ -130,7 +130,7 @@ fn clamp_pct(value: Option<f64>) -> Option<u8> {
 }
 
 /// Round rate-limit usage without turning a still-live sliver into exhaustion.
-fn clamp_rate_limit_used_pct(value: Option<f64>) -> Option<u8> {
+pub(crate) fn clamp_rate_limit_used_pct(value: Option<f64>) -> Option<u8> {
     value.map(|v| {
         let clamped = v.clamp(0.0, 100.0);
         if clamped > 0.0 && clamped < 100.0 {
@@ -147,8 +147,8 @@ fn non_empty<T: Default + PartialEq>(value: T) -> Option<T> {
 
 /// Claude's two named wire windows, in minutes — stamped onto each window so the
 /// dashboard labels and ages it like any other provider's.
-const CLAUDE_FIVE_HOUR_MINS: u32 = 5 * 60;
-const CLAUDE_SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
+pub(crate) const CLAUDE_FIVE_HOUR_MINS: u32 = 5 * 60;
+pub(crate) const CLAUDE_SEVEN_DAY_MINS: u32 = 7 * 24 * 60;
 
 /// Map one of Claude's named wire windows to a [`RateLimitWindow`], stamping the
 /// `duration_mins` the kind implies (Claude omits it from the wire). `None` when

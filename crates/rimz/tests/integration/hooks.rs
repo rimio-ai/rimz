@@ -1268,4 +1268,12 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         cache["windows"]["codex"]["windows"][1]["used_percentage"], 7,
         "the long window comes from the app-server secondary window"
     );
+    let credits_path = env.runtime_paths().shared_credits_path();
+    let credits: Value =
+        serde_json::from_slice(&std::fs::read(credits_path).expect("credits cache"))
+            .expect("credits cache json");
+    assert_eq!(
+        credits["entries"]["codex"]["extra_credits"]["known"]["remaining_usd"], 18.5,
+        "the app-server credits balance lands in the shared credits cache"
+    );
 }

@@ -1,0 +1,276 @@
+//! Direct Claude OAuth account-usage probe.
+//!
+//! This is a read-only fallback over Claude Code's local OAuth credentials. It
+//! reads `~/.claude/.credentials.json`, calls the provider usage endpoint, and
+//! normalizes the response into Rimz's account-window and paid-usage types. It
+//! never refreshes or writes credentials; retry/backoff and cache writes live in
+//! the CLI helper that calls this module.
+
+use std::path::PathBuf;
+#[cfg(target_os = "macos")]
+use std::process::{Command, Stdio};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use jiff::Timestamp;
+use serde::Deserialize;
+
+use crate::agents::context::{AgentRateLimits, RateLimitWindow};
+use crate::agents::{ExtraCredits, transcript_fs::home_dir};
+
+use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
+
+const DEFAULT_USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
+const URL_ENV: &str = "RIMZ_CLAUDE_OAUTH_USAGE_URL";
+const USER_AGENT_FALLBACK_VERSION: &str = "unknown";
+const TIMEOUT_SECS: u64 = 5;
+const MAX_BYTES: u64 = 512 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ClaudeOauthUsageErr {
+    #[error("claude OAuth credentials not found")]
+    NoCredentials,
+    #[error("claude OAuth token is expired")]
+    TokenExpired,
+    #[error("claude OAuth token is missing user:profile scope")]
+    MissingScope,
+    #[error("reading claude OAuth credentials: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("parsing claude OAuth credentials or usage response: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("claude OAuth usage http error: {0}")]
+    Http(String),
+}
+
+pub(crate) type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClaudeOauthUsage {
+    pub(crate) rate_limits: Option<AgentRateLimits>,
+    pub(crate) extra_credits: Option<ExtraCredits>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct ClaudeOauthCredentials {
+    access_token: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct CredentialsFile {
+    claude_ai_oauth: Option<ClaudeAiOauth>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+struct ClaudeAiOauth {
+    access_token: Option<String>,
+    expires_at: Option<i64>,
+    scopes: Option<Vec<String>>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct UsageWire {
+    five_hour: Option<WindowWire>,
+    seven_day: Option<WindowWire>,
+    extra_usage: Option<ExtraUsageWire>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct WindowWire {
+    utilization: Option<f64>,
+    resets_at: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct ExtraUsageWire {
+    is_enabled: Option<bool>,
+    used_credits: Option<f64>,
+    monthly_limit: Option<f64>,
+}
+
+pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<ClaudeOauthUsage> {
+    let credentials = load_credentials()?;
+    fetch_usage_with_url(&usage_url(), &credentials, cli_version)
+}
+
+pub(crate) fn load_credentials() -> Result<ClaudeOauthCredentials> {
+    let path = credentials_path();
+    match std::fs::read(&path) {
+        Ok(bytes) => parse_credentials(&bytes),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => load_keychain_credentials(),
+        Err(err) => Err(ClaudeOauthUsageErr::Io(err)),
+    }
+}
+
+fn load_keychain_credentials() -> Result<ClaudeOauthCredentials> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = Command::new("security")
+            .args([
+                "find-generic-password",
+                "-s",
+                "Claude Code-credentials",
+                "-w",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .map_err(ClaudeOauthUsageErr::Io)?;
+        if !output.status.success() {
+            return Err(ClaudeOauthUsageErr::NoCredentials);
+        }
+        parse_credentials(&output.stdout)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(ClaudeOauthUsageErr::NoCredentials)
+    }
+}
+
+fn credentials_path() -> PathBuf {
+    home_dir().join(".claude").join(".credentials.json")
+}
+
+pub(crate) fn parse_credentials(bytes: &[u8]) -> Result<ClaudeOauthCredentials> {
+    let parsed: CredentialsFile = serde_json::from_slice(bytes)?;
+    let Some(oauth) = parsed.claude_ai_oauth else {
+        return Err(ClaudeOauthUsageErr::NoCredentials);
+    };
+    let Some(access_token) = oauth.access_token.filter(|token| !token.is_empty()) else {
+        return Err(ClaudeOauthUsageErr::NoCredentials);
+    };
+    let scopes = oauth.scopes.unwrap_or_default();
+    if !scopes.iter().any(|scope| scope == "user:profile") {
+        return Err(ClaudeOauthUsageErr::MissingScope);
+    }
+    let Some(expires_at) = oauth.expires_at else {
+        return Err(ClaudeOauthUsageErr::TokenExpired);
+    };
+    if expires_at <= unix_now_ms() as i64 {
+        return Err(ClaudeOauthUsageErr::TokenExpired);
+    }
+    Ok(ClaudeOauthCredentials { access_token })
+}
+
+pub(crate) fn fetch_usage_with_url(
+    url: &str,
+    credentials: &ClaudeOauthCredentials,
+    cli_version: Option<&str>,
+) -> Result<ClaudeOauthUsage> {
+    let body = http_get(url, &credentials.access_token, cli_version)?;
+    parse_usage_response(&body)
+}
+
+fn usage_url() -> String {
+    std::env::var(URL_ENV)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_USAGE_URL.to_owned())
+}
+
+fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {
+    let agent = ureq::Agent::config_builder()
+        .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
+        .build()
+        .new_agent();
+    let mut response = agent
+        .get(url)
+        .header("Authorization", format!("Bearer {token}"))
+        .header("Accept", "application/json")
+        .header("anthropic-beta", "oauth-2025-04-20")
+        .header("User-Agent", claude_code_user_agent(cli_version))
+        .call()
+        .map_err(|err| ClaudeOauthUsageErr::Http(err.to_string()))?;
+    if response.status().as_u16() != 200 {
+        return Err(ClaudeOauthUsageErr::Http(format!(
+            "non-200 status {}",
+            response.status().as_u16()
+        )));
+    }
+    response
+        .body_mut()
+        .with_config()
+        .limit(MAX_BYTES)
+        .read_to_string()
+        .map_err(|err| ClaudeOauthUsageErr::Http(err.to_string()))
+}
+
+fn claude_code_user_agent(cli_version: Option<&str>) -> String {
+    let version = cli_version
+        .and_then(normalized_version)
+        .or_else(|| crate::agents::version::probe_cli_version("claude"))
+        .unwrap_or_else(|| USER_AGENT_FALLBACK_VERSION.to_owned());
+    format!("claude-code/{version}")
+}
+
+fn normalized_version(version: &str) -> Option<String> {
+    let trimmed = version.trim();
+    (!trimmed.is_empty()).then_some(trimmed.to_owned())
+}
+
+pub(crate) fn parse_usage_response(body: &str) -> Result<ClaudeOauthUsage> {
+    let parsed: UsageWire = serde_json::from_str(body)?;
+    Ok(ClaudeOauthUsage {
+        rate_limits: collect_rate_limits(parsed.five_hour, parsed.seven_day),
+        extra_credits: collect_extra_usage(parsed.extra_usage),
+    })
+}
+
+fn collect_rate_limits(
+    five_hour: Option<WindowWire>,
+    seven_day: Option<WindowWire>,
+) -> Option<AgentRateLimits> {
+    let windows: Vec<RateLimitWindow> = [
+        window(five_hour, CLAUDE_FIVE_HOUR_MINS),
+        window(seven_day, CLAUDE_SEVEN_DAY_MINS),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!windows.is_empty()).then_some(AgentRateLimits { windows })
+}
+
+fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<RateLimitWindow> {
+    let field = field?;
+    let used_percentage = clamp_rate_limit_used_pct(field.utilization);
+    let resets_at = field
+        .resets_at
+        .as_deref()
+        .and_then(|raw| raw.parse::<Timestamp>().ok());
+    (used_percentage.is_some() || resets_at.is_some()).then_some(RateLimitWindow {
+        used_percentage,
+        resets_at,
+        duration_mins: Some(duration_mins),
+    })
+}
+
+fn collect_extra_usage(field: Option<ExtraUsageWire>) -> Option<ExtraCredits> {
+    let field = field?;
+    if field.is_enabled == Some(false) {
+        return Some(ExtraCredits::Disabled);
+    }
+    Some(ExtraCredits::known(
+        cents_to_usd(field.used_credits),
+        None,
+        cents_to_usd(field.monthly_limit),
+    ))
+}
+
+fn cents_to_usd(value: Option<f64>) -> Option<f64> {
+    value.map(|value| value / 100.0)
+}
+
+fn unix_now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+#[cfg(test)]
+#[path = "tests/oauth_usage.rs"]
+mod tests;
