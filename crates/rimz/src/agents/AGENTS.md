@@ -2,7 +2,7 @@
 
 Local contract for `crates/rimz/src/agents/` — the integration layer. Extends [crates/rimz/AGENTS.md](../../AGENTS.md); it never restates parent rules.
 
-Topic detail lives in the internals leaves the root map describes — [hooks.md](../../../../docs/internals/agents/hooks.md) (the hook model and the adding-an-agent recipe), [transcript.md](../../../../docs/internals/agents/transcript.md), [account.md](../../../../docs/internals/agents/account.md), [agent.md](../../../../docs/internals/agents/agent.md), and the per-agent upstream references in [adapter/](../../../../docs/externals/agent-adapter/).
+Topic detail lives in the internals leaves the root map describes — [agent.md](../../../../docs/internals/agents/agent.md) (the agent model, the adapter boundary, and the adding-an-agent recipe), the per-kind internal mappings in [adapter/](../../../../docs/internals/agents/adapter/claude.md), [provider.md](../../../../docs/internals/agents/provider.md) (accounts, balances, spend, and pricing), and the per-agent upstream references in [agent-adapter/](../../../../docs/externals/agent-adapter/claude-reference.md).
 
 ## Layout
 

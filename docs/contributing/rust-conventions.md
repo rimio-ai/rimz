@@ -35,7 +35,7 @@ Stdout is the protocol surface. The crate root of every binary enforces this wit
 #![deny(clippy::print_stdout)]
 ```
 
-The only legal `println!` sites are `--json` event emitters and the final user-facing message, each annotated `#[expect(clippy::print_stdout)]` with a one-line reason. The hook subcommand (`rimz hooks <agent> ...`) is a third allowed site — its stdout is the agent-native decision channel, per [hooks.md → Hook stdout is the decision channel](../internals/agents/hooks.md#hook-stdout-is-the-decision-channel) and the rule of the same name in [AGENTS.md](../../AGENTS.md).
+The only legal `println!` sites are `--json` event emitters and the final user-facing message, each annotated `#[expect(clippy::print_stdout)]` with a one-line reason. The hook subcommand (`rimz hooks <agent> ...`) is a third allowed site — its stdout is the agent-native decision channel, per [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel) and the rule of the same name in [AGENTS.md](../../AGENTS.md).
 
 All other output flows through `tracing` to stderr:
 

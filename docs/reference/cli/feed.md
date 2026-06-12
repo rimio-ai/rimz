@@ -285,7 +285,7 @@ rimz hooks uninstall
 rimz hooks uninstall claude
 ```
 
-Installed hooks call Rimz's hidden hook entrypoint for lifecycle events and blocking feed events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and route blocking decisions through the bridge; see [agent hooks](../../internals/agents/hooks.md) for the adapter contract.
+Installed hooks call Rimz's hidden hook entrypoint for lifecycle events and blocking feed events. Hook stdout is the agent decision channel, so installed hooks keep diagnostics off stdout and route blocking decisions through the bridge; see [the adapter boundary](../../internals/agents/agent.md#the-adapter-boundary) for the adapter contract.
 
 Some agents add their own hook trust gate after installation. When an agent reports installed-but-untrusted hooks, `rimz doctor` prints the exact fix, such as trusting Rimz hooks inside that agent's own hook UI.
 

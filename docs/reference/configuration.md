@@ -218,7 +218,7 @@ max_provider_blocks = 3
 
 The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses today's spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
 
-`[sidebar.providers.<kind>]` restyles a provider's display name, ASCII art, and brand color; the fields and formats live in [theme.md](./theme.md#provider-styling). Account and budget sourcing is in [internals/agents/account.md](../internals/agents/account.md).
+`[sidebar.providers.<kind>]` restyles a provider's display name, ASCII art, and brand color; the fields and formats live in [theme.md](./theme.md#provider-styling). Account and budget sourcing is in [internals/agents/provider.md](../internals/agents/provider.md).
 
 ## Changing Values
 
@@ -274,4 +274,4 @@ Command-running fields enter the trust hash, so a clone with project config show
 
 Resolver configuration lives with `rimz resolver` and the protocol details in [internals/agents/resolvers.md](../internals/agents/resolvers.md). Remote aliases live with `rimz remote` and are documented in [cli.md](./cli.md). Trust records live with `rimz trust` and [internals/sidebar/trust.md](../internals/sidebar/trust.md).
 
-Payload-fidelity and retention controls are a planned project surface. The design and intended privacy keys live in [security.md](../guide/security.md), and the hook boundary they will govern is in [internals/agents/hooks.md](../internals/agents/hooks.md).
+Payload-fidelity and retention controls are a planned project surface. The design and intended privacy keys live in [security.md](../guide/security.md), and the hook boundary they will govern is in [internals/agents/agent.md → The adapter boundary](../internals/agents/agent.md#the-adapter-boundary).

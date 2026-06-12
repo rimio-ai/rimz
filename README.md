@@ -124,7 +124,7 @@ rimz queue codex --on done -- "open a PR summary"
 | Codex       | ✅     | hooks + `notify` · app-server · rollout `.jsonl` · `codex resume` |
 | Pi          | ✅     | extension API · session `.jsonl` · `pi --session`                 |
 
-Adapters are thin layers over the same hook and transcript primitives ([agents internals](./docs/internals/agents/hooks.md)); the agents run stock, in your terminal, with the official apps untouched.
+Adapters are thin layers over the same hook and transcript primitives ([agents internals](./docs/internals/agents/agent.md)); the agents run stock, in your terminal, with the official apps untouched.
 
 ## Install
 

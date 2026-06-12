@@ -76,11 +76,12 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
 **Internals** — `docs/internals/`, grouped into four leaves by subsystem.
 
 - **`agents/`** — integrate, operate, and house coding agents.
-  - [hooks.md](./docs/internals/agents/hooks.md) — the agent boundary: the integration trait, the two hook channels, install, and the Claude/Codex/Pi native-event mappings.
-  - [agent.md](./docs/internals/agents/agent.md) — agent state model: the rollup, state machine, turn phase, and liveness.
-  - [transcript.md](./docs/internals/agents/transcript.md) — agent context read-path: transcript discovery, tail parsing, the Claude/Codex JSONL→internal mapping, the statusline / app-server rich-context transports, and the full-history cost/spending read-path.
-  - [account.md](./docs/internals/agents/account.md) — agent accounts and balances: the plan/metered model, the per-provider auth and rate-limit mapping, the out-of-band account probe, and the provider-dashboard aggregation.
-  - [pricing.md](./docs/internals/agents/pricing.md) — per-model token pricing: the three-layer table (embedded snapshot, remote refresh, builtins), model resolution, and how Codex token counts become dollars.
+  - [agent.md](./docs/internals/agents/agent.md) — the agent model end to end: the rollup, state machine, turn phase, and liveness; the adapter boundary (the integration trait, the two hook channels, the decision channel, install, and adding an agent); and the live context read-path.
+  - **`adapter/`** — per-kind native mappings: hooks/lifecycle, context/transcript, account, and spend for one agent.
+    - [claude.md](./docs/internals/agents/adapter/claude.md) — Claude Code.
+    - [codex.md](./docs/internals/agents/adapter/codex.md) — Codex.
+    - [pi.md](./docs/internals/agents/adapter/pi.md) — Pi.
+  - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
   - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
   - [messages.md](./docs/internals/agents/messages.md) — state-aware `steer` and durable per-agent queued messages: target grammar, record layout, gates, delivery, attempts, and hazards.
   - [run.md](./docs/internals/agents/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.

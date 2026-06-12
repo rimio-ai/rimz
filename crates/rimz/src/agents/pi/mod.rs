@@ -10,8 +10,8 @@
 //! (`context_pct` / `context_window` / `total_tokens`) stamped on every
 //! envelope from the in-process `ctx.getContextUsage()` — payload-first, so
 //! the sidebar's bar stays current with no transcript tail read here.
-//! Lifecycle maps per docs/internals/agents/hooks.md →
-//! Appendix Pi: `session_start` registers, `before_agent_start` starts the
+//! Lifecycle maps per docs/internals/agents/adapter/pi.md: `session_start`
+//! registers, `before_agent_start` starts the
 //! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
 //! `tool_execution_end` is the mutating-tool heartbeat, and
 //! `session_before_compact`/`session_compact`/`session_shutdown` are the
@@ -280,7 +280,7 @@ impl AgentAdapter for PiAdapter {
         let parsed = payloads::parse_payload(payload);
         // The status decision lives in the shared `lifecycle::step` table —
         // here the adapter only names the intent. The native-event → signal
-        // mapping is docs/internals/agents/hooks.md → Appendix Pi.
+        // mapping is docs/internals/agents/adapter/pi.md.
         let signal = match event_name {
             "session_start" => LifecycleSignal::Registered,
             // Pi's `agent_start`/`agent_end` bracket one user prompt — pi's

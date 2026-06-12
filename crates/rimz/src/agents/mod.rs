@@ -109,7 +109,7 @@ pub type Result<T> = std::result::Result<T, AgentErr>;
 pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
     /// the agent rollup (`SessionStart`, `UserPromptSubmit`, `Stop`, …). Per
-    /// `docs/internals/agents/hooks.md` there are two runtime channels — lifecycle
+    /// `docs/internals/agents/agent.md` there are two runtime channels — lifecycle
     /// and feed. Whether a lifecycle event records anything is decided by
     /// [`AgentAdapter::observe_lifecycle`] returning `Some`.
     Lifecycle,

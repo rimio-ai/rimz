@@ -1,0 +1,178 @@
+# Provider accounts, balances, and spend
+
+> See [DESIGN.md → Attention at a glance](../../../DESIGN.md#attention-at-a-glance) for the account-scoped-budget invariant this doc operationalizes, [agent.md → Rich context](./agent.md#rich-context-agentcontext) for how the live-session rich context this doc interprets is stored on the rollup, and [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard) for what the provider dashboard looks like on screen.
+
+A coding agent runs against a **provider account** — a login, on a plan, that may or may not be metered — and that account has a **balance**: the included rate-limit windows the plan draws against plus any paid extra/API usage the provider or local spend ledger can name.
+This doc owns the account, balance, spend, and pricing model end to end: what the metered/unmetered/plan facts mean, how the producer folds them into the provider dashboard, how full-history spend is totalled, and how a model resolves to a price. The per-kind surfaces each provider exposes are in the adapter docs ([adapter/claude.md](./adapter/claude.md#account-and-balance), [adapter/codex.md](./adapter/codex.md#account-and-balance), [adapter/pi.md](./adapter/pi.md#account-and-balance)); the raw auth and account-usage surfaces those read are in the per-provider upstream references ([claude-reference.md](../../externals/agent-adapter/claude-reference.md#auth-surface), [codex-reference.md](../../externals/agent-adapter/codex-reference.md#auth-file), [pi-reference.md → Auth file](../../externals/agent-adapter/pi-reference.md#auth-file)).
+
+It is the **single home for account/balance/spend semantics**, folding onto the internal types [`AgentAccount`](../../../crates/rimz/src/agents/context.rs), [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs), [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs), the [`SidebarProviderPanel`](../../../crates/rimz/src/ledger/snapshot/view.rs) the renderer paints, and the [`SpendTally`](../../../crates/rimz/src/agents/spending.rs) the cost walk produces.
+
+Account, balance, and spend are **enrichment, never correctness** — the no-transcript-correctness rule.
+A missing binary, a logged-out account, an unparseable file: each degrades to an omitted plan label, a `v?` version placeholder, or an unknown budget track, never a failed snapshot or a wrong decision.
+
+## The model
+
+Three facts, all **account-scoped** — every session of one provider kind shares them, so the dashboard reads them per kind and never paints them per row:
+
+- **Account identity** — [`AgentAccount`](../../../crates/rimz/src/agents/context.rs): the raw `plan` tier the provider reports (`max`, `team`, `pro`), a `metered` flag, and — for a multi-provider client (Pi) — the raw `sub_provider` credential id (`anthropic`, `openai`) naming the subscription the account runs on.
+- **Included balance** — [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs): an ordered list of [`RateLimitWindow`](../../../crates/rimz/src/agents/context.rs)s (short→long), each a `used_percentage`, a typed `resets_at` instant a renderer formats as a countdown, and a `duration_mins` that names the window. Both Claude and Codex report a 5-hour and a 7-day window. The duration drives the bar label (`5h`/`7d`) and the reset-to-max roll-forward, so no window kind is hard-coded — a provider's windows are whatever it reports, and a server-side change in their count or length renders gracefully (a transient Codex bug once widened its window to ~30 days; it painted a labeled `30d` bar rather than misrendering).
+- **Paid usage** — [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs): an optional provider-paid balance or local API spend projection. It may name used USD, remaining USD, a limit, or a disabled state; missing fields stay missing, so the renderer can show an unknown or uncapped row without inventing a cap.
+
+Account identity and included balance ride [`AgentContext`](../../../crates/rimz/src/agents/context.rs), the session-scoped rich-context record (see [agent.md → Rich context](./agent.md#rich-context-agentcontext)); the producer lifts them to the account scope at aggregation time. Paid usage rides the shared credits cache when a provider reports it, or a read-time local spend projection for API-key accounts.
+
+**Metered vs. unmetered** is the one distinction the dashboard turns on.
+A subscription or ChatGPT login is *metered*: it draws on the rate-limit windows, drawn as draining "mana" bars.
+An API-key login is *unmetered by subscription windows*: it has no included-window budget to drain, so the dashboard shows a single `api` paid-usage row sourced from transcript-derived trailing-month spend and an optional display ceiling.
+`metered: None` is unknown — the dashboard infers metering from whether any rate-limit window was reported.
+
+## Two origins
+
+A kind's account and balance reach the dashboard two ways, mirroring the [two-source split](./agent.md#two-sources) of the live context read-path:
+
+1. **A live session's rich context.** The statusline / app-server transport already carries account and included-window balance, so any live session of a kind fills both at no extra cost. The transport is per-kind — Claude's statusline, Codex's app-server, stored on the rollup as described in [agent.md → Rich context](./agent.md#rich-context-agentcontext) — and this doc owns only what its fields *mean*.
+2. **An out-of-band probe** ([`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs), one `account.rs` per adapter behind the shared [`AccountProbe`](../../../crates/rimz/src/agents/account.rs) contract). For a provider that is logged in but has no live session this run, the producer probes the login directly, so the dashboard shows your accounts and budgets between turns — not only mid-turn.
+
+A live session always wins where both exist: its reading is richer and current.
+Paid usage reaches the dashboard through a separate shared `credits.json` cache when a provider account-usage surface can be reached from local OAuth credentials or the Codex app-server, and through a read-time local spend projection for API-key accounts. Credential-file probes are read-only: Rimz does not refresh tokens, write provider auth files, or use browser-cookie dashboard strategies. Absence is an unknown `ex`/`api` row, not a synthesized value.
+
+An agent launched through an elevation wrapper as another real uid stays outside account aggregation. Its hooks and credentials live under that other user's home directory, and the current user's out-of-band probe reads only the current user's account surface, so the sidebar presents it as a flagged process row only and leaves it out of the provider dashboard.
+
+## Per-provider mapping
+
+Each provider maps its native account and balance surfaces onto the internal types in its own adapter doc; this table is the index. A new provider fills the relevant cells in its adapter doc and the rest of Rimz is unchanged.
+
+| Provider | Account identity → [`AgentAccount`](../../../crates/rimz/src/agents/context.rs) | Balance → [`AgentRateLimits`](../../../crates/rimz/src/agents/context.rs) / [`ExtraCredits`](../../../crates/rimz/src/agents/credits.rs) |
+| --- | --- | --- |
+| **Claude** | [`claude auth status`](../../externals/agent-adapter/claude-reference.md#auth-surface) → plan + metered | statusline 5h/7d windows, or `rimz claude refresh-usage` idle — [adapter/claude.md](./adapter/claude.md#account-and-balance) |
+| **Codex** | app-server `planType` / `~/.codex/auth.json` | app-server `primary`/`secondary` windows + `credits.balance`, or `rimz codex refresh-rate-limits` — [adapter/codex.md](./adapter/codex.md#account-and-balance) |
+| **Pi** | `~/.pi/agent/auth.json` (oauth → metered, api_key → unmetered) | borrowed from the sibling kind its `sub_provider` names — [adapter/pi.md](./adapter/pi.md#account-and-balance) |
+
+Both Claude and Codex can refresh included windows while idle when `[accounts] oauth_usage` is enabled and their local OAuth credentials are present. Codex uses the app-server first because it is the provider's local read-only account surface; the direct OAuth endpoint is its fallback. Claude uses the direct OAuth endpoint because the statusline is live-session only.
+
+## The out-of-band probe
+
+[`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) returns an [`AccountProbe`](../../../crates/rimz/src/agents/account.rs) with three arms, and the arm — not just the value — drives the producer's cache TTL:
+
+- **`Found(AgentAccount)`** — a resolved login. Authoritative; rides the long success TTL.
+- **`LoggedOut`** — the probe ran and confidently found no login. Also authoritative (it changes about never), so it caches like a success.
+- **`Unavailable`** — the probe could not complete: a binary that would not run, a non-zero exit, an unreadable file. Transient; retried on the short failure TTL rather than pinning the dashboard empty for the full success window.
+
+The probe is a **pure read**; cross-process memoization lives one layer up in the producer (below). Each provider's probe mechanics — Claude's `claude auth status` fork, Codex's and Pi's cheap auth-file read — are in the adapter docs. An unknown kind has no probe arm yet and reads as `LoggedOut`.
+
+Every registered adapter exposes a display-only version probe by default: run `<kind> --version`, capture stdout, and treat any failure as no version. Rich context transports still win when present — Claude's statusline and Codex's app-server context can report fresher versions for live sessions — while the CLI probe fills idle or older account-cache entries; an absent version bypasses the long success TTL only after the short retry TTL, so a binary that cannot report `--version` does not re-fork on every producer frame. A future adapter overrides only when its binary name differs from its kind or when it has a cheaper/richer idle version source.
+
+## Producer aggregation
+
+[`SidebarSnapshot::with_provider_aggregates`](../../../crates/rimz/src/ledger/snapshot/view/providers.rs) folds accounts and balances into the dashboard view-model — one [`SidebarProviderPanel`](../../../crates/rimz/src/ledger/snapshot/view.rs) per kind.
+It is **producer-only**: it needs per-machine config and the out-of-band probe the pure reducer cannot read, so the reducer leaves `providers` empty and every consumer tab reads the producer's published panel (see [sidebar.md → State access](../sidebar/sidebar.md#state-access)).
+
+Per panel:
+
+- **Aggregate stats** — the per-provider `spending` (trailing 24h / 7d / 30d / 365d, summed fleet-wide across the kind's transcript history by `compute_spending`); `plan` and `version` taken from the freshest `context.observed_at`, the version falling back to the display-only binary probe when no session reports one. A kind with no live session still earns a panel when it has a probed login; recorded spend enriches an existing panel but never creates the provider section by itself.
+- **Account** — `metered` and the `plan` label come from the kind's account (a live session's, or the probed idle one); a `plan` tier formats into a brand label (`max` → `Claude Max`, `pro` → `ChatGPT Pro`), and a missing account infers `metered` from whether windows were reported.
+- **Brand style** — emblem art, color, and product name resolve from `[sidebar.providers.<kind>]` over the built-in defaults (claude clay, codex blue, pi forest green); an unknown kind gets neutral grey and no emblem. See [theme.md](../../reference/theme.md#provider-styling).
+- **Balance windows** — the per-duration set chosen by `stable_windows` (below). A kind that declares no window surface but runs on a metered sibling subscription (Pi on OAuth) borrows the sibling kind's stable windows instead — same account, same bars, so the Pi block and the sibling's block read identically when both show.
+- **Paid/API usage** — `ExtraCredits` from the shared credits cache is folded onto metered panels when `[accounts] oauth_usage` is enabled, then enriched with a display-only `[accounts.usage_limit_usd.<kind>]` ceiling if the provider did not report a cap. Unmetered API-key panels synthesize `ExtraCredits::Known` from the provider's trailing-month transcript spend and the same optional ceiling, so an API-key account can show `$used/$limit` without pretending the provider enforces that limit.
+
+Today's JSONL spend decides which discovered panels survive the `[sidebar] max_provider_blocks` cap (default 3), and a token-only provider ranks on the same transcript-derived footing — the retained set then orders stably by kind: the panels are the dashboard's tabs ([sidebar.md → Provider dashboard](../sidebar/sidebar.md#provider-dashboard)), so the row never reorders as spend shifts. The account, rate-limit, and credits caches are user-scoped and single-flighted across rooms — the elected producer publishes shared `accounts.json`, `rate_limits.json`, and `credits.json`; consumers read them and never fork.
+
+### Per-provider spend
+
+A panel's today line — the `◎` session count then the token breakdown `◇ ↘ ↗ ◌` (integer magnitudes, the fleet-ledger rows' exact vocabulary, with cache creation folded into `↘` input) with the bold money-green `$` pinned right — is all today's transcript-history burn, read from `spending` — the per-provider [`SpendTally`](../../../crates/rimz/src/agents/spending.rs) `compute_spending` returns ([Cost history](#cost-history)). The producer attaches each kind's entry to its panel before sorting; the renderer reads `spending.today` (its `sessions` count, split fields, and `usd`), so a token-only provider like Codex (priced from tokens via [token pricing](#token-pricing)) shows its dollars the same as a `costUSD`-logging one — there is no live-session aggregate to fall back to. The fleet-wide trailing-week/month `W:`/`M:` ledger rows (with session counts) are a separate, fleet-level read of `value_tally`, pinned below the panel. The spend is producer-only, like the rest of aggregation; it threads in as a plain map so the reducer stays I/O-free.
+
+### Stable window selection
+
+Balance is account-scoped, but the *freshest* session is not the truest reading: parallel sessions report the same window at slightly different instants, so "freshest wins" flickers between ticks.
+[`stable_windows`](../../../crates/rimz/src/ledger/snapshot/view/providers.rs) instead groups every session's readings by `duration_mins` and picks each duration deterministically: it drops any reading whose reset has already passed (stale), then keeps the **most-drained survivor** (highest `used_percentage`, so the bar never over-promises remaining budget), and returns the set short→long.
+Same inputs, same bars, regardless of which session reported last.
+
+### Spent windows and paused rows
+
+A window is **spent** at `used_percentage == 100`; it is currently limiting while its reset still sits ahead. The spent window paints the provider dashboard's budget bars; it does not park every agent of that kind. A row becomes `paused` only when that agent actually stopped mid-turn on a limit: a native turn-error certificate (`rate_limit` or `overloaded`) parks the affected running agent, and a stalled running agent uses a spent, unreset kind window as the fallback pause predicate. A `rate_limit` pause lifts to `failed` only after at least one spent window has reset and no known spent window for that kind remains unreset. Calm agents (`idle`/`success`) and actively progressing turns stay in their lifecycle status even when a budget bar reads empty. The rollup keeps each agent's true lifecycle status, and the projection and glyph live in [agent.md → Displayed status](./agent.md#displayed-status) and [the interface legend](../../interface/sidebar.md#reading-the-glyphs).
+
+### Not-started windows
+
+These budgets are **sliding** windows: the clock starts on your first token, so until then the provider keeps `resets_at` slid a full window-length ahead. A window whose reset still sits ~a full window out has **not started** — and it is detected by that reset distance, not a `used_percentage` of 0, because a fresh window still reports ~1% used (the live Codex 5h reads `usedPercent: 1` with the reset a full 5h out). That ~1% is the floor: any usage **above** it means the window has clearly started, so only a window at or below the floor (0–1% used) is a not-started candidate — past that, the reset is a real countdown regardless of its distance. The dashboard omits the countdown for such a window (a near-full bar, no `↻`), so it reads "ready to start" rather than a misleading ticking placeholder. Display only — it touches no parking or correctness — and applies to every provider; the on-screen treatment is [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+
+### Persistence across idle sessions
+
+A session ending or going idle would otherwise empty the dashboard, so the producer mirrors each resolved window into a user-scoped `rate_limits.json` cache (atomic write under a shared read-modify-write lock) and reads it back when no live session reports one:
+
+- Before a window's reset, the last-known (most-drained) reading stands.
+- Once a shorter window's reset passes while the longest cached window is still in the future, that shorter window has refilled — it shows full with the reset rolled one window-length forward, until a live reading overwrites it.
+- Once the longest cached window's reset passes with no fresh reading, Rimz no longer knows the account balance — every cached bar for that provider shows as an unknown empty track until a live or out-of-band reading overwrites it.
+
+Only live ground truth is persisted; the synthesized full or unknown window is a **read-time projection, never written**. The cache tracks login and drops a kind once it logs out.
+
+Paid usage has a sibling `credits.json` cache with the same account-scoped shape and lock discipline. Provider-reported values are persisted when a local account-usage surface returns them; API-key spend projections are not persisted because they are already derivable from the transcript spending walk plus config. A stale or absent credits entry leaves the `ex` row unknown (`∞` value over a dim empty track), while a configured display ceiling can still scale the row if usage is known.
+
+### Refresh cadences
+
+Codex keeps its included balance current without a live turn through the read-only app-server path; Claude keeps idle/fallback windows and extra usage current through `rimz claude refresh-usage`. Both run on the producer's shared success/failure TTLs, and both publish into the user-scoped `rate_limits.json`/`credits.json` caches so every workspace shares the retry pace. The per-kind cadence detail — Codex's 60 s app-server refresh and `rimz codex refresh-rate-limits`, Claude's `rimz claude refresh-usage` merge rule — lives in each adapter's Account section ([adapter/codex.md](./adapter/codex.md#account-and-balance), [adapter/claude.md](./adapter/claude.md#account-and-balance)).
+
+## Cost history
+
+A read-path walks the *whole* transcript history to total spend and token throughput — bucketed into four trailing windows, 24h / 7d / 30d / 365d, as a [`SpendTally`](../../../crates/rimz/src/agents/spending.rs). It lives in each adapter's `spend.rs` ([`claude`](../../../crates/rimz/src/agents/claude/spend.rs), [`codex`](../../../crates/rimz/src/agents/codex/spend.rs), [`pi`](../../../crates/rimz/src/agents/pi/spend.rs), shared walk helpers in [`transcript_fs`](../../../crates/rimz/src/agents/transcript_fs.rs)): one read-only parser per provider, resolved through `AgentAdapter::transcript_files` / `parse_spend`, that turns a provider's full session JSONL into per-entry cost, a four-way token split (`input` / `output` / `cache_write` / `cache_read`), and an entry timestamp, aggregated by [`spending::compute_spending`](../../../crates/rimz/src/agents/spending.rs). Each window carries that split — its `↘` input folds in `cache_write`, so the `◇` total is folded input plus output; `cache_read` rides apart — plus a `sessions` count of the distinct threads that ran in the window. The fleet tally feeds two consumers: the cockpit's `◎`/`¤`/breakdown summary with its trailing-24h count-up `$`, and the bottom [fleet ledger](../../interface/sidebar.md#the-fleet-ledger) (the static trailing-week and trailing-month rows). The read is incremental and user-scoped: the shared spending cache stores `(mtime, len, cursor)` per file, so an unchanged file is one stat and a grown file parses only its appended suffix from the cursor (Codex's cumulative-totals fold state rides the cursor). A shape change to the per-entry split bumps `SPENDING_CACHE_VERSION` so finalized sessions re-parse cleanly; a semantic change to the published aggregate bumps `PROVIDER_SPENDING_VERSION` so `provider-spending.json` recomputes once from the current entry cache without forcing JSONL re-parse. The whole walk runs at most once per user per `SPENDING_TTL`: between due walks every room serves the shared `provider-spending.json` exactly as a consumer tab reads it ([performance.md → Per-enrichment cadences](../health/performance.md#per-enrichment-cadences)).
+
+It is **read-only and sidebar-safe** — no ledger writes — so it sits apart from the integration adapters. The parsing is mostly shared; two concerns are provider-specific and live in the adapter docs:
+
+- **Dedup.** Claude replays a parent message into each subagent file with an inflated cost, so `compute_spending` dedups across files; Pi and Codex sessions are single-file and need no cross-file dedup ([adapter/claude.md → Cost](./adapter/claude.md#cost)).
+- **Cost source.** Claude and Codex log token counts, priced through the [token pricing](#token-pricing) table; Pi logs dollars directly, used verbatim ([adapter/claude.md → Cost](./adapter/claude.md#cost), [adapter/codex.md → Cost](./adapter/codex.md#cost), [adapter/pi.md → Cost](./adapter/pi.md#cost)).
+
+**Unknown prices.** A token-priced turn whose model misses the book contributes no entry, and the file cache records the trimmed model name plus its youngest timestamp for the pricing refresh chase; sentinel names such as Claude's `<synthetic>` are filtered out because they are not API model IDs, and unknowns older than the 365-day spend window do not chase. Once an active unknown model resolves, the file cold re-parses from byte zero, so entries skipped before the incremental cursor are recovered in the same due walk.
+
+The producer ([`sidebar::produce`](../../../crates/rimz/src/sidebar/produce/spending.rs)) discovers all three fleet-wide — every Claude project dir, every Codex and Pi session — so each provider counts on the same footing regardless of which project it ran in. `compute_spending` returns one fleet total plus a **per-provider breakdown** — the cockpit shows the total, each dashboard panel its own provider's spend ([Per-provider spend](#per-provider-spend)).
+
+## Token pricing
+
+Claude and Codex log token counts, so converting their turns to dollars needs a per-model price table; Pi logs `costUSD` directly (as did older Claude transcripts, which still use that figure when present). This section owns that table: where prices come from, how a model resolves to a price, and how the table stays fresh. Pricing is **enrichment, never correctness** — a failed fetch, a missing snapshot, an unknown model each degrades to stale-but-usable prices or an omitted entry, never a hard failure.
+
+The table lives in [`agents/pricing/`](../../../crates/rimz/src/agents/pricing/mod.rs): per-token [`Pricing`](../../../crates/rimz/src/agents/pricing/mod.rs) keyed by model in a [`PriceBook`](../../../crates/rimz/src/agents/pricing/mod.rs). Lookups are pure and network-free; the only network is the gated refresh in `load_for_spending`.
+
+### Three layers
+
+The book is assembled from three sources, the later ones winning, so a stale or missing remote entry never overrides a price the team maintains:
+
+| Layer | When | Source |
+| --- | --- | --- |
+| 1. Embedded snapshot | always, at process start | the checked-in LiteLLM-shaped snapshot, generated from LiteLLM plus authoritative models.dev fillers, compacted into the binary by [`build.rs`](../../../crates/rimz/build.rs) and `include_str!`-ed ([`embedded.rs`](../../../crates/rimz/src/agents/pricing/embedded.rs)) |
+| 2. Remote refresh | once per TTL, on disk | a fresh LiteLLM pull, plus authoritative models.dev entries filling models the snapshot lacks ([`remote.rs`](../../../crates/rimz/src/agents/pricing/remote.rs)) |
+| 3. Builtins | always, applied last | hardcoded prices for the OpenAI/Codex family ([`builtins.rs`](../../../crates/rimz/src/agents/pricing/builtins.rs)) |
+
+`gpt-5` is mandatory in the builtins: it is the Codex parser's fallback model, so a Codex event with no resolvable model still prices.
+
+### The refresh
+
+`rimz sidebar snapshot` is a one-shot process, so the refresh is disk-cached at `$XDG_RUNTIME_DIR/rimz/shared/pricing-cache.json` rather than held in memory: the spending producer reads the embedded snapshot plus the cache instantly while it holds the shared spending lock, and re-fetches when the cache is older than a day. A failed daily fetch records its attempt time and backs off an hour, so a persistent outage never re-fetches on every snapshot. `RIMZ_PRICING_OFFLINE` skips every fetch path.
+
+An unknown-model chase rides the same producer walk, with no timer of its own. When the [cost-history pass](#cost-history) records a priceable model name that the assembled book still cannot price, the pricing cache may fetch early on a standalone 30-minute gate. While the same unknowns persist, that gate doubles to 1h, 2h, and onward to the 24h cap; a newly seen unknown resets the gate to 30m. The chase also observes a 30-minute floor after any fetch attempt, so a just-refreshed source has time to catch up before Rimz asks again. Failed chase attempts escalate the same way as successful ones; when every recorded unknown resolves, the chase state clears.
+
+`build.rs` never touches the network: it embeds the checked-in vendored snapshot at [`crates/rimz/pricing/litellm-pricing.json`](../../../crates/rimz/pricing/litellm-pricing.json) (or a `RIMZ_PRICING_JSON_PATH` override), so every build is reproducible and hermetic. `cargo xtask pricing-refresh` is the deliberate update path — it fetches LiteLLM, fills missing models from the authoritative Anthropic/OpenAI models.dev catalogues, and rewrites that snapshot as a reviewable, committed diff; its compaction mirrors `build.rs`.
+
+### Resolving a model
+
+`PriceBook::price` resolves a model id to a price by exact match, then a boundary-aware fuzzy scan: the longest stored key that is a word-boundary prefix of the (normalized: trimmed, lowercased, `.`/`@`→`-`) lookup wins. So `claude-sonnet-4-20250514-via-bedrock` resolves to its base model. A purely numeric, non-date version bump is rejected — a new `gpt-5`-family version is never silently priced as the old one; it falls through to its own entry or to no price.
+
+### Computing token-priced cost
+
+`spending::compute_spending` prices the token-only providers per turn. **Codex** multiplies each [`CodexTokenEvent`](../../../crates/rimz/src/agents/codex/spend.rs): uncached input at the input rate, the cached slice at the cache-read rate, and output (which already includes reasoning tokens) at the output rate. **Claude** prices each `message.usage` the same way and adds the cache-creation slice at the cache-creation (prompt-cache write) rate, since its transcripts now omit `costUSD`; an older Claude turn that still logs a positive `costUSD` keeps that figure instead. A turn whose model has no known price contributes nothing rather than guessing.
+
+## Adding a provider
+
+A new agent earns an account block and balance bars by filling the two internal types from its own surfaces; everything downstream — aggregation, `stable_windows`, caching, the dashboard, the pricing table — is provider-agnostic and comes free.
+The work mirrors [agent.md → Adding an agent](./agent.md#adding-an-agent):
+
+1. **Fill `AgentAccount`** (plan + metered) on the session's `AgentContext` from its rich-context transport, and/or override [`AgentAdapter::probe_account`](../../../crates/rimz/src/agents/mod.rs) for the logged-in-but-idle case.
+2. **Fill `AgentRateLimits`** (the windows, each with a `used_percentage`, reset instant, and `duration_mins`) on `AgentContext` from the transport.
+3. **Optionally fill `ExtraCredits`** from a read-only provider account-usage surface; use `Disabled` only when the provider explicitly says paid extra usage is off.
+4. **Optionally** register `[sidebar.providers.<kind>]` defaults (emblem, color, name).
+5. **Stay best-effort** throughout: a missing fact is an omitted label, a `v?` placeholder, or an unknown budget track, never an error.
+
+Golden the account mapping from a fixture probe payload and a fixture transport payload, including the logged-out and unparseable cases (the inline goldens in each adapter's `account.rs` are the model). Golden the spend parser from a fixture JSONL, including the dedup and zero/negative-cost cases.
+
+## What lives elsewhere
+
+- **The on-screen look** — the mana bars, the `ex`/`api` paid-usage rows, the aligned grid, the `⇅ rc` flag, the exhausted-window and longer-window-gating rendering — is [the interface reference](../../interface/sidebar.md#zone-3--the-provider-dashboard).
+- **The renderer's projection** of `providers` and where the dashboard sits in the sidebar is [sidebar.md → Provider dashboard](../sidebar/sidebar.md#provider-dashboard).
+- **The per-kind transport** that carries the rich context — the statusline pipe and its wrap/restore, the Codex app-server connection ladder and broker — is the adapter docs ([adapter/claude.md](./adapter/claude.md#context-and-transcript), [adapter/codex.md](./adapter/codex.md#context-and-transcript)).
+- **Storage** of `AgentContext` on the rollup and the sidecar fold-in is [agent.md → Rich context](./agent.md#rich-context-agentcontext).

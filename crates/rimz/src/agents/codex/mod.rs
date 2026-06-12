@@ -432,7 +432,7 @@ impl AgentAdapter for CodexAdapter {
 
     fn render_neutral(&self, _event_name: &str) -> Result<Option<Value>> {
         // Codex permission hooks expect empty stdout on the neutral path —
-        // the agent's own UI then asks the human. Per docs/internals/agents/hooks.md:
+        // the agent's own UI then asks the human. Per docs/internals/agents/agent.md:
         // never emit `updatedInput` / `interrupt` for Codex permission hooks.
         Ok(None)
     }

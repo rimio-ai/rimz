@@ -46,7 +46,7 @@ Detail in [resolvers.md](../internals/agents/resolvers.md).
 
 ## Hook safety
 
-The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [hooks.md](../internals/agents/hooks.md#hook-stdout-is-the-decision-channel).
+The mechanics behind these guarantees — the decision channel, the neutral no-op, fresh stdio — are in [agent.md → Hook stdout is the decision channel](../internals/agents/agent.md#hook-stdout-is-the-decision-channel).
 
 - Hook stdout is reserved for the agent's decision channel.
 - Logs go to stderr or Rimz runtime state logs such as `binding.log.jsonl`.
