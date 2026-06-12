@@ -78,7 +78,7 @@ idle
  │ turn started (a mutating tool on an idle row also reconciles it)
  ▼
 running ───── turn ended ─────┬── clean ─────► success ──┐
- ▲   ⠁ reasoning ──► acting   │                          │
+ ▲     reasoning ──► acting   │                          │
  │                            └── errored ───► failed ───┤
  │                                                       │
  └── turn started re-enters · a mutating tool on ────────┘
@@ -121,7 +121,7 @@ A `TurnEnded` signal resolves the turn to `success`, or `failed` on its error bi
 The phase is the running turn's shape, derived from the turn's own hook events — the agent owns its status, Rimz derives the phase. Every turn opens in `reasoning`: `TurnStarted` and `SubagentStarted` set it, and the sidebar paints the themeable thinking head from the [interface legend](../../interface/sidebar.md#reading-the-glyphs) while the turn reads, searches, and decides. The turn's first **file-editing** tool moves it to `acting` — `ToolUsed { edits: true }`, each adapter's file-writing subset of its mutating set (Claude `Edit`/`Write`/`MultiEdit`/`NotebookEdit`, Codex `apply_patch`, Pi `edit`/`write`), read through `tool_edits_files`. The trigger is always a hook event, never prompt or transcript content.
 
 ```text
-turn starts ──► reasoning ⠁ ──first file-editing tool──► acting ──► turn ends
+turn starts ──► reasoning  ──first file-editing tool──► acting ──► turn ends
                     │                                                  ▲
                     └── a research turn that never edits a file ───────┘
 clean end with background work still in flight ──► parked (the row stays running, ⋯ bg)
