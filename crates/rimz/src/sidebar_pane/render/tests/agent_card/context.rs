@@ -339,12 +339,11 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
     );
 }
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
-/// idle span) with a tone stepping the same quarters: the dim resting
-/// weight while a resume would still hit cache, yellow from the second
-/// quarter, amber past the half hour, red past the hour — the cost warning
-/// that resuming will likely re-read the whole context uncached.
+/// idle span) with a continuous tone: the dim resting weight while a resume
+/// would still hit cache, then a warn-caution-alarm ramp to the hour — the cost
+/// warning that resuming will likely re-read the whole context uncached.
 #[test]
-fn context_line_age_tone_steps_with_the_clock_quarters() {
+fn context_line_age_tone_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
     let age_style = |idle_secs: u64, clock: char| {
         let mut codex = agent(
@@ -366,6 +365,12 @@ fn context_line_age_tone_steps_with_the_clock_quarters() {
             .map(|span| span.style)
             .unwrap_or_else(|| panic!("the context line carries the {clock} age"))
     };
+    let heat = |age_secs: i64| {
+        theme.style(
+            theme.heat_tone(age_heat_amount_for_test(age_secs)),
+            Modifier::empty(),
+        )
+    };
     assert_eq!(
         age_style(4 * 60, '◔'),
         theme.dim(),
@@ -373,13 +378,13 @@ fn context_line_age_tone_steps_with_the_clock_quarters() {
     );
     assert_eq!(
         age_style(25 * 60, '◑'),
-        theme.style(Color::Yellow, Modifier::empty()),
-        "yellow with the half-full face"
+        heat(25 * 60),
+        "warm ramp tone with the half-full face"
     );
     assert_eq!(
         age_style(40 * 60, '◕'),
-        theme.style(theme.clay(), Modifier::empty()),
-        "amber past the half hour"
+        heat(40 * 60),
+        "mid-ramp tone past the half hour"
     );
     assert_eq!(
         age_style(2 * 60 * 60, '◉'),

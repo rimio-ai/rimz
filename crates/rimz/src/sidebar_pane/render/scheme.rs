@@ -232,7 +232,7 @@ fn derive_palette(scheme: &GhosttyScheme) -> Result<PaletteTones, String> {
     })
 }
 
-fn blend_oklab(left: Rgb, right: Rgb, amount: f32) -> Rgb {
+pub(super) fn blend_oklab(left: Rgb, right: Rgb, amount: f32) -> Rgb {
     let left = Oklab::from_rgb(left);
     let right = Oklab::from_rgb(right);
     Oklab {

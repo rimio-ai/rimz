@@ -65,7 +65,7 @@ Twelve semantic slots cover everything the sidebar paints. Each accepts `#rrggbb
 | --- | --- | --- |
 | `good` | calm/positive: running tallies, low gauges, `+` additions, cache reads | `#96c293` |
 | `warn` | caution: waiting glyphs at rest, mid gauges, cache writes | `#dfb66d` |
-| `caution` | the amber badge/gauge rung between warning and alarm | `#e0915c` |
+| `caution` | the amber badge/gauge rung between warning and alarm, and the age-heat midpoint | `#e0915c` |
 | `alarm` | failed glyphs, high gauges, `-` removals, fresh input | `#de6e6e` |
 | `accent` | structure: worktree headers, the selected lane spine | `#72b3aa` |
 | `cool` | cool informational: the `plan` posture pill, window tags | `#7fa8de` |
@@ -83,6 +83,8 @@ warn = 173         # a raw xterm index stays exact at every depth
 ```
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
+
+Age heat interpolates `warn` → `caution` → `alarm` in OKLab, then emits the result at the active depth. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
 
 ## Custom Theme Files
 

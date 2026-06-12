@@ -37,7 +37,7 @@ use ratatui::style::Color;
 use tachyonfx::{CellFilter, Effect, EffectTimer, Interpolation, fx};
 
 use super::fmt::age_secs;
-use super::labels::{Heat, age_heat, status_glyph};
+use super::labels::{HeatCadence, heat_cadence, status_glyph};
 use super::row_passes_filter;
 use super::theme::Theme;
 
@@ -335,11 +335,11 @@ fn glow_delta(row: &SidebarRow, now: Timestamp, phase: u64) -> Option<f32> {
     if !row.status().is_some_and(AgentStatus::is_actionable) {
         return None;
     }
-    let heat = age_heat(age_secs(row.last_activity, now));
-    if heat == Some(Heat::Red) {
+    let cadence = heat_cadence(age_secs(row.last_activity, now));
+    if cadence == Some(HeatCadence::Red) {
         return None;
     }
-    let level = breath_level(phase, heat == Some(Heat::Amber));
+    let level = breath_level(phase, cadence == Some(HeatCadence::Amber));
     (level > 0.0).then_some(level * GLOW_MAX_LIGHTNESS)
 }
 

@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat, agent_style_at, attention_floor_color, hard_blink, heat_color, status_chip_color,
+    age_heat_color, agent_style_at, attention_floor_color, hard_blink, status_chip_color,
     status_glyph, status_rest_style, status_style_at, status_style_with_modifier,
 };
 use crate::sidebar_pane::render::theme::Theme;
@@ -42,7 +42,7 @@ pub(crate) struct MakeUpHit {
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?` and `failed` `!` (each wearing its
-/// oldest row's age heat over a yellow floor), parked `paused` `⏸` (held
+/// oldest row's continuous age heat over a yellow floor), parked `paused` `⏸` (held
 /// amber, never heating), then `success` `✓`. The right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
@@ -85,7 +85,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 
     // Top line — the make-up split by who might want you. The left cluster gathers
     // the rows worth a glance: `waiting` `?` and `failed` `!` (the oldest row's
-    // heat over a yellow floor), parked `paused` `⏸`, then success. The right
+    // continuous heat over a yellow floor), parked `paused` `⏸`, then success. The right
     // cluster is the live-capacity tail: working, then idle. Every bucket shows
     // its count.
     let mut left = Cluster::new(theme, filter);
@@ -313,8 +313,8 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
 }
 
 /// The cockpit attention bucket's tone: bold, wearing the oldest contributing
-/// row's [`age_heat`] over the same yellow floor as the per-row glyph — the
-/// aggregate echo of
+/// row's continuous age heat over the same yellow floor as the per-row glyph —
+/// the aggregate echo of
 /// [`agent_lead_style`](crate::sidebar_pane::render::labels::agent_lead_style)'s
 /// escalation. Reads the rendered rows (capped-away agents are excluded — the
 /// bucket count still spans them, but a hidden agent never drives the visible
@@ -333,9 +333,7 @@ fn attention_bucket_style(
         .max()
         .unwrap_or(0);
     theme.style(
-        age_heat(oldest)
-            .map(|heat| heat_color(theme, heat))
-            .unwrap_or_else(|| attention_floor_color(theme, status)),
+        age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
         Modifier::BOLD,
     )
 }
@@ -353,9 +351,7 @@ fn unread_bucket_style(
     };
     match status {
         AgentStatus::Waiting | AgentStatus::Failed => theme.style(
-            age_heat(oldest)
-                .map(|heat| heat_color(theme, heat))
-                .unwrap_or_else(|| attention_floor_color(theme, status)),
+            age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
             hard_blink(animation_phase),
         ),
         AgentStatus::Paused | AgentStatus::Success | AgentStatus::Running | AgentStatus::Idle => {

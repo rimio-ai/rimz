@@ -148,9 +148,8 @@ fn agent_card_lead_style(
 /// context-sidecar reading first, the hook-derived fallback second,
 /// omitted when neither has named it. Capability tokens degrade by width tier:
 /// L2 carries model + effort + window, L1 drops effort, L0 keeps just the name
-/// — cost always pins right. A blocked `?`/`!` glyph heats through amber to
-/// red on the age clock's quarter-hour ramp, so a long-ignored ask escalates
-/// without a timestamp.
+/// — cost always pins right. A blocked `?`/`!` glyph slides through the age
+/// heat ramp toward alarm, so a long-ignored ask escalates without a timestamp.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn agent_identity_line(
     theme: &Theme,
@@ -185,7 +184,7 @@ pub(super) fn agent_identity_line(
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —
     // metadata, a step under the soft stat figures — over `·` seams of the
-    // same weight. The glyph heats with the age clock once a
+    // same weight. The glyph heats continuously with the age clock once a
     // `waiting`/`failed` row sits unanswered. The kind name reads at normal
     // weight in the provider's brand color (or mid-gray chrome for unknown
     // kinds); the bright slot is saved for the task below.

@@ -33,10 +33,10 @@ pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'
 }
 
 /// The brightness modifier for a breathing attention glyph (`?` / `!`) on this
-/// frame, paced by the same [`age_heat`] ramp the glyph's color wears. While
-/// yellow it is a slow triangle pulse — `DIM` at the troughs, normal through
-/// the middle, `BOLD` at the peak — so the marker swells and fades like a
-/// breath (~2.4s at the 100ms animation tick), pulling the eye back to an
+/// frame, paced by the age cadence tier while color slides continuously. Below
+/// the half hour it is a slow triangle pulse — `DIM` at the troughs, normal
+/// through the middle, `BOLD` at the peak — so the marker swells and fades like
+/// a breath (~2.4s at the 100ms animation tick), pulling the eye back to an
 /// unanswered row without strobing. Amber doubles the tempo (~1.2s): the row
 /// sits past the half hour and the breath quickens with it. Red switches to
 /// [`hard_blink`] — past the hour the glyph earns the strobe the young breath
@@ -47,12 +47,11 @@ pub(in crate::sidebar_pane::render) fn attention_breath(
     animation_phase: u64,
     age_secs: i64,
 ) -> Modifier {
-    match age_heat(age_secs) {
-        Some(Heat::Red) => hard_blink(animation_phase),
+    match heat_cadence(age_secs) {
+        Some(HeatCadence::Red) => hard_blink(animation_phase),
         // Amber: the same triangle at double-time.
-        Some(Heat::Amber) => breath_wave(animation_phase.wrapping_mul(2)),
-        // Yellow (including the fresh yellow floor): the resting cadence.
-        _ => breath_wave(animation_phase),
+        Some(HeatCadence::Amber) => breath_wave(animation_phase.wrapping_mul(2)),
+        None => breath_wave(animation_phase),
     }
 }
 
@@ -294,16 +293,14 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
 ) -> Style {
     let role = agent_role(status, phase);
     if unread && status.is_actionable() {
-        let color = age_heat(age_secs)
-            .map(|heat| heat_color(theme, heat))
-            .unwrap_or_else(|| attention_floor_color(theme, status));
+        let color =
+            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
         theme.style(color, hard_blink(animation_phase))
     } else if unread {
         role_style_with_modifier(theme, role, hard_blink(animation_phase))
     } else if status.is_actionable() {
-        let color = age_heat(age_secs)
-            .map(|heat| heat_color(theme, heat))
-            .unwrap_or_else(|| attention_floor_color(theme, status));
+        let color =
+            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
         theme.style(color, attention_breath(animation_phase, age_secs))
     } else {
         role_style(theme, role, animation_phase)

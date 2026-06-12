@@ -205,7 +205,7 @@ pub fn nearest_xterm_index(red: u8, green: u8, blue: u8) -> u8 {
     best.1
 }
 
-fn xterm_rgb(index: u8) -> (u8, u8, u8) {
+pub(crate) fn xterm_rgb(index: u8) -> (u8, u8, u8) {
     debug_assert!(index >= 16);
     if index >= 232 {
         let value = 8 + (index - 232) * 10;

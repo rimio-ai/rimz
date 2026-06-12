@@ -82,7 +82,7 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
 }
 /// The cockpit `?`/`!` buckets echo the per-row glyph escalation: each
 /// wears its oldest contributing row's age heat over the same yellow floor
-/// — yellow while fresh, amber past the half hour, red past the hour.
+/// — warm while fresh, sliding until full alarm at the hour.
 #[test]
 fn attention_bucket_wears_the_oldest_rows_age_heat() {
     let theme = Theme::fixed(false);
@@ -106,11 +106,12 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
             .expect("the make-up line carries the ? bucket")
     };
     let style = |color| theme.style(color, Modifier::BOLD).fg;
+    let heat = |age_secs: i64| style(theme.heat_tone(age_heat_amount_for_test(age_secs)));
     assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
     assert_eq!(
         bucket_fg(40 * 60),
-        style(theme.clay()),
-        "amber past the half hour"
+        heat(40 * 60),
+        "mid-ramp tone follows the oldest row"
     );
     assert_eq!(
         bucket_fg(2 * 60 * 60),

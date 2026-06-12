@@ -1,3 +1,4 @@
+use super::super::super::age_heat_amount_for_test;
 use super::*;
 
 #[test]
@@ -42,13 +43,20 @@ fn window_style_tints_by_size_class_but_stays_subordinate() {
 fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     let theme = Theme::fixed(false);
     let yellow = theme.style(Color::Yellow, Modifier::BOLD).fg;
-    let amber = theme.style(theme.clay(), Modifier::BOLD).fg;
     let red = theme.style(Color::Red, Modifier::BOLD).fg;
+    let heat = |age_secs: i64| {
+        theme
+            .style(
+                theme.heat_tone(age_heat_amount_for_test(age_secs)),
+                Modifier::BOLD,
+            )
+            .fg
+    };
 
     // Both attention states floor at yellow while the age heat is still
     // resting — a row that needs a human never reads as dim chrome — then
-    // step with the clock quarters. The glyph breathes, so its brightness
-    // modifier varies by frame; only the color is asserted here.
+    // slide with the clock age. The glyph breathes, so its brightness modifier
+    // varies by frame; only the color is asserted here.
     for status in [AgentStatus::Waiting, AgentStatus::Failed] {
         assert_eq!(
             agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false).fg,
@@ -56,17 +64,18 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
         );
         assert_eq!(
             agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false).fg,
-            yellow
+            heat(25 * 60)
         );
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 31 * 60, 0, false).fg,
-            amber
+            agent_lead_style(&theme, status, TurnPhase::Idle, 50 * 60, 0, false).fg,
+            heat(50 * 60)
         );
         assert_eq!(
             agent_lead_style(&theme, status, TurnPhase::Idle, 61 * 60, 0, false).fg,
             red
         );
     }
+    assert_ne!(heat(25 * 60), heat(50 * 60), "age heat is not constant");
     assert_eq!(
         agent_lead_style(
             &theme,
@@ -262,29 +271,32 @@ fn loading_dots_stay_static_while_attention_breath_paces_with_age() {
 }
 
 #[test]
-fn activity_age_style_steps_with_the_clock_quarters() {
+fn activity_age_style_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
-    let yellow = theme.style(Color::Yellow, Modifier::empty());
-    let amber = theme.style(theme.clay(), Modifier::empty());
     let red = theme.style(Color::Red, Modifier::empty());
+    let heat = |age_secs: i64| {
+        theme.style(
+            theme.heat_tone(age_heat_amount_for_test(age_secs)),
+            Modifier::empty(),
+        )
+    };
     assert_eq!(activity_age_style(&theme, 60), theme.dim());
     assert_eq!(activity_age_style(&theme, 900), theme.dim());
     assert_eq!(
         activity_age_style(&theme, 901),
-        yellow,
-        "yellow from the second quarter"
+        heat(901),
+        "the ramp starts after the first quarter"
     );
-    assert_eq!(activity_age_style(&theme, 1800), yellow);
     assert_eq!(
-        activity_age_style(&theme, 1801),
-        amber,
-        "amber past the half hour"
+        activity_age_style(&theme, 2250),
+        theme.style(theme.heat_tone(0.5), Modifier::empty()),
+        "caution anchors the ramp midpoint"
     );
-    assert_eq!(activity_age_style(&theme, 3600), amber);
+    assert_eq!(activity_age_style(&theme, 3600), red);
     assert_eq!(
         activity_age_style(&theme, 3601),
         red,
-        "red once the cache is likely invalidated"
+        "alarm clamps once the cache is likely invalidated"
     );
 }
 

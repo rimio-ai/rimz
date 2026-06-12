@@ -57,6 +57,12 @@ pub(crate) use self::sections::status_total;
 pub(crate) use self::sections::{MakeUpHit, ProviderTabHit};
 use self::theme::Theme;
 
+#[cfg(test)]
+fn age_heat_amount_for_test(age_secs: i64) -> f32 {
+    debug_assert!(age_secs > 900);
+    ((age_secs - 900) as f32 / 2700.0).min(1.0)
+}
+
 pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Alert>) {
     draw_with_ui(frame, snapshot, alert, &mut UiState::default());
 }

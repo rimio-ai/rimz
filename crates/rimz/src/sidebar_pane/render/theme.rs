@@ -17,7 +17,7 @@
 
 use crate::config::{
     AnimationColor, ColorDepth, GlowMode, SidebarConfig, SidebarThemeConfig, ThemeColor,
-    nearest_xterm_index,
+    nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -105,6 +105,7 @@ pub(crate) fn builtin_palette_tones(name: &str) -> Option<PaletteTones> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Palette {
     depth: ColorDepth,
+    heat_ramp: [(u8, u8, u8); 3],
     good: Color,
     warn: Color,
     caution: Color,
@@ -149,6 +150,11 @@ impl Palette {
         };
         Palette {
             depth,
+            heat_ramp: [
+                heat_ramp_slot(theme.warn, tones.warn),
+                heat_ramp_slot(theme.caution, tones.caution),
+                heat_ramp_slot(theme.alarm, tones.alarm),
+            ],
             good: slot(theme.good, tones.good),
             warn: slot(theme.warn, tones.warn),
             caution: slot(theme.caution, tones.caution),
@@ -191,6 +197,14 @@ fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {
     match color {
         ThemeColor::Indexed(index) => Color::Indexed(index),
         ThemeColor::Rgb(red, green, blue) => rgb_color((red, green, blue), depth),
+    }
+}
+
+fn heat_ramp_slot(color: Option<ThemeColor>, builtin: (u8, u8, u8)) -> (u8, u8, u8) {
+    match color {
+        Some(ThemeColor::Rgb(red, green, blue)) => (red, green, blue),
+        Some(ThemeColor::Indexed(index)) if index >= 16 => xterm_rgb(index),
+        Some(ThemeColor::Indexed(_)) | None => builtin,
     }
 }
 
@@ -337,6 +351,20 @@ impl Theme {
 
     pub(crate) fn clay(&self) -> Color {
         self.palette.clay
+    }
+
+    pub(super) fn heat_tone(&self, amount: f32) -> Color {
+        let [warn, caution, alarm] = self.palette.heat_ramp;
+        let rgb = if amount <= 0.0 {
+            warn
+        } else if amount >= 1.0 {
+            alarm
+        } else if amount < 0.5 {
+            scheme::blend_oklab(warn, caution, amount * 2.0)
+        } else {
+            scheme::blend_oklab(caution, alarm, (amount - 0.5) * 2.0)
+        };
+        rgb_color(rgb, self.depth)
     }
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
@@ -498,6 +526,121 @@ mod tests {
         assert_eq!(
             indexed.style(Color::Green, Modifier::empty()).fg,
             Some(Color::Indexed(nearest_xterm_index(0xa3, 0xbe, 0x8c)))
+        );
+    }
+
+    #[test]
+    fn heat_tone_hits_endpoints_and_midpoint() {
+        let theme = Theme::fixed(false);
+        assert_eq!(theme.heat_tone(-0.1), Color::Indexed(179));
+        assert_eq!(theme.heat_tone(0.0), Color::Indexed(179));
+        assert_eq!(theme.heat_tone(0.5), Color::Indexed(173));
+        assert_eq!(theme.heat_tone(1.0), Color::Indexed(167));
+        assert_eq!(theme.heat_tone(1.1), Color::Indexed(167));
+    }
+
+    #[test]
+    fn heat_tone_honors_interpolatable_overrides() {
+        let truecolor = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    mode: ThemeMode::Truecolor,
+                    scheme: Some("classic".to_owned()),
+                    alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        assert_eq!(truecolor.heat_tone(1.0), Color::Rgb(0xff, 0x00, 0x00));
+
+        let indexed_rgb = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    scheme: Some("classic".to_owned()),
+                    alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        assert_eq!(
+            indexed_rgb.heat_tone(1.0),
+            Color::Indexed(nearest_xterm_index(0xff, 0x00, 0x00))
+        );
+
+        let indexed_xterm = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    scheme: Some("classic".to_owned()),
+                    alarm: Some(ThemeColor::Indexed(196)),
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        assert_eq!(indexed_xterm.heat_tone(1.0), Color::Indexed(196));
+    }
+
+    #[test]
+    fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
+        let theme = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    scheme: Some("classic".to_owned()),
+                    alarm: Some(ThemeColor::Indexed(1)),
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        assert_eq!(
+            theme.style(Color::Red, Modifier::empty()).fg,
+            Some(Color::Indexed(1)),
+            "flat alarm uses the ANSI override"
+        );
+        assert_eq!(
+            theme.heat_tone(1.0),
+            Color::Indexed(167),
+            "the ramp uses the scheme alarm because ANSI RGB is terminal-defined"
+        );
+    }
+
+    #[test]
+    fn truecolor_heat_gradient_changes_smoothly_toward_alarm() {
+        let theme = Theme::fixed_for_sidebar(
+            false,
+            &SidebarConfig {
+                theme: SidebarThemeConfig {
+                    mode: ThemeMode::Truecolor,
+                    scheme: Some("classic".to_owned()),
+                    ..SidebarThemeConfig::default()
+                },
+                ..SidebarConfig::default()
+            },
+        );
+        let sample = |minutes: i64| {
+            let amount = super::super::age_heat_amount_for_test(minutes * 60);
+            match theme.heat_tone(amount) {
+                Color::Rgb(red, green, blue) => (red, green, blue),
+                other => panic!("truecolor heat tone should be RGB, got {other:?}"),
+            }
+        };
+        let samples: Vec<_> = [16, 20, 25, 30, 35, 40, 45, 50, 55, 60]
+            .into_iter()
+            .map(sample)
+            .collect();
+        assert!(
+            samples.windows(2).all(|pair| pair[0] != pair[1]),
+            "each five-minute truecolor sample should move: {samples:?}"
+        );
+        assert!(
+            samples.windows(2).all(|pair| pair[0].1 > pair[1].1),
+            "classic heat lowers green toward alarm: {samples:?}"
         );
     }
 

@@ -206,9 +206,9 @@ pub(super) fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
 /// crosses a full minute
 /// — a just-active agent shows the breakdown alone, left-aligned, rather than
 /// a misleading `1m` — as the clock-fill glyph ([`elapsed_glyph`]) over the
-/// quarter-stepping age tone ([`activity_age_style`]): dim while warm, yellow
-/// from the second quarter, amber past the half hour, red from the hour, when
-/// resuming would likely re-read the whole context uncached.
+/// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
+/// through warn, caution, and alarm toward the hour, when resuming would likely
+/// re-read the whole context uncached.
 pub(super) fn context_tokens_line(
     theme: &Theme,
     row: &SidebarRow,
