@@ -14,8 +14,10 @@ pub enum TargetErr {
         scope: String,
         flag: String,
     },
-    #[error("no agent matches target `{target}`; live agents: {candidates}")]
-    NoMatch { target: String, candidates: String },
+    #[error(
+        "no agent matches target `{target}`{suggestion}; run `rimz agents list` to see live agents"
+    )]
+    NoMatch { target: String, suggestion: String },
     #[error("target `{target}` matched multiple agents: {candidates}")]
     Ambiguous { target: String, candidates: String },
     #[error("pane `{pane_id}` is not bound to a known agent")]
@@ -158,7 +160,7 @@ fn one_or_ambiguous<'a>(
         [agent] => Ok(agent),
         [] => Err(TargetErr::NoMatch {
             target: raw.to_owned(),
-            candidates: render_candidates_or_none(live_agents),
+            suggestion: suggest_names(raw, live_agents),
         }),
         many => Err(TargetErr::Ambiguous {
             target: raw.to_owned(),
@@ -187,9 +189,14 @@ fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
             .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
 }
 
+/// How many ambiguous candidates to spell out before collapsing the tail into
+/// a `(+K more)` count — enough to disambiguate a real clash, never a fleet dump.
+const CANDIDATE_CAP: usize = 8;
+
 fn render_candidates(candidates: &[&AgentState]) -> String {
-    candidates
+    let mut rendered = candidates
         .iter()
+        .take(CANDIDATE_CAP)
         .map(|agent| {
             let name = agent.name.as_deref().unwrap_or("unnamed");
             let kind = match agent.kind_ordinal {
@@ -214,15 +221,57 @@ fn render_candidates(candidates: &[&AgentState]) -> String {
             format!("{name} {kind} {worktree} {pane}")
         })
         .collect::<Vec<_>>()
-        .join(", ")
+        .join(", ");
+    let extra = candidates.len().saturating_sub(CANDIDATE_CAP);
+    if extra > 0 {
+        rendered.push_str(&format!(" (+{extra} more)"));
+    }
+    rendered
 }
 
-fn render_candidates_or_none(candidates: &[&AgentState]) -> String {
-    if candidates.is_empty() {
-        "none".to_owned()
-    } else {
-        render_candidates(candidates)
+/// A short "did you mean" suffix for a target miss: live agent names close to
+/// the selector by prefix, substring, or a shared name token (case-insensitive),
+/// capped at three. Empty when nothing is close, so the error stays a bare
+/// pointer to `rimz agents list`.
+fn suggest_names(raw: &str, live_agents: &[&AgentState]) -> String {
+    let selector = raw
+        .split_once('@')
+        .map_or(raw, |(selector, _scope)| selector)
+        .to_lowercase();
+    if selector.is_empty() {
+        return String::new();
     }
+    let mut names: Vec<&str> = live_agents
+        .iter()
+        .filter_map(|agent| agent.name.as_deref())
+        .filter(|name| {
+            let lower = name.to_lowercase();
+            lower.contains(&selector)
+                || selector.contains(&lower)
+                || shares_token(&lower, &selector)
+        })
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names.truncate(3);
+    if names.is_empty() {
+        return String::new();
+    }
+    let joined = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" (did you mean {joined}?)")
+}
+
+/// Whether two pet names share a meaningful `-`-delimited token, so
+/// `swift-otter` suggests `otter-swift`. Tokens under three chars are too noisy
+/// to match on.
+fn shares_token(a: &str, b: &str) -> bool {
+    a.split('-')
+        .filter(|token| token.len() >= 3)
+        .any(|token| b.split('-').any(|other| other == token))
 }
 
 #[cfg(test)]
@@ -289,6 +338,59 @@ mod tests {
             resolve_card(&snapshot, "claude-1", None),
             Err(TargetErr::NoMatch { .. })
         ));
+    }
+
+    #[test]
+    fn no_match_points_to_the_list_without_dumping_the_roster() {
+        let mut snapshot = empty_snapshot();
+        let names = ["calm-fox", "bold-pine", "warm-dune"];
+        snapshot.agents = names
+            .iter()
+            .enumerate()
+            .map(|(i, name)| {
+                let mut agent = agent("claude", &format!("session-{i}"), Some("main"), "terminal_1");
+                agent.name = Some((*name).to_owned());
+                agent
+            })
+            .collect();
+
+        let err = resolve_card(&snapshot, "missing-name", None).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("run `rimz agents list`"),
+            "points at the list: {message}"
+        );
+        assert!(
+            !message.contains("live agents:"),
+            "no inline roster dump: {message}"
+        );
+        // An unrelated miss names no candidate.
+        assert!(
+            names.iter().all(|name| !message.contains(name)),
+            "no roster names leak in: {message}"
+        );
+    }
+
+    #[test]
+    fn no_match_suggests_close_pet_names() {
+        let mut snapshot = empty_snapshot();
+        let mut close = agent("claude", "session-1", Some("main"), "terminal_1");
+        close.name = Some("otter-swift".to_owned());
+        let mut far = agent("claude", "session-2", Some("main"), "terminal_2");
+        far.name = Some("calm-fox".to_owned());
+        snapshot.agents = vec![close, far];
+
+        let message = resolve_card(&snapshot, "swift-otter", None)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            message.contains("did you mean") && message.contains("otter-swift"),
+            "suggests the token-sharing name: {message}"
+        );
+        assert!(
+            !message.contains("calm-fox"),
+            "skips unrelated names: {message}"
+        );
     }
 
     #[test]

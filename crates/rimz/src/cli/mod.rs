@@ -136,11 +136,11 @@ pub(crate) fn resolve_agent_card<'a>(
 ) -> Result<&'a AgentState> {
     match rimz::target::resolve_card(snapshot, raw, worktree_filter) {
         Ok(agent) => Ok(agent),
-        Err(rimz::TargetErr::NoMatch { target, candidates }) => {
+        Err(rimz::TargetErr::NoMatch { target, suggestion }) => {
             if let Some(hint) = launch_ref_hint(raw)? {
-                anyhow::bail!("{hint}; live agents: {candidates}");
+                anyhow::bail!("{hint}; run `rimz agents list` to see live agents");
             }
-            Err(rimz::TargetErr::NoMatch { target, candidates }.into())
+            Err(rimz::TargetErr::NoMatch { target, suggestion }.into())
         }
         Err(err) => Err(err.into()),
     }
