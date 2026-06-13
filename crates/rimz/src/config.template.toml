@@ -90,10 +90,11 @@
 # stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds
 
 [sidebar.theme]
-# Palette depth and scheme are optional. mode = "auto" uses truecolor when COLORTERM advertises it, otherwise 256. scheme = "auto" follows Ghostty's active theme when visible and falls back to clay.
-# Slot overrides accept either 256-color indexes or "#rrggbb"; omitted slots use the selected scheme.
+# Palette depth and scheme are optional. mode = "auto" uses truecolor when COLORTERM advertises it, otherwise 256. Unset scheme uses clay; set a built-in name, a bundled Alacritty theme, or a path to an Alacritty TOML file.
+# Slot overrides accept either 256-color indexes or "#rrggbb"; omitted slots use the selected scheme. The bundled catalog lives under crates/rimz/themes/alacritty.
 ## mode = "auto"
-## scheme = "auto"
+## scheme = "clay"
+## scheme = "Catppuccin Mocha"
 ## good = "#96c293"
 ## warn = "#dfb66d"
 ## caution = "#e0915c"

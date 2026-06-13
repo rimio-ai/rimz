@@ -212,7 +212,7 @@ trunk = "develop"
 
 `max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
 
-`[sidebar.theme]` picks the palette — built-in schemes, Ghostty theme adoption, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[sidebar.animations]` status heads and `[sidebar.providers]` brand styling, lives in [theme.md](./theme.md).
+`[sidebar.theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[sidebar.animations]` status heads and `[sidebar.providers]` brand styling, lives in [theme.md](./theme.md).
 
 `card_density = "auto"` keeps the standard agent card: identity, description, context meter, context line, and subagents on the selected card. `expanded` shows every card's subagents. `compact` trims resting cards by status while the selected card opens to the standard card.
 
@@ -245,7 +245,7 @@ rimz config get
 rimz config get sidebar.max_cols
 rimz config get sidebar --json
 rimz config set sidebar.max_cols 80
-rimz config set sidebar.theme.scheme slate
+rimz config set sidebar.theme slate
 rimz config set worktree.base fresh
 rimz config set notifications.triggers '["waiting", "failed"]'
 ```

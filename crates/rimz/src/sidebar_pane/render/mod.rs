@@ -17,6 +17,7 @@ mod ansi;
 mod chrome;
 mod compose;
 mod effects;
+mod embedded_themes;
 mod fmt;
 mod labels;
 mod odometer;

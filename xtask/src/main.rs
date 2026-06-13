@@ -12,6 +12,7 @@ mod pricing;
 mod runner;
 mod screenshot;
 mod source_files;
+mod theme;
 
 #[cfg(test)]
 mod tests;
@@ -112,6 +113,11 @@ const TASKS: &[TaskInfo] = &[
         name: "pricing-refresh",
         summary: "Refresh the generated pricing snapshot.",
         runs: "fetch LiteLLM pricing JSON plus authoritative models.dev fillers, compact them, and rewrite the ignored snapshot atomically",
+    },
+    TaskInfo {
+        name: "theme-refresh",
+        summary: "Refresh the bundled Alacritty theme catalog.",
+        runs: "fetch the iTerm2-Color-Schemes Alacritty catalog, rewrite vendored TOML plus attribution atomically",
     },
     TaskInfo {
         name: "screenshot",
@@ -219,6 +225,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "pricing-refresh" => pricing::pricing_refresh(root),
+        "theme-refresh" => theme::theme_refresh(root),
         "screenshot" => screenshot::screenshot(root, args),
         "ci" => gates::ci(root),
         other => bail!("unknown xtask `{other}`"),

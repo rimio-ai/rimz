@@ -2,41 +2,62 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-use crate::config::parse_hex;
-use crate::ledger::paths::config_home;
+use serde::Deserialize;
 
+use crate::config::parse_hex;
+
+use super::embedded_themes;
 use super::theme::{PaletteTones, builtin_palette_tones};
 
 type Rgb = (u8, u8, u8);
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct GhosttyScheme {
+struct AnsiScheme {
     palette: [Option<Rgb>; 16],
     background: Option<Rgb>,
     foreground: Option<Rgb>,
 }
 
-pub(crate) fn auto_palette_tones() -> Option<PaletteTones> {
-    static CACHED: OnceLock<Option<PaletteTones>> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        let config = std::fs::read_to_string(config_home().join("ghostty").join("config")).ok()?;
-        let theme = active_theme_name(&config)?;
-        explicit_palette_tones(&theme)
-    })
+#[derive(Debug, Deserialize)]
+struct AlacrittyTheme {
+    colors: Option<AlacrittyColors>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AlacrittyColors {
+    primary: Option<AlacrittyPrimaryColors>,
+    normal: Option<AlacrittyAnsiColors>,
+    bright: Option<AlacrittyAnsiColors>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AlacrittyPrimaryColors {
+    background: Option<String>,
+    foreground: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AlacrittyAnsiColors {
+    red: Option<String>,
+    green: Option<String>,
+    yellow: Option<String>,
+    blue: Option<String>,
+    magenta: Option<String>,
+    cyan: Option<String>,
 }
 
 pub(crate) fn explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
     if let Some(tones) = builtin_palette_tones(name_or_path) {
         return Some(tones);
     }
-    cached_external_palette_tones(name_or_path)
+    cached_explicit_palette_tones(name_or_path)
 }
 
 pub fn validate_explicit_scheme(name_or_path: &str) -> Result<(), String> {
     load_explicit_palette_tones(name_or_path).map(|_| ())
 }
 
-fn cached_external_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
+fn cached_explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
     {
         let cache = lock_explicit_scheme_cache();
         if let Some(tones) = cache.get(name_or_path) {
@@ -44,7 +65,7 @@ fn cached_external_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
         }
     }
 
-    let tones = load_external_palette_tones(name_or_path).ok();
+    let tones = load_explicit_palette_tones(name_or_path).ok();
     let mut cache = lock_explicit_scheme_cache();
     *cache.entry(name_or_path.to_owned()).or_insert(tones)
 }
@@ -61,11 +82,16 @@ fn load_explicit_palette_tones(name_or_path: &str) -> Result<PaletteTones, Strin
     if let Some(tones) = builtin_palette_tones(name_or_path) {
         return Ok(tones);
     }
+    if let Some(text) = embedded_themes::theme_toml(name_or_path) {
+        return parse_palette_tones(text).map_err(|err| {
+            format!("invalid bundled sidebar theme scheme `{name_or_path}`: {err}")
+        });
+    }
     load_external_palette_tones(name_or_path)
 }
 
 fn load_external_palette_tones(name_or_path: &str) -> Result<PaletteTones, String> {
-    let path = resolve_scheme_path(name_or_path).ok_or_else(|| {
+    let path = resolve_external_scheme_path(name_or_path).ok_or_else(|| {
         format!(
             "unknown sidebar theme scheme `{name_or_path}`; {}",
             theme_lookup_hint()
@@ -78,61 +104,15 @@ fn load_external_palette_tones(name_or_path: &str) -> Result<PaletteTones, Strin
 }
 
 pub fn theme_lookup_hint() -> String {
-    let user = config_home().join("ghostty").join("themes");
-    match std::env::var_os("GHOSTTY_RESOURCES_DIR") {
-        Some(resources) => format!(
-            "builtins: clay, slate, classic; Ghostty themes: {}, {}",
-            user.display(),
-            PathBuf::from(resources).join("themes").display()
-        ),
-        None => format!(
-            "builtins: clay, slate, classic; Ghostty themes: {} or $GHOSTTY_RESOURCES_DIR/themes",
-            user.display()
-        ),
-    }
+    format!(
+        "builtins: clay, slate, classic; {} bundled Alacritty themes in crates/rimz/themes/alacritty; or a path to an Alacritty .toml",
+        embedded_themes::theme_count()
+    )
 }
 
-fn active_theme_name(config: &str) -> Option<String> {
-    config
-        .lines()
-        .rev()
-        .filter_map(line_key_value)
-        .find_map(|(key, value)| {
-            (key == "theme")
-                .then(|| choose_dark_theme(value))
-                .filter(|value| !value.is_empty())
-        })
-}
-
-fn choose_dark_theme(value: &str) -> String {
-    let value = strip_quotes(value.trim());
-    for part in value.split(',') {
-        let part = part.trim();
-        if let Some(theme) = part.strip_prefix("dark:") {
-            return strip_quotes(theme.trim()).to_owned();
-        }
-    }
-    strip_quotes(value.split(',').next().unwrap_or(value).trim()).to_owned()
-}
-
-fn resolve_scheme_path(name_or_path: &str) -> Option<PathBuf> {
-    scheme_candidates(name_or_path)
-        .into_iter()
-        .find(|path| path.is_file())
-}
-
-fn scheme_candidates(name_or_path: &str) -> Vec<PathBuf> {
-    let mut paths = vec![
-        config_home()
-            .join("ghostty")
-            .join("themes")
-            .join(name_or_path),
-    ];
-    if let Some(resources) = std::env::var_os("GHOSTTY_RESOURCES_DIR") {
-        paths.push(PathBuf::from(resources).join("themes").join(name_or_path));
-    }
-    paths.push(expand_home(Path::new(name_or_path)));
-    paths
+fn resolve_external_scheme_path(name_or_path: &str) -> Option<PathBuf> {
+    let path = expand_home(Path::new(name_or_path));
+    path.is_file().then_some(path)
 }
 
 fn expand_home(path: &Path) -> PathBuf {
@@ -151,55 +131,92 @@ fn expand_home(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn parse_palette_tones(text: &str) -> Result<PaletteTones, String> {
-    derive_palette(&parse_ghostty_scheme(text)?)
+    derive_palette(&parse_alacritty_scheme(text)?)
 }
 
-fn parse_ghostty_scheme(text: &str) -> Result<GhosttyScheme, String> {
-    let mut scheme = GhosttyScheme::default();
-    for (key, value) in text.lines().filter_map(line_key_value) {
-        match key {
-            "palette" => {
-                let (index, color) = value
-                    .split_once('=')
-                    .ok_or_else(|| format!("invalid palette entry `{value}`"))?;
-                let index = index
-                    .trim()
-                    .parse::<usize>()
-                    .map_err(|err| format!("invalid palette index `{index}`: {err}"))?;
-                if index >= scheme.palette.len() {
-                    return Err(format!("palette index {index} is outside 0..=15"));
-                }
-                scheme.palette[index] = Some(parse_hex(strip_quotes(color.trim()))?);
-            }
-            "background" => {
-                scheme.background = Some(parse_hex(strip_quotes(value.trim()))?);
-            }
-            "foreground" => {
-                scheme.foreground = Some(parse_hex(strip_quotes(value.trim()))?);
-            }
-            _ => {}
-        }
-    }
+fn parse_alacritty_scheme(text: &str) -> Result<AnsiScheme, String> {
+    let theme: AlacrittyTheme =
+        toml::from_str(text).map_err(|err| format!("parsing Alacritty theme TOML: {err}"))?;
+    let colors = theme.colors.unwrap_or_default();
+    let mut scheme = AnsiScheme::default();
+
+    let primary = colors.primary.unwrap_or_default();
+    scheme.background = Some(parse_required_color(
+        "colors.primary.background",
+        primary.background.as_deref(),
+    )?);
+    scheme.foreground = Some(parse_required_color(
+        "colors.primary.foreground",
+        primary.foreground.as_deref(),
+    )?);
+
+    let normal = colors.normal.unwrap_or_default();
+    set_required_palette_slot(&mut scheme, 1, "colors.normal.red", normal.red.as_deref())?;
+    set_required_palette_slot(
+        &mut scheme,
+        2,
+        "colors.normal.green",
+        normal.green.as_deref(),
+    )?;
+    set_required_palette_slot(
+        &mut scheme,
+        3,
+        "colors.normal.yellow",
+        normal.yellow.as_deref(),
+    )?;
+    set_required_palette_slot(&mut scheme, 4, "colors.normal.blue", normal.blue.as_deref())?;
+    set_required_palette_slot(
+        &mut scheme,
+        5,
+        "colors.normal.magenta",
+        normal.magenta.as_deref(),
+    )?;
+    set_required_palette_slot(&mut scheme, 6, "colors.normal.cyan", normal.cyan.as_deref())?;
+
+    let bright_blue = colors
+        .bright
+        .as_ref()
+        .and_then(|bright| bright.blue.as_deref())
+        .or(normal.blue.as_deref());
+    set_palette_slot(&mut scheme, 12, "colors.bright.blue", bright_blue)?;
+
     Ok(scheme)
 }
 
-fn line_key_value(line: &str) -> Option<(&str, &str)> {
-    let line = line.trim();
-    if line.is_empty() || line.starts_with('#') {
-        return None;
-    }
-    let (key, value) = line.split_once('=')?;
-    Some((key.trim(), value.trim()))
+fn parse_required_color(key: &str, value: Option<&str>) -> Result<Rgb, String> {
+    let value = value.ok_or_else(|| format!("{key} is missing"))?;
+    parse_color(key, value)
 }
 
-fn strip_quotes(value: &str) -> &str {
-    value
-        .strip_prefix('"')
-        .and_then(|value| value.strip_suffix('"'))
-        .unwrap_or(value)
+fn parse_optional_color(key: &str, value: Option<&str>) -> Result<Option<Rgb>, String> {
+    value.map(|value| parse_color(key, value)).transpose()
 }
 
-fn derive_palette(scheme: &GhosttyScheme) -> Result<PaletteTones, String> {
+fn set_required_palette_slot(
+    scheme: &mut AnsiScheme,
+    index: usize,
+    key: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    scheme.palette[index] = Some(parse_required_color(key, value)?);
+    Ok(())
+}
+
+fn set_palette_slot(
+    scheme: &mut AnsiScheme,
+    index: usize,
+    key: &str,
+    value: Option<&str>,
+) -> Result<(), String> {
+    scheme.palette[index] = parse_optional_color(key, value)?;
+    Ok(())
+}
+
+fn parse_color(key: &str, value: &str) -> Result<Rgb, String> {
+    parse_hex(value).map_err(|err| format!("{key}: {err}"))
+}
+
+fn derive_palette(scheme: &AnsiScheme) -> Result<PaletteTones, String> {
     let color = |index: usize| {
         scheme.palette[index].ok_or_else(|| format!("palette index {index} is missing"))
     };
@@ -325,75 +342,92 @@ fn linear_to_srgb(value: f32) -> u8 {
 mod tests {
     use super::*;
 
-    const DARK_SCHEME: &str = r#"
-background = #1a1b26
-foreground = #c0caf5
-palette = 1=#f7768e
-palette = 2=#9ece6a
-palette = 3=#e0af68
-palette = 4=#7aa2f7
-palette = 5=#bb9af7
-palette = 6=#7dcfff
-palette = 12=#7aa2f7
+    const AFTERGLOW: &str = r#"
+[colors.bright]
+blue = '#6c99bb'
+
+[colors.normal]
+red = '#ac4142'
+green = '#7e8e50'
+yellow = '#e5b567'
+blue = '#6c99bb'
+magenta = '#9f4e85'
+cyan = '#7dd6cf'
+
+[colors.primary]
+background = '#212121'
+foreground = '#d0d0d0'
 "#;
 
     const LIGHT_SCHEME: &str = r#"
-background = #fdf6e3
-foreground = #657b83
-palette = 1=#dc322f
-palette = 2=#859900
-palette = 3=#b58900
-palette = 4=#268bd2
-palette = 5=#d33682
-palette = 6=#2aa198
-palette = 12=#268bd2
+[colors.normal]
+red = '#dc322f'
+green = '#859900'
+yellow = '#b58900'
+blue = '#268bd2'
+magenta = '#d33682'
+cyan = '#2aa198'
+
+[colors.primary]
+background = '#fdf6e3'
+foreground = '#657b83'
 "#;
 
     #[test]
-    fn ghostty_scheme_derives_semantic_slots() {
-        let tones = parse_palette_tones(DARK_SCHEME).expect("parse scheme");
-        assert_eq!(tones.good, (0x9e, 0xce, 0x6a));
-        assert_eq!(tones.warn, (0xe0, 0xaf, 0x68));
-        assert_eq!(tones.alarm, (0xf7, 0x76, 0x8e));
-        assert_eq!(tones.accent, (0x7d, 0xcf, 0xff));
-        assert_eq!(tones.cool, (0x7a, 0xa2, 0xf7));
-        assert_eq!(tones.meta, (0xbb, 0x9a, 0xf7));
-        assert_eq!(tones.selection, (0x7a, 0xa2, 0xf7));
+    fn alacritty_scheme_parses_and_derives() {
+        let tones = parse_palette_tones(AFTERGLOW).expect("parse scheme");
+        assert_eq!(tones.good, (0x7e, 0x8e, 0x50));
+        assert_eq!(tones.warn, (0xe5, 0xb5, 0x67));
+        assert_eq!(tones.alarm, (0xac, 0x41, 0x42));
+        assert_eq!(tones.accent, (0x7d, 0xd6, 0xcf));
+        assert_eq!(tones.cool, (0x6c, 0x99, 0xbb));
+        assert_eq!(tones.meta, (0x9f, 0x4e, 0x85));
+        assert_eq!(tones.selection, (0x6c, 0x99, 0xbb));
         assert_ne!(tones.caution, tones.warn);
         assert_ne!(tones.caution, tones.alarm);
     }
 
     #[test]
-    fn gray_ladder_follows_background_to_foreground_direction() {
-        let dark = parse_palette_tones(DARK_SCHEME).expect("dark");
-        let light = parse_palette_tones(LIGHT_SCHEME).expect("light");
+    fn alacritty_selection_falls_back_to_normal_blue_when_bright_missing() {
+        let tones = parse_palette_tones(LIGHT_SCHEME).expect("parse scheme");
+        assert_eq!(tones.cool, (0x26, 0x8b, 0xd2));
+        assert_eq!(tones.selection, tones.cool);
+    }
+
+    #[test]
+    fn alacritty_missing_required_normal_entry_is_named_error() {
+        let err = parse_palette_tones(
+            r#"
+[colors.normal]
+red = '#ac4142'
+yellow = '#e5b567'
+blue = '#6c99bb'
+magenta = '#9f4e85'
+cyan = '#7dd6cf'
+
+[colors.primary]
+background = '#212121'
+foreground = '#d0d0d0'
+"#,
+        )
+        .expect_err("missing green should fail");
+        assert_eq!(err, "colors.normal.green is missing");
+    }
+
+    #[test]
+    fn light_alacritty_theme_ladder_darkens_toward_foreground() {
+        let tones = parse_palette_tones(LIGHT_SCHEME).expect("parse scheme");
         assert!(
-            dark.soft.0 > dark.dim.0 && dark.dim.0 > dark.faint.0,
-            "dark scheme ladder lightens toward foreground"
-        );
-        assert!(
-            light.soft.0 < light.dim.0 && light.dim.0 < light.faint.0,
+            tones.soft.0 < tones.dim.0 && tones.dim.0 < tones.faint.0,
             "light scheme ladder darkens toward foreground"
         );
     }
 
     #[test]
-    fn ghostty_config_theme_prefers_dark_side() {
-        assert_eq!(
-            active_theme_name("theme = dark:TokyoNight,light:Solarized Light\n").as_deref(),
-            Some("TokyoNight")
-        );
-        assert_eq!(
-            active_theme_name("theme = \"Solarized Light\"\n").as_deref(),
-            Some("Solarized Light")
-        );
-    }
-
-    #[test]
-    fn ghostty_config_theme_uses_last_assignment() {
-        assert_eq!(
-            active_theme_name("theme = Old\nfont-size = 14\ntheme = New\n").as_deref(),
-            Some("New")
+    fn embedded_name_resolves_to_palette() {
+        assert!(
+            explicit_palette_tones("Afterglow").is_some(),
+            "the vendored Alacritty catalog should include Afterglow"
         );
     }
 

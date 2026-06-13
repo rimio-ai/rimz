@@ -11,10 +11,9 @@
 //! `NO_COLOR` is off.
 //!
 //! Palette choice is data in the snapshot's `[sidebar.theme]`: `scheme`
-//! selects a built-in palette, a Ghostty-format theme file, or Ghostty's
-//! active theme when set to `auto`; per-slot overrides then win over the
-//! selected scheme. The renderer resolves depth because terminal capability
-//! is a renderer-local fact.
+//! selects a built-in palette, a bundled Alacritty theme, or an Alacritty TOML
+//! file; per-slot overrides then win over the selected scheme. The renderer
+//! resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
     AnimationColor, ColorDepth, GlowMode, SidebarConfig, SidebarThemeConfig, ThemeColor,
@@ -141,24 +140,20 @@ pub(crate) struct Palette {
 
 impl Palette {
     pub(crate) fn resolve(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_auto_fallback(theme, depth, PaletteTones::CLAY, true)
+        Self::resolve_with_fallback(theme, depth, PaletteTones::CLAY)
     }
 
     pub(crate) fn resolve_fixed(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_auto_fallback(theme, depth, PaletteTones::CLASSIC, false)
+        Self::resolve_with_fallback(theme, depth, PaletteTones::CLASSIC)
     }
 
-    fn resolve_with_auto_fallback(
+    fn resolve_with_fallback(
         theme: &SidebarThemeConfig,
         depth: ColorDepth,
-        auto_fallback: PaletteTones,
-        detect_auto_scheme: bool,
+        fallback: PaletteTones,
     ) -> Palette {
         let tones = match theme.scheme.as_deref() {
-            None | Some("auto") if detect_auto_scheme => {
-                scheme::auto_palette_tones().unwrap_or(auto_fallback)
-            }
-            None | Some("auto") => auto_fallback,
+            None => fallback,
             Some(name) => selected_palette_tones(name).unwrap_or(PaletteTones::CLAY),
         };
         let slot = |override_color: Option<ThemeColor>, builtin| {
@@ -209,7 +204,7 @@ impl Palette {
 }
 
 fn selected_palette_tones(name: &str) -> Option<PaletteTones> {
-    builtin_palette_tones(name).or_else(|| scheme::explicit_palette_tones(name))
+    scheme::explicit_palette_tones(name)
 }
 
 fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {

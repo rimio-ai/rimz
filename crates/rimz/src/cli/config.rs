@@ -124,14 +124,15 @@ fn get(args: GetArgs) -> Result<()> {
 
 fn set(args: SetArgs) -> Result<()> {
     let path = MachineConfig::path();
-    let key = parse_key(&args.key)?;
+    let requested_key = parse_key(&args.key)?;
+    let value = parse_set_value(&requested_key, &args.value);
+    let key = normalize_set_key(&requested_key, &value)?;
     validate_set_key(&key)?;
 
     let text = read_config_or_template(&path)?;
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    let value = parse_edit_value(&args.value);
     validate_set_value(&key, &value)?;
     set_document_value(&mut doc, &key, value)?;
 
@@ -382,6 +383,20 @@ fn parse_edit_value(raw: &str) -> Value {
         .unwrap_or_else(|_| Value::from(raw.to_owned()))
 }
 
+fn parse_set_value(path: &[String], raw: &str) -> Value {
+    if is_sidebar_theme_scheme_edit(path) {
+        return parse_string_edit_value(raw);
+    }
+    parse_edit_value(raw)
+}
+
+fn parse_string_edit_value(raw: &str) -> Value {
+    match raw.parse::<Value>() {
+        Ok(value) if value.is_str() => value,
+        _ => Value::from(raw.to_owned()),
+    }
+}
+
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     if matches!(
         path,
@@ -390,13 +405,29 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(scheme) = value.as_str() else {
             bail!("sidebar.theme.scheme must be a string");
         };
-        if scheme != "auto"
-            && let Err(err) = rimz::sidebar_pane::render::scheme::validate_explicit_scheme(scheme)
-        {
+        if let Err(err) = rimz::sidebar_pane::render::scheme::validate_explicit_scheme(scheme) {
             bail!("{err}");
         }
     }
     Ok(())
+}
+
+fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "sidebar" && child == "theme")
+        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "theme" && leaf == "scheme")
+}
+
+fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
+    if matches!(path, [root, child] if root == "sidebar" && child == "theme") {
+        if !value.is_str() {
+            bail!("sidebar.theme shorthand sets a scheme string");
+        }
+        return Ok(["sidebar", "theme", "scheme"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect());
+    }
+    Ok(path.to_vec())
 }
 
 fn set_document_value(doc: &mut DocumentMut, path: &[String], value: Value) -> Result<()> {
@@ -511,6 +542,55 @@ mod tests {
         assert_eq!(parse_edit_value("always").as_str(), Some("always"));
         assert_eq!(parse_edit_value("80").as_integer(), Some(80));
         assert_eq!(parse_edit_value("false").as_bool(), Some(false));
+    }
+
+    #[test]
+    fn theme_scheme_values_are_parsed_as_strings() {
+        let key = parse_key("sidebar.theme.scheme").expect("key");
+        assert_eq!(parse_set_value(&key, "0x96f").as_str(), Some("0x96f"));
+        assert_eq!(
+            parse_set_value(&key, "\"Catppuccin Mocha\"").as_str(),
+            Some("Catppuccin Mocha")
+        );
+
+        let shorthand = parse_key("sidebar.theme").expect("key");
+        assert_eq!(parse_set_value(&shorthand, "0x96f").as_str(), Some("0x96f"));
+
+        let numeric = parse_key("sidebar.max_cols").expect("key");
+        assert_eq!(parse_set_value(&numeric, "80").as_integer(), Some(80));
+    }
+
+    #[test]
+    fn theme_scheme_validation_accepts_bundled_names_and_rejects_auto() {
+        let key = parse_key("sidebar.theme.scheme").expect("key");
+
+        validate_set_value(&key, &Value::from("Afterglow")).expect("bundled theme");
+        validate_set_value(&key, &Value::from("0x96f")).expect("numeric-looking bundled theme");
+
+        let err = validate_set_value(&key, &Value::from("auto"))
+            .expect_err("auto is no longer a selectable scheme")
+            .to_string();
+        assert!(
+            err.contains("unknown sidebar theme scheme `auto`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sidebar_theme_set_key_is_scheme_shorthand() {
+        let key = parse_key("sidebar.theme").expect("key");
+        assert_eq!(
+            normalize_set_key(&key, &Value::from("Afterglow")).expect("normalize"),
+            parse_key("sidebar.theme.scheme").expect("scheme key")
+        );
+
+        let err = normalize_set_key(&key, &Value::from(256))
+            .expect_err("shorthand only accepts a scheme string")
+            .to_string();
+        assert!(
+            err.contains("sidebar.theme shorthand sets a scheme string"),
+            "unexpected error: {err}"
+        );
     }
 
     fn set_key_reaches_leaf(set_keys: &BTreeSet<String>, leaf: &str) -> bool {

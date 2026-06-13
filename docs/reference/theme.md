@@ -5,7 +5,7 @@
 The sidebar's palette, status-head animations, and provider brand styling are per-machine display settings under `[sidebar]` in `~/.config/rimz/config.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
 
 ```sh
-rimz config set sidebar.theme.scheme slate
+rimz config set sidebar.theme slate
 ```
 
 Every key below also lives as commented TOML in the generated template: `rimz config init --print`.
@@ -16,37 +16,40 @@ Every key below also lives as commented TOML in the generated template: `rimz co
 
 | `scheme` | character | source |
 | --- | --- | --- |
-| `auto` (default) | matches your terminal | Ghostty's active theme, falling back to `clay` |
+| unset | warm, earthen | built-in `clay` |
 | `clay` | warm, earthen | built-in |
 | `slate` | cool, blue-leaning | built-in |
 | `classic` | neutral | built-in |
+| `Afterglow`, `Catppuccin Mocha`, ... | theme-defined | bundled Alacritty catalog |
+| `/path/to/theme.toml` | theme-defined | custom Alacritty TOML |
 
 ```toml
 [sidebar.theme]
 scheme = "slate"
 ```
 
-### Following Ghostty
+### Bundled Themes
 
-`scheme = "auto"` follows Ghostty's active theme when the sidebar process can read it and falls back to the built-in `clay` palette. The sidebar reads `~/.config/ghostty/config`, takes the last `theme =` line, and loads the named theme through the lookup ladder below; a `theme = dark:X,light:Y` pair picks the dark side because muxes do not expose a reliable light/dark signal, and a plain comma list picks the first entry.
+Rimz embeds the Alacritty export from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes), so theme names work the same across terminals and muxes. Pick a name exactly as it appears under [crates/rimz/themes/alacritty](../../crates/rimz/themes/alacritty); names with spaces need TOML quotes.
 
-Auto-detection is cached for the sidebar process lifetime, so changing the terminal theme needs a sidebar restart; explicit `scheme = "slate"` or `scheme = "/path/to/theme"` is the pin lever.
-
-### Any Ghostty Theme
-
-`scheme` accepts any Ghostty theme name or theme-file path, resolved in order:
-
-1. `~/.config/ghostty/themes/<name>`
-2. `$GHOSTTY_RESOURCES_DIR/themes/<name>`
-3. the value as a path, with `~` expanded
+The checked-in catalog is refreshed with `cargo xtask theme-refresh`; its provenance and license live in [crates/rimz/themes/README.md](../../crates/rimz/themes/README.md) and [crates/rimz/themes/LICENSE](../../crates/rimz/themes/LICENSE).
 
 ```toml
 [sidebar.theme]
-scheme = "Catppuccin Mocha"   # an installed Ghostty theme
-# scheme = "~/themes/mine"    # or any Ghostty-format file
+scheme = "Catppuccin Mocha"
+# scheme = "Solarized Light"
 ```
 
-A changed `scheme` value applies on the next snapshot; loaded theme files are cached like auto-detection, so edits inside one apply after a sidebar restart.
+The bundled Alacritty TOML supplies `background`, `foreground`, the six normal ANSI hues, and `bright.blue` for the selection accent. Themes without `bright.blue` use `normal.blue` for that slot.
+
+### Custom Theme Paths
+
+`scheme` also accepts a path to an Alacritty TOML file, with `~` expanded. A changed `scheme` value applies on the next snapshot; loaded theme files are cached for the sidebar process lifetime, so edits inside one apply after a sidebar restart.
+
+```toml
+[sidebar.theme]
+scheme = "~/themes/rimz.toml"
+```
 
 ## Color Depth
 
@@ -92,33 +95,38 @@ Money amounts use a fixed dollar green (`#85bb65` at truecolor depth, nearest xt
 
 ## Custom Theme Files
 
-Custom themes are Ghostty-format theme files — the same files Ghostty ships and the community publishes. A minimal valid theme:
+Custom themes are Alacritty TOML files. A minimal valid theme:
 
-```
-background = #1a1b26
-foreground = #c0caf5
-palette = 1=#f7768e
-palette = 2=#9ece6a
-palette = 3=#e0af68
-palette = 4=#7aa2f7
-palette = 5=#bb9af7
-palette = 6=#7dcfff
-palette = 12=#7aa2f7
+```toml
+[colors.primary]
+background = '#1a1b26'
+foreground = '#c0caf5'
+
+[colors.normal]
+red = '#f7768e'
+green = '#9ece6a'
+yellow = '#e0af68'
+blue = '#7aa2f7'
+magenta = '#bb9af7'
+cyan = '#7dcfff'
+
+[colors.bright]
+blue = '#7aa2f7'
 ```
 
-`background`, `foreground`, and palette entries 1–6 and 12 are required; the load error names a missing entry. The twelve slots derive from those keys:
+`colors.primary.background`, `colors.primary.foreground`, and `colors.normal.red` / `green` / `yellow` / `blue` / `magenta` / `cyan` are required; `colors.bright.blue` is optional and falls back to `colors.normal.blue`. The load error names a missing palette entry or malformed color. The twelve slots derive from those keys:
 
 | slot | derived from |
 | --- | --- |
-| `good` | green — palette 2 |
-| `warn` | yellow — palette 3 |
+| `good` | normal green |
+| `warn` | normal yellow |
 | `caution` | yellow blended halfway toward red |
-| `alarm` | red — palette 1 |
-| `accent` | cyan — palette 6 |
-| `cool` | blue — palette 4 |
-| `meta` | magenta — palette 5 |
+| `alarm` | normal red |
+| `accent` | normal cyan |
+| `cool` | normal blue |
+| `meta` | normal magenta |
 | `soft` / `dim` / `faint` / `rule` | background toward foreground at 65% / 45% / 25% / 18% |
-| `selection` | bright blue — palette 12 |
+| `selection` | bright blue, or normal blue when bright blue is absent |
 
 Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
 
@@ -185,11 +193,11 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 ## Changing Values
 
 ```sh
-rimz config set sidebar.theme.scheme slate
+rimz config set sidebar.theme slate
 rimz config set sidebar.theme.good '#a0d0a0'
 rimz config set sidebar.glow always
 rimz config set sidebar.animations.idle.effect breathe
 rimz config set sidebar.providers.codex.color 33
 ```
 
-`rimz config set` validates before it writes: an unknown scheme is rejected with the built-in names and the Ghostty theme directories searched, and a malformed color or frame is rejected before the file changes. Loading stays lenient, so an older binary tolerates a newer file. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
+`rimz config set` validates before it writes: an unknown scheme is rejected with the built-in names, bundled-catalog count, and custom-file path hint, and a malformed color, Alacritty file, or frame is rejected before the file changes. Loading stays lenient, so an older or stale scheme value falls back to `clay` at render time instead of taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).

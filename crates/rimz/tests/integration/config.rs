@@ -102,6 +102,28 @@ fn config_get_set_round_trip_preserves_template_comments() {
             .success()
             .stdout(expected);
     }
+
+    env.rimz()
+        .args(["config", "set", "sidebar.theme", "Catppuccin Mocha"])
+        .assert()
+        .success()
+        .stdout(contains("set sidebar.theme"));
+    env.rimz()
+        .args(["config", "get", "sidebar.theme.scheme"])
+        .assert()
+        .success()
+        .stdout("Catppuccin Mocha\n");
+
+    env.rimz()
+        .args(["config", "set", "sidebar.theme", "0x96f"])
+        .assert()
+        .success()
+        .stdout(contains("set sidebar.theme"));
+    env.rimz()
+        .args(["config", "get", "sidebar.theme.scheme"])
+        .assert()
+        .success()
+        .stdout("0x96f\n");
 }
 
 #[test]
@@ -126,8 +148,15 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .failure()
         .stderr(contains("unknown sidebar theme scheme `does-not-exist`"));
 
-    let bad_scheme = env.home_root.join("bad-theme");
-    std::fs::write(&bad_scheme, "background = #000000\n").expect("write bad scheme");
+    env.rimz()
+        .args(["config", "set", "sidebar.theme", "auto"])
+        .assert()
+        .failure()
+        .stderr(contains("unknown sidebar theme scheme `auto`"));
+
+    let bad_scheme = env.home_root.join("bad-theme.toml");
+    std::fs::write(&bad_scheme, "[colors.primary]\nbackground = 'nothex'\n")
+        .expect("write bad scheme");
     env.rimz()
         .args([
             "config",
@@ -137,7 +166,7 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         ])
         .assert()
         .failure()
-        .stderr(contains("invalid sidebar theme scheme"));
+        .stderr(contains("colors.primary.background"));
 }
 
 #[test]
