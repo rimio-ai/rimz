@@ -250,35 +250,36 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
     unread: bool,
 ) -> Style {
     let role = agent_role(status, phase);
+    let animation = theme.animations.status(status);
     let style = if status.is_actionable() {
-        let animation = theme.animations.status(status);
         let color =
             age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
-        let amplitude = if unread {
-            BREATH_DEEP_AMPLITUDE
+        if unread {
+            // The hard unread pulse — the same sample the name and description
+            // swing on — so the whole card blinks bright↔dim together.
+            match animation.attention_pulse(animation_phase, age_secs, BREATH_DEEP_AMPLITUDE) {
+                Some(sample) => theme.pulse(color, sample),
+                None => theme.style(color, Modifier::BOLD),
+            }
         } else {
-            BREATH_SHALLOW_AMPLITUDE
-        };
-        if let Some(phase) = animation.attention_breath_phase(animation_phase) {
-            theme.breathe(color, BreathSample::for_age(phase, age_secs, amplitude))
-        } else {
-            theme.style(color, Modifier::empty())
+            // Read but still actionable: a gentle resting breath, not a blink.
+            match animation.attention_pulse(animation_phase, age_secs, BREATH_SHALLOW_AMPLITUDE) {
+                Some(sample) => theme.breathe(color, sample),
+                None => theme.style(color, Modifier::empty()),
+            }
         }
     } else if unread && status == AgentStatus::Success {
-        let animation = theme.animations.status(status);
-        if let Some(phase) = animation.attention_breath_phase(animation_phase) {
-            theme.breathe(
-                animation.color(),
-                BreathSample::for_age(phase, age_secs, BREATH_DEEP_AMPLITUDE),
-            )
-        } else {
-            theme.style(animation.color(), Modifier::empty())
+        match animation.attention_pulse(animation_phase, age_secs, BREATH_DEEP_AMPLITUDE) {
+            Some(sample) => theme.pulse(animation.color(), sample),
+            None => theme.style(animation.color(), Modifier::BOLD),
         }
     } else {
         role_style(theme, role, animation_phase)
     };
     let uses_unread_pulse = status.is_actionable() || status == AgentStatus::Success;
     if unread && !uses_unread_pulse {
+        // Parked unread states (paused) hold a steady bold — nothing to act on
+        // until the provider recovers, so they never join the blink.
         style.add_modifier(Modifier::BOLD)
     } else {
         style

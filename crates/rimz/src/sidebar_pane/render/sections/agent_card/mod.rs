@@ -116,6 +116,7 @@ pub(super) fn row_lines(
                     inner.push(description_line(
                         theme,
                         row,
+                        now,
                         tier,
                         cw,
                         selected,
@@ -129,6 +130,7 @@ pub(super) fn row_lines(
                     inner.push(description_line(
                         theme,
                         row,
+                        now,
                         tier,
                         cw,
                         selected,
@@ -140,6 +142,7 @@ pub(super) fn row_lines(
             inner.push(description_line(
                 theme,
                 row,
+                now,
                 tier,
                 cw,
                 selected,

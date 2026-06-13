@@ -15,24 +15,30 @@ use super::*;
 pub(super) fn description_line(
     theme: &Theme,
     row: &SidebarRow,
+    now: Timestamp,
     tier: Tier,
     width: usize,
     selected: bool,
     animation_phase: u64,
 ) -> Line<'static> {
+    // The shared unread pulse, on a concrete body tone so the description lifts
+    // and dims in unison with the lead glyph and the name — and joins the glow
+    // pass, which the terminal-default fg would skip.
+    let pulse = unread_pulse(theme, row, now, animation_phase);
+    let unread_body = || match pulse {
+        Some(sample) => theme.pulse(theme.soft_tone(), sample),
+        None => theme.style(theme.soft_tone(), Modifier::BOLD),
+    };
     let body = if let Some(label) = agent(row).and_then(|agent| agent.turn_error_label.as_deref()) {
-        let style = theme.soft().add_modifier(if row.unread {
-            Modifier::ITALIC | Modifier::BOLD
+        let style = if row.unread {
+            unread_body().add_modifier(Modifier::ITALIC)
         } else {
-            Modifier::ITALIC
-        });
+            theme.soft().add_modifier(Modifier::ITALIC)
+        };
         Span::styled(label.to_owned(), style)
     } else {
         match descriptor(row) {
-            Some(text) if row.unread => Span::styled(
-                text.to_owned(),
-                Style::default().add_modifier(Modifier::BOLD),
-            ),
+            Some(text) if row.unread => Span::styled(text.to_owned(), unread_body()),
             Some(text) if selected => Span::raw(text.to_owned()),
             Some(text) => Span::styled(text.to_owned(), theme.soft()),
             None if shows_loading_dots(row) => {

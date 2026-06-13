@@ -1,5 +1,6 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
+use crate::sidebar_pane::render::animation::BreathSample;
 
 fn truecolor_theme() -> Theme {
     let mut sidebar = crate::config::SidebarConfig::default();
@@ -257,10 +258,12 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         true,
     );
 
-    assert_ne!(read.fg, unread_trough.fg);
-    assert_ne!(unread_trough.fg, unread_peak.fg);
+    // Grow-only: the blink rests at the read tone and swells to a bright, bold
+    // crest — it never dims below rest, even in truecolor.
     assert_eq!(unread_trough.add_modifier, Modifier::empty());
-    assert_eq!(unread_peak.add_modifier, Modifier::empty());
+    assert_eq!(unread_peak.add_modifier, Modifier::BOLD);
+    assert_ne!(unread_trough.fg, unread_peak.fg);
+    assert_ne!(read.fg, unread_peak.fg);
 
     let read_waiting_peak = agent_lead_style(
         &theme,
@@ -321,6 +324,8 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     );
     assert_eq!(read_waiting_plain.add_modifier, Modifier::empty());
     assert_eq!(unread_waiting_plain.add_modifier, Modifier::BOLD);
+    // At the trough the grow-only blink rests at plain weight under NO_COLOR —
+    // never DIM — and the `?`/`✓` shape carries the meaning.
     assert_eq!(
         agent_lead_style(
             &plain,
@@ -331,7 +336,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             true,
         )
         .add_modifier,
-        Modifier::DIM
+        Modifier::empty()
     );
     assert_eq!(
         agent_lead_style(
@@ -343,7 +348,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             true,
         )
         .add_modifier,
-        Modifier::DIM
+        Modifier::empty()
     );
     assert_eq!(
         agent_lead_style(

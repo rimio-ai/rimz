@@ -18,7 +18,9 @@ const HOT_ATTENTION_PERIOD: f32 = 12.0;
 const BREATH_MIDPOINT: f32 = 0.35;
 
 pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
-pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.25;
+/// The unread/attention pulse depth: a hard upward swing so the blink grows from
+/// the element's resting tone to a bright crest, never dimming below it.
+pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.42;
 const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -107,13 +109,39 @@ impl BreathSample {
             return Modifier::empty();
         }
         let depth = (self.amplitude / BREATH_DEEP_AMPLITUDE).clamp(0.0, 1.0);
-        let dim_cutoff = 0.20 * depth;
+        // Widen both poles with depth so a deep pulse spends real time at each
+        // end — a hard bright↔dim swing rather than a momentary peak.
+        let dim_cutoff = 0.30 * depth;
+        let bold_floor = 1.0 - 0.38 * depth;
         match self.level {
             level if level <= dim_cutoff => Modifier::DIM,
-            level if self.amplitude >= BREATH_DEEP_AMPLITUDE * 0.75 && level >= 0.72 => {
+            level if self.amplitude >= BREATH_DEEP_AMPLITUDE * 0.75 && level >= bold_floor => {
                 Modifier::BOLD
             }
             _ => Modifier::empty(),
+        }
+    }
+
+    /// The grow-only lightness delta for the unread blink: zero at the trough
+    /// (the element rests at its normal tone) up to the same bright crest the
+    /// two-pole peak reached, never negative — the blink swells to bright and
+    /// settles back without ever dimming below the resting tone.
+    pub(crate) fn grow_delta(self) -> f32 {
+        self.level * (1.0 - BREATH_MIDPOINT) * self.amplitude
+    }
+
+    /// The grow-only weight: bold near the crest, plain elsewhere, never DIM —
+    /// the weight half of the same swell-to-bright blink.
+    pub(crate) fn grow_modifier(self) -> Modifier {
+        if self.amplitude == 0.0 {
+            return Modifier::empty();
+        }
+        let depth = (self.amplitude / BREATH_DEEP_AMPLITUDE).clamp(0.0, 1.0);
+        let bold_floor = 1.0 - 0.38 * depth;
+        if self.amplitude >= BREATH_DEEP_AMPLITUDE * 0.75 && self.level >= bold_floor {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
         }
     }
 }
@@ -172,6 +200,20 @@ impl Animation {
             (Effect::Static, true) => None,
             _ => Some(self.speed.effect_phase(phase)),
         }
+    }
+
+    /// The unread/attention pulse sample for this role at `age_secs` of waiting,
+    /// or `None` when a configured `effect = "static"` quiets the pulse. The one
+    /// source every grouped element shares — the lead glyph, the agent name, the
+    /// description, and the cockpit make-up bucket — so they swing in unison.
+    pub(crate) fn attention_pulse(
+        &self,
+        phase: u64,
+        age_secs: i64,
+        amplitude: f32,
+    ) -> Option<BreathSample> {
+        self.attention_breath_phase(phase)
+            .map(|phase| BreathSample::for_age(phase, age_secs, amplitude))
     }
 
     #[cfg(test)]

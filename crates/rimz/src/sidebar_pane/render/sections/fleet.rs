@@ -7,6 +7,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::BodyFilter;
+use crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
     age_heat_color, attention_floor_color, status_chip_color, status_glyph, status_rest_style,
@@ -65,7 +66,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     groups: &[SidebarWorktreeGroup],
     now: Timestamp,
     filter: Option<BodyFilter>,
-    _animation_phase: u64,
+    animation_phase: u64,
     width: usize,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
     let status_filter = match filter {
@@ -97,13 +98,13 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         status_chip_color(theme, AgentStatus::Waiting),
         waiting,
-        attention_bucket_style(theme, groups, AgentStatus::Waiting, now),
+        attention_bucket_style(theme, groups, AgentStatus::Waiting, now, animation_phase),
     );
     left.push_count(
         AgentStatus::Failed,
         status_chip_color(theme, AgentStatus::Failed),
         failed,
-        attention_bucket_style(theme, groups, AgentStatus::Failed, now),
+        attention_bucket_style(theme, groups, AgentStatus::Failed, now, animation_phase),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
     // but still a row worth spotting. It renders like every other bucket — the
@@ -300,6 +301,7 @@ fn attention_bucket_style(
     groups: &[SidebarWorktreeGroup],
     status: AgentStatus,
     now: Timestamp,
+    animation_phase: u64,
 ) -> Style {
     let oldest = groups
         .iter()
@@ -308,10 +310,18 @@ fn attention_bucket_style(
         .map(|row| age_secs(row.last_activity, now))
         .max()
         .unwrap_or(0);
-    theme.style(
-        age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status)),
-        Modifier::BOLD,
-    )
+    let color =
+        age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status));
+    // The bucket pulses on its oldest row's age, the aggregate echo of the
+    // per-row blink, so the make-up line breathes in step with the cards.
+    match theme.animations.status(status).attention_pulse(
+        animation_phase,
+        oldest,
+        BREATH_DEEP_AMPLITUDE,
+    ) {
+        Some(sample) => theme.pulse(color, sample),
+        None => theme.style(color, Modifier::BOLD),
+    }
 }
 
 /// The full-fleet count for one make-up bucket — the sum of every group's

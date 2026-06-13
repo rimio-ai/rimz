@@ -6,9 +6,6 @@ use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::TallyAnim;
-use crate::sidebar_pane::render::animation::{
-    BREATH_DEEP_AMPLITUDE, BreathSample, DEFAULT_BREATH_PERIOD,
-};
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::{attention_floor_color, token_breakdown_spans};
 use crate::sidebar_pane::render::theme::Theme;
@@ -75,11 +72,13 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         &live_agents.to_string(),
     );
     if unread_agents > 0 {
+        // A steady tally, not a blink — the attention pulse lives on the cards
+        // and the make-up buckets; the cockpit count holds its attention tone.
         left.push(Span::styled(
             format!(" ({unread_agents})"),
-            theme.breathe(
+            theme.style(
                 attention_floor_color(theme, crate::feed::AgentStatus::Waiting),
-                BreathSample::new(phase, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE),
+                Modifier::BOLD,
             ),
         ));
     }

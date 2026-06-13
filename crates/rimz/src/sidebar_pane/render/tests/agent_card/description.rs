@@ -42,7 +42,7 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
     );
 }
 
-fn rendered_group_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
+fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'static>> {
     let theme = Theme::fixed(true);
     let mut row_index = 0;
     let mut lines = Vec::new();
@@ -58,7 +58,7 @@ fn rendered_group_lines(snapshot: &SidebarSnapshot) -> Vec<Line<'static>> {
         None,
         &mut row_index,
         0,
-        0,
+        phase,
         &CostRolls::default(),
         &mut lines,
         &mut map,
@@ -75,7 +75,7 @@ fn span_for<'a>(lines: &'a [Line<'static>], text: &str) -> &'a Span<'static> {
 }
 
 #[test]
-fn unread_descriptor_renders_bold() {
+fn unread_descriptor_grows_bold_without_dimming() {
     let agent = agent(
         "claude-1",
         "claude",
@@ -86,26 +86,31 @@ fn unread_descriptor_renders_bold() {
     );
     let mut unread = snapshot_with(Vec::new(), vec![agent.clone()]);
     unread.worktree_groups[0].rows[0].unread = true;
-    let unread_lines = rendered_group_lines(&unread);
-    assert!(
-        span_for(&unread_lines, "done")
-            .style
-            .add_modifier
-            .contains(Modifier::BOLD)
-    );
+    // The unread descriptor blinks with the lead glyph and the name: it swells
+    // to bold at the crest and rests at plain weight between — never dimming.
+    let unread_mods: Vec<_> = (0..32)
+        .map(|phase| {
+            span_for(&rendered_group_lines_at(&unread, phase), "done")
+                .style
+                .add_modifier
+        })
+        .collect();
+    assert!(unread_mods.iter().any(|m| m.contains(Modifier::BOLD)));
+    assert!(unread_mods.iter().any(|m| m.is_empty()));
+    assert!(unread_mods.iter().all(|m| !m.contains(Modifier::DIM)));
 
+    // A read descriptor never blinks — its weight is the same at every phase.
     let read = snapshot_with(Vec::new(), vec![agent]);
-    let read_lines = rendered_group_lines(&read);
-    assert!(
-        !span_for(&read_lines, "done")
+    for phase in 0..32 {
+        let modifier = span_for(&rendered_group_lines_at(&read, phase), "done")
             .style
-            .add_modifier
-            .contains(Modifier::BOLD)
-    );
+            .add_modifier;
+        assert!(!modifier.contains(Modifier::BOLD));
+    }
 }
 
 #[test]
-fn unread_turn_error_label_stays_soft_and_bold() {
+fn unread_turn_error_label_pulses_and_stays_italic() {
     let agent = agent(
         "claude-1",
         "claude",
@@ -119,14 +124,19 @@ fn unread_turn_error_label_stays_soft_and_bold() {
     row.unread = true;
     row.as_agent_mut().unwrap().turn_error_label = Some("api error".to_owned());
 
-    let lines = rendered_group_lines(&snapshot);
-    let span = span_for(&lines, "api error");
+    let mods: Vec<_> = (0..32)
+        .map(|phase| {
+            span_for(&rendered_group_lines_at(&snapshot, phase), "api error")
+                .style
+                .add_modifier
+        })
+        .collect();
     assert!(
-        span.style.add_modifier.contains(Modifier::BOLD),
-        "unread error labels keep the unread weight"
+        mods.iter().any(|m| m.contains(Modifier::BOLD)),
+        "the unread error label blinks bold at the pulse peak"
     );
     assert!(
-        span.style.add_modifier.contains(Modifier::ITALIC),
-        "the error-label branch keeps the soft italic style"
+        mods.iter().all(|m| m.contains(Modifier::ITALIC)),
+        "the error-label branch keeps the soft italic style throughout"
     );
 }

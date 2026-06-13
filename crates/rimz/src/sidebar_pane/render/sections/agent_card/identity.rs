@@ -1,24 +1,54 @@
 use super::*;
 
+use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
+
 /// The agent name's style: the matching provider brand color at full weight, so
 /// the name ties to the provider dashboard. Falls back to mid-gray chrome (no
-/// DIM modifier) when no provider matches the kind.
+/// DIM modifier) when no provider matches the kind. An unread row pulses the
+/// name on the shared attention `pulse` sample so it blinks in unison with the
+/// lead glyph and the description; with no sample (configured static) it holds
+/// bold.
 pub(super) fn agent_name_style(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     kind: &str,
     unread: bool,
+    pulse: Option<BreathSample>,
 ) -> Style {
-    let style = providers
+    let brand = providers
         .iter()
         .find(|panel| panel.kind == kind)
-        .map(|panel| theme.style(theme.brand_tone(panel), Modifier::empty()))
-        .unwrap_or_else(|| theme.style(Color::DarkGray, Modifier::empty()));
-    if unread {
-        style.add_modifier(Modifier::BOLD)
-    } else {
-        style
+        .map(|panel| theme.brand_tone(panel))
+        .unwrap_or(Color::DarkGray);
+    match (unread, pulse) {
+        (true, Some(sample)) => theme.pulse(brand, sample),
+        (true, None) => theme.style(brand, Modifier::BOLD),
+        (false, _) => theme.style(brand, Modifier::empty()),
     }
+}
+
+/// The unread attention pulse for a row, or `None` when the row is read, parked
+/// (paused — nothing to act on), or a configured `effect = "static"` quiets it.
+/// One sample feeds the lead glyph, the name, and the description so the
+/// blinking states (actionable `?`/`!` and an unread result) swing as a group.
+pub(super) fn unread_pulse(
+    theme: &Theme,
+    row: &SidebarRow,
+    now: Timestamp,
+    animation_phase: u64,
+) -> Option<BreathSample> {
+    if !row.unread {
+        return None;
+    }
+    let status = row.status()?;
+    if !(status.is_actionable() || status == AgentStatus::Success) {
+        return None;
+    }
+    theme.animations.status(status).attention_pulse(
+        animation_phase,
+        age_secs(row.last_activity, now),
+        BREATH_DEEP_AMPLITUDE,
+    )
 }
 
 pub(super) struct IdentityLineContext<'a> {
@@ -189,12 +219,13 @@ pub(super) fn agent_identity_line(
     // `waiting`/`failed` row sits unanswered. The kind name reads at normal
     // weight in the provider's brand color (or mid-gray chrome for unknown
     // kinds); the bright slot is saved for the task below.
+    let pulse = unread_pulse(theme, row, now, animation_phase);
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, now, animation_phase),
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),
-            agent_name_style(theme, providers, &row.name, row.unread),
+            agent_name_style(theme, providers, &row.name, row.unread, pulse),
         ),
     ];
     if tier != Tier::L0 {

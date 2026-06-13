@@ -156,7 +156,7 @@ The built-in heads:
 
 `color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped pulse, `effect = "static"` quiets it, and `speed` tunes it when the pulse is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
 
-Every role uses the same model: frames, color, effect, and speed. The built-in attention pulse still applies age heat and unread depth on row glyphs unless an explicit static effect quiets it; cockpit tallies use still representative frames.
+Every role uses the same model: frames, color, effect, and speed. The built-in attention pulse still applies age heat and unread depth across the lead glyph, the card name, the description, and the make-up `?`/`!` buckets unless an explicit static effect quiets it; the cockpit count and per-bucket counts use still representative frames.
 
 ## Provider Styling
 
