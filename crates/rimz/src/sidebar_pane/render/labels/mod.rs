@@ -36,7 +36,7 @@ fn heat_fraction(age_secs: i64) -> Option<f32> {
 }
 
 pub(super) fn age_heat_color(theme: &Theme, age_secs: i64) -> Option<Color> {
-    heat_fraction(age_secs).map(|amount| theme.heat_tone(amount))
+    heat_fraction(age_secs).map(|amount| theme.warm_heat_tone(amount))
 }
 
 /// Tone for the card's elapsed-age cluster at `age_secs` of inactivity: the

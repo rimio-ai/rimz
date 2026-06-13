@@ -189,7 +189,7 @@ amber = 150
 red = 200
 ```
 
-The agent card context meter warms by the worse of two axes: fill percentage and absolute tokens in the window. Warm values interpolate continuously across the theme's OKLab warn → caution → alarm heat scale. A large-window model can still warm by sheer token count even when its percentage looks calm.
+The agent card context meter reads its health by the worse of two axes: fill percentage and absolute tokens in the window. It interpolates continuously across the theme's OKLab health scale — a healthy green at rest, then gold, orange, and alarm red as the window fills. A large-window model can still warm by sheer token count even when its percentage looks calm.
 
 The provider dashboard budget zones work in the opposite direction: they bound remaining budget from above. At or above `yellow` the bar stays green; below each threshold it moves through yellow, amber, and red. The template carries the shipped numbers.
 

@@ -84,7 +84,7 @@ warn = 173         # a raw xterm index stays exact at every depth
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
 
-Age heat and the context meter's warm values interpolate `warn` → `caution` → `alarm` in OKLab, then emit the result at the active depth. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
+The context meter interpolates a health ramp — `good` → `warn` → `caution` → `alarm`, a healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. Age and attention heat ride the warm tail of that same ramp (`warn` → `caution` → `alarm`), since an idle agent reads stale rather than healthy. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
 
 ## Custom Theme Files
 

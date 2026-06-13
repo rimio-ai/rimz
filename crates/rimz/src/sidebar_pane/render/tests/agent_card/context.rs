@@ -206,10 +206,10 @@ fn codex_card_renders_the_per_call_composition() {
     );
     assert_snapshot("codex_card_context_composition", rendered);
 }
-/// The calm bar's colored segments come from the row-level split too: with no
-/// rich blob, a Codex card's fill splits into the cache-read and fresh-input
-/// segment tones — and no cache-write segment exists to paint — so the context
-/// line stays the bar's legend by construction. Style-level, since text
+/// The bar's composition comes from the row-level split too: with no rich blob,
+/// a Codex card's fill leads with the cache-read gradient sweep, then the
+/// fresh-input accent — and no cache-write segment exists to paint — so the
+/// context line stays the bar's legend by construction. Style-level, since text
 /// goldens cannot see the segment colors.
 #[test]
 fn codex_calm_bar_splits_into_row_level_segments() {
@@ -255,22 +255,29 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
+    let input = theme.style(labels::SEGMENT_INPUT, Modifier::empty());
+    let cache_write = theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty());
     assert!(
-        bar_styles.contains(&theme.style(labels::SEGMENT_CACHE_READ, Modifier::empty())),
-        "the cache-read segment colors the bar"
+        bar_styles.contains(&input),
+        "the fresh-input accent colors the bar tail"
     );
     assert!(
-        bar_styles.contains(&theme.style(labels::SEGMENT_INPUT, Modifier::empty())),
-        "the fresh-input segment colors the bar"
-    );
-    assert!(
-        !bar_styles.contains(&theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty())),
+        !bar_styles.contains(&cache_write),
         "no cache-write segment exists to paint"
     );
+    let input_at = bar_styles
+        .iter()
+        .position(|style| *style == input)
+        .expect("the fresh-input accent");
+    assert!(
+        input_at >= 1 && bar_styles[..input_at].iter().all(|style| *style != input),
+        "the cache-read gradient leads the bar before fresh input: {bar_styles:?}"
+    );
 }
-/// When all per-call input buckets are present, the calm context bar reads left
-/// to right like the context line: cache read, cache write, fresh input. This is
-/// style-level because the terminal text only shows one continuous `━` run.
+/// When all per-call input buckets are present, the context bar reads left to
+/// right like the context line: the cache-read gradient sweep, then the
+/// cache-write and fresh-input accents in order. Style-level because the
+/// terminal text only shows the `━` run and its `◦` separators.
 #[test]
 fn calm_context_bar_orders_cache_read_before_cache_write() {
     let theme = Theme::fixed(false);
@@ -323,19 +330,26 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
-    let expected = [
-        theme.style(labels::SEGMENT_CACHE_READ, Modifier::empty()),
-        theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty()),
-        theme.style(labels::SEGMENT_INPUT, Modifier::empty()),
-    ];
+    let cache_write = theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty());
+    let input = theme.style(labels::SEGMENT_INPUT, Modifier::empty());
+    let write_at = bar_styles
+        .iter()
+        .position(|style| *style == cache_write)
+        .expect("the cache-write accent");
+    let input_at = bar_styles
+        .iter()
+        .position(|style| *style == input)
+        .expect("the fresh-input accent");
     assert!(
-        bar_styles.len() >= expected.len(),
-        "expected at least three filled context segments: {bar_styles:?}"
+        write_at < input_at,
+        "cache-write precedes fresh input along the bar: {bar_styles:?}"
     );
-    assert_eq!(
-        &bar_styles[..expected.len()],
-        expected.as_slice(),
-        "the filled context bar should render read, write, input"
+    assert!(
+        write_at >= 1
+            && bar_styles[..write_at]
+                .iter()
+                .all(|style| *style != cache_write && *style != input),
+        "the cache-read gradient leads the bar before the accents: {bar_styles:?}"
     );
 }
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the
@@ -367,7 +381,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     };
     let heat = |age_secs: i64| {
         theme.style(
-            theme.heat_tone(age_heat_amount_for_test(age_secs)),
+            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
             Modifier::empty(),
         )
     };

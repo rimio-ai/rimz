@@ -28,6 +28,22 @@ use super::scheme;
 
 pub(crate) const CLAUDE_CLAY_RGB: (u8, u8, u8) = (0xd9, 0x77, 0x57);
 
+/// Stops on the context **health** ramp, ordered calm → alarm:
+/// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
+/// the scheme's green to the warm trio widens the visible range so a filling
+/// context reads as a health sweep at a glance, while every stop stays
+/// scheme-tunable through its existing slot. [`Theme::heat_tone`] interpolates
+/// across these in OKLab.
+const HEAT_RAMP_STOPS: usize = 4;
+
+/// Where the warm tail (`warn`) sits on the full ramp: the second of four stops,
+/// i.e. one third of the way along. Scales whose "low" should read warm rather
+/// than healthy-green — idle age, where fifteen minutes is stale, not optimal —
+/// map their amount into `[HEAT_RAMP_WARM_START, 1.0]` via
+/// [`Theme::warm_heat_tone`], reproducing the legacy warn → caution → alarm
+/// sweep.
+const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct PaletteTones {
     pub(crate) good: (u8, u8, u8),
@@ -106,7 +122,7 @@ pub(crate) fn builtin_palette_tones(name: &str) -> Option<PaletteTones> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Palette {
     depth: ColorDepth,
-    heat_ramp: [(u8, u8, u8); 3],
+    heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
     good: Color,
     warn: Color,
     caution: Color,
@@ -152,6 +168,7 @@ impl Palette {
         Palette {
             depth,
             heat_ramp: [
+                heat_ramp_slot(theme.good, tones.good),
                 heat_ramp_slot(theme.warn, tones.warn),
                 heat_ramp_slot(theme.caution, tones.caution),
                 heat_ramp_slot(theme.alarm, tones.alarm),
@@ -213,6 +230,23 @@ fn rgb_color((red, green, blue): (u8, u8, u8), depth: ColorDepth) -> Color {
     match depth {
         ColorDepth::Truecolor => Color::Rgb(red, green, blue),
         ColorDepth::Indexed => Color::Indexed(nearest_xterm_index(red, green, blue)),
+    }
+}
+
+/// Piecewise OKLab interpolation across an N-stop ramp: `amount` ∈ `[0, 1]` maps
+/// across the `N - 1` segments, blending within the active one. Endpoints clamp,
+/// so `0.0` is the first stop and `1.0` the last. One blend regardless of stop
+/// count — the ramp can grow or shrink without touching the math.
+fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
+    match ramp {
+        [] => (0, 0, 0),
+        [only] => *only,
+        _ => {
+            let segments = (ramp.len() - 1) as f32;
+            let scaled = amount.clamp(0.0, 1.0) * segments;
+            let lower = (scaled.floor() as usize).min(ramp.len() - 2);
+            scheme::blend_oklab(ramp[lower], ramp[lower + 1], scaled - lower as f32)
+        }
     }
 }
 
@@ -421,18 +455,21 @@ impl Theme {
         self.palette.clay
     }
 
+    /// The context **health** tone for `amount` ∈ `[0, 1]`: a piecewise OKLab
+    /// blend across the full `[good, warn, caution, alarm]` ramp, so `0.0` reads
+    /// healthy green and `1.0` reads alarm red, with even perceptual steps
+    /// between. Drives the context meter's gradient sweep and severity glyph.
     pub(super) fn heat_tone(&self, amount: f32) -> Color {
-        let [warn, caution, alarm] = self.palette.heat_ramp;
-        let rgb = if amount <= 0.0 {
-            warn
-        } else if amount >= 1.0 {
-            alarm
-        } else if amount < 0.5 {
-            scheme::blend_oklab(warn, caution, amount * 2.0)
-        } else {
-            scheme::blend_oklab(caution, alarm, (amount - 0.5) * 2.0)
-        };
-        rgb_color(rgb, self.depth)
+        rgb_color(ramp_tone(&self.palette.heat_ramp, amount), self.depth)
+    }
+
+    /// The warm tail of the ramp (`warn` → `caution` → `alarm`) for `amount` ∈
+    /// `[0, 1]`. Age and attention readers start warm — an idle agent is stale,
+    /// not healthy — so they map into `[HEAT_RAMP_WARM_START, 1.0]` instead of
+    /// the full green→red sweep the context meter owns.
+    pub(super) fn warm_heat_tone(&self, amount: f32) -> Color {
+        let mapped = HEAT_RAMP_WARM_START + amount.clamp(0.0, 1.0) * (1.0 - HEAT_RAMP_WARM_START);
+        self.heat_tone(mapped)
     }
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
@@ -598,11 +635,16 @@ mod tests {
     }
 
     #[test]
-    fn heat_tone_hits_endpoints_and_midpoint() {
+    fn heat_tone_walks_good_to_alarm_across_stops() {
         let theme = Theme::fixed(false);
-        assert_eq!(theme.heat_tone(-0.1), Color::Indexed(179));
-        assert_eq!(theme.heat_tone(0.0), Color::Indexed(179));
-        assert_eq!(theme.heat_tone(0.5), Color::Indexed(173));
+        // Four stops — good → warn → caution → alarm — at 0, ⅓, ⅔, 1; the
+        // classic scheme quantizes warn/caution/alarm to the legacy indexes and
+        // good to its green slot. Endpoints clamp.
+        let good = Color::Indexed(nearest_xterm_index(0x8d, 0xbe, 0x8d));
+        assert_eq!(theme.heat_tone(-0.1), good);
+        assert_eq!(theme.heat_tone(0.0), good);
+        assert_eq!(theme.heat_tone(1.0 / 3.0), Color::Indexed(179));
+        assert_eq!(theme.heat_tone(2.0 / 3.0), Color::Indexed(173));
         assert_eq!(theme.heat_tone(1.0), Color::Indexed(167));
         assert_eq!(theme.heat_tone(1.1), Color::Indexed(167));
     }
@@ -753,7 +795,7 @@ mod tests {
     }
 
     #[test]
-    fn truecolor_heat_gradient_changes_smoothly_toward_alarm() {
+    fn truecolor_heat_gradient_sweeps_green_to_alarm() {
         let theme = Theme::fixed_for_sidebar(
             false,
             &SidebarConfig {
@@ -765,24 +807,21 @@ mod tests {
                 ..SidebarConfig::default()
             },
         );
-        let sample = |minutes: i64| {
-            let amount = super::super::age_heat_amount_for_test(minutes * 60);
-            match theme.heat_tone(amount) {
-                Color::Rgb(red, green, blue) => (red, green, blue),
-                other => panic!("truecolor heat tone should be RGB, got {other:?}"),
-            }
+        let sample = |amount: f32| match theme.heat_tone(amount) {
+            Color::Rgb(red, green, blue) => (red, green, blue),
+            other => panic!("truecolor heat tone should be RGB, got {other:?}"),
         };
-        let samples: Vec<_> = [16, 20, 25, 30, 35, 40, 45, 50, 55, 60]
-            .into_iter()
-            .map(sample)
-            .collect();
+        // Walk the full health ramp: every step moves, and green falls
+        // monotonically from the healthy green start toward the alarm red end —
+        // the perceptually-even sweep a filling context rides.
+        let samples: Vec<_> = (0..=10).map(|step| sample(step as f32 / 10.0)).collect();
         assert!(
             samples.windows(2).all(|pair| pair[0] != pair[1]),
-            "each five-minute truecolor sample should move: {samples:?}"
+            "each tenth of the sweep should move: {samples:?}"
         );
         assert!(
             samples.windows(2).all(|pair| pair[0].1 > pair[1].1),
-            "classic heat lowers green toward alarm: {samples:?}"
+            "green falls from healthy green toward alarm: {samples:?}"
         );
     }
 

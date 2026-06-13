@@ -27,16 +27,15 @@ pub(in crate::sidebar_pane::render) const CONTEXT_FILLED: &str = "▤";
 pub(in crate::sidebar_pane::render) const CONTEXT_COMPACTIONS: &str = "↻";
 
 /// The context-window composition colors — one tone per segment, shared by the
-/// bar's colored runs and the context line's `◌`/`◍`/`↘` markers so the line
-/// reads as the bar's legend by construction. Cache-write reads violet (the
-/// `meta` family) to stay clear of the severity ramp's yellow/amber/red; it
-/// shares the `◇` total's violet, but those markers never co-occur because `◇`
-/// is fleet vocabulary and `◍` belongs to the card context line. `↗` output is
-/// not in the window (it joins next turn), so it carries no bar segment; its
-/// green is free because the meter's calm tier reads blue.
-pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_READ: Color = Color::Blue;
+/// bar's accent runs and the context line's `◌`/`◍`/`↘`/`↗` markers so the line
+/// reads as the bar's legend by construction. All four sit in the cool,
+/// off-warm hues — cyan, violet, blue, green — leaving the warm green→red band
+/// to the context-health gradient alone, so a composition tone never reads as a
+/// severity tone. Cache-read carries the bar's gradient sweep, so its `◌` marker
+/// stands in for the read quantity in cyan rather than tinting the swept run.
+pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_READ: Color = Color::Cyan;
 pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_WRITE: Color = Color::Magenta;
-pub(in crate::sidebar_pane::render) const SEGMENT_INPUT: Color = Color::Red;
+pub(in crate::sidebar_pane::render) const SEGMENT_INPUT: Color = Color::Blue;
 pub(in crate::sidebar_pane::render) const SEGMENT_OUTPUT: Color = Color::Green;
 
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
@@ -158,6 +157,11 @@ pub(in crate::sidebar_pane::render) fn context_total_spans(
 /// meter, so it reads with color off.
 const BAR_FILLED: char = '━';
 const BAR_TRACK: char = '─';
+/// A hollow `◦` set between a gradient bar's composition segments: one faint
+/// cell that breaks the cache-read sweep from the trailing accent runs, so the
+/// where-the-window-went split stays legible at a glance. The gap is carved from
+/// the filled region, so the bar still ends exactly at its fill level.
+const BAR_SEPARATOR: char = '◦';
 
 /// Segmented `▰` / `▱` for the provider dashboard's draining "mana / stamina"
 /// bars: a thin, ticked energy gauge that reads lighter than a solid `█` block
@@ -209,13 +213,26 @@ fn two_tone_bar(
     spans
 }
 
-/// The context meter's continuous tone for a concrete row. Calm reads blue;
-/// warm rows use the same OKLab warn → caution → alarm heat ramp as
-/// age/attention. Severity remains the domain verdict, while the renderer uses
-/// the row's position inside the configured bands to choose the heat amount,
-/// taking the worse of percent and token axes just like
-/// [`ContextSeverity::classify`]. A missing or stale axis falls back to the tier
-/// anchor so the color never understates a stamped severity.
+/// The context meter's heat amount for a concrete row, `0.0` (healthy green) →
+/// `1.0` (alarm red) along the [`Theme::heat_tone`] ramp. Severity remains the
+/// domain verdict, while the renderer uses the row's position inside the
+/// configured bands to choose the amount, taking the worse of percent and token
+/// axes just like [`ContextSeverity::classify`]. A missing or stale axis falls
+/// back to the tier anchor so the tone never understates a stamped severity;
+/// Calm rests at the green start. This amount also drives the bar's gradient
+/// sweep, so glyph, bar tip, and `▤` line read one urgency.
+pub(in crate::sidebar_pane::render) fn severity_heat_amount(
+    severity: ContextSeverity,
+    percent: u8,
+    used_tokens: Option<u64>,
+    bands: &ContextSeverityConfig,
+) -> f32 {
+    let anchor = severity_heat_anchor(severity);
+    context_heat_amount(percent, used_tokens, bands).map_or(anchor, |amount| amount.max(anchor))
+}
+
+/// The [`severity_heat_amount`] resolved through the ramp — the row's severity
+/// tone for the `▣` glyph and `▤` line, matching the bar's gradient tip.
 pub(in crate::sidebar_pane::render) fn severity_heat_color(
     theme: &Theme,
     severity: ContextSeverity,
@@ -223,13 +240,7 @@ pub(in crate::sidebar_pane::render) fn severity_heat_color(
     used_tokens: Option<u64>,
     bands: &ContextSeverityConfig,
 ) -> Color {
-    if severity == ContextSeverity::Calm {
-        return Color::Blue;
-    }
-    let anchor = severity_heat_anchor(severity);
-    let amount = context_heat_amount(percent, used_tokens, bands)
-        .map_or(anchor, |amount| amount.max(anchor));
-    theme.heat_tone(amount)
+    theme.heat_tone(severity_heat_amount(severity, percent, used_tokens, bands))
 }
 
 fn severity_heat_anchor(severity: ContextSeverity) -> f32 {
@@ -304,67 +315,85 @@ pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) 
     theme.style(color, Modifier::DIM)
 }
 
-/// Context bar: a thin rule whose filled run grows left-to-right as the window
-/// fills, painted in `color` (the caller's [`severity_color`]) over a faint
-/// track. The label and value columns live in the renderer's shared bar row;
-/// here we paint just the meter.
-pub(in crate::sidebar_pane::render) fn gauge_spans(
+/// The context meter's health bar: the dominant cache-read run sweeps the OKLab
+/// ramp from its green start up to `amount` (the row's severity), so the bar
+/// reads as a green→severity gradient at a glance, while the trailing accent
+/// segments (cache-write, fresh input) stay flat in their off-warm tones, each
+/// set off by a faint `◦` separator carved from the fill so composition stays
+/// legible against the sweep. `segments[0]` is the cache-read run — its color is
+/// the gradient, so the value passed for it is ignored; later segments paint in
+/// their own color. `total_pct` sizes the filled run exactly as the plain gauge
+/// would. With no split to draw, the whole filled run is one gradient sweep.
+/// Under `NO_COLOR` the sweep and accents collapse to one heavy run — the fill
+/// level still reads by shape.
+pub(in crate::sidebar_pane::render) fn gradient_gauge_spans(
     theme: &Theme,
-    color: Color,
-    percent: u8,
-    width: usize,
-) -> Vec<Span<'static>> {
-    two_tone_bar(
-        filled_cells(percent, width),
-        width,
-        theme.style(color, Modifier::empty()),
-        theme.faint(),
-        BAR_FILLED,
-        BAR_TRACK,
-    )
-}
-
-/// Like [`gauge_spans`], but the filled run is split into colored segments by
-/// token weight — showing *where* the context window went (cache reads, cache
-/// writes, and fresh input in the caller-provided order). `total_pct` sizes
-/// that filled run exactly as the single-color gauge would; the segments
-/// apportion that run by their weights with largest-remainder rounding, so the
-/// colored cells always sum to the filled count and the bar never over- or
-/// under-fills. With no breakdown to
-/// draw it falls back to the plain gauge. Under `NO_COLOR` the segments merge
-/// into one heavy run — the split is a color enrichment; the fill level still
-/// reads by shape.
-pub(in crate::sidebar_pane::render) fn segmented_gauge_spans(
-    theme: &Theme,
+    amount: f32,
     segments: &[(u64, Color)],
-    fallback_color: Color,
     total_pct: u8,
     width: usize,
 ) -> Vec<Span<'static>> {
     let width = width.max(1);
-    let total_pct = total_pct.min(100);
-    let filled = filled_cells(total_pct, width);
+    let filled = filled_cells(total_pct.min(100), width);
     let weight: u64 = segments.iter().map(|(value, _)| *value).sum();
+    let track = |drawn: usize| -> Option<Span<'static>> {
+        (drawn < width).then(|| {
+            Span::styled(
+                std::iter::repeat_n(BAR_TRACK, width - drawn).collect::<String>(),
+                theme.faint(),
+            )
+        })
+    };
     if filled == 0 || weight == 0 {
-        return gauge_spans(theme, fallback_color, total_pct, width);
+        // No split to draw: the whole filled run is one gradient sweep.
+        let mut spans = gradient_run_spans(theme, amount, filled);
+        spans.extend(track(filled));
+        return spans;
     }
-    let cells = apportion(segments.iter().map(|(value, _)| *value), filled);
-    let mut spans = Vec::with_capacity(segments.len() + 1);
-    for ((_, color), count) in segments.iter().zip(cells) {
-        if count > 0 {
+    // Reserve one cell per separator — one before each non-empty trailing accent
+    // — so the gaps come out of the fill and the bar still ends at `filled`.
+    let probe = apportion(segments.iter().map(|(value, _)| *value), filled);
+    let separators = probe.iter().skip(1).filter(|&&count| count > 0).count();
+    let cells = apportion(
+        segments.iter().map(|(value, _)| *value),
+        filled.saturating_sub(separators),
+    );
+    let mut spans = Vec::with_capacity(filled + 2);
+    let mut drawn = 0usize;
+    for (index, ((_, color), &count)) in segments.iter().zip(&cells).enumerate() {
+        if count == 0 {
+            continue;
+        }
+        if index == 0 {
+            spans.extend(gradient_run_spans(theme, amount, count));
+            drawn += count;
+        } else {
+            spans.push(Span::styled(BAR_SEPARATOR.to_string(), theme.faint()));
             spans.push(Span::styled(
                 std::iter::repeat_n(BAR_FILLED, count).collect::<String>(),
                 theme.style(*color, Modifier::empty()),
             ));
+            drawn += count + 1;
         }
     }
-    if filled < width {
-        spans.push(Span::styled(
-            std::iter::repeat_n(BAR_TRACK, width - filled).collect::<String>(),
-            theme.faint(),
-        ));
-    }
+    spans.extend(track(drawn));
     spans
+}
+
+/// `count` heavy cells whose color sweeps the health ramp from its green start up
+/// to `theme.heat_tone(amount)` — one `Span` per cell so each carries its own
+/// gradient tone, the last landing on the true severity tone. This is the
+/// cache-read run; trailing accent segments resume after it in flat tones.
+fn gradient_run_spans(theme: &Theme, amount: f32, count: usize) -> Vec<Span<'static>> {
+    (0..count)
+        .map(|cell| {
+            let position = (cell + 1) as f32 / count.max(1) as f32;
+            Span::styled(
+                BAR_FILLED.to_string(),
+                theme.style(theme.heat_tone(amount * position), Modifier::empty()),
+            )
+        })
+        .collect()
 }
 
 /// Distribute `total` whole cells across `weights` by the largest-remainder

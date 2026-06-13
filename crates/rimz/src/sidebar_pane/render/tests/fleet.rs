@@ -139,7 +139,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
             .expect("the make-up line carries the ? bucket")
     };
     let style = |color| theme.style(color, Modifier::BOLD).fg;
-    let heat = |age_secs: i64| style(theme.heat_tone(age_heat_amount_for_test(age_secs)));
+    let heat = |age_secs: i64| style(theme.warm_heat_tone(age_heat_amount_for_test(age_secs)));
     assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
     assert_eq!(
         bucket_fg(40 * 60),

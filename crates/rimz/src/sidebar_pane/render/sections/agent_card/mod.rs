@@ -20,7 +20,7 @@ use crate::sidebar_pane::render::labels::{
     SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
     agent_glyph, agent_lead_style, agent_role_style_at, compacting_glyph, compacting_head_style,
     context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
-    gauge_spans, loading_dots, resolver_glyph, resolver_style, segmented_gauge_spans,
+    gradient_gauge_spans, loading_dots, resolver_glyph, resolver_style, severity_heat_amount,
     severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::Theme;

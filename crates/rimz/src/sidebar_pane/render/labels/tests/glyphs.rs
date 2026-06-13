@@ -64,7 +64,7 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     };
     let heat = |age_secs: i64| {
         pulsed(
-            theme.heat_tone(age_heat_amount_for_test(age_secs)),
+            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
             age_secs,
         )
     };
@@ -443,7 +443,7 @@ fn activity_age_style_slides_with_the_clock_age() {
     let red = theme.style(Color::Red, Modifier::empty());
     let heat = |age_secs: i64| {
         theme.style(
-            theme.heat_tone(age_heat_amount_for_test(age_secs)),
+            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
             Modifier::empty(),
         )
     };
@@ -456,8 +456,8 @@ fn activity_age_style_slides_with_the_clock_age() {
     );
     assert_eq!(
         activity_age_style(&theme, 2250),
-        theme.style(theme.heat_tone(0.5), Modifier::empty()),
-        "caution anchors the ramp midpoint"
+        theme.style(theme.warm_heat_tone(0.5), Modifier::empty()),
+        "caution anchors the warm ramp's midpoint"
     );
     assert_eq!(activity_age_style(&theme, 3600), red);
     assert_eq!(

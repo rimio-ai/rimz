@@ -90,13 +90,14 @@ pub(super) fn gauge_line(
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
     let severity = row_severity(row, bands);
-    let color = row_severity_color(theme, row, bands, severity);
-    // The severity decides composition-vs-solid: the segments (where the window
-    // went) paint only while the meter rests calm; once it warms the bar goes
-    // solid severity.
-    let segments = (severity == ContextSeverity::Calm)
-        .then(|| gauge_segments(row))
-        .flatten();
+    // One health amount drives the whole row: the bar's green→severity gradient
+    // sweep and its tip, the `▣` glyph, and the `▤` line below — so glyph, bar,
+    // and figure read one urgency. The composition segments (where the window
+    // went) ride the bar at every severity; the dominant cache-read run carries
+    // the sweep while cache-write and fresh input stay flat accents beside it.
+    let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
+    let color = theme.heat_tone(amount);
+    let segments = gauge_segments(row);
     let glyph = if percent == 0 {
         CONTEXT_EMPTY_GLYPH
     } else {
@@ -108,8 +109,8 @@ pub(super) fn gauge_line(
         theme.style(color, Modifier::empty()),
         &value,
         |bar_width| match &segments {
-            Some(segments) => segmented_gauge_spans(theme, segments, color, percent, bar_width),
-            None => gauge_spans(theme, color, percent, bar_width),
+            Some(segments) => gradient_gauge_spans(theme, amount, segments, percent, bar_width),
+            None => gradient_gauge_spans(theme, amount, &[], percent, bar_width),
         },
         width,
     ))

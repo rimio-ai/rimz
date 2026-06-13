@@ -26,7 +26,8 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     let bands = crate::config::ContextSeverityConfig::default();
     assert_eq!(
         severity_heat_color(&theme, ContextSeverity::Calm, 0, None, &bands),
-        Color::Blue
+        theme.heat_tone(0.0),
+        "calm rests at the healthy green start of the ramp"
     );
     assert_eq!(
         severity_heat_color(&theme, ContextSeverity::Yellow, 60, None, &bands),
@@ -79,38 +80,98 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     assert_eq!(apportion([1, 1, 1], 4).iter().sum::<usize>(), 4);
     assert_eq!(apportion([0, 0], 3), vec![0, 0]);
 
-    let theme = Theme::fixed(true);
-    for (color, percent, width, expected) in [
-        (Color::Green, 60, 5, "━━━──"),
-        (Color::Green, 38, 10, "━━━━──────"),
-        (Color::Green, 0, 5, "─────"),
-        (Color::Red, 100, 5, "━━━━━"),
+    let plain = Theme::fixed(true);
+    for (percent, width, expected) in [
+        (60, 5, "━━━──"),
+        (38, 10, "━━━━──────"),
+        (0, 5, "─────"),
+        (100, 5, "━━━━━"),
     ] {
-        let spans = gauge_spans(&theme, color, percent, width);
+        let spans = gradient_gauge_spans(&plain, 0.5, &[], percent, width);
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_no_fg(&spans);
     }
 
+    // Composition rides the bar at every severity: the cache-read run takes the
+    // gradient, the trailing accents are dot-separated flat runs, and the gaps
+    // come out of the fill so the bar still ends exactly at its fill level.
     let segments = [
-        (8_000_u64, Color::Green),
-        (5_000, Color::Cyan),
-        (2_000, Color::Blue),
+        (8_000_u64, SEGMENT_CACHE_READ),
+        (5_000, SEGMENT_CACHE_WRITE),
+        (2_000, SEGMENT_INPUT),
     ];
-    let spans = segmented_gauge_spans(&theme, &segments, Color::Green, 60, 10);
-    // 60% of 10 = 6 filled; segments apportion 6 → 3/2/1; then a 4-cell track.
-    assert_eq!(text(&spans), "━━━━━━────");
-    let filled = text(&spans).chars().filter(|c| *c == '━').count();
-    assert_eq!(filled, 6);
-    assert_no_fg(&spans);
+    let rendered = text(&gradient_gauge_spans(&plain, 0.6, &segments, 60, 10));
+    assert_eq!(
+        rendered.chars().count(),
+        10,
+        "the bar fills its width exactly"
+    );
+    assert_eq!(
+        rendered.matches('◦').count(),
+        2,
+        "a separator sets off each accent run"
+    );
+    assert_eq!(
+        rendered.chars().filter(|c| *c == '━').count() + rendered.matches('◦').count(),
+        6,
+        "fill plus separators occupy the 60% run"
+    );
+    assert_eq!(
+        rendered.matches('─').count(),
+        4,
+        "the track fills the remainder"
+    );
 
-    let spans = segmented_gauge_spans(
-        &theme,
-        &[(0, Color::Green), (0, Color::Cyan)],
-        Color::Green,
+    // A weightless split falls back to a single gradient sweep.
+    let spans = gradient_gauge_spans(
+        &plain,
+        0.5,
+        &[(0, SEGMENT_CACHE_READ), (0, SEGMENT_INPUT)],
         50,
         4,
     );
     assert_eq!(text(&spans), "━━──");
+    assert_no_fg(&spans);
+
+    // In truecolor the cache-read run sweeps distinct RGB tones up to the
+    // severity tip, while cache-write and fresh input stay flat in their accents.
+    let segments = [
+        (9_000_u64, SEGMENT_CACHE_READ),
+        (3_000, SEGMENT_CACHE_WRITE),
+        (1_500, SEGMENT_INPUT),
+    ];
+    let mut runs: Vec<Vec<Option<Color>>> = vec![Vec::new()];
+    for span in &gradient_gauge_spans(&truecolor, 1.0, &segments, 90, 16) {
+        let content = span.content.as_ref();
+        if content == "◦" {
+            runs.push(Vec::new());
+        } else if !content.is_empty() && content.chars().all(|glyph| glyph == '━') {
+            runs.last_mut()
+                .unwrap()
+                .extend(content.chars().map(|_| span.style.fg));
+        }
+    }
+    let read = &runs[0];
+    assert!(
+        read.len() >= 2 && read.iter().all(|fg| matches!(fg, Some(Color::Rgb(..)))),
+        "the cache-read run is a truecolor sweep: {read:?}"
+    );
+    assert_ne!(read.first(), read.last(), "the sweep moves across its run");
+    assert_eq!(
+        *read.last().unwrap(),
+        Some(truecolor.heat_tone(1.0)),
+        "the sweep tips at the severity tone"
+    );
+    let write_fg = truecolor.style(SEGMENT_CACHE_WRITE, Modifier::empty()).fg;
+    let input_fg = truecolor.style(SEGMENT_INPUT, Modifier::empty()).fg;
+    assert!(
+        !runs[1].is_empty() && runs[1].iter().all(|fg| *fg == write_fg),
+        "cache-write is a flat accent"
+    );
+    assert!(
+        !runs[2].is_empty() && runs[2].iter().all(|fg| *fg == input_fg),
+        "fresh input is a flat accent"
+    );
 }
 
 #[test]
@@ -344,15 +405,23 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
             .style
             .fg
     };
-    assert_eq!(tone(CONTEXT_FILLED), Some(Color::Indexed(173)), "severity");
-    assert_eq!(tone(TOKENS_CACHED), Some(Color::Indexed(75)), "cache read");
+    // The `▤` head wears the bar's severity tip; each composition marker legends
+    // the bar in its own segment tone — cache-read cyan, cache-write violet,
+    // fresh input blue, output green — all off the warm severity band.
+    let segment_fg = |color| theme.style(color, Modifier::empty()).fg;
+    assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
+    assert_eq!(
+        tone(TOKENS_CACHED),
+        segment_fg(SEGMENT_CACHE_READ),
+        "cache read"
+    );
     assert_eq!(
         tone(TOKENS_CACHE_WRITE),
-        Some(Color::Indexed(141)),
+        segment_fg(SEGMENT_CACHE_WRITE),
         "cache write"
     );
-    assert_eq!(tone(TOKENS_IN), Some(Color::Indexed(167)), "fresh input");
-    assert_eq!(tone(TOKENS_OUT), Some(Color::Indexed(108)), "output");
+    assert_eq!(tone(TOKENS_IN), segment_fg(SEGMENT_INPUT), "fresh input");
+    assert_eq!(tone(TOKENS_OUT), segment_fg(SEGMENT_OUTPUT), "output");
     // Every figure reads dim — only the markers carry tones — and the `·`
     // seam shares the same dim gray chrome.
     for span in spans.iter().filter(|s| s.content.starts_with(' ')) {
