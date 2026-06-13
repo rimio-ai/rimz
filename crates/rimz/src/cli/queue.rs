@@ -220,11 +220,12 @@ fn deliver_one(
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let backend = rimz::mux::backend_for(candidate.pane_id.mux());
-    let mut text = message.text.clone();
-    if message.enter {
-        text.push('\r');
-    }
-    match super::pane::send_text(backend.as_ref(), &candidate.pane_id, &text) {
+    match super::pane::send_message(
+        backend.as_ref(),
+        &candidate.pane_id,
+        &message.text,
+        message.enter,
+    ) {
         Ok(()) => {
             ledger.settle_message(
                 &message.message_id,

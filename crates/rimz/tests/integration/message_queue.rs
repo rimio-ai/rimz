@@ -1,7 +1,8 @@
 use serde_json::json;
 
+use std::path::{Path, PathBuf};
+
 use rimz::feed::{FeedItem, FeedKind, Surface};
-use rimz::ids::{MuxName, PaneId};
 use rimz::message::MessageStatus;
 
 use crate::common::Env;
@@ -10,7 +11,7 @@ use crate::common::Env;
 fn queue_add_list_remove_and_clear_for_running_agent() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-queue", "feature-q", None);
+    register_running_agent(&env, "sess-queue", "feature-q", &[]);
 
     let first = queue_add(&env, "claude", "first task");
     let second = queue_add(&env, "claude", "second task");
@@ -90,7 +91,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
 fn deliver_leaves_ineligible_message_unclaimed() {
     let env = Env::new();
     env.install_agent_hooks("claude");
-    register_running_agent(&env, "sess-deliver", "feature-d", None);
+    register_running_agent(&env, "sess-deliver", "feature-d", &[]);
 
     let message_id = queue_add(&env, "claude", "next task");
 
@@ -126,7 +127,7 @@ fn deliver_leaves_ineligible_message_unclaimed() {
 #[test]
 fn queue_refuses_without_installed_hooks() {
     let env = Env::new();
-    register_running_agent(&env, "sess-no-hooks", "feature-q", None);
+    register_running_agent(&env, "sess-no-hooks", "feature-q", &[]);
 
     let out = env
         .rimz()
@@ -144,12 +145,7 @@ fn queue_refuses_without_installed_hooks() {
 #[test]
 fn steer_refuses_pending_ask_before_touching_pane() {
     let env = Env::new();
-    register_running_agent(
-        &env,
-        "sess-steer",
-        "feature-s",
-        Some(PaneId::from_parts(MuxName::Tmux, "%1")),
-    );
+    register_running_agent(&env, "sess-steer", "feature-s", &[("TMUX_PANE", "%1")]);
     push_pending_agent_ask(&env, "sess-steer");
 
     let out = env
@@ -165,11 +161,172 @@ fn steer_refuses_pending_ask_before_touching_pane() {
     );
 }
 
-fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane: Option<PaneId>) {
-    let pane_env = pane
-        .as_ref()
-        .and_then(|pane| (pane.mux() == MuxName::Tmux).then_some(("TMUX_PANE", pane.raw())));
-    let pane_env = pane_env.into_iter().collect::<Vec<_>>();
+/// `steer` types the text and then presses Enter as a discrete key event —
+/// never a carriage return folded into the typed text. Agent UIs submit on the
+/// keystroke but take an embedded newline as a composer line break, so the
+/// distinction is the whole feature. Drives a real `rimz steer` against the
+/// zellij-trace shim and asserts the recorded action sequence: `write-chars`
+/// of the text, then a discrete `write 13` (Enter), with no `\r` anywhere.
+#[test]
+fn steer_presses_enter_as_discrete_key() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-steer-enter",
+        "feature-se",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-steer-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "claude", "--", "y"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_text_then_enter(&trace_log, "y");
+}
+
+/// `--no-enter` types the text and stops — no Enter keystroke at all.
+#[test]
+fn steer_no_enter_suppresses_the_keystroke() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-steer-quiet",
+        "feature-sq",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-steer-quiet-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "claude", "--no-enter", "--", "y"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lines = trace_lines(&trace_log);
+    assert!(
+        lines.iter().any(|line| is_write_chars(line, "y")),
+        "expected write-chars of `y`; trace: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|line| is_enter_key(line)),
+        "--no-enter must not press Enter; trace: {lines:?}"
+    );
+}
+
+/// Queue delivery routes through the same send path: a message delivered at an
+/// open gate presses Enter as a discrete key, not a literal carriage return.
+/// Bringing the agent to an idle turn boundary with a bound pane lets the queue
+/// `add` deliver inline, so the assertion stays synchronous.
+#[test]
+fn queue_delivery_presses_enter_as_discrete_key() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-queue-enter", "feature-qe", pane_env);
+    // A turn end opens the `done` gate; the agent keeps its bound pane.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-queue-enter",
+            "worktree_branch": "feature-qe",
+        }),
+        pane_env,
+    );
+
+    let trace_log = env.project_root.join("zellij-queue-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "claude", "--", "go"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        env.ledger().list_pending_messages().unwrap().is_empty(),
+        "an idle agent with a bound pane should deliver the queued message inline"
+    );
+    assert_text_then_enter(&trace_log, "go");
+}
+
+fn zellij_trace_shim() -> PathBuf {
+    PathBuf::from(env!("CARGO_BIN_EXE_zellij-trace"))
+}
+
+fn trace_lines(path: &Path) -> Vec<String> {
+    std::fs::read_to_string(path)
+        .map(|raw| raw.lines().map(str::to_owned).collect())
+        .unwrap_or_default()
+}
+
+/// The shim records each invocation as tab-separated argv (`argv0\t…`). Pin the
+/// full action tail, including `--pane-id <pane>`, so a send to the wrong pane
+/// fails rather than passing on action type alone.
+const TRACE_PANE: &str = "terminal_3";
+
+/// A `zellij action write-chars --pane-id <pane> <text>` line.
+fn is_write_chars(line: &str, text: &str) -> bool {
+    line.ends_with(&format!(
+        "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t{text}"
+    ))
+}
+
+/// A discrete `zellij action write --pane-id <pane> 13` line — Enter sent as its
+/// own key event (`NamedKey::Enter` writes byte `13`), distinct from the text.
+fn is_enter_key(line: &str) -> bool {
+    line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
+}
+
+/// The shim recorded `write-chars <text>` followed by a discrete `write 13` —
+/// both to `TRACE_PANE` — with no carriage return folded into any sent payload.
+fn assert_text_then_enter(trace_log: &Path, text: &str) {
+    let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
+    assert!(
+        !raw.contains('\r'),
+        "no carriage return should be folded into the sent text; trace: {raw:?}"
+    );
+    let lines = trace_lines(trace_log);
+    let text_at = lines.iter().position(|line| is_write_chars(line, text));
+    let enter_at = lines.iter().position(|line| is_enter_key(line));
+    assert!(
+        text_at.is_some(),
+        "expected write-chars of `{text}`; trace: {lines:?}"
+    );
+    assert!(
+        enter_at.is_some(),
+        "expected Enter as a discrete `write 13`; trace: {lines:?}"
+    );
+    assert!(
+        text_at < enter_at,
+        "text must be typed before Enter; trace: {lines:?}"
+    );
+}
+
+fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &[(&str, &str)]) {
     run_hook(
         env,
         json!({
@@ -177,7 +334,7 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane: Optio
             "session_id": session_id,
             "worktree_branch": branch,
         }),
-        &pane_env,
+        pane_env,
     );
     run_hook(
         env,
@@ -187,7 +344,7 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane: Optio
             "prompt": "work",
             "worktree_branch": branch,
         }),
-        &pane_env,
+        pane_env,
     );
 }
 

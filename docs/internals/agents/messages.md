@@ -8,7 +8,7 @@ Message commands resolve `TARGET` with the same card ref grammar as [`rimz agent
 
 ## Steer
 
-`rimz steer <target> -- <text>` types into the resolved agent's bound pane immediately and appends Enter by default. A pending feed ask attached to that agent blocks the send; `--force` records the override. The `agent.steered` event records kind, session id, pane id, force flag, and text length. Message content stays out of the event log.
+`rimz steer <target> -- <text>` types into the resolved agent's bound pane immediately and presses Enter as a discrete keystroke by default, so the agent submits instead of taking a newline into its composer. A pending feed ask attached to that agent blocks the send; `--force` records the override. The `agent.steered` event records kind, session id, pane id, force flag, and text length. Message content stays out of the event log.
 
 ## Queue Layout
 

@@ -30,7 +30,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
     if args.text.is_empty() {
         bail!("expected non-empty text");
     }
-    let mut text = args.text.join(" ");
+    let text = args.text.join(" ");
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
@@ -60,10 +60,10 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
     })?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
     let text_len = text.len();
-    if !args.no_enter {
-        text.push('\r');
-    }
     super::pane::send_text(backend.as_ref(), &pane.pane_id, &text)?;
+    // Record the steer once the text lands and before the submit keystroke, so a
+    // submitted steer is always preceded by its audit event. A failed Enter then
+    // returns an error over text that is already accounted for, never untracked.
     let event = EventEnvelope::agent_steered(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),
@@ -76,5 +76,8 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         ),
     );
     ledger.append_event(&event)?;
+    if !args.no_enter {
+        super::pane::send_enter(backend.as_ref(), &pane.pane_id)?;
+    }
     Ok(())
 }

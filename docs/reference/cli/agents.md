@@ -64,7 +64,7 @@ rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."
 rimz steer [OPTIONS] <REF> [--worktree <WORKTREE>] [--no-enter] [--force] -- <TEXT...>
 ```
 
-Targets use the same card ref grammar as `agents show`. By default, `steer` appends Enter after the text. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
+Targets use the same card ref grammar as `agents show`. By default, `steer` presses Enter as a discrete keystroke after the text, so the agent submits instead of taking a newline. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
 
 Target resolution and pane-answering resolver behavior are covered in [resolver internals](../../internals/agents/resolvers.md).
 

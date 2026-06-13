@@ -255,6 +255,27 @@ pub(super) fn send_key(backend: &dyn MuxBackend, pane: &PaneId, key: NamedKey) -
     backend.send_key(pane, key).map_err(Into::into)
 }
 
+/// Press Enter as a discrete key event — the submit keystroke. Agent UIs submit
+/// on the keystroke but treat a newline folded into typed text as a composer
+/// line break, so the submit Enter never rides inside the text payload.
+pub(super) fn send_enter(backend: &dyn MuxBackend, pane: &PaneId) -> Result<()> {
+    send_key(backend, pane, NamedKey::Enter)
+}
+
+/// Type `text`, then press Enter unless suppressed.
+pub(super) fn send_message(
+    backend: &dyn MuxBackend,
+    pane: &PaneId,
+    text: &str,
+    enter: bool,
+) -> Result<()> {
+    send_text(backend, pane, text)?;
+    if enter {
+        send_enter(backend, pane)?;
+    }
+    Ok(())
+}
+
 fn send(
     backend: &dyn MuxBackend,
     pane: &PaneId,
