@@ -553,9 +553,20 @@ fn agent_name_follows_card_emphasis() {
         Some(Color::Indexed(expected)),
         "the selected agent name wears the provider color"
     );
+    let unselected = name_style(usize::MAX).fg;
     assert_eq!(
-        name_style(usize::MAX).fg,
+        unselected,
+        theme.soft_brand(Color::Indexed(expected)).fg,
+        "a calm unselected agent name keeps a muted brand tone"
+    );
+    assert_ne!(
+        unselected,
         theme.soft().fg,
-        "a calm unselected agent name softens with the row"
+        "the muted brand tone is not the flat soft gray"
+    );
+    assert_ne!(
+        unselected,
+        Some(Color::Indexed(expected)),
+        "the muted brand tone is softer than the selected full brand"
     );
 }

@@ -279,6 +279,12 @@ pub(in crate::sidebar_pane::render) fn attention_blink_sample(
     )
 }
 
+/// Paint an element's natural tone under the row's card emphasis, so the lead
+/// glyph, name, and description move as one group: blink pulses the tone on the
+/// shared sample, normal wears it at full strength, and soft mutes it toward the
+/// body tier (`soft_brand`) so a calm unselected card keeps its color, just
+/// quietly. A colorless element (an idle lead, body text) rests at the plain
+/// soft body tone.
 pub(in crate::sidebar_pane::render) fn emphasize(
     theme: &Theme,
     natural_color: Option<Color>,
@@ -295,7 +301,9 @@ pub(in crate::sidebar_pane::render) fn emphasize(
         CardEmphasis::Normal => natural_color.map_or_else(Style::default, |color| {
             theme.style(color, Modifier::empty())
         }),
-        CardEmphasis::Soft => theme.soft(),
+        CardEmphasis::Soft => {
+            natural_color.map_or_else(|| theme.soft(), |color| theme.soft_brand(color))
+        }
     }
 }
 

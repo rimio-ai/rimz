@@ -114,6 +114,9 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
         );
     }
     assert_ne!(heat(25 * 60), heat(50 * 60), "age heat is not constant");
+    // A calm, unselected lead softens to the body tier with the name and
+    // description. An idle lead carries no hue, so it rests at plain soft gray;
+    // a running lead keeps its working color, muted toward the same tier.
     assert_eq!(
         agent_lead_style(
             &theme,
@@ -127,18 +130,24 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
         .fg,
         theme.soft().fg
     );
-    assert_eq!(
-        agent_lead_style(
-            &theme,
-            AgentStatus::Running,
-            TurnPhase::Acting,
-            2 * 60 * 60,
-            0,
-            false,
-            false,
-        )
-        .fg,
-        theme.soft().fg
+    let working = agent_role_style_at(&theme, AgentStatus::Running, TurnPhase::Acting, 0)
+        .fg
+        .expect("a running lead carries a working color");
+    let calm_running = agent_lead_style(
+        &theme,
+        AgentStatus::Running,
+        TurnPhase::Acting,
+        2 * 60 * 60,
+        0,
+        false,
+        false,
+    )
+    .fg;
+    assert_eq!(calm_running, theme.soft_brand(working).fg);
+    assert_ne!(
+        calm_running,
+        theme.soft().fg,
+        "a calm running lead keeps a muted working hue, not flat gray"
     );
 }
 

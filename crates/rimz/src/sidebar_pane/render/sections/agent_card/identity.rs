@@ -2,11 +2,12 @@ use super::*;
 
 use crate::sidebar_pane::render::animation::BreathSample;
 
-/// The agent name's style under the row's card emphasis. The normal tier wears
-/// the matching provider brand color, tying the card to the provider dashboard;
-/// the soft tier rests with the row; the blink tier pulses on the shared sample
-/// with the lead glyph and description. Unknown providers fall back to mid-gray
-/// chrome.
+/// The agent name's style under the row's card emphasis, sharing [`emphasize`]
+/// with the lead glyph and description so the three move as one group: the
+/// normal tier wears the matching provider brand color, tying the card to the
+/// provider dashboard; the soft tier keeps that brand hue muted to the body
+/// tier, so a calm unselected card still reads as its provider; the blink tier
+/// pulses on the shared sample. Unknown providers fall back to mid-gray chrome.
 pub(super) fn agent_name_style(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
