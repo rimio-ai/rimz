@@ -443,14 +443,15 @@ impl Theme {
         self.chrome(self.palette.body)
     }
 
-    /// A provider brand tone for a calm card: the brand keeps its full hue and
-    /// saturation while its OKLab lightness dims one fixed step ([`SOFT_BRAND_DIM`]),
-    /// so an unselected card's name stays unmistakably on-brand while resting a
-    /// touch quieter than the full-brand selected/attention state. At indexed
-    /// depth a step that quantizes back to the brand's own slot falls back to a
-    /// `DIM` weight, as [`breathe`](Self::breathe) does. `no_color` keeps the
-    /// `DIM` fallback — no hue survives there — and an unresolvable color falls
-    /// back to plain `body()`.
+    /// A provider brand tone for a calm card. At truecolor the brand keeps its
+    /// full hue and saturation while its OKLab lightness dims one fixed step
+    /// ([`SOFT_BRAND_DIM`]), so an unselected card's name rests a touch quieter
+    /// than the full-brand selected/attention state. The 256-color cube is too
+    /// coarse for that subtle step — its nearest darker cell is a hard
+    /// ~40-per-channel jump that reads as a heavy darkening, not a soft
+    /// recession — so indexed depth keeps the full brand and lets the selection
+    /// bar and description carry the calm cue. `no_color`, and an unresolvable
+    /// color, fall back to the plain `body()` tone.
     pub(crate) fn body_brand(&self, brand: Color) -> Style {
         if self.no_color {
             return self.body();
@@ -458,13 +459,11 @@ impl Theme {
         let Some(brand_rgb) = color_to_rgb(brand) else {
             return self.body();
         };
-        let dimmed = oklab::lift_lightness(brand_rgb, -SOFT_BRAND_DIM);
-        let color = rgb_color(dimmed, self.depth);
-        let mut style = Style::default().fg(color);
-        if self.depth == ColorDepth::Indexed && color == rgb_color(brand_rgb, self.depth) {
-            style = style.add_modifier(Modifier::DIM);
-        }
-        style
+        let tone = match self.depth {
+            ColorDepth::Indexed => brand_rgb,
+            ColorDepth::Truecolor => oklab::lift_lightness(brand_rgb, -SOFT_BRAND_DIM),
+        };
+        Style::default().fg(rgb_color(tone, self.depth))
     }
 
     pub(crate) fn faint(&self) -> Style {

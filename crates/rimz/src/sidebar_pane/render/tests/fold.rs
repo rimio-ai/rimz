@@ -513,12 +513,15 @@ fn consecutive_cards_stack_without_a_blank_separator() {
         rendered.join("\n")
     );
 }
-/// The agent name uses the provider brand color in the card's normal tier and
-/// softens with the rest of a calm unselected card. Read the expected index off
-/// the snapshot's own panel so the test follows config overrides.
+/// The agent name uses the provider brand color in the card's normal tier. At
+/// truecolor a calm unselected card softens it a lightness step; the 256-color
+/// cube is too coarse for that subtle step, so an indexed render (this test)
+/// keeps the full brand and leaves the calm cue to the selection bar and
+/// description. Read the expected index off the snapshot's own panel so the test
+/// follows config overrides.
 #[test]
 fn agent_name_follows_card_emphasis() {
-    let theme = Theme::fixed(false); // color on, so the brand tone survives
+    let theme = Theme::fixed(false); // indexed depth, color on, so the brand tone survives
     let state = agent(
         "claude-1",
         "claude",
@@ -558,15 +561,16 @@ fn agent_name_follows_card_emphasis() {
     assert_eq!(
         calm,
         theme.body_brand(Color::Indexed(expected)),
-        "a calm unselected agent name takes the recessed brand style"
+        "a calm unselected agent name takes the calm brand style"
     );
-    assert_ne!(
+    assert_eq!(
         calm, selected,
-        "the calm brand tone rests a step under the selected full brand"
+        "at indexed depth the calm name keeps full brand — the cube can't render \
+         a subtle dim, so the selection bar and description carry the calm cue"
     );
     assert_ne!(
         calm.fg,
         theme.body().fg,
-        "the recessed brand keeps its hue, not the flat soft gray"
+        "the calm name keeps its brand hue, not the flat soft gray"
     );
 }
