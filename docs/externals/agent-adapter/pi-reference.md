@@ -183,7 +183,7 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 | Surface | Meaning |
 | --- | --- |
-| `pi --version` | version (`0.78.1` verified) |
+| `pi --version` | version (`0.78.1` verified), written to **stderr** — the adapter probe captures both streams |
 | `pi -c` / `pi -r` | continue the most recent session / browse and pick |
 | `pi --session <path\|id>` | resume a specific session; accepts a partial UUID — the resume-on-rebirth seed |
 | `pi --fork <path\|id>`, `--no-session`, `--name <n>` | fork into a new file, ephemeral mode, display name |

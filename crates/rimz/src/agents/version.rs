@@ -2,8 +2,10 @@
 //!
 //! Adapter-specific transports (statusline, app-server context, account files)
 //! still win when they carry a fresher version. This module is the cheap
-//! out-of-band fallback: run `<binary> --version`, capture stdout, and parse the
-//! conventional leading version token where a caller needs ordering.
+//! out-of-band fallback: run `<binary> --version`, capture both streams, and
+//! parse the conventional leading version token where a caller needs ordering.
+//! Agent CLIs disagree on the stream — Claude and Codex print to stdout, Pi
+//! prints to stderr — so the probe reads both.
 
 use std::process::{Command, Stdio};
 use std::str::FromStr;
@@ -80,13 +82,23 @@ pub(crate) fn probe_cli_version(binary: &str) -> Option<String> {
         .arg("--version")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .output()
         .ok()?;
     if !output.status.success() {
         return None;
     }
-    normalize_cli_version_output(&String::from_utf8_lossy(&output.stdout))
+    cli_version_from_streams(
+        &String::from_utf8_lossy(&output.stdout),
+        &String::from_utf8_lossy(&output.stderr),
+    )
+}
+
+/// Pick the version from a `--version` probe's two streams. Claude and Codex
+/// write the version to stdout, Pi writes it to stderr, so scan both for the
+/// first parseable version token.
+fn cli_version_from_streams(stdout: &str, stderr: &str) -> Option<String> {
+    normalize_cli_version_output(&format!("{stdout}\n{stderr}"))
 }
 
 fn normalize_cli_version_output(output: &str) -> Option<String> {
@@ -149,5 +161,25 @@ mod tests {
             Some("not a version")
         );
         assert_eq!(normalize_cli_version_output("   "), None);
+    }
+
+    #[test]
+    fn selects_version_from_whichever_stream_carries_it() {
+        // Claude and Codex print `--version` to stdout.
+        assert_eq!(
+            cli_version_from_streams("2.1.173 (Claude Code)\n", "").as_deref(),
+            Some("2.1.173")
+        );
+        assert_eq!(
+            cli_version_from_streams("codex-cli 0.139.0\n", "").as_deref(),
+            Some("0.139.0")
+        );
+        // Pi prints `--version` to stderr, leaving stdout empty.
+        assert_eq!(
+            cli_version_from_streams("", "0.78.1\n").as_deref(),
+            Some("0.78.1")
+        );
+        // No output on either stream is an absent version.
+        assert_eq!(cli_version_from_streams("", ""), None);
     }
 }
