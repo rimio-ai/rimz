@@ -46,6 +46,9 @@ skip = [
     # catches up. (The former wit-bindgen and windows-sys skips left with the
     # graph's target scoping — wasm and windows triples are no longer audited.)
     { crate = "getrandom@0.2.17", reason = "ring pins getrandom 0.2; workspace otherwise on 0.3/0.4" },
+    # `sentry-core`'s `rand 0.9` (event sampling) pins getrandom 0.3 into the
+    # shipped graph, where `uuid` otherwise carries 0.4; drop when they converge.
+    { crate = "getrandom@0.3.4", reason = "sentry-core's rand 0.9 pins getrandom 0.3; uuid carries 0.4" },
     # `toml_edit`/`indexmap` has moved to hashbrown 0.17 while the ratatui
     # stack still carries 0.16; drop when either upstream converges.
     { crate = "hashbrown@0.17.1", reason = "toml_edit/indexmap pins hashbrown 0.17; ratatui stack pins 0.16" },
