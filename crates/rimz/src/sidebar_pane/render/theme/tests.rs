@@ -394,7 +394,7 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     assert_eq!(lit.rule().fg, Some(Color::Indexed(239)));
     assert!(
         lit.rule().add_modifier.contains(Modifier::DIM),
-        "rule rides faint's gray under the DIM attenuation"
+        "rule keeps a standing DIM over its own darkest gray (239), not faint's (59) — the one ladder tone still attenuated when lit"
     );
 
     let dark = Theme::fixed(true);
