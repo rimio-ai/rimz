@@ -322,6 +322,12 @@ pub(super) fn render_tab_layout(
 /// plugin panes and Zellij assigns them to swap slots like terminals, so a
 /// template without one re-tiles the bar into the work area as a full-size pane
 /// (swap-layout semantics in `docs/externals/mux-adapter/zellij-reference.md`).
+///
+/// The templates stop at two work panes. Larger static templates need a
+/// `children` placeholder to absorb extra panes, and that can make keyboard
+/// `NewPane` actions prefer the first work slot instead of the focused pane.
+/// Letting Zellij's native focus-based split path handle three-or-more work
+/// panes preserves the user's expected target.
 fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
     format!(
         r#"    swap_tiled_layout name="rimz-work-area" {{
@@ -339,18 +345,6 @@ fn rimz_swap_layout_kdl(sidebar_cols: u16) -> String {
                 pane size={sidebar_cols}
                 pane split_direction="vertical" {{
                     pane
-                    pane
-                }}
-            }}
-            pane size=1 borderless=true {{
-                plugin location="zellij:compact-bar"
-            }}
-        }}
-        tab max_panes=6 {{
-            pane split_direction="vertical" {{
-                pane size={sidebar_cols}
-                pane split_direction="vertical" {{
-                    pane {{ children; }}
                     pane
                 }}
             }}
@@ -600,13 +594,16 @@ mod tests {
         );
         assert!(layout.contains("tab max_panes=3"), "{layout}");
         assert!(layout.contains("tab max_panes=4"), "{layout}");
-        assert!(layout.contains("tab max_panes=6"), "{layout}");
+        assert!(
+            !layout.contains("tab max_panes=6"),
+            "larger tabs should fall back to Zellij's focused split path:\n{layout}",
+        );
         assert_eq!(
             layout
                 .matches(r#"plugin location="zellij:compact-bar""#)
                 .count(),
-            4,
-            "the visible bar plus all three swap templates must carry the \
+            3,
+            "the visible bar plus both swap templates must carry the \
              compact-bar plugin:\n{layout}",
         );
         assert!(layout.contains(r#"cwd="/proj/worktree""#), "{layout}");
@@ -657,13 +654,16 @@ mod tests {
         );
         assert!(layout.contains("tab max_panes=3"), "{layout}");
         assert!(layout.contains("tab max_panes=4"), "{layout}");
-        assert!(layout.contains("tab max_panes=6"), "{layout}");
+        assert!(
+            !layout.contains("tab max_panes=6"),
+            "larger tabs should fall back to Zellij's focused split path:\n{layout}",
+        );
         assert_eq!(
             layout
                 .matches(r#"plugin location="zellij:compact-bar""#)
                 .count(),
-            4,
-            "the visible bar plus all three swap templates must carry the \
+            3,
+            "the visible bar plus both swap templates must carry the \
              compact-bar plugin:\n{layout}",
         );
         assert!(layout.contains("pane size=72"), "{layout}");
