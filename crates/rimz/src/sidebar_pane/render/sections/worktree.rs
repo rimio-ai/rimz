@@ -70,7 +70,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     // worktree is just its bold label. The `external` divider is full-bleed
     // chrome with a blank gutter.
     let header = group_header(theme, group, width, group_selected);
-    lines.push(with_gutter(theme, header, lane));
+    lines.push(with_gutter(theme, header, lane, width));
     // The worktree name is itself a click target: it lands on the group's first
     // row — the agent adjacent to the header — so clicking the pod name jumps
     // straight into it. The `external` divider is not a worktree name, so it
@@ -110,6 +110,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
             theme,
             Line::styled(format!("  +{} more", group.hidden_count), theme.dim()),
             lane,
+            width,
         ));
         map.push(None);
     }

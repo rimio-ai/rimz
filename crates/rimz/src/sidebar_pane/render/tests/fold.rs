@@ -152,8 +152,13 @@ fn selecting_a_row_only_appends_never_reshapes_the_fold_lines() {
         "the selected worktree header is sealed: {:?}",
         selected[0]
     );
-    // Row lines differ only by the leading one-cell gutter; strip it.
-    let strip = |line: &String| line.chars().skip(1).collect::<String>();
+    // Row lines differ only by the frame cells; strip the left gutter and right
+    // rail before comparing the content.
+    let strip = |line: &String| {
+        let mut text = line.chars().skip(1).collect::<String>();
+        text.pop();
+        text
+    };
     let fold: Vec<String> = unselected[1..].iter().map(strip).collect();
     let full: Vec<String> = selected[1..].iter().map(strip).collect();
     // The resting fold is identity + description + ctx bar + the context line.

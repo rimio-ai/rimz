@@ -178,7 +178,7 @@ pub(super) fn row_lines(
     }
     inner
         .into_iter()
-        .map(|line| with_gutter(theme, line, gutter))
+        .map(|line| with_gutter(theme, line, gutter, width))
         .collect()
 }
 

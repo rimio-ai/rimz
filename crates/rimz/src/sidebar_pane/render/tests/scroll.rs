@@ -43,8 +43,8 @@ fn scroll_thumb_reads_top_and_bottom_true() {
 fn render_scroll_overflow_shows_bar() {
     // More cards than the frame holds, mid-scroll: the cockpit stays pinned at
     // the top, the footer at the bottom, and the cards scroll between them
-    // behind a right-margin scrollbar — the thumb at the top of the track,
-    // since the selection (row 0) holds the window at the zone's start. The
+    // behind a right-rail scrollbar — the thumb at the top of the track, since
+    // the selection (row 0) holds the window at the zone's start. The
     // freshly-stamped fade is what shows the bar: `auto` mode paints it only
     // while the viewport moves.
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -67,25 +67,49 @@ fn render_scroll_overflow_shows_bar() {
         lines.last().unwrap().contains("? for help"),
         "footer pinned:\n{rendered}"
     );
-    assert!(rendered.contains('▐'), "the thumb renders:\n{rendered}");
+    assert!(
+        line_containing(&rendered, "⑂ alpha").ends_with('▐'),
+        "the thumb replaces the selected header rail:\n{rendered}"
+    );
     assert!(rendered.contains('▕'), "the track renders:\n{rendered}");
     assert_snapshot("scroll_overflow_shows_bar", rendered);
+}
+#[test]
+fn scrollbar_clips_help_overlay_without_erasing_text() {
+    let mut snapshot = overflowing_fleet();
+    snapshot.sidebar.scrollbar = ScrollbarMode::Always;
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            help_visible: true,
+            scroll_offset: usize::MAX,
+            ..Default::default()
+        },
+        36,
+        28,
+    );
+
+    let filter = line_containing(&rendered, "filter   u unread");
+    assert!(
+        filter.ends_with('▕') || filter.ends_with('▐'),
+        "help text keeps its clipped content and receives the scrollbar rail:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("system   r reload"),
+        "other help chrome survives the scrollbar too:\n{rendered}"
+    );
 }
 #[test]
 fn render_scroll_offset_follows_selection_to_bottom() {
     // Selecting the last row auto-scrolls its card fully into view. The first
     // draw establishes the fade's baseline rather than reading as a move, so
     // this frame doubles as the settled witness: no scroll activity, no bar.
-    let rendered = snapshot_to_screen_with_alert_and_ui(
-        &overflowing_fleet(),
-        None,
-        &UiState {
-            selected_index: 5,
-            ..Default::default()
-        },
-        38,
-        18,
-    );
+    let ui = UiState {
+        selected_index: 5,
+        ..Default::default()
+    };
+    let rendered = snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &ui, 38, 18);
     assert!(
         rendered.contains("task-5"),
         "the selected last card is in view:\n{rendered}"
@@ -94,9 +118,12 @@ fn render_scroll_offset_follows_selection_to_bottom() {
         !rendered.contains("task-0"),
         "the zone's head scrolled off:\n{rendered}"
     );
-    assert!(
-        !rendered.contains('▐') && !rendered.contains('▕'),
-        "a settled viewport carries no bar:\n{rendered}"
+    let mut no_bar = overflowing_fleet();
+    no_bar.sidebar.scrollbar = ScrollbarMode::Never;
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 18);
+    assert_eq!(
+        rendered, expected,
+        "a settled viewport carries no scrollbar overlay"
     );
     assert_snapshot("scroll_offset_follows_selection_to_bottom", rendered);
 }
@@ -175,27 +202,26 @@ fn render_scroll_manual_offset_holds() {
 }
 #[test]
 fn scrollbar_modes_control_visibility_without_moving_the_window() {
-    let settled = snapshot_to_screen_with_alert_and_ui(
-        &overflowing_fleet(),
-        None,
-        &UiState {
-            scrollbar: scrolled_fade(0, 0),
-            animation_phase: 11,
-            ..Default::default()
-        },
-        38,
-        18,
-    );
-    assert!(
-        !settled.contains('▐') && !settled.contains('▕'),
-        "the settle window has passed — no bar:\n{settled}"
+    let settled_ui = UiState {
+        scrollbar: scrolled_fade(0, 0),
+        animation_phase: 11,
+        ..Default::default()
+    };
+    let settled =
+        snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &settled_ui, 38, 18);
+    let mut no_bar = overflowing_fleet();
+    no_bar.sidebar.scrollbar = ScrollbarMode::Never;
+    let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, 38, 18);
+    assert_eq!(
+        settled, expected,
+        "the settle window has passed — no scrollbar overlay"
     );
 
     let mut snapshot = overflowing_fleet();
     snapshot.sidebar.scrollbar = ScrollbarMode::Always;
     let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
     assert!(
-        always.contains('▐') && always.contains('▕'),
+        line_containing(&always, "⑂ alpha").ends_with('▐'),
         "always mode pins the bar with no activity:\n{always}"
     );
 
@@ -216,11 +242,22 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
         18,
     );
     assert!(
-        !never.contains('▐') && !never.contains('▕'),
-        "never mode paints no bar even mid-scroll:\n{never}"
+        !ends_with_rail(line_containing(&never, "⑂ beta")),
+        "never mode leaves a non-selected rail blank even mid-scroll:\n{never}"
     );
     assert!(
         never.contains("task-3") && !never.contains("task-0"),
         "the pinned window still renders its cards:\n{never}"
     );
+}
+
+fn line_containing<'a>(rendered: &'a str, needle: &str) -> &'a str {
+    rendered
+        .lines()
+        .find(|line| line.contains(needle))
+        .unwrap_or_else(|| panic!("missing {needle:?} in:\n{rendered}"))
+}
+
+fn ends_with_rail(line: &str) -> bool {
+    matches!(line.chars().last(), Some('▐' | '▕'))
 }

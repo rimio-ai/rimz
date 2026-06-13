@@ -8,8 +8,8 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, unread_total,
-    worktree_group_lines,
+    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, trim_spans_to_width,
+    unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
 use super::{Alert, UiState, active_provider_kind, dashboard_tabbed, labels, row_passes_filter};
@@ -32,8 +32,8 @@ use super::{Alert, UiState, active_provider_kind, dashboard_tabbed, labels, row_
 /// beneath it. The effective
 /// offset is returned for the caller to write back, a draw byproduct like the
 /// hit-test map. When the cards overflow the viewport, each visible scroll line
-/// carries a track/thumb glyph in the right-margin column the content leaves
-/// free — part of the composed line, so every consumer of the frame sees it.
+/// carries a track/thumb glyph in the right rail column — part of the composed
+/// line, so every consumer of the frame sees it.
 ///
 /// Returns the composed frame with its hit-test maps and the effective scroll
 /// offset ([`ComposedFrame`]). Row-map entry `i` is the visible row index that
@@ -60,8 +60,8 @@ pub(crate) fn compose_lines(
     let theme = Theme::for_sidebar(&snapshot.sidebar);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
-    // width and opened with a blank gutter, leaving the trailing column as the
-    // matching right margin — the same frame the cards carry (see `with_gutter`).
+    // width and opened with a blank gutter, reserving the trailing right rail —
+    // the same frame the cards carry (see `with_gutter`).
     let inner = content_width(cells);
     let (mut lines, mut map, mut make_up_hits) = top_lines(snapshot, ui, cells, &theme);
     let (scroll, scroll_map) = scroll_lines(snapshot, alert, ui, cells, &theme);
@@ -110,7 +110,7 @@ pub(crate) fn compose_lines(
     }
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
-    // right-margin column when the cards overflow the viewport — gated by the
+    // right rail column when the cards overflow the viewport — gated by the
     // `[sidebar] scrollbar` mode. `auto` paints the bar on the very frame the
     // viewport moves (the fade's baseline still holds the pre-move offset; the
     // caller stamps it at the write-back) and through the settle window after.
@@ -313,15 +313,14 @@ pub(super) fn auto_scroll_to_selection(
     offset
 }
 
-/// Ride the scrollbar on a visible scroll-zone line: pad to the right-margin
-/// column the content leaves free (content builds to `content_width`, the
-/// gutter takes column 0) and append the track or thumb glyph — so the bar is
-/// part of the composed frame, reflows nothing, and adds no line the hit-test
-/// map would have to account for. The solid `▐` thumb against the hairline `▕`
-/// track carries the position by shape, so it survives `NO_COLOR`. The pad
-/// measures display cells (`Line::width`) against the char-count budget the
-/// content was built to; the two agree because every glyph in the sidebar
-/// lexicon is single-cell.
+/// Ride the scrollbar on a visible scroll-zone line: the right rail is the last
+/// sidebar column, already present on framed card lines and reserved by
+/// chrome/help lines. Overflow trims the line to the column before the rail,
+/// then writes the track or thumb glyph into that rail instead of appending
+/// another column. Framed cards lose their spine rail; over-wide chrome keeps
+/// its clipped text instead of losing a whole span. The solid `▐` thumb against
+/// the hairline `▕` track carries the position by shape, so it survives
+/// `NO_COLOR`.
 pub(super) fn with_scrollbar(
     mut line: Line<'static>,
     theme: &Theme,
@@ -332,7 +331,9 @@ pub(super) fn with_scrollbar(
     viewport: usize,
 ) -> Line<'static> {
     let (thumb_start, thumb_len) = scroll_thumb(offset, scroll_len, viewport);
-    let pad = cells.saturating_sub(1).saturating_sub(line.width());
+    let rail_column = cells.saturating_sub(1);
+    line.spans = trim_spans_to_width(line.spans, rail_column);
+    let pad = rail_column.saturating_sub(line.width());
     if pad > 0 {
         line.spans.push(Span::raw(" ".repeat(pad)));
     }
@@ -534,13 +535,12 @@ pub(super) fn extend_inert(
 }
 
 /// Open a chrome line with the same one-cell blank left gutter the cards carry,
-/// so the whole sidebar sits inside a one-cell frame — the trailing column the
-/// content leaves free is the matching right margin. A genuinely empty line (a
-/// blank separator, or the cockpit's reserved-but-empty totals slot) is left as
-/// is, so it stays zero-width and reads as a true blank row. A line-level style
-/// (a `Line::styled` hairline or help line) is patched into the rebuilt spans —
-/// the same carry the cards' `with_gutter` does — so the rebuild never silently
-/// strips a tone.
+/// so the whole sidebar sits inside a one-cell frame and reserves the trailing
+/// right rail. A genuinely empty line (a blank separator, or the cockpit's
+/// reserved-but-empty totals slot) is left as is, so it stays zero-width and
+/// reads as a true blank row. A line-level style (a `Line::styled` hairline or
+/// help line) is patched into the rebuilt spans — the same carry the cards'
+/// `with_gutter` does — so the rebuild never silently strips a tone.
 pub(super) fn pad_chrome(line: Line<'static>) -> Line<'static> {
     if line.spans.iter().all(|span| span.content.is_empty()) {
         return line;

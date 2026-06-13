@@ -302,9 +302,11 @@ fn row_run(line_map: &[Option<usize>], index: usize) -> Option<Range<usize>> {
     Some(first..last + 1)
 }
 
-/// Resolve a one-shot's paint rect for the row keyed `key`, or `None` when
-/// the row is gone or off screen this frame. Width spares the right-margin
-/// column so a flash never tints the scrollbar.
+/// Resolve a one-shot's paint rect for the row keyed `key`, or `None` when the
+/// row is gone or off screen this frame. Width spares the right rail column so a
+/// flash never tints the scrollbar. That also leaves the static right spine
+/// untinted on card flashes; mirroring the flash needs a rail-aware target that
+/// knows whether the scrollbar owns the column this frame.
 fn target_rect(
     rows: &[&SidebarRow],
     line_map: &[Option<usize>],

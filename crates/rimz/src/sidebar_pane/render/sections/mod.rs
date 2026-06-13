@@ -56,22 +56,31 @@ const TAB_CAP_RIGHT: char = '├';
 const TAB_INK: Color = Color::Indexed(16);
 
 /// The selected card's left accent: a bold half-block `▌` running the card's
-/// full height — the one loud lane marker on screen.
+/// full height — the one loud lane marker on screen, mirrored by the right
+/// rail's `▐`.
 const SELECTED_SPINE: &str = "▌";
+
+/// The selected card's right accent: the mirrored half-block `▐`. This is the
+/// same right-rail vocabulary the scrollbar thumb uses.
+const SELECTED_SPINE_RIGHT: &str = "▐";
 
 /// The selected *worktree's* resting lane spine: a thin `▏` (lighter than the
 /// selected card's `▌`) down the whole selected group — header and every row —
-/// so the worktree holding the selection reads as one bracketed lane.
-/// Non-selected worktrees carry no spine at all.
+/// so the worktree holding the selection reads as one bracketed lane, mirrored
+/// by the right rail's `▕`. Non-selected worktrees carry no spine at all.
 const LANE_SPINE: &str = "▏";
 
+/// The selected worktree's right rail: the mirrored hairline `▕`. This is the
+/// same right-rail vocabulary the scrollbar track uses.
+const LANE_SPINE_RIGHT: &str = "▕";
+
 /// Inner content width: the sidebar width less the one-cell left gutter and the
-/// one-cell right margin. Every line is built to this width and then opened with
-/// a gutter cell (blank, lane `▏`, or selected `▌`), leaving the trailing column
-/// as the matching right margin — so the whole sidebar reads inside a one-cell
-/// frame and selecting a row only swaps the gutter glyph, never shifts a column.
+/// one-cell right rail. Card and worktree lines build to this width before
+/// [`with_gutter`] frames them with both edge cells. Chrome lines use the same
+/// inner width and reserve the right rail as blank space, so selecting a row
+/// never shifts a content column.
 pub(super) fn content_width(width: usize) -> usize {
-    width.saturating_sub(2).max(1)
+    width.saturating_sub(2)
 }
 
 /// Width band that drives the ambient row density.
@@ -97,42 +106,64 @@ impl Tier {
     }
 }
 
-/// The one-cell left gutter that opens every line — blank for chrome and resting
-/// worktrees, the resting lane `▏` for the selected worktree, the bold `▌` accent
-/// for the selected card itself.
+/// The gutter state that frames a line with one left cell and one right rail
+/// cell — blank for chrome and resting worktrees, the resting lane `▏`/`▕` for
+/// the selected worktree, the bold `▌`/`▐` accent for the selected card itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Gutter {
     /// No marker — chrome and non-selected worktrees.
     Blank,
-    /// The selected worktree's resting lane spine (`▏`, dim teal).
+    /// The selected worktree's resting lane spine (`▏`/`▕`, dim teal).
     Lane,
-    /// The selected card's bold accent spine (`▌`).
+    /// The selected card's bold accent spine (`▌`/`▐`).
     Selected,
 }
 
-/// Open a line with its one-cell gutter (see [`Gutter`]). The cell is always one
-/// column, so changing it never shifts content; the trailing column the content
-/// leaves free is the matching right margin. Applied to every line of a worktree
-/// group so the lane spans the whole selected worktree as one block, with the
-/// selected card lit `▌` inside it. Under `NO_COLOR` the `▏`/`▌` shapes carry the
-/// lane and the selection without color. Rebuilding the line would drop a
-/// line-level style (`Line::styled` chrome like the dim `+K more`), so the
-/// incoming style is patched onto each content span — the gutter cell keeps its
-/// own tone untouched.
-fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter) -> Line<'static> {
-    let cell = match gutter {
-        Gutter::Blank => Span::raw(" "),
-        Gutter::Lane => Span::styled(LANE_SPINE, theme.style(Color::Cyan, Modifier::DIM)),
-        Gutter::Selected => Span::styled(SELECTED_SPINE, theme.selection()),
+/// Frame a line with its left gutter and right rail (see [`Gutter`]). Both cells
+/// are always one column, so changing them never shifts content; the right rail
+/// is active space, owned by the spine, scrollbar, or blank frame. Applied to
+/// every line of a worktree group so the lane spans the whole selected worktree
+/// as one block, with the selected card lit `▌`/`▐` inside it. Under `NO_COLOR`
+/// the shapes carry the lane and the selection without color. Rebuilding the
+/// line would drop a line-level style (`Line::styled` chrome like the dim `+K
+/// more`), so the incoming style is patched onto each content span — the gutter
+/// cells keep their own tone untouched.
+fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize) -> Line<'static> {
+    let (left_cell, right_cell) = match gutter {
+        Gutter::Blank => (Span::raw(" "), Span::raw(" ")),
+        Gutter::Lane => (
+            Span::styled(LANE_SPINE, theme.style(Color::Cyan, Modifier::DIM)),
+            Span::styled(LANE_SPINE_RIGHT, theme.style(Color::Cyan, Modifier::DIM)),
+        ),
+        Gutter::Selected => (
+            Span::styled(SELECTED_SPINE, theme.selection()),
+            Span::styled(SELECTED_SPINE_RIGHT, theme.selection()),
+        ),
     };
+    if width == 0 {
+        return Line::from(Vec::<Span<'static>>::new());
+    }
+    if width == 1 {
+        return Line::from(vec![left_cell]);
+    }
     let base = line.style;
-    let mut spans = Vec::with_capacity(line.spans.len() + 1);
-    spans.push(cell);
-    spans.extend(
+    let cw = content_width(width);
+    let mut content = trim_spans_to_width(
         line.spans
             .into_iter()
-            .map(|span| Span::styled(span.content, base.patch(span.style))),
+            .map(|span| Span::styled(span.content, base.patch(span.style)))
+            .collect(),
+        cw,
     );
+    let used = spans_width(&content);
+    if used < cw {
+        content.push(Span::raw(" ".repeat(cw - used)));
+    }
+
+    let mut spans = Vec::with_capacity(content.len() + 2);
+    spans.push(left_cell);
+    spans.extend(content);
+    spans.push(right_cell);
     Line::from(spans)
 }
 
@@ -159,7 +190,7 @@ fn spans_width(spans: &[Span<'static>]) -> usize {
     spans.iter().map(Span::width).sum()
 }
 
-fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+pub(super) fn trim_spans_to_width(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let mut remaining = width;
     let mut trimmed = Vec::new();
     for span in spans {

@@ -165,9 +165,9 @@ const BAR_SEGMENT_CAP: char = '╸';
 const MANA_FILLED: char = '▰';
 const MANA_TRACK: char = '▱';
 
-/// The agent-cards viewport scrollbar, ridden on the right-margin column when
-/// the cards overflow: a solid `▐` thumb over a hairline `▕` track. The
-/// solid/thin shape difference carries the position, so it survives `NO_COLOR`.
+/// The agent-cards viewport scrollbar, ridden on the right rail column when the
+/// cards overflow: a solid `▐` thumb over a hairline `▕` track. The solid/thin
+/// shape difference carries the position, so it survives `NO_COLOR`.
 pub(in crate::sidebar_pane::render) const SCROLL_THUMB: &str = "▐";
 pub(in crate::sidebar_pane::render) const SCROLL_TRACK: &str = "▕";
 
