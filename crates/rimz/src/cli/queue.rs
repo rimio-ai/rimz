@@ -6,6 +6,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::{GlobalFlags, open_ledger};
+use crate::cli::render;
 use rimz::feed::{AgentState, pending_ask_for};
 use rimz::ids::{MessageId, PaneId};
 use rimz::message::{
@@ -151,20 +152,19 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
             println!("{rendered}");
         }
     } else {
+        let mut table =
+            render::Table::new(["ID", "STATUS", "TARGET", "ATTEMPTS", "TEXT"]).right(&[3]);
         for message in messages {
-            #[expect(clippy::print_stdout, reason = "human listing")]
-            {
-                println!(
-                    "{}\t{}\t{}:{}\tattempts={}\t{}",
-                    message.message_id,
-                    message.status.as_str(),
-                    message.kind,
-                    message.agent_id,
-                    message.attempts,
-                    preview(&message.text),
-                );
-            }
+            table.row([
+                render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
+                render::cell(message.status.as_str()).fg(render::status::message(message.status)),
+                render::cell(format!("{}:{}", message.kind, message.agent_id))
+                    .fg(render::palette::META),
+                render::cell(message.attempts.to_string()),
+                render::cell(preview(&message.text)),
+            ]);
         }
+        table.render(&mut render::out())?;
     }
     Ok(())
 }

@@ -6,6 +6,7 @@ use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::ResolvedWorkspace;
 use rimz::ids::PaneId;
 use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
@@ -127,12 +128,14 @@ fn list(
             println!("{rendered}");
         }
     } else {
+        let mut table = render::Table::new(["PANE", "SESSION"]);
         for pane in panes {
-            #[expect(clippy::print_stdout, reason = "human listing")]
-            {
-                println!("{}\t{}", pane.pane_id, pane.session_name);
-            }
+            table.row([
+                render::cell(pane.pane_id.to_string()).fg(render::palette::ACCENT),
+                render::cell(pane.session_name),
+            ]);
         }
+        table.render(&mut render::out())?;
     }
     Ok(())
 }

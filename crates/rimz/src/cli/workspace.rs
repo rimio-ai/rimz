@@ -7,6 +7,7 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::ids::WorkspaceId;
 use rimz::ledger::event_log::RotationOutcome;
 use rimz::workspace::WorkspaceResolver;
@@ -114,15 +115,32 @@ fn migrate(old_root: PathBuf, new_root: PathBuf) -> Result<()> {
         .rewrite_workspace_identity(&new_workspace)
         .context("rewriting workspace identity")?;
 
-    #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-    {
-        println!("migrated {} -> {}", old_workspace_id, outcome.workspace_id);
-        println!("  old root      : {}", old_project_root.display());
-        println!("  new root      : {}", new_workspace.project_root.display());
-        println!("  feed items    : {}", outcome.feed_items_rewritten);
-        println!("  messages      : {}", outcome.messages_rewritten);
-        println!("  events        : {}", outcome.events_rewritten);
-    }
+    use std::io::Write;
+    let mut out = render::out();
+    writeln!(
+        out,
+        "migrated {} -> {}",
+        old_workspace_id, outcome.workspace_id
+    )?;
+    let mut kv = render::KeyVals::new().indent(2);
+    kv.push(
+        "old root",
+        render::cell(old_project_root.display().to_string()),
+    );
+    kv.push(
+        "new root",
+        render::cell(new_workspace.project_root.display().to_string()).fg(render::palette::ACCENT),
+    );
+    kv.push(
+        "feed items",
+        render::cell(outcome.feed_items_rewritten.to_string()),
+    );
+    kv.push(
+        "messages",
+        render::cell(outcome.messages_rewritten.to_string()),
+    );
+    kv.push("events", render::cell(outcome.events_rewritten.to_string()));
+    kv.render(&mut out)?;
     Ok(())
 }
 
@@ -138,34 +156,47 @@ fn rotate_events(args: RotateEventsArgs, globals: &GlobalFlags) -> Result<()> {
         .rotate_event_log(args.max_bytes, args.archive_older_than)
         .context("rotating event log")?;
 
-    #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-    {
-        match &outcome.rotation {
-            RotationOutcome::Skipped { current_bytes } => {
-                println!("event-log rotation skipped");
-                println!("  workspace     : {}", workspace.workspace_id);
-                println!("  current bytes : {current_bytes}");
-                println!("  threshold     : {}", args.max_bytes);
-            }
-            RotationOutcome::Rotated {
-                archive_path,
-                bytes_rotated,
-            } => {
-                println!("event-log rotated");
-                println!("  workspace     : {}", workspace.workspace_id);
-                println!("  bytes rotated : {bytes_rotated}");
-                println!("  archive       : {}", archive_path.display());
-                println!("  carryover     : {} agent(s)", outcome.carryover_agents);
-            }
-        }
-        if args.archive_older_than.is_some() {
-            println!(
-                "  pruned        : {} archive(s)",
-                outcome.pruned.files_removed
+    use std::io::Write;
+    let mut out = render::out();
+    let mut kv = render::KeyVals::new().indent(2);
+    match &outcome.rotation {
+        RotationOutcome::Skipped { current_bytes } => {
+            writeln!(out, "event-log rotation skipped")?;
+            kv.push(
+                "workspace",
+                render::cell(workspace.workspace_id.to_string()).fg(render::palette::ACCENT),
             );
-            println!("  bytes pruned  : {}", outcome.pruned.bytes_removed);
+            kv.push("current bytes", render::cell(current_bytes.to_string()));
+            kv.push("threshold", render::cell(args.max_bytes.to_string()));
+        }
+        RotationOutcome::Rotated {
+            archive_path,
+            bytes_rotated,
+        } => {
+            writeln!(out, "event-log rotated")?;
+            kv.push(
+                "workspace",
+                render::cell(workspace.workspace_id.to_string()).fg(render::palette::ACCENT),
+            );
+            kv.push("bytes rotated", render::cell(bytes_rotated.to_string()));
+            kv.push("archive", render::cell(archive_path.display().to_string()));
+            kv.push(
+                "carryover",
+                render::cell(format!("{} agent(s)", outcome.carryover_agents)),
+            );
         }
     }
+    if args.archive_older_than.is_some() {
+        kv.push(
+            "pruned",
+            render::cell(format!("{} archive(s)", outcome.pruned.files_removed)),
+        );
+        kv.push(
+            "bytes pruned",
+            render::cell(outcome.pruned.bytes_removed.to_string()),
+        );
+    }
+    kv.render(&mut out)?;
     Ok(())
 }
 

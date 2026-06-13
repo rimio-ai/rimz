@@ -54,6 +54,23 @@ shlex = "2"
 # Already in the tree transitively via clap's `wrap_help`; trivial API.
 terminal_size = "0.4"
 
+# Human-facing CLI presentation (`cli/render`). `anstyle` is the styling
+# primitive and `anstream` the auto-detecting stdout adapter that strips ANSI
+# when output is piped or color is disabled (it honors NO_COLOR/CLICOLOR/
+# CLICOLOR_FORCE and TTY), so `--json` and snapshot output stay byte-clean while
+# interactive runs get color; `colorchoice` carries the `--color` override into
+# anstream's global. `unicode-width` measures display columns so the borderless
+# auto-fit tables align under wide glyphs. This is the clap-native styling stack
+# (the same one cargo and ripgrep use) and every one of these crates is already
+# in the tree transitively through clap — promoting them to direct deps adds
+# zero footprint. Writing through anstream uses `writeln!`, matching the
+# existing `print_json` stdout path, so the `print_stdout` lint still guards the
+# protocol surface.
+anstyle = "1"
+anstream = "1"
+colorchoice = "1"
+unicode-width = "0.2"
+
 # Hook consent diffs — `similar` gives a minimal line-level unified diff for
 # the config install gate. It is already in the tree transitively via `insta`;
 # making it direct lets the user-visible security diff use the library rather

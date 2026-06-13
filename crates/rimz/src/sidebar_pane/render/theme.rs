@@ -16,8 +16,8 @@
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, SidebarConfig, SidebarThemeConfig, ThemeColor,
-    nearest_xterm_index, xterm_rgb,
+    AnimationColor, ColorDepth, GlowMode, PaletteTones, SidebarConfig, SidebarThemeConfig,
+    ThemeColor, nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -49,46 +49,10 @@ const HEAT_RAMP_STOPS: usize = 4;
 /// sweep.
 const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PaletteTones {
-    pub(crate) good: (u8, u8, u8),
-    pub(crate) warn: (u8, u8, u8),
-    pub(crate) caution: (u8, u8, u8),
-    pub(crate) alarm: (u8, u8, u8),
-    pub(crate) accent: (u8, u8, u8),
-    pub(crate) cool: (u8, u8, u8),
-    pub(crate) meta: (u8, u8, u8),
-    pub(crate) soft: (u8, u8, u8),
-    pub(crate) dim: (u8, u8, u8),
-    pub(crate) faint: (u8, u8, u8),
-    pub(crate) rule: (u8, u8, u8),
-    pub(crate) selection: (u8, u8, u8),
-}
-
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
-/// catalog. `[sidebar.theme] scheme` left unset resolves to this.
+/// catalog. `[sidebar.theme] scheme` left unset resolves to this. The baked-in
+/// tones live in [`PaletteTones::DEFAULT`].
 pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
-
-impl PaletteTones {
-    /// The derived [`DEFAULT_SCHEME`] tones, baked in as the infallible backstop
-    /// so resolution never fails even when the bundled catalog is unreadable.
-    /// `default_const_matches_bundled_default` keeps these in lockstep with the
-    /// catalog.
-    pub(crate) const DEFAULT: Self = Self {
-        good: (0x9e, 0xce, 0x6a),
-        warn: (0xe0, 0xaf, 0x68),
-        caution: (0xed, 0x95, 0x7d),
-        alarm: (0xf7, 0x76, 0x8e),
-        accent: (0x7d, 0xcf, 0xff),
-        cool: (0x7a, 0xa2, 0xf7),
-        meta: (0xbb, 0x9a, 0xf7),
-        soft: (0x80, 0x87, 0xa6),
-        dim: (0x5e, 0x63, 0x7b),
-        faint: (0x3e, 0x41, 0x53),
-        rule: (0x34, 0x36, 0x46),
-        selection: (0x7a, 0xa2, 0xf7),
-    };
-}
 
 /// The active palette, one named slot per semantic tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

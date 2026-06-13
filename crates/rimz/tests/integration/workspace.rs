@@ -215,7 +215,7 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
         .assert()
         .success()
         .stdout(contains("event-log rotated"))
-        .stdout(contains("pruned        : 1 archive(s)"));
+        .stdout(contains("pruned:        1 archive(s)"));
 
     assert!(!paths.events_log.exists(), "active log moved");
     assert!(paths.agents_carryover.exists(), "carryover persisted");

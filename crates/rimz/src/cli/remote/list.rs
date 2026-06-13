@@ -1,6 +1,7 @@
 use serde::Serialize;
 use serde_json::json;
 
+use crate::cli::render;
 use rimz::remote::aliases::RemoteAlias;
 
 #[derive(Serialize)]
@@ -12,23 +13,19 @@ struct ListEntryJson<'a> {
     mux: Option<&'a str>,
 }
 
-pub(super) fn print(entries: &[RemoteAlias], json: bool) {
+pub(super) fn print(entries: &[RemoteAlias], json: bool) -> std::io::Result<()> {
     if json {
         let rendered = render_list_json(entries);
         #[expect(clippy::print_stdout, reason = "json emitter")]
         {
             println!("{rendered}");
         }
-        return;
+        return Ok(());
     }
-    let rendered = render_list_human(entries);
-    if rendered.is_empty() {
-        return;
+    if entries.is_empty() {
+        return Ok(());
     }
-    #[expect(clippy::print_stdout, reason = "human listing")]
-    {
-        println!("{rendered}");
-    }
+    human_table(entries).render(&mut render::out())
 }
 
 fn render_list_json(entries: &[RemoteAlias]) -> String {
@@ -45,8 +42,8 @@ fn render_list_json(entries: &[RemoteAlias]) -> String {
     serde_json::to_string_pretty(&json!({ "remotes": rows })).expect("rendered JSON serializes")
 }
 
-fn render_list_human(entries: &[RemoteAlias]) -> String {
-    let mut buf = String::new();
+fn human_table(entries: &[RemoteAlias]) -> render::Table {
+    let mut table = render::Table::new(["NAME", "TARGET", "RECONNECT", "RESUME", "MUX"]);
     for entry in entries {
         let reconnect = if entry.reconnect {
             "reconnect"
@@ -62,15 +59,20 @@ fn render_list_human(entries: &[RemoteAlias]) -> String {
             .mux
             .map(|mux| mux.as_str().to_owned())
             .unwrap_or_else(|| "-".to_owned());
-        use std::fmt::Write as _;
-        writeln!(
-            buf,
-            "{}\t{}\t{}\t{}\t{}",
-            entry.name, entry.target, reconnect, no_resume, mux,
-        )
-        .expect("write to string");
+        let reconnect_style = if entry.reconnect {
+            render::palette::GOOD
+        } else {
+            render::palette::DIM
+        };
+        table.row([
+            render::cell(entry.name.as_str()).fg(render::palette::ACCENT),
+            render::cell(entry.target.as_str()),
+            render::cell(reconnect).fg(reconnect_style),
+            render::cell(no_resume).fg(render::palette::SOFT),
+            render::cell(mux).dash(),
+        ]);
     }
-    buf.trim_end().to_owned()
+    table
 }
 
 #[cfg(test)]
@@ -123,9 +125,16 @@ mod tests {
             no_resume: false,
             mux: Some(MuxName::Zellij),
         }];
-        insta::assert_snapshot!(
-            render_list_human(&entries),
-            @"prod	prod-box:query-engine	reconnect	resume	zellij"
-        );
+        // Render the table with ANSI stripped so the snapshot is the plain,
+        // aligned text; `print` re-styles on the real stdout via `render::out`.
+        let mut buf: Vec<u8> = Vec::new();
+        human_table(&entries)
+            .render(&mut anstream::StripStream::new(&mut buf))
+            .expect("table renders to an in-memory buffer");
+        let rendered = String::from_utf8(buf).expect("table output is utf-8");
+        insta::assert_snapshot!(rendered, @r"
+        NAME  TARGET                 RECONNECT  RESUME  MUX
+        prod  prod-box:query-engine  reconnect  resume  zellij
+        ");
     }
 }

@@ -31,6 +31,10 @@ pub struct DoctorArgs {
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
 
+    // Deliberate exception to the `cli/render` path (see rust-conventions.md →
+    // Stdout and tracing): doctor is a multi-section diagnostic with a bespoke
+    // layout spread across `doctor/{agents,protocol,runtime}.rs`. It stays on
+    // annotated `println!` until it gets its own render pass.
     #[expect(clippy::print_stdout, reason = "doctor is the user-facing report")]
     {
         println!("Rimz doctor");

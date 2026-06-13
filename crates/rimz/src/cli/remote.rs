@@ -136,7 +136,7 @@ pub fn run(args: RemoteArgs, globals: &GlobalFlags) -> Result<()> {
         }
         RemoteSubcmd::List { json } => {
             let aliases = RemoteAliases::load().context("loading remote aliases")?;
-            list::print(aliases.entries(), json);
+            list::print(aliases.entries(), json)?;
             Ok(())
         }
         RemoteSubcmd::LinkStats { command } => match command {

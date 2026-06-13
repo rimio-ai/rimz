@@ -13,93 +13,110 @@ use anyhow::Result;
 use clap::Args;
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::reload::{ReloadOutcome, reload_user_sidebars};
 
 #[derive(Debug, Args)]
 pub struct ReloadArgs {}
 
 pub fn run(_args: ReloadArgs, _globals: &GlobalFlags) -> Result<()> {
-    report(&reload_user_sidebars());
-    Ok(())
+    report(&reload_user_sidebars())
 }
 
-#[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-fn report(outcome: &ReloadOutcome) {
+fn report(outcome: &ReloadOutcome) -> Result<()> {
+    use std::io::Write;
+    let mut out = render::out();
+    // Each tally reads at a glance: the count carries the accent, the verb stays plain.
+    let n = |count: usize, noun: &str| {
+        render::paint(render::palette::ACCENT, &self::count(count, noun))
+    };
     if outcome.sessions == 0 && outcome.dead_swept == 0 {
-        println!("No running sidebars to reload.");
-        println!("Launch one with `rimz start` or `rimz attach`.");
-        return;
+        writeln!(out, "No running sidebars to reload.")?;
+        writeln!(out, "Launch one with `rimz start` or `rimz attach`.")?;
+        return Ok(());
     }
     if outcome.reexeced > 0 {
-        println!(
+        writeln!(
+            out,
             "Reloaded {} across {}.",
-            count(outcome.reexeced, "sidebar"),
-            count(outcome.sessions, "session"),
-        );
+            n(outcome.reexeced, "sidebar"),
+            n(outcome.sessions, "session"),
+        )?;
     }
     if outcome.already_current > 0 {
-        println!(
+        writeln!(
+            out,
             "{} already on the current build.",
-            count(outcome.already_current, "sidebar"),
-        );
+            n(outcome.already_current, "sidebar"),
+        )?;
     }
     if outcome.restarted > 0 {
-        println!(
+        writeln!(
+            out,
             "Restarted {} that could not reload in place.",
-            count(outcome.restarted, "sidebar"),
-        );
+            n(outcome.restarted, "sidebar"),
+        )?;
     }
     if outcome.unverified > 0 {
-        println!(
+        writeln!(
+            out,
             "{} could not be build-verified.",
-            count(outcome.unverified, "sidebar"),
-        );
+            n(outcome.unverified, "sidebar"),
+        )?;
     }
     if outcome.recovered > 0 {
-        println!(
+        writeln!(
+            out,
             "Recovered {} in place.",
-            count(outcome.recovered, "sidebar")
-        );
+            n(outcome.recovered, "sidebar")
+        )?;
     }
     if outcome.closed > 0 {
-        println!(
+        writeln!(
+            out,
             "Closed {}.",
-            count(outcome.closed, "duplicate or unresponsive sidebar"),
-        );
+            n(outcome.closed, "duplicate or unresponsive sidebar"),
+        )?;
     }
     if outcome.redocked > 0 {
-        println!("Repaired {} geometry.", count(outcome.redocked, "sidebar"));
+        writeln!(out, "Repaired {} geometry.", n(outcome.redocked, "sidebar"))?;
     }
     if outcome.misdocked > 0 {
-        println!(
+        writeln!(
+            out,
             "{} still working but not docked.",
-            count(outcome.misdocked, "sidebar"),
-        );
+            n(outcome.misdocked, "sidebar"),
+        )?;
     }
     if outcome.reaped > 0 {
-        println!(
+        writeln!(
+            out,
             "Reaped {}.",
-            count(outcome.reaped, "orphaned sidebar process")
-        );
+            n(outcome.reaped, "orphaned sidebar process")
+        )?;
     }
     if outcome.dead_swept > 0 {
-        println!(
+        writeln!(
+            out,
             "Swept {} from stopped sessions.",
-            count(outcome.dead_swept, "leftover process"),
-        );
+            n(outcome.dead_swept, "leftover process"),
+        )?;
     }
     if outcome.deferred > 0 {
-        println!(
+        writeln!(
+            out,
             "Deferred {} (no attached client); attach and re-run `rimz reload`.",
-            count(outcome.deferred, "sidebar repair"),
-        );
+            n(outcome.deferred, "sidebar repair"),
+        )?;
     }
     if outcome.failed > 0 {
-        println!(
+        writeln!(
+            out,
             "{} could not be repaired; attach and re-run `rimz reload`.",
-            count(outcome.failed, "sidebar"),
-        );
+            n(outcome.failed, "sidebar"),
+        )?;
     }
+    Ok(())
 }
 
 /// `"1 sidebar"` / `"3 sidebars"`.

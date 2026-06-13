@@ -10,6 +10,7 @@ use rimz::trust::TrustState;
 use rimz::workspace::WorkspaceResolver;
 
 use super::{GlobalFlags, config};
+use crate::cli::render;
 
 #[derive(Debug, Args)]
 pub struct SetupArgs {
@@ -26,29 +27,29 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     let interactive = std::io::stdin().is_terminal();
 
     if !interactive && !args.yes {
-        print_report(&report);
-        print_line("No terminal input is available; setup changed nothing.");
+        print_report(&report)?;
+        print_line("No terminal input is available; setup changed nothing.")?;
         print_line(
             "Run `rimz setup --yes` to write the default config, or run setup from a terminal.",
-        );
+        )?;
         return Ok(());
     }
 
     if args.yes {
-        print_report(&report);
+        print_report(&report)?;
         write_config(args.force)?;
-        print_line("No hooks or trust grants were changed by --yes.");
-        print_line("Run `rimz start` when ready.");
+        print_line("No hooks or trust grants were changed by --yes.")?;
+        print_line("Run `rimz start` when ready.")?;
         return Ok(());
     }
 
-    print_report(&report);
+    print_report(&report)?;
     if super::confirm("Write the default per-machine config now?")? {
         write_config(args.force)?;
     } else {
-        print_line("Config unchanged.");
+        print_line("Config unchanged.")?;
     }
-    print_line("Run `rimz start` when ready.");
+    print_line("Run `rimz start` when ready.")?;
     Ok(())
 }
 
@@ -131,44 +132,62 @@ impl SetupReport {
 fn write_config(force: bool) -> Result<()> {
     let path = rimz::config::MachineConfig::path();
     if config::write_default_config(force)? {
-        print_line(&format!("Wrote {}", path.display()));
+        print_line(&format!("Wrote {}", path.display()))?;
     } else {
         print_line(&format!(
             "{} already exists; pass --force to replace it.",
             path.display()
-        ));
+        ))?;
     }
     Ok(())
 }
 
-#[expect(clippy::print_stdout, reason = "setup is a user-facing report")]
-fn print_report(report: &SetupReport) {
-    println!("Rimz setup");
+fn print_report(report: &SetupReport) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut out = render::out();
+    writeln!(out, "Rimz setup")?;
+    let mut kv = render::KeyVals::new().indent(2);
     match &report.mux {
         Ok(mux) => {
             let version = mux.version.as_deref().unwrap_or("version unknown");
-            println!("  multiplexer   : {} ({version})", mux.name);
+            kv.push(
+                "multiplexer",
+                render::cell(format!("{} ({version})", mux.name)),
+            );
         }
-        Err(err) => println!("  multiplexer   : unavailable ({err})"),
+        Err(err) => kv.push(
+            "multiplexer",
+            render::cell(format!("unavailable ({err})")).fg(render::palette::ALARM),
+        ),
     }
     match &report.workspace {
         Ok(workspace) => {
-            println!("  project root  : {}", workspace.project_root.display());
-            println!("  root class    : {}", workspace.root_class);
+            kv.push(
+                "project root",
+                render::cell(workspace.project_root.display().to_string())
+                    .fg(render::palette::ACCENT),
+            );
+            kv.push("root class", render::cell(workspace.root_class.to_string()));
             if let Some(trust) = workspace.trust {
-                println!("  trust         : {}", trust.as_str());
+                kv.push(
+                    "trust",
+                    render::cell(trust.as_str()).fg(render::status::trust(trust)),
+                );
             }
         }
-        Err(err) => println!("  workspace     : could not resolve ({err})"),
+        Err(err) => kv.push(
+            "workspace",
+            render::cell(format!("could not resolve ({err})")).fg(render::palette::ALARM),
+        ),
     }
-    let config_state = if report.config_exists {
-        "present"
+    let (config_state, config_style) = if report.config_exists {
+        ("present", render::palette::GOOD)
     } else {
-        "missing"
+        ("missing", render::palette::WARN)
     };
-    println!(
-        "  config        : {} ({config_state})",
-        report.config_path.display()
+    kv.push(
+        "config",
+        render::cell(format!("{} ({config_state})", report.config_path.display())).fg(config_style),
     );
     for agent in &report.agents {
         let path_state = if agent.on_path {
@@ -183,11 +202,22 @@ fn print_report(report: &SetupReport) {
         } else {
             "hooks not installed"
         };
-        println!("  agent {:<7}: {path_state}; {hook_state}", agent.name);
+        let style = if !agent.on_path {
+            render::palette::ALARM
+        } else if agent.hook_install && !agent.hooks_installed {
+            render::palette::WARN
+        } else {
+            render::palette::GOOD
+        };
+        kv.push(
+            format!("agent {}", agent.name),
+            render::cell(format!("{path_state}; {hook_state}")).fg(style),
+        );
     }
+    kv.render(&mut out)
 }
 
-#[expect(clippy::print_stdout, reason = "setup is a user-facing report")]
-fn print_line(line: &str) {
-    println!("{line}");
+fn print_line(line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    writeln!(render::out(), "{line}")
 }

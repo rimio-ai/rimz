@@ -2839,9 +2839,12 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 name = "rimz"
 version = "0.0.0"
 dependencies = [
+ "anstream",
+ "anstyle",
  "anyhow",
  "assert_cmd",
  "clap 4.6.1",
+ "colorchoice",
  "crc32fast",
  "flate2",
  "fs4",
@@ -2871,6 +2874,7 @@ dependencies = [
  "toml_edit",
  "tracing",
  "tracing-subscriber",
+ "unicode-width 0.2.2",
  "ureq",
  "uuid",
  "vt100",

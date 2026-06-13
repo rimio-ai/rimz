@@ -2,7 +2,7 @@
 //! ladder, depth-aware brand emission, and capability gating.
 
 use super::*;
-use crate::config::{SidebarAnimationsConfig, ThemeMode};
+use crate::config::{PaletteTones, SidebarAnimationsConfig, ThemeMode};
 
 fn indices(palette: Palette) -> [Color; 13] {
     [

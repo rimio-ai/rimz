@@ -97,7 +97,7 @@ Contracts live in the layered `AGENTS.md` files — the root contract plus a loc
 
 | Subtree | Owns | Detail |
 | --- | --- | --- |
-| `src/cli/` | command parsing and per-subcommand handlers; one `run(...)` per subcommand, with oversized command internals split under matching leaves such as `cli/agents_cmd/` and `cli/remote/` | [cli.md](./docs/reference/cli.md) |
+| `src/cli/` | command parsing and per-subcommand handlers; one `run(...)` per subcommand, with oversized command internals split under matching leaves such as `cli/agents_cmd/` and `cli/remote/`; human-facing output is styled and aligned through the shared `cli/render/` presentation layer | [cli.md](./docs/reference/cli.md) |
 | `src/ledger/` | durable state: atomic helpers, framed event log, feed store, split write path, snapshot rebuild and staged view projection (`snapshot/view/`), wakeups, GC | [contract](./crates/rimz/src/ledger/AGENTS.md) · [ledger.md](./docs/internals/sidebar/ledger.md) |
 | `src/mux/` | the Zellij/tmux seam: `MuxBackend`, bounded subprocess engine, reconcile planner, recovery | [contract](./crates/rimz/src/mux/AGENTS.md) · [multiplexers.md](./docs/internals/sidebar/multiplexers.md) |
 | `src/agents/` | the agent integration layer: adapter trait, registry, per-provider adapters, spend/pricing/account | [contract](./crates/rimz/src/agents/AGENTS.md) · [agent.md](./docs/internals/agents/agent.md) · [provider.md](./docs/internals/agents/provider.md) |

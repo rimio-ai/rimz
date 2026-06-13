@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use serde_json::Value;
 
 use super::{GlobalFlags, open_ledger};
+use crate::cli::render;
 use rimz::bridge::{self, BridgeOutcome, ExpectedFrame, SocketGuard};
 use rimz::feed::{
     AbandonReason, FeedItem, FeedKind, FeedStatus, PaneRef, Resolution, ResolutionMethod,
@@ -331,15 +332,16 @@ fn list(ledger: &Ledger, json: bool, audit: bool) -> Result<()> {
             println!("{rendered}");
         }
     } else {
+        let mut table = render::Table::new(["REQUEST", "STATUS", "SURFACE", "TITLE"]);
         for item in items {
-            #[expect(clippy::print_stdout, reason = "human listing")]
-            {
-                println!(
-                    "{}\t{}\t{}\t{}",
-                    item.request_id, item.status, item.surface, item.title
-                );
-            }
+            table.row([
+                render::cell(item.request_id.to_string()).fg(render::palette::ACCENT),
+                render::cell(item.status.to_string()).fg(render::status::feed(item.status)),
+                render::cell(item.surface.to_string()).fg(render::palette::META),
+                render::cell(item.title),
+            ]);
         }
+        table.render(&mut render::out())?;
     }
     Ok(())
 }
@@ -354,15 +356,18 @@ fn show(ledger: &Ledger, request_id: String, json: bool) -> Result<()> {
             println!("{rendered}");
         }
     } else {
-        #[expect(clippy::print_stdout, reason = "human display")]
-        {
-            println!(
-                "{} [{}/{}] {}",
-                item.request_id, item.status, item.surface, item.title
-            );
-            if let Some(body) = item.body {
-                println!("{body}");
-            }
+        use std::io::Write;
+        let mut out = render::out();
+        writeln!(
+            out,
+            "{} [{}/{}] {}",
+            render::paint(render::palette::ACCENT, &item.request_id.to_string()),
+            render::paint(render::status::feed(item.status), item.status.as_str()),
+            item.surface,
+            item.title,
+        )?;
+        if let Some(body) = item.body {
+            writeln!(out, "{body}")?;
         }
     }
     Ok(())

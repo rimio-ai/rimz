@@ -36,7 +36,7 @@ pub use animation::{
     SidebarAnimationsConfig,
 };
 pub(crate) use color::xterm_rgb;
-pub use color::{ColorDepth, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex};
+pub use color::{ColorDepth, PaletteTones, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

@@ -14,6 +14,7 @@ use anyhow::{Context, Result, anyhow};
 use clap::{Args, Subcommand, ValueEnum};
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
@@ -355,13 +356,31 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
     } else {
         let waiting = status_tally(snapshot, rimz::feed::AgentStatus::Waiting);
         let failed = status_tally(snapshot, rimz::feed::AgentStatus::Failed);
-        #[expect(clippy::print_stdout, reason = "human summary")]
-        {
-            println!("Workspace:       {}", snapshot.display_name);
-            println!("Worktree groups: {}", snapshot.worktree_groups.len());
-            println!("Waiting:         {waiting}");
-            println!("Failed:          {failed}");
-        }
+        let waiting_style = if waiting > 0 {
+            render::palette::WARN
+        } else {
+            render::palette::DIM
+        };
+        let failed_style = if failed > 0 {
+            render::palette::ALARM
+        } else {
+            render::palette::DIM
+        };
+        let mut kv = render::KeyVals::new();
+        kv.push(
+            "Workspace",
+            render::cell(snapshot.display_name.to_string()).fg(render::palette::ACCENT),
+        );
+        kv.push(
+            "Worktree groups",
+            render::cell(snapshot.worktree_groups.len().to_string()),
+        );
+        kv.push(
+            "Waiting",
+            render::cell(waiting.to_string()).fg(waiting_style),
+        );
+        kv.push("Failed", render::cell(failed.to_string()).fg(failed_style));
+        kv.render(&mut render::out())?;
     }
     Ok(())
 }

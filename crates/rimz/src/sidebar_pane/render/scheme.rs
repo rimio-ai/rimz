@@ -4,10 +4,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::Deserialize;
 
-use crate::config::parse_hex;
+use crate::config::{PaletteTones, parse_hex};
 
 use super::embedded_themes;
-use super::theme::PaletteTones;
 
 type Rgb = (u8, u8, u8);
 

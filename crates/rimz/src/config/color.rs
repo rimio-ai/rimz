@@ -10,6 +10,48 @@ pub enum ColorDepth {
     Truecolor,
 }
 
+/// The twelve semantic palette tones, as raw RGB. One neutral home shared by
+/// the sidebar renderer (which quantizes these to the active [`ColorDepth`])
+/// and the CLI presentation layer (which emits them as ANSI). Pure data: no
+/// renderer or terminal dependency.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaletteTones {
+    pub good: (u8, u8, u8),
+    pub warn: (u8, u8, u8),
+    pub caution: (u8, u8, u8),
+    pub alarm: (u8, u8, u8),
+    pub accent: (u8, u8, u8),
+    pub cool: (u8, u8, u8),
+    pub meta: (u8, u8, u8),
+    pub soft: (u8, u8, u8),
+    pub dim: (u8, u8, u8),
+    pub faint: (u8, u8, u8),
+    pub rule: (u8, u8, u8),
+    pub selection: (u8, u8, u8),
+}
+
+impl PaletteTones {
+    /// The derived `TokyoNight Night` tones, baked in as the infallible default
+    /// so sidebar resolution never fails even when the bundled catalog is
+    /// unreadable. `default_const_matches_bundled_default` keeps these in
+    /// lockstep with the catalog; the CLI palette (`cli::render`) styles its
+    /// output from these same tones.
+    pub const DEFAULT: Self = Self {
+        good: (0x9e, 0xce, 0x6a),
+        warn: (0xe0, 0xaf, 0x68),
+        caution: (0xed, 0x95, 0x7d),
+        alarm: (0xf7, 0x76, 0x8e),
+        accent: (0x7d, 0xcf, 0xff),
+        cool: (0x7a, 0xa2, 0xf7),
+        meta: (0xbb, 0x9a, 0xf7),
+        soft: (0x80, 0x87, 0xa6),
+        dim: (0x5e, 0x63, 0x7b),
+        faint: (0x3e, 0x41, 0x53),
+        rule: (0x34, 0x36, 0x46),
+        selection: (0x7a, 0xa2, 0xf7),
+    };
+}
+
 /// `[sidebar.theme] mode`: how the renderer chooses palette color depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ThemeMode {

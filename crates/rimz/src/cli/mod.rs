@@ -22,6 +22,7 @@ mod parse;
 mod queue;
 mod reload;
 mod remote;
+mod render;
 mod reset;
 mod resolver;
 mod resume;
@@ -69,6 +70,7 @@ pub(crate) use start_notice::live_session_names;
 pub fn dispatch() -> Result<()> {
     let cli = Cli::parse();
     let globals = cli.global;
+    globals.color.write_global();
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
@@ -205,6 +207,31 @@ pub struct GlobalFlags {
     /// Override project-root resolution (monorepo escape hatch).
     #[arg(long, global = true)]
     pub root: Option<PathBuf>,
+    /// When to colorize human output: `auto` (default), `always`, or `never`.
+    /// `auto` follows the terminal and the `NO_COLOR`/`CLICOLOR` environment.
+    #[arg(long, value_enum, default_value_t = ColorWhen::Auto, global = true)]
+    pub color: ColorWhen,
+}
+
+/// `--color` choice, mapped onto the global `colorchoice` that `render::out`
+/// consults when it auto-detects whether to emit ANSI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum ColorWhen {
+    #[default]
+    Auto,
+    Always,
+    Never,
+}
+
+impl ColorWhen {
+    fn write_global(self) {
+        let choice = match self {
+            ColorWhen::Auto => colorchoice::ColorChoice::Auto,
+            ColorWhen::Always => colorchoice::ColorChoice::Always,
+            ColorWhen::Never => colorchoice::ColorChoice::Never,
+        };
+        choice.write_global();
+    }
 }
 
 #[derive(Debug, Subcommand)]

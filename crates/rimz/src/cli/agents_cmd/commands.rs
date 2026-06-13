@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::cli::render;
+
 pub(super) fn list_agents(
     json: bool,
     all: bool,
@@ -45,60 +47,38 @@ pub(super) fn list_agents(
         supervised::output::print_json(&agents)?;
         return Ok(());
     }
-    #[expect(clippy::print_stdout, reason = "command result is the agent list")]
-    {
-        let now = jiff::Timestamp::now();
-        if let Some(live_keys) = live_keys.as_ref() {
-            println!(
-                "{:<22} {:<10} {:<18} {:<9} {:<22} {:>5} {:>8} {:>7} {:>6} {:<18} PANE",
-                "NAME",
-                "KIND",
-                "STATUS",
-                "LIFECYCLE",
-                "MODEL",
-                "CTX",
-                "TOKENS",
-                "TODO",
-                "AGE",
-                "WORKTREE"
-            );
-            for agent in agents {
-                println!(
-                    "{:<22} {:<10} {:<18} {:<9} {:<22} {:>5} {:>8} {:>7} {:>6} {:<18} {}",
-                    agent_name(agent),
-                    agent_kind_label(agent),
-                    agent_status_label(agent),
-                    lifecycle_label(agent, live_keys),
-                    model_label(agent),
-                    context_label(agent),
-                    tokens_label(agent),
-                    todo_label(agent),
-                    age_label(now, agent.last_seen),
-                    worktree_label(agent),
-                    pane_label(agent),
-                );
-            }
-        } else {
-            println!(
-                "{:<22} {:<10} {:<18} {:<22} {:>5} {:>8} {:>7} {:>6} {:<18} PANE",
-                "NAME", "KIND", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE"
-            );
-            for agent in agents {
-                println!(
-                    "{:<22} {:<10} {:<18} {:<22} {:>5} {:>8} {:>7} {:>6} {:<18} {}",
-                    agent_name(agent),
-                    agent_kind_label(agent),
-                    agent_status_label(agent),
-                    model_label(agent),
-                    context_label(agent),
-                    tokens_label(agent),
-                    todo_label(agent),
-                    age_label(now, agent.last_seen),
-                    worktree_label(agent),
-                    pane_label(agent),
-                );
-            }
-        };
+    let now = jiff::Timestamp::now();
+    let mut out = render::out();
+    if let Some(live_keys) = live_keys.as_ref() {
+        let mut table = render::Table::new([
+            "NAME",
+            "KIND",
+            "STATUS",
+            "LIFECYCLE",
+            "MODEL",
+            "CTX",
+            "TOKENS",
+            "TODO",
+            "AGE",
+            "WORKTREE",
+            "PANE",
+        ])
+        .right(&[5, 6, 7, 8]);
+        for agent in agents {
+            let mut cells = agent_row(agent, now);
+            cells.insert(3, lifecycle_cell(agent, live_keys));
+            table.row(cells);
+        }
+        table.render(&mut out)?;
+    } else {
+        let mut table = render::Table::new([
+            "NAME", "KIND", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE", "PANE",
+        ])
+        .right(&[4, 5, 6, 7]);
+        for agent in agents {
+            table.row(agent_row(agent, now));
+        }
+        table.render(&mut out)?;
     }
     Ok(())
 }
@@ -156,7 +136,7 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
     }
     let Some(agent) = agent.as_ref() else {
         if let Some(run) = run {
-            print_run_line(&run);
+            print_run_line(&run)?;
             return Ok(());
         }
         if let Some(err) = audit_error {
@@ -167,21 +147,33 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
             Ok(_) => unreachable!("agent is present above"),
         };
     };
-    #[expect(clippy::print_stdout, reason = "command result is the agent detail")]
-    {
-        println!("name:\t{}", agent_name(agent));
-        println!("kind:\t{}", agent_kind_label(agent));
-        println!("session:\t{}", agent.agent_id);
-        println!("status:\t{}", agent_status_label(agent));
-        if stale {
-            println!("lifecycle:\tstale");
-        }
-        println!("model:\t{}", model_label(agent));
-        println!("worktree:\t{}", worktree_label(agent));
-        println!("pane:\t{}", pane_label(agent));
+    let mut kv = render::KeyVals::new();
+    kv.push(
+        "name",
+        render::cell(agent_name(agent)).fg(render::palette::ACCENT),
+    );
+    kv.push(
+        "kind",
+        render::cell(agent_kind_label(agent)).fg(render::palette::META),
+    );
+    kv.push("session", render::cell(agent.agent_id.to_string()));
+    kv.push(
+        "status",
+        render::cell(agent_status_label(agent))
+            .fg(render::status::agent(agent.status, agent.phase)),
+    );
+    if stale {
+        kv.push(
+            "lifecycle",
+            render::cell("stale").fg(render::palette::FAINT),
+        );
     }
+    kv.push("model", render::cell(model_label(agent)).dash());
+    kv.push("worktree", render::cell(worktree_label(agent)).dash());
+    kv.push("pane", render::cell(pane_label(agent)).dash());
+    kv.render(&mut render::out())?;
     if let Some(run) = run.or_else(|| newest_run_for_agent(&ledger, agent).ok().flatten()) {
-        print_run_line(&run);
+        print_run_line(&run)?;
     }
     Ok(())
 }
@@ -582,15 +574,58 @@ fn newest_run_by_ref(
     Ok(records.into_iter().next())
 }
 
-fn print_run_line(run: &RunRecord) {
-    #[expect(clippy::print_stdout, reason = "command result is the agent detail")]
-    {
-        println!(
-            "run:\t{} {} {}",
-            run.run_id,
-            supervised::output::status_label(run.status),
-            run.prompt
-        );
+fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
+    use std::io::Write;
+    let status = supervised::output::status_label(run.status);
+    writeln!(
+        render::out(),
+        "{} {} {} {}",
+        render::paint(render::palette::DIM, "run:"),
+        run.run_id,
+        render::paint(render::status::run(run.status), status),
+        run.prompt,
+    )
+}
+
+/// The ten columns shared by `agents list` in both its default and `--all`
+/// shapes, in display order; the `--all` view inserts `LIFECYCLE` at index 3.
+fn agent_row(agent: &AgentState, now: jiff::Timestamp) -> Vec<render::Cell> {
+    vec![
+        render::cell(agent_name(agent)).fg(render::palette::ACCENT),
+        render::cell(agent_kind_label(agent)).fg(render::palette::META),
+        render::cell(agent_status_label(agent))
+            .fg(render::status::agent(agent.status, agent.phase)),
+        render::cell(model_label(agent)).dash(),
+        context_cell(agent),
+        render::cell(tokens_label(agent)).dash(),
+        render::cell(todo_label(agent)).dash(),
+        render::cell(age_label(now, agent.last_seen)),
+        render::cell(worktree_label(agent)).dash(),
+        render::cell(pane_label(agent)).dash(),
+    ]
+}
+
+/// Context fill warms as it climbs: gold past 75%, rose past 90%.
+fn context_cell(agent: &AgentState) -> render::Cell {
+    let c = render::cell(context_label(agent));
+    match agent.context_pct {
+        Some(pct) if pct >= 90 => c.fg(render::palette::ALARM),
+        Some(pct) if pct >= 75 => c.fg(render::palette::WARN),
+        Some(_) => c,
+        None => c.dash(),
+    }
+}
+
+fn lifecycle_cell(
+    agent: &AgentState,
+    live_keys: &std::collections::BTreeSet<(AgentKind, AgentSessionId)>,
+) -> render::Cell {
+    let label = lifecycle_label(agent, live_keys);
+    let cell = render::cell(label);
+    if label == "stale" {
+        cell.fg(render::palette::FAINT)
+    } else {
+        cell
     }
 }
 

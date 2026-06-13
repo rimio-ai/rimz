@@ -9,6 +9,7 @@ use anyhow::Result;
 use clap::Args;
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::sidebar_pane::render::scheme;
 
 #[derive(Debug, Args)]
@@ -28,11 +29,11 @@ pub fn run(args: ListThemesArgs, _globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
-    #[expect(clippy::print_stdout, reason = "user-facing theme name list")]
-    {
-        for name in &names {
-            println!("{name}");
-        }
+    use std::io::Write;
+    let mut out = render::out();
+    let accent = render::palette::ACCENT;
+    for name in &names {
+        writeln!(out, "{}{name}{}", accent.render(), accent.render_reset())?;
     }
     Ok(())
 }

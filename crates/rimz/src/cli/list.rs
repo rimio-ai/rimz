@@ -20,6 +20,7 @@ use serde::Serialize;
 use tracing::warn;
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::ids::MuxName;
 use rimz::ledger::paths::workspaces_dir;
 
@@ -57,7 +58,7 @@ pub fn run(args: ListArgs, _globals: &GlobalFlags) -> Result<()> {
         }
         return Ok(());
     }
-    print_human(&rows);
+    print_human(&rows)?;
     Ok(())
 }
 
@@ -151,43 +152,34 @@ fn backend_sessions(mux: MuxName) -> Vec<String> {
     }
 }
 
-fn print_human(rows: &[WorkspaceRow]) {
+fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
     if rows.is_empty() {
-        return;
+        return Ok(());
     }
-    let id_w = rows
-        .iter()
-        .map(|r| r.workspace_id.len())
-        .max()
-        .unwrap_or(12)
-        .max(12);
-    let session_w = rows
-        .iter()
-        .map(|r| r.session_name.len())
-        .max()
-        .unwrap_or(7)
-        .max(7);
-    let root_w = rows
-        .iter()
-        .map(|r| r.project_root.len())
-        .max()
-        .unwrap_or(12)
-        .max(12);
-    #[expect(clippy::print_stdout, reason = "user-facing table emitter")]
-    {
-        println!(
-            "{:<id_w$}  {:<session_w$}  {:<root_w$}  {:<7}  LAST_ACTIVITY",
-            "WORKSPACE", "SESSION", "PROJECT_ROOT", "RUNNING",
-        );
-        for row in rows {
-            let running = row.running_on.as_deref().unwrap_or("-");
-            let last = row.last_activity.as_deref().unwrap_or("-");
-            println!(
-                "{:<id_w$}  {:<session_w$}  {:<root_w$}  {:<7}  {last}",
-                row.workspace_id, row.session_name, row.project_root, running,
-            );
-        }
+    let mut table = render::Table::new([
+        "WORKSPACE",
+        "SESSION",
+        "PROJECT_ROOT",
+        "RUNNING",
+        "LAST_ACTIVITY",
+    ]);
+    for row in rows {
+        let running = row.running_on.as_deref().unwrap_or("-");
+        let last = row.last_activity.as_deref().unwrap_or("-");
+        let running_style = if row.running_on.is_some() {
+            render::palette::GOOD
+        } else {
+            render::palette::FAINT
+        };
+        table.row([
+            render::cell(row.workspace_id.as_str()).fg(render::palette::ACCENT),
+            render::cell(row.session_name.as_str()),
+            render::cell(row.project_root.as_str()).fg(render::palette::SOFT),
+            render::cell(running).fg(running_style),
+            render::cell(last).dash(),
+        ]);
     }
+    table.render(&mut render::out())
 }
 
 #[cfg(test)]
