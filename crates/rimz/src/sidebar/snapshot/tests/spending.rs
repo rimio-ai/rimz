@@ -312,7 +312,96 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
 }
 
 #[test]
-fn cached_enrich_holds_stale_workspace_cache_for_display() {
+fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+
+    let project = dir.path().join("repo");
+    let transcript = dir.path().join("claude.jsonl");
+    let now_secs = crate::agents::spending::unix_secs_now();
+    let published = Timestamp::now() - SignedDuration::from_secs(30);
+    let published_ms = published.as_millisecond().max(0) as u64;
+    let registered_after_publish = Timestamp::now() - SignedDuration::from_secs(10);
+    let mut raw =
+        crate::agents::spending::read_spending_cache(&runtime.shared_spending_cursor_path());
+    raw.files.insert(
+        transcript.to_string_lossy().into_owned(),
+        crate::agents::spending::FileCacheEntry {
+            mtime_secs: 1,
+            len: 1,
+            cursor: crate::agents::spending::SpendCursor::default(),
+            origin_path: None,
+            entries: vec![crate::agents::spending::CachedEntry {
+                ts_secs: now_secs,
+                cost_usd: 3.75,
+                input: 20,
+                output: 7,
+                cache_write: 0,
+                cache_read: 0,
+                message_id: Some("msg-miss".to_owned()),
+                request_id: Some("req-miss".to_owned()),
+                is_sidechain: false,
+                origin_path: Some(project.join("src")),
+            }],
+            unknown_models: BTreeMap::new(),
+        },
+    );
+    crate::agents::spending::write_spending_cache(&runtime.shared_spending_cursor_path(), &raw);
+    crate::agents::spending::write_provider_spending_cache(
+        &runtime.shared_provider_spending_path(),
+        published_ms,
+        &crate::agents::spending::Spending::default(),
+    );
+
+    let scope = crate::agents::spending::SpendScope::from_roots(Some(&project), &[]);
+    let hash = scope.hash();
+    assert!(
+        !runtime.workspace_spending_path(&hash).exists(),
+        "test starts without the per-scope workspace cache"
+    );
+
+    let _discovered = crate::agents::spending::override_discovered_spending_files_for_test(vec![(
+        &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
+        transcript,
+    )]);
+    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+        .with_project_root(Some(project));
+    let project = snapshot.project_root.clone().unwrap();
+    snapshot.worktree_groups = vec![worktree_group(
+        &project,
+        vec![cost_row_at(
+            "new-session",
+            Some(0.25),
+            Some(registered_after_publish),
+            &project,
+        )],
+    )];
+    let snapshot = enrich(snapshot, None, &runtime, None, EnrichMode::Cached, None);
+
+    assert_eq!(
+        snapshot.workspace_value_tally.as_ref().map(|tally| (
+            tally.today.usd,
+            tally.today.sessions,
+            tally.today.tokens
+        )),
+        Some((3.75, 1, 27)),
+        "consumer folds derive the cockpit tally from the shared cursor cache"
+    );
+    assert_eq!(
+        snapshot.today_spend_live_usd,
+        Some(4.0),
+        "the derived cache keeps the producer publish stamp for live-spend overlay"
+    );
+    assert!(
+        !runtime.workspace_spending_path(&hash).exists(),
+        "the consumer derive path stays read-only"
+    );
+}
+
+#[test]
+fn cached_enrich_uses_hash_matching_workspace_cache_regardless_of_age() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();

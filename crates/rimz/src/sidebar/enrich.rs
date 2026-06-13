@@ -4,11 +4,16 @@
 //! arrives through [`EnrichMode::Producing`]; consumer reads project published
 //! runtime caches and sidecars only.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, hash_map::DefaultHasher};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+use std::time::UNIX_EPOCH;
 
 use crate::agents::spending::{
-    SpendScope, SpendingCaches, read_provider_spending_cache, read_workspace_spending_cache,
+    SpendScope, SpendingCaches, WorkspaceSpendingCache, compute_scoped_tally,
+    discover_spending_files, read_provider_spending_cache, read_spending_cache,
+    read_workspace_spending_cache, unix_secs_now,
 };
 use crate::feed::AgentStatus;
 use crate::ids::{PaneId, WorkspaceId};
@@ -606,19 +611,7 @@ fn fold_machine_config_cached(
     // re-walking the JSONL transcript history themselves.
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
     let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
-    let workspace = if scope.is_empty() {
-        Default::default()
-    } else {
-        let hash = scope.hash();
-        let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&hash));
-        if workspace.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
-            && workspace.scope_hash == hash
-        {
-            workspace
-        } else {
-            Default::default()
-        }
-    };
+    let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms);
     let mut snapshot =
         fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);
     // A consumer reads the producer's published windows to fill idle gaps, but
@@ -632,6 +625,125 @@ fn fold_machine_config_cached(
             workspace,
         },
     )
+}
+
+fn cached_workspace_spending(
+    runtime: &RuntimePaths,
+    scope: &SpendScope,
+    source_refreshed_at_ms: u64,
+) -> WorkspaceSpendingCache {
+    if scope.is_empty() {
+        return Default::default();
+    }
+    let hash = scope.hash();
+    let workspace = read_workspace_spending_cache(&runtime.workspace_spending_path(&hash));
+    if workspace.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+        && workspace.scope_hash == hash
+    {
+        return workspace;
+    }
+    derive_workspace_spending(
+        runtime,
+        scope,
+        hash,
+        source_refreshed_at_ms,
+        &discover_spending_files(),
+    )
+}
+
+fn derive_workspace_spending(
+    runtime: &RuntimePaths,
+    scope: &SpendScope,
+    scope_hash: String,
+    source_refreshed_at_ms: u64,
+    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+) -> WorkspaceSpendingCache {
+    let cursor_path = runtime.shared_spending_cursor_path();
+    let key = WorkspaceDeriveKey {
+        cursor_path: cursor_path.clone(),
+        cursor_stamp: file_stamp(&cursor_path),
+        files_signature: discovered_files_signature(files),
+        scope_hash: scope_hash.clone(),
+        source_refreshed_at_ms,
+    };
+    if let Ok(memo) = workspace_derive_memo().lock()
+        && let Some(cached) = memo.as_ref()
+        && cached.key == key
+    {
+        return cached.workspace.clone();
+    }
+
+    let cursor = read_spending_cache(&cursor_path);
+    let workspace = WorkspaceSpendingCache {
+        version: crate::agents::spending::WORKSPACE_SPENDING_VERSION,
+        refreshed_at_ms: source_refreshed_at_ms,
+        scope_hash,
+        tally: compute_scoped_tally(files, &cursor, scope, unix_secs_now()),
+    };
+    if let Ok(mut memo) = workspace_derive_memo().lock() {
+        *memo = Some(WorkspaceDeriveMemo {
+            key,
+            workspace: workspace.clone(),
+        });
+    }
+    workspace
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct WorkspaceDeriveMemo {
+    key: WorkspaceDeriveKey,
+    workspace: WorkspaceSpendingCache,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WorkspaceDeriveKey {
+    cursor_path: PathBuf,
+    cursor_stamp: FileStamp,
+    files_signature: u64,
+    scope_hash: String,
+    source_refreshed_at_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FileStamp {
+    len: u64,
+    modified_secs: u64,
+    modified_nanos: u32,
+}
+
+fn workspace_derive_memo() -> &'static Mutex<Option<WorkspaceDeriveMemo>> {
+    static MEMO: OnceLock<Mutex<Option<WorkspaceDeriveMemo>>> = OnceLock::new();
+    MEMO.get_or_init(|| Mutex::new(None))
+}
+
+fn file_stamp(path: &Path) -> FileStamp {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return FileStamp {
+            len: 0,
+            modified_secs: 0,
+            modified_nanos: 0,
+        };
+    };
+    let modified = meta
+        .modified()
+        .ok()
+        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok());
+    FileStamp {
+        len: meta.len(),
+        modified_secs: modified.as_ref().map_or(0, |duration| duration.as_secs()),
+        modified_nanos: modified.map_or(0, |duration| duration.subsec_nanos()),
+    }
+}
+
+fn discovered_files_signature(
+    files: &[(&'static dyn crate::agents::AgentAdapter, PathBuf)],
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    for (adapter, file) in files {
+        adapter.descriptor().kind.hash(&mut hasher);
+        file.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// Apply the resolved config and already-resolved accounts onto the snapshot:

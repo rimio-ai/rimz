@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use crate::agents::spending::discover_spending_files;
 use crate::sidebar::cache::unix_now_ms;
 use crate::{RuntimePaths, SidebarSnapshot};
 
@@ -150,6 +151,7 @@ fn walk_fleet_spending(
                     scope_hash,
                     &workspace.tally,
                 );
+                prune_workspace_spending_siblings(runtime, scope_hash);
             }
         }
         return SpendingCaches {
@@ -201,6 +203,7 @@ fn walk_fleet_spending(
                 scope_hash,
                 &workspace_tally,
             );
+            prune_workspace_spending_siblings(runtime, scope_hash);
         }
     }
     SpendingCaches {
@@ -216,18 +219,6 @@ fn walk_fleet_spending(
             tally: workspace_tally,
         },
     }
-}
-
-fn discover_spending_files() -> Vec<(&'static dyn crate::agents::AgentAdapter, PathBuf)> {
-    crate::agents::ADAPTERS
-        .iter()
-        .flat_map(|adapter| {
-            adapter
-                .transcript_files()
-                .into_iter()
-                .map(move |file| (*adapter, file))
-        })
-        .collect()
 }
 
 fn workspace_cache_from_shared_entries(
@@ -268,8 +259,31 @@ fn workspace_cache_from_shared_entries(
             scope_hash,
             &workspace.tally,
         );
+        prune_workspace_spending_siblings(runtime, scope_hash);
     }
     Some(workspace)
+}
+
+fn prune_workspace_spending_siblings(runtime: &RuntimePaths, current_scope_hash: &str) {
+    let current_prefix = current_scope_hash.get(..32).unwrap_or(current_scope_hash);
+    let Ok(entries) = std::fs::read_dir(&runtime.root) else {
+        return;
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        let Some(prefix) = name
+            .strip_prefix("workspace-spending.")
+            .and_then(|name| name.strip_suffix(".json"))
+        else {
+            continue;
+        };
+        if prefix != current_prefix {
+            let _ = std::fs::remove_file(path);
+        }
+    }
 }
 
 fn fresh_workspace_cache(
@@ -478,6 +492,14 @@ mod tests {
             &crate::agents::ClaudeAdapter as &'static dyn crate::agents::AgentAdapter,
             transcript,
         )];
+        let stale_hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        crate::agents::spending::write_workspace_spending_cache(
+            &runtime.workspace_spending_path(stale_hash),
+            unix_now_ms(),
+            stale_hash,
+            &Default::default(),
+        );
+        assert!(runtime.workspace_spending_path(stale_hash).exists());
 
         let workspace = workspace_cache_from_shared_entries(
             &runtime,
@@ -493,6 +515,10 @@ mod tests {
         assert_eq!(
             read_workspace_spending_cache(&runtime.workspace_spending_path(&scope_hash)).tally,
             workspace.tally
+        );
+        assert!(
+            !runtime.workspace_spending_path(stale_hash).exists(),
+            "producer publishing the current scope prunes old per-hash workspace caches"
         );
     }
 

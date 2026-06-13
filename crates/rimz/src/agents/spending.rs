@@ -15,6 +15,8 @@
 //! fleet ledger and each dashboard panel read account-global piles. The cockpit
 //! reads a workspace-scoped [`SpendTally`] derived from the same cached entries.
 
+#[cfg(test)]
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -267,7 +269,58 @@ pub struct CachedEntry {
     pub origin_path: Option<PathBuf>,
 }
 
+#[cfg(test)]
+type DiscoveredSpendingFiles = Vec<(&'static dyn AgentAdapter, PathBuf)>;
+
+#[cfg(test)]
+thread_local! {
+    static DISCOVER_SPENDING_FILES_OVERRIDE: RefCell<Option<DiscoveredSpendingFiles>> =
+        const { RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) struct DiscoverSpendingFilesOverride {
+    prior: Option<DiscoveredSpendingFiles>,
+}
+
+#[cfg(test)]
+impl Drop for DiscoverSpendingFilesOverride {
+    fn drop(&mut self) {
+        let prior = self.prior.take();
+        DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| {
+            *slot.borrow_mut() = prior;
+        });
+    }
+}
+
+#[cfg(test)]
+pub(crate) fn override_discovered_spending_files_for_test(
+    files: DiscoveredSpendingFiles,
+) -> DiscoverSpendingFilesOverride {
+    let prior = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.replace(Some(files)));
+    DiscoverSpendingFilesOverride { prior }
+}
+
 // ── Spending computation ──────────────────────────────────────────────────────
+
+/// Every registered agent transcript file, tagged with the adapter that owns
+/// its native spending parser.
+pub fn discover_spending_files() -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
+    #[cfg(test)]
+    if let Some(files) = DISCOVER_SPENDING_FILES_OVERRIDE.with(|slot| slot.borrow().clone()) {
+        return files;
+    }
+
+    crate::agents::ADAPTERS
+        .iter()
+        .flat_map(|adapter| {
+            adapter
+                .transcript_files()
+                .into_iter()
+                .map(move |file| (*adapter, file))
+        })
+        .collect()
+}
 
 /// Compute the fleet and per-provider trailing 24h / 7d / 30d / 365d spend and
 /// token tally for the given adapter-tagged JSONL files, pricing token-only
