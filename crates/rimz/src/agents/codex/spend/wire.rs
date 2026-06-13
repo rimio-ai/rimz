@@ -28,6 +28,26 @@ pub struct CodexTokenEvent {
 
 // ── Typed structs — session format ───────────────────────────────────────────
 
+/// Rollout `session_meta` header — the file's first line. Only its `cwd`
+/// matters to spend: it stamps each entry's durable origin so a closed Codex
+/// session still scopes to its workspace, the way Claude and Pi already do.
+#[derive(Deserialize)]
+pub(crate) struct CodexSessionMeta<'a> {
+    #[serde(
+        borrow,
+        default,
+        deserialize_with = "deserialize_optional_object_lossy"
+    )]
+    pub(crate) payload: Option<CodexSessionMetaPayload<'a>>,
+}
+
+/// The slice of the `session_meta` payload spend reads: the session's `cwd`.
+#[derive(Default, Deserialize)]
+pub(crate) struct CodexSessionMetaPayload<'a> {
+    #[serde(borrow, default)]
+    pub(crate) cwd: Option<Cow<'a, str>>,
+}
+
 /// Codex session log entry — structural detection before deeper parsing.
 ///
 /// Matches both `"type":"event_msg"` (carries `payload`) and

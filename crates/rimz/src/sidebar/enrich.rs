@@ -354,6 +354,16 @@ pub fn enrich(
             }
         }
     }
+    // The repo's durable worktree home, resolved purely from the project root
+    // plus the `[worktree] dir` template — independent of `git worktree list`,
+    // so the cockpit spend scope still counts sessions from worktrees cleanup
+    // has removed. Both modes derive it the same way, so producer and consumer
+    // hash the same scope and read the same workspace-spending cache.
+    if let Some(root) = snapshot.project_root.clone() {
+        snapshot = snapshot.with_worktree_home(
+            crate::worktree::worktree_parent(&root, &machine_config.worktree).ok(),
+        );
+    }
 
     // Fold each session's rich statusline context onto its agent state
     // (read-only; the feed process is the writer). Both the context sidecar
@@ -610,7 +620,11 @@ fn fold_machine_config_cached(
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
     let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
-    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
+    let scope = SpendScope::for_workspace(
+        snapshot.project_root.as_deref(),
+        &snapshot.worktree_roots,
+        snapshot.worktree_home.as_deref(),
+    );
     let workspace = cached_workspace_spending(runtime, &scope, cache.refreshed_at_ms);
     let mut snapshot =
         fold_machine_config_with(snapshot, config, accounts, &cache.spending.by_provider);

@@ -157,6 +157,16 @@ pub struct SidebarSnapshot {
     /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
+    /// The repo's durable worktree-home directory — the resolved `[worktree]
+    /// dir` template (default `…/<repo>-worktrees`). It widens the cockpit
+    /// spend scope alone: a session recorded under a worktree that cleanup has
+    /// since removed still counts toward the room's today figure, because the
+    /// home is a stable path prefix while `worktree_roots` tracks only the live
+    /// `git worktree list`. It never feeds pod grouping, which stays on
+    /// `worktree_roots`. Like `project_root`, the `rimz sidebar snapshot`
+    /// enrichment fills it from `MachineConfig`; the pure path leaves it `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_home: Option<PathBuf>,
     /// The room root's class from the workspace record. Grouping reads it to
     /// give a non-repo room's root pod the name-only [`SidebarWorktreeKind::Root`]
     /// kind while a repo room's own checkout keeps per-path pods. Like
@@ -303,6 +313,7 @@ impl SidebarSnapshot {
             only_daemon_view_remains: false,
             project_root: None,
             worktree_roots: Vec::new(),
+            worktree_home: None,
             root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
             providers: Vec::new(),
@@ -331,6 +342,15 @@ impl SidebarSnapshot {
     /// construction; the pure path leaves it empty.
     pub fn with_worktree_roots(mut self, worktree_roots: Vec<PathBuf>) -> Self {
         self.worktree_roots = worktree_roots;
+        self
+    }
+
+    /// Record the repo's durable worktree-home directory so the cockpit spend
+    /// scope counts sessions from worktrees cleanup has since removed. Filled
+    /// from `MachineConfig`'s `[worktree] dir` after construction, like
+    /// `with_worktree_roots`; the pure path leaves it `None`.
+    pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {
+        self.worktree_home = worktree_home;
         self
     }
 

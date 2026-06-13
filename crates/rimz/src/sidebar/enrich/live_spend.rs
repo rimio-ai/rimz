@@ -59,7 +59,11 @@ pub(super) fn refresh_live_spend_baselines(
 pub fn live_row_costs(
     snapshot: &SidebarSnapshot,
 ) -> impl Iterator<Item = (&str, f64, Option<u64>)> {
-    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
+    let scope = SpendScope::for_workspace(
+        snapshot.project_root.as_deref(),
+        &snapshot.worktree_roots,
+        snapshot.worktree_home.as_deref(),
+    );
     snapshot
         .worktree_groups
         .iter()

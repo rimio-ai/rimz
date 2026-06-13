@@ -24,6 +24,7 @@ pub(super) fn sidebar_fixture_snapshot(
         only_daemon_view_remains: false,
         project_root: Some(PathBuf::from("/srv/code/query-engine")),
         worktree_roots: vec![PathBuf::from("/srv/code/query-engine")],
+        worktree_home: None,
         root_class: rimz::workspace::RootClass::Repo,
         sidebar: rimz::config::SidebarConfig::default(),
         providers: Vec::new(),

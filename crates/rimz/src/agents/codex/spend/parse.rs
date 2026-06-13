@@ -3,15 +3,16 @@
 //! This module classifies JSONL lines, tracks cumulative totals and current model across resume cursors, and emits raw token events for pricing.
 
 use std::borrow::Cow;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::spending::origin_path;
 use crate::agents::transcript_fs::read_spend_lines;
 
 use super::wire::{
     CodexInfo, CodexLogEntry, CodexModelMetadata, CodexPayload, CodexRawUsage, CodexResultFields,
-    CodexSessionEntry, CodexTimestamp, CodexTokenEvent,
+    CodexSessionEntry, CodexSessionMeta, CodexTimestamp, CodexTokenEvent,
 };
 
 // ── Line-kind detection ───────────────────────────────────────────────────────
@@ -19,6 +20,8 @@ use super::wire::{
 /// Which JSONL format a line belongs to.
 #[derive(Clone, Copy)]
 pub(super) enum CodexLineKind {
+    /// Rollout header: `"type":"session_meta"`, carrying the session `cwd`.
+    SessionMeta,
     /// Structured session log: `turn_context` or `event_msg` + `token_count`.
     Session,
     /// Headless/exec log: flat `usage`, `input_tokens`, or `prompt_tokens` field.
@@ -31,6 +34,10 @@ pub(super) enum CodexLineKind {
 pub(super) fn codex_line_kind(line: &[u8]) -> Option<CodexLineKind> {
     fn has(hay: &[u8], needle: &[u8]) -> bool {
         hay.windows(needle.len()).any(|w| w == needle)
+    }
+
+    if has(line, br#""type":"session_meta""#) {
+        return Some(CodexLineKind::SessionMeta);
     }
 
     let has_turn_ctx = has(line, br#""type":"turn_context""#);
@@ -66,6 +73,11 @@ pub(super) struct CodexSpendState {
     pub(super) previous_totals: Option<CodexRawUsage>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     current_model: Option<String>,
+    /// The session `cwd` from the rollout's `session_meta` header, captured
+    /// once and carried across resume cursors so every appended usage entry
+    /// keeps its workspace origin without re-reading the header.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) cwd: Option<PathBuf>,
 }
 
 /// Parse a Codex session JSONL file into `CodexTokenEvent` values from
@@ -101,6 +113,14 @@ pub(super) fn parse_codex_session(
             continue;
         }
         match codex_line_kind(line) {
+            Some(CodexLineKind::SessionMeta) => {
+                if state.cwd.is_none()
+                    && let Ok(meta) = serde_json::from_slice::<CodexSessionMeta<'_>>(line)
+                    && let Some(cwd) = meta.payload.and_then(|payload| payload.cwd)
+                {
+                    state.cwd = origin_path(Some(cwd.as_ref()));
+                }
+            }
             Some(CodexLineKind::Session) => {
                 let Ok(entry) = serde_json::from_slice::<CodexSessionEntry<'_>>(line) else {
                     continue;

@@ -41,7 +41,11 @@ pub(super) fn compute_fleet_spending(
     use crate::agents::spending::{SpendScope, read_provider_spending_cache};
 
     let now_ms = unix_now_ms();
-    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
+    let scope = SpendScope::for_workspace(
+        snapshot.project_root.as_deref(),
+        &snapshot.worktree_roots,
+        snapshot.worktree_home.as_deref(),
+    );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
     let provider_path = runtime.shared_provider_spending_path();
     // Fresh stamp: the published walk is young enough — serve it back with the
@@ -121,17 +125,32 @@ fn walk_fleet_spending(
     use crate::agents::spending::{
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendScope, Spending, SpendingCaches,
         WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache,
-        compute_spending_with_origins_and_scope, read_spending_cache, unix_secs_now,
-        write_provider_spending_cache, write_spending_cache, write_workspace_spending_cache,
+        compute_spending_with_origins_and_scope, read_provider_spending_cache, read_spending_cache,
+        unix_secs_now, write_provider_spending_cache, write_spending_cache,
+        write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
-    let scope = SpendScope::from_roots(snapshot.project_root.as_deref(), &snapshot.worktree_roots);
+    let scope = SpendScope::for_workspace(
+        snapshot.project_root.as_deref(),
+        &snapshot.worktree_roots,
+        snapshot.worktree_home.as_deref(),
+    );
     let scope_hash = (!scope.is_empty()).then(|| scope.hash());
     // Tag each file with its adapter at discovery — the source knows the kind,
     // so pricing/bucketing never has to guess it from the path.
     let files = discover_spending_files();
     if files.is_empty() {
+        // Empty discovery is not authoritative once a prior walk has found spend:
+        // transcript homes can be transiently unreadable, and publishing a fresh
+        // zero would blank the provider dashboard until the next successful walk.
+        let published = read_provider_spending_cache(&provider_path);
+        if !published.spending.total.is_zero() {
+            return SpendingCaches {
+                provider: published,
+                workspace: matching_workspace_cache(runtime, scope_hash.as_deref()),
+            };
+        }
         let refreshed_at_ms = unix_now_ms();
         let spending = Spending::default();
         let workspace = WorkspaceSpendingCache {
@@ -300,6 +319,25 @@ fn fresh_workspace_cache(
     cache.is_fresh(now_ms, scope_hash).then_some(cache)
 }
 
+fn matching_workspace_cache(
+    runtime: &RuntimePaths,
+    scope_hash: Option<&str>,
+) -> crate::agents::spending::WorkspaceSpendingCache {
+    let Some(scope_hash) = scope_hash else {
+        return Default::default();
+    };
+    let cache = crate::agents::spending::read_workspace_spending_cache(
+        &runtime.workspace_spending_path(scope_hash),
+    );
+    if cache.version == crate::agents::spending::WORKSPACE_SPENDING_VERSION
+        && cache.scope_hash == scope_hash
+    {
+        cache
+    } else {
+        Default::default()
+    }
+}
+
 fn codex_origin_overrides(snapshot: &SidebarSnapshot) -> HashMap<PathBuf, PathBuf> {
     let row_worktrees: HashMap<&str, &str> = snapshot
         .worktree_groups
@@ -341,8 +379,10 @@ mod tests {
     use crate::agents::TurnPhase;
     use crate::agents::spending::{
         CachedEntry, FileCacheEntry, PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendCursor,
-        SpendScope, Spending, read_spending_cache, read_workspace_spending_cache, unix_secs_now,
-        write_provider_spending_cache, write_spending_cache,
+        SpendScope, Spending, override_discovered_spending_files_for_test,
+        read_provider_spending_cache, read_spending_cache, read_workspace_spending_cache,
+        unix_secs_now, write_provider_spending_cache, write_spending_cache,
+        write_workspace_spending_cache,
     };
     use crate::feed::{AgentState, AgentStatus};
     use crate::ids::AgentKind;
@@ -520,6 +560,51 @@ mod tests {
             !runtime.workspace_spending_path(stale_hash).exists(),
             "producer publishing the current scope prunes old per-hash workspace caches"
         );
+    }
+
+    #[test]
+    fn empty_discovery_preserves_prior_nonzero_provider_publish() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let runtime = RuntimePaths::under(workspace.clone(), dir.path()).expect("runtime paths");
+        runtime.ensure_dirs().expect("runtime dirs");
+        let project = dir.path().join("repo");
+        let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
+            .with_project_root(Some(project.clone()));
+        let scope = SpendScope::for_workspace(Some(&project), &[], None);
+        let scope_hash = scope.hash();
+
+        let mut spending = Spending::default();
+        spending.total.today.usd = 981.0;
+        spending.total.year.usd = 981.0;
+        write_provider_spending_cache(&runtime.shared_provider_spending_path(), 1, &spending);
+        let mut workspace_tally = crate::agents::SpendTally::default();
+        workspace_tally.today.usd = 42.0;
+        workspace_tally.year.usd = 42.0;
+        write_workspace_spending_cache(
+            &runtime.workspace_spending_path(&scope_hash),
+            1,
+            &scope_hash,
+            &workspace_tally,
+        );
+
+        let _discovered = override_discovered_spending_files_for_test(Vec::new());
+        let cache = compute_fleet_spending(&runtime, &snapshot);
+
+        assert_eq!(
+            cache.provider.spending.total.today.usd, 981.0,
+            "a transient empty transcript discovery must not publish a fresh zero"
+        );
+        assert_eq!(
+            cache.workspace.tally.today.usd, 42.0,
+            "the matching workspace cache is kept with the retained provider publish"
+        );
+        let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+        assert_eq!(
+            published.refreshed_at_ms, 1,
+            "the stale non-zero provider cache is returned, not overwritten as fresh"
+        );
+        assert_eq!(published.spending.total.today.usd, 981.0);
     }
 
     #[test]

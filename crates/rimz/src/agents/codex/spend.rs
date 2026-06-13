@@ -148,7 +148,12 @@ pub(crate) fn parse_codex_spend(
             message_id: None,
             request_id: None,
             is_sidechain: false,
-            origin_path: None,
+            // The session's durable origin, parsed from the rollout's
+            // `session_meta` cwd and carried in `state` across resume cursors,
+            // so a closed Codex session still scopes to its workspace. A trusted
+            // snapshot override (`codex_origin_overrides`) can still supersede it
+            // for live or headless sessions whose rollout omits the header.
+            origin_path: state.cwd.clone(),
         });
     }
     SpendParse {

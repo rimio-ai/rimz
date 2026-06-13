@@ -137,12 +137,13 @@ pub struct SpendingCaches {
 /// unknown model names; the cold rebuild also heals entries silently dropped
 /// while unpriced under v5. v7 records per-entry origin paths so workspace
 /// scoped cockpit tallies can be exact; old entries would otherwise read as
-/// unknown-origin and disappear from the cockpit. The later per-file learned
-/// origin is additive and backfilled from Codex overrides or already-stamped
-/// entries, so it does not need another cold rebuild. A cache stamped with an
-/// older version is discarded on read, forcing a clean re-parse under the
+/// unknown-origin and disappear from the cockpit. v8 stores Codex
+/// `session_meta.cwd` in the parser cursor and stamps Codex entries from it;
+/// old finalized Codex files would otherwise sit at EOF with no origin and
+/// remain invisible to workspace-scoped cockpit tallies. A cache stamped with
+/// an older version is discarded on read, forcing a clean re-parse under the
 /// current shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 7;
+const SPENDING_CACHE_VERSION: u32 = 8;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -537,9 +538,24 @@ pub struct SpendScope {
 
 impl SpendScope {
     pub fn from_roots(project_root: Option<&Path>, worktree_roots: &[PathBuf]) -> Self {
+        Self::for_workspace(project_root, worktree_roots, None)
+    }
+
+    /// The cockpit scope for a room: its project root, the live `git worktree
+    /// list` checkout roots, and — the durable part — the repo's worktree-home
+    /// directory (the resolved `[worktree] dir` template, e.g.
+    /// `…/<repo>-worktrees`). The home is a path prefix, so a session recorded
+    /// under a worktree that has since been removed still scopes in, where the
+    /// live worktree list alone would drop it the moment cleanup ran.
+    pub fn for_workspace(
+        project_root: Option<&Path>,
+        worktree_roots: &[PathBuf],
+        worktree_home: Option<&Path>,
+    ) -> Self {
         let mut roots: Vec<PathBuf> = project_root
             .into_iter()
             .chain(worktree_roots.iter().map(PathBuf::as_path))
+            .chain(worktree_home)
             .map(normalize_path_lexical)
             .filter(|root| root.is_absolute())
             .collect();

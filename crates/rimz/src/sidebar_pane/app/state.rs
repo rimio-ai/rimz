@@ -74,6 +74,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         only_daemon_view_remains: false,
         project_root: None,
         worktree_roots: Vec::new(),
+        worktree_home: None,
         root_class: crate::workspace::RootClass::Repo,
         sidebar: crate::config::SidebarConfig::default(),
         providers: Vec::new(),

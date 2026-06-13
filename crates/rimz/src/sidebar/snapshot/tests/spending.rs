@@ -7,6 +7,16 @@ fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> cra
     cost_row_at(id, usd, registered_at, Path::new("/repo/wt"))
 }
 
+/// The cockpit scope hash for a project root, derived the way cached enrich
+/// derives it: project root plus the durable worktree home resolved from the
+/// loaded machine config. Tests that pre-write a per-scope workspace cache key
+/// it through here so the consumer reads back the same hash.
+fn workspace_scope_hash(project: &Path) -> String {
+    let config = crate::config::MachineConfig::load().unwrap_or_default();
+    let home = crate::worktree::worktree_parent(project, &config.worktree).ok();
+    crate::agents::spending::SpendScope::for_workspace(Some(project), &[], home.as_deref()).hash()
+}
+
 fn cost_row_at(
     id: &str,
     usd: Option<f64>,
@@ -285,8 +295,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     scoped.today.usd = 1.25;
     scoped.today.sessions = 3;
     scoped.year.usd = 1.25;
-    let scope = crate::agents::spending::SpendScope::from_roots(Some(&project), &[]);
-    let hash = scope.hash();
+    let hash = workspace_scope_hash(&project);
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
         unix_now_ms(),
@@ -355,8 +364,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
         &crate::agents::spending::Spending::default(),
     );
 
-    let scope = crate::agents::spending::SpendScope::from_roots(Some(&project), &[]);
-    let hash = scope.hash();
+    let hash = workspace_scope_hash(&project);
     assert!(
         !runtime.workspace_spending_path(&hash).exists(),
         "test starts without the per-scope workspace cache"
@@ -420,8 +428,7 @@ fn cached_enrich_uses_hash_matching_workspace_cache_regardless_of_age() {
     scoped.today.usd = 2.50;
     scoped.today.sessions = 4;
     scoped.year.usd = 2.50;
-    let scope = crate::agents::spending::SpendScope::from_roots(Some(&project), &[]);
-    let hash = scope.hash();
+    let hash = workspace_scope_hash(&project);
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
         1,

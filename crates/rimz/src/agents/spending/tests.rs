@@ -261,6 +261,73 @@ fn scoped_tally_includes_project_and_linked_worktree_roots_only() {
 }
 
 #[test]
+fn scoped_tally_counts_sessions_under_worktree_home_not_just_listed_roots() {
+    // The regression: a session ran in a worktree that cleanup has since
+    // removed, so it is no longer in `git worktree list`, but its transcript
+    // (and recorded origin) survive. The durable worktree-home prefix must
+    // still scope it in; a session outside the home must stay out.
+    let dir = TempDir::new().unwrap();
+    let today = utc_date(NOW_SECS);
+    let ts = format!("{today}T10:00:00.000Z");
+    let project = dir.path().join("repo");
+    let home = dir.path().join("repo-worktrees");
+    let removed_worktree = home.join("budget-reset");
+    let outside = dir.path().join("other-project");
+    let removed_session = dir.path().join("sessions/removed");
+    let outside_session = dir.path().join("sessions/outside");
+    std::fs::create_dir_all(&removed_session).unwrap();
+    std::fs::create_dir_all(&outside_session).unwrap();
+
+    let removed_file = write_jsonl(
+        &removed_session,
+        "chat.jsonl",
+        &[&claude_line_ts_in(
+            &ts,
+            3.0,
+            "msg-removed",
+            "req-removed",
+            &removed_worktree.join("crates/rimz"),
+        )],
+    );
+    let outside_file = write_jsonl(
+        &outside_session,
+        "chat.jsonl",
+        &[&claude_line_ts_in(
+            &ts,
+            9.0,
+            "msg-outside",
+            "req-outside",
+            &outside,
+        )],
+    );
+    let files = vec![
+        (claude_adapter(), removed_file),
+        (claude_adapter(), outside_file),
+    ];
+    let mut cache = SpendingDiskCache::default();
+    let _ = compute_spending(&files, &mut cache, &PriceBook::default(), NOW_SECS);
+
+    // `worktree_roots` is empty — the removed worktree is gone from the live
+    // list — yet the home prefix keeps its spend in scope.
+    let scope = SpendScope::for_workspace(Some(&project), &[], Some(&home));
+    let scoped = compute_scoped_tally(&files, &cache, &scope, NOW_SECS);
+
+    assert!(
+        (scoped.today.usd - 3.0).abs() < 1e-9,
+        "a removed-worktree session under the home still counts"
+    );
+    assert_eq!(scoped.today.sessions, 1, "the outside session is excluded");
+
+    // Without the home prefix the removed worktree drops out — the bug.
+    let live_only = SpendScope::from_roots(Some(&project), &[]);
+    let live_scoped = compute_scoped_tally(&files, &cache, &live_only, NOW_SECS);
+    assert_eq!(
+        live_scoped.today.usd, 0.0,
+        "the live worktree list alone misses the removed worktree"
+    );
+}
+
+#[test]
 fn trailing_windows_bucket_by_age() {
     let dir = TempDir::new().unwrap();
     const HOUR: u64 = 3_600;

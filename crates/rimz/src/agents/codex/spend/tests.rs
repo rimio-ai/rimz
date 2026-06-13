@@ -172,3 +172,88 @@ fn unpriced_model_is_recorded_as_unknown() {
         )])
     );
 }
+
+fn gpt5_book() -> PriceBook {
+    PriceBook::from_litellm_json(
+        r#"{"gpt-5": {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6,
+                      "cache_read_input_token_cost": 1e-7}}"#,
+    )
+}
+
+const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;
+
+#[test]
+fn session_meta_cwd_stamps_entry_origin() {
+    let cwd = "/home/marvin/code/rimz-worktrees/budget-reset";
+    let meta = format!(r#"{{"type":"session_meta","payload":{{"id":"s","cwd":"{cwd}"}}}}"#);
+    let (_dir, path) = write_session(
+        "rollout.jsonl",
+        &[
+            meta.as_str(),
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            TOKEN_COUNT_LINE,
+        ],
+    );
+
+    let parsed = parse_codex_spend(&path, None, &gpt5_book());
+
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries[0].origin_path.as_deref(),
+        Some(Path::new(cwd)),
+        "the rollout session_meta cwd stamps each entry's durable origin"
+    );
+}
+
+#[test]
+fn session_meta_cwd_survives_resume_cursor() {
+    let cwd = "/home/marvin/code/rimz-worktrees/budget-reset";
+    let meta = format!(r#"{{"type":"session_meta","payload":{{"id":"s","cwd":"{cwd}"}}}}"#);
+    // First parse sees only the header prefix: cwd is captured into the cursor
+    // state, but no token_count line means no priced entries yet.
+    let (_dir, path) = write_session(
+        "rollout.jsonl",
+        &[
+            meta.as_str(),
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+        ],
+    );
+    let first = parse_codex_spend(&path, None, &gpt5_book());
+    assert!(first.entries.is_empty());
+
+    // A turn is appended after the header. The resume parse never re-reads the
+    // header, yet the cwd carried in the cursor still stamps the new entry.
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .unwrap();
+    writeln!(f, "{TOKEN_COUNT_LINE}").unwrap();
+    drop(f);
+
+    let second = parse_codex_spend(&path, Some(&first.cursor), &gpt5_book());
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(
+        second.entries[0].origin_path.as_deref(),
+        Some(Path::new(cwd)),
+        "the resume cursor carries the session cwd to entries appended after the header"
+    );
+}
+
+#[test]
+fn no_session_meta_keeps_none_origin() {
+    let (_dir, path) = write_session(
+        "rollout.jsonl",
+        &[
+            r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
+            TOKEN_COUNT_LINE,
+        ],
+    );
+
+    let parsed = parse_codex_spend(&path, None, &gpt5_book());
+
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(
+        parsed.entries[0].origin_path, None,
+        "a headless rollout without session_meta leaves origin for the snapshot override to fill"
+    );
+}
