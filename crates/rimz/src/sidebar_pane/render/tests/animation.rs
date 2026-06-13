@@ -370,7 +370,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
     assert!(matches!(pulse_trough.fg, Some(Color::Indexed(_))));
     assert!(
         pulse_trough.add_modifier.contains(Modifier::DIM),
-        "indexed color may need the fallback modifier when quantization hides the pulse"
+        "indexed depth carries the breathe as a weight modifier over the base tone"
     );
     let pulse_peak = labels::agent_role_style_at(
         &lit,
@@ -378,7 +378,10 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         crate::agents::TurnPhase::Reasoning,
         6,
     );
-    assert_ne!(pulse_trough.fg, pulse_peak.fg);
+    assert_ne!(
+        pulse_trough, pulse_peak,
+        "the indexed breathe changes the style by weight (DIM at the trough), not color"
+    );
 
     let plain = Theme::fixed_for_sidebar(true, &sidebar);
     let plain_style = labels::agent_role_style_at(

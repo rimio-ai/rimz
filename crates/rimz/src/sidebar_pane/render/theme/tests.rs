@@ -182,9 +182,12 @@ fn breathe_emits_color_depth_fallbacks() {
     let indexed = Theme::fixed(false);
     let indexed_trough = indexed.breathe(Color::Indexed(179), trough);
     let indexed_peak = indexed.breathe(Color::Indexed(179), peak);
-    assert!(matches!(indexed_trough.fg, Some(Color::Indexed(_))));
-    assert!(matches!(indexed_peak.fg, Some(Color::Indexed(_))));
-    assert_ne!(indexed_trough.fg, indexed_peak.fg);
+    // The cube can't render the sub-cell lift, so indexed breathe holds the base
+    // tone and pulses on weight instead: the trough dims, the deep peak bolds.
+    assert_eq!(indexed_trough.fg, Some(Color::Indexed(179)));
+    assert_eq!(indexed_peak.fg, Some(Color::Indexed(179)));
+    assert_eq!(indexed_trough.add_modifier, Modifier::DIM);
+    assert_eq!(indexed_peak.add_modifier, Modifier::BOLD);
 
     let plain = Theme::fixed(true);
     assert_eq!(plain.breathe(Color::Indexed(179), trough).fg, None);
@@ -205,7 +208,7 @@ fn breathe_emits_color_depth_fallbacks() {
 }
 
 #[test]
-fn indexed_breathe_uses_modifier_when_quantization_hides_the_color_step() {
+fn indexed_breathe_carries_the_pulse_as_weight_over_the_base_tone() {
     let indexed = Theme::fixed(false);
     let trough = BreathSample::new(
         0,
@@ -216,7 +219,7 @@ fn indexed_breathe_uses_modifier_when_quantization_hides_the_color_step() {
     assert_eq!(style.fg, Some(Color::Indexed(16)));
     assert!(
         style.add_modifier.contains(Modifier::DIM),
-        "the fallback modifier keeps a visible step when indexed color cannot move"
+        "the 256-color cube can't render the sub-cell lift, so the pulse rides a weight modifier over the base tone"
     );
 }
 

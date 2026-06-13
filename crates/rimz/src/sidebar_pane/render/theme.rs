@@ -374,25 +374,30 @@ impl Theme {
         let Some(rgb) = color_to_rgb(fg) else {
             return Style::default();
         };
-        let lifted = oklab::lift_lightness(rgb, sample.lightness_delta());
-        let color = rgb_color(lifted, self.depth);
-        let mut style = Style::default().fg(color);
-        if self.depth == ColorDepth::Indexed
-            && sample.lightness_delta() != 0.0
-            && color == rgb_color(rgb, self.depth)
-        {
-            style = style.add_modifier(sample.modifier());
+        // The breathing lift is a sub-cube-cell lightness step: truecolor renders
+        // it as color, while the 256-color cube carries it as a weight modifier
+        // over the base tone — the same shape `no_color` uses (see theme.md,
+        // "Subtle steps and color depth").
+        match self.depth {
+            ColorDepth::Truecolor => {
+                let lifted = oklab::lift_lightness(rgb, sample.lightness_delta());
+                Style::default().fg(rgb_color(lifted, self.depth))
+            }
+            ColorDepth::Indexed => Style::default()
+                .fg(rgb_color(rgb, self.depth))
+                .add_modifier(sample.modifier()),
         }
-        style
     }
 
     /// The unread attention blink: a hard 2-pole brightness toggle between the
-    /// element's resting tone and a bright crest, held bold the whole colored
-    /// cycle so weight never flickers with the lightness. It is stronger than the
-    /// calm [`breathe`](Self::breathe). The glyph, name, and description of an
-    /// unread row, and the `?`/`!`/`✓` make-up buckets, share one sample so they
-    /// flip in unison. `no_color` and a colorless `fg` keep the on-pole bold
-    /// toggle as the fallback signal.
+    /// element's resting tone and a bright crest. At truecolor the crest is a
+    /// lightness lift, held bold the whole cycle so weight never flickers with the
+    /// color. The 256-color cube can't carry that subtle crest, so indexed depth —
+    /// like `no_color` and a colorless `fg` — toggles bold by pole over the base
+    /// tone instead (see theme.md, "Subtle steps and color depth"). It is stronger
+    /// than the calm [`breathe`](Self::breathe). The glyph, name, and description
+    /// of an unread row, and the `?`/`!`/`✓` make-up buckets, share one sample so
+    /// they flip in unison.
     pub(super) fn pulse(&self, fg: Color, sample: BreathSample) -> Style {
         if self.no_color {
             return Style::default().add_modifier(sample.grow_modifier());
@@ -400,10 +405,17 @@ impl Theme {
         let Some(rgb) = color_to_rgb(fg) else {
             return Style::default().add_modifier(sample.grow_modifier());
         };
-        let lifted = oklab::lift_lightness(rgb, sample.grow_delta());
-        Style::default()
-            .fg(rgb_color(lifted, self.depth))
-            .add_modifier(Modifier::BOLD)
+        match self.depth {
+            ColorDepth::Truecolor => {
+                let lifted = oklab::lift_lightness(rgb, sample.grow_delta());
+                Style::default()
+                    .fg(rgb_color(lifted, self.depth))
+                    .add_modifier(Modifier::BOLD)
+            }
+            ColorDepth::Indexed => Style::default()
+                .fg(rgb_color(rgb, self.depth))
+                .add_modifier(sample.grow_modifier()),
+        }
     }
 
     /// The body-text tone as a concrete color, so a pulsing description can lift
