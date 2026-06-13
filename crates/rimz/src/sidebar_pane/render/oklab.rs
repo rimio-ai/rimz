@@ -23,13 +23,26 @@ pub(crate) fn blend(left: Rgb, right: Rgb, amount: f32) -> Rgb {
     .to_rgb()
 }
 
-/// Shift a color's OKLab lightness by `delta` without moving its hue axes, so
-/// a breathing or pulsing element brightens and dims along one perceptual axis.
+/// Shift a color's OKLab lightness by `delta`, holding its hue. A brightening
+/// lift can push a saturated tone past the sRGB ceiling, where a per-channel
+/// clamp would skew the hue (red → pink, blue → cyan); there, chroma eases
+/// toward neutral just enough to fit, so the tone keeps its color and only loses
+/// saturation as it nears white. A dimming lift stays a plain lightness drop —
+/// it does not overshoot the ceiling, so its hue holds without easing chroma.
 pub(crate) fn lift_lightness(rgb: Rgb, delta: f32) -> Rgb {
     let mut color = Oklab::from_rgb(rgb);
     color.l = (color.l + delta).clamp(0.0, 1.0);
+    if delta > 0.0 {
+        color = color.fit_to_gamut();
+    }
     color.to_rgb()
 }
+
+/// Iterations of the chroma-fit bisection: 16 resolves the scale to 1/65536,
+/// far finer than 8-bit sRGB can show.
+const GAMUT_FIT_ITERS: usize = 16;
+/// Linear-channel tolerance when testing sRGB-gamut membership.
+const GAMUT_EPS: f32 = 1e-4;
 
 fn lerp(left: f32, right: f32, amount: f32) -> f32 {
     left + (right - left) * amount
@@ -63,7 +76,9 @@ impl Oklab {
         }
     }
 
-    fn to_rgb(self) -> Rgb {
+    /// Linear sRGB channels before the per-channel encode and clamp, so gamut
+    /// tests see the true out-of-range values.
+    fn to_linear(self) -> (f32, f32, f32) {
         let l_ = self.l + 0.396_337_78 * self.a + 0.215_803_76 * self.b;
         let m_ = self.l - 0.105_561_346 * self.a - 0.063_854_17 * self.b;
         let s_ = self.l - 0.089_484_18 * self.a - 1.291_485_5 * self.b;
@@ -72,15 +87,57 @@ impl Oklab {
         let m = m_ * m_ * m_;
         let s = s_ * s_ * s_;
 
-        let red = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
-        let green = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s;
-        let blue = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
+        (
+            4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s,
+            -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s,
+            -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s,
+        )
+    }
 
+    fn to_rgb(self) -> Rgb {
+        let (red, green, blue) = self.to_linear();
         (
             linear_to_srgb(red),
             linear_to_srgb(green),
             linear_to_srgb(blue),
         )
+    }
+
+    /// Whether the tone sits inside the sRGB gamut: every linear channel within
+    /// `[0, 1]`, give or take [`GAMUT_EPS`].
+    fn in_gamut(self) -> bool {
+        let (red, green, blue) = self.to_linear();
+        let within = |value: f32| (-GAMUT_EPS..=1.0 + GAMUT_EPS).contains(&value);
+        within(red) && within(green) && within(blue)
+    }
+
+    /// Ease chroma toward the neutral axis just until the tone fits the sRGB
+    /// gamut, holding lightness and hue. Scaling `a` and `b` by one factor keeps
+    /// the hue angle fixed, so only saturation gives way. A no-op when already in
+    /// gamut, so an in-range lift is returned unchanged.
+    fn fit_to_gamut(self) -> Self {
+        if self.in_gamut() {
+            return self;
+        }
+        let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+        for _ in 0..GAMUT_FIT_ITERS {
+            let mid = 0.5 * (lo + hi);
+            let candidate = Self {
+                l: self.l,
+                a: self.a * mid,
+                b: self.b * mid,
+            };
+            if candidate.in_gamut() {
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Self {
+            l: self.l,
+            a: self.a * lo,
+            b: self.b * lo,
+        }
     }
 }
 
@@ -117,6 +174,25 @@ mod tests {
         );
         assert!((lifted.a - base.a).abs() < 0.01);
         assert!((lifted.b - base.b).abs() < 0.01);
+    }
+
+    #[test]
+    fn clipping_lift_holds_hue_by_easing_chroma() {
+        // A saturated tone lifted hard would clip per-channel and skew its hue
+        // (red → pink, blue → cyan); the chroma-fit must hold the hue angle and
+        // give up only saturation instead.
+        let base = Oklab::from_rgb((0xf7, 0x76, 0x8e));
+        let lifted = Oklab::from_rgb(lift_lightness((0xf7, 0x76, 0x8e), 0.10));
+        let hue = |c: Oklab| c.b.atan2(c.a);
+        assert!(lifted.l > base.l, "lightness still rises");
+        assert!(
+            (hue(lifted) - hue(base)).abs() < 0.03,
+            "hue angle holds despite the gamut-clipping lift"
+        );
+        assert!(
+            lifted.a.hypot(lifted.b) < base.a.hypot(base.b),
+            "chroma eases to stay in gamut"
+        );
     }
 
     #[test]

@@ -24,6 +24,12 @@ pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
 /// bright crest on the on-pole, never dimming below rest.
 pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.42;
 const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
+/// The unread blink's peak OKLab-L lift at the on-pole. Held small so a bright
+/// resting tone brightens toward its crest without clipping to white; the
+/// gamut-safe `lift_lightness` then keeps the hue while saturation eases. The
+/// blink's punch also rides held bold weight and the animated head, so the lift
+/// itself can stay gentle and keep the color true through the swing.
+const BLINK_PEAK_LIFT: f32 = 0.08;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AnimationRole {
@@ -128,11 +134,11 @@ impl BreathSample {
     }
 
     /// The lightness lift for the unread blink: zero on the off-pole (the element
-    /// rests at its normal tone) and the full crest on the on-pole — the same top
-    /// brightness the swell once peaked at — with nothing in between, never
-    /// negative. A hard 2-pole square wave between normal and bright.
+    /// rests at its normal tone) and a fixed gentle crest ([`BLINK_PEAK_LIFT`]) on
+    /// the on-pole, with nothing in between and never negative — a hard 2-pole
+    /// square wave between the resting tone and a brighter, same-hue crest.
     pub(crate) fn grow_delta(self) -> f32 {
-        self.level * (1.0 - BREATH_MIDPOINT) * self.amplitude
+        self.level * BLINK_PEAK_LIFT
     }
 
     /// The weight half of the unread blink for the colorless fallback: bold on
@@ -623,7 +629,7 @@ mod tests {
         // The unread attention blink is a hard 2-pole square wave: the lightness
         // snaps between the resting tone (off-pole, delta 0) and the bright crest
         // (on-pole), with no eased value between them, and never below rest.
-        let peak_delta = (1.0 - BREATH_MIDPOINT) * BREATH_DEEP_AMPLITUDE;
+        let peak_delta = BLINK_PEAK_LIFT;
         let on =
             BreathSample::blink_for_age(0, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
         let off =
