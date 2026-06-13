@@ -43,10 +43,10 @@ fn default_indexed_palette_matches_expected_indices() {
             Color::Indexed(117),
             Color::Indexed(111),
             Color::Indexed(141),
-            Color::Indexed(103),
-            Color::Indexed(60),
-            Color::Indexed(238),
-            Color::Indexed(237),
+            Color::Indexed(146),
+            Color::Indexed(102),
+            Color::Indexed(59),
+            Color::Indexed(239),
             Color::Indexed(111),
         ]
     );
@@ -387,11 +387,11 @@ fn money_tone_uses_fixed_dollar_green_at_active_depth() {
 #[test]
 fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     let lit = Theme::fixed(false);
-    for (style, index) in [(lit.body(), 103), (lit.muted(), 60), (lit.faint(), 238)] {
+    for (style, index) in [(lit.body(), 146), (lit.muted(), 102), (lit.faint(), 59)] {
         assert_eq!(style.fg, Some(Color::Indexed(index)));
         assert!(style.add_modifier.is_empty(), "no DIM attenuation when lit");
     }
-    assert_eq!(lit.rule().fg, Some(Color::Indexed(237)));
+    assert_eq!(lit.rule().fg, Some(Color::Indexed(239)));
     assert!(
         lit.rule().add_modifier.contains(Modifier::DIM),
         "rule rides faint's gray under the DIM attenuation"

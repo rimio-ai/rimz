@@ -35,10 +35,10 @@ impl RawPalette {
             accent: self.cyan,
             cool: self.blue,
             meta: self.magenta,
-            body: oklab::blend(self.background, self.foreground, 0.65),
-            muted: oklab::blend(self.background, self.foreground, 0.45),
-            faint: oklab::blend(self.background, self.foreground, 0.25),
-            rule: oklab::blend(self.background, self.foreground, 0.18),
+            body: oklab::blend(self.background, self.foreground, 0.82),
+            muted: oklab::blend(self.background, self.foreground, 0.6),
+            faint: oklab::blend(self.background, self.foreground, 0.38),
+            rule: oklab::blend(self.background, self.foreground, 0.28),
             selection: self.bright_blue,
         }
     }

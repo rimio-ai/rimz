@@ -128,7 +128,7 @@ blue = '#7aa2f7'
 | `accent` | normal cyan |
 | `cool` | normal blue |
 | `meta` | normal magenta |
-| `body` / `muted` / `faint` / `rule` | background toward foreground at 65% / 45% / 25% / 18% |
+| `body` / `muted` / `faint` / `rule` | background toward foreground at 82% / 60% / 38% / 28% |
 | `selection` | bright blue, or normal blue when bright blue is absent |
 
 Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
