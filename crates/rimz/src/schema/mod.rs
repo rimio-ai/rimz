@@ -6,6 +6,7 @@
 pub mod diag;
 pub mod event;
 pub mod heartbeat;
+pub mod notify_trace;
 pub mod pane_topology;
 pub mod sidebar_event;
 

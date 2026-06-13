@@ -10,7 +10,9 @@ use jiff::Timestamp;
 use tracing::{debug, warn};
 
 use crate::sidebar::read_marks::ReadMarkStore;
-use crate::sidebar_pane::render::{GateNotice, UiState, UnreadTracker};
+use crate::sidebar_pane::render::{
+    GateNotice, UiState, UnreadChange, UnreadChangeKind, UnreadTracker,
+};
 
 use super::fetch::FetchOutcome;
 use super::gate::{GateState, apply_gate, gate_held_ms};
@@ -191,7 +193,7 @@ pub(super) fn apply_fetch_outcome(
         .as_ref()
         .and_then(|pane| row_id_of_pane(current, pane));
     let marks = read_marks.load_merged();
-    let cleared = ui.unread.observe(
+    let outcome = ui.unread.observe(
         current
             .worktree_groups
             .iter()
@@ -199,13 +201,16 @@ pub(super) fn apply_fetch_outcome(
         focused_row_id.as_deref(),
         &marks,
     );
+    if let Some(diag) = diag {
+        emit_unread_trace(diag, current, &outcome.changes);
+    }
     let live: HashSet<String> = current
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
         .map(|row| row.id.clone())
         .collect();
-    read_marks.observe_fold(cleared, now.as_millisecond(), &live);
+    read_marks.observe_fold(outcome.focus_cleared, now.as_millisecond(), &live);
     stamp_unread(current, &ui.unread);
     // Presentation sort only reorders the producer's already-capped visible set.
     current.sort_groups_for_presentation();
@@ -399,6 +404,45 @@ fn stamp_unread(snapshot: &mut SidebarSnapshot, unread: &UnreadTracker) {
     {
         row.unread = unread.is_unread(&row.id);
     }
+}
+
+/// Append this fold's unread mark/clear transitions to the notification trace,
+/// so a tab-bell episode can be reconstructed against the look that cleared it.
+fn emit_unread_trace(
+    diag: &crate::diag::DiagSink,
+    snapshot: &SidebarSnapshot,
+    changes: &[UnreadChange],
+) {
+    use crate::schema::notify_trace::NotifyTraceEvent;
+    for change in changes {
+        let label = unread_row_label(snapshot, &change.row_id);
+        let event = match change.kind {
+            UnreadChangeKind::Marked(status) => NotifyTraceEvent::UnreadMarked {
+                row_id: change.row_id.clone(),
+                label,
+                status: status.as_str().to_owned(),
+            },
+            UnreadChangeKind::Cleared(cause) => NotifyTraceEvent::UnreadCleared {
+                row_id: change.row_id.clone(),
+                label,
+                cause: cause.as_str().to_owned(),
+            },
+        };
+        diag.trace_notify(event);
+    }
+}
+
+fn unread_row_label(snapshot: &SidebarSnapshot, row_id: &str) -> Option<String> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| group.rows.iter())
+        .find(|row| row.id == row_id)
+        .map(|row| {
+            row.worktree_branch
+                .clone()
+                .unwrap_or_else(|| row.name.clone())
+        })
 }
 
 #[cfg(test)]

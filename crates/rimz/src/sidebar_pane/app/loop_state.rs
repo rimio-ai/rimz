@@ -172,15 +172,25 @@ impl LoopState {
                 body,
                 panes,
                 recheck_unread,
+                notification_kind,
             } => {
+                let kind = notification_kind.as_deref().unwrap_or(if recheck_unread {
+                    "agent"
+                } else {
+                    "link"
+                });
                 match emit_terminal_notification(
                     config,
                     terminal,
                     &self.current,
-                    &title,
-                    &body,
-                    &panes,
-                    recheck_unread,
+                    BellNotice {
+                        title: &title,
+                        body: &body,
+                        panes: &panes,
+                        recheck_unread,
+                        kind,
+                    },
+                    diag,
                 ) {
                     Ok(true) => self.remind.note_ring(crate::sidebar::cache::unix_now_ms()),
                     Ok(false) => {}
@@ -359,8 +369,10 @@ impl LoopState {
         &mut self,
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        diag: Option<&crate::diag::DiagSink>,
     ) {
-        self.remind.maybe_remind(config, terminal, &self.current);
+        self.remind
+            .maybe_remind(config, terminal, &self.current, diag);
     }
 
     pub(super) fn paint_frame_if_due(

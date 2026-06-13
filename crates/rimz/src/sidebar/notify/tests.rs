@@ -664,6 +664,8 @@ fn command_spawn_receives_notification_env() {
             agent_id: AgentSessionId::from("sess-1"),
             label: "claude sess-1".to_owned(),
             pane_id: None,
+            prev_status: Some(AgentStatus::Running),
+            new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,
         title: "Rimz: claude needs you".to_owned(),

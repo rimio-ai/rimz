@@ -111,6 +111,11 @@ pub enum SidebarEvent {
         /// keeps the agent default (`true`) for older producers.
         #[serde(default = "default_recheck_unread")]
         recheck_unread: bool,
+        /// The producer's notification kind (`waiting`/`success`/`reminder`/…),
+        /// carried so the renderer's bell-decision trace is self-explanatory.
+        /// Absent on older producers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        notification_kind: Option<String>,
     },
     /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
     /// reload survives sidebar-event envelope version skew.
@@ -200,6 +205,7 @@ mod tests {
                 body: "claude sess-1 is waiting for input".to_owned(),
                 panes: vec![PaneId::from_parts(MuxName::Zellij, "terminal_4")],
                 recheck_unread: true,
+                notification_kind: Some("waiting".to_owned()),
             },
             SidebarEvent::Reload,
         ];
@@ -241,9 +247,11 @@ mod tests {
             body: "claude sess-1 is waiting for input".to_owned(),
             panes: Vec::new(),
             recheck_unread: true,
+            notification_kind: None,
         });
         let encoded = serde_json::to_vec(&expected).expect("serialize event envelope");
         assert!(!String::from_utf8_lossy(&encoded).contains("panes"));
+        assert!(!String::from_utf8_lossy(&encoded).contains("notification_kind"));
 
         let decoded: SidebarEventEnvelope =
             serde_json::from_slice(&encoded).expect("decode event envelope");

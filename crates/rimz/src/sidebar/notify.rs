@@ -48,6 +48,11 @@ pub struct NotificationAgent {
     pub agent_id: AgentSessionId,
     pub label: String,
     pub pane_id: Option<PaneId>,
+    /// The status edge that caused this notification: the status before this
+    /// frame, and the status reached. Both populated for agent notifications,
+    /// left `None` for link/reminder notifications that name no agent.
+    pub prev_status: Option<AgentStatus>,
+    pub new_status: Option<AgentStatus>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -342,6 +347,8 @@ impl NotificationRow {
                 agent_id,
                 label: label.clone(),
                 pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                prev_status: None,
+                new_status: Some(status),
             },
             label,
             focused: row.pane.as_ref().is_some_and(|pane| pane.is_focused),
@@ -403,7 +410,8 @@ impl NotificationState {
         for row in &rows {
             let key = row.key.clone();
             let status = row.status;
-            if self.statuses.get(&key).copied() == Some(status) {
+            let prev_status = self.statuses.get(&key).copied();
+            if prev_status == Some(status) {
                 continue;
             }
             if !prefs.triggers_status(status) {
@@ -426,7 +434,7 @@ impl NotificationState {
                 continue;
             }
             self.pending
-                .push(pending_notification(row, notification_kind));
+                .push(pending_notification(row, notification_kind, prev_status));
         }
 
         if pending_was_empty && !self.pending.is_empty() {
@@ -511,6 +519,7 @@ fn notification_rows(snapshot: &SidebarSnapshot) -> Vec<NotificationRow> {
 fn pending_notification(
     row: &NotificationRow,
     notification_kind: AgentNotificationKind,
+    prev_status: Option<AgentStatus>,
 ) -> PendingNotification {
     let label = row.label.clone();
     let title = match notification_kind {
@@ -525,10 +534,12 @@ fn pending_notification(
         AgentNotificationKind::Paused => format!("{label} is parked on a provider limit."),
         AgentNotificationKind::Success => format!("{label} completed successfully."),
     };
+    let mut agent = row.agent.clone();
+    agent.prev_status = prev_status;
     PendingNotification {
         key: row.key.clone(),
         notification_kind,
-        agent: row.agent.clone(),
+        agent,
         title,
         body,
     }

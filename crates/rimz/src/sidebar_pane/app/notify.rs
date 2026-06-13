@@ -1,25 +1,44 @@
 use super::*;
 
+/// One notification to render in this renderer's terminal: the desktop text, the
+/// owned panes it targets, whether the tab bell re-checks unread, and the
+/// producer's kind for the trace.
+pub(super) struct BellNotice<'a> {
+    pub title: &'a str,
+    pub body: &'a str,
+    pub panes: &'a [PaneId],
+    pub recheck_unread: bool,
+    pub kind: &'a str,
+}
+
 pub(super) fn emit_terminal_notification(
     config: &ServeConfig,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
-    title: &str,
-    body: &str,
-    panes: &[PaneId],
-    recheck_unread: bool,
+    notice: BellNotice<'_>,
+    diag: Option<&crate::diag::DiagSink>,
 ) -> io::Result<bool> {
     let prefs = &config.notification_prefs;
     let mut bytes = Vec::new();
-    if desktop_notification_targets_renderer(config.mux, snapshot, panes) {
+    if desktop_notification_targets_renderer(config.mux, snapshot, notice.panes) {
         bytes.extend(osc::desktop_notification_bytes(
             config.mux,
             prefs.desktop,
-            title,
-            body,
+            notice.title,
+            notice.body,
         ));
     }
-    if bell_targets_own_view(snapshot, panes, recheck_unread) {
+    let bell = bell_decision(snapshot, notice.panes, notice.recheck_unread);
+    if let Some(diag) = diag {
+        diag.trace_notify(crate::schema::notify_trace::NotifyTraceEvent::BellRing {
+            notification_kind: notice.kind.to_owned(),
+            fired: bell.fired(),
+            recheck_unread: notice.recheck_unread,
+            panes: notice.panes.to_vec(),
+            suppressed: bell.suppressed_reason().map(str::to_owned),
+        });
+    }
+    if bell.fired() {
         bytes.extend(osc::sound_notification_bytes(prefs.sound));
     }
     if bytes.is_empty() {
@@ -31,38 +50,68 @@ pub(super) fn emit_terminal_notification(
     Ok(true)
 }
 
-/// Whether this renderer rings the sticky tab bell for a notification. The bell
-/// is a mux tab marker the renderer cannot retract, so it is bound to genuine,
-/// current unread attention: a daemon-only view never rings (its siblings are
-/// infrastructure host panes, never agents that need you), and an agent
-/// notification rings only while a targeted, owned pane's row is still unread —
-/// the same `UnreadTracker` signal stamped onto `SidebarRow::unread`, which
-/// clears the instant the agent returns to running. Link reachability alerts and
-/// pre-vetted unread reminders clear `recheck_unread` to ring whenever they own
-/// a targeted, non-daemon pane.
-pub(super) fn bell_targets_own_view(
+/// Why this renderer did or did not ring the sticky tab bell for a notification.
+/// The bell is a mux tab marker the renderer cannot retract, so it is bound to
+/// genuine, current unread attention: a daemon-only view never rings (its
+/// siblings are infrastructure host panes, never agents that need you), and an
+/// agent notification rings only while a targeted, owned pane's row is still
+/// unread — the same `UnreadTracker` signal stamped onto `SidebarRow::unread`,
+/// which stays set until a human looks. Link reachability alerts and pre-vetted
+/// unread reminders clear `recheck_unread` to ring whenever they own a targeted,
+/// non-daemon pane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum BellDecision {
+    Fired,
+    NoOwnView,
+    DaemonView,
+    PaneNotInView,
+    NotUnread,
+}
+
+impl BellDecision {
+    pub(super) fn fired(self) -> bool {
+        matches!(self, Self::Fired)
+    }
+
+    fn suppressed_reason(self) -> Option<&'static str> {
+        match self {
+            Self::Fired => None,
+            Self::NoOwnView => Some("no_own_view"),
+            Self::DaemonView => Some("daemon_view"),
+            Self::PaneNotInView => Some("pane_not_in_view"),
+            Self::NotUnread => Some("not_unread"),
+        }
+    }
+}
+
+pub(super) fn bell_decision(
     snapshot: &SidebarSnapshot,
     panes: &[PaneId],
     recheck_unread: bool,
-) -> bool {
+) -> BellDecision {
     let Some(view) = snapshot.own_view.as_ref() else {
-        return false;
+        return BellDecision::NoOwnView;
     };
     if view.own_view_is_daemon {
-        return false;
+        return BellDecision::DaemonView;
     }
     if !panes
         .iter()
         .any(|pane| view.working_pane_ids.contains(pane))
     {
-        return false;
+        return BellDecision::PaneNotInView;
     }
     if !recheck_unread {
-        return true;
+        return BellDecision::Fired;
     }
-    panes
+    if panes
         .iter()
         .any(|pane| view.working_pane_ids.contains(pane) && pane_row_unread(snapshot, pane))
+    {
+        BellDecision::Fired
+    } else {
+        BellDecision::NotUnread
+    }
 }
 
 /// Whether the agent row bound to `pane` is currently unread. Mirrors the row

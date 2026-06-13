@@ -257,7 +257,7 @@ pub(in crate::sidebar_pane::render) fn card_emphasis(
     unread: bool,
     selected: bool,
 ) -> CardEmphasis {
-    if unread && (status.is_actionable() || status == AgentStatus::Success) {
+    if unread && status.marks_unread() {
         CardEmphasis::Blink
     } else if status.needs_a_look() || selected {
         CardEmphasis::Normal

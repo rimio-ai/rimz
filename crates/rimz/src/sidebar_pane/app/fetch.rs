@@ -302,6 +302,7 @@ fn evaluate_and_deliver_notifications(
             tracing::debug!(error = %err, "notify-command spawn failed");
         }
         let panes = notification_panes(snapshot, &notification);
+        let notification_kind = notification.kind_env().to_owned();
         // Agent notifications ring the sticky tab bell only while the targeted
         // row is still unread; link reachability alerts ring directly.
         let recheck_unread = !matches!(
@@ -309,6 +310,9 @@ fn evaluate_and_deliver_notifications(
             crate::sidebar::notify::NotificationKind::LinkDegraded
                 | crate::sidebar::notify::NotificationKind::LinkRecovered
         );
+        if let Some(diag) = diag {
+            diag.trace_notify(notification_emitted_trace(&notification, &panes));
+        }
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
@@ -317,10 +321,35 @@ fn evaluate_and_deliver_notifications(
                 body: notification.body,
                 panes,
                 recheck_unread,
+                notification_kind: Some(notification_kind),
             },
         ) {
             tracing::debug!(error = %err, "notification event broadcast failed");
         }
+    }
+}
+
+fn notification_emitted_trace(
+    notification: &Notification,
+    panes: &[PaneId],
+) -> crate::schema::notify_trace::NotifyTraceEvent {
+    use crate::schema::notify_trace::{NotifyTraceEvent, TraceAgent};
+    NotifyTraceEvent::NotificationEmitted {
+        notification_kind: notification.kind_env().to_owned(),
+        agents: notification
+            .agents
+            .iter()
+            .map(|agent| TraceAgent {
+                kind: agent.kind.clone(),
+                agent_id: agent.agent_id.clone(),
+                label: agent.label.clone(),
+                pane_id: agent.pane_id.clone(),
+                prev_status: agent.prev_status.map(|status| status.as_str().to_owned()),
+                new_status: agent.new_status.map(|status| status.as_str().to_owned()),
+            })
+            .collect(),
+        panes: panes.to_vec(),
+        unread_count: notification.unread_count,
     }
 }
 

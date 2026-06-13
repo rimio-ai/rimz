@@ -281,7 +281,7 @@ pub fn serve(config: ServeConfig) -> Result<()> {
         }
 
         state.run_maintenance(&config, &runtime, &socket_path, &mut fetch, tick);
-        state.maybe_remind(&config, &mut terminal);
+        state.maybe_remind(&config, &mut terminal, diag.as_ref());
         state.paint_frame_if_due(&mut terminal, anim_start, active)?;
     }
     if state.tab_emptied {

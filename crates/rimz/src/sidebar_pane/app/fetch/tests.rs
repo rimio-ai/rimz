@@ -352,6 +352,8 @@ fn notification_agent(id: &str, pane_id: Option<PaneId>) -> NotificationAgent {
         agent_id: AgentSessionId::from(id),
         label: format!("claude {id}"),
         pane_id,
+        prev_status: None,
+        new_status: None,
     }
 }
 

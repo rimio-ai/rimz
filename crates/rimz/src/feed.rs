@@ -640,6 +640,14 @@ impl AgentStatus {
     pub fn needs_a_look(self) -> bool {
         self.is_attention() || matches!(self, Self::Success)
     }
+
+    /// States that set an unread pending-look: a row reaches one of these on its
+    /// own and stays unread until a human looks. Excludes the parked `Paused` —
+    /// it auto-recovers when the provider window resets, so it never originates
+    /// a look. The actionable subset plus a finished result.
+    pub fn marks_unread(self) -> bool {
+        self.is_actionable() || matches!(self, Self::Success)
+    }
 }
 
 /// The context meter's four-tier severity ramp — calm → yellow → amber → red.
@@ -1211,17 +1219,22 @@ mod tests {
             assert!(status.is_attention());
             assert!(status.is_actionable());
             assert!(status.needs_a_look());
+            assert!(status.marks_unread());
         }
         assert!(AgentStatus::Paused.is_attention());
         assert!(!AgentStatus::Paused.is_actionable());
         assert!(AgentStatus::Paused.needs_a_look());
+        // Paused auto-recovers without a human look, so it never originates unread.
+        assert!(!AgentStatus::Paused.marks_unread());
         assert!(!AgentStatus::Success.is_attention());
         assert!(!AgentStatus::Success.is_actionable());
         assert!(AgentStatus::Success.needs_a_look());
+        assert!(AgentStatus::Success.marks_unread());
         for status in [AgentStatus::Running, AgentStatus::Idle] {
             assert!(!status.is_attention());
             assert!(!status.is_actionable());
             assert!(!status.needs_a_look());
+            assert!(!status.marks_unread());
         }
     }
 

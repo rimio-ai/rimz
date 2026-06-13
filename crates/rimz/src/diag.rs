@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::ids::{PaneId, SidebarInstanceId, WorkspaceId};
 use crate::schema::diag::{DiagEnvelope, DiagEvent, GroupIdentity};
+use crate::schema::notify_trace::{NotifyTraceEnvelope, NotifyTraceEvent};
 
 const DIAG_LOG_NAME: &str = "diag.log.jsonl";
 const DIAG_LOG_MAX_BYTES: u64 = 1_048_576;
@@ -96,6 +97,25 @@ impl DiagSink {
 
     pub fn emit_unlimited(&self, event: DiagEvent) {
         self.append(event, crate::sidebar::cache::unix_now_ms());
+    }
+
+    /// Append a notification trace record to the sibling `notify.log.jsonl`.
+    /// Reuses this sink's workspace identity and plumbing; the trace stream is
+    /// never rate-limited, so every notification, bell decision, and unread
+    /// transition lands.
+    pub fn trace_notify(&self, event: NotifyTraceEvent) {
+        self.trace_notify_at_ms(event, crate::sidebar::cache::unix_now_ms());
+    }
+
+    pub fn trace_notify_at_ms(&self, event: NotifyTraceEvent, at_ms: u64) {
+        let envelope = NotifyTraceEnvelope::new(
+            self.workspace_id.clone(),
+            self.session_name.clone(),
+            self.instance_id.clone(),
+            at_ms,
+            event,
+        );
+        crate::notify_log::append(&self.state_root, &envelope);
     }
 
     pub fn capture_frame_pair<T: Serialize>(

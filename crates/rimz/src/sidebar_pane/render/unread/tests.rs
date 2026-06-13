@@ -5,7 +5,7 @@ use crate::sidebar::read_marks::ReadMarks;
 use crate::{AgentCard, RowCard, SidebarRow};
 use jiff::Timestamp;
 
-use super::UnreadTracker;
+use super::{ClearCause, UnreadChangeKind, UnreadTracker};
 
 fn fixed_now() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
@@ -69,11 +69,11 @@ fn observe_with_marks(
     focused: Option<&str>,
     marks: &ReadMarks,
 ) -> Vec<String> {
-    tracker.observe(rows.iter(), focused, marks)
+    tracker.observe(rows.iter(), focused, marks).focus_cleared
 }
 
 #[test]
-fn transitions_into_needs_a_look_stamp_unread() {
+fn transitions_into_a_pending_look_stamp_unread() {
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
     assert!(!tracker.is_unread("a"));
@@ -82,13 +82,22 @@ fn transitions_into_needs_a_look_stamp_unread() {
         (AgentStatus::Running, AgentStatus::Success),
         (AgentStatus::Running, AgentStatus::Failed),
         (AgentStatus::Running, AgentStatus::Waiting),
-        (AgentStatus::Running, AgentStatus::Paused),
     ] {
         let mut tracker = UnreadTracker::default();
         observe(&mut tracker, vec![row("a", from)], None);
         observe(&mut tracker, vec![row("a", status)], None);
         assert!(tracker.is_unread("a"), "{from:?} -> {status:?}");
     }
+}
+
+#[test]
+fn paused_never_marks_unread() {
+    // Paused auto-recovers when the provider window resets, so it never
+    // originates a pending look — only Waiting/Failed/Success do.
+    let mut tracker = UnreadTracker::default();
+    observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
+    observe(&mut tracker, vec![row("a", AgentStatus::Paused)], None);
+    assert!(!tracker.is_unread("a"));
 }
 
 #[test]
@@ -214,17 +223,76 @@ fn first_seen_calm_after_seed_stays_read() {
 }
 
 #[test]
-fn running_or_idle_clears_unread() {
+fn unread_is_sticky_through_running_and_idle() {
+    // A pending look stays pending until a human looks: the agent resuming on
+    // its own (Success -> Running -> Idle) must never clear it.
     let mut tracker = UnreadTracker::default();
     observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
     observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
     assert!(tracker.is_unread("a"));
     observe(&mut tracker, vec![row("a", AgentStatus::Running)], None);
-    assert!(!tracker.is_unread("a"));
-    observe(&mut tracker, vec![row("a", AgentStatus::Success)], None);
-    assert!(tracker.is_unread("a"));
+    assert!(
+        tracker.is_unread("a"),
+        "running must not clear a pending look"
+    );
     observe(&mut tracker, vec![row("a", AgentStatus::Idle)], None);
+    assert!(tracker.is_unread("a"), "idle must not clear a pending look");
+}
+
+#[test]
+fn observe_reports_typed_mark_and_clear_changes() {
+    let mut tracker = UnreadTracker::default();
+    // Seed: no change.
+    let out = tracker.observe(
+        [row("a", AgentStatus::Running)].iter(),
+        None,
+        &ReadMarks::empty(),
+    );
+    assert!(out.changes.is_empty());
+    // Transition into Waiting marks unread.
+    let out = tracker.observe(
+        [row("a", AgentStatus::Waiting)].iter(),
+        None,
+        &ReadMarks::empty(),
+    );
+    assert_eq!(out.changes.len(), 1);
+    assert_eq!(out.changes[0].row_id, "a");
+    assert_eq!(
+        out.changes[0].kind,
+        UnreadChangeKind::Marked(AgentStatus::Waiting)
+    );
+    // The row leaving the snapshot before a look clears it as RowGone.
+    let out = tracker.observe(
+        [row("b", AgentStatus::Idle)].iter(),
+        None,
+        &ReadMarks::empty(),
+    );
+    assert!(out.changes.iter().any(|change| change.row_id == "a"
+        && change.kind == UnreadChangeKind::Cleared(ClearCause::RowGone)));
     assert!(!tracker.is_unread("a"));
+}
+
+#[test]
+fn observe_reports_focus_clear_change() {
+    let mut tracker = UnreadTracker::default();
+    tracker.observe(
+        [row("a", AgentStatus::Running)].iter(),
+        None,
+        &ReadMarks::empty(),
+    );
+    tracker.observe(
+        [row("a", AgentStatus::Waiting)].iter(),
+        None,
+        &ReadMarks::empty(),
+    );
+    let out = tracker.observe(
+        [row("a", AgentStatus::Waiting)].iter(),
+        Some("a"),
+        &ReadMarks::empty(),
+    );
+    assert_eq!(out.focus_cleared, vec!["a".to_owned()]);
+    assert!(out.changes.iter().any(|change| change.row_id == "a"
+        && change.kind == UnreadChangeKind::Cleared(ClearCause::Focus)));
 }
 
 #[test]

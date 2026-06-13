@@ -241,53 +241,40 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
 
     // Agent path: rings only while the owned row is unread.
     let unread_waiting = scene(true, AgentStatus::Waiting, false);
-    assert!(bell_targets_own_view(
-        &unread_waiting,
-        std::slice::from_ref(&work),
-        true
-    ));
+    assert_eq!(
+        bell_decision(&unread_waiting, std::slice::from_ref(&work), true),
+        BellDecision::Fired
+    );
 
     // Resumed to running and no longer unread — a thinking agent never rings.
     let running = scene(false, AgentStatus::Running, false);
-    assert!(!bell_targets_own_view(
-        &running,
-        std::slice::from_ref(&work),
-        true
-    ));
+    assert_eq!(
+        bell_decision(&running, std::slice::from_ref(&work), true),
+        BellDecision::NotUnread
+    );
 
     // A foreign pane the view does not own never rings.
-    assert!(!bell_targets_own_view(
-        &unread_waiting,
-        std::slice::from_ref(&foreign),
-        true
-    ));
+    assert_eq!(
+        bell_decision(&unread_waiting, std::slice::from_ref(&foreign), true),
+        BellDecision::PaneNotInView
+    );
 
     // Link/reminder path bypasses the unread re-check and rings on an owned pane.
-    assert!(bell_targets_own_view(
-        &running,
-        std::slice::from_ref(&work),
-        false
-    ));
+    assert!(bell_decision(&running, std::slice::from_ref(&work), false).fired());
 
     // A daemon-only view (rimzd) never rings, on either path.
     let daemon = scene(true, AgentStatus::Waiting, true);
-    assert!(!bell_targets_own_view(
-        &daemon,
-        std::slice::from_ref(&work),
-        true
-    ));
-    assert!(!bell_targets_own_view(
-        &daemon,
-        std::slice::from_ref(&work),
-        false
-    ));
+    assert_eq!(
+        bell_decision(&daemon, std::slice::from_ref(&work), true),
+        BellDecision::DaemonView
+    );
+    assert!(!bell_decision(&daemon, std::slice::from_ref(&work), false).fired());
 
     // No own view at all never rings.
-    assert!(!bell_targets_own_view(
-        &snapshot(&ws),
-        std::slice::from_ref(&work),
-        false
-    ));
+    assert_eq!(
+        bell_decision(&snapshot(&ws), std::slice::from_ref(&work), false),
+        BellDecision::NoOwnView
+    );
 }
 
 #[test]

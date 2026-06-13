@@ -12,7 +12,7 @@ use crate::ids::PaneId;
 use crate::sidebar::notify::{Notification, NotificationKind, spawn_notify_command};
 
 use super::ServeConfig;
-use super::notify::emit_terminal_notification;
+use super::notify::{BellNotice, emit_terminal_notification};
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct RemindState {
@@ -38,6 +38,7 @@ impl RemindState {
         config: &ServeConfig,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
         snapshot: &SidebarSnapshot,
+        diag: Option<&crate::diag::DiagSink>,
     ) {
         let scope = unread_reminder_scope(snapshot, &config.notification_prefs);
         if scope.count == 0
@@ -57,15 +58,19 @@ impl RemindState {
         // The reminder scope is already unread `waiting`/`failed` rows, and its
         // paneless path borrows non-unread sibling panes to reach a detached
         // ask — so ring directly rather than re-checking each borrowed pane's
-        // row. The daemon exclusion in `bell_targets_own_view` still applies.
+        // row. The daemon exclusion in `bell_decision` still applies.
         if let Err(err) = emit_terminal_notification(
             config,
             terminal,
             snapshot,
-            &notification.title,
-            &notification.body,
-            &scope.panes,
-            false,
+            BellNotice {
+                title: &notification.title,
+                body: &notification.body,
+                panes: &scope.panes,
+                recheck_unread: false,
+                kind: notification.kind_env(),
+            },
+            diag,
         ) {
             debug!(error = %err, "terminal unread reminder emit failed");
         }
