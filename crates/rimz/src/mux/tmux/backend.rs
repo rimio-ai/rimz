@@ -5,10 +5,10 @@ use super::options::{sidebar_serve_command, tmux_views_with_sidebars};
 use super::parse::{parse_focused_client_panes, parse_new_window_ids, parse_pane_line};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result,
-    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SplitPaneOptions,
-    TabOptions, ensure_pane_backend,
+    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
+    ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
+    PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
+    SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -246,6 +246,27 @@ impl MuxBackend for TmuxBackend {
             .args(["send-keys", "-t", pane.raw(), key.tmux_name()])
             .run()
             .map(|_| ())
+    }
+
+    fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Tmux)?;
+        // Open marker, literal text, close marker — each `-l` so tmux never
+        // re-reads the bytes as key names, all in one client invocation.
+        let literal = |body: &str| {
+            vec![
+                "send-keys".to_owned(),
+                "-t".to_owned(),
+                pane.raw().to_owned(),
+                "-l".to_owned(),
+                "--".to_owned(),
+                body.to_owned(),
+            ]
+        };
+        self.batch(&[
+            literal(BRACKET_PASTE_OPEN),
+            literal(text),
+            literal(BRACKET_PASTE_CLOSE),
+        ])
     }
 
     fn open_sidebar(&self, opts: &SidebarPaneOptions, _daemon: Option<&DaemonView>) -> Result<()> {

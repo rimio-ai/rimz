@@ -13,8 +13,8 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-queue", "feature-q", &[]);
 
-    let first = queue_add(&env, "claude", "first task");
-    let second = queue_add(&env, "claude", "second task");
+    let first = queue_add(&env, "@claude", "first task");
+    let second = queue_add(&env, "@claude", "second task");
     assert_ne!(first, second);
 
     let pending = env.ledger().list_pending_messages().expect("pending queue");
@@ -56,7 +56,7 @@ fn queue_add_list_remove_and_clear_for_running_agent() {
 
     let cleared = env
         .rimz()
-        .args(["queue", "clear", "claude"])
+        .args(["queue", "clear", "@claude"])
         .output()
         .expect("queue clear");
     assert!(
@@ -93,7 +93,7 @@ fn deliver_leaves_ineligible_message_unclaimed() {
     env.install_agent_hooks("claude");
     register_running_agent(&env, "sess-deliver", "feature-d", &[]);
 
-    let message_id = queue_add(&env, "claude", "next task");
+    let message_id = queue_add(&env, "@claude", "next task");
 
     run_hook(
         &env,
@@ -131,7 +131,7 @@ fn queue_refuses_without_installed_hooks() {
 
     let out = env
         .rimz()
-        .args(["queue", "claude", "--", "next task"])
+        .args(["queue", "@claude", "--", "next task"])
         .output()
         .expect("queue add");
     assert!(!out.status.success(), "queue should fail without hooks");
@@ -150,7 +150,7 @@ fn steer_refuses_pending_ask_before_touching_pane() {
 
     let out = env
         .rimz()
-        .args(["steer", "claude", "--", "continue"])
+        .args(["steer", "@claude", "--", "continue"])
         .output()
         .expect("steer");
     assert!(!out.status.success(), "steer should fail on pending ask");
@@ -161,12 +161,13 @@ fn steer_refuses_pending_ask_before_touching_pane() {
     );
 }
 
-/// `steer` types the text and then presses Enter as a discrete key event —
-/// never a carriage return folded into the typed text. Agent UIs submit on the
-/// keystroke but take an embedded newline as a composer line break, so the
-/// distinction is the whole feature. Drives a real `rimz steer` against the
-/// zellij-trace shim and asserts the recorded action sequence: `write-chars`
-/// of the text, then a discrete `write 13` (Enter), with no `\r` anywhere.
+/// `steer` bracket-pastes the text and then presses Enter as a discrete key
+/// event outside the paste — never a carriage return folded into the typed
+/// text. Agent UIs submit on the keystroke but take an embedded newline as a
+/// composer line break, so the distinction is the whole feature. Drives a real
+/// `rimz steer` against the zellij-trace shim and asserts the recorded action
+/// sequence: a bracketed paste of the text, then a discrete `write 13` (Enter),
+/// with no `\r` anywhere.
 #[test]
 fn steer_presses_enter_as_discrete_key() {
     let env = Env::new();
@@ -182,7 +183,7 @@ fn steer_presses_enter_as_discrete_key() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["steer", "claude", "--", "y"])
+        .args(["steer", "@claude", "--", "y"])
         .output()
         .expect("steer");
     assert!(
@@ -210,7 +211,7 @@ fn steer_no_enter_suppresses_the_keystroke() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["steer", "claude", "--no-enter", "--", "y"])
+        .args(["steer", "@claude", "--no-enter", "--", "y"])
         .output()
         .expect("steer");
     assert!(
@@ -221,8 +222,8 @@ fn steer_no_enter_suppresses_the_keystroke() {
 
     let lines = trace_lines(&trace_log);
     assert!(
-        lines.iter().any(|line| is_write_chars(line, "y")),
-        "expected write-chars of `y`; trace: {lines:?}"
+        lines.iter().any(|line| is_paste(line, "y")),
+        "expected a bracketed paste of `y`; trace: {lines:?}"
     );
     assert!(
         !lines.iter().any(|line| is_enter_key(line)),
@@ -257,7 +258,7 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .env("RIMZ_QUEUE_SETTLE_MS", "0")
-        .args(["queue", "claude", "--", "go"])
+        .args(["queue", "@claude", "--", "go"])
         .output()
         .expect("queue add");
     assert!(
@@ -271,6 +272,103 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "an idle agent with a bound pane should deliver the queued message inline"
     );
     assert_text_then_enter(&trace_log, "go");
+}
+
+/// `queue @claude --yes` fans out to every claude in the room: one queued
+/// message per agent, all carrying the same text.
+#[test]
+fn queue_fanout_two_agents() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    // Distinct panes so the two cards stay distinct; both are `running`, so the
+    // gate is closed and each message simply stays pending.
+    register_running_agent(&env, "sess-fan-a", "feature-fa", &[("ZELLIJ_PANE_ID", "5")]);
+    register_running_agent(&env, "sess-fan-b", "feature-fb", &[("ZELLIJ_PANE_ID", "6")]);
+
+    let out = env
+        .rimz()
+        .args(["queue", "@claude", "--yes", "--", "shared task"])
+        .output()
+        .expect("queue fanout");
+    assert!(
+        out.status.success(),
+        "queue fanout failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let pending = env.ledger().list_pending_messages().expect("pending queue");
+    assert_eq!(
+        pending.len(),
+        2,
+        "one queued message per agent: {pending:?}"
+    );
+    assert!(
+        pending.iter().all(|message| message.text == "shared task"),
+        "every fan-out message carries the same text: {pending:?}"
+    );
+}
+
+/// `steer @claude --yes` broadcasts to every claude with a bound pane and prints
+/// a summary naming the count.
+#[test]
+fn steer_fanout_summary() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-fsa", "feature-fsa", &[("ZELLIJ_PANE_ID", "3")]);
+    register_running_agent(&env, "sess-fsb", "feature-fsb", &[("ZELLIJ_PANE_ID", "4")]);
+
+    let trace_log = env.project_root.join("zellij-fanout-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--yes", "--", "hello"])
+        .output()
+        .expect("steer fanout");
+    assert!(
+        out.status.success(),
+        "steer fanout failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("steered 2 agent(s)"),
+        "summary names the count: {stdout}"
+    );
+}
+
+/// A skipped agent never aborts a broadcast: one targeted agent has no bound
+/// pane, so it is skipped while the other still receives the steer, and the
+/// command summarizes and succeeds rather than failing on the first skip.
+#[test]
+fn steer_fanout_skips_blocked_and_steers_the_rest() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-skip-a",
+        "feature-ska",
+        &[("ZELLIJ_PANE_ID", "7")],
+    );
+    // A distinct second card with no bound pane — it can only be skipped.
+    register_running_agent(&env, "sess-skip-b", "feature-skb", &[]);
+
+    let trace_log = env.project_root.join("zellij-skip-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--yes", "--", "go"])
+        .output()
+        .expect("steer partial skip");
+    assert!(
+        out.status.success(),
+        "a skipped agent must not abort the broadcast: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("steered 1 agent(s)") && stdout.contains("no pane"),
+        "summary names the sent and skipped agents: {stdout}"
+    );
 }
 
 fn zellij_trace_shim() -> PathBuf {
@@ -288,21 +386,28 @@ fn trace_lines(path: &Path) -> Vec<String> {
 /// fails rather than passing on action type alone.
 const TRACE_PANE: &str = "terminal_3";
 
-/// A `zellij action write-chars --pane-id <pane> <text>` line.
-fn is_write_chars(line: &str, text: &str) -> bool {
+/// A bracketed-paste `zellij action write --pane-id <pane> 27 91 50 48 48 126
+/// <text bytes…> 27 91 50 48 49 126` line — the text wrapped in `ESC[200~` …
+/// `ESC[201~` decimal byte markers, so a following Enter reads as submit.
+fn is_paste(line: &str, text: &str) -> bool {
+    let payload = text
+        .bytes()
+        .map(|byte| byte.to_string())
+        .collect::<Vec<_>>()
+        .join("\t");
     line.ends_with(&format!(
-        "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t{text}"
+        "\taction\twrite\t--pane-id\t{TRACE_PANE}\t27\t91\t50\t48\t48\t126\t{payload}\t27\t91\t50\t48\t49\t126"
     ))
 }
 
 /// A discrete `zellij action write --pane-id <pane> 13` line — Enter sent as its
-/// own key event (`NamedKey::Enter` writes byte `13`), distinct from the text.
+/// own key event (`NamedKey::Enter` writes byte `13`), distinct from the paste.
 fn is_enter_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
 }
 
-/// The shim recorded `write-chars <text>` followed by a discrete `write 13` —
-/// both to `TRACE_PANE` — with no carriage return folded into any sent payload.
+/// The shim recorded a bracketed paste of `text` followed by a discrete
+/// `write 13` — both to `TRACE_PANE` — with no carriage return folded in.
 fn assert_text_then_enter(trace_log: &Path, text: &str) {
     let raw = std::fs::read_to_string(trace_log).unwrap_or_default();
     assert!(
@@ -310,11 +415,11 @@ fn assert_text_then_enter(trace_log: &Path, text: &str) {
         "no carriage return should be folded into the sent text; trace: {raw:?}"
     );
     let lines = trace_lines(trace_log);
-    let text_at = lines.iter().position(|line| is_write_chars(line, text));
+    let text_at = lines.iter().position(|line| is_paste(line, text));
     let enter_at = lines.iter().position(|line| is_enter_key(line));
     assert!(
         text_at.is_some(),
-        "expected write-chars of `{text}`; trace: {lines:?}"
+        "expected a bracketed paste of `{text}`; trace: {lines:?}"
     );
     assert!(
         enter_at.is_some(),
@@ -322,7 +427,7 @@ fn assert_text_then_enter(trace_log: &Path, text: &str) {
     );
     assert!(
         text_at < enter_at,
-        "text must be typed before Enter; trace: {lines:?}"
+        "text must be pasted before Enter; trace: {lines:?}"
     );
 }
 

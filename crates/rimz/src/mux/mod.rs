@@ -16,7 +16,7 @@ pub mod zellij;
 
 pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
-pub use keys::{NamedKey, UnknownKey};
+pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub(crate) use reconcile::{ViewSidebars, plan_reconcile};
 pub use selection::auto_detect_backend;
@@ -453,6 +453,15 @@ pub trait MuxBackend: Send + Sync {
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
     fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()>;
+    /// Inject `text` into the pane as one bracketed paste (`ESC[200~` …
+    /// `ESC[201~`), so an agent composer takes the whole payload as pasted
+    /// content and a following submit Enter reads as a keystroke instead of a
+    /// folded newline. Use only on panes running a TUI with bracketed-paste
+    /// mode enabled (agent REPLs) — a bare shell renders the markers literally,
+    /// so the raw [`Self::send_keys`] path stays for generic pane sends. The
+    /// submit Enter is not included; callers follow with [`Self::send_key`] so
+    /// the trailing `\r` lands outside the paste.
+    fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()>;
     /// Birth (or heal) the session's working view with its sidebar. When `daemon`
     /// is `Some`, the session is born with that view leading and the working view
     /// focused second — on Zellij the lead order is fixed here, at birth, since

@@ -17,10 +17,11 @@ use super::sidebar::DockOutcome;
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::{
-    BackgroundViewLaunch, BackgroundViewOptions, ClientFocusOptions, CommandSpec, DaemonView,
-    MuxBackend, MuxErr, NamedKey, PaneCapture, PaneListOptions, PaneListing, Result, SessionHealth,
-    SessionOptions, SidebarLiveness, SidebarPaneOptions, SidebarRecovery, SidebarWidth,
-    SplitPaneOptions, TabOptions, ensure_pane_backend,
+    BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
+    ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
+    PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions, SidebarLiveness,
+    SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions,
+    ensure_pane_backend,
 };
 
 impl MuxBackend for ZellijBackend {
@@ -184,6 +185,23 @@ impl MuxBackend for ZellijBackend {
     fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         let bytes = key.write_bytes().iter().map(u8::to_string);
+        self.cmd()
+            .args(["action", "write", "--pane-id", pane.raw()])
+            .args(bytes)
+            .run()
+            .map(|_| ())
+    }
+
+    fn paste_text(&self, pane: &PaneId, text: &str) -> Result<()> {
+        ensure_pane_backend(pane, MuxName::Zellij)?;
+        // Open marker + text + close marker as one decimal byte list, mirroring
+        // the existing `send_key` byte-write mechanism. Raw bytes pass through
+        // untouched, so a marker-looking byte inside `text` is never re-parsed.
+        let bytes = BRACKET_PASTE_OPEN
+            .bytes()
+            .chain(text.bytes())
+            .chain(BRACKET_PASTE_CLOSE.bytes())
+            .map(|byte| byte.to_string());
         self.cmd()
             .args(["action", "write", "--pane-id", pane.raw()])
             .args(bytes)

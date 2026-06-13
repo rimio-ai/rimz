@@ -235,6 +235,10 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
+    fn paste_text(&self, _pane: &PaneId, _text: &str) -> rimz::mux::Result<()> {
+        Ok(())
+    }
+
     fn open_sidebar(
         &self,
         opts: &SidebarPaneOptions,

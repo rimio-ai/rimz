@@ -129,13 +129,89 @@ fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn resolve_agent_card<'a>(
+/// The current channel a command runs in: the worktree's branch, else its
+/// directory basename when we are genuinely inside a separate worktree. A bare
+/// directory workspace (root == worktree) yields `None`, which the resolver
+/// reads as "all channels" rather than a silent narrowing.
+pub(crate) fn current_channel(workspace: &rimz::ResolvedWorkspace) -> Option<String> {
+    workspace.worktree_branch.clone().or_else(|| {
+        (workspace.worktree_root != workspace.project_root)
+            .then(|| {
+                workspace
+                    .worktree_root
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            })
+            .flatten()
+    })
+}
+
+/// A human handle for an agent: its pet name, else `kind-ordinal`, else kind.
+pub(crate) fn agent_label(agent: &AgentState) -> String {
+    agent
+        .name
+        .clone()
+        .unwrap_or_else(|| match agent.kind_ordinal {
+            Some(ordinal) => format!("{}-{}", agent.kind, ordinal),
+            None => agent.kind.to_string(),
+        })
+}
+
+/// Gate a fan-out (more than one agent) behind explicit confirmation. On a TTY,
+/// prompt `<verb> N agents (…)? [y/N]`; off a TTY, refuse and point at `--yes`
+/// so a script never broadcasts by surprise.
+pub(crate) fn confirm_fanout(verb: &str, target: &str, agents: &[&AgentState]) -> Result<()> {
+    let labels: Vec<String> = agents.iter().map(|agent| agent_label(agent)).collect();
+    let list = labels.join(", ");
+    if !std::io::stdin().is_terminal() {
+        anyhow::bail!(
+            "`{target}` fans out to {} agents ({list}); re-run with --yes to broadcast",
+            agents.len()
+        );
+    }
+    let mut stderr = std::io::stderr();
+    write!(stderr, "{verb} {} agents ({list})? [y/N] ", agents.len())?;
+    stderr.flush().ok();
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    if !matches!(answer.trim(), "y" | "Y" | "yes" | "Yes") {
+        anyhow::bail!("aborted");
+    }
+    Ok(())
+}
+
+/// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
+/// `queue clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
+pub(crate) fn resolve_agent_one<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,
-    worktree_filter: Option<&str>,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
 ) -> Result<&'a AgentState> {
-    match rimz::target::resolve_card(snapshot, raw, worktree_filter) {
-        Ok(agent) => Ok(agent),
+    map_resolve(
+        raw,
+        rimz::target::resolve_one(snapshot, raw, worktree_flag, current_channel),
+    )
+}
+
+/// Resolve a ref to every matching agent for a broadcast (`steer`, `queue add`).
+pub(crate) fn resolve_agent_many<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> Result<Vec<&'a AgentState>> {
+    map_resolve(
+        raw,
+        rimz::target::resolve_many(snapshot, raw, worktree_flag, current_channel),
+    )
+}
+
+/// Turn a clean target miss into the launch-alias/layout hint when the ref
+/// names a launch alias or layout rather than a running agent.
+fn map_resolve<T>(raw: &str, result: std::result::Result<T, rimz::TargetErr>) -> Result<T> {
+    match result {
+        Ok(value) => Ok(value),
         Err(rimz::TargetErr::NoMatch { target, suggestion }) => {
             if let Some(hint) = launch_ref_hint(raw)? {
                 anyhow::bail!("{hint}; run `rimz agents list` to see live agents");
@@ -150,10 +226,8 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     if raw.contains(':') {
         return Ok(None);
     }
-    let selector = raw
-        .split_once('@')
-        .map(|(selector, _scope)| selector)
-        .unwrap_or(raw);
+    let without_channel = raw.split('#').next().unwrap_or(raw);
+    let selector = without_channel.strip_prefix('@').unwrap_or(without_channel);
     let config = machine_config()?;
     if config.agents.aliases.0.contains_key(selector) {
         return Ok(Some(format!(

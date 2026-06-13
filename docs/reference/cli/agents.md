@@ -12,7 +12,7 @@ Run these commands from inside the Rimz room or anywhere that resolves to the sa
 rimz agents
 rimz agents list --json
 rimz agents show swift-otter
-rimz agents focus claude-2@cli-docs
+rimz agents focus @claude-2#cli-docs
 rimz agents wait swift-otter --stream --from-start
 rimz agents stop run_0123456789abcdef0123456789abcdef
 rimz agents claude,codex --worktree=cli-docs
@@ -46,49 +46,54 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 
 `show` prints one card and its newest attached run record when present. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate. `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.
 
-`<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`), an exact pet name, a kind ordinal (`claude-2`), a unique kind in scope, or a unique session-id prefix. Add `@<worktree>` to the selector or pass `--worktree` where available; both forms narrow by branch, generated worktree name, or directory basename.
+`<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`) or an `@`-mention: `@swift-otter` (pet name), `@claude-2` (kind ordinal), `@claude` (a kind), or `@<session-prefix>`. Append `#<worktree>` to scope the lookup; it narrows by branch, generated worktree name, or directory basename, and defaults to the current worktree. These management commands resolve to one agent, so a fan-out mention (`@claude` matching several, or `@all`) is an ambiguity here — name one. They also accept a bare selector (`swift-otter`) and `wait`/`stop`/`show` accept a run id: the `@` sigil is optional here on purpose, because a run id has none. The `@` sigil is required for `steer` and `queue`, which fan out instead; see below.
 
 Supervised `-p` runs require installed and trusted hooks because hooks provide the completion signal. Details live in [run internals](../../internals/agents/run.md).
 
-## Steer A Live Agent
+## Steer Live Agents
 
-`rimz steer` sends human-authored text to one live agent pane immediately.
+`rimz steer` sends human-authored text to live agent panes immediately, addressed like Slack: `@<agent>` names who, `#<worktree>` names the channel.
 
 ```sh
-rimz steer swift-otter -- "Please inspect the failing test and propose the smallest fix."
-rimz steer claude-2@cli-docs --no-enter -- "Use the docs branch only."
+rimz steer @swift-otter -- "Please inspect the failing test and propose the smallest fix."
+rimz steer @claude-2#cli-docs --no-enter -- "Use the docs branch only."
+rimz steer @codex -- "Rebase on main when the run lands."
+rimz steer @all --yes -- "Pause and report status."
 rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."
 ```
 
 ```sh
-rimz steer [OPTIONS] <REF> [--worktree <WORKTREE>] [--no-enter] [--force] -- <TEXT...>
+rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--yes] -- <TEXT...>
 ```
 
-Targets use the same card ref grammar as `agents show`. By default, `steer` presses Enter as a discrete keystroke after the text, so the agent submits instead of taking a newline. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
+`<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint.
+
+A fan-out to more than one agent asks for confirmation; `--yes` (`-y`) skips the prompt, and off a TTY the broadcast refuses without it. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. One blocked or paneless agent never aborts the rest — `steer` prints which agents it reached and which it skipped. The audit event records metadata and text length, not message content.
 
 Target resolution and pane-answering resolver behavior are covered in [resolver internals](../../internals/agents/resolvers.md).
 
 ## Queue The Next Message
 
-`rimz queue` stores text for one agent and delivers it after the agent reaches a safe turn boundary.
+`rimz queue` stores text for agents and delivers it after each reaches a safe turn boundary. It uses the same `@<agent>#<worktree>` grammar as `steer`.
 
 ```sh
-rimz queue swift-otter -- "After this turn, add focused tests for the parser."
-rimz queue add codex@cli-docs --on any -- "If the run failed, capture the error first."
+rimz queue @swift-otter -- "After this turn, add focused tests for the parser."
+rimz queue add @codex#cli-docs --on any -- "If the run failed, capture the error first."
+rimz queue @all --yes -- "When you reach a boundary, summarize what changed."
 rimz queue list --json
 rimz queue remove msg_01J...
-rimz queue clear claude-2@cli-docs
+rimz queue clear @claude-2#cli-docs
 ```
 
 ```sh
-rimz queue [OPTIONS] <REF> [--worktree <WORKTREE>] [--on done|any] [--no-enter] -- <TEXT...>
-rimz queue add [OPTIONS] <REF> [--worktree <WORKTREE>] [--on done|any] [--no-enter] -- <TEXT...>
+rimz queue [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--yes] -- <TEXT...>
+rimz queue add [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--yes] -- <TEXT...>
 rimz queue list [--json] [REF]
 rimz queue remove <MESSAGE_ID>
 rimz queue clear [--worktree <WORKTREE>] <REF>
 ```
 
-The bare form and `queue add` do the same work. `--on done` is the default gate and delivers after the agent is `idle` or `success`. `--on any` also delivers after `failed`. `running`, `waiting`, and `paused` keep the message pending. `--no-enter` stores the text without the final Enter.
+The bare form and `queue add` do the same work and take an `@`-mention. A mention that fans out (`@codex`, `@all`) queues one message per matched agent and asks for confirmation past the first; `--yes` (`-y`) skips the prompt. `--on done` is the default gate and delivers after the agent is `idle` or `success`. `--on any` also delivers after `failed`. `running`, `waiting`, and `paused` keep the message pending. Delivered text rides as a bracketed paste with a discrete submit Enter, the same path as `steer`; `--no-enter` stores the text without it. The whole `queue` family takes the `@`-mention grammar — `list <ref>` and `clear <ref>` require the sigil and resolve a single agent.
 
 Delivery is FIFO per agent and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap.
 

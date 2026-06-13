@@ -108,8 +108,8 @@ rimz agents 'vim,codex+term'              # or layout dynamically
 
 ```sh
 rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the suite, open a PR"
-rimz steer claude -- "focus on the failing parser test"
-rimz queue codex --on done -- "open a PR summary"
+rimz steer @claude -- "focus on the failing parser test"
+rimz queue @codex --on done -- "open a PR summary"
 ```
 
 → [the four scenarios, in full](./docs/guide/product.md)

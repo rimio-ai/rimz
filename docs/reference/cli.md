@@ -34,8 +34,8 @@ Use `agents -p` for one supervised agent turn from a script, `steer` for immedia
 
 ```sh
 rimz agents codex --worktree=docs --timeout 2h -p "update the CLI reference and run markdown checks"
-rimz steer claude -- "focus on the failing parser test"
-rimz queue codex --on done -- "open a PR summary when the tests pass"
+rimz steer @claude -- "focus on the failing parser test"
+rimz queue @codex --on done -- "open a PR summary when the tests pass"
 ```
 
 ## Start and attach a workspace
@@ -88,15 +88,15 @@ rimz agents <spec> [prompt] -p|--print [--timeout <duration>] [--detach] [--stre
 Use `steer` for immediate text into a live agent pane, and `queue` for durable delivery after the agent reaches a safe gate.
 
 ```sh
-rimz steer <target> [--worktree <name>] [--no-enter] [--force] -- <text>
-rimz queue <target> [--worktree <name>] [--on done|any] [--no-enter] -- <text>
-rimz queue add <target> [--worktree <name>] [--on done|any] [--no-enter] -- <text>
+rimz steer <target> [--worktree <name>] [--no-enter] [--force] [--yes] -- <text>
+rimz queue <target> [--worktree <name>] [--on done|any] [--no-enter] [--yes] -- <text>
+rimz queue add <target> [--worktree <name>] [--on done|any] [--no-enter] [--yes] -- <text>
 rimz queue list [--json] [target]
 rimz queue remove <message-id>
 rimz queue clear [--worktree <name>] <target>
 ```
 
-`TARGET` is a pane id such as `tmux:%1` or `zellij:terminal_3`, an agent pet name, a kind ordinal such as `claude-2`, an agent kind such as `claude`, `codex`, or `pi`, an agent session id, or a unique session-id prefix. Append `@<worktree>` or pass `--worktree` to narrow matches by branch, worktree name, or path. `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment.
+`TARGET` is an `@`-mention or a pane id (`tmux:%1`, `zellij:terminal_3`). `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (an agent kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`, both narrowing by branch, worktree name, or path. A fan-out past one agent confirms first (`--yes` skips the prompt). `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment.
 
 Full agent, pane, and worktree examples live in [Agent control](./cli/agents.md).
 
@@ -122,7 +122,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | --- | --- | --- |
 | `rimz`, `start` | Open or create the current project room. | [Getting started](./cli/getting-started.md#start-the-room) |
 | `remote` | Connect to rooms over SSH and manage remote aliases. | [Getting started](./cli/getting-started.md#remote-rooms) |
-| `steer` | Type into a live agent pane immediately. | [Agent control](./cli/agents.md#steer-a-live-agent) |
+| `steer` | Type into live agent panes immediately. | [Agent control](./cli/agents.md#steer-live-agents) |
 | `queue` | Deliver the next instruction when an agent finishes a turn. | [Agent control](./cli/agents.md#queue-the-next-message) |
 | `pane` | List, capture, send to, focus, split, or detach mux panes. | [Agent control](./cli/agents.md#drive-panes) |
 | `feed` | Post feed items, ask script questions, and resolve decisions. | [Feed](./cli/feed.md#feed-items-and-decisions) |

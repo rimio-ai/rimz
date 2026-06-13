@@ -4,11 +4,17 @@ Rimz accepts human-authored text for a live agent now (`rimz steer`) or for the 
 
 ## Targets
 
-Message commands resolve `TARGET` with the same card ref grammar as [`rimz agents`](../../reference/cli/agents.md): a normalized pane id (`tmux:%1`, `zellij:terminal_3`), exact pet name, kind ordinal (`claude-2`), unique kind, or agent session id/prefix. Add `@<worktree>` inline or pass `--worktree` to narrow matches by branch, path basename, or full path. Ambiguous matches and misses fail with candidate `(name, kind ordinal, worktree, pane)` labels.
+Message commands address agents like Slack: `@<agent>` names who, `#<worktree>` names the channel. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel defaults to the current worktree and is overridden by an inline `#<worktree>` or `--worktree`, both narrowing by branch, path basename, or full path. A pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, channel-agnostic address. `steer` and `queue` require the `@` sigil — a bare selector fails with a `did you mean @…?` hint — while a `None` current channel (a bare directory workspace) addresses every channel rather than narrowing. Misses report whether the agent runs in another channel; ambiguous single-agent lookups fail with candidate `(name, kind ordinal, worktree, pane)` labels.
+
+A fan-out to more than one agent confirms before sending (`--yes`/`-y` skips the prompt; off a TTY it refuses without the flag). One blocked or paneless agent skips rather than aborting the broadcast.
 
 ## Steer
 
-`rimz steer <target> -- <text>` types into the resolved agent's bound pane immediately and presses Enter as a discrete keystroke by default, so the agent submits instead of taking a newline into its composer. A pending feed ask attached to that agent blocks the send; `--force` records the override. The `agent.steered` event records kind, session id, pane id, force flag, and text length. Message content stays out of the event log.
+`rimz steer <target> -- <text>` injects into each resolved agent's bound pane immediately as a [bracketed paste](#bracketed-paste-submit) and then presses Enter as a discrete keystroke outside the paste, so the agent submits instead of taking a newline into its composer. A pending feed ask attached to an agent skips that agent; `--force` records the override and sends anyway. The `agent.steered` event records kind, session id, pane id, force flag, and text length per agent. Message content stays out of the event log.
+
+## Bracketed paste submit
+
+Both `steer` and queue delivery wrap the text in bracketed-paste markers (`ESC[200~` … `ESC[201~`) through the `MuxBackend::paste_text` primitive, then press Enter as a separate `send_key`. Agent composers run paste-detection heuristics: text and a trailing `\r` coalesced into one PTY read are taken as pasted content, and the `\r` becomes a literal newline rather than a submit. The paste markers make the boundary lexical — the composer leaves paste mode on `ESC[201~`, so the following Enter is unambiguously a keystroke even when every byte arrives in one read. The generic `rimz pane send` stays on the raw type path, since a bare shell would render the markers literally.
 
 ## Queue Layout
 

@@ -251,6 +251,14 @@ pub(super) fn send_text(backend: &dyn MuxBackend, pane: &PaneId, text: &str) -> 
     backend.send_keys(pane, text).map_err(Into::into)
 }
 
+/// Bracketed-paste `text` into an agent composer. The submit Enter rides
+/// separately through [`send_enter`] so it lands outside the paste and reads as
+/// a keystroke. Distinct from [`send_text`], which types raw — `pane send`
+/// keeps that path so markers never reach a bare shell.
+pub(super) fn paste_text(backend: &dyn MuxBackend, pane: &PaneId, text: &str) -> Result<()> {
+    backend.paste_text(pane, text).map_err(Into::into)
+}
+
 pub(super) fn send_key(backend: &dyn MuxBackend, pane: &PaneId, key: NamedKey) -> Result<()> {
     backend.send_key(pane, key).map_err(Into::into)
 }
@@ -262,14 +270,16 @@ pub(super) fn send_enter(backend: &dyn MuxBackend, pane: &PaneId) -> Result<()> 
     send_key(backend, pane, NamedKey::Enter)
 }
 
-/// Type `text`, then press Enter unless suppressed.
-pub(super) fn send_message(
+/// Bracketed-paste `text` into an agent composer, then press Enter as a
+/// discrete keystroke that lands outside the paste — a real submit — unless
+/// suppressed.
+pub(super) fn submit_message(
     backend: &dyn MuxBackend,
     pane: &PaneId,
     text: &str,
     enter: bool,
 ) -> Result<()> {
-    send_text(backend, pane, text)?;
+    paste_text(backend, pane, text)?;
     if enter {
         send_enter(backend, pane)?;
     }
@@ -283,6 +293,9 @@ fn send(
     keys: &[NamedKey],
     enter: bool,
 ) -> Result<()> {
+    // The generic primitive types raw — a target may be a bare shell where
+    // bracketed-paste markers would echo literally. Agent-composer submits
+    // (steer, queue) take the bracketed `submit_message` path instead.
     if text.is_none_or(str::is_empty) && keys.is_empty() && !enter {
         bail!("expected text, --key, or --enter");
     }

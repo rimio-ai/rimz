@@ -37,7 +37,7 @@ const NOUNS: &[&str] = &[
 ];
 
 const RESERVED: &[&str] = &[
-    "exec", "focus", "list", "ls", "show", "stop", "term", "wait",
+    "all", "exec", "focus", "list", "ls", "show", "stop", "term", "wait",
 ];
 
 pub fn mint(taken: impl IntoIterator<Item = impl AsRef<str>>) -> String {
@@ -125,6 +125,8 @@ mod tests {
     fn validates_cli_safe_names() {
         assert!(valid_name("amber-atlas"));
         assert!(!valid_name("show"));
+        // `all` is the @all fan-out keyword; the generator must never mint it.
+        assert!(!valid_name("all"));
         assert!(!valid_name("two words"));
         assert!(collides_with_reserved_prefix("claude-1", ["claude"]));
     }

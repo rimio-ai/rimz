@@ -145,7 +145,12 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         .snapshot_cached()
         .context("reading agent snapshot")?
         .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
-    let agent_result = crate::cli::resolve_agent_card(&snapshot, &reference, None);
+    let agent_result = crate::cli::resolve_agent_one(
+        &snapshot,
+        &reference,
+        None,
+        crate::cli::current_channel(&workspace).as_deref(),
+    );
     let mut agent = agent_result.as_ref().ok().map(|agent| (*agent).clone());
     let mut stale = false;
     let mut audit_error = None;
@@ -241,7 +246,7 @@ fn resolve_audit_agent(
         jiff::Timestamp::now(),
     )
     .with_agent_context(rimz::ledger::agent_context::read_all(runtime));
-    match crate::cli::resolve_agent_card(&snapshot, reference, None) {
+    match crate::cli::resolve_agent_one(&snapshot, reference, None, None) {
         Ok(agent) => Ok(Some(agent.clone())),
         Err(err) => Err(err),
     }
@@ -255,7 +260,12 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let agent = crate::cli::resolve_agent_card(&snapshot, &reference, None)?;
+    let agent = crate::cli::resolve_agent_one(
+        &snapshot,
+        &reference,
+        None,
+        crate::cli::current_channel(&workspace).as_deref(),
+    )?;
     let pane = agent
         .pane
         .as_ref()
@@ -275,19 +285,35 @@ pub(super) fn wait_agent(
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let live_agent = crate::cli::resolve_agent_card(&snapshot, &reference, None).ok();
+    let live_agent = crate::cli::resolve_agent_one(
+        &snapshot,
+        &reference,
+        None,
+        crate::cli::current_channel(&workspace).as_deref(),
+    )
+    .ok();
     if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)?
         && (!run.status.is_terminal() || live_agent.is_none() || run.run_id.as_str() == reference)
     {
         return wait_run_record(&ledger, &run, timeout, stream_output, from_start, json);
     }
     if live_agent.is_none() {
-        crate::cli::resolve_agent_card(&snapshot, &reference, None)?;
+        crate::cli::resolve_agent_one(
+            &snapshot,
+            &reference,
+            None,
+            crate::cli::current_channel(&workspace).as_deref(),
+        )?;
     }
     let deadline = timeout.map(|duration| Instant::now() + duration);
     loop {
         let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-        let agent = crate::cli::resolve_agent_card(&snapshot, &reference, None)?;
+        let agent = crate::cli::resolve_agent_one(
+            &snapshot,
+            &reference,
+            None,
+            crate::cli::current_channel(&workspace).as_deref(),
+        )?;
         if gate_open(DeliveryGate::Done, agent.status) {
             if json {
                 supervised::output::print_json(agent)?;
@@ -311,7 +337,13 @@ pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()>
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let live_agent = crate::cli::resolve_agent_card(&snapshot, &reference, None).ok();
+    let live_agent = crate::cli::resolve_agent_one(
+        &snapshot,
+        &reference,
+        None,
+        crate::cli::current_channel(&workspace).as_deref(),
+    )
+    .ok();
     if let Some(run) = newest_run_by_ref(&ledger, &reference, live_agent)? {
         if run.status.is_terminal()
             && run.run_id.as_str() != reference
@@ -339,7 +371,12 @@ pub(super) fn stop_agent(reference: String, globals: &GlobalFlags) -> Result<()>
     }
     let agent = match live_agent {
         Some(agent) => agent,
-        None => crate::cli::resolve_agent_card(&snapshot, &reference, None)?,
+        None => crate::cli::resolve_agent_one(
+            &snapshot,
+            &reference,
+            None,
+            crate::cli::current_channel(&workspace).as_deref(),
+        )?,
     };
     close_agent_pane(&workspace, agent)
 }

@@ -5,6 +5,13 @@
 
 use std::str::FromStr;
 
+/// Bracketed-paste open marker (`ESC[200~`). Wraps injected text so an agent
+/// composer takes it as one pasted block and a following Enter reads as a
+/// submit keystroke, not a folded newline.
+pub const BRACKET_PASTE_OPEN: &str = "\u{1b}[200~";
+/// Bracketed-paste close marker (`ESC[201~`).
+pub const BRACKET_PASTE_CLOSE: &str = "\u{1b}[201~";
+
 /// Small named-key vocabulary Rimz exposes for pane automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NamedKey {
@@ -102,5 +109,13 @@ mod tests {
         assert_eq!(NamedKey::Enter.write_bytes(), b"\r");
         assert_eq!(NamedKey::Up.write_bytes(), b"\x1b[A");
         assert_eq!(NamedKey::Backspace.write_bytes(), b"\x7f");
+    }
+
+    #[test]
+    fn bracketed_paste_markers_are_the_csi_byte_sequences() {
+        // A typo in either marker would break submit on every agent; pin the
+        // exact bytes both backends emit.
+        assert_eq!(BRACKET_PASTE_OPEN.as_bytes(), &[27, 91, 50, 48, 48, 126]);
+        assert_eq!(BRACKET_PASTE_CLOSE.as_bytes(), &[27, 91, 50, 48, 49, 126]);
     }
 }

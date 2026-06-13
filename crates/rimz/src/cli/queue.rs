@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::{GlobalFlags, open_ledger};
+use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::feed::{AgentState, pending_ask_for};
 use rimz::ids::{MessageId, PaneId};
@@ -26,9 +26,12 @@ pub struct QueueArgs {
     /// Queue text without pressing Enter after delivery.
     #[arg(long)]
     no_enter: bool,
-    /// Restrict kind/session matches to one worktree branch, name, or path.
+    /// Restrict matches to one worktree branch, name, or path (the channel).
     #[arg(long)]
     worktree: Option<String>,
+    /// Queue for more than one agent without the confirmation prompt.
+    #[arg(long, short = 'y')]
+    yes: bool,
     /// Text to deliver.
     #[arg(last = true)]
     text: Vec<String>,
@@ -71,6 +74,8 @@ struct AddArgs {
     no_enter: bool,
     #[arg(long)]
     worktree: Option<String>,
+    #[arg(long, short = 'y')]
+    yes: bool,
     #[arg(last = true)]
     text: Vec<String>,
 }
@@ -83,6 +88,7 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
             join_text(add.text)?,
             !add.no_enter,
             add.on,
+            add.yes,
             globals,
         ),
         Some(QueueSubcmd::List { json, target }) => list_messages(json, target, globals),
@@ -100,6 +106,7 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
                 text,
                 !args.no_enter,
                 args.on,
+                args.yes,
                 globals,
             )
         }
@@ -119,30 +126,58 @@ fn add_message(
     text: String,
     enter: bool,
     gate: DeliveryGate,
+    yes: bool,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if text.is_empty() {
         bail!("expected non-empty text");
     }
+    rimz::target::require_mention(&target)?;
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let agent = super::resolve_agent_card(&snapshot, &target, worktree.as_deref())?;
-    preflight_queue_hooks(agent)?;
-    let message = MessageRecord::new(workspace.workspace_id.clone(), agent, text, enter, gate);
-    let message_id = message.message_id.clone();
-    ledger.queue_message(&message, &workspace.session_name)?;
-    let _ = deliver_one(&workspace, &ledger, &message_id, Duration::ZERO);
-    #[expect(clippy::print_stdout, reason = "command result is message id")]
+    let channel = current_channel(&workspace);
+    let agents =
+        super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
+    if agents.len() > 1 && !yes {
+        super::confirm_fanout("Queue for", &target, &agents)?;
+    }
+    // Preflight hooks once per distinct kind, before queuing anything — the hard
+    // hooks precondition is all-or-nothing across the fan-out.
+    let mut kinds_seen = std::collections::BTreeSet::new();
+    for &agent in &agents {
+        if kinds_seen.insert(agent.kind.as_str().to_owned()) {
+            preflight_queue_hooks(agent)?;
+        }
+    }
+    let mut ids = Vec::with_capacity(agents.len());
+    for &agent in &agents {
+        let message = MessageRecord::new(
+            workspace.workspace_id.clone(),
+            agent,
+            text.clone(),
+            enter,
+            gate,
+        );
+        let message_id = message.message_id.clone();
+        ledger.queue_message(&message, &workspace.session_name)?;
+        let _ = deliver_one(&workspace, &ledger, &message_id, Duration::ZERO);
+        ids.push(message_id);
+    }
+    #[expect(clippy::print_stdout, reason = "command result is message id(s)")]
     {
-        println!("{message_id}");
+        for id in &ids {
+            println!("{id}");
+        }
     }
     Ok(())
 }
 
 fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> Result<()> {
-    let (_workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
+    let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let mut messages = ledger.list_messages()?;
     if let Some(raw) = target {
-        let agent = super::resolve_agent_card(&snapshot, &raw, None)?;
+        rimz::target::require_mention(&raw)?;
+        let channel = current_channel(&workspace);
+        let agent = super::resolve_agent_one(&snapshot, &raw, None, channel.as_deref())?;
         messages.retain(|message| message.same_agent_card(agent));
     }
     if json {
@@ -179,8 +214,11 @@ fn remove_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
 }
 
 fn clear_messages(target: String, worktree: Option<String>, globals: &GlobalFlags) -> Result<()> {
+    rimz::target::require_mention(&target)?;
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let agent = super::resolve_agent_card(&snapshot, &target, worktree.as_deref())?;
+    let channel = current_channel(&workspace);
+    let agent =
+        super::resolve_agent_one(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
     let count = ledger.clear_messages_for(
         &agent.kind,
         &agent.agent_id,
@@ -220,7 +258,7 @@ fn deliver_one(
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let backend = rimz::mux::backend_for(candidate.pane_id.mux());
-    match super::pane::send_message(
+    match super::pane::submit_message(
         backend.as_ref(),
         &candidate.pane_id,
         &message.text,
