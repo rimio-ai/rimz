@@ -57,6 +57,107 @@ fn stamped_codex_returned_to_shell_renders_process_row() {
 }
 
 #[test]
+fn forked_side_session_does_not_repaint_primary_card() {
+    // Codex `/side` / `/btw` forks the conversation into a fresh session id in
+    // the same pane and process. Both sessions stamp `%1` as root agents, but
+    // the fork registered later and just posted the side question, so it holds
+    // the newer `last_activity`. The card must stay on the primary (earliest-
+    // registered) session — never flip to the fork.
+    let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    main.registered_at = Some(ago(600));
+
+    let mut fork = agent("codex", "fork-sess", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    fork.registered_at = Some(ago(60));
+
+    let snapshot = room(Vec::new(), vec![main, fork])
+        .with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "one top-level row on the shared pane");
+    assert!(rows[0].is_agent());
+    assert_eq!(
+        rows[0].id, "main-sess",
+        "the card stays on the primary session, not the newer-activity fork",
+    );
+    assert_eq!(rows[0].pane.as_ref().unwrap().pane_id.raw(), "%1");
+}
+
+#[test]
+fn forked_side_session_survives_the_reaper_and_keeps_primary_card() {
+    // Production shape: the ghost reaper runs before the live-pane fold
+    // (`assemble.rs`). A `/side` / `/btw` fork shares the primary's daemon owner
+    // pid, so the same-pane supersession reaper must spare the primary instead
+    // of collapsing it as a relaunch — otherwise `stamped_agent_for_pane` never
+    // sees the primary and the card flips to the fork.
+    let mut main = agent("codex", "main-sess", AgentStatus::Running, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120);
+    main.registered_at = Some(ago(600));
+    main.agent_pid = Some(9_999); // shared app-server daemon pid
+
+    let mut fork = agent("codex", "fork-sess", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5);
+    fork.registered_at = Some(ago(60));
+    fork.agent_pid = Some(9_999); // same daemon pid — a fork, not a relaunch
+
+    let mut snapshot = room(Vec::new(), vec![main, fork]);
+    snapshot.reap_stale_sessions();
+    let snapshot = snapshot.with_live_panes(vec![pane("%1", "codex", "/repo/main")], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1, "one top-level row on the shared pane");
+    assert!(rows[0].is_agent());
+    assert_eq!(
+        rows[0].id, "main-sess",
+        "the reaper spares the fork's primary, so the card stays on it end-to-end",
+    );
+}
+
+#[test]
+fn relaunch_in_reused_cwd_still_takes_over_the_card() {
+    // The earliest-registered preference must not over-pin. A genuine relaunch
+    // is a NEW process whose start postdates the dead predecessor's last
+    // activity, so the process-start guard evicts the old session before the
+    // primary tiebreak runs — and the fresh session binds even though the dead
+    // one registered earlier.
+    let live = PaneRef {
+        pane_process_start: Some(ago(30)),
+        ..pane("%1", "codex", "/repo/main")
+    };
+
+    let mut dead = agent("codex", "old-sess", AgentStatus::Success, 1_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(120); // predates the new process start
+    dead.registered_at = Some(ago(600)); // earliest-registered, yet evicted
+
+    let mut fresh = agent("codex", "new-sess", AgentStatus::Running, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(5); // postdates the new process start
+    fresh.registered_at = Some(ago(20));
+
+    let snapshot = room(Vec::new(), vec![dead, fresh]).with_live_panes(vec![live], None);
+
+    let rows = rows(&snapshot);
+    assert_eq!(rows.len(), 1);
+    assert!(rows[0].is_agent());
+    assert_eq!(
+        rows[0].id, "new-sess",
+        "a relaunch (new process) takes over even though the dead session registered earlier",
+    );
+}
+
+#[test]
 fn pending_agent_ask_folds_by_stamped_pane_and_preserves_session_description() {
     let item = agent_ask(FeedKind::Permission, "claude", "live-claude");
     let request_id = item.request_id.clone();

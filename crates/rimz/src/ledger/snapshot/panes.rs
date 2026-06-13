@@ -101,7 +101,7 @@ pub(super) fn pane_admits_card(pane: &PaneRef, exclude: Option<&PaneId>) -> Card
 /// The pid the hook recorded as this session's owner: the runtime owner when
 /// one was captured, else the legacy `agent_pid`. In daemon mode this is the
 /// shared app-server daemon; in standalone mode it is the session's own process.
-fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
+pub(super) fn agent_owner_pid(agent: &AgentState) -> Option<u32> {
     agent
         .runtime_owner
         .as_ref()
@@ -141,7 +141,33 @@ pub(super) fn stamped_agent_for_pane<'a>(
         // pane id; it nests under the parent via `attach_sub_agents` and must
         // never win the pane as a top-level row. Panes bind root agents only.
         .filter(|agent| agent.parent_agent_id.is_none())
-        .max_by_key(|agent| agent.last_activity)
+        // The card follows the pane's *primary* — the session that owned it
+        // first (earliest `registered_at`). A later in-process thread fork
+        // (Codex `/side` / `/btw` registers a fresh session id in the same pane
+        // and process) posts newer activity but a later registration, so it can
+        // never repaint the card. Safe because the process-start guard in
+        // `stamped_agent_matches_live_pane` has already evicted any
+        // older-instance residue: this only arbitrates between sessions
+        // genuinely sharing one live process, and a real relaunch (new process)
+        // still takes over because the dead predecessor is gone before this runs.
+        .min_by(|a, b| {
+            registered_rank(a)
+                .cmp(&registered_rank(b))
+                // Most-recently-active as a deterministic fallback when
+                // registration order ties or is unknown (pre-field rollups).
+                .then_with(|| b.last_activity.cmp(&a.last_activity))
+                // Stable final tiebreak so selection is order-independent.
+                .then_with(|| a.agent_id.cmp(&b.agent_id))
+        })
+}
+
+/// Registration sort key: an earlier `registered_at` ranks first (the pane's
+/// primary owner), and an absent stamp (a rollup persisted before the field
+/// existed) ranks last so a known primary always outranks it. `is_none()` is
+/// `false` for `Some` and `true` for `None`, so `Some` sorts ahead of `None`;
+/// within `Some`, the earlier timestamp sorts first.
+fn registered_rank(agent: &AgentState) -> (bool, Option<Timestamp>) {
+    (agent.registered_at.is_none(), agent.registered_at)
 }
 
 fn stamped_agent_matches_live_pane(agent: &AgentState, stamped: &PaneRef, pane: &PaneRef) -> bool {

@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::feed::{AgentState, FeedItem, PaneRef};
-use crate::ledger::snapshot::panes::is_daemon_mode_codex;
+use crate::ledger::snapshot::panes::{agent_owner_pid, is_daemon_mode_codex};
 use crate::ledger::snapshot::process::command_is_sidebar_chrome;
 use crate::remote_control;
 
@@ -72,10 +72,12 @@ impl SidebarSnapshot {
     ///     not reported in hours. A recent pidless session (a just-launched
     ///     agent) is kept.
     /// (b) an older session **superseded** by a strictly-newer same-kind
-    ///     session that took over its pane — or, for two paneless remnants, its
-    ///     `(worktree_path, worktree_branch)` (`older_yields_pane`). This
-    ///     collapses relaunch-in-place and shared-pid ghosts to the newest
-    ///     while never dropping a concurrent agent that owns its own pane.
+    ///     session that *relaunched* in its pane — a provably different process
+    ///     ([`older_yields_pane`]) — or, for two paneless remnants, its
+    ///     `(worktree_path, worktree_branch)`. This collapses relaunch-in-place
+    ///     and shared-pid ghosts to the newest while never dropping a concurrent
+    ///     agent that owns its own pane, nor an in-pane thread fork (Codex
+    ///     `/side` / `/btw`) that shares the primary's live process.
     pub fn reap_stale_sessions(&mut self) {
         let now = self.now;
         // Mark each superseded older session by position, borrowing `agents`
@@ -188,20 +190,41 @@ fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
 }
 
 /// True when reaping `older` cannot drop a concurrently-live agent. The pane is
-/// the unit of identity: an older session yields when the newer one took over
-/// its exact pane (a relaunch in place — regardless of any branch checkout
-/// between the two), or when both are paneless remnants of the same worktree
-/// (indistinguishable daemon/shared-pid ghosts). An older paneless session does
-/// not yield to a newer distinctly stamped pane: it may still be the occupant of
-/// another same-cwd lazy agent pane that only the projection can bind.
+/// the unit of identity: an older session yields when the newer one *relaunched*
+/// in its exact pane — a provably different process ([`relaunched_in_pane`]),
+/// regardless of any branch checkout between the two — or when both are paneless
+/// remnants of the same worktree (indistinguishable daemon/shared-pid ghosts).
+/// An older paneless session does not yield to a newer distinctly stamped pane:
+/// it may still be the occupant of another same-cwd lazy agent pane that only
+/// the projection can bind.
 fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (Some(older_pane), Some(newer_pane)) => newer_pane.pane_id == older_pane.pane_id,
+        (Some(older_pane), Some(newer_pane)) => {
+            newer_pane.pane_id == older_pane.pane_id && relaunched_in_pane(older, newer)
+        }
         (None, None) => {
             older.worktree_path == newer.worktree_path
                 && older.worktree_branch == newer.worktree_branch
         }
         (None, Some(_)) | (Some(_), None) => false,
+    }
+}
+
+/// Whether the newer session is a *relaunch* of the older in their shared pane —
+/// a provably different process — rather than a same-process in-pane thread fork.
+/// A Codex `/side` / `/btw` fork registers a fresh session id in the live process
+/// the primary still owns, so the pair shares one owner pid and must not collapse;
+/// only the projection (`stamped_agent_for_pane`) arbitrates such a pair, pinning
+/// the pane to its earliest-registered primary. A standalone relaunch records two
+/// distinct live pids, so it still collapses here. A daemon-routed relaunch shares
+/// the daemon's owner pid like a fork, but the loaded-thread reaper
+/// ([`drop_dead_daemon_sessions`]) and the projection's process-start guard
+/// ([`crate::ledger::snapshot::panes::pane_start_allows_bind`]) collapse it
+/// instead. Unknown owners never collapse — a missing pid cannot prove a relaunch.
+fn relaunched_in_pane(older: &AgentState, newer: &AgentState) -> bool {
+    match (agent_owner_pid(older), agent_owner_pid(newer)) {
+        (Some(older_pid), Some(newer_pid)) => older_pid != newer_pid,
+        _ => false,
     }
 }
 
