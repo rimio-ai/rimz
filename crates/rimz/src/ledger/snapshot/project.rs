@@ -691,13 +691,15 @@ fn assemble_launch_state(
             .map(|state| state.recent_prompts.clone())
             .unwrap_or_default(),
     };
-    let status = match payload.state {
-        AgentLaunchState::Failed => AgentStatus::Failed,
-        AgentLaunchState::Starting | AgentLaunchState::Bound => AgentStatus::Running,
-    };
-    let phase = match payload.state {
-        AgentLaunchState::Failed => lifecycle::TurnPhase::Idle,
-        AgentLaunchState::Starting | AgentLaunchState::Bound => lifecycle::TurnPhase::Reasoning,
+    let (status, phase) = match payload.state {
+        AgentLaunchState::Failed => (AgentStatus::Failed, lifecycle::TurnPhase::Idle),
+        AgentLaunchState::Starting | AgentLaunchState::Bound => {
+            if payload.prompt.is_some() {
+                (AgentStatus::Running, lifecycle::TurnPhase::Reasoning)
+            } else {
+                (AgentStatus::Idle, lifecycle::TurnPhase::Idle)
+            }
+        }
     };
     AgentState {
         agent_id: payload.agent_id,

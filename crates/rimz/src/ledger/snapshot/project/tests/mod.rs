@@ -185,6 +185,33 @@ fn launch_event_creates_provisional_card() {
 }
 
 #[test]
+fn launch_event_without_prompt_creates_idle_card() {
+    // Interactive launch (no prompt) must be Idle so the sidebar renders
+    // loading dots rather than the thinking glyph + em dash.
+    let agents = reduce_agent_states(&[EventEnvelope::agent_launched(
+        project_workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: "launch_a".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            kind_ordinal: None,
+            state: AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+        },
+    )]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].status, AgentStatus::Idle);
+    assert_eq!(agents[0].phase, TurnPhase::Idle);
+}
+
+#[test]
 fn bound_launch_event_keeps_the_starting_ordinal() {
     let agents = reduce_agent_states(&[
         raw_launch(AgentLaunchState::Starting, "launch_a", "lucid-atlas", None),
