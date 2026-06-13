@@ -24,7 +24,7 @@ pub enum ScrollbarMode {
 
 /// `[sidebar] glow`: whether the post-render transition flashes run over the
 /// composed frame. Display-only; with the tier off the base status-head
-/// rendering still carries the attention pulse.
+/// rendering still carries the attention blink.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GlowMode {

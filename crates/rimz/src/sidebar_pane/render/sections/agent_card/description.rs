@@ -23,7 +23,7 @@ pub(super) fn description_line(
     animation_phase: u64,
 ) -> Line<'static> {
     let emphasis = attention.emphasis;
-    // The shared unread pulse, on a concrete body tone so the description lifts
+    // The shared unread blink, on a concrete body tone so the description lifts
     // in unison with the lead glyph and the name — and joins the glow pass,
     // which the terminal-default fg would skip.
     let body_style = || match emphasis {

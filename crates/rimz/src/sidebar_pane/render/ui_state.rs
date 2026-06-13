@@ -169,8 +169,9 @@ impl Alert {
 
 /// The fastest animation class currently visible in the snapshot. Fast motion
 /// changes every frame (working/thinking spinners, resolver work, active
-/// process rows). Breath motion is the smooth attention/result pulse, sampled
-/// near the base grid without paying the full spinner cadence for calm rooms.
+/// process rows). Breath motion is the attention/result blink and the calm
+/// resting breathe, sampled near the base grid without paying the full spinner
+/// cadence for calm rooms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AnimationCadence {
     None,

@@ -165,9 +165,9 @@ The built-in heads:
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped pulse, `effect = "static"` quiets it, and `speed` tunes it when the pulse is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
+`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped blink, `effect = "static"` quiets it, and `speed` tunes it when the blink is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
 
-Every role uses the same model: frames, color, effect, and speed. The built-in attention pulse still applies age heat and unread depth across the lead glyph, the card name, the description, and the make-up `?`/`!` buckets unless an explicit static effect quiets it; the cockpit count and per-bucket counts use still representative frames.
+Every role uses the same model: frames, color, effect, and speed. The built-in attention blink — a 2-pole square wave whose rate quickens with age — still applies age heat across the lead glyph, the card name, the description, and the make-up `?`/`!` buckets unless an explicit static effect quiets it; the cockpit count and per-bucket counts use still representative frames.
 
 ## Provider Styling
 
@@ -184,7 +184,7 @@ ascii_art = "CLAUDE"
 
 ## Glow
 
-`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The continuous attention/result pulse is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base pulse.
+`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The attention/result blink is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base blink.
 
 ```toml
 [sidebar]

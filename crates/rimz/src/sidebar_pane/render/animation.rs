@@ -19,8 +19,9 @@ const BREATH_MIDPOINT: f32 = 0.35;
 
 #[cfg(test)]
 pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
-/// The unread/attention pulse depth: a hard upward swing so the blink grows from
-/// the element's resting tone to a bright crest, never dimming below it.
+/// The unread/attention blink depth: the full upward swing of the 2-pole square
+/// wave — the element sits at its resting tone on the off-pole and snaps to a
+/// bright crest on the on-pole, never dimming below rest.
 pub(crate) const BREATH_DEEP_AMPLITUDE: f32 = 0.42;
 const BREATH_CONFIG_AMPLITUDE: f32 = 0.12;
 
@@ -92,8 +93,11 @@ impl BreathSample {
         }
     }
 
-    pub(crate) fn for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
-        Self::new(phase, breath_tempo(age_secs), amplitude)
+    pub(crate) fn blink_for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
+        Self {
+            level: blink_level(phase, breath_tempo(age_secs)),
+            amplitude,
+        }
     }
 
     #[cfg(test)]
@@ -110,7 +114,7 @@ impl BreathSample {
             return Modifier::empty();
         }
         let depth = (self.amplitude / BREATH_DEEP_AMPLITUDE).clamp(0.0, 1.0);
-        // Widen both poles with depth so a deep pulse spends real time at each
+        // Widen both poles with depth so a deep breathe spends real time at each
         // end — a hard bright↔dim swing rather than a momentary peak.
         let dim_cutoff = 0.30 * depth;
         let bold_floor = 1.0 - 0.38 * depth;
@@ -123,23 +127,22 @@ impl BreathSample {
         }
     }
 
-    /// The grow-only lightness delta for the unread blink: zero at the trough
-    /// (the element rests at its normal tone) up to the same bright crest the
-    /// two-pole peak reached, never negative — the blink swells to bright and
-    /// settles back without ever dimming below the resting tone.
+    /// The lightness lift for the unread blink: zero on the off-pole (the element
+    /// rests at its normal tone) and the full crest on the on-pole — the same top
+    /// brightness the swell once peaked at — with nothing in between, never
+    /// negative. A hard 2-pole square wave between normal and bright.
     pub(crate) fn grow_delta(self) -> f32 {
         self.level * (1.0 - BREATH_MIDPOINT) * self.amplitude
     }
 
-    /// The grow-only weight: bold near the crest, plain elsewhere, never DIM —
-    /// the weight half of the same swell-to-bright blink.
+    /// The weight half of the unread blink for the colorless fallback: bold on
+    /// the on-pole, plain on the off-pole, so a `NO_COLOR` or colorless element
+    /// still blinks on weight alone. The colored path holds bold at both poles.
     pub(crate) fn grow_modifier(self) -> Modifier {
         if self.amplitude == 0.0 {
             return Modifier::empty();
         }
-        let depth = (self.amplitude / BREATH_DEEP_AMPLITUDE).clamp(0.0, 1.0);
-        let bold_floor = 1.0 - 0.38 * depth;
-        if self.amplitude >= BREATH_DEEP_AMPLITUDE * 0.75 && self.level >= bold_floor {
+        if self.level >= 0.5 {
             Modifier::BOLD
         } else {
             Modifier::empty()
@@ -160,6 +163,15 @@ pub(crate) fn breath_theta(phase: u64, period: f32) -> f32 {
 pub(crate) fn breath_unit(theta: f32) -> f32 {
     let floor = (-1.0_f32).exp();
     ((theta.sin().exp() - floor) / (std::f32::consts::E - floor)).clamp(0.0, 1.0)
+}
+
+/// The 2-pole blink level for the unread attention signal: full on the first
+/// half of each cycle, off the second — a hard square swing between the resting
+/// tone and the bright crest, no easing between them. `period` is the age tempo
+/// the calm breath also rides, so an older ask blinks faster.
+pub(crate) fn blink_level(phase: u64, period: f32) -> f32 {
+    let frac = (phase as f32 / period.max(1.0)) % 1.0;
+    if frac < 0.5 { 1.0 } else { 0.0 }
 }
 
 impl From<ConfigSpeed> for Speed {
@@ -203,8 +215,8 @@ impl Animation {
         }
     }
 
-    /// The unread/attention pulse sample for this role at `age_secs` of waiting,
-    /// or `None` when a configured `effect = "static"` quiets the pulse. The one
+    /// The unread/attention blink sample for this role at `age_secs` of waiting,
+    /// or `None` when a configured `effect = "static"` quiets the blink. The one
     /// source every grouped element shares — the lead glyph, the agent name, the
     /// description, and the cockpit make-up bucket — so they swing in unison.
     pub(crate) fn attention_pulse(
@@ -214,7 +226,7 @@ impl Animation {
         amplitude: f32,
     ) -> Option<BreathSample> {
         self.attention_breath_phase(phase)
-            .map(|phase| BreathSample::for_age(phase, age_secs, amplitude))
+            .map(|phase| BreathSample::blink_for_age(phase, age_secs, amplitude))
     }
 
     #[cfg(test)]
@@ -567,7 +579,7 @@ mod tests {
                 .role(AnimationRole::Waiting)
                 .attention_breath_phase(3),
             Some(6),
-            "configured speed reaches the attention pulse phase"
+            "configured speed reaches the attention blink phase"
         );
         assert!(
             animations.has_resting_motion(),
@@ -582,12 +594,12 @@ mod tests {
                 .role(AnimationRole::Waiting)
                 .attention_breath_phase(3),
             None,
-            "configured static quiets the default attention pulse"
+            "configured static quiets the default attention blink"
         );
     }
 
     #[test]
-    fn breath_curve_is_smooth_and_age_tempo_is_clamped() {
+    fn breath_curve_is_smooth_but_attention_blink_is_two_pole() {
         assert_eq!(breath_tempo(-1), FRESH_ATTENTION_PERIOD);
         assert_eq!(
             breath_tempo(ATTENTION_AGE_CEILING_SECS),
@@ -599,6 +611,7 @@ mod tests {
         );
         assert!(breath_tempo(1_800) < breath_tempo(0));
 
+        // The calm, configurable breathe effect still eases smoothly.
         let trough = BreathSample::new(0, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
         let middle = BreathSample::new(6, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
         let peak = BreathSample::new(12, DEFAULT_BREATH_PERIOD, BREATH_DEEP_AMPLITUDE);
@@ -607,11 +620,52 @@ mod tests {
         assert!(trough.lightness_delta() < 0.0);
         assert!(peak.lightness_delta() > 0.0);
 
-        let old = BreathSample::for_age(0, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
-        let next = BreathSample::for_age(1, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
+        // The unread attention blink is a hard 2-pole square wave: the lightness
+        // snaps between the resting tone (off-pole, delta 0) and the bright crest
+        // (on-pole), with no eased value between them, and never below rest.
+        let peak_delta = (1.0 - BREATH_MIDPOINT) * BREATH_DEEP_AMPLITUDE;
+        let on =
+            BreathSample::blink_for_age(0, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
+        let off =
+            BreathSample::blink_for_age(6, 2 * ATTENTION_AGE_CEILING_SECS, BREATH_DEEP_AMPLITUDE);
+        assert_eq!(on.grow_delta(), peak_delta);
+        assert_eq!(off.grow_delta(), 0.0);
+        for phase in 0..12 {
+            let delta = BreathSample::blink_for_age(
+                phase,
+                2 * ATTENTION_AGE_CEILING_SECS,
+                BREATH_DEEP_AMPLITUDE,
+            )
+            .grow_delta();
+            assert!(
+                delta == 0.0 || delta == peak_delta,
+                "the blink only ever sits at a pole, never an eased value between them"
+            );
+            assert!(delta >= 0.0, "the blink never dims below the resting tone");
+        }
+    }
+
+    #[test]
+    fn attention_blink_is_a_hard_two_pole_square_wave() {
+        // A 50/50 square wave on the period: on for the first half, off the second.
+        assert_eq!(blink_level(0, 12.0), 1.0);
+        assert_eq!(blink_level(5, 12.0), 1.0);
+        assert_eq!(blink_level(6, 12.0), 0.0);
+        assert_eq!(blink_level(11, 12.0), 0.0);
+        assert_eq!(blink_level(12, 12.0), 1.0, "the cycle wraps");
+
+        // Older asks blink faster: a shorter period reaches the off-pole sooner.
+        let first_off = |age: i64| {
+            (0..64)
+                .find(|&phase| {
+                    BreathSample::blink_for_age(phase, age, BREATH_DEEP_AMPLITUDE).grow_delta()
+                        == 0.0
+                })
+                .expect("the blink turns off within a cycle")
+        };
         assert!(
-            (next.lightness_delta() - old.lightness_delta()).abs() < 0.05,
-            "hot attention still eases rather than strobing"
+            first_off(2 * ATTENTION_AGE_CEILING_SECS) < first_off(0),
+            "a hot ask reaches its off-pole sooner — the blink keeps pacing with age"
         );
     }
 

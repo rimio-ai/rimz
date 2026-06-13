@@ -1,6 +1,6 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
-use crate::sidebar_pane::render::animation::{BREATH_SHALLOW_AMPLITUDE, BreathSample};
+use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
 use crate::sidebar_pane::render::theme::Component;
 
 fn truecolor_theme() -> Theme {
@@ -196,12 +196,12 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
             AgentStatus::Waiting,
             TurnPhase::Idle,
             5 * 60,
-            12,
+            18,
             true,
             false,
         )
         .fg,
-        "the default unread actionable head blinks"
+        "the default unread actionable head blinks between its bright and normal poles"
     );
 
     let mut quiet = crate::config::SidebarConfig::default();
@@ -308,7 +308,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         false,
         false,
     );
-    let unread_trough = agent_lead_style(
+    let unread_on = agent_lead_style(
         &theme,
         AgentStatus::Success,
         TurnPhase::Idle,
@@ -317,22 +317,23 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         true,
         false,
     );
-    let unread_peak = agent_lead_style(
+    let unread_off = agent_lead_style(
         &theme,
         AgentStatus::Success,
         TurnPhase::Idle,
         5 * 60,
-        12,
+        18,
         true,
         false,
     );
 
-    // Grow-only: the blink holds bold through the colored cycle while the
-    // lightness swells; it never dims below rest, even in truecolor.
-    assert_eq!(unread_trough.add_modifier, Modifier::BOLD);
-    assert_eq!(unread_peak.add_modifier, Modifier::BOLD);
-    assert_ne!(unread_trough.fg, unread_peak.fg);
-    assert_ne!(read.fg, unread_peak.fg);
+    // Two-pole: the blink holds bold the whole colored cycle and hard-flips the
+    // lightness between the bright on-pole and the resting off-pole, never below
+    // rest, even in truecolor.
+    assert_eq!(unread_on.add_modifier, Modifier::BOLD);
+    assert_eq!(unread_off.add_modifier, Modifier::BOLD);
+    assert_ne!(unread_on.fg, unread_off.fg);
+    assert_ne!(read.fg, unread_on.fg);
 
     let read_waiting_peak = agent_lead_style(
         &theme,
@@ -393,15 +394,15 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     );
     assert_eq!(read_waiting_plain.add_modifier, Modifier::empty());
     assert_eq!(unread_waiting_plain.add_modifier, Modifier::BOLD);
-    // At the trough the grow-only blink rests at plain weight under NO_COLOR —
-    // never DIM — and the `?`/`✓` shape carries the meaning.
+    // On the off-pole the blink rests at plain weight under NO_COLOR — never
+    // DIM — and the `?`/`✓` shape carries the meaning.
     assert_eq!(
         agent_lead_style(
             &plain,
             AgentStatus::Waiting,
             TurnPhase::Idle,
             5 * 60,
-            0,
+            18,
             true,
             false,
         )
@@ -414,7 +415,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             AgentStatus::Success,
             TurnPhase::Idle,
             5 * 60,
-            0,
+            18,
             true,
             false,
         )
@@ -501,7 +502,7 @@ fn animations_cycle_and_wrap() {
 }
 
 #[test]
-fn loading_dots_stay_static_while_attention_pulse_paces_with_age() {
+fn loading_dots_stay_static_while_attention_blink_paces_with_age() {
     assert_eq!(loading_dots(0), "...");
     assert_eq!(loading_dots(7), "...");
     assert_eq!(loading_dots(8), "...");
@@ -513,12 +514,23 @@ fn loading_dots_stay_static_while_attention_pulse_paces_with_age() {
     assert!(tempo(25 * 60) > tempo(50 * 60));
     assert_eq!(tempo(2 * 60 * 60), tempo(60 * 60));
 
-    let fresh = BreathSample::for_age(0, 5 * 60, BREATH_SHALLOW_AMPLITUDE);
-    let hot = BreathSample::for_age(1, 2 * 60 * 60, BREATH_SHALLOW_AMPLITUDE);
-    assert!(fresh.lightness_delta() < 0.0);
+    // The unread blink is a hard 2-pole flip, not a smooth pulse: the on-pole
+    // sits at the bright crest, the off-pole rests at the normal tone (delta 0),
+    // with nothing between them.
+    let on = BreathSample::blink_for_age(0, 5 * 60, BREATH_DEEP_AMPLITUDE);
     assert!(
-        hot.lightness_delta().abs() < BREATH_SHALLOW_AMPLITUDE,
-        "old attention remains a smooth pulse, never a hard flip"
+        on.grow_delta() > 0.0,
+        "the on-pole lifts toward the bright crest"
+    );
+    let off_phase = (0..64)
+        .find(|&phase| {
+            BreathSample::blink_for_age(phase, 5 * 60, BREATH_DEEP_AMPLITUDE).grow_delta() == 0.0
+        })
+        .expect("the blink reaches its off-pole within a cycle");
+    assert_eq!(
+        BreathSample::blink_for_age(off_phase, 5 * 60, BREATH_DEEP_AMPLITUDE).grow_delta(),
+        0.0,
+        "the off-pole rests at the normal tone, never an eased value below it"
     );
 }
 

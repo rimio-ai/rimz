@@ -384,13 +384,13 @@ impl Theme {
         style
     }
 
-    /// The hard attention pulse: a grow-only lightness swell from the element's
-    /// resting tone to a bright crest and back, held bold for the whole colored
-    /// cycle so the blink stays smooth instead of snapping weight at the peak.
-    /// It is stronger than the calm [`breathe`](Self::breathe). The glyph,
-    /// name, and description of an unread row, and the `?`/`!`/`✓` make-up
-    /// buckets, share one sample so they brighten in unison. `no_color` and a
-    /// colorless `fg` keep the grow-only weight toggle as the fallback signal.
+    /// The unread attention blink: a hard 2-pole brightness toggle between the
+    /// element's resting tone and a bright crest, held bold the whole colored
+    /// cycle so weight never flickers with the lightness. It is stronger than the
+    /// calm [`breathe`](Self::breathe). The glyph, name, and description of an
+    /// unread row, and the `?`/`!`/`✓` make-up buckets, share one sample so they
+    /// flip in unison. `no_color` and a colorless `fg` keep the on-pole bold
+    /// toggle as the fallback signal.
     pub(super) fn pulse(&self, fg: Color, sample: BreathSample) -> Style {
         if self.no_color {
             return Style::default().add_modifier(sample.grow_modifier());

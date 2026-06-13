@@ -251,9 +251,9 @@ pub const MIN_REFRESH_MS: u16 = 16;
 /// event latency visibly worse, so keep slow data polling on `--tick-seconds`.
 pub const MAX_REFRESH_MS: u16 = 1_000;
 
-/// Smooth pulse animation cadence. It stays close to the base grid so the
-/// truecolor lightness ramp does not visibly band, and is clamped at runtime
-/// to never be faster than the configured base grid.
+/// The breath/blink animation cadence. It stays close to the base grid so the
+/// smooth breathe's truecolor lightness ramp does not visibly band, and is
+/// clamped at runtime to never be faster than the configured base grid.
 pub const BREATH_ANIMATION_FRAME: Duration = Duration::from_millis(120);
 
 /// Cap on one visible effects step. A calm room can paint rarely; clamping
@@ -357,8 +357,8 @@ pub fn animation_frame(refresh_ms: u16) -> Duration {
     Duration::from_millis(u64::from(refresh_ms))
 }
 
-/// Smooth pulse frame, clamped so it never runs faster than the configured
-/// base grid.
+/// The breath/blink animation frame, clamped so it never runs faster than the
+/// configured base grid.
 pub fn breath_animation_frame(refresh_ms: u16) -> Duration {
     BREATH_ANIMATION_FRAME.max(animation_frame(refresh_ms))
 }

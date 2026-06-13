@@ -77,7 +77,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         &live_agents.to_string(),
     );
     if unread_agents > 0 {
-        // A steady tally, not a blink — the attention pulse lives on the cards
+        // A steady tally, not a blink — the attention blink lives on the cards
         // and the make-up buckets; the cockpit count holds its attention tone.
         left.push(Span::styled(
             format!(" ({unread_agents})"),

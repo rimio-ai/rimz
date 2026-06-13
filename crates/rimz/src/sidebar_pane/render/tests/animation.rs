@@ -113,7 +113,7 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
         let mut terminal = Terminal::with_options(backend, TerminalOptions { viewport }).unwrap();
         terminal.clear().unwrap();
         let mut ui = UiState {
-            // Mid-breath: the swell's peak, where the lift is unmistakable.
+            // On the blink's bright on-pole, where the lift is unmistakable.
             animation_phase: 6,
             ..UiState::default()
         };

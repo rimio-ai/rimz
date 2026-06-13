@@ -117,9 +117,9 @@
 # "body", "muted", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
 # effect is "static" or "breathe"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
 # Every role follows the same frames/color/effect/speed model. For waiting,
-# failed, and unread success rows, omitted effect keeps the shipped row pulse;
-# set effect to "static" to quiet it. A literal blink is a frame sequence such
-# as [" ", "!"].
+# failed, and unread success rows, omitted effect keeps the shipped row blink
+# (a 2-pole brightness toggle, age-paced); set effect to "static" to quiet it.
+# A literal blink is a frame sequence such as [" ", "!"].
 ## [sidebar.animations.thinking]
 ## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 ## color = "clay"
