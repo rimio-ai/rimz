@@ -281,11 +281,13 @@ pub(in crate::sidebar_pane::render) fn attention_blink_sample(
 }
 
 /// Paint an element's natural tone under the row's card emphasis, so the lead
-/// glyph, name, and description move as one group: blink pulses the tone on the
-/// shared sample, normal wears it at full strength, and soft mutes it toward the
-/// body tier (`soft_brand`) so a calm unselected card keeps its color, just
-/// quietly. A colorless element (an idle lead, body text) rests at the plain
-/// soft body tone.
+/// glyph and name move together: blink pulses the tone on the shared sample,
+/// normal wears it at full strength, and soft dims its lightness a step
+/// (`body_brand`, keeping the hue) so a calm unselected card keeps its color,
+/// just quietly. A colorless element (an idle lead) rests at the plain soft body
+/// tone. The description mirrors the same blink/normal/soft split through its
+/// own body-style path — it is body text, never brand-colored, so its soft tone
+/// is the plain body gray.
 pub(in crate::sidebar_pane::render) fn emphasize(
     theme: &Theme,
     natural_color: Option<Color>,

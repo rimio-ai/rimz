@@ -415,31 +415,43 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
 }
 
 #[test]
-fn soft_brand_mutes_the_brand_hue_toward_the_body_tier() {
+fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
     let truecolor = Theme {
         depth: ColorDepth::Truecolor,
         palette: Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
-    let clay = Identity::Claude.base_rgb();
-    let brand = Color::Rgb(clay.0, clay.1, clay.2);
-    let muted = truecolor.body_brand(brand);
-    assert!(matches!(muted.fg, Some(Color::Rgb(..))), "keeps a hue");
-    assert!(muted.add_modifier.is_empty(), "no DIM attenuation when lit");
-    assert_ne!(
-        muted.fg,
-        truecolor.body().fg,
-        "softened brand is not the flat soft gray"
-    );
-    assert_ne!(
-        muted.fg,
-        Some(brand),
-        "softened brand is recessed below full brand"
-    );
+    // The three shipped provider brands: clay, Codex blue, Pi green. Pi sits at
+    // the body weight, so a recession toward the body tone would vanish — the
+    // fixed lightness step must still dim it visibly.
+    let brands = [
+        Identity::Claude.base_rgb(),
+        (0x2f, 0xb1, 0xd1),
+        (0x27, 0xa0, 0x77),
+    ];
+    for (red, green, blue) in brands {
+        let brand = Color::Rgb(red, green, blue);
+        let dimmed = truecolor.body_brand(brand);
+        assert!(matches!(dimmed.fg, Some(Color::Rgb(..))), "keeps a hue");
+        assert!(
+            dimmed.add_modifier.is_empty(),
+            "no DIM attenuation when lit"
+        );
+        assert_ne!(
+            dimmed.fg,
+            truecolor.body().fg,
+            "the dimmed brand keeps its hue, not the flat soft gray"
+        );
+        assert_ne!(
+            dimmed.fg,
+            Some(brand),
+            "the dimmed brand is distinguishable from full brand at truecolor"
+        );
+    }
 
     let dark = Theme::fixed(true);
     assert_eq!(
-        dark.body_brand(brand),
+        dark.body_brand(Color::Rgb(brands[0].0, brands[0].1, brands[0].2)),
         dark.body(),
         "NO_COLOR keeps the soft DIM fallback — no hue survives"
     );

@@ -34,10 +34,12 @@ pub(crate) use component::Component;
 pub(crate) use identity::Identity;
 pub(crate) use raw::RawPalette;
 
-/// How far an unselected card name's brand hue blends toward the body gray
-/// (`0.0` = full brand, `1.0` = plain body). Balanced: recessed to the body tier
-/// while staying recognizably the provider's color.
-const BODY_BRAND_BLEND: f32 = 0.6;
+/// How far a calm card name's brand lightness dims below full brand, in OKLab L
+/// (`0.0` = full brand). Hue and saturation hold; only the lightness drops, so
+/// the name reads a touch quieter while staying recognizably the provider's
+/// color. A fixed step (rather than a blend toward the body tone) keeps the
+/// recession visible for every brand, including one already at the body weight.
+const SOFT_BRAND_DIM: f32 = 0.05;
 
 /// The chip ink: a fixed near-black laid on a colored chip fill, crisp on every
 /// mid-brightness fill — the provider tab rail's brand fill and the make-up
@@ -441,22 +443,28 @@ impl Theme {
         self.chrome(self.palette.body)
     }
 
-    /// A provider brand tone recessed to the body tier: the brand hue blended
-    /// toward the body gray in OKLab, so a calm unselected card's name keeps its
-    /// provider color while resting at the same recessed weight as the rest of
-    /// the row. `no_color` keeps the `DIM` fallback — no hue survives there — and
-    /// an unresolvable color falls back to plain `body()`.
+    /// A provider brand tone for a calm card: the brand keeps its full hue and
+    /// saturation while its OKLab lightness dims one fixed step ([`SOFT_BRAND_DIM`]),
+    /// so an unselected card's name stays unmistakably on-brand while resting a
+    /// touch quieter than the full-brand selected/attention state. At indexed
+    /// depth a step that quantizes back to the brand's own slot falls back to a
+    /// `DIM` weight, as [`breathe`](Self::breathe) does. `no_color` keeps the
+    /// `DIM` fallback — no hue survives there — and an unresolvable color falls
+    /// back to plain `body()`.
     pub(crate) fn body_brand(&self, brand: Color) -> Style {
         if self.no_color {
             return self.body();
         }
-        match (color_to_rgb(brand), color_to_rgb(self.palette.body)) {
-            (Some(brand_rgb), Some(body_rgb)) => {
-                let blended = oklab::blend(brand_rgb, body_rgb, BODY_BRAND_BLEND);
-                Style::default().fg(rgb_color(blended, self.depth))
-            }
-            _ => self.body(),
+        let Some(brand_rgb) = color_to_rgb(brand) else {
+            return self.body();
+        };
+        let dimmed = oklab::lift_lightness(brand_rgb, -SOFT_BRAND_DIM);
+        let color = rgb_color(dimmed, self.depth);
+        let mut style = Style::default().fg(color);
+        if self.depth == ColorDepth::Indexed && color == rgb_color(brand_rgb, self.depth) {
+            style = style.add_modifier(Modifier::DIM);
         }
+        style
     }
 
     pub(crate) fn faint(&self) -> Style {

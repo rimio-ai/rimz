@@ -548,25 +548,25 @@ fn agent_name_follows_card_emphasis() {
             .expect("the agent name span")
             .style
     };
+    let selected = name_style(0);
     assert_eq!(
-        name_style(0).fg,
+        selected.fg,
         Some(Color::Indexed(expected)),
-        "the selected agent name wears the provider color"
+        "the selected agent name wears the full provider color"
     );
-    let unselected = name_style(usize::MAX).fg;
+    let calm = name_style(usize::MAX);
     assert_eq!(
-        unselected,
-        theme.body_brand(Color::Indexed(expected)).fg,
-        "a calm unselected agent name keeps a muted brand tone"
+        calm,
+        theme.body_brand(Color::Indexed(expected)),
+        "a calm unselected agent name takes the recessed brand style"
     );
     assert_ne!(
-        unselected,
+        calm, selected,
+        "the calm brand tone rests a step under the selected full brand"
+    );
+    assert_ne!(
+        calm.fg,
         theme.body().fg,
-        "the muted brand tone is not the flat soft gray"
-    );
-    assert_ne!(
-        unselected,
-        Some(Color::Indexed(expected)),
-        "the muted brand tone is softer than the selected full brand"
+        "the recessed brand keeps its hue, not the flat soft gray"
     );
 }
