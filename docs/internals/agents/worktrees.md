@@ -12,6 +12,14 @@ The checkout stays clean of Rimz metadata. Ownership lives in `rimz-worktree.jso
 
 The marker records the name, branch, base branch name, base commit, repo root, worktree path, and marker version. A missing marker reads as user-owned, even if the path matches the configured directory template.
 
+### Seeded files
+
+A new worktree starts ready to run: the project's `.worktreeinclude` lists the untracked files an agent needs — `.env`, local config, caches — as glob patterns, one per line, and Rimz copies each pattern's matches from the checkout into the worktree right after `git worktree add`, preserving the path relative to the repo root. Lines use conventional shell-glob semantics (`*` within a path component, `**` across directories); blank lines and `#` comments are skipped. Matched directories copy recursively.
+
+Seeding stays inside the project root: absolute patterns and patterns reaching out with `..` are skipped, and every file is confined by its canonical path, so a symlink a glob pattern descends into cannot pull host files into the agent-readable worktree. Seeding carries no command execution, so `.worktreeinclude` stays outside the trust hash.
+
+Seeding is best-effort enrichment layered over creation: a missing `.worktreeinclude` is a silent no-op, and a pattern that matches nothing or a file that fails to copy warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. `rimz worktree new` reports the count of seeded files.
+
 ## Cleanup
 
 The hidden `rimz agents exec` wrapper runs the agent command in the pane and inherits the pane's TTY. It launches the agent through the user's default shell startup path when that shell and `/usr/bin/env` are available, re-applying Rimz launch env after shell rc/profile files, and falls back to direct exec for unsupported or missing shells. When the agent exits with `--worktree-path`, it spawns the on-disk `rimz worktree cleanup <path>` helper, resolving past the kernel's trailing ` (deleted)` annotation after an atomic install, so long-lived panes pick up the freshest cleanup logic; if the helper cannot be resolved or spawned, the wrapper falls back to the same cleanup implementation in process.

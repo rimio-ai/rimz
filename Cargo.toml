@@ -105,6 +105,15 @@ sentry-tracing = "0.48"
 # Filesystem and locking
 fs4 = { version = "1", features = ["sync"] }
 tempfile = "3"
+# Worktree seeding — `.worktreeinclude` lists glob patterns whose matches are
+# copied from the checkout into a freshly created worktree. `glob` expands a
+# pattern against the filesystem, descending only the directories the pattern
+# names (`.env` stats one path, `config/*.toml` lists one directory) instead of
+# walking the whole repo the way a matcher-plus-walker (`globset` + `walkdir`)
+# would. It is the minimal, std-only, widely-vetted choice for pattern→paths
+# expansion and brings no transitive tree; `Pattern::escape` roots user patterns
+# under the project directory safely even when that path holds glob metacharacters.
+glob = "0.3"
 # Filesystem-event watch — the elder sidebar tails live Codex rollout files so
 # a mid-turn token update repaints on the write instead of the next producer
 # tick. `notify` is the standard cross-platform watcher (inotify/kqueue/

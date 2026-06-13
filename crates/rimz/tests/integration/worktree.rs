@@ -71,6 +71,72 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_new_seeds_files_from_worktreeinclude() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    // Untracked files that `git worktree add` would not carry over.
+    std::fs::write(env.project_root.join(".env"), "SECRET=1").expect("write .env");
+    std::fs::create_dir_all(env.project_root.join("config")).expect("config dir");
+    std::fs::write(env.project_root.join("config/local.toml"), "a = 1").expect("write local");
+    std::fs::write(
+        env.project_root.join(".worktreeinclude"),
+        ".env\nconfig/*.toml\n",
+    )
+    .expect("write include");
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("seeded : 2 file(s) from .worktreeinclude"));
+
+    let path = env.home_root.join("project-worktrees").join("demo");
+    assert_eq!(
+        std::fs::read_to_string(path.join(".env")).expect("seeded .env"),
+        "SECRET=1"
+    );
+    assert!(
+        path.join("config/local.toml").is_file(),
+        "seeded glob match"
+    );
+}
+
+#[test]
+fn worktree_new_without_include_seeds_nothing() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+
+    // A pattern that matches nothing still creates the worktree; no seed report.
+    std::fs::write(env.project_root.join(".worktreeinclude"), "missing.txt\n")
+        .expect("write include");
+
+    let out = env
+        .rimz()
+        .args(["worktree", "new", "demo"])
+        .output()
+        .expect("spawn new");
+    assert!(out.status.success(), "worktree still created");
+    assert!(
+        !String::from_utf8_lossy(&out.stdout).contains("seeded"),
+        "no files seeded"
+    );
+    assert!(
+        !env.home_root
+            .join("project-worktrees")
+            .join("demo")
+            .join("missing.txt")
+            .exists()
+    );
+}
+
+#[test]
 fn worktree_remove_refuses_dirty_without_force() {
     if git_missing() {
         return;

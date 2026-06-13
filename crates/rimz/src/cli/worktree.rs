@@ -93,6 +93,12 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                     println!("  base branch: {base_branch}");
                 }
                 println!("  base   : {}", created.base_ref);
+                if created.included > 0 {
+                    println!(
+                        "  seeded : {} file(s) from .worktreeinclude",
+                        created.included
+                    );
+                }
             }
             Ok(())
         }

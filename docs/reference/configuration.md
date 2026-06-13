@@ -26,6 +26,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
 | `<root>/.rimz/config.toml` | committed | declared workspace shape, trust-tracked today | humans and project automation |
+| `<root>/.worktreeinclude` | committed | glob patterns for untracked files to seed into new worktrees | humans |
 
 Per-machine settings load leniently: a missing file is the default config, and unknown keys are ignored so an older binary can tolerate a newer file. `rimz config set` is stricter than the loader and rejects unknown dotted keys before it writes.
 
@@ -145,7 +146,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Cleanup state lives in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
+`rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists glob patterns for untracked files to copy from the checkout into each new worktree. Seeding and cleanup state live in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
 
 ### Agent Aliases And Layouts
 

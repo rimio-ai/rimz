@@ -382,6 +382,10 @@ criteria = "safe-to-deploy"
 version = "0.3.4"
 criteria = "safe-to-deploy"
 
+[[exemptions.glob]]
+version = "0.3.3"
+criteria = "safe-to-deploy"
+
 [[exemptions.hermit-abi]]
 version = "0.5.2"
 criteria = "safe-to-run"

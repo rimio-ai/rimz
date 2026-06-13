@@ -77,6 +77,9 @@ pub struct CreatedWorktree {
     pub base_branch: Option<String>,
     pub base_ref: String,
     pub reused: bool,
+    /// Files copied into the worktree from the project's `.worktreeinclude`.
+    /// Zero for a reused worktree, which is never re-seeded.
+    pub included: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -166,6 +169,7 @@ pub fn create(
                 base_branch: marker.base_branch,
                 base_ref: marker.base_ref,
                 reused: true,
+                included: 0,
             });
         }
         return Err(WorktreeErr::Exists { name, path });
@@ -209,6 +213,7 @@ pub fn create(
         created_at: jiff::Timestamp::now(),
     };
     write_marker(&path, &marker)?;
+    let included = crate::worktree_include::copy_includes(repo_root, &path);
     Ok(CreatedWorktree {
         name,
         path,
@@ -216,6 +221,7 @@ pub fn create(
         base_branch,
         base_ref,
         reused: false,
+        included,
     })
 }
 
