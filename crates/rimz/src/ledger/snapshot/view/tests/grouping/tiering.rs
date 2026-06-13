@@ -1,7 +1,8 @@
 use super::*;
+use crate::feed::ATTENTION_AGE_CEILING_SECS;
 
 #[test]
-fn group_tiering_floats_attention_and_tails_external() {
+fn group_tiering_floats_attention_and_always_tails_external() {
     let labels_for = |mut agents: Vec<AgentState>| {
         let mut panes = Vec::new();
         for (idx, agent) in agents.iter_mut().enumerate() {
@@ -40,14 +41,25 @@ fn group_tiering_floats_attention_and_tails_external() {
         vec!["alpha", "beta", "external"]
     );
 
-    // The external catch-all rises out of the tail only when it holds an
-    // attention agent (waiting or failed).
+    // The external catch-all always tails, even when it holds an attention
+    // agent: out-of-project work never displaces a project worktree.
     assert_eq!(
         labels_for(vec![
             agent_in("b1", "/repo/beta", AgentStatus::Idle, 1_000),
             agent_in("b2", "/repo/beta", AgentStatus::Idle, 1_000),
             external("e1", AgentStatus::Failed),
         ]),
-        vec!["external", "beta"]
+        vec!["beta", "external"]
+    );
+
+    // It tails below even an inactive project group — a stale, calm worktree
+    // still outranks an out-of-project agent holding `failed`.
+    assert_eq!(
+        labels_for(vec![
+            agent_in("a1", "/repo/alpha", AgentStatus::Idle, 1_000)
+                .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
+            external("e1", AgentStatus::Failed),
+        ]),
+        vec!["alpha", "external"]
     );
 }

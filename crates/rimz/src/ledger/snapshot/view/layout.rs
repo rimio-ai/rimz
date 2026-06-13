@@ -247,15 +247,16 @@ pub(super) fn compare_groups(
     left: &SidebarWorktreeGroup,
     right: &SidebarWorktreeGroup,
 ) -> Ordering {
-    // A worktree floats by its most-urgent member: a `waiting`-topped group sits
-    // above a `failed`-topped one, above the calm groups. Among same-tier groups
-    // the `external` catch-all sorts after project worktrees; then both hold a
-    // stable order keyed on the earliest-spawned member, then label. The external
-    // group therefore only rises out of the tail when it holds a `waiting` or
-    // `failed` agent — the tier carries that, no separate predicate needed.
-    group_tier(left)
-        .cmp(&group_tier(right))
-        .then_with(|| group_is_external(left).cmp(&group_is_external(right)))
+    // The `external` catch-all always tails: out-of-project residue never
+    // displaces project work, so it sorts below every project group — below even
+    // the inactive groups, and regardless of any `waiting`/`failed` member it
+    // holds. Among project worktrees the macro tiers then order by most-urgent
+    // member (a `waiting`-topped group above a `failed`-topped one, above the
+    // calm groups), then a stable order keyed on the earliest-spawned member,
+    // then label.
+    group_is_external(left)
+        .cmp(&group_is_external(right))
+        .then_with(|| group_tier(left).cmp(&group_tier(right)))
         .then_with(|| cmp_start_asc(group_earliest_spawn(left), group_earliest_spawn(right)))
         .then_with(|| left.label.cmp(&right.label))
 }

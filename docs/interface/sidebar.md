@@ -277,7 +277,7 @@ The worktree header carries the worktree's git story on the right: the `⇡`/`�
    Deploy staging?
 ```
 
-The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, sorts last unless it holds something waiting, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces.
+The `external` block is the catch-all for panes outside the project — untethered scripts, CI, stray shells. It renders as a dim divider rather than a worktree header, always sorts last, and keeps an attention-only `? n` / `! n` tally so an out-of-project ask still surfaces from the tail.
 
 A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the same way with its child repos as the pods: each child repo keeps the full `⑂` header with its own per-repo git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
 
