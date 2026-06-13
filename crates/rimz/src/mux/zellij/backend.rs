@@ -158,7 +158,7 @@ impl MuxBackend for ZellijBackend {
             }
         }
         spec.run()?;
-        // `new-pane` focuses the pane it creates; for the `--no-focus` path
+        // `new-pane` focuses the pane it creates; for the `--bg` path
         // return focus to the splitting pane (best-effort — the pane is open).
         if !opts.focus
             && let Some(target) = &target

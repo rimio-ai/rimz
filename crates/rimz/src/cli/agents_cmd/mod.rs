@@ -66,9 +66,9 @@ pub struct AgentsArgs {
     /// Durable name for a single launched agent.
     #[arg(long)]
     name: Option<String>,
-    /// Open tabs/windows without moving focus to them.
+    /// Launch in the background, leaving focus on the launching pane.
     #[arg(long)]
-    no_focus: bool,
+    bg: bool,
     /// Split the agent into the current view instead of a new tab. Single
     /// agent cell only; rejected for a multi-cell layout.
     #[arg(long)]

@@ -312,7 +312,7 @@ pub struct SplitPaneOptions {
     pub command: Option<Vec<String>>,
     pub env: BTreeMap<String, String>,
     /// Move focus to the new pane. `false` leaves focus on the splitting pane
-    /// (`target_pane_id`, when set) — the `--no-focus` launch path.
+    /// (`target_pane_id`, when set) — the `--bg` launch path.
     pub focus: bool,
 }
 

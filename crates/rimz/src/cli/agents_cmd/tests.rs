@@ -26,7 +26,7 @@ fn agents_launch_parses_spec_prompt_and_worktree_name() {
         "claude,codex+term",
         "fix the tests",
         "--worktree=docs",
-        "--no-focus",
+        "--bg",
     ])
     .expect("parse agents launch");
 
@@ -34,7 +34,7 @@ fn agents_launch_parses_spec_prompt_and_worktree_name() {
     assert_eq!(parsed.args.spec.as_deref(), Some("claude,codex+term"));
     assert_eq!(parsed.args.prompt.as_deref(), Some("fix the tests"));
     assert_eq!(parsed.args.worktree.as_deref(), Some("docs"));
-    assert!(parsed.args.no_focus);
+    assert!(parsed.args.bg);
 }
 
 #[test]

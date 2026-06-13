@@ -111,7 +111,7 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
                 title,
                 cwd: cwd.clone(),
                 panes,
-                focus: !args.no_focus,
+                focus: !args.bg,
                 sidebar,
             }),
             "opening agent tab",
@@ -122,7 +122,7 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
                 cwd: Some(cwd.to_string_lossy().into_owned()),
                 command: Some(single_pane_argv(&panes)?),
                 env: agents_launch::launch_identity_env(&workspace),
-                focus: !args.no_focus,
+                focus: !args.bg,
             }),
             "splitting the agent into the current view",
         ),
@@ -312,7 +312,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         );
     }
     if args.name.is_some()
-        || args.no_focus
+        || args.bg
         || args.same_tab
         || args.new_tab
         || args.ask
