@@ -129,6 +129,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | `agents` | List, launch, focus, wait for, and stop agent cards. | [Agent control](./cli/agents.md#agents) |
 | `worktree` | Create, list, and remove Rimz-owned git worktrees. | [Agent control](./cli/agents.md#manage-rimz-owned-worktrees) |
 | `list` | Show known rooms and their live backend. | [Getting started](./cli/getting-started.md#list-rooms) |
+| `list-themes` | Print the bundled sidebar theme names. | [Maintenance](./cli/maintenance.md#list-themes) |
 | `doctor` | Diagnose backend, hook, trust, resolver, and room-tree state. | [Getting started](./cli/getting-started.md#setup-and-doctor) |
 | `setup` | Print first-run environment state and write default config. | [Getting started](./cli/getting-started.md#setup-and-doctor) |
 | `hooks` | Install or remove agent hooks. | [Feed](./cli/feed.md#agent-hooks) |

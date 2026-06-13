@@ -7,7 +7,7 @@ use serde::Deserialize;
 use crate::config::parse_hex;
 
 use super::embedded_themes;
-use super::theme::{PaletteTones, builtin_palette_tones};
+use super::theme::PaletteTones;
 
 type Rgb = (u8, u8, u8);
 
@@ -47,14 +47,16 @@ struct AlacrittyAnsiColors {
 }
 
 pub(crate) fn explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
-    if let Some(tones) = builtin_palette_tones(name_or_path) {
-        return Some(tones);
-    }
     cached_explicit_palette_tones(name_or_path)
 }
 
 pub fn validate_explicit_scheme(name_or_path: &str) -> Result<(), String> {
     load_explicit_palette_tones(name_or_path).map(|_| ())
+}
+
+/// Every scheme name a user can select: the bundled Alacritty catalog, sorted.
+pub fn available_scheme_names() -> Vec<String> {
+    embedded_themes::theme_names().map(str::to_owned).collect()
 }
 
 fn cached_explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
@@ -79,9 +81,6 @@ fn lock_explicit_scheme_cache() -> MutexGuard<'static, HashMap<String, Option<Pa
 }
 
 fn load_explicit_palette_tones(name_or_path: &str) -> Result<PaletteTones, String> {
-    if let Some(tones) = builtin_palette_tones(name_or_path) {
-        return Ok(tones);
-    }
     if let Some(text) = embedded_themes::theme_toml(name_or_path) {
         return parse_palette_tones(text).map_err(|err| {
             format!("invalid bundled sidebar theme scheme `{name_or_path}`: {err}")
@@ -105,7 +104,7 @@ fn load_external_palette_tones(name_or_path: &str) -> Result<PaletteTones, Strin
 
 pub fn theme_lookup_hint() -> String {
     format!(
-        "builtins: clay, slate, classic; {} bundled Alacritty themes in crates/rimz/themes/alacritty; or a path to an Alacritty .toml",
+        "{} bundled Alacritty themes in crates/rimz/themes/alacritty (see `rimz list-themes`); or a path to an Alacritty .toml",
         embedded_themes::theme_count()
     )
 }
@@ -429,6 +428,25 @@ foreground = '#d0d0d0'
             explicit_palette_tones("Afterglow").is_some(),
             "the vendored Alacritty catalog should include Afterglow"
         );
+    }
+
+    #[test]
+    fn available_scheme_names_list_the_bundled_catalog() {
+        let names = available_scheme_names();
+        assert!(names.iter().any(|name| name == "TokyoNight Night"));
+        assert!(names.iter().any(|name| name == "Catppuccin Mocha"));
+        assert!(names.windows(2).all(|pair| pair[0] <= pair[1]), "sorted");
+    }
+
+    #[test]
+    fn removed_builtin_names_no_longer_resolve() {
+        for removed in ["clay", "slate", "classic"] {
+            assert!(
+                explicit_palette_tones(removed).is_none(),
+                "`{removed}` was retired in favour of the bundled catalog"
+            );
+            assert!(validate_explicit_scheme(removed).is_err());
+        }
     }
 
     #[test]

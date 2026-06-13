@@ -23,23 +23,32 @@ fn indices(palette: Palette) -> [Color; 13] {
 }
 
 #[test]
-fn classic_indexed_palette_matches_legacy_indices() {
+fn default_const_matches_bundled_default() {
+    assert_eq!(
+        PaletteTones::DEFAULT,
+        scheme::explicit_palette_tones(DEFAULT_SCHEME).expect("bundled default scheme resolves"),
+        "PaletteTones::DEFAULT must mirror the bundled `{DEFAULT_SCHEME}` tones"
+    );
+}
+
+#[test]
+fn default_indexed_palette_matches_expected_indices() {
     let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
     assert_eq!(
         indices(palette),
         [
-            Color::Indexed(108),
+            Color::Indexed(149),
             Color::Indexed(179),
-            Color::Indexed(173),
-            Color::Indexed(167),
-            Color::Indexed(73),
-            Color::Indexed(75),
+            Color::Indexed(210),
+            Color::Indexed(210),
+            Color::Indexed(117),
+            Color::Indexed(111),
             Color::Indexed(141),
-            Color::Indexed(246),
-            Color::Indexed(242),
+            Color::Indexed(103),
+            Color::Indexed(60),
             Color::Indexed(238),
-            Color::Indexed(238),
-            Color::Indexed(110),
+            Color::Indexed(237),
+            Color::Indexed(111),
             Color::Indexed(173),
         ]
     );
@@ -63,11 +72,11 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     );
     assert_eq!(
         theme.style(Color::Red, Modifier::empty()).fg,
-        Some(Color::Indexed(167))
+        Some(Color::Indexed(210))
     );
     assert_eq!(
         theme.style(Color::LightRed, Modifier::empty()).fg,
-        Some(Color::Indexed(173))
+        Some(Color::Indexed(210))
     );
     assert_eq!(
         theme.style(Color::Indexed(173), Modifier::empty()).fg,
@@ -101,7 +110,6 @@ fn rgb_overrides_follow_depth() {
     let sidebar = SidebarConfig {
         theme: SidebarThemeConfig {
             mode: ThemeMode::Truecolor,
-            scheme: Some("classic".to_owned()),
             good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
             ..SidebarThemeConfig::default()
         },
@@ -115,7 +123,6 @@ fn rgb_overrides_follow_depth() {
 
     let sidebar = SidebarConfig {
         theme: SidebarThemeConfig {
-            scheme: Some("classic".to_owned()),
             good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
             ..SidebarThemeConfig::default()
         },
@@ -132,15 +139,15 @@ fn rgb_overrides_follow_depth() {
 fn heat_tone_walks_good_to_alarm_across_stops() {
     let theme = Theme::fixed(false);
     // Four stops — good → warn → caution → alarm — at 0, ⅓, ⅔, 1; the
-    // classic scheme quantizes warn/caution/alarm to the legacy indexes and
-    // good to its green slot. Endpoints clamp.
-    let good = Color::Indexed(nearest_xterm_index(0x8d, 0xbe, 0x8d));
+    // default scheme quantizes each tone to its xterm index. Endpoints clamp.
+    let (good_r, good_g, good_b) = PaletteTones::DEFAULT.good;
+    let good = Color::Indexed(nearest_xterm_index(good_r, good_g, good_b));
     assert_eq!(theme.heat_tone(-0.1), good);
     assert_eq!(theme.heat_tone(0.0), good);
     assert_eq!(theme.heat_tone(1.0 / 3.0), Color::Indexed(179));
-    assert_eq!(theme.heat_tone(2.0 / 3.0), Color::Indexed(173));
-    assert_eq!(theme.heat_tone(1.0), Color::Indexed(167));
-    assert_eq!(theme.heat_tone(1.1), Color::Indexed(167));
+    assert_eq!(theme.heat_tone(2.0 / 3.0), Color::Indexed(210));
+    assert_eq!(theme.heat_tone(1.0), Color::Indexed(210));
+    assert_eq!(theme.heat_tone(1.1), Color::Indexed(210));
 }
 
 #[test]
@@ -224,7 +231,6 @@ fn heat_tone_honors_interpolatable_overrides() {
         &SidebarConfig {
             theme: SidebarThemeConfig {
                 mode: ThemeMode::Truecolor,
-                scheme: Some("classic".to_owned()),
                 alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
                 ..SidebarThemeConfig::default()
             },
@@ -237,7 +243,6 @@ fn heat_tone_honors_interpolatable_overrides() {
         false,
         &SidebarConfig {
             theme: SidebarThemeConfig {
-                scheme: Some("classic".to_owned()),
                 alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
                 ..SidebarThemeConfig::default()
             },
@@ -253,7 +258,6 @@ fn heat_tone_honors_interpolatable_overrides() {
         false,
         &SidebarConfig {
             theme: SidebarThemeConfig {
-                scheme: Some("classic".to_owned()),
                 alarm: Some(ThemeColor::Indexed(196)),
                 ..SidebarThemeConfig::default()
             },
@@ -269,7 +273,6 @@ fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
         false,
         &SidebarConfig {
             theme: SidebarThemeConfig {
-                scheme: Some("classic".to_owned()),
                 alarm: Some(ThemeColor::Indexed(1)),
                 ..SidebarThemeConfig::default()
             },
@@ -283,7 +286,7 @@ fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
     );
     assert_eq!(
         theme.heat_tone(1.0),
-        Color::Indexed(167),
+        Color::Indexed(210),
         "the ramp uses the scheme alarm because ANSI RGB is terminal-defined"
     );
 }
@@ -295,7 +298,6 @@ fn truecolor_heat_gradient_sweeps_green_to_alarm() {
         &SidebarConfig {
             theme: SidebarThemeConfig {
                 mode: ThemeMode::Truecolor,
-                scheme: Some("classic".to_owned()),
                 ..SidebarThemeConfig::default()
             },
             ..SidebarConfig::default()
@@ -320,18 +322,19 @@ fn truecolor_heat_gradient_sweeps_green_to_alarm() {
 }
 
 #[test]
-fn builtin_schemes_resolve_by_name() {
+fn bundled_scheme_resolves_by_name() {
     let sidebar = SidebarConfig {
         theme: SidebarThemeConfig {
-            scheme: Some("slate".to_owned()),
+            scheme: Some("TokyoNight Night".to_owned()),
             ..SidebarThemeConfig::default()
         },
         ..SidebarConfig::default()
     };
     let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let (good_r, good_g, good_b) = PaletteTones::DEFAULT.good;
     assert_eq!(
         theme.style(Color::Green, Modifier::empty()).fg,
-        Some(Color::Indexed(nearest_xterm_index(0x9e, 0xce, 0x6a)))
+        Some(Color::Indexed(nearest_xterm_index(good_r, good_g, good_b)))
     );
 }
 
@@ -387,11 +390,11 @@ fn money_tone_uses_fixed_dollar_green_at_active_depth() {
 #[test]
 fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     let lit = Theme::fixed(false);
-    for (style, index) in [(lit.soft(), 246), (lit.dim(), 242), (lit.faint(), 238)] {
+    for (style, index) in [(lit.soft(), 103), (lit.dim(), 60), (lit.faint(), 238)] {
         assert_eq!(style.fg, Some(Color::Indexed(index)));
         assert!(style.add_modifier.is_empty(), "no DIM attenuation when lit");
     }
-    assert_eq!(lit.rule().fg, Some(Color::Indexed(238)));
+    assert_eq!(lit.rule().fg, Some(Color::Indexed(237)));
     assert!(
         lit.rule().add_modifier.contains(Modifier::DIM),
         "rule rides faint's gray under the DIM attenuation"

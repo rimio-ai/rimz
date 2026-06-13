@@ -11,9 +11,9 @@
 //! `NO_COLOR` is off.
 //!
 //! Palette choice is data in the snapshot's `[sidebar.theme]`: `scheme`
-//! selects a built-in palette, a bundled Alacritty theme, or an Alacritty TOML
-//! file; per-slot overrides then win over the selected scheme. The renderer
-//! resolves depth because terminal capability is a renderer-local fact.
+//! selects a bundled Alacritty theme or an Alacritty TOML file, defaulting to
+//! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
+//! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
     AnimationColor, ColorDepth, GlowMode, SidebarConfig, SidebarThemeConfig, ThemeColor,
@@ -65,62 +65,29 @@ pub(crate) struct PaletteTones {
     pub(crate) selection: (u8, u8, u8),
 }
 
-impl PaletteTones {
-    pub(crate) const CLAY: Self = Self {
-        good: (0x96, 0xc2, 0x93),
-        warn: (0xdf, 0xb6, 0x6d),
-        caution: (0xe0, 0x91, 0x5c),
-        alarm: (0xde, 0x6e, 0x6e),
-        accent: (0x72, 0xb3, 0xaa),
-        cool: (0x7f, 0xa8, 0xde),
-        meta: (0xb4, 0x9b, 0xe0),
-        soft: (0xa6, 0xa1, 0x9a),
-        dim: (0x76, 0x71, 0x68),
-        faint: (0x45, 0x42, 0x3d),
-        rule: (0x34, 0x32, 0x30),
-        selection: (0x8a, 0xb3, 0xe0),
-    };
+/// The scheme that ships as the default look, drawn from the bundled Alacritty
+/// catalog. `[sidebar.theme] scheme` left unset resolves to this.
+pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 
-    pub(crate) const SLATE: Self = Self {
+impl PaletteTones {
+    /// The derived [`DEFAULT_SCHEME`] tones, baked in as the infallible backstop
+    /// so resolution never fails even when the bundled catalog is unreadable.
+    /// `default_const_matches_bundled_default` keeps these in lockstep with the
+    /// catalog.
+    pub(crate) const DEFAULT: Self = Self {
         good: (0x9e, 0xce, 0x6a),
         warn: (0xe0, 0xaf, 0x68),
-        caution: (0xff, 0x9e, 0x64),
+        caution: (0xed, 0x95, 0x7d),
         alarm: (0xf7, 0x76, 0x8e),
-        accent: (0x41, 0xa6, 0xb5),
+        accent: (0x7d, 0xcf, 0xff),
         cool: (0x7a, 0xa2, 0xf7),
         meta: (0xbb, 0x9a, 0xf7),
-        soft: (0xa9, 0xb1, 0xd6),
-        dim: (0x56, 0x5f, 0x89),
-        faint: (0x3b, 0x42, 0x61),
-        rule: (0x29, 0x2e, 0x42),
+        soft: (0x80, 0x87, 0xa6),
+        dim: (0x5e, 0x63, 0x7b),
+        faint: (0x3e, 0x41, 0x53),
+        rule: (0x34, 0x36, 0x46),
         selection: (0x7a, 0xa2, 0xf7),
     };
-
-    pub(crate) const CLASSIC: Self = Self {
-        good: (0x8d, 0xbe, 0x8d),
-        warn: (0xdc, 0xb1, 0x68),
-        caution: (0xdc, 0x8c, 0x62),
-        alarm: (0xdc, 0x66, 0x66),
-        accent: (0x66, 0xb0, 0xb0),
-        cool: (0x6b, 0xaa, 0xf5),
-        meta: (0xb2, 0x8f, 0xf5),
-        soft: (0x99, 0x99, 0x99),
-        dim: (0x6e, 0x6e, 0x6e),
-        faint: (0x46, 0x46, 0x46),
-        // Keep classic@256 exactly on the legacy rule index 238; the rule's
-        // DIM modifier supplies the darker visual step.
-        rule: (0x46, 0x46, 0x46),
-        selection: (0x8a, 0xb1, 0xdb),
-    };
-}
-
-pub(crate) fn builtin_palette_tones(name: &str) -> Option<PaletteTones> {
-    match name {
-        "clay" => Some(PaletteTones::CLAY),
-        "slate" => Some(PaletteTones::SLATE),
-        "classic" => Some(PaletteTones::CLASSIC),
-        _ => None,
-    }
 }
 
 /// The active palette, one named slot per semantic tone.
@@ -145,11 +112,11 @@ pub(crate) struct Palette {
 
 impl Palette {
     pub(crate) fn resolve(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_fallback(theme, depth, PaletteTones::CLAY)
+        Self::resolve_with_fallback(theme, depth, default_palette_tones())
     }
 
     pub(crate) fn resolve_fixed(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_fallback(theme, depth, PaletteTones::CLASSIC)
+        Self::resolve_with_fallback(theme, depth, PaletteTones::DEFAULT)
     }
 
     fn resolve_with_fallback(
@@ -159,7 +126,7 @@ impl Palette {
     ) -> Palette {
         let tones = match theme.scheme.as_deref() {
             None => fallback,
-            Some(name) => selected_palette_tones(name).unwrap_or(PaletteTones::CLAY),
+            Some(name) => selected_palette_tones(name).unwrap_or(fallback),
         };
         let slot = |override_color: Option<ThemeColor>, builtin| {
             override_color
@@ -210,6 +177,12 @@ impl Palette {
 
 fn selected_palette_tones(name: &str) -> Option<PaletteTones> {
     scheme::explicit_palette_tones(name)
+}
+
+/// The shipped default tones: [`DEFAULT_SCHEME`] resolved from the bundled
+/// catalog, with the baked-in [`PaletteTones::DEFAULT`] as the backstop.
+fn default_palette_tones() -> PaletteTones {
+    scheme::explicit_palette_tones(DEFAULT_SCHEME).unwrap_or(PaletteTones::DEFAULT)
 }
 
 fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {
@@ -345,7 +318,7 @@ impl Theme {
         }
     }
 
-    /// Build a deterministic test theme. Tests use the classic indexed palette
+    /// Build a deterministic test theme. Tests use the default indexed palette
     /// unless they explicitly pass a sidebar config to [`Self::fixed_for_sidebar`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {

@@ -86,7 +86,11 @@ fn config_get_set_round_trip_preserves_template_comments() {
     for (key, value, expected) in [
         ("sidebar.theme.mode", "truecolor", "truecolor\n"),
         ("sidebar.theme.mode", "256", "256\n"),
-        ("sidebar.theme.scheme", "slate", "slate\n"),
+        (
+            "sidebar.theme.scheme",
+            "TokyoNight Night",
+            "TokyoNight Night\n",
+        ),
         ("sidebar.theme.good", "'#a3be8c'", "#a3be8c\n"),
         ("sidebar.theme.caution", "214", "214\n"),
         ("sidebar.providers.claude.color", "'#D97757'", "#d97757\n"),

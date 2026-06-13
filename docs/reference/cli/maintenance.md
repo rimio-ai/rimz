@@ -35,6 +35,15 @@ rimz config set <KEY> <VALUE>
 
 Dotted keys address nested TOML tables. Examples include `worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.layouts.peer`, `agents.aliases.codex-yolo.mode`, and `sidebar.providers.codex.color`.
 
+## List themes
+
+```sh
+rimz list-themes
+rimz list-themes --json
+```
+
+`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set sidebar.theme.scheme <name>`. `--json` emits the same list as an array for scripting. The palette model and custom theme files are covered in [theme.md](../theme.md).
+
 ## Workspace ledger tools
 
 ```sh

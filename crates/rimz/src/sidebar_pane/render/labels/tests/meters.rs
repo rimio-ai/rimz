@@ -252,19 +252,20 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
     };
     // Green at half or more left, yellow below half, amber below a quarter,
     // red below a tenth — band edges pinned on both sides.
-    assert_eq!(fg(80), Color::Indexed(108));
-    assert_eq!(fg(50), Color::Indexed(108));
+    assert_eq!(fg(80), Color::Indexed(149));
+    assert_eq!(fg(50), Color::Indexed(149));
     assert_eq!(fg(49), Color::Indexed(179));
     assert_eq!(fg(40), Color::Indexed(179));
     assert_eq!(fg(25), Color::Indexed(179));
     assert_eq!(fg(24), Color::Indexed(173));
     assert_eq!(fg(10), Color::Indexed(173));
-    assert_eq!(fg(9), Color::Indexed(167));
-    assert_eq!(fg(1), Color::Indexed(167));
+    assert_eq!(fg(9), Color::Indexed(210));
+    assert_eq!(fg(1), Color::Indexed(210));
     let track = &mana_bar_spans(&lit, 70, 10, &zones)[1];
     assert_eq!(track.style, lit.dim());
     let spent = mana_bar_spans(&lit, 0, 10, &zones);
-    assert_eq!(spent[0].style.fg, Some(Color::Indexed(167)));
+    assert_eq!(spent[0].style.fg, Some(Color::Indexed(210)));
+    assert_ne!(spent[0].style.fg, lit.dim().fg);
     assert_ne!(spent[0].style.fg, lit.dim().fg);
 }
 

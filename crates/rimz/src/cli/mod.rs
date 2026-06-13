@@ -16,6 +16,7 @@ mod hook_consent;
 mod hook_install;
 mod hooks;
 mod list;
+mod list_themes;
 mod pane;
 mod parse;
 mod queue;
@@ -71,6 +72,7 @@ pub fn dispatch() -> Result<()> {
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
+        Some(Subcmd::ListThemes(args)) => list_themes::run(args, &globals),
         Some(Subcmd::Event(args)) => event::run(args, &globals),
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
@@ -217,6 +219,8 @@ enum Subcmd {
     Workspace(workspace::WorkspaceArgs),
     /// Show known workspaces and which mux is currently running them.
     List(list::ListArgs),
+    /// List the bundled sidebar theme names.
+    ListThemes(list_themes::ListThemesArgs),
     /// Emit generic events into the workspace ledger.
     Event(event::EventArgs),
     /// Feed primitives: ask, push, list, show, resolve, dismiss, abstain.

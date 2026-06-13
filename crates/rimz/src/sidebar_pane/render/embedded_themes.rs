@@ -34,8 +34,7 @@ fn load() -> BTreeMap<String, String> {
     serde_json::from_str(&json).unwrap_or_default()
 }
 
-#[cfg(test)]
-fn theme_names() -> impl Iterator<Item = &'static str> {
+pub(super) fn theme_names() -> impl Iterator<Item = &'static str> {
     catalog().keys().map(String::as_str)
 }
 

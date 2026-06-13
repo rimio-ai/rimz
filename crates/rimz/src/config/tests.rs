@@ -313,11 +313,14 @@ fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
-        "[sidebar.theme]\nmode = 256\nscheme = \"slate\"\ngood = 34\nselection = \"#8ab3e0\"\n",
+        "[sidebar.theme]\nmode = 256\nscheme = \"TokyoNight Night\"\ngood = 34\nselection = \"#8ab3e0\"\n",
     ))
     .expect("load");
     assert_eq!(config.sidebar.theme.mode, ThemeMode::Indexed);
-    assert_eq!(config.sidebar.theme.scheme.as_deref(), Some("slate"));
+    assert_eq!(
+        config.sidebar.theme.scheme.as_deref(),
+        Some("TokyoNight Night")
+    );
     assert_eq!(config.sidebar.theme.good, Some(ThemeColor::Indexed(34)));
     assert_eq!(
         config.sidebar.theme.selection,

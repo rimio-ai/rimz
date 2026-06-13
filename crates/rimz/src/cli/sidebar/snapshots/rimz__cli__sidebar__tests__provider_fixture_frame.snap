@@ -9,7 +9,7 @@ expression: strip_sgr(&ansi)
  ────────────────────────────────────────────────────
  ? 1   ! 1   ⏸︎ 0   ✓ 0                      ⢿ 1   ○ 0
 
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47▕
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +182 -47▕
 ▌⢄ claude · Opus 4.1 · 200k                          ▐
 ▌  port auth watcher                        ●●○○○ 4/7▐
 ▌  ▣ ━━━━━━━━━━━━━━━━━╸━━━━━━━━━━──────────────   67%▐
@@ -19,11 +19,11 @@ expression: strip_sgr(&ansi)
 ▌      ◇ 22k · Haiku                            ◔  3m▐
 ▌    ✓ test — run focused nextest                    ▐
 ▌      ◇ 18k · Haiku                            ◔  4m▐
-▏? codex · GPT 5.1 Codex · 272k                      ▕
-▏  approve pricing cache write              ●●○○○ 4/7▕
-▏  ▣ ━━━━━━━━━━╸━━━━━━─────────────────────────   41%▕
-▏  ▤ 51k · ◌ 32k ↘ 19k ↗ 12k                         ▕
-▏⣾ cargo nextest                                     ▕
+▎? codex · GPT 5.1 Codex · 272k                      ▕
+▎  approve pricing cache write              ●●○○○ 4/7▕
+▎  ▣ ━━━━━━━━━━╸━━━━━━─────────────────────────   41%▕
+▎  ▤ 51k · ◌ 32k ↘ 19k ↗ 12k                         ▕
+▎⣾ cargo nextest                                     ▕
 
  ─── Claude ──── Codex ──────────────────────────────
 

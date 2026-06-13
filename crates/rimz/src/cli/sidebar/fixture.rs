@@ -34,7 +34,7 @@ pub(super) fn sidebar_fixture_snapshot(
         link: None,
         reflects_log: None,
     };
-    snapshot.sidebar.theme.scheme = Some("clay".to_owned());
+    snapshot.sidebar.theme.scheme = Some("TokyoNight Night".to_owned());
 
     match state {
         SidebarFixtureState::Empty => {}

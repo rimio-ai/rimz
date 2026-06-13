@@ -245,7 +245,7 @@ rimz config get
 rimz config get sidebar.max_cols
 rimz config get sidebar --json
 rimz config set sidebar.max_cols 80
-rimz config set sidebar.theme slate
+rimz config set sidebar.theme "TokyoNight Night"
 rimz config set worktree.base fresh
 rimz config set notifications.triggers '["waiting", "failed"]'
 ```

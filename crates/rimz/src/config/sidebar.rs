@@ -199,9 +199,9 @@ pub struct SidebarThemeConfig {
     /// `truecolor` forces RGB, and `256` quantizes RGB tones to xterm indexes.
     #[serde(skip_serializing_if = "is_default_theme_mode")]
     pub mode: ThemeMode,
-    /// Palette scheme: unset uses the built-in clay palette. Built-in names,
-    /// bundled Alacritty theme names, and paths to Alacritty TOML theme files
-    /// are accepted.
+    /// Palette scheme: unset uses the bundled `TokyoNight Night` theme. Bundled
+    /// Alacritty theme names (`rimz list-themes`) and paths to Alacritty TOML
+    /// theme files are accepted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
     /// Calm/positive: running tallies, low gauges, `+` additions, cache reads.

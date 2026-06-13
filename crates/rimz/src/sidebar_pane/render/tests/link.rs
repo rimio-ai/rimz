@@ -87,7 +87,7 @@ fn stale_link_badge_is_unknown() {
         .iter()
         .find(|span| span.content.contains("remote"))
         .unwrap();
-    assert_eq!(badge.style.fg, Some(Color::Indexed(242)));
+    assert_eq!(badge.style.fg, Some(Color::Indexed(60)));
 }
 
 #[test]

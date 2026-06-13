@@ -5,27 +5,24 @@
 The sidebar's palette, status-head animations, and provider brand styling are per-machine display settings under `[sidebar]` in `~/.config/rimz/config.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
 
 ```sh
-rimz config set sidebar.theme slate
+rimz config set sidebar.theme "TokyoNight Night"
 ```
 
 Every key below also lives as commented TOML in the generated template: `rimz config init --print`.
 
 ## Schemes
 
-`[sidebar.theme] scheme` picks the palette source.
+`[sidebar.theme] scheme` picks the palette source. `rimz list-themes` prints every bundled name.
 
 | `scheme` | character | source |
 | --- | --- | --- |
-| unset | warm, earthen | built-in `clay` |
-| `clay` | warm, earthen | built-in |
-| `slate` | cool, blue-leaning | built-in |
-| `classic` | neutral | built-in |
+| unset | the shipped default | bundled `TokyoNight Night` |
 | `Afterglow`, `Catppuccin Mocha`, ... | theme-defined | bundled Alacritty catalog |
 | `/path/to/theme.toml` | theme-defined | custom Alacritty TOML |
 
 ```toml
 [sidebar.theme]
-scheme = "slate"
+scheme = "TokyoNight Night"
 ```
 
 ### Bundled Themes
@@ -62,22 +59,22 @@ mode = "auto"        # or "truecolor", "256"
 
 ## Palette Slots
 
-Twelve semantic slots cover everything the sidebar paints. Each accepts `#rrggbb` hex or a raw 0–255 xterm index under `[sidebar.theme]`; an omitted slot keeps the selected scheme's tone. Slot names follow the semantics rather than the shipped hues, so a light-terminal re-theme still reads `good`/`warn`/`alarm`.
+Twelve semantic slots cover everything the sidebar paints. Each accepts `#rrggbb` hex or a raw 0–255 xterm index under `[sidebar.theme]`; an omitted slot keeps the selected scheme's tone (the bundled `TokyoNight Night` palette by default). Slot names follow the semantics rather than the shipped hues, so a light-terminal re-theme still reads `good`/`warn`/`alarm`.
 
-| slot | colors | clay default |
-| --- | --- | --- |
-| `good` | calm/positive: running tallies, low gauges, `+` additions | `#96c293` |
-| `warn` | caution: waiting glyphs at rest, mid gauges | `#dfb66d` |
-| `caution` | the amber badge/gauge rung between warning and alarm, and the age-heat midpoint | `#e0915c` |
-| `alarm` | failed glyphs, high gauges, `-` removals | `#de6e6e` |
-| `accent` | structure: worktree headers, the selected lane spine | `#72b3aa` |
-| `cool` | cool informational: the `plan` posture pill, window tags, the `◇` token total | `#7fa8de` |
-| `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker | `#b49be0` |
-| `soft` | soft content text: stat figures, capability tokens, subagent lines | `#a6a19a` |
-| `dim` | dim chrome: labels, ages, subordinate values | `#767168` |
-| `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers | `#45423d` |
-| `rule` | the darkest chrome (the scrollbar track), a step below `faint` | `#343230` |
-| `selection` | the selected-row `▌` accent bar | `#8ab3e0` |
+| slot | colors |
+| --- | --- |
+| `good` | calm/positive: running tallies, low gauges, `+` additions |
+| `warn` | caution: waiting glyphs at rest, mid gauges |
+| `caution` | the amber badge/gauge rung between warning and alarm, and the age-heat midpoint |
+| `alarm` | failed glyphs, high gauges, `-` removals |
+| `accent` | structure: worktree headers, the selected lane spine |
+| `cool` | cool informational: the `plan` posture pill, window tags, the `◇` token total |
+| `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker |
+| `soft` | soft content text: stat figures, capability tokens, subagent lines |
+| `dim` | dim chrome: labels, ages, subordinate values |
+| `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers |
+| `rule` | the darkest chrome (the scrollbar track), a step below `faint` |
+| `selection` | the selected-row `▌` accent bar |
 
 ```toml
 [sidebar.theme]
@@ -193,11 +190,11 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 ## Changing Values
 
 ```sh
-rimz config set sidebar.theme slate
+rimz config set sidebar.theme "TokyoNight Night"
 rimz config set sidebar.theme.good '#a0d0a0'
 rimz config set sidebar.glow always
 rimz config set sidebar.animations.idle.effect breathe
 rimz config set sidebar.providers.codex.color 33
 ```
 
-`rimz config set` validates before it writes: an unknown scheme is rejected with the built-in names, bundled-catalog count, and custom-file path hint, and a malformed color, Alacritty file, or frame is rejected before the file changes. Loading stays lenient, so an older or stale scheme value falls back to `clay` at render time instead of taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
+`rimz config set` validates before it writes: an unknown scheme is rejected with the bundled-catalog count and custom-file path hint, and a malformed color, Alacritty file, or frame is rejected before the file changes. Loading stays lenient, so an older or stale scheme value falls back to the default `TokyoNight Night` scheme at render time instead of taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
