@@ -1,12 +1,12 @@
-//! The CLI's semantic color palette: the [`PaletteTones`] slots emitted as
-//! `anstyle` styles. Built from [`PaletteTones::DEFAULT`] — the same fixed
+//! The CLI's semantic color palette: the [`Semantic`] slots emitted as
+//! `anstyle` styles. Built from [`Semantic::DEFAULT`] — the same fixed
 //! `TokyoNight Night` tones the default sidebar uses — so `rimz` command output
 //! and the room share one look without dragging per-user theme resolution onto
 //! the CLI path.
 
-use rimz::config::PaletteTones;
+use rimz::config::Semantic;
 
-const TONES: PaletteTones = PaletteTones::DEFAULT;
+const TONES: Semantic = Semantic::DEFAULT;
 
 const fn fg(rgb: (u8, u8, u8)) -> anstyle::Style {
     anstyle::Style::new().fg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(

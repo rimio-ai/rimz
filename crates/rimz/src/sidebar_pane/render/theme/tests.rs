@@ -2,7 +2,7 @@
 //! ladder, depth-aware brand emission, and capability gating.
 
 use super::*;
-use crate::config::{PaletteTones, SidebarAnimationsConfig, ThemeMode};
+use crate::config::{Semantic, SidebarAnimationsConfig, ThemeMode};
 
 fn indices(palette: Palette) -> [Color; 12] {
     [
@@ -24,9 +24,9 @@ fn indices(palette: Palette) -> [Color; 12] {
 #[test]
 fn default_const_matches_bundled_default() {
     assert_eq!(
-        PaletteTones::DEFAULT,
+        Semantic::DEFAULT,
         scheme::explicit_palette_tones(DEFAULT_SCHEME).expect("bundled default scheme resolves"),
-        "PaletteTones::DEFAULT must mirror the bundled `{DEFAULT_SCHEME}` tones"
+        "Semantic::DEFAULT must mirror the bundled `{DEFAULT_SCHEME}` tones"
     );
 }
 
@@ -132,7 +132,7 @@ fn heat_tone_walks_good_to_alarm_across_stops() {
     let theme = Theme::fixed(false);
     // Four stops — good → warn → caution → alarm — at 0, ⅓, ⅔, 1; the
     // default scheme quantizes each tone to its xterm index. Endpoints clamp.
-    let (good_r, good_g, good_b) = PaletteTones::DEFAULT.good;
+    let (good_r, good_g, good_b) = Semantic::DEFAULT.good;
     let good = Color::Indexed(nearest_xterm_index(good_r, good_g, good_b));
     assert_eq!(theme.heat_tone(-0.1), good);
     assert_eq!(theme.heat_tone(0.0), good);
@@ -325,7 +325,7 @@ fn bundled_scheme_resolves_by_name() {
         ..SidebarConfig::default()
     };
     let theme = Theme::fixed_for_sidebar(false, &sidebar);
-    let (good_r, good_g, good_b) = PaletteTones::DEFAULT.good;
+    let (good_r, good_g, good_b) = Semantic::DEFAULT.good;
     assert_eq!(
         theme.good(Modifier::empty()).fg,
         Some(Color::Indexed(nearest_xterm_index(good_r, good_g, good_b)))

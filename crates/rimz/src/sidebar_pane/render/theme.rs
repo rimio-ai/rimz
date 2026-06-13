@@ -16,8 +16,8 @@
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, PaletteTones, SidebarConfig, SidebarThemeConfig,
-    ThemeColor, nearest_xterm_index, xterm_rgb,
+    AnimationColor, ColorDepth, GlowMode, Semantic, SidebarConfig, SidebarThemeConfig, ThemeColor,
+    nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -68,7 +68,7 @@ const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
 
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
 /// catalog. `[sidebar.theme] scheme` left unset resolves to this. The baked-in
-/// tones live in [`PaletteTones::DEFAULT`].
+/// tones live in [`Semantic::DEFAULT`].
 pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 
 /// The active palette, one named slot per semantic tone.
@@ -96,13 +96,13 @@ impl Palette {
     }
 
     pub(crate) fn resolve_fixed(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_fallback(theme, depth, PaletteTones::DEFAULT)
+        Self::resolve_with_fallback(theme, depth, Semantic::DEFAULT)
     }
 
     fn resolve_with_fallback(
         theme: &SidebarThemeConfig,
         depth: ColorDepth,
-        fallback: PaletteTones,
+        fallback: Semantic,
     ) -> Palette {
         let tones = match theme.scheme.as_deref() {
             None => fallback,
@@ -160,14 +160,14 @@ impl Palette {
     }
 }
 
-fn selected_palette_tones(name: &str) -> Option<PaletteTones> {
+fn selected_palette_tones(name: &str) -> Option<Semantic> {
     scheme::explicit_palette_tones(name)
 }
 
 /// The shipped default tones: [`DEFAULT_SCHEME`] resolved from the bundled
-/// catalog, with the baked-in [`PaletteTones::DEFAULT`] as the backstop.
-fn default_palette_tones() -> PaletteTones {
-    scheme::explicit_palette_tones(DEFAULT_SCHEME).unwrap_or(PaletteTones::DEFAULT)
+/// catalog, with the baked-in [`Semantic::DEFAULT`] as the backstop.
+fn default_palette_tones() -> Semantic {
+    scheme::explicit_palette_tones(DEFAULT_SCHEME).unwrap_or(Semantic::DEFAULT)
 }
 
 fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {

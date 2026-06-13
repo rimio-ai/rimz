@@ -4,7 +4,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::Deserialize;
 
-use crate::config::{PaletteTones, parse_hex};
+use crate::config::{Semantic, parse_hex};
 
 use super::embedded_themes;
 use super::oklab::Rgb;
@@ -38,7 +38,7 @@ struct AlacrittyAnsiColors {
     cyan: Option<String>,
 }
 
-pub(crate) fn explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
+pub(crate) fn explicit_palette_tones(name_or_path: &str) -> Option<Semantic> {
     cached_explicit_palette_tones(name_or_path)
 }
 
@@ -51,7 +51,7 @@ pub fn available_scheme_names() -> Vec<String> {
     embedded_themes::theme_names().map(str::to_owned).collect()
 }
 
-fn cached_explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
+fn cached_explicit_palette_tones(name_or_path: &str) -> Option<Semantic> {
     {
         let cache = lock_explicit_scheme_cache();
         if let Some(tones) = cache.get(name_or_path) {
@@ -64,15 +64,15 @@ fn cached_explicit_palette_tones(name_or_path: &str) -> Option<PaletteTones> {
     *cache.entry(name_or_path.to_owned()).or_insert(tones)
 }
 
-fn lock_explicit_scheme_cache() -> MutexGuard<'static, HashMap<String, Option<PaletteTones>>> {
-    static CACHED: OnceLock<Mutex<HashMap<String, Option<PaletteTones>>>> = OnceLock::new();
+fn lock_explicit_scheme_cache() -> MutexGuard<'static, HashMap<String, Option<Semantic>>> {
+    static CACHED: OnceLock<Mutex<HashMap<String, Option<Semantic>>>> = OnceLock::new();
     match CACHED.get_or_init(|| Mutex::new(HashMap::new())).lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
     }
 }
 
-fn load_explicit_palette_tones(name_or_path: &str) -> Result<PaletteTones, String> {
+fn load_explicit_palette_tones(name_or_path: &str) -> Result<Semantic, String> {
     if let Some(text) = embedded_themes::theme_toml(name_or_path) {
         return parse_palette_tones(text).map_err(|err| {
             format!("invalid bundled sidebar theme scheme `{name_or_path}`: {err}")
@@ -81,7 +81,7 @@ fn load_explicit_palette_tones(name_or_path: &str) -> Result<PaletteTones, Strin
     load_external_palette_tones(name_or_path)
 }
 
-fn load_external_palette_tones(name_or_path: &str) -> Result<PaletteTones, String> {
+fn load_external_palette_tones(name_or_path: &str) -> Result<Semantic, String> {
     let path = resolve_external_scheme_path(name_or_path).ok_or_else(|| {
         format!(
             "unknown sidebar theme scheme `{name_or_path}`; {}",
@@ -121,7 +121,7 @@ fn expand_home(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-pub(crate) fn parse_palette_tones(text: &str) -> Result<PaletteTones, String> {
+pub(crate) fn parse_palette_tones(text: &str) -> Result<Semantic, String> {
     Ok(parse_raw_palette(text)?.derive_tones())
 }
 

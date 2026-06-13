@@ -3,7 +3,7 @@
 //! scheme-supplied color; every downstream tone derives from these.
 
 use super::super::oklab::{self, Rgb};
-use crate::config::PaletteTones;
+use crate::config::Semantic;
 
 /// The imported terminal colors, verbatim: background, foreground, the six
 /// ANSI normal hues the renderer maps to meaning, and the selection accent.
@@ -22,12 +22,12 @@ pub(crate) struct RawPalette {
 }
 
 impl RawPalette {
-    /// Derive the twelve semantic tones ([`PaletteTones`], the shared palette
+    /// Derive the twelve semantic tones ([`Semantic`], the shared palette
     /// the CLI and sidebar both read): ANSI hues map straight through, `caution`
     /// blends yellow toward red, and the neutral ladder steps from background
     /// toward foreground — all in OKLab so each step reads evenly.
-    pub(crate) fn derive_tones(&self) -> PaletteTones {
-        PaletteTones {
+    pub(crate) fn derive_tones(&self) -> Semantic {
+        Semantic {
             good: self.green,
             warn: self.yellow,
             caution: oklab::blend(self.yellow, self.red, 0.5),

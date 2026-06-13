@@ -15,7 +15,7 @@ pub enum ColorDepth {
 /// and the CLI presentation layer (which emits them as ANSI). Pure data: no
 /// renderer or terminal dependency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PaletteTones {
+pub struct Semantic {
     pub good: (u8, u8, u8),
     pub warn: (u8, u8, u8),
     pub caution: (u8, u8, u8),
@@ -30,7 +30,7 @@ pub struct PaletteTones {
     pub selection: (u8, u8, u8),
 }
 
-impl PaletteTones {
+impl Semantic {
     /// The derived `TokyoNight Night` tones, baked in as the infallible default
     /// so sidebar resolution never fails even when the bundled catalog is
     /// unreadable. `default_const_matches_bundled_default` keeps these in
