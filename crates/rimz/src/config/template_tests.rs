@@ -55,6 +55,7 @@ fn template_lists_optional_sidebar_theme_slots() {
         "faint",
         "rule",
         "selection",
+        "selection_bg",
     ] {
         assert!(
             template.contains(&format!("## {slot} = ")),

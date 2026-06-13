@@ -10,7 +10,7 @@ pub enum ColorDepth {
     Truecolor,
 }
 
-/// The twelve semantic palette tones, as raw RGB. One neutral home shared by
+/// The thirteen semantic palette tones, as raw RGB. One neutral home shared by
 /// the sidebar renderer (which quantizes these to the active [`ColorDepth`])
 /// and the CLI presentation layer (which emits them as ANSI). Pure data: no
 /// renderer or terminal dependency.
@@ -28,6 +28,11 @@ pub struct Semantic {
     pub faint: (u8, u8, u8),
     pub rule: (u8, u8, u8),
     pub selection: (u8, u8, u8),
+    /// The selected card's background band. Derived from the scheme's
+    /// `colors.selection.background`, subdued toward the background, or a blue
+    /// tint when the scheme ships none. Used only by the sidebar renderer's band
+    /// fill; the CLI presentation layer ignores it.
+    pub selection_bg: (u8, u8, u8),
 }
 
 impl Semantic {
@@ -39,7 +44,7 @@ impl Semantic {
     pub const DEFAULT: Self = Self {
         good: (0x9e, 0xce, 0x6a),
         warn: (0xe0, 0xaf, 0x68),
-        caution: (0xed, 0x95, 0x7d),
+        caution: (0xfa, 0xa1, 0x4f),
         alarm: (0xf7, 0x76, 0x8e),
         accent: (0x7d, 0xcf, 0xff),
         cool: (0x7a, 0xa2, 0xf7),
@@ -48,7 +53,8 @@ impl Semantic {
         muted: (0x78, 0x7e, 0x9b),
         faint: (0x53, 0x57, 0x6d),
         rule: (0x43, 0x46, 0x59),
-        selection: (0x7a, 0xa2, 0xf7),
+        selection: (0xab, 0xc4, 0xff),
+        selection_bg: (0x1d, 0x20, 0x30),
     };
 }
 

@@ -341,6 +341,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.theme.faint",
         "sidebar.theme.rule",
         "sidebar.theme.selection",
+        "sidebar.theme.selection_bg",
         "sidebar.scrollbar",
         "sidebar.glow",
         "zellij.mouse_mode",

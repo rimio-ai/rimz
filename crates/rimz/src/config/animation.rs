@@ -171,6 +171,7 @@ impl<'de> Deserialize<'de> for AnimationFrames {
 pub enum AnimationColor {
     Good,
     Warn,
+    Caution,
     Alarm,
     Accent,
     Cool,
@@ -188,6 +189,7 @@ impl AnimationColor {
         match self {
             Self::Good => Some("good"),
             Self::Warn => Some("warn"),
+            Self::Caution => Some("caution"),
             Self::Alarm => Some("alarm"),
             Self::Accent => Some("accent"),
             Self::Cool => Some("cool"),
@@ -204,6 +206,7 @@ impl AnimationColor {
         match value {
             "good" => Some(Self::Good),
             "warn" => Some(Self::Warn),
+            "caution" => Some(Self::Caution),
             "alarm" => Some(Self::Alarm),
             "accent" => Some(Self::Accent),
             "cool" => Some(Self::Cool),
@@ -263,7 +266,7 @@ impl<'de> Deserialize<'de> for AnimationColor {
                         .map_err(E::custom);
                 }
                 Err(E::custom(format!(
-                    "unknown animation color `{value}`; expected good, warn, alarm, accent, cool, meta, body, muted, faint, clay, #rrggbb, or 0-255"
+                    "unknown animation color `{value}`; expected good, warn, caution, alarm, accent, cool, meta, body, muted, faint, clay, #rrggbb, or 0-255"
                 )))
             }
 
@@ -343,6 +346,8 @@ mod tests {
     fn color_accepts_names_and_indexes() {
         let named: ColorWrap = toml::from_str("value = \"clay\"").expect("named color");
         assert_eq!(named.value, AnimationColor::Clay);
+        let caution: ColorWrap = toml::from_str("value = \"caution\"").expect("caution color");
+        assert_eq!(caution.value, AnimationColor::Caution);
         let indexed: ColorWrap = toml::from_str("value = 173").expect("indexed color");
         assert_eq!(indexed.value, AnimationColor::Indexed(173));
         let rgb: ColorWrap = toml::from_str("value = \"#2FB1D1\"").expect("rgb color");

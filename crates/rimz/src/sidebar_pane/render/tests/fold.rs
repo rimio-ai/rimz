@@ -564,9 +564,10 @@ fn agent_name_follows_card_emphasis() {
         "a calm unselected agent name takes the calm brand style"
     );
     assert_eq!(
-        calm, selected,
-        "at indexed depth the calm name keeps full brand — the cube can't render \
-         a subtle dim, so the selection bar and description carry the calm cue"
+        calm.fg, selected.fg,
+        "at indexed depth the calm name keeps the same full-brand tone — the cube \
+         can't render a subtle dim, so the selection band, bar, and description \
+         carry the selected/calm distinction"
     );
     assert_ne!(
         calm.fg,

@@ -38,6 +38,38 @@ pub(crate) fn lift_lightness(rgb: Rgb, delta: f32) -> Rgb {
     color.to_rgb()
 }
 
+/// Warm `base` toward `target`'s hue while enriching chroma, holding `base`'s
+/// lightness. Unlike [`blend`] — which desaturates through the midpoint and
+/// drifts toward the target's lightness — this keeps the source vivid: a gold
+/// `yellow` rotated a fraction toward a rose `red` and saturated lands on a true
+/// amber-orange, not a washed-out coral. `rotate` is the fraction of the
+/// shortest-path hue swing toward `target` (`0.0` holds `base`'s hue), and
+/// `chroma_scale` multiplies chroma (`1.0` holds it). Chroma eases back into the
+/// sRGB gamut if the enriched tone overshoots.
+pub(crate) fn warm_toward(base: Rgb, target: Rgb, rotate: f32, chroma_scale: f32) -> Rgb {
+    use std::f32::consts::{PI, TAU};
+    let base = Oklab::from_rgb(base);
+    let target = Oklab::from_rgb(target);
+    let chroma = base.a.hypot(base.b) * chroma_scale;
+    let base_hue = base.b.atan2(base.a);
+    let target_hue = target.b.atan2(target.a);
+    let mut delta = target_hue - base_hue;
+    while delta > PI {
+        delta -= TAU;
+    }
+    while delta < -PI {
+        delta += TAU;
+    }
+    let hue = base_hue + delta * rotate;
+    Oklab {
+        l: base.l,
+        a: chroma * hue.cos(),
+        b: chroma * hue.sin(),
+    }
+    .fit_to_gamut()
+    .to_rgb()
+}
+
 /// Iterations of the chroma-fit bisection: 16 resolves the scale to 1/65536,
 /// far finer than 8-bit sRGB can show.
 const GAMUT_FIT_ITERS: usize = 16;
@@ -201,5 +233,35 @@ mod tests {
         let right = (0xc0, 0xa0, 0x40);
         assert_eq!(blend(left, right, 0.0), left);
         assert_eq!(blend(left, right, 1.0), right);
+    }
+
+    #[test]
+    fn warm_toward_lands_a_vivid_orange_not_a_coral() {
+        // Tokyo Night gold warmed toward its rose-red. A linear blend desaturates
+        // into coral (blue rises toward the rose red); warming the hue and
+        // enriching chroma instead lands a true amber-orange — its blue channel
+        // falls *below* the source gold's, the signature of orange over coral.
+        let yellow = (0xe0, 0xaf, 0x68);
+        let red = (0xf7, 0x76, 0x8e);
+        let amber = warm_toward(yellow, red, 0.22, 1.35);
+        assert!(
+            amber.2 < yellow.2,
+            "orange pulls blue below the gold: {amber:?}"
+        );
+        assert!(
+            blend(yellow, red, 0.5).2 > yellow.2,
+            "the plain blend instead drifts blue up toward the rose red — a coral"
+        );
+        assert_ne!(amber, blend(yellow, red, 0.5));
+    }
+
+    #[test]
+    fn warm_toward_zero_rotation_and_unit_chroma_holds_the_source() {
+        let gold = (0xe0, 0xaf, 0x68);
+        let held = warm_toward(gold, (0xf7, 0x76, 0x8e), 0.0, 1.0);
+        // Round-trip through OKLab is lossless to within a channel step.
+        assert!(held.0.abs_diff(gold.0) <= 1);
+        assert!(held.1.abs_diff(gold.1) <= 1);
+        assert!(held.2.abs_diff(gold.2) <= 1);
     }
 }

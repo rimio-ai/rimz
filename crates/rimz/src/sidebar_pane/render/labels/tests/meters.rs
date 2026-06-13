@@ -24,15 +24,20 @@ fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
     let input = theme.component(Component::Input);
     assert_eq!(
         input,
+        theme.heat_tone(2.0 / 3.0),
+        "fresh input wears the caution amber — the ramp's third stop — hot/costly"
+    );
+    assert_ne!(
+        input,
         theme.heat_tone(1.0),
-        "fresh input matches the context-fill alarm endpoint"
+        "fresh input no longer borrows the 100% alarm red, so red stays exclusive to danger"
     );
     assert_eq!(
         write,
         theme.component(Component::SubagentHeader),
         "cache-write shares the compaction/delegation violet (meta) slot"
     );
-    assert_ne!(write, input, "cache-write stays distinct from input red");
+    assert_ne!(write, input, "cache-write stays distinct from input amber");
 }
 
 #[test]

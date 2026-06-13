@@ -4,7 +4,7 @@
 use super::*;
 use crate::config::{Semantic, SidebarAnimationsConfig, ThemeMode};
 
-fn indices(palette: Palette) -> [Color; 12] {
+fn indices(palette: Palette) -> [Color; 13] {
     [
         palette.good,
         palette.warn,
@@ -18,6 +18,7 @@ fn indices(palette: Palette) -> [Color; 12] {
         palette.faint,
         palette.rule,
         palette.selection,
+        palette.selection_bg,
     ]
 }
 
@@ -38,7 +39,7 @@ fn default_indexed_palette_matches_expected_indices() {
         [
             Color::Indexed(149),
             Color::Indexed(179),
-            Color::Indexed(210),
+            Color::Indexed(215),
             Color::Indexed(210),
             Color::Indexed(117),
             Color::Indexed(111),
@@ -47,7 +48,8 @@ fn default_indexed_palette_matches_expected_indices() {
             Color::Indexed(102),
             Color::Indexed(59),
             Color::Indexed(239),
-            Color::Indexed(111),
+            Color::Indexed(153),
+            Color::Indexed(235),
         ]
     );
 }
@@ -68,7 +70,7 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     assert_eq!(theme.alarm(Modifier::empty()).fg, Some(Color::Indexed(210)));
     assert_eq!(
         theme.heat_tone(2.0 / 3.0),
-        Color::Indexed(210),
+        Color::Indexed(215),
         "the untouched caution slot still anchors the ramp's third stop"
     );
     assert_eq!(
@@ -139,7 +141,7 @@ fn heat_tone_walks_good_to_alarm_across_stops() {
     assert_eq!(theme.heat_tone(-0.1), good);
     assert_eq!(theme.heat_tone(0.0), good);
     assert_eq!(theme.heat_tone(1.0 / 3.0), Color::Indexed(179));
-    assert_eq!(theme.heat_tone(2.0 / 3.0), Color::Indexed(210));
+    assert_eq!(theme.heat_tone(2.0 / 3.0), Color::Indexed(215));
     assert_eq!(theme.heat_tone(1.0), Color::Indexed(210));
     assert_eq!(theme.heat_tone(1.1), Color::Indexed(210));
 }
@@ -567,13 +569,15 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
         let p = theme.palette;
         for &component in Component::ALL {
             let expected = match component {
-                Sessions | LaneSpine | WorktreeHeader | BranchDelta | CacheRead | WindowHuge
-                | FlashSelectionLanded => p.accent,
+                Sessions | CacheRead | WindowHuge => p.accent,
+                LaneSpine | FlashSelectionLanded => p.selection,
+                WorktreeHeader | BranchDelta => p.body,
                 LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
                 ProcMem | Output | FlashResolved | FlashLifted => p.good,
                 Compaction | AttentionFloor | FlashWaiting => p.warn,
-                Input | FlashFailed => p.alarm,
+                Input => p.caution,
+                FlashFailed => p.alarm,
                 WindowMedium | UnknownBrand | FlashMaterialized => p.muted,
                 WindowSmall => p.faint,
             };

@@ -204,19 +204,20 @@ pub struct SidebarThemeConfig {
     /// theme files are accepted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
-    /// Calm/positive: running tallies, low gauges, `+` additions, cache reads.
+    /// Calm/positive: running tallies, low gauges, `+` additions, output tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub good: Option<ThemeColor>,
-    /// Caution: waiting glyphs at rest, mid gauges, cache writes.
+    /// Caution floor: waiting glyphs at rest, low-mid gauges.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub warn: Option<ThemeColor>,
-    /// Elevated caution: amber badge/gauge rung between warning and alarm.
+    /// Amber, the warm "hot/costly/parked" tier: the gauge mid-band, age heat,
+    /// the paused glyph, and the fresh-input token marker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caution: Option<ThemeColor>,
-    /// Alarm: failed glyphs, high gauges, `-` removals, fresh input.
+    /// Alarm, reserved for danger: failed glyphs, the 100% gauge crest, `-` removals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alarm: Option<ThemeColor>,
-    /// Structure accent: worktree headers and the selected lane spine.
+    /// Data accent: the `◎` sessions glyph and the `◌` cache-read marker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent: Option<ThemeColor>,
     /// Cool informational: the `plan` posture pill, window tags.
@@ -238,9 +239,15 @@ pub struct SidebarThemeConfig {
     /// The darkest chrome (the scrollbar track) — a step below `faint`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule: Option<ThemeColor>,
-    /// The selected-row `▌` accent bar.
+    /// The selection tone: the selected card's bright `▌` spine and the dim
+    /// `▎` lane bracket around the worktree holding it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection: Option<ThemeColor>,
+    /// The selected card's background band, behind every line of the card.
+    /// Derived from the scheme's `colors.selection.background`, subdued toward
+    /// the background.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_bg: Option<ThemeColor>,
 }
 
 impl SidebarThemeConfig {

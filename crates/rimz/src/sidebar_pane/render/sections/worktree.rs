@@ -128,8 +128,8 @@ fn group_header(
         return external_divider(theme, group, width);
     }
     // The lane spine (added by the caller) opens the header, so the label leads
-    // here in bold teal — no inline `▌`, the spine carries the lane. The header
-    // builds to the content width left after the gutter cell.
+    // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
+    // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
     // The worktree's git story pins right: a landed marker when a non-trunk
     // branch holds no work of its own (`≡ <trunk>` at the tip, `✓ <trunk>`
@@ -169,12 +169,20 @@ fn group_header(
         " ".repeat(middle)
     };
 
+    // The selected worktree's dotted `┄` seal wears the dim selection tone, so it
+    // matches the lane spine and reads as the top of the same bracket; an
+    // unselected header's gap is plain faint spaces.
+    let fill_style = if sealed {
+        theme.styled(Component::LaneSpine, Modifier::DIM)
+    } else {
+        theme.faint()
+    };
     let mut spans = vec![
         Span::styled(
             left,
             theme.styled(Component::WorktreeHeader, Modifier::BOLD),
         ),
-        Span::styled(fill, theme.faint()),
+        Span::styled(fill, fill_style),
     ];
     spans.extend(right);
     Line::from(spans)

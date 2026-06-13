@@ -428,7 +428,7 @@ fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
         ),
         AnimationRole::Paused => (
             vec!["⏸\u{FE0E}"],
-            palette.animation_color(AnimationColor::Warn),
+            palette.animation_color(AnimationColor::Caution),
             Effect::Static,
             Speed::Normal,
         ),

@@ -105,7 +105,7 @@ impl Tier {
 pub(super) enum Gutter {
     /// No marker — chrome and non-selected worktrees.
     Blank,
-    /// The selected worktree's resting lane spine (`▎`/`🮇`, dim teal).
+    /// The selected worktree's resting lane spine (`▎`/`🮇`, the dim selection tone).
     Lane,
     /// The selected card's bold accent spine (`▌`/`▐`).
     Selected,
@@ -121,6 +121,14 @@ pub(super) enum Gutter {
 /// more`), so the incoming style is patched onto each content span — the gutter
 /// cells keep their own tone untouched.
 fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize) -> Line<'static> {
+    // The selected card rests on a background band: a dark fill behind every one
+    // of its lines, padding included, so the whole card reads as one lit block.
+    // The lane bracket and chrome carry no band; `NO_COLOR` drops it and the
+    // bright spine plus bold weight carry the selection alone.
+    let band = match gutter {
+        Gutter::Selected => theme.selection_band(),
+        Gutter::Blank | Gutter::Lane => None,
+    };
     let (left_cell, right_cell) = match gutter {
         Gutter::Blank => (Span::raw(" "), Span::raw(" ")),
         Gutter::Lane => (
@@ -138,6 +146,8 @@ fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize)
             Span::styled(SELECTED_SPINE_RIGHT, theme.selection()),
         ),
     };
+    let left_cell = banded(left_cell, band);
+    let right_cell = banded(right_cell, band);
     if width == 0 {
         return Line::from(Vec::<Span<'static>>::new());
     }
@@ -149,13 +159,13 @@ fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize)
     let mut content = trim_spans_to_width(
         line.spans
             .into_iter()
-            .map(|span| Span::styled(span.content, base.patch(span.style)))
+            .map(|span| banded(Span::styled(span.content, base.patch(span.style)), band))
             .collect(),
         cw,
     );
     let used = spans_width(&content);
     if used < cw {
-        content.push(Span::raw(" ".repeat(cw - used)));
+        content.push(banded(Span::raw(" ".repeat(cw - used)), band));
     }
 
     let mut spans = Vec::with_capacity(content.len() + 2);
@@ -163,6 +173,16 @@ fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize)
     spans.extend(content);
     spans.push(right_cell);
     Line::from(spans)
+}
+
+/// Lay the selection band behind a span when one is active, holding its
+/// foreground tone and weight. A `None` band (chrome, the lane, or `NO_COLOR`)
+/// returns the span untouched, so the band paints only the selected card.
+fn banded(span: Span<'static>, band: Option<Color>) -> Span<'static> {
+    match band {
+        Some(bg) => Span::styled(span.content, span.style.bg(bg)),
+        None => span,
+    }
 }
 
 /// Pack `left` from the start and pin `right` flush to the trailing edge: trim

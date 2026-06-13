@@ -20,12 +20,18 @@ struct AlacrittyColors {
     primary: Option<AlacrittyPrimaryColors>,
     normal: Option<AlacrittyAnsiColors>,
     bright: Option<AlacrittyAnsiColors>,
+    selection: Option<AlacrittySelectionColors>,
 }
 
 #[derive(Debug, Default, Deserialize)]
 struct AlacrittyPrimaryColors {
     background: Option<String>,
     foreground: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct AlacrittySelectionColors {
+    background: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -155,6 +161,16 @@ fn parse_raw_palette(text: &str) -> Result<RawPalette, String> {
         Some(value) => parse_color("colors.bright.blue", value)?,
         None => blue,
     };
+    // The selected-card band. Optional: a scheme without it derives a tint at
+    // [`RawPalette::derive_tones`] time, so every theme still gets a band.
+    let selection_background = match colors
+        .selection
+        .as_ref()
+        .and_then(|selection| selection.background.as_deref())
+    {
+        Some(value) => Some(parse_color("colors.selection.background", value)?),
+        None => None,
+    };
 
     Ok(RawPalette {
         background,
@@ -166,6 +182,7 @@ fn parse_raw_palette(text: &str) -> Result<RawPalette, String> {
         magenta,
         cyan,
         bright_blue,
+        selection_background,
     })
 }
 
@@ -222,16 +239,60 @@ foreground = '#657b83'
         assert_eq!(tones.accent, (0x7d, 0xd6, 0xcf));
         assert_eq!(tones.cool, (0x6c, 0x99, 0xbb));
         assert_eq!(tones.meta, (0x9f, 0x4e, 0x85));
-        assert_eq!(tones.selection, (0x6c, 0x99, 0xbb));
+        // Selection is its own bright cool tone, lifted off the data-cool slot —
+        // never a raw copy of bright.blue — so the selected card never borrows a
+        // token color.
+        assert_ne!(tones.selection, tones.cool);
+        // Caution warms the yellow into an amber distinct from both neighbors.
         assert_ne!(tones.caution, tones.warn);
         assert_ne!(tones.caution, tones.alarm);
     }
 
     #[test]
-    fn alacritty_selection_falls_back_to_normal_blue_when_bright_missing() {
+    fn selection_derives_a_distinct_bright_tone_and_a_band_when_scheme_omits_them() {
+        // No bright.blue and no colors.selection: the selection source falls back
+        // to normal blue, the selection tone still derives bright and distinct from
+        // the data-cool slot, and the band derives a deep tint of the background.
         let tones = parse_palette_tones(LIGHT_SCHEME).expect("parse scheme");
         assert_eq!(tones.cool, (0x26, 0x8b, 0xd2));
-        assert_eq!(tones.selection, tones.cool);
+        assert_ne!(tones.selection, tones.cool);
+        assert_ne!(
+            tones.selection_bg,
+            (0xfd, 0xf6, 0xe3),
+            "the band is a derived tint, not the raw background"
+        );
+    }
+
+    #[test]
+    fn alacritty_selection_background_feeds_the_band_when_present() {
+        const WITH_SELECTION: &str = r#"
+[colors.selection]
+background = '#283457'
+
+[colors.normal]
+red = '#f7768e'
+green = '#9ece6a'
+yellow = '#e0af68'
+blue = '#7aa2f7'
+magenta = '#bb9af7'
+cyan = '#7dcfff'
+
+[colors.primary]
+background = '#1a1b26'
+foreground = '#c0caf5'
+"#;
+        let tones = parse_palette_tones(WITH_SELECTION).expect("parse scheme");
+        // The band is the scheme's text-selection background pulled most of the
+        // way back toward the background — subdued for a full-card fill, so it
+        // equals neither the raw selection color nor the background, and its blue
+        // sits between the two.
+        assert_ne!(tones.selection_bg, (0x28, 0x34, 0x57));
+        assert_ne!(tones.selection_bg, (0x1a, 0x1b, 0x26));
+        assert!(
+            tones.selection_bg.2 > 0x26 && tones.selection_bg.2 < 0x57,
+            "the band's blue sits between background and the raw selection: {:?}",
+            tones.selection_bg
+        );
     }
 
     #[test]

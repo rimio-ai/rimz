@@ -41,7 +41,10 @@ fn selected_default_idle_agent_card_lead_stays_colorless() {
         .find(|span| span.content.as_ref() == "○")
         .expect("idle card lead glyph renders as its own span");
 
-    assert_eq!(lead.style, Style::default());
+    // The selected idle lead keeps no foreground tint — it stays colorless — while
+    // the selection band lays its dark fill behind every cell of the card.
+    assert_eq!(lead.style.fg, None);
+    assert_eq!(lead.style.bg, Some(Color::Indexed(235)));
 }
 
 #[test]

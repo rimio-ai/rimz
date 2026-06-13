@@ -579,7 +579,7 @@ fn paused_glyph_is_single_cell_amber_and_never_heats() {
     );
 
     let style = status_style(&theme, AgentStatus::Paused);
-    assert_eq!(style.fg, Some(Color::Indexed(179)));
+    assert_eq!(style.fg, Some(Color::Indexed(215)));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
     let long_parked = agent_lead_style(
         &theme,
@@ -590,7 +590,7 @@ fn paused_glyph_is_single_cell_amber_and_never_heats() {
         false,
         false,
     );
-    assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
+    assert_eq!(long_parked.fg, Some(Color::Indexed(215)));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
 }
 

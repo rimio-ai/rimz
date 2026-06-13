@@ -250,14 +250,20 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         &mut map,
     );
 
+    // Identify segments by foreground: the selected card's band lays a bg behind
+    // every span, orthogonal to which composition accent the segment paints.
     let bar_styles: Vec<_> = lines
         .iter()
         .flat_map(|line| line.spans.iter())
         .filter(|span| span.content.contains('━'))
-        .map(|span| span.style)
+        .map(|span| span.style.fg)
         .collect();
-    let input = theme.style(theme.component(Component::Input), Modifier::empty());
-    let cache_write = theme.style(theme.component(Component::CacheWrite), Modifier::empty());
+    let input = theme
+        .style(theme.component(Component::Input), Modifier::empty())
+        .fg;
+    let cache_write = theme
+        .style(theme.component(Component::CacheWrite), Modifier::empty())
+        .fg;
     assert!(
         bar_styles.contains(&input),
         "the fresh-input accent colors the bar tail"
@@ -325,14 +331,20 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         &mut map,
     );
 
+    // Identify segments by foreground: the selected card's band lays a bg behind
+    // every span, orthogonal to which composition accent the segment paints.
     let bar_styles: Vec<_> = lines
         .iter()
         .flat_map(|line| line.spans.iter())
         .filter(|span| span.content.contains('━'))
-        .map(|span| span.style)
+        .map(|span| span.style.fg)
         .collect();
-    let cache_write = theme.style(theme.component(Component::CacheWrite), Modifier::empty());
-    let input = theme.style(theme.component(Component::Input), Modifier::empty());
+    let cache_write = theme
+        .style(theme.component(Component::CacheWrite), Modifier::empty())
+        .fg;
+    let input = theme
+        .style(theme.component(Component::Input), Modifier::empty())
+        .fg;
     let write_at = bar_styles
         .iter()
         .position(|style| *style == cache_write)

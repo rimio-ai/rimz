@@ -28,12 +28,14 @@ use super::Palette;
 pub(crate) enum Component {
     /// `◎` sessions glyph — the cockpit summary and the W/M ledger rows.
     Sessions,
-    /// The unselected lane gutter spine.
+    /// The selected worktree's lane bracket spine — the dim selection tone, so
+    /// the bracket, band, and bright card spine read as one selection language.
     LaneSpine,
-    /// A worktree group header.
+    /// A worktree group header — a neutral, authoritative heading (`body`) that
+    /// anchors the group without competing with attention or selection.
     WorktreeHeader,
     /// The `⇡/⇣` commit-delta cluster on a worktree header — the branch facts
-    /// rhyme with the worktree name's accent.
+    /// rhyme with the worktree name's neutral heading tone.
     BranchDelta,
     /// The `◌` cache-read token marker and the bar's cache-read run.
     CacheRead,
@@ -49,8 +51,8 @@ pub(crate) enum Component {
     ProcIo,
     /// The `↗` output token marker — generated output, conventionally green.
     Output,
-    /// The `↘` fresh-input token marker — the expensive freshly-read tokens
-    /// wear the alarm tone the 100%-fill context meter shows.
+    /// The `↘` fresh-input token marker — the expensive freshly-read tokens wear
+    /// the warm caution amber ("hot/costly"), keeping alarm red for danger alone.
     Input,
     /// The `◍` cache-write token marker — the compaction/delegation violet.
     CacheWrite,
@@ -132,13 +134,15 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         match self {
-            Sessions | LaneSpine | WorktreeHeader | BranchDelta | CacheRead | WindowHuge
-            | FlashSelectionLanded => palette.accent,
+            Sessions | CacheRead | WindowHuge => palette.accent,
+            LaneSpine | FlashSelectionLanded => palette.selection,
+            WorktreeHeader | BranchDelta => palette.body,
             LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
             ProcMem | Output | FlashResolved | FlashLifted => palette.good,
             Compaction | AttentionFloor | FlashWaiting => palette.warn,
-            Input | FlashFailed => palette.alarm,
+            Input => palette.caution,
+            FlashFailed => palette.alarm,
             WindowMedium | UnknownBrand | FlashMaterialized => palette.muted,
             WindowSmall => palette.faint,
         }

@@ -108,14 +108,15 @@
 ## faint = "#45423d"
 ## rule = "#343230"
 ## selection = "#8ab3e0"
+## selection_bg = "#2a2723"           # the selected card's background band; derived from the scheme's colors.selection.background, subdued toward the background
 
 [sidebar.animations]
 # Status-head animation roles are optional. Each role accepts frames, color,
 # effect, and speed; omitted fields keep the built-in value. frames can be a
 # string split per Unicode codepoint or an array for multi-codepoint glyphs;
 # every frame must occupy exactly one terminal cell.
-# Colors are palette slots ("good", "warn", "alarm", "accent", "cool", "meta",
-# "body", "muted", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
+# Colors are palette slots ("good", "warn", "caution", "alarm", "accent", "cool",
+# "meta", "body", "muted", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
 # effect is "static" or "breathe"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
 # Every role follows the same frames/color/effect/speed model. For waiting,
 # failed, and unread success rows, omitted effect keeps the shipped row blink
@@ -158,7 +159,7 @@
 ## speed = "normal"
 ## [sidebar.animations.paused]
 ## frames = ["⏸︎"]
-## color = "warn"
+## color = "caution"
 ## [sidebar.animations.waiting]
 ## frames = "?"
 ## color = "warn"

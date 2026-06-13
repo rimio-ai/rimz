@@ -90,6 +90,7 @@ pub(crate) struct Palette {
     faint: Color,
     rule: Color,
     selection: Color,
+    selection_bg: Color,
 }
 
 impl Palette {
@@ -135,6 +136,7 @@ impl Palette {
             faint: slot(theme.faint, tones.faint),
             rule: slot(theme.rule, tones.rule),
             selection: slot(theme.selection, tones.selection),
+            selection_bg: slot(theme.selection_bg, tones.selection_bg),
         }
     }
 
@@ -148,6 +150,7 @@ impl Palette {
         match color {
             AnimationColor::Good => self.good,
             AnimationColor::Warn => self.warn,
+            AnimationColor::Caution => self.caution,
             AnimationColor::Alarm => self.alarm,
             AnimationColor::Accent => self.accent,
             AnimationColor::Cool => self.cool,
@@ -488,6 +491,14 @@ impl Theme {
 
     pub(crate) fn selection(&self) -> Style {
         self.style(self.palette.selection, Modifier::BOLD)
+    }
+
+    /// The selected card's background band tone, or `None` under `NO_COLOR`. A
+    /// dark fill lands on its own cube cell, so it renders at both truecolor and
+    /// indexed depth; only `NO_COLOR` drops it and lets the bright spine and bold
+    /// weight carry the selection alone.
+    pub(super) fn selection_band(&self) -> Option<Color> {
+        (!self.no_color).then_some(self.palette.selection_bg)
     }
 
     /// Flat health-tone accessors for fixed chrome: `good` for the positive tier
