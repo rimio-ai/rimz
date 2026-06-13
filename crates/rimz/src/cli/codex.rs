@@ -420,6 +420,7 @@ mod tests {
                     used_percentage: Some(55),
                     resets_at: None,
                     duration_mins: Some(300),
+                    ..Default::default()
                 }],
             }),
             pr: None,

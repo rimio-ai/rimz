@@ -118,11 +118,13 @@ fn provider_panel(index: usize) -> SidebarProviderPanel {
                 used_percentage: Some(((index * 17) % 100) as u8),
                 resets_at: Some(super::fixed_now()),
                 duration_mins: Some(300),
+                ..Default::default()
             },
             RateLimitWindow {
                 used_percentage: Some(((index * 7) % 100) as u8),
                 resets_at: Some(super::fixed_now()),
                 duration_mins: Some(10_080),
+                ..Default::default()
             },
         ],
     }

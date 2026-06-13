@@ -7,7 +7,9 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::ExtraCredits;
-use crate::agents::context::{AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow};
+use crate::agents::context::{
+    AgentAccount, AgentContext, AgentRateLimits, RateLimitWindow, WindowSource,
+};
 
 use super::transport::AppServerErr;
 
@@ -214,7 +216,7 @@ pub(super) fn into_context(
         exceeds_200k_tokens: None,
         cost: None,
         tokens: None,
-        rate_limits,
+        rate_limits: rate_limits.map(|limits| limits.stamped_at(observed_at)),
         pr: None,
         account,
         turn_error: None,
@@ -244,6 +246,11 @@ pub(super) fn collect_windows(
             duration_mins: window
                 .window_duration_mins
                 .and_then(|mins| u32::try_from(mins).ok()),
+            // The app-server queries Codex's official usage API, so its reading
+            // is authoritative — it may lower the bar at once. `observed_at` is
+            // stamped in `into_context`.
+            observed_at: None,
+            source: WindowSource::Authoritative,
         })
         .collect();
     (!windows.is_empty()).then_some(AgentRateLimits { windows })

@@ -1,0 +1,380 @@
+[
+  {
+    "windows": [
+      {
+        "used_percentage": 1,
+        "resets_at": "2026-06-10T17:40:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 34,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 13,
+        "resets_at": "2026-06-10T17:40:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 36,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 14,
+        "resets_at": "2026-06-10T17:40:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 36,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 11,
+        "resets_at": "2026-06-10T17:40:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 36,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 18,
+        "resets_at": "2026-06-10T17:40:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 37,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 15,
+        "resets_at": "2026-06-11T09:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 40,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 27,
+        "resets_at": "2026-06-11T09:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 42,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 31,
+        "resets_at": "2026-06-11T09:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 43,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 16,
+        "resets_at": "2026-06-11T14:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 47,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 19,
+        "resets_at": "2026-06-11T14:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 47,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 21,
+        "resets_at": "2026-06-11T14:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 48,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 12,
+        "resets_at": "2026-06-11T19:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 50,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 18,
+        "resets_at": "2026-06-12T11:00:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 70,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 31,
+        "resets_at": "2026-06-12T11:00:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 73,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 5,
+        "resets_at": "2026-06-12T16:00:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 74,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 8,
+        "resets_at": "2026-06-12T16:00:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 75,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 5,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 1,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 5,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 1,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 8,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 2,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 15,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 57,
+        "resets_at": "2026-06-11T19:20:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 59,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 16,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 17,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 5,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 1,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 17,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 17,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  },
+  {
+    "windows": [
+      {
+        "used_percentage": 18,
+        "resets_at": "2026-06-13T08:30:00Z",
+        "duration_mins": 300
+      },
+      {
+        "used_percentage": 3,
+        "resets_at": "2026-06-15T06:00:00Z",
+        "duration_mins": 10080
+      }
+    ]
+  }
+]

@@ -104,6 +104,7 @@ fn prior_app_server_fields(observed_at: Timestamp) -> AgentContextRecord {
             used_percentage: Some(12),
             resets_at: None,
             duration_mins: Some(300),
+            ..Default::default()
         }],
     });
     record.rate_limits_observed_at = Some(observed_at);

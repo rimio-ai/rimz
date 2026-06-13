@@ -263,6 +263,7 @@ pub(super) fn window(used: u8, resets_in_secs: i64) -> RateLimitWindow {
         used_percentage: Some(used),
         resets_at: Some(resets_at),
         duration_mins: Some(300),
+        ..Default::default()
     }
 }
 

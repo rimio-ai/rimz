@@ -86,6 +86,20 @@ fn usage_response_maps_windows_and_extra_usage() {
         Some(CLAUDE_SEVEN_DAY_MINS)
     );
     assert_eq!(windows.windows[1].used_percentage, Some(88));
+    assert!(
+        windows
+            .windows
+            .iter()
+            .all(|window| window.source.is_authoritative()),
+        "the OAuth usage endpoint is the official API — its windows are authoritative"
+    );
+    assert!(
+        windows
+            .windows
+            .iter()
+            .all(|window| window.observed_at.is_none()),
+        "the fetch instant is stamped at merge, not in the pure parser"
+    );
     assert_eq!(
         usage.extra_credits,
         Some(ExtraCredits::known(Some(7.25), None, Some(50.0)))

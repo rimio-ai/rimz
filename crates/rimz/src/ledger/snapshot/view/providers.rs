@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 
-use crate::agents::{AgentAccount, RateLimitWindow, SpendTally};
+use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
 use crate::config::ThemeColor;
 use crate::feed::AgentState;
 
@@ -77,22 +77,24 @@ impl SidebarSnapshot {
             // The budget windows are account-scoped too, but the *freshest*
             // session is not the truest reading: parallel sessions report the same
             // window at slightly different instants, so "freshest wins" flips
-            // between ticks and the bar flickers. Instead, pick each window stably
-            // across every session, grouped by duration — drop readings whose reset
-            // already passed (stale), then keep the most-drained survivor (most
-            // conservative). Same inputs always yield the same bars, regardless of
-            // which session reported last. A provider whose descriptor declares no
-            // rate-limit windows renders the absence deliberately — its panel
-            // never grows budget bars even if a stray reading lands in a session
-            // context; an unregistered kind keeps whatever it reports.
+            // between ticks and the bar flickers. Instead, reject content-stale
+            // readings whole (an idle session re-emits a days-old payload with a
+            // fresh capture stamp; its shortest window's passed reset gives it
+            // away), then keep the most-drained survivor per duration — within a
+            // live window usage only climbs, so this is both stable and the
+            // truest. Same inputs always yield the same bars, regardless of which
+            // session reported last; the enrich layer fuses this live reading with
+            // the cached and authoritative truth. A provider whose descriptor
+            // declares no rate-limit windows renders the absence deliberately — its
+            // panel never grows budget bars even if a stray reading lands in a
+            // session context; an unregistered kind keeps whatever it reports.
             let now = self.now;
             let windows_for = |of_kind: &str| {
-                stable_windows(
+                fresh_windows(
                     self.agents
                         .iter()
                         .filter(|agent| agent.parent_agent_id.is_none() && agent.kind == *of_kind)
-                        .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref())
-                        .flat_map(|limits| limits.windows.iter().cloned()),
+                        .filter_map(|agent| agent.context.as_ref()?.rate_limits.as_ref()),
                     now,
                 )
             };
@@ -252,69 +254,46 @@ fn resolve_provider_panels(
     resolved
 }
 
-/// The account-stable *set* of budget windows across every session of a
-/// provider, grouped by [`duration_mins`](RateLimitWindow::duration_mins).
-/// Readings of the same duration run through [`stable_window`] independently, so
-/// two sessions reporting one budget at different instants converge to a single
-/// bar per duration. Output sorted short→long for a stable paint order; windows
-/// of unknown duration sort last.
-pub(super) fn stable_windows(
-    windows: impl Iterator<Item = RateLimitWindow>,
+/// The content-fresh live budget windows across every session of a provider,
+/// one per [`duration_mins`](RateLimitWindow::duration_mins), tagged with the
+/// reading's `observed_at`/`source` for the enrich layer to fuse with cached and
+/// authoritative truth.
+///
+/// Each `reading` is one session's whole window set. A reading is rejected
+/// wholesale by [`AgentRateLimits::content_stale_at`] — an idle session
+/// re-emits a days-old payload with a fresh capture stamp, so its longer windows
+/// look current even though they are not; the shortest window's passed reset
+/// gives the whole payload away. Among surviving readings, the most-drained value
+/// wins per duration: within one live window usage only climbs, so the highest
+/// reading is the most current and the pick is stable against parallel sessions
+/// reporting the same budget at different instants. Output sorted short→long for a
+/// stable paint order; windows of unknown duration sort last.
+pub(super) fn fresh_windows<'a>(
+    readings: impl Iterator<Item = &'a AgentRateLimits>,
     now: Timestamp,
 ) -> Vec<RateLimitWindow> {
-    let mut groups: BTreeMap<Option<u32>, Vec<RateLimitWindow>> = BTreeMap::new();
-    for window in windows {
-        groups.entry(window.duration_mins).or_default().push(window);
-    }
-    let mut stable: Vec<RateLimitWindow> = groups
-        .into_values()
-        .filter_map(|group| stable_window(group.into_iter(), now))
-        .collect();
-    stable.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
-    stable
-}
-
-/// The account-stable reading of one rate-limit window (one duration) across
-/// every session of a provider. Parallel sessions report the same shared budget
-/// at different instants, so a "freshest wins" pick flickers; this is
-/// deterministic instead.
-///
-/// Drop any reading whose `resets_at` has already passed — that window reset, so
-/// its `used_percentage` is stale — then, among the survivors, keep the most
-/// drained (highest `used_percentage`, so the bar never over-promises remaining
-/// budget). A window with no reset instant can't be aged out, so it is kept as a
-/// last-resort reading only when nothing with a live reset survives.
-pub(super) fn stable_window(
-    windows: impl Iterator<Item = RateLimitWindow>,
-    now: Timestamp,
-) -> Option<RateLimitWindow> {
-    let mut live: Option<RateLimitWindow> = None;
-    let mut undated: Option<RateLimitWindow> = None;
-    for window in windows {
-        if window.used_percentage.is_none() {
+    let mut by_duration: BTreeMap<Option<u32>, RateLimitWindow> = BTreeMap::new();
+    for reading in readings {
+        if reading.content_stale_at(now) {
             continue;
         }
-        match window.resets_at {
-            Some(resets_at) if resets_at <= now => continue, // reset already passed — stale
-            Some(_) => {
-                if live
-                    .as_ref()
-                    .is_none_or(|best| window.used_percentage > best.used_percentage)
-                {
-                    live = Some(window);
-                }
+        for window in &reading.windows {
+            if window.used_percentage.is_none() {
+                continue;
             }
-            None => {
-                if undated
-                    .as_ref()
-                    .is_none_or(|best| window.used_percentage > best.used_percentage)
-                {
-                    undated = Some(window);
-                }
-            }
+            by_duration
+                .entry(window.duration_mins)
+                .and_modify(|best| {
+                    if window.used_percentage > best.used_percentage {
+                        *best = window.clone();
+                    }
+                })
+                .or_insert_with(|| window.clone());
         }
     }
-    live.or(undated)
+    let mut windows: Vec<RateLimitWindow> = by_duration.into_values().collect();
+    windows.sort_by_key(|window| window.duration_mins.unwrap_or(u32::MAX));
+    windows
 }
 
 /// Built-in provider style, read from the adapter's brand descriptor

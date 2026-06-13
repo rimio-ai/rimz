@@ -85,6 +85,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         used_percentage: Some(50),
         resets_at: Some(now + Duration::from_secs(4 * 3_600)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
 
     let rows = metered_bar_rows(&theme, &panel);
@@ -122,6 +123,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         used_percentage: Some(50),
         resets_at: Some(now + Duration::from_secs(4 * 3_600)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
 
     let plain = Theme::fixed(true);
@@ -136,11 +138,13 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
             used_percentage: Some(0),
             resets_at: Some(now + Duration::from_secs(4 * 3_600)),
             duration_mins: Some(5 * 60),
+            ..Default::default()
         },
         RateLimitWindow {
             used_percentage: Some(50),
             resets_at: Some(now + Duration::from_secs(6 * 86_400)),
             duration_mins: Some(7 * 24 * 60),
+            ..Default::default()
         },
     ];
 
@@ -162,6 +166,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         used_percentage: Some(50),
         resets_at: Some(now + Duration::from_secs(4 * 3_600)),
         duration_mins: None,
+        ..Default::default()
     }];
 
     let rows = metered_bar_rows(&theme, &panel);
@@ -175,6 +180,7 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         used_percentage: Some(100),
         resets_at: Some(now + Duration::from_secs(150 * 60)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
 
     let rows = metered_bar_rows(&theme, &panel);
@@ -245,16 +251,19 @@ fn provider_bar_selection_surfaces_extra_usage_when_included_windows_are_spent()
             used_percentage: Some(5),
             resets_at: None,
             duration_mins: Some(5 * 60),
+            ..Default::default()
         },
         RateLimitWindow {
             used_percentage: Some(100),
             resets_at: None,
             duration_mins: Some(7 * 24 * 60),
+            ..Default::default()
         },
         RateLimitWindow {
             used_percentage: Some(10),
             resets_at: None,
             duration_mins: Some(30 * 24 * 60),
+            ..Default::default()
         },
     ];
     assert_eq!(
@@ -332,6 +341,7 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         used_percentage: Some(1),
         resets_at: Some(now + Duration::from_secs(5 * 3_600 - 30)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &claude);
     assert_eq!(rows.len(), 1);
@@ -350,6 +360,7 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         used_percentage: Some(99),
         resets_at: None,
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &codex);
     assert_eq!(rows.len(), 1);
@@ -365,6 +376,7 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         used_percentage: None,
         resets_at: None,
         duration_mins: Some(7 * 24 * 60),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &claude);
     assert_eq!(rows.len(), 1);
@@ -425,6 +437,7 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         used_percentage: Some(1),
         resets_at: Some(now + Duration::from_secs(4 * 3_600)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &claude);
     assert_eq!(rows.len(), 1);
@@ -439,6 +452,7 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
         used_percentage: Some(5),
         resets_at: Some(now + Duration::from_secs(5 * 3_600 - 30)),
         duration_mins: Some(5 * 60),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &claude);
     assert_eq!(rows.len(), 1);
@@ -459,6 +473,7 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
         used_percentage: Some(7),
         resets_at: Some(now + Duration::from_secs(28 * 86_400 + 4 * 3_600)),
         duration_mins: Some(43_800),
+        ..Default::default()
     }];
     let rows = metered_bar_rows(&theme, &codex);
     assert_eq!(rows.len(), 1, "one window -> one bar");
@@ -478,6 +493,7 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
         used_percentage: Some(50),
         resets_at: Some(now + Duration::from_secs(20 * 3_600 + 20 * 60)),
         duration_mins: Some(7 * 24 * 60),
+        ..Default::default()
     }];
 
     let rows = metered_bar_rows(&theme, &claude);

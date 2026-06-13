@@ -236,6 +236,37 @@ pub struct AgentRateLimits {
     pub windows: Vec<RateLimitWindow>,
 }
 
+impl AgentRateLimits {
+    /// Stamp a capture timestamp onto every window that lacks one. Ingest
+    /// builders set the `source`; the boundary that knows when the reading was
+    /// taken — `into_context` for a live session, the merge for an out-of-band
+    /// refresh — fills `observed_at` so the fusion can rank freshness.
+    pub fn stamped_at(mut self, observed_at: Timestamp) -> Self {
+        for window in &mut self.windows {
+            window.observed_at.get_or_insert(observed_at);
+        }
+        self
+    }
+
+    /// Whether this reading's content predates its shortest window's reset, so
+    /// the whole payload is stale even where a longer window's own reset is
+    /// still future. An idle session re-emits a days-old payload with a fresh
+    /// capture stamp, so `observed_at` can't judge a best-effort reading's
+    /// freshness; the shortest window resets most often, so its passed reset is
+    /// the surest sign the session has stopped refreshing. A reading with no
+    /// dated window can't be aged out this way and is treated as fresh — a
+    /// last-resort backstop. Used wherever a stale statusline payload must not
+    /// shadow truth: the snapshot view's window selection and the OAuth-merge
+    /// suppression check.
+    pub fn content_stale_at(&self, now: Timestamp) -> bool {
+        self.windows
+            .iter()
+            .filter_map(|window| Some((window.duration_mins?, window.resets_at?)))
+            .min_by_key(|(mins, _)| *mins)
+            .is_some_and(|(_, resets_at)| resets_at <= now)
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct RateLimitWindow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -245,11 +276,54 @@ pub struct RateLimitWindow {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets_at: Option<Timestamp>,
     /// The window's length in minutes — its identity across sessions (the
-    /// stable-window pick groups readings by it), the source of its bar label,
-    /// and the roll-forward length once it refills while idle. Providers stamp
-    /// it: Claude from the window kind it names, Codex from `windowDurationMins`.
+    /// fusion groups readings by it), the source of its bar label, and the
+    /// roll-forward length once it refills while idle. Providers stamp it:
+    /// Claude from the window kind it names, Codex from `windowDurationMins`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_mins: Option<u32>,
+    /// When this reading was captured. Provenance for fusion, not display. For a
+    /// [`WindowSource::BestEffort`] statusline this is *capture* time, not
+    /// content time — an idle session re-emits a days-old payload with a fresh
+    /// stamp, so content freshness is judged by the shortest window's
+    /// `resets_at`, and this only breaks ties. For [`WindowSource::Authoritative`]
+    /// it is content time (the API was queried then), so it ranks recency directly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub observed_at: Option<Timestamp>,
+    /// Where the reading came from, deciding how far the fusion trusts a drop.
+    #[serde(default, skip_serializing_if = "WindowSource::is_best_effort")]
+    pub source: WindowSource,
+}
+
+/// Where a [`RateLimitWindow`] reading came from, deciding how far the fusion
+/// trusts it. Usage only climbs within a live window, so a reading that lowers
+/// the bar is a refill that must be earned: an official-API query moves the bar
+/// down at once, while a statusline-derived reading is held until confirmed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSource {
+    /// Queried from the provider's official usage API (Claude OAuth usage,
+    /// Codex app-server `account/rateLimits/read`). Truth at its `observed_at`:
+    /// it overrides older readings and may lower the bar immediately.
+    Authoritative,
+    /// Derived from the agent's statusline payload. Current while the agent
+    /// works, but an idle session re-emits a stale payload, so a downward move
+    /// is trusted only once confirmed across the sliding window.
+    #[default]
+    BestEffort,
+}
+
+impl WindowSource {
+    /// Whether this is the default ([`WindowSource::BestEffort`]) — lets serde
+    /// omit the common case and a cold cache deserialize to the safe reading.
+    pub fn is_best_effort(&self) -> bool {
+        matches!(self, WindowSource::BestEffort)
+    }
+
+    /// Whether this reading came from an official-API query and may lower the
+    /// bar without waiting for confirmation.
+    pub fn is_authoritative(&self) -> bool {
+        matches!(self, WindowSource::Authoritative)
+    }
 }
 
 impl RateLimitWindow {
@@ -325,6 +399,7 @@ mod tests {
             used_percentage: used,
             resets_at: None,
             duration_mins: Some(300),
+            ..Default::default()
         }
     }
 

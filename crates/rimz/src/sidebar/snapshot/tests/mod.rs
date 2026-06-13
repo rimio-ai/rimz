@@ -50,6 +50,7 @@ fn rl_window_mins(used: u8, resets_at: Option<Timestamp>, duration_mins: u32) ->
         used_percentage: Some(used),
         resets_at,
         duration_mins: Some(duration_mins),
+        ..Default::default()
     }
 }
 

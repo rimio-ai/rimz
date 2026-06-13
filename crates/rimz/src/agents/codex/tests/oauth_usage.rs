@@ -66,6 +66,13 @@ fn usage_response_maps_windows_and_tolerates_bad_credit_balance() {
         Timestamp::from_second(1_780_092_691).ok()
     );
     assert_eq!(windows.windows[1].duration_mins, Some(10080));
+    assert!(
+        windows
+            .windows
+            .iter()
+            .all(|window| window.source.is_authoritative()),
+        "Codex usage comes from the official API — its windows are authoritative"
+    );
     assert_eq!(
         usage.extra_credits,
         Some(ExtraCredits::known(None, Some(18.5), None))

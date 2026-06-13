@@ -1,65 +1,128 @@
 use super::*;
 
-// ── Rate-limit window stabilizers (the dashboard bars) ───────────────────────
+// ── Rate-limit window fusion: the live half (the dashboard bars) ─────────────
+
+/// One session's reading — a set of windows that age out together.
+fn reading(windows: impl IntoIterator<Item = RateLimitWindow>) -> AgentRateLimits {
+    AgentRateLimits {
+        windows: windows.into_iter().collect(),
+    }
+}
+
+/// A window of `mins` length, `used`% drained, resetting `resets_in_secs` after
+/// the [`epoch`] (negative = the reset already passed).
+fn window_mins(used: u8, resets_in_secs: i64, mins: u32) -> RateLimitWindow {
+    RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: Some(epoch() + jiff::SignedDuration::from_secs(resets_in_secs)),
+        duration_mins: Some(mins),
+        ..Default::default()
+    }
+}
 
 #[test]
-fn stable_windows_keep_conservative_readings_per_duration() {
-    // A stale window (reset already passed) reads low; two live windows
-    // report 50% and 80%. The stale one is dropped, and the most-drained
-    // live survivor (80%) wins — never over-promising remaining budget.
-    let live_50 = window(50, 3_600);
-    let live_80 = window(80, 1_800);
-    let stale_10 = window(10, -60);
+fn fresh_windows_keep_most_drained_per_duration() {
+    // Two sessions each report a 5h and a 7d window at different drains. Within
+    // a live window usage only climbs, so the most-drained reading is the
+    // truest and the pick is stable against session order.
+    let a = reading([window_mins(20, 3_600, 300), window_mins(40, 3_600, 10_080)]);
+    let b = reading([window_mins(50, 1_800, 300), window_mins(10, 3_600, 10_080)]);
 
-    let pick = stable_window(
-        [live_50.clone(), live_80.clone(), stale_10.clone()].into_iter(),
-        epoch(),
-    )
-    .expect("a live window survives");
-    assert_eq!(pick.used_percentage, Some(80));
-
-    // Order-independent: the producer must not flicker with session order.
-    let reversed = stable_window([stale_10, live_80, live_50].into_iter(), epoch())
-        .expect("a live window survives");
-    assert_eq!(reversed.used_percentage, Some(80));
-
-    assert!(
-        stable_window([window(90, -10), window(40, -3_600)].into_iter(), epoch()).is_none(),
-        "every dated reading is stale"
-    );
-
-    // A window with no reset instant can't be aged out; it is the last-resort
-    // reading only when nothing with a live reset survives.
-    let undated = RateLimitWindow {
-        used_percentage: Some(33),
-        resets_at: None,
-        duration_mins: Some(300),
-    };
-    let pick = stable_window([window(90, -10), undated].into_iter(), epoch())
-        .expect("the undated reading backstops the stale one");
-    assert_eq!(pick.used_percentage, Some(33));
-
-    let mk = |used: u8, mins: u32| RateLimitWindow {
-        used_percentage: Some(used),
-        resets_at: Some(epoch() + std::time::Duration::from_secs(3_600)),
-        duration_mins: Some(mins),
-    };
-    // Two sessions, each reporting a 5h and a 30d window at different drains.
-    let readings = [mk(10, 43_800), mk(20, 300), mk(40, 43_800), mk(5, 300)];
-    let stable = stable_windows(readings.into_iter(), epoch());
+    let stable = fresh_windows([&a, &b].into_iter(), epoch());
     assert_eq!(stable.len(), 2, "one bar per duration");
     assert_eq!(
         stable[0].duration_mins,
         Some(300),
         "short window sorts first"
     );
-    assert_eq!(stable[0].used_percentage, Some(20), "most-drained 5h kept");
+    assert_eq!(stable[0].used_percentage, Some(50), "most-drained 5h kept");
     assert_eq!(
         stable[1].duration_mins,
-        Some(43_800),
+        Some(10_080),
         "long window sorts last"
     );
-    assert_eq!(stable[1].used_percentage, Some(40), "most-drained 30d kept");
+    assert_eq!(stable[1].used_percentage, Some(40), "most-drained 7d kept");
+
+    let reversed = fresh_windows([&b, &a].into_iter(), epoch());
+    assert_eq!(
+        reversed, stable,
+        "the pick never flickers with session order"
+    );
+}
+
+#[test]
+fn fresh_windows_reject_a_reading_whose_shortest_window_reset() {
+    // An idle session re-emits a stale payload: its 5h window reset long ago,
+    // but its 7d reset is still future. The whole reading is dropped, so its
+    // stale-high 7d can't outweigh the live low 7d — the per-window check alone
+    // would have kept the 59%.
+    let live = reading([window_mins(15, 3_600, 300), window_mins(3, 86_400, 10_080)]);
+    let stale = reading([
+        window_mins(57, -3_600, 300),
+        window_mins(59, 86_400, 10_080),
+    ]);
+
+    let stable = fresh_windows([&live, &stale].into_iter(), epoch());
+    let seven_day = stable
+        .iter()
+        .find(|window| window.duration_mins == Some(10_080))
+        .expect("a 7d bar");
+    assert_eq!(
+        seven_day.used_percentage,
+        Some(3),
+        "the stale-high 7d is dropped with its reading"
+    );
+
+    // A reading with no dated window can't be aged out — it backstops.
+    let undated = reading([RateLimitWindow {
+        used_percentage: Some(33),
+        resets_at: None,
+        duration_mins: Some(300),
+        ..Default::default()
+    }]);
+    let only_stale = reading([window_mins(90, -10, 300)]);
+    let stable = fresh_windows([&only_stale, &undated].into_iter(), epoch());
+    assert_eq!(stable.len(), 1);
+    assert_eq!(
+        stable[0].used_percentage,
+        Some(33),
+        "undated backstops the stale"
+    );
+}
+
+#[test]
+fn fresh_windows_replay_captured_free_reset() {
+    // 27 real Claude readings captured mid free-reset: the 7d budget refilled
+    // (used 75% → ~1–3%) with its reset timer unchanged, while one idle session
+    // still reported the pre-reset 7d=59%. That session's 5h reset is ~1.6 days
+    // past, so the reading-level staleness check drops it whole — the live bar
+    // reads 3%, not the 59% the old most-drained-per-window pick clung to.
+    let readings: Vec<AgentRateLimits> =
+        serde_json::from_str(include_str!("fixtures/claude_free_reset.json"))
+            .expect("captured fixture parses");
+    let now = "2026-06-13T06:15:00Z"
+        .parse()
+        .expect("fixed instant just after capture");
+
+    let stable = fresh_windows(readings.iter(), now);
+    let seven_day = stable
+        .iter()
+        .find(|window| window.duration_mins == Some(10_080))
+        .expect("a 7d bar");
+    assert_eq!(
+        seven_day.used_percentage,
+        Some(3),
+        "the live refill wins, not the clung 59%"
+    );
+    let five_hour = stable
+        .iter()
+        .find(|window| window.duration_mins == Some(300))
+        .expect("a 5h bar");
+    assert_eq!(
+        five_hour.used_percentage,
+        Some(18),
+        "the stale session's 57% 5h is rejected too"
+    );
 }
 
 // ── The per-call split: the context line's row-level fallback ────────────────

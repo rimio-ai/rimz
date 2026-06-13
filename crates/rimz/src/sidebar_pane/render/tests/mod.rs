@@ -254,11 +254,13 @@ fn claude_context(now: Timestamp) -> AgentContext {
                     used_percentage: Some(30),
                     resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
                     duration_mins: Some(5 * 60),
+                    ..Default::default()
                 },
                 RateLimitWindow {
                     used_percentage: Some(60),
                     resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
                     duration_mins: Some(7 * 24 * 60),
+                    ..Default::default()
                 },
             ],
         }),
@@ -294,11 +296,13 @@ fn codex_context(now: Timestamp) -> AgentContext {
                     used_percentage: Some(42),
                     resets_at: Some(now + Duration::from_secs(3 * 3_600 + 12 * 60)),
                     duration_mins: Some(5 * 60),
+                    ..Default::default()
                 },
                 RateLimitWindow {
                     used_percentage: Some(7),
                     resets_at: Some(now + Duration::from_secs(3 * 86_400 + 4 * 3_600)),
                     duration_mins: Some(7 * 24 * 60),
+                    ..Default::default()
                 },
             ],
         }),
@@ -467,6 +471,7 @@ fn provider_panel(
         used_percentage: Some(used),
         resets_at: Some(now + resets_in),
         duration_mins: Some(mins),
+        ..Default::default()
     };
     crate::SidebarProviderPanel {
         kind: kind.to_owned(),

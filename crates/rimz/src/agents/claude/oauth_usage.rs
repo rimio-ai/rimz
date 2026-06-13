@@ -14,7 +14,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use jiff::Timestamp;
 use serde::Deserialize;
 
-use crate::agents::context::{AgentRateLimits, RateLimitWindow};
+use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 use crate::agents::{ExtraCredits, transcript_fs::home_dir};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
@@ -245,6 +245,10 @@ fn window(field: Option<WindowWire>, duration_mins: u32) -> Option<RateLimitWind
         used_percentage,
         resets_at,
         duration_mins: Some(duration_mins),
+        // The OAuth usage endpoint is the official API, so this reading is
+        // authoritative; `observed_at` is stamped to the fetch instant at merge.
+        observed_at: None,
+        source: WindowSource::Authoritative,
     })
 }
 

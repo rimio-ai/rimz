@@ -14,7 +14,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::agents::ExtraCredits;
-use crate::agents::context::{AgentRateLimits, RateLimitWindow};
+use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
 
 use super::app_server::codex_home;
 
@@ -240,6 +240,10 @@ fn collect_windows(
             duration_mins: window
                 .limit_window_seconds
                 .and_then(|seconds| u32::try_from(seconds / 60).ok()),
+            // Refreshed straight from Codex's usage API: authoritative, with
+            // `observed_at` stamped to the fetch instant at merge.
+            observed_at: None,
+            source: WindowSource::Authoritative,
         })
         .filter(|window| {
             window.used_percentage.is_some()

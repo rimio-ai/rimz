@@ -46,11 +46,12 @@ pub use credits::{
 };
 pub use live_spend::{apply_live_today_spend, live_row_costs};
 pub(crate) use rate_limits::apply_rate_limit_cache;
-pub use rate_limits::{RateLimitsCache, merge_account_rate_limits};
 #[cfg(test)]
 pub(crate) use rate_limits::{
-    project_idle_window, read_rate_limits_cache, write_rate_limits_cache,
+    LIVE_HORIZON_SECS, PendingRefill, REFILL_CONFIRM_SECS, fuse_window, project_idle_window,
+    read_rate_limits_cache, write_rate_limits_cache,
 };
+pub use rate_limits::{RateLimitsCache, merge_account_rate_limits};
 
 #[cfg(test)]
 pub(crate) use accounts::accounts_cache_version_refresh_due;

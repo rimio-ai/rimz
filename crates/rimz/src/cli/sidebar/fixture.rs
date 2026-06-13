@@ -316,6 +316,7 @@ fn provider_panel(
         used_percentage: Some(used),
         resets_at: Some(now + std::time::Duration::from_secs(resets_in_secs)),
         duration_mins: Some(mins),
+        ..Default::default()
     };
     let windows = windows
         .map(|(short, long)| {

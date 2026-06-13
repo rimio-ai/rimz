@@ -1,8 +1,6 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use jiff::Timestamp;
-
 use crate::RuntimePaths;
 use crate::config::AccountsConfig;
 use crate::sidebar::timing::CREDITS_TTL;
@@ -51,23 +49,25 @@ fn refresh_claude_oauth_usage(
 }
 
 fn has_fresh_claude_statusline_windows(snapshot: &SidebarSnapshot) -> bool {
-    let now = Timestamp::now();
+    let now = snapshot.now;
     snapshot.agents.iter().any(|agent| {
-        agent.kind == "claude"
-            && agent.parent_agent_id.is_none()
-            && agent
-                .context
-                .as_ref()
-                .filter(|context| {
-                    context
-                        .rate_limits
-                        .as_ref()
-                        .is_some_and(|limits| !limits.windows.is_empty())
-                })
-                .is_some_and(|context| {
-                    now.duration_since(context.observed_at).as_secs()
-                        <= CREDITS_TTL.as_secs() as i64
-                })
+        if agent.kind != "claude" || agent.parent_agent_id.is_some() {
+            return false;
+        }
+        let Some(context) = agent.context.as_ref() else {
+            return false;
+        };
+        let Some(limits) = context.rate_limits.as_ref() else {
+            return false;
+        };
+        // A live session's statusline windows suppress the authoritative OAuth
+        // merge only when both the capture is recent *and* the content is fresh.
+        // An idle session re-emits a days-old payload with a fresh `observed_at`,
+        // so the capture stamp alone would wrongly shadow truth; the reading's
+        // shortest window's passed reset gives the stale payload away.
+        !limits.windows.is_empty()
+            && !limits.content_stale_at(now)
+            && now.duration_since(context.observed_at).as_secs() <= CREDITS_TTL.as_secs() as i64
     })
 }
 
@@ -128,6 +128,8 @@ fn spawn_claude_usage_refresh(
 mod tests {
     use std::time::Duration;
 
+    use jiff::Timestamp;
+
     use crate::agents::lifecycle::TurnPhase;
     use crate::agents::{AgentRateLimits, RateLimitWindow};
     use crate::feed::{AgentState, AgentStatus, PaneRef};
@@ -176,6 +178,33 @@ mod tests {
             no_windows
         )));
 
+        // The idle-session trap: a fresh capture stamp over a stale payload. The
+        // 5h window already reset (so the content is stale) even though
+        // `observed_at` is now and the longer 7d window's reset is still future.
+        // Without the content-staleness check this would wrongly suppress the
+        // authoritative OAuth window merge.
+        let mut content_stale = statusline_agent("content-stale", now);
+        content_stale.context.as_mut().unwrap().rate_limits = Some(AgentRateLimits {
+            windows: vec![
+                RateLimitWindow {
+                    used_percentage: Some(57),
+                    resets_at: now.checked_sub(jiff::SignedDuration::from_hours(1)).ok(),
+                    duration_mins: Some(300),
+                    ..Default::default()
+                },
+                RateLimitWindow {
+                    used_percentage: Some(59),
+                    resets_at: now.checked_add(jiff::SignedDuration::from_hours(48)).ok(),
+                    duration_mins: Some(7 * 24 * 60),
+                    ..Default::default()
+                },
+            ],
+        });
+        assert!(
+            !has_fresh_claude_statusline_windows(&snapshot_with_agent(content_stale)),
+            "a fresh capture stamp can't rescue a payload whose 5h window already reset"
+        );
+
         fn snapshot_with_agent(agent: AgentState) -> SidebarSnapshot {
             SidebarSnapshot::build_with_agents(
                 WorkspaceId::from_project_root(std::path::Path::new("/tmp/oauth-windows")),
@@ -192,6 +221,7 @@ mod tests {
                     used_percentage: Some(12),
                     resets_at: None,
                     duration_mins: Some(300),
+                    ..Default::default()
                 }],
             });
             AgentState {

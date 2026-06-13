@@ -13,7 +13,7 @@ use serde_json::Value;
 
 use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
-    AgentTurnError, RateLimitWindow, TurnErrorClass,
+    AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource,
 };
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
@@ -161,6 +161,12 @@ fn rate_window(field: Option<RateWindowField>, duration_mins: u32) -> Option<Rat
         used_percentage,
         resets_at,
         duration_mins: Some(duration_mins),
+        // Statusline readings are best-effort: an idle session re-emits this
+        // payload with a fresh stamp, so the fusion judges freshness by the
+        // shortest window's reset and confirms a drop before trusting it.
+        // `observed_at` is stamped in `into_context`, where the capture time is known.
+        observed_at: None,
+        source: WindowSource::BestEffort,
     })
 }
 
@@ -377,7 +383,8 @@ impl StatuslinePayload {
         .into_iter()
         .flatten()
         .collect();
-        let rate_limits = (!windows.is_empty()).then_some(AgentRateLimits { windows });
+        let rate_limits =
+            (!windows.is_empty()).then(|| AgentRateLimits { windows }.stamped_at(observed_at));
         let pr = non_empty(AgentPullRequest {
             number: self.pr.number,
             url: self.pr.url,
@@ -501,6 +508,15 @@ mod tests {
         // 23.5 rounds to 24.
         assert_eq!(five.used_percentage, Some(24));
         assert_eq!(five.resets_at, Timestamp::from_second(1738425600).ok());
+        assert!(
+            five.source.is_best_effort(),
+            "a statusline reading is best-effort — a drop is confirmed before it lowers the bar"
+        );
+        assert_eq!(
+            five.observed_at,
+            Some(ctx.observed_at),
+            "into_context stamps the capture instant onto each window"
+        );
         assert_eq!(
             window_by_mins(&rate, CLAUDE_SEVEN_DAY_MINS).used_percentage,
             Some(41)

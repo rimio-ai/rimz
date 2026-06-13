@@ -84,6 +84,7 @@ fn idle_window_projection_ages_only_known_elapsed_windows() {
         used_percentage: Some(90),
         resets_at: Some(passed),
         duration_mins: None,
+        ..Default::default()
     };
     assert_eq!(project_idle_window(no_duration.clone(), now), no_duration);
 }
@@ -160,6 +161,7 @@ fn idle_short_window_past_reset_shows_full_without_persisting_the_synthetic_wind
                     ],
                 },
             )]),
+            pending: BTreeMap::new(),
         },
     );
 
@@ -215,6 +217,7 @@ fn idle_longest_window_past_reset_shows_unknown_without_persisting_it() {
                     ],
                 },
             )]),
+            pending: BTreeMap::new(),
         },
     );
 
@@ -289,6 +292,51 @@ fn producer_drops_windows_for_a_logged_out_provider() {
     );
 }
 
+/// When the *last* provider logs out there is no surviving panel to rebuild the
+/// cache from, so the producer reaps it wholesale — a later re-login paints from
+/// live readings, never stale budgets. A consumer never touches it.
+#[test]
+fn producer_reaps_cache_when_every_provider_logs_out() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let future = Timestamp::from_second(4_000_000_000).unwrap();
+    let path = runtime.shared_rate_limits_path();
+    let seed = || {
+        write_rate_limits_cache(
+            &path,
+            &RateLimitsCache {
+                refreshed_at_ms: 1,
+                windows: BTreeMap::from([(
+                    "claude".to_owned(),
+                    AgentRateLimits {
+                        windows: vec![rl_window(40, Some(future))],
+                    },
+                )]),
+                pending: BTreeMap::new(),
+            },
+        );
+    };
+
+    // A consumer (persist=false) with no panels leaves the cache intact.
+    seed();
+    let mut consumer = snapshot_with_panels(workspace.clone(), Vec::new());
+    apply_rate_limit_cache(&mut consumer, &runtime, false);
+    assert!(
+        read_rate_limits_cache(&path).windows.contains_key("claude"),
+        "a consumer never reaps the cache"
+    );
+
+    // The producer (persist=true) with no panels clears it.
+    let mut producer = snapshot_with_panels(workspace, Vec::new());
+    apply_rate_limit_cache(&mut producer, &runtime, true);
+    assert!(
+        read_rate_limits_cache(&path).windows.is_empty(),
+        "a fully logged-out room reaps its stale windows so a re-login can't flash them"
+    );
+}
+
 /// The out-of-band helper seeds one kind's windows into the shared cache
 /// without disturbing another kind's, so an idle provider's bars paint from
 /// the next producer frame.
@@ -311,6 +359,7 @@ fn merge_account_rate_limits_seeds_a_kind_without_clobbering_others() {
                     windows: vec![rl_window(20, None)],
                 },
             )]),
+            pending: BTreeMap::new(),
         },
     );
 
@@ -355,6 +404,7 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
                     windows: vec![rl_window(20, None)],
                 },
             )]),
+            pending: BTreeMap::new(),
         },
     );
 
@@ -388,4 +438,267 @@ fn held_rate_limit_lock_makes_producer_read_only_instead_of_dropping_other_kinds
         "the contending producer does not publish its partial provider set"
     );
     <std::fs::File as fs4::FileExt>::unlock(&lock_file).unwrap();
+}
+
+// ── fuse_window: source- and time-aware refill trust ────────────────────────
+
+use crate::agents::context::WindowSource;
+use crate::sidebar::enrich::{LIVE_HORIZON_SECS, PendingRefill, REFILL_CONFIRM_SECS, fuse_window};
+
+fn fuse_now() -> Timestamp {
+    Timestamp::from_second(2_000_000_000).unwrap()
+}
+
+/// A best-effort (statusline) window reading.
+fn be(used: u8, resets_at: Timestamp, observed_at: Timestamp) -> RateLimitWindow {
+    RateLimitWindow {
+        used_percentage: Some(used),
+        resets_at: Some(resets_at),
+        duration_mins: Some(300),
+        observed_at: Some(observed_at),
+        source: WindowSource::BestEffort,
+    }
+}
+
+/// An authoritative (official-API) window reading.
+fn auth(used: u8, resets_at: Timestamp, observed_at: Timestamp) -> RateLimitWindow {
+    RateLimitWindow {
+        source: WindowSource::Authoritative,
+        ..be(used, resets_at, observed_at)
+    }
+}
+
+#[test]
+fn fuse_climb_is_immediate_and_clears_any_pending() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let parked = PendingRefill {
+        duration_mins: Some(300),
+        used_percentage: 2,
+        first_seen_at: now,
+    };
+    // A reading at or above the prior is real consumption — adopt at once.
+    let (truth, pending) = fuse_window(
+        Some(&be(20, reset, now)),
+        Some(&be(35, reset, now)),
+        Some(&parked),
+        now,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(35));
+    assert!(pending.is_none(), "a climb cancels a parked refill");
+}
+
+#[test]
+fn fuse_authoritative_drop_is_immediate() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let (truth, pending) = fuse_window(
+        Some(&be(80, reset, now)),
+        Some(&auth(2, reset, now)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(2),
+        "an official reading lowers the bar now"
+    );
+    assert!(pending.is_none());
+}
+
+#[test]
+fn fuse_reset_timer_advance_accepts_the_drop() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let later = reset + SignedDuration::from_secs(7_200);
+    let (truth, _) = fuse_window(
+        Some(&be(80, reset, now)),
+        Some(&be(1, later, now)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(1),
+        "a later reset instant proves a new window epoch and lowers at once"
+    );
+}
+
+#[test]
+fn fuse_best_effort_refill_holds_then_confirms() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    // First sight of a same-epoch best-effort drop: hold the higher bar, park it.
+    let (truth, pending) = fuse_window(
+        Some(&be(75, reset, now)),
+        Some(&be(1, reset, now)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(75),
+        "held on first sight"
+    );
+    let parked = pending.expect("a refill candidate is parked");
+    assert_eq!(parked.used_percentage, 1);
+
+    // Still within the confirm window: still held.
+    let within = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS - 1);
+    let (truth, still) = fuse_window(
+        Some(&be(75, reset, within)),
+        Some(&be(2, reset, within)),
+        Some(&parked),
+        within,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(75),
+        "still held before confirm elapses"
+    );
+    assert!(still.is_some());
+
+    // Past the confirm window: the sustained refill is adopted.
+    let after = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
+    let (truth, done) = fuse_window(
+        Some(&be(75, reset, after)),
+        Some(&be(3, reset, after)),
+        Some(&parked),
+        after,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(3),
+        "the confirmed refill follows the live reading"
+    );
+    assert!(done.is_none());
+}
+
+#[test]
+fn fuse_transient_low_then_climb_never_dips() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let (_, pending) = fuse_window(
+        Some(&be(40, reset, now)),
+        Some(&be(2, reset, now)),
+        None,
+        now,
+        true,
+    );
+    assert!(pending.is_some(), "the low sample is parked, not shown");
+
+    let next = now + SignedDuration::from_secs(5);
+    let (truth, pending) = fuse_window(
+        Some(&be(40, reset, next)),
+        Some(&be(41, reset, next)),
+        pending.as_ref(),
+        next,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(41), "the climb wins");
+    assert!(pending.is_none(), "one stray low sample never dips the bar");
+}
+
+#[test]
+fn fuse_consumer_never_lowers_the_bar_on_its_own() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let (truth, _) = fuse_window(
+        Some(&be(75, reset, now)),
+        Some(&be(1, reset, now)),
+        None,
+        now,
+        false,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(75),
+        "a consumer mirrors the producer's persisted truth"
+    );
+}
+
+#[test]
+fn fuse_ignores_a_wildly_old_live_reading() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let old = now - SignedDuration::from_secs(LIVE_HORIZON_SECS + 1);
+    let (truth, _) = fuse_window(
+        Some(&be(50, reset, now)),
+        Some(&be(2, reset, old)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(50),
+        "a stale capture can't move the bar"
+    );
+}
+
+#[test]
+fn fuse_stale_authoritative_drop_cannot_lower_a_newer_bar() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    let older = now - SignedDuration::from_secs(60);
+    // The prior is the newer authoritative truth (80% @ now); an out-of-order
+    // sidecar reports 2% but its capture is a minute older. The newer bar holds.
+    let (truth, pending) = fuse_window(
+        Some(&auth(80, reset, now)),
+        Some(&auth(2, reset, older)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(80),
+        "an older authoritative reading can't undo a newer one"
+    );
+    assert!(
+        pending.is_none(),
+        "a stale authoritative drop never seeds the best-effort debounce"
+    );
+}
+
+#[test]
+fn fuse_mid_range_best_effort_drop_holds_most_drained() {
+    let now = fuse_now();
+    let reset = now + SignedDuration::from_secs(3_600);
+    // 80% -> 70% with the same reset: a mid-range best-effort drop is jitter,
+    // not a refill. It holds the most-drained prior and is never parked.
+    let (truth, pending) = fuse_window(
+        Some(&be(80, reset, now)),
+        Some(&be(70, reset, now)),
+        None,
+        now,
+        true,
+    );
+    assert_eq!(
+        truth.unwrap().used_percentage,
+        Some(80),
+        "a mid-range drop above the reset floor holds the most-drained prior"
+    );
+    assert!(
+        pending.is_none(),
+        "only a near-full refill candidate is parked for confirmation"
+    );
+
+    // And it never confirms with time: it was never parked, so the bar holds.
+    let after = now + SignedDuration::from_secs(REFILL_CONFIRM_SECS + 1);
+    let (truth, pending) = fuse_window(
+        Some(&be(80, reset, after)),
+        Some(&be(70, reset, after)),
+        None,
+        after,
+        true,
+    );
+    assert_eq!(truth.unwrap().used_percentage, Some(80));
+    assert!(pending.is_none());
 }
