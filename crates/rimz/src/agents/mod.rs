@@ -575,6 +575,13 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
+    /// Extra launch argv for the built-in `-ping` virtual alias: lowest
+    /// effort setting plus the word `"ping"` as the initial prompt. Returns
+    /// `None` when the adapter does not support ping.
+    fn ping_args(&self) -> Option<Vec<String>> {
+        None
+    }
+
     /// Render typed per-machine launch alias presets into provider-native argv.
     /// Unsupported fields fail at launch so config cannot silently drop intent.
     fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {

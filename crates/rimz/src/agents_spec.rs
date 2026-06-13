@@ -14,7 +14,8 @@ use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
-const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo"];
+const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
+const PING_SUFFIX: &str = "ping";
 const RESERVED_ALIAS_AND_LAYOUT_NAMES: &[&str] = &[
     "list", "ls", "show", "stop", "focus", "wait", "term", "exec",
 ];
@@ -217,6 +218,7 @@ fn is_cell_word(raw: &str, aliases: &AliasesConfig) -> bool {
         || raw == "term"
         || crate::agents::find_adapter(raw).is_some()
         || virtual_agent_args(raw).is_some()
+        || virtual_ping_cell(raw).is_some()
 }
 
 fn parse_cell(raw: &str, aliases: &AliasesConfig) -> Result<Cell> {
@@ -235,6 +237,9 @@ fn parse_cell(raw: &str, aliases: &AliasesConfig) -> Result<Cell> {
             args,
             mode: Some(mode),
         });
+    }
+    if let Some(cell) = virtual_ping_cell(raw) {
+        return Ok(cell);
     }
     Err(LayoutErr::UnknownCell {
         cell: raw.to_owned(),
@@ -310,11 +315,22 @@ fn virtual_agent_args(raw: &str) -> Option<(&str, PermissionMode, Vec<String>)> 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
     let adapter = crate::agents::find_adapter(kind)?;
     let args = adapter.permission_args(mode);
-    if mode == PermissionMode::Ask || !args.is_empty() {
+    if mode == PermissionMode::Ask || mode == PermissionMode::Plan || !args.is_empty() {
         Some(args)
     } else {
         None
     }
+}
+
+fn virtual_ping_cell(raw: &str) -> Option<Cell> {
+    let kind = raw.strip_suffix("-ping")?;
+    let adapter = crate::agents::find_adapter(kind)?;
+    let args = adapter.ping_args()?;
+    Some(Cell::Agent {
+        kind: AgentKind::new_unchecked(kind),
+        args,
+        mode: None,
+    })
 }
 
 fn validate_alias_names(aliases: &AliasesConfig) -> Result<()> {
@@ -354,6 +370,9 @@ fn valid_cells(aliases: &AliasesConfig) -> String {
             if supported_virtual_agent_args(kind, parsed).is_some() {
                 values.insert(format!("{kind}-{mode}"));
             }
+        }
+        if crate::agents::find_adapter(kind).is_some_and(|a| a.ping_args().is_some()) {
+            values.insert(format!("{kind}-{PING_SUFFIX}"));
         }
     }
     values.extend(aliases.0.keys().cloned());
@@ -663,6 +682,89 @@ mod tests {
                 if cell == "pi-yolo"
                     && !valid.split(", ").any(|candidate| candidate == "pi-yolo")
                     && valid.split(", ").any(|candidate| candidate == "pi-ask")
+        ));
+    }
+
+    #[test]
+    fn plan_mode_works_without_config() {
+        let aliases = AliasesConfig::default();
+
+        // claude-plan: adapter returns non-empty args
+        assert_eq!(
+            parse_layout_spec("claude-plan", &aliases)
+                .expect("claude-plan")
+                .columns[0]
+                .rows[0],
+            Cell::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
+                mode: Some(PermissionMode::Plan),
+            }
+        );
+
+        // codex-plan: adapter returns empty args (fallback to default, same as plain codex)
+        assert_eq!(
+            parse_layout_spec("codex-plan", &aliases)
+                .expect("codex-plan")
+                .columns[0]
+                .rows[0],
+            Cell::Agent {
+                kind: AgentKind::new_unchecked("codex"),
+                args: Vec::new(),
+                mode: Some(PermissionMode::Plan),
+            }
+        );
+
+        // pi-plan: also valid with empty args (Plan is always accepted, like Ask)
+        assert_eq!(
+            parse_layout_spec("pi-plan", &aliases)
+                .expect("pi-plan")
+                .columns[0]
+                .rows[0],
+            Cell::Agent {
+                kind: AgentKind::new_unchecked("pi"),
+                args: Vec::new(),
+                mode: Some(PermissionMode::Plan),
+            }
+        );
+    }
+
+    #[test]
+    fn ping_aliases_work_without_config() {
+        let aliases = AliasesConfig::default();
+
+        assert_eq!(
+            parse_layout_spec("claude-ping", &aliases)
+                .expect("claude-ping")
+                .columns[0]
+                .rows[0],
+            Cell::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                args: vec!["--effort".to_owned(), "low".to_owned(), "ping".to_owned()],
+                mode: None,
+            }
+        );
+
+        assert_eq!(
+            parse_layout_spec("codex-ping", &aliases)
+                .expect("codex-ping")
+                .columns[0]
+                .rows[0],
+            Cell::Agent {
+                kind: AgentKind::new_unchecked("codex"),
+                args: vec![
+                    "-c".to_owned(),
+                    "model_reasoning_effort=low".to_owned(),
+                    "ping".to_owned(),
+                ],
+                mode: None,
+            }
+        );
+
+        // pi has no ping_args implementation → unknown cell
+        assert!(matches!(
+            parse_layout_spec("pi-ping", &aliases),
+            Err(LayoutErr::UnknownCell { cell, .. }) if cell == "pi-ping"
         ));
     }
 

@@ -260,7 +260,16 @@ impl AgentAdapter for CodexAdapter {
                 "workspace-write".to_owned(),
             ],
             PermissionMode::Ask => Vec::new(),
+            PermissionMode::Plan => Vec::new(),
         }
+    }
+
+    fn ping_args(&self) -> Option<Vec<String>> {
+        Some(vec![
+            "-c".to_owned(),
+            "model_reasoning_effort=low".to_owned(),
+            "ping".to_owned(),
+        ])
     }
 
     fn render_preset(

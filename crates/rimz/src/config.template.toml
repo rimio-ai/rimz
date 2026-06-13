@@ -17,14 +17,12 @@
 
 [agents.aliases]
 # Bare strings are shell-split raw commands. Agent alias tables use `agent`
-# plus optional `mode` ("auto", "ask", "yolo"), `model`, `effort`, and extra
-# shell-split `args`.
+# plus optional `mode` ("auto", "ask", "plan", "yolo"), `model`, `effort`, and
+# extra shell-split `args`. Built-in virtual cells include `claude-plan`,
+# `claude-ping`, `codex-plan`, and `codex-ping` — define an alias here to
+# shadow one or add custom variants.
 ## vim = "nvim -p"
 ## htop = "htop"
-## [agents.aliases.claude-plan]
-## agent = "claude"
-## model = "claude-opus-4-8"
-## args = "--permission-mode plan"
 ## [agents.aliases.codex-yolo]
 ## agent = "codex"
 ## mode = "yolo"

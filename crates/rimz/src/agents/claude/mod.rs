@@ -287,7 +287,12 @@ impl AgentAdapter for ClaudeAdapter {
             PermissionMode::Auto => vec!["--permission-mode".to_owned(), "acceptEdits".to_owned()],
             PermissionMode::Ask => Vec::new(),
             PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
+            PermissionMode::Plan => vec!["--permission-mode".to_owned(), "plan".to_owned()],
         }
+    }
+
+    fn ping_args(&self) -> Option<Vec<String>> {
+        Some(vec!["--effort".to_owned(), "low".to_owned(), "ping".to_owned()])
     }
 
     fn render_preset(

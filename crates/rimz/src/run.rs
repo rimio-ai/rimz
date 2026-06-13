@@ -22,6 +22,7 @@ pub enum PermissionMode {
     Auto,
     Ask,
     Yolo,
+    Plan,
 }
 
 impl FromStr for PermissionMode {
@@ -32,8 +33,9 @@ impl FromStr for PermissionMode {
             "auto" => Ok(Self::Auto),
             "ask" => Ok(Self::Ask),
             "yolo" => Ok(Self::Yolo),
+            "plan" => Ok(Self::Plan),
             _ => Err(format!(
-                "unknown permission mode `{raw}`; expected auto, ask, or yolo"
+                "unknown permission mode `{raw}`; expected auto, ask, plan, or yolo"
             )),
         }
     }
