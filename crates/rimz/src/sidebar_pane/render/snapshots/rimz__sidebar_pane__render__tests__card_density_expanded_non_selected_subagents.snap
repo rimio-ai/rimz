@@ -9,14 +9,14 @@ expression: screen
  ────────────────────────────────────────────────────
  ? 1   ! 0   ⏸︎ 0   ✓ 0                      ⢿ 0   ○ 1
 
-▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄▕
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
 ▌? asker · opus · high · 200k                        ▐
 ▌  needs review                                      ▐
 ▌  ▣ ━━━━━━━━━━╸━━─────────────────────────────   30%▐
 ▌  ▤ 30k · ◌ 24k ↘ 6k ↗ 1k                           ▐
-▎○ claude · opus · high · 200k                       ▕
-▎  delegated sweep                                   ▕
-▎  ⧉ subagents (1)                                   ▕
-▎    ✓ Explore — map the render path                 ▕
-▎      ◇ 31k · opus · high                      ◔  2m▕
+▎○ claude · opus · high · 200k                       🮇
+▎  delegated sweep                                   🮇
+▎  ⧉ subagents (1)                                   🮇
+▎    ✓ Explore — map the render path                 🮇
+▎      ◇ 31k · opus · high                      ◔  2m🮇
                                            ? for help
