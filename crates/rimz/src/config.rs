@@ -30,7 +30,7 @@ mod sidebar;
 mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
-pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig};
+pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig, TabPlacement};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig,

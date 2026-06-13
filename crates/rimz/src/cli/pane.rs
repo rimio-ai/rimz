@@ -1,13 +1,10 @@
 //! `rimz pane` — the public pane primitives: list, capture, send, focus.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Result, bail};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
 use crate::cli::render;
-use rimz::ResolvedWorkspace;
 use rimz::ids::PaneId;
 use rimz::mux::{MuxBackend, NamedKey, PaneListOptions, SplitPaneOptions};
 use rimz::workspace::WorkspaceResolver;
@@ -205,30 +202,13 @@ fn split(backend: &dyn MuxBackend, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     backend
         .split_pane(SplitPaneOptions {
-            target_pane_id: None,
+            target_pane_id: rimz::mux::own_pane_id(backend.name()),
             cwd: Some(workspace.worktree_root.display().to_string()),
             command: None,
-            env: split_env(&workspace),
+            env: crate::cli::agents_launch::launch_identity_env(&workspace),
+            focus: true,
         })
         .map_err(Into::into)
-}
-
-fn split_env(workspace: &ResolvedWorkspace) -> BTreeMap<String, String> {
-    BTreeMap::from([
-        ("RIMZ".to_owned(), "1".to_owned()),
-        (
-            "RIMZ_WORKSPACE_ID".to_owned(),
-            workspace.workspace_id.to_string(),
-        ),
-        (
-            "RIMZ_PROJECT_ROOT".to_owned(),
-            workspace.project_root.display().to_string(),
-        ),
-        (
-            "RIMZ_WORKTREE_PATH".to_owned(),
-            workspace.worktree_root.display().to_string(),
-        ),
-    ])
 }
 
 fn detach(

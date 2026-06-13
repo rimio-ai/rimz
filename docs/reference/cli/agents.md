@@ -28,7 +28,7 @@ rimz agents show <REF> [--json]
 rimz agents focus <REF>
 rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--no-focus] [--ask|--yolo] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [-- PASSTHROUGH...]
 rimz agents <SPEC> [PROMPT] -p|--print [--timeout <DURATION>] [--detach] [--stream] [--json] [--keep]
 ```
 
@@ -41,6 +41,8 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 `PROMPT` is the optional second positional and is broadcast to every agent cell. Interactive launches pass no approval override by default, so each provider keeps its native prompts; `--ask` keeps/returns to native prompts where supported, and `--yolo` passes the adapter's bypass flags. `-- PASSTHROUGH...` appends raw agent argv to every agent cell after alias preset args and any explicit permission args. A second positional that is itself a known cell or layout is rejected with a `rimz agents a,b` hint so the removed space-separated fan-out form does not silently become a prompt.
 
 `-w`/`--worktree` takes a value as `--worktree=docs` or a space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. A worktree launch names the backend tab `⑂ <NAME>` (the worktree name behind the worktree glyph); launches without a worktree name the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated worktree name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
+
+Placement follows intent. By default (the `auto` policy) a worktree launch or a multi-cell layout opens its own tab, while a single non-worktree agent splits the current view beside the launching pane. `--new-tab` forces a new tab; `--same-tab` forces the split for a single agent cell — including a single worktree launch — run from inside the room, and is rejected for a multi-cell layout. The per-machine `[agents] tab` default sets the policy when neither flag is given, and `tab = "same"` likewise splits a single worktree launch ([configuration.md](../configuration.md#agent-aliases-and-layouts)). `--no-focus` keeps focus on the launching pane in either case.
 
 `-p` launches exactly one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with the run status code: `0` completed, `1` failed, `124` timed out, `130` canceled. `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
 

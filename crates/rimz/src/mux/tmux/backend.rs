@@ -176,7 +176,12 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
-        let mut spec = self.cmd().args(["split-window", "-d", "-h"]);
+        // `-d` keeps focus on the splitting pane; omit it to land in the new
+        // pane (the focused launch path).
+        let mut spec = self.cmd().args(["split-window", "-h"]);
+        if !opts.focus {
+            spec = spec.arg("-d");
+        }
         for (key, value) in &opts.env {
             spec = spec.args(["-e".to_owned(), format!("{key}={value}")]);
         }

@@ -10,6 +10,7 @@
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 
 [agents]
+# tab = "auto"                          # launch placement: "auto" (worktree or multi-cell → new tab, else same tab), "new", or "same"
 # `rimz agents <spec>` cells are aliases. Built-ins include `term`, agent kinds,
 # and adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
 # `codex-yolo`; user aliases below may shadow agent kinds. `peer` (claude,codex) is

@@ -79,7 +79,7 @@ rimz agents show <ref> [--json]
 rimz agents focus <ref>
 rimz agents wait <ref> [--timeout <duration>] [--stream [--from-start]] [--json]
 rimz agents stop <ref>
-rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--name <name>] [--no-focus] [--ask|--yolo] [-- passthrough...]
+rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--name <name>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [-- passthrough...]
 rimz agents <spec> [prompt] -p|--print [--timeout <duration>] [--detach] [--stream] [--json] [--keep]
 ```
 

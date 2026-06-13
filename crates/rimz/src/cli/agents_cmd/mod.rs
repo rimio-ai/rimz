@@ -20,11 +20,12 @@ use super::{GlobalFlags, RoomTarget};
 use rimz::agents::AgentAdapter;
 use rimz::agents_spec::{Cell, LayoutSpec};
 use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};
+use rimz::config::TabPlacement;
 use rimz::feed::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
 use rimz::message::{DeliveryGate, gate_open};
-use rimz::mux::{LayoutPanes, PaneCmd, TabOptions, own_pane_id};
+use rimz::mux::{LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id};
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 
@@ -68,6 +69,13 @@ pub struct AgentsArgs {
     /// Open tabs/windows without moving focus to them.
     #[arg(long)]
     no_focus: bool,
+    /// Split the agent into the current view instead of a new tab. Single
+    /// agent cell only; rejected for a multi-cell layout.
+    #[arg(long)]
+    same_tab: bool,
+    /// Open the launch in a new tab/window instead of the current view.
+    #[arg(long, conflicts_with = "same_tab")]
+    new_tab: bool,
     /// Let the agent ask before tool use where supported.
     #[arg(long, conflicts_with = "yolo")]
     ask: bool,

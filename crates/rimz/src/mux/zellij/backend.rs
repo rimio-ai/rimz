@@ -1,5 +1,6 @@
 //! Zellij [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -23,6 +24,20 @@ use crate::mux::{
     SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions,
     ensure_pane_backend,
 };
+
+/// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
+/// pane inherits the requested vars; Zellij's `new-pane` has no env flag of its
+/// own. An empty env map returns the command unchanged.
+fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<String> {
+    if env.is_empty() {
+        return command;
+    }
+    let mut wrapped = Vec::with_capacity(command.len() + env.len() + 1);
+    wrapped.push("env".to_owned());
+    wrapped.extend(env.iter().map(|(key, value)| format!("{key}={value}")));
+    wrapped.extend(command);
+    wrapped
+}
 
 impl MuxBackend for ZellijBackend {
     fn name(&self) -> MuxName {
@@ -121,23 +136,36 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()> {
-        let mut spec = self.cmd().args(["action", "new-pane"]);
-        if let Some(target) = opts.target_pane_id {
-            ensure_pane_backend(&target, MuxName::Zellij)?;
+        let target = opts.target_pane_id;
+        if let Some(target) = &target {
+            ensure_pane_backend(target, MuxName::Zellij)?;
             // Zellij's CLI opens relative to the current focus and does not
             // expose a target-pane flag for `new-pane`.
         }
+        let mut spec = self.cmd().args(["action", "new-pane"]);
         if let Some(cwd) = opts.cwd {
             spec = spec.args(["--cwd".to_owned(), cwd]);
         }
-        if let Some(command) = opts.command
-            && let Some((program, args)) = command.split_first()
-        {
-            spec = spec
-                .args(["--".to_owned(), program.clone()])
-                .args(args.iter().cloned());
+        if let Some(command) = opts.command {
+            // Zellij's `new-pane` has no env flag, so inject the requested vars
+            // through an `env KEY=VALUE …` prefix — the cross-backend match for
+            // tmux's native `-e` (see the backend env-injection parity tests).
+            let command = env_prefixed(&opts.env, command);
+            if let Some((program, args)) = command.split_first() {
+                spec = spec
+                    .args(["--".to_owned(), program.clone()])
+                    .args(args.iter().cloned());
+            }
         }
-        spec.run().map(|_| ())
+        spec.run()?;
+        // `new-pane` focuses the pane it creates; for the `--no-focus` path
+        // return focus to the splitting pane (best-effort — the pane is open).
+        if !opts.focus
+            && let Some(target) = &target
+        {
+            let _ = self.focus_pane(target);
+        }
+        Ok(())
     }
 
     fn focus_pane(&self, pane: &PaneId) -> Result<()> {

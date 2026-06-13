@@ -31,6 +31,26 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
     for kind in layout.agent_kinds() {
         agent_launch_env(&workspace.project_root, kind)?;
     }
+    // Resolve where the launch lands before any side effect — the live-session
+    // probe, worktree creation, the ledger append, the sidebar build — so an
+    // invalid `--same-tab` (a multi-cell layout, or run outside a room) refuses
+    // cleanly and leaves no provisional rows or worktree behind. Feasibility
+    // reads the ambient pane; the split target is re-derived for the resolved
+    // backend below.
+    let single_pane = layout
+        .columns
+        .iter()
+        .map(|column| column.rows.len())
+        .sum::<usize>()
+        == 1;
+    let placement = resolve_tab_placement(
+        args.new_tab,
+        args.same_tab,
+        machine_config.agents.tab,
+        args.worktree.is_some(),
+        single_pane,
+        rimz::mux::ambient_pane_id().is_some(),
+    )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
@@ -83,14 +103,29 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
         args.worktree.is_some(),
         &launch_identities,
     )?;
-    let open_result = backend.open_tab(&TabOptions {
-        session_name: workspace.session_name.clone(),
-        title,
-        cwd: cwd.clone(),
-        panes,
-        focus: !args.no_focus,
-        sidebar,
-    });
+    let (open_result, what) = match placement {
+        TabTarget::NewTab => (
+            backend.open_tab(&TabOptions {
+                session_name: workspace.session_name.clone(),
+                title,
+                cwd: cwd.clone(),
+                panes,
+                focus: !args.no_focus,
+                sidebar,
+            }),
+            "opening agent tab",
+        ),
+        TabTarget::SameTab => (
+            backend.split_pane(SplitPaneOptions {
+                target_pane_id: own_pane_id(mux),
+                cwd: Some(cwd.to_string_lossy().into_owned()),
+                command: Some(single_pane_argv(&panes)?),
+                env: agents_launch::launch_identity_env(&workspace),
+                focus: !args.no_focus,
+            }),
+            "splitting the agent into the current view",
+        ),
+    };
     if let Err(err) = open_result {
         let _ = append_launch_events(
             &ledger,
@@ -101,9 +136,76 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
             args.prompt.as_deref(),
             rimz::schema::event::AgentLaunchState::Failed,
         );
-        return Err(err).context("opening agent tab");
+        return Err(err).context(what);
     }
     Ok(())
+}
+
+/// Where a launch lands. The resolver derives it from the per-launch flags, the
+/// `[agents] tab` default, and whether a same-tab split is feasible here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TabTarget {
+    NewTab,
+    SameTab,
+}
+
+/// Resolve launch placement. Explicit flags win; otherwise the config policy
+/// decides, with `auto` opening a new tab for a worktree or multi-cell layout
+/// and splitting the current view for a single non-worktree agent. A same-tab
+/// outcome needs a single cell and a launching pane to split — an explicit
+/// `--same-tab` that cannot be honored fails fast; a defaulted one falls back
+/// to a new tab.
+pub(super) fn resolve_tab_placement(
+    new_tab: bool,
+    same_tab: bool,
+    policy: TabPlacement,
+    is_worktree: bool,
+    single_pane: bool,
+    has_launching_pane: bool,
+) -> Result<TabTarget> {
+    if new_tab {
+        return Ok(TabTarget::NewTab);
+    }
+    if same_tab {
+        if !single_pane {
+            bail!(
+                "--same-tab opens a single agent cell; a multi-cell layout opens a new tab — drop --same-tab or pass --new-tab"
+            );
+        }
+        if !has_launching_pane {
+            bail!(
+                "--same-tab splits the current pane, so run it from inside the room; drop it to open a new tab"
+            );
+        }
+        return Ok(TabTarget::SameTab);
+    }
+    Ok(match policy {
+        TabPlacement::New => TabTarget::NewTab,
+        TabPlacement::Same => same_tab_or_new(single_pane, has_launching_pane),
+        TabPlacement::Auto if is_worktree => TabTarget::NewTab,
+        TabPlacement::Auto => same_tab_or_new(single_pane, has_launching_pane),
+    })
+}
+
+/// Split the current view when feasible, else fall back to a new tab. The
+/// fallback path for a defaulted same-tab outcome — never for an explicit flag.
+fn same_tab_or_new(single_pane: bool, has_launching_pane: bool) -> TabTarget {
+    if single_pane && has_launching_pane {
+        TabTarget::SameTab
+    } else {
+        TabTarget::NewTab
+    }
+}
+
+/// The one pane command of a same-tab launch (the resolver guarantees a single
+/// cell before this is reached).
+fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
+    panes
+        .columns
+        .first()
+        .and_then(|column| column.first())
+        .map(|pane| pane.argv.clone())
+        .context("same-tab launch produced no pane command")
 }
 
 /// Trust-gated `[[agents]]` env for an agent launch, ready to inject into the
@@ -208,7 +310,14 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
             "--worktree requires an agent layout spec; use `rimz agents list --worktree <name>` to filter cards"
         );
     }
-    if args.name.is_some() || args.no_focus || args.ask || args.yolo || args.print {
+    if args.name.is_some()
+        || args.no_focus
+        || args.same_tab
+        || args.new_tab
+        || args.ask
+        || args.yolo
+        || args.print
+    {
         bail!("agent launch options require an agent layout spec");
     }
     Ok(())

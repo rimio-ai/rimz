@@ -1,10 +1,35 @@
 //! Shared helpers for agent launch commands that open panes in the current room.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use anyhow::{Result, bail};
 
+use rimz::ResolvedWorkspace;
 use rimz::workspace::RootClass;
+
+/// The room-identity environment a pane opened into the current session
+/// carries: the `RIMZ` marker plus the workspace pin (id, project root, and the
+/// room's worktree root). Splits inherit the session env already; setting these
+/// explicitly keeps a freshly split pane pinned to the same room as the
+/// new-tab launch path. The pane's own working directory is set separately.
+pub(crate) fn launch_identity_env(workspace: &ResolvedWorkspace) -> BTreeMap<String, String> {
+    BTreeMap::from([
+        ("RIMZ".to_owned(), "1".to_owned()),
+        (
+            "RIMZ_WORKSPACE_ID".to_owned(),
+            workspace.workspace_id.to_string(),
+        ),
+        (
+            "RIMZ_PROJECT_ROOT".to_owned(),
+            workspace.project_root.display().to_string(),
+        ),
+        (
+            "RIMZ_WORKTREE_PATH".to_owned(),
+            workspace.worktree_root.display().to_string(),
+        ),
+    ])
+}
 
 pub(crate) fn resolve_cwd(
     workspace: &rimz::ResolvedWorkspace,

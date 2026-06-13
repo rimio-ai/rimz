@@ -681,6 +681,7 @@ fn split_pane_injects_env_vars() {
                 "printf RIMZ_TEST_VAR=$RIMZ_TEST_VAR; sleep 5".to_owned(),
             ]),
             env,
+            focus: false,
         })
         .expect("split_pane");
 

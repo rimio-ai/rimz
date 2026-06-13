@@ -151,6 +151,9 @@ base = "fresh"
 ### Agent Aliases And Layouts
 
 ```toml
+[agents]
+tab = "auto"
+
 [agents.aliases]
 vim = "nvim -p"
 htop = "htop"
@@ -172,6 +175,8 @@ debug = "pi,htop+term"
 ```
 
 Named layouts feed `rimz agents <name>`, and inline specs such as `rimz agents "claude,codex+term"` use the same cell resolver. A layout is a shape string: commas split columns, plus signs stack rows in a column, and each cell is an alias or built-in cell. Cells resolve in this order: user entries in `[agents.aliases]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` agent variants such as `claude-auto`, `codex-ask`, or `codex-yolo`. Non-`ask` virtual modes exist only when that adapter contributes permission argv for the posture. The built-in `peer = "claude,codex"` exists even when unset, and `[agents.layouts.peer]` overrides it for this machine. Alias and layout names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`; aliases may shadow agent kinds such as `claude` to set local defaults for that kind.
+
+`tab` sets where a launch lands when neither `--same-tab` nor `--new-tab` is passed. `"auto"` (the default) opens a new tab for a worktree launch or a multi-cell layout and splits the current view for a single non-worktree agent; `"new"` always opens a new tab; `"same"` splits the current view whenever the launch is a single agent cell, falling back to a new tab otherwise.
 
 A bare alias string is shell-split as a raw command pane. An alias table with `agent = "<kind>"` opens an agent cell; `model` and `effort` render through the adapter, `mode = "auto" | "ask" | "yolo"` adds that adapter's permission argv, then `args` is shell-split and appended. Claude supports `model`; Codex supports `model` and `effort`; unsupported typed fields fail config load with the fix rather than being ignored. Per-machine configs with `[tab]`, `[tab.keywords]`, or `[tab.layouts]` hard-error; rename them to `[agents]`, `[agents.aliases]`, and `[agents.layouts]`.
 

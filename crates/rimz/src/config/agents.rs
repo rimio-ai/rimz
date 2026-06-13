@@ -9,9 +9,30 @@ use crate::run::PermissionMode;
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
+    /// Where a launch lands: a new backend tab/window or the current view.
+    /// Declared before the table fields so the section serializes as valid
+    /// TOML (a scalar after a sub-table would bind to the wrong table).
+    pub tab: TabPlacement,
     #[serde(default)]
     pub aliases: AliasesConfig,
     pub layouts: LayoutsConfig,
+}
+
+/// Default tab placement for `rimz agents <spec>` launches; the per-launch
+/// `--same-tab` / `--new-tab` flags override it.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum TabPlacement {
+    /// A worktree or multi-cell layout opens a new tab; a single non-worktree
+    /// agent splits the current view.
+    #[default]
+    Auto,
+    /// Always open a new tab/window.
+    New,
+    /// Split the current view when a launch is a single agent cell, falling
+    /// back to a new tab when it cannot (a multi-cell layout, or no launching
+    /// pane).
+    Same,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

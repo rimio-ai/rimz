@@ -296,6 +296,7 @@ fn exact_set_keys() -> BTreeSet<String> {
     [
         "worktree.dir",
         "worktree.base",
+        "agents.tab",
         "accounts.oauth_usage",
         "remote_control.claude",
         "remote_control.codex",

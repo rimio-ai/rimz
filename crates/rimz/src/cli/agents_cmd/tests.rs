@@ -3,6 +3,7 @@ use super::launch::*;
 use super::*;
 use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
+use rimz::config::TabPlacement;
 use rimz::ids::{AgentKind, WorkspaceId};
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
 
@@ -97,6 +98,98 @@ fn launch_flags_require_a_spec() {
         .expect("parse passthrough without spec");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject passthrough");
     assert!(err.to_string().contains("missing agent layout spec"));
+
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "--same-tab"]).expect("parse same-tab without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject same-tab");
+    assert!(
+        err.to_string().contains("require an agent layout spec"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn tab_placement_flags_parse_and_conflict() {
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "claude", "--same-tab"]).expect("parse same-tab");
+    assert!(parsed.args.same_tab);
+    assert!(!parsed.args.new_tab);
+
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "claude", "--new-tab"]).expect("parse new-tab");
+    assert!(parsed.args.new_tab);
+
+    assert!(
+        AgentsHarness::try_parse_from(["rimz", "claude", "--same-tab", "--new-tab"]).is_err(),
+        "--same-tab and --new-tab are mutually exclusive"
+    );
+}
+
+#[test]
+fn tab_placement_resolves_from_flags_policy_and_feasibility() {
+    use TabTarget::{NewTab, SameTab};
+
+    // auto default: a single non-worktree agent with a launching pane → same tab.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Auto, false, true, true).unwrap(),
+        SameTab
+    );
+    // auto: a worktree launch always opens a new tab.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Auto, true, true, true).unwrap(),
+        NewTab
+    );
+    // auto: a multi-cell layout opens a new tab.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Auto, false, false, true).unwrap(),
+        NewTab
+    );
+    // auto: no launching pane (run from outside the room) falls back to a new tab.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Auto, false, true, false).unwrap(),
+        NewTab
+    );
+    // --new-tab forces a new tab even for a single non-worktree agent.
+    assert_eq!(
+        resolve_tab_placement(true, false, TabPlacement::Auto, false, true, true).unwrap(),
+        NewTab
+    );
+    // --same-tab forces a same-tab split for a single agent (worktree included).
+    assert_eq!(
+        resolve_tab_placement(false, true, TabPlacement::Auto, true, true, true).unwrap(),
+        SameTab
+    );
+    // config "new" overrides the auto same-tab default.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::New, false, true, true).unwrap(),
+        NewTab
+    );
+    // config "same" splits a single agent (ignoring the worktree default, like the flag).
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Same, true, true, true).unwrap(),
+        SameTab
+    );
+    // config "same" falls back to a new tab for a multi-cell layout.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Same, false, false, true).unwrap(),
+        NewTab
+    );
+    // config "same" falls back when there is no launching pane.
+    assert_eq!(
+        resolve_tab_placement(false, false, TabPlacement::Same, false, true, false).unwrap(),
+        NewTab
+    );
+}
+
+#[test]
+fn explicit_same_tab_fails_fast_when_infeasible() {
+    let err = resolve_tab_placement(false, true, TabPlacement::Auto, false, false, true)
+        .expect_err("multi-cell same-tab");
+    assert!(err.to_string().contains("single agent cell"), "{err:#}");
+
+    let err = resolve_tab_placement(false, true, TabPlacement::Auto, false, true, false)
+        .expect_err("paneless same-tab");
+    assert!(err.to_string().contains("inside the room"), "{err:#}");
 }
 
 #[test]

@@ -13,6 +13,7 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -22,7 +23,7 @@ use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
     LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth, SidebarPaneOptions,
-    SidebarWidth, TabOptions, ZellijBackend, zellij,
+    SidebarWidth, SplitPaneOptions, TabOptions, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -642,6 +643,83 @@ fn open_sidebar_heals_a_live_session_missing_its_sidebar() {
         "open_sidebar should rebirth a sidebar-less live session with a sidebar: {healed:?}",
     );
     assert_sidebar_is_left_thirty_percent(xdg.path(), &name);
+}
+
+/// `split_pane` injects `RIMZ_*` env on Zellij too — parity with tmux's native
+/// `-e`. Zellij's `new-pane` has no env flag, so the backend prefixes the
+/// command with an `env KEY=VALUE` shim. The split command records the var to a
+/// file we read back, which a background session writes reliably without
+/// depending on a rendered, attached pane.
+#[test]
+fn split_pane_injects_env_vars() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("splitenv");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let marker_file = cwd.path().join("rimz-env-marker");
+
+    // Birth a live background session with one long-lived pane to split from.
+    let layout = cwd.path().join("plain.kdl");
+    std::fs::write(
+        &layout,
+        "layout {\n    pane command=\"sleep\" {\n        args \"60\"\n    }\n}\n",
+    )
+    .expect("write plain layout");
+    let created = scoped_zellij(xdg.path())
+        .args(["attach", "--create-background", &name, "options"])
+        .arg("--default-cwd")
+        .arg(cwd.path())
+        .arg("--default-layout")
+        .arg(&layout)
+        .bounded_status()
+        .expect("create session");
+    assert!(created.success(), "create-background failed for {name}");
+    assert!(
+        !wait_for_pane_count(xdg.path(), &name, 1).is_empty(),
+        "session should have its working pane before the split",
+    );
+
+    let mut env = BTreeMap::new();
+    env.insert("RIMZ_TEST_VAR".to_owned(), "marker-rimz-env".to_owned());
+    ZellijBackend::with_runtime_dir(xdg.path())
+        .split_pane(SplitPaneOptions {
+            target_pane_id: None,
+            cwd: None,
+            command: Some(vec![
+                "sh".to_owned(),
+                "-c".to_owned(),
+                format!(
+                    "printf '%s' \"$RIMZ_TEST_VAR\" > {}; sleep 5",
+                    marker_file.display()
+                ),
+            ]),
+            env,
+            focus: false,
+        })
+        .expect("split_pane");
+
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let marker = loop {
+        if let Ok(text) = std::fs::read_to_string(&marker_file)
+            && !text.is_empty()
+        {
+            break text;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "env-injected split never wrote the marker file",
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        marker, "marker-rimz-env",
+        "Zellij split pane missed the injected RIMZ_TEST_VAR",
+    );
 }
 
 /// Count this user's live sidebar-serve processes scoped to `session` — the

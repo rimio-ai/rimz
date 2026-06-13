@@ -2,6 +2,8 @@
 
 #[cfg(unix)]
 use assert_cmd::assert::OutputAssertExt;
+#[cfg(unix)]
+use predicates::str::contains;
 
 #[cfg(unix)]
 use crate::common::{
@@ -144,6 +146,34 @@ fn missing_shell_path_falls_back_to_direct_exec() {
     assert!(
         dumped.lines().any(|line| line == "ARGV="),
         "direct fallback did not run the agent shim:\n{dumped}"
+    );
+}
+
+/// An invalid explicit `--same-tab` (here a multi-cell layout) refuses the
+/// whole launch before any side effect, so it leaves no provisional ledger rows
+/// and never creates the requested worktree. Resolution runs ahead of the
+/// live-session probe, so the rejection needs neither a running room nor a mux.
+#[cfg(unix)]
+#[test]
+fn invalid_same_tab_refuses_an_agents_launch_before_side_effects() {
+    let env = Env::new();
+
+    env.rimz()
+        .args(["agents", "claude,codex", "--worktree=wt-a", "--same-tab"])
+        .assert()
+        .failure()
+        .stderr(contains("single agent cell"));
+
+    assert!(
+        !env.home_root
+            .join("project-worktrees")
+            .join("wt-a")
+            .exists(),
+        "a rejected --same-tab must not create the worktree",
+    );
+    assert!(
+        !env.state_path_for(&env.project_root).events_log.exists(),
+        "a rejected --same-tab must not append launch events",
     );
 }
 
