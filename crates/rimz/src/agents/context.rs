@@ -194,6 +194,22 @@ pub struct AgentTokenUsage {
     pub current_usage: Option<AgentCurrentUsage>,
 }
 
+impl AgentTokenUsage {
+    /// Tokens currently occupying the context window — the latest API
+    /// response's `input + cache_creation + cache_read`, exactly the numerator
+    /// [`AgentTokenUsage::used_percentage`] scales (output joins the window only
+    /// next turn). `None` before the first call or right after `/compact`
+    /// clears the breakdown.
+    pub fn used_tokens(&self) -> Option<u64> {
+        let usage = self.current_usage.as_ref()?;
+        Some(
+            usage.input_tokens.unwrap_or(0)
+                + usage.cache_creation_input_tokens.unwrap_or(0)
+                + usage.cache_read_input_tokens.unwrap_or(0),
+        )
+    }
+}
+
 /// The token breakdown of the most-recent API response. Cache reads dominate a
 /// long session; cache writes spike on fresh file reads; `input_tokens` is the
 /// live, uncached turn.
@@ -410,6 +426,25 @@ mod tests {
         assert!(!window(Some(0)).is_spent());
         // An unreported window is not a spent one.
         assert!(!window(None).is_spent());
+    }
+
+    #[test]
+    fn used_tokens_sums_the_current_message_window_composition() {
+        // No breakdown yet (fresh session) → no occupancy.
+        assert_eq!(AgentTokenUsage::default().used_tokens(), None);
+        let tokens = AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            used_percentage: Some(30),
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(5_000),
+                output_tokens: Some(9_999),
+                cache_creation_input_tokens: Some(100_000),
+                cache_read_input_tokens: Some(200_000),
+            }),
+            ..AgentTokenUsage::default()
+        };
+        // Output is excluded — it joins the window next turn, not this one.
+        assert_eq!(tokens.used_tokens(), Some(305_000));
     }
 
     #[test]

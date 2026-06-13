@@ -4,7 +4,7 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::AgentContext;
+use crate::agents::{AgentContext, AgentTokenUsage};
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentStatus, ContextSeverity, PaneRef, Surface};
 use crate::ids::{RequestId, ResolverId};
@@ -235,17 +235,11 @@ impl AgentCard {
     /// `input + cache_creation + cache_read`, exactly the numerator the gauge
     /// percent scales.
     pub fn context_used_tokens(&self) -> Option<u64> {
-        let rich = self
-            .context
+        self.context
             .as_ref()
             .and_then(|context| context.tokens.as_ref())
-            .and_then(|tokens| tokens.current_usage.as_ref())
-            .map(|usage| {
-                usage.input_tokens.unwrap_or(0)
-                    + usage.cache_creation_input_tokens.unwrap_or(0)
-                    + usage.cache_read_input_tokens.unwrap_or(0)
-            });
-        rich.or_else(|| self.call_split().map(|split| split.filled()))
+            .and_then(AgentTokenUsage::used_tokens)
+            .or_else(|| self.call_split().map(|split| split.filled()))
     }
 
     /// The latest call's composition when the rich `context.tokens.

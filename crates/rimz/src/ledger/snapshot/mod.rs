@@ -52,6 +52,7 @@ pub use view::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarSnapshot,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
 };
+pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {

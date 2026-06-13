@@ -33,6 +33,8 @@ pub use model::{
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 
+pub use layout::{AgentWorktreeGroup, group_live_agents_by_worktree};
+
 #[cfg(test)]
 pub(super) use aggregate::{attach_sub_agents, sub_agent_from_state};
 #[cfg(test)]

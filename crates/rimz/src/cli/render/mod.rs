@@ -93,14 +93,23 @@ impl Cell {
     }
 }
 
+/// One body entry: a row of cells, or a section label spanning the table to
+/// head a group of following rows.
+enum Body {
+    Row(Vec<Cell>),
+    Section(String),
+}
+
 /// A borderless table whose columns auto-fit their widest cell. Headers render
 /// in the [`palette::HEADER`] tone; every body cell keeps its own style. Cells
 /// are joined with a two-space gap and the trailing column is never padded, so
-/// lines carry no trailing whitespace.
+/// lines carry no trailing whitespace. [`Table::section`] groups rows under a
+/// spanning label while every row shares one width computation, so groups stay
+/// column-aligned.
 pub(crate) struct Table {
     headers: Vec<String>,
     align: Vec<Align>,
-    rows: Vec<Vec<Cell>>,
+    rows: Vec<Body>,
 }
 
 impl Table {
@@ -129,15 +138,23 @@ impl Table {
     }
 
     pub(crate) fn row<I: IntoIterator<Item = Cell>>(&mut self, cells: I) {
-        self.rows.push(cells.into_iter().collect());
+        self.rows.push(Body::Row(cells.into_iter().collect()));
+    }
+
+    /// Open a group: a blank line then `label` in the accent tone, heading every
+    /// row pushed until the next section.
+    pub(crate) fn section(&mut self, label: impl Into<String>) {
+        self.rows.push(Body::Section(label.into()));
     }
 
     pub(crate) fn render(&self, w: &mut impl Write) -> std::io::Result<()> {
         let cols = self.headers.len();
         let mut widths: Vec<usize> = self.headers.iter().map(|h| h.width()).collect();
-        for row in &self.rows {
-            for (col, cell) in row.iter().enumerate().take(cols) {
-                widths[col] = widths[col].max(cell.width());
+        for body in &self.rows {
+            if let Body::Row(row) = body {
+                for (col, cell) in row.iter().enumerate().take(cols) {
+                    widths[col] = widths[col].max(cell.width());
+                }
             }
         }
         let header_cells: Vec<Cell> = self
@@ -146,8 +163,15 @@ impl Table {
             .map(|h| cell(h.clone()).fg(palette::HEADER))
             .collect();
         self.write_row(w, &header_cells, &widths)?;
-        for row in &self.rows {
-            self.write_row(w, row, &widths)?;
+        for body in &self.rows {
+            match body {
+                Body::Row(row) => self.write_row(w, row, &widths)?,
+                Body::Section(label) => {
+                    writeln!(w)?;
+                    cell(label.clone()).fg(palette::ACCENT.bold()).write_styled(w)?;
+                    writeln!(w)?;
+                }
+            }
         }
         Ok(())
     }

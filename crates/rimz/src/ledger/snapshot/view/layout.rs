@@ -1,13 +1,14 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::feed::AgentStatus;
+use crate::feed::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
-use super::{SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
+use super::{SidebarSnapshot, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 
 pub(super) const WORKTREE_ROW_CAP: usize = 6;
 
@@ -17,6 +18,30 @@ pub(super) fn group_branch_label(rows: &[SidebarRow]) -> Option<String> {
     rows.iter()
         .find_map(|row| row.worktree_branch.as_deref().filter(|b| !b.is_empty()))
         .map(ToOwned::to_owned)
+}
+
+/// The worktree paths that host more than one branch. A path keyed by branch
+/// (rather than by path alone) keeps each branch its own group instead of
+/// collapsing two checkouts under one mislabeled header. Shared by the live
+/// row fold ([`build_worktree_groups_from_rows`]) and the `rimz agents list`
+/// roster ([`group_live_agents_by_worktree`]) so both split identically.
+pub(super) fn multi_branch_paths<'a>(
+    entries: impl Iterator<Item = (Option<&'a str>, Option<&'a str>)>,
+) -> BTreeSet<String> {
+    let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for (path, branch) in entries {
+        if let (Some(path), Some(branch)) = (
+            path.filter(|path| !path.is_empty()),
+            branch.filter(|branch| !branch.is_empty()),
+        ) {
+            branches_per_path.entry(path).or_default().insert(branch);
+        }
+    }
+    branches_per_path
+        .into_iter()
+        .filter(|(_, branches)| branches.len() > 1)
+        .map(|(path, _)| path.to_owned())
+        .collect()
 }
 
 pub(super) fn worktree_group_key(
@@ -350,4 +375,108 @@ fn status_rank(status: AgentStatus) -> u8 {
         AgentStatus::Running => 4,
         AgentStatus::Idle => 5,
     }
+}
+
+/// One worktree's live agents, ranked within the group like the sidebar.
+#[derive(Debug)]
+pub struct AgentWorktreeGroup<'a> {
+    pub label: String,
+    pub kind: SidebarWorktreeKind,
+    pub agents: Vec<&'a AgentState>,
+}
+
+/// Group root agents by worktree and rank them the way the sidebar ranks rows
+/// and groups: attention agents first (longest-overdue), calm agents in stable
+/// spawn order, the `external` catch-all last. The `rimz agents list` roster
+/// reuses this so the CLI and the room agree on order. Uncapped — the listing
+/// shows the whole roster, including paneless sessions, unlike the sidebar's
+/// per-worktree cap.
+pub fn group_live_agents_by_worktree<'a>(
+    agents: &[&'a AgentState],
+    snapshot: &SidebarSnapshot,
+) -> Vec<AgentWorktreeGroup<'a>> {
+    let project_root = snapshot.project_root.as_deref();
+    // Split a path that hosts more than one branch into per-branch pods, exactly
+    // as the sidebar's row fold does, so two checkouts of one path never collapse
+    // under a single mislabeled header.
+    let multi_branch = multi_branch_paths(
+        agents
+            .iter()
+            .map(|agent| (agent.worktree_path.as_deref(), agent.worktree_branch.as_deref())),
+    );
+    let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
+    for &agent in agents {
+        let split_by_branch = agent
+            .worktree_path
+            .as_deref()
+            .is_some_and(|path| multi_branch.contains(path));
+        let (kind, key, label) = worktree_group_key(
+            agent.worktree_path.as_deref(),
+            agent.worktree_branch.as_deref(),
+            split_by_branch,
+            project_root,
+            &snapshot.worktree_roots,
+            snapshot.root_class,
+        );
+        by_key
+            .entry(key)
+            .or_insert_with(|| AgentWorktreeGroup {
+                label,
+                kind,
+                agents: Vec::new(),
+            })
+            .agents
+            .push(agent);
+    }
+    let mut groups: Vec<AgentWorktreeGroup<'a>> = by_key.into_values().collect();
+    for group in &mut groups {
+        group.agents.sort_by(|a, b| compare_listing_agents(a, b));
+    }
+    groups.sort_by(compare_listing_groups);
+    groups
+}
+
+/// The agent's durable spawn instant — its pane's process start when known,
+/// else `registered_at` — the key the calm within-bucket order uses (see
+/// [`spawn_key`] for the row-side equivalent).
+fn agent_spawn_key(agent: &AgentState) -> Option<Timestamp> {
+    agent
+        .pane
+        .as_ref()
+        .and_then(|pane| pane.pane_process_start)
+        .or(agent.registered_at)
+}
+
+/// [`compare_rows`] for a bare roster with no unread/inactive state: the status
+/// ladder orders the bucket, attention agents tiebreak longest-overdue-first,
+/// calm agents by stable spawn order, then the durable `agent_id`.
+fn compare_listing_agents(a: &AgentState, b: &AgentState) -> Ordering {
+    status_rank(a.status)
+        .cmp(&status_rank(b.status))
+        .then_with(|| {
+            if a.status.is_attention() {
+                a.last_activity.cmp(&b.last_activity)
+            } else {
+                cmp_start_asc(agent_spawn_key(a), agent_spawn_key(b))
+            }
+        })
+        .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
+}
+
+/// [`compare_groups`] for the roster: the `external` catch-all last, then the
+/// most-urgent member, then the earliest-spawned member, then the label.
+fn compare_listing_groups(a: &AgentWorktreeGroup, b: &AgentWorktreeGroup) -> Ordering {
+    let tier = |group: &AgentWorktreeGroup| match group.agents.first() {
+        Some(top) if top.status.is_attention() => (1_u8, status_rank(top.status)),
+        Some(_) => (2, 0),
+        None => (u8::MAX, u8::MAX),
+    };
+    let earliest =
+        |group: &AgentWorktreeGroup| group.agents.iter().filter_map(|a| agent_spawn_key(a)).min();
+
+    (a.kind == SidebarWorktreeKind::External)
+        .cmp(&(b.kind == SidebarWorktreeKind::External))
+        .then_with(|| tier(a).cmp(&tier(b)))
+        .then_with(|| cmp_start_asc(earliest(a), earliest(b)))
+        .then_with(|| a.label.cmp(&b.label))
 }

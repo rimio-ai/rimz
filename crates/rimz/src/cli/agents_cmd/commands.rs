@@ -10,31 +10,63 @@ pub(super) fn list_agents(
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
-    let agents = if all {
-        ledger
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    let context_records = rimz::ledger::agent_context::read_all(&runtime);
+
+    let (mut snapshot, live_keys) = if all {
+        let audit = ledger
             .runtime_projection(rimz::RuntimeScope::Audit)
             .context("reading audit agent rollup")?
-            .agents
-    } else {
-        ledger
-            .snapshot_cached()
-            .context("reading agent snapshot")?
-            .agents
-    };
-    let live_keys = if all && !json {
-        Some(
-            ledger
+            .agents;
+        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
+            workspace.workspace_id.clone(),
+            Vec::new(),
+            audit,
+            jiff::Timestamp::now(),
+        );
+        // The audit projection carries no workspace identity. Copy the live
+        // snapshot's root and class so an out-of-project stale agent tails into
+        // `external` instead of earning its own pod above project work — the
+        // same identity the sidebar groups by. Only the grouped human view needs
+        // it; `--json` emits a flat array, so it skips the extra read.
+        let live_keys = if json {
+            None
+        } else {
+            let live = ledger
                 .snapshot_cached()
-                .context("reading live agent snapshot")?
-                .agents
-                .iter()
-                .map(agent_key)
-                .collect::<std::collections::BTreeSet<_>>(),
-        )
+                .context("reading live agent snapshot")?;
+            snapshot = snapshot
+                .with_root_class(live.root_class)
+                .with_project_root(live.project_root.clone());
+            Some(
+                live.agents
+                    .iter()
+                    .map(agent_key)
+                    .collect::<std::collections::BTreeSet<_>>(),
+            )
+        };
+        (snapshot, live_keys)
     } else {
-        None
+        (
+            ledger.snapshot_cached().context("reading agent snapshot")?,
+            None,
+        )
     };
-    let agents: Vec<&AgentState> = agents
+    // Group by the room's worktree checkouts the way the sidebar does: a
+    // worktree parked outside the project root still earns its own pod. The
+    // cached enumeration is read-only and best-effort, matching the sidebar's
+    // consumer path; `--json` skips it since the flat array never groups.
+    if !json && snapshot.project_root.is_some() {
+        snapshot =
+            snapshot.with_worktree_roots(rimz::sidebar::enrich::cached_worktree_roots(&runtime));
+    }
+    // Fold each session's rich statusline context so the `CTX` column reads the
+    // real used/window fill, not the carried-forward `context_pct`.
+    let snapshot = snapshot.with_agent_context(context_records);
+
+    let agents: Vec<&AgentState> = snapshot
+        .agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| {
@@ -47,10 +79,12 @@ pub(super) fn list_agents(
         supervised::output::print_json(&agents)?;
         return Ok(());
     }
+
+    let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(&agents, &snapshot);
     let now = jiff::Timestamp::now();
     let mut out = render::out();
-    if let Some(live_keys) = live_keys.as_ref() {
-        let mut table = render::Table::new([
+    let mut table = if live_keys.is_some() {
+        render::Table::new([
             "NAME",
             "KIND",
             "STATUS",
@@ -63,23 +97,24 @@ pub(super) fn list_agents(
             "WORKTREE",
             "PANE",
         ])
-        .right(&[5, 6, 7, 8]);
-        for agent in agents {
-            let mut cells = agent_row(agent, now);
-            cells.insert(3, lifecycle_cell(agent, live_keys));
-            table.row(cells);
-        }
-        table.render(&mut out)?;
+        .right(&[5, 6, 7, 8])
     } else {
-        let mut table = render::Table::new([
+        render::Table::new([
             "NAME", "KIND", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE", "PANE",
         ])
-        .right(&[4, 5, 6, 7]);
-        for agent in agents {
-            table.row(agent_row(agent, now));
+        .right(&[4, 5, 6, 7])
+    };
+    for group in &groups {
+        table.section(format!("{} ({})", group.label, group.agents.len()));
+        for agent in &group.agents {
+            let mut cells = agent_row(agent, now);
+            if let Some(live_keys) = live_keys.as_ref() {
+                cells.insert(3, lifecycle_cell(agent, live_keys));
+            }
+            table.row(cells);
         }
-        table.render(&mut out)?;
     }
+    table.render(&mut out)?;
     Ok(())
 }
 
@@ -101,13 +136,21 @@ fn lifecycle_label(
 pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -> Result<()> {
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = crate::cli::open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let runtime = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    // Fold the rich statusline context so the shown card — and the `--json`
+    // payload — carries the real token window, not the carried-forward
+    // `context_pct`.
+    let snapshot = ledger
+        .snapshot_cached()
+        .context("reading agent snapshot")?
+        .with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
     let agent_result = crate::cli::resolve_agent_card(&snapshot, &reference, None);
     let mut agent = agent_result.as_ref().ok().map(|agent| (*agent).clone());
     let mut stale = false;
     let mut audit_error = None;
     if agent.is_none() {
-        match resolve_audit_agent(&ledger, &workspace, &reference) {
+        match resolve_audit_agent(&ledger, &workspace, &runtime, &reference) {
             Ok(Some(audit_agent)) => {
                 agent = Some(audit_agent);
                 stale = true;
@@ -169,6 +212,7 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         );
     }
     kv.push("model", render::cell(model_label(agent)).dash());
+    kv.push("context", context_cell(agent));
     kv.push("worktree", render::cell(worktree_label(agent)).dash());
     kv.push("pane", render::cell(pane_label(agent)).dash());
     kv.render(&mut render::out())?;
@@ -181,6 +225,7 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
 fn resolve_audit_agent(
     ledger: &rimz::Ledger,
     workspace: &rimz::ResolvedWorkspace,
+    runtime: &rimz::RuntimePaths,
     reference: &str,
 ) -> Result<Option<AgentState>> {
     let audit = ledger
@@ -194,7 +239,8 @@ fn resolve_audit_agent(
         Vec::new(),
         audit.agents,
         jiff::Timestamp::now(),
-    );
+    )
+    .with_agent_context(rimz::ledger::agent_context::read_all(runtime));
     match crate::cli::resolve_agent_card(&snapshot, reference, None) {
         Ok(agent) => Ok(Some(agent.clone())),
         Err(err) => Err(err),
@@ -607,10 +653,14 @@ fn agent_row(agent: &AgentState, now: jiff::Timestamp) -> Vec<render::Cell> {
 
 /// Context fill warms as it climbs: gold past 75%, rose past 90%.
 fn context_cell(agent: &AgentState) -> render::Cell {
-    let c = render::cell(context_label(agent));
-    match agent.context_pct {
-        Some(pct) if pct >= 90 => c.fg(render::palette::ALARM),
-        Some(pct) if pct >= 75 => c.fg(render::palette::WARN),
+    let pct = context_pct_display(agent);
+    let text = pct
+        .map(|pct| format!("{}%", pct.round() as u8))
+        .unwrap_or_else(|| "-".to_owned());
+    let c = render::cell(text);
+    match pct {
+        Some(pct) if pct >= 90.0 => c.fg(render::palette::ALARM),
+        Some(pct) if pct >= 75.0 => c.fg(render::palette::WARN),
         Some(_) => c,
         None => c.dash(),
     }
@@ -683,11 +733,52 @@ fn model_label(agent: &AgentState) -> String {
     }
 }
 
-fn context_label(agent: &AgentState) -> String {
+/// The real context-window fill (0..=100): the live token composition over the
+/// model's window — "from sidebar or model". Prefers the precise used/window
+/// fraction, then the statusline's reported `used_percentage`, then the carried
+/// `context_pct`, so a session with no rich context still reads its last gauge.
+fn context_pct_display(agent: &AgentState) -> Option<f64> {
+    match (context_used_tokens(agent), resolved_context_window(agent)) {
+        (Some(used), Some(window)) if window > 0 => {
+            Some((used as f64 / window as f64 * 100.0).clamp(0.0, 100.0))
+        }
+        _ => agent
+            .context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.used_percentage)
+            .or(agent.context_pct)
+            .map(f64::from),
+    }
+}
+
+/// Tokens currently occupying the window: the statusline's rich breakdown, else
+/// the per-call split (`cache_read + fresh_input`) the rollout tail feeds.
+fn context_used_tokens(agent: &AgentState) -> Option<u64> {
     agent
-        .context_pct
-        .map(|pct| format!("{pct}%"))
-        .unwrap_or_else(|| "-".to_owned())
+        .context
+        .as_ref()
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(rimz::agents::AgentTokenUsage::used_tokens)
+        .or_else(|| {
+            let fresh = agent.fresh_input_tokens?;
+            Some(agent.cache_read_input_tokens.unwrap_or(0) + fresh)
+        })
+}
+
+/// The window denominator: the statusline's `context_window_size`, else the
+/// adapter-resolved `context_window`, else the model descriptor's default.
+fn resolved_context_window(agent: &AgentState) -> Option<u64> {
+    agent
+        .context
+        .as_ref()
+        .and_then(|context| context.tokens.as_ref())
+        .and_then(|tokens| tokens.context_window_size)
+        .or(agent.context_window)
+        .or_else(|| {
+            rimz::agents::descriptor_by_kind(agent.kind.as_str())
+                .and_then(|descriptor| descriptor.default_context_window)
+        })
 }
 
 fn tokens_label(agent: &AgentState) -> String {

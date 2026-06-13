@@ -277,6 +277,27 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         ))
         .expect("append stale lifecycle");
 
+    // A rich statusline sidecar for the same session: `show --json` must fold it
+    // onto the resolved card (even via the audit fallback) so the real token
+    // window reaches consumers, not the carried-forward `context_pct`.
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    // A fresh `observed_at`: `read_all` ages out a sidecar past its TTL.
+    let mut context =
+        rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    context.tokens = Some(rimz::agents::AgentTokenUsage {
+        context_window_size: Some(1_000_000),
+        used_percentage: Some(30),
+        current_usage: Some(rimz::agents::AgentCurrentUsage {
+            input_tokens: Some(5_000),
+            cache_read_input_tokens: Some(300_000),
+            ..Default::default()
+        }),
+        ..Default::default()
+    });
+    let record = rimz::ledger::agent_context::new_record("claude", "sess-stale", context);
+    rimz::ledger::agent_context::write_record(&runtime, &record).expect("write context sidecar");
+
     let out = env
         .rimz()
         .args(["agents", "show", "lucid-atlas", "--json"])
@@ -292,6 +313,15 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("show json");
     assert_eq!(parsed["agent"]["agent_id"], "sess-stale");
     assert_eq!(parsed["stale"], true);
+    assert_eq!(
+        parsed["agent"]["context"]["tokens"]["context_window_size"], 1_000_000,
+        "show --json folds the rich context window: {parsed}"
+    );
+    assert_eq!(
+        parsed["agent"]["context"]["tokens"]["current_usage"]["cache_read_input_tokens"],
+        300_000,
+        "folded usage reaches the payload: {parsed}"
+    );
 
     let out = env
         .rimz()

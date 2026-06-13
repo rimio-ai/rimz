@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
@@ -8,8 +8,8 @@ use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
 use super::layout::{
-    capped_rows, compare_groups, compare_rows, group_branch_label, status_counts,
-    worktree_group_key,
+    capped_rows, compare_groups, compare_rows, group_branch_label, multi_branch_paths,
+    status_counts, worktree_group_key,
 };
 use super::{SidebarWorktreeGroup, SidebarWorktreeKind};
 
@@ -42,22 +42,10 @@ pub(super) fn build_worktree_groups_from_rows(
     status::project_display_status(&mut rows, agents, now, stalled_after_secs);
     stamp_inactive(&mut rows, now);
 
-    let mut branches_per_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
-    for row in &rows {
-        if let (Some(path), Some(branch)) = (
-            row.worktree_path.as_deref().filter(|path| !path.is_empty()),
-            row.worktree_branch
-                .as_deref()
-                .filter(|branch| !branch.is_empty()),
-        ) {
-            branches_per_path.entry(path).or_default().insert(branch);
-        }
-    }
-    let multi_branch_paths: BTreeSet<String> = branches_per_path
-        .into_iter()
-        .filter(|(_, branches)| branches.len() > 1)
-        .map(|(path, _)| path.to_owned())
-        .collect();
+    let multi_branch = multi_branch_paths(
+        rows.iter()
+            .map(|row| (row.worktree_path.as_deref(), row.worktree_branch.as_deref())),
+    );
 
     let mut by_group: BTreeMap<String, (String, SidebarWorktreeKind, Vec<SidebarRow>)> =
         BTreeMap::new();
@@ -65,7 +53,7 @@ pub(super) fn build_worktree_groups_from_rows(
         let split_by_branch = row
             .worktree_path
             .as_deref()
-            .is_some_and(|path| multi_branch_paths.contains(path));
+            .is_some_and(|path| multi_branch.contains(path));
         let (kind, key, label) = worktree_group_key(
             row.worktree_path.as_deref(),
             row.worktree_branch.as_deref(),
