@@ -17,7 +17,7 @@ pub(crate) fn agent(status: AgentStatus, phase: TurnPhase) -> anstyle::Style {
     match status {
         AgentStatus::Running if phase == TurnPhase::Reasoning => palette::COOL,
         AgentStatus::Running | AgentStatus::Success => palette::GOOD,
-        AgentStatus::Idle => palette::DIM,
+        AgentStatus::Idle => palette::MUTED,
         AgentStatus::Waiting | AgentStatus::Paused => palette::WARN,
         AgentStatus::Failed => palette::ALARM,
     }
@@ -29,7 +29,7 @@ pub(crate) fn run(status: RunStatus) -> anstyle::Style {
         RunStatus::Completed => palette::GOOD,
         RunStatus::Running | RunStatus::Pending => palette::COOL,
         RunStatus::Failed | RunStatus::TimedOut => palette::ALARM,
-        RunStatus::Canceled => palette::DIM,
+        RunStatus::Canceled => palette::MUTED,
     }
 }
 
@@ -39,7 +39,7 @@ pub(crate) fn message(status: MessageStatus) -> anstyle::Style {
         MessageStatus::Delivered => palette::GOOD,
         MessageStatus::Pending | MessageStatus::Claimed => palette::COOL,
         MessageStatus::Abandoned => palette::WARN,
-        MessageStatus::Removed => palette::DIM,
+        MessageStatus::Removed => palette::MUTED,
     }
 }
 
@@ -49,7 +49,7 @@ pub(crate) fn feed(status: FeedStatus) -> anstyle::Style {
         FeedStatus::Resolved => palette::GOOD,
         FeedStatus::Pending => palette::COOL,
         FeedStatus::TimedOut => palette::WARN,
-        FeedStatus::Abandoned => palette::DIM,
+        FeedStatus::Abandoned => palette::MUTED,
     }
 }
 
@@ -60,6 +60,6 @@ pub(crate) fn trust(state: TrustState) -> anstyle::Style {
         TrustState::Trusted => palette::GOOD,
         TrustState::Stale => palette::ALARM,
         TrustState::Untrusted => palette::WARN,
-        TrustState::NoConfig => palette::DIM,
+        TrustState::NoConfig => palette::MUTED,
     }
 }

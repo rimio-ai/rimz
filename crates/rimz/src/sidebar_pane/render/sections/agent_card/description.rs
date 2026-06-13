@@ -28,11 +28,11 @@ pub(super) fn description_line(
     // which the terminal-default fg would skip.
     let body_style = || match emphasis {
         CardEmphasis::Blink => match attention.pulse {
-            Some(sample) => theme.pulse(theme.soft_tone(), sample),
-            None => theme.style(theme.soft_tone(), Modifier::BOLD),
+            Some(sample) => theme.pulse(theme.body_tone(), sample),
+            None => theme.style(theme.body_tone(), Modifier::BOLD),
         },
         CardEmphasis::Normal => Style::default(),
-        CardEmphasis::Soft => theme.soft(),
+        CardEmphasis::Soft => theme.body(),
     };
     let body = if let Some(label) = agent(row)
         .and_then(|agent| agent.turn_error_label.as_deref())
@@ -43,7 +43,7 @@ pub(super) fn description_line(
         match descriptor(row).and_then(single_line_description) {
             Some(text) => Span::styled(text, body_style()),
             None if shows_loading_dots(row) => {
-                Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
+                Span::styled(loading_dots(animation_phase).to_owned(), theme.muted())
             }
             None => Span::raw("—".to_owned()),
         }

@@ -38,3 +38,61 @@ fn tests_path_component_matches_nested_test_trees() {
         "labels/contest/glyphs.rs"
     )));
 }
+
+#[test]
+fn ui_color_exemptions_cover_the_pipeline_and_tests() {
+    // The color pipeline owns the named-ANSI vocabulary.
+    assert!(ui_color_exempt(Path::new("theme.rs")));
+    assert!(ui_color_exempt(Path::new("theme/component.rs")));
+    assert!(ui_color_exempt(Path::new("theme/semantic.rs")));
+    assert!(ui_color_exempt(Path::new("ansi.rs")));
+    assert!(ui_color_exempt(Path::new("scheme.rs")));
+    assert!(ui_color_exempt(Path::new("oklab.rs")));
+    // Tests assert carrier→slot mappings, inline or in a tests tree.
+    assert!(ui_color_exempt(Path::new("labels/tests/meters.rs")));
+    assert!(ui_color_exempt(Path::new("tests/process.rs")));
+    // Ordinary render code must name intent.
+    assert!(!ui_color_exempt(Path::new("effects.rs")));
+    assert!(!ui_color_exempt(Path::new("labels/meters.rs")));
+    assert!(!ui_color_exempt(Path::new("sections/agent_card/gauge.rs")));
+}
+
+#[test]
+fn ui_color_violations_flag_color_variants_but_allow_the_reset_sentinel() {
+    // A named ANSI hue is intent — flagged.
+    let named = format!(
+        "    theme.style({}, Modifier::empty());",
+        concat!("Color", "::", "Yellow")
+    );
+    assert_eq!(ui_color_violation_lines(&named).len(), 1);
+
+    // A hand-picked Indexed/Rgb literal bypasses the pipeline — flagged too, so
+    // a `const HOT: Color = Color::Indexed(201)` cannot slip past the gate.
+    let indexed = concat!("    const HOT: Color = Color", "::", "Indexed(201);");
+    assert_eq!(ui_color_violation_lines(indexed).len(), 1);
+    let rgb = concat!("    let c = Color", "::", "Rgb(1, 2, 3);");
+    assert_eq!(ui_color_violation_lines(rgb).len(), 1);
+
+    // `Color::Reset` is the one allowed path; a config `ThemeColor` is a
+    // different type the boundary guard must not catch.
+    let allowed = concat!(
+        "fx.filter(Color",
+        "::",
+        "Reset);\n",
+        "let g = ThemeColor",
+        "::",
+        "Indexed(34);\n",
+    );
+    assert!(ui_color_violation_lines(allowed).is_empty());
+
+    // An inline test module legitimately asserts carrier→slot mappings.
+    let in_tests = concat!(
+        "fn prod() {}\n",
+        "mod tests {\n",
+        "    let c = Color",
+        "::",
+        "Red;\n",
+        "}\n",
+    );
+    assert!(ui_color_violation_lines(in_tests).is_empty());
+}

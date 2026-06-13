@@ -43,6 +43,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_card_admission_predicate(root)?;
     ensure_config_template_sections(root)?;
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
+    ensure_no_hardcoded_ui_colors(root, &files)?;
     ensure_ledger_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
@@ -261,6 +262,126 @@ fn ensure_sidebar_render_runtime_uses_snapshot_clock(root: &Path, files: &[PathB
 fn path_has_tests_component(path: &Path) -> bool {
     path.components()
         .any(|component| component.as_os_str() == OsStr::new("tests"))
+}
+
+/// Sidebar render code names color intent through a component token or a
+/// semantic accessor, never a raw terminal color — so the four-layer theme
+/// stays the one place hue is decided. The only `Color::` path render code may
+/// write is the `Color::Reset` sentinel: the 16 named ANSI variants are intent,
+/// and `Color::Indexed`/`Color::Rgb` constructors are already-resolved emit
+/// values the theme pipeline mints, never hand-picked in render. The theme
+/// module (which owns the Raw→Semantic→Component→emit pipeline and the depth
+/// quantizer), the Alacritty parser, and the OKLab math are exempt, as are test
+/// modules — tests legitimately assert carrier→slot mappings. See
+/// docs/reference/theme.md and docs/contributing/rust-conventions.md.
+fn ensure_no_hardcoded_ui_colors(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let render_root = root.join("crates/rimz/src/sidebar_pane/render");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs") || !path.starts_with(&render_root)
+        {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(&render_root) else {
+            continue;
+        };
+        if ui_color_exempt(relative) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in ui_color_violation_lines(&text) {
+            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "sidebar render must name color through a component token (theme.component(Component::…)) \
+         or a semantic accessor (theme.good/warn/caution/alarm, body/muted/faint/rule), never a \
+         Color variant; only Color::Reset may be named — Color::Indexed/Rgb are minted by the \
+         theme pipeline, not hand-picked in render — see docs/reference/theme.md\n{}",
+        violations.join("\n")
+    );
+}
+
+/// Render files that own or bridge the color pipeline (theme module, depth
+/// quantizer, Alacritty parser, OKLab math), plus every test module.
+fn ui_color_exempt(relative: &Path) -> bool {
+    let file = relative.file_name().and_then(OsStr::to_str);
+    matches!(
+        file,
+        Some("theme.rs" | "ansi.rs" | "scheme.rs" | "oklab.rs")
+    ) || relative
+        .components()
+        .any(|component| component.as_os_str() == OsStr::new("theme"))
+        || path_has_tests_component(relative)
+        || file.is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+}
+
+/// The banned `Color::` carrier lines outside any inline `mod tests` block. The
+/// only `Color::` path render code may write is the `Color::Reset` sentinel: the
+/// 16 named ANSI variants are intent, and `Color::Indexed`/`Color::Rgb`
+/// constructors are already-resolved emit values that only the theme pipeline
+/// mints. Needles are `concat!`-split so this file never trips its own grep.
+fn ui_color_violation_lines(text: &str) -> Vec<(usize, &str)> {
+    const BANNED: [&str; 18] = [
+        concat!("Color", "::", "Red"),
+        concat!("Color", "::", "Green"),
+        concat!("Color", "::", "Yellow"),
+        concat!("Color", "::", "Blue"),
+        concat!("Color", "::", "Magenta"),
+        concat!("Color", "::", "Cyan"),
+        concat!("Color", "::", "Gray"),
+        concat!("Color", "::", "DarkGray"),
+        concat!("Color", "::", "LightRed"),
+        concat!("Color", "::", "LightGreen"),
+        concat!("Color", "::", "LightYellow"),
+        concat!("Color", "::", "LightBlue"),
+        concat!("Color", "::", "LightMagenta"),
+        concat!("Color", "::", "LightCyan"),
+        concat!("Color", "::", "White"),
+        concat!("Color", "::", "Black"),
+        concat!("Color", "::", "Indexed"),
+        concat!("Color", "::", "Rgb"),
+    ];
+    let mut hits = Vec::new();
+    let mut in_tests = false;
+    for (idx, line) in text.lines().enumerate() {
+        if line.trim_start().starts_with("mod tests") {
+            in_tests = true;
+        }
+        if in_tests {
+            continue;
+        }
+        if BANNED
+            .iter()
+            .any(|needle| names_color_variant(line, needle))
+        {
+            hits.push((idx, line));
+        }
+    }
+    hits
+}
+
+/// True when `line` writes `needle` (a `Color::<Variant>` path) as its own
+/// identifier, not as the tail of a longer one like `ThemeColor::Indexed`.
+fn names_color_variant(line: &str, needle: &str) -> bool {
+    let mut from = 0;
+    while let Some(rel) = line[from..].find(needle) {
+        let at = from + rel;
+        let glued_to_prefix = line[..at]
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_alphanumeric() || ch == '_');
+        if !glued_to_prefix {
+            return true;
+        }
+        from = at + needle.len();
+    }
+    false
 }
 
 fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {

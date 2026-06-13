@@ -103,18 +103,18 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert!(has_reset, "started windows keep their reset countdown");
     assert_eq!(
         label_fg,
-        theme.style(Color::Green, Modifier::empty()).fg,
+        theme.good(Modifier::empty()).fg,
         "50% remaining stays in the green bar zone"
     );
     assert_eq!(glyph_fg, label_fg, "the label still mirrors the bar");
     assert_eq!(
         reset_marker_fg(&rows[0]),
-        theme.style(Color::Red, Modifier::empty()).fg,
+        theme.alarm(Modifier::empty()).fg,
         "2.5x pace colors only the reset marker"
     );
     assert_eq!(
         reset_time_style(&rows[0]),
-        Some(theme.soft()),
+        Some(theme.body()),
         "the reset time stays neutral"
     );
 
@@ -129,8 +129,8 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     let plain = Theme::fixed(true);
     let rows = metered_bar_rows(&plain, &panel);
     assert_eq!(rows.len(), 1);
-    assert_eq!(reset_marker_style(&rows[0]), Some(plain.soft()));
-    assert_eq!(reset_time_style(&rows[0]), Some(plain.soft()));
+    assert_eq!(reset_marker_style(&rows[0]), Some(plain.body()));
+    assert_eq!(reset_time_style(&rows[0]), Some(plain.body()));
 
     let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
     panel.windows = vec![
@@ -152,12 +152,12 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert_eq!(rows.len(), 2);
     assert_eq!(
         reset_marker_style(&rows[0]),
-        Some(theme.soft()),
+        Some(theme.body()),
         "unused started 5h window keeps the marker soft like its countdown"
     );
     assert_eq!(
         reset_marker_fg(&rows[1]),
-        theme.style(Color::Red, Modifier::empty()).fg,
+        theme.alarm(Modifier::empty()).fg,
         "half the 7d budget after one day burns at 3.5x pace"
     );
 
@@ -171,8 +171,8 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
 
     let rows = metered_bar_rows(&theme, &panel);
     assert_eq!(rows.len(), 1);
-    assert_eq!(reset_marker_fg(&rows[0]), theme.soft().fg);
-    assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
+    assert_eq!(reset_marker_fg(&rows[0]), theme.body().fg);
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.body()));
 
     let mut panel = provider_panel("claude", "Claude", 173, true, false, None);
     panel.extra_credits = Some(crate::agents::ExtraCredits::Disabled);
@@ -187,13 +187,13 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert_eq!(rows.len(), 1);
     let (label_fg, _, has_reset) = bar_row_facts(&rows[0]);
     assert!(has_reset, "the spent window keeps its own countdown");
-    assert_eq!(label_fg, theme.style(Color::Red, Modifier::empty()).fg);
+    assert_eq!(label_fg, theme.alarm(Modifier::empty()).fg);
     assert_eq!(
         reset_marker_fg(&rows[0]),
-        theme.style(theme.clay(), Modifier::empty()).fg,
+        theme.caution(Modifier::empty()).fg,
         "spent exactly halfway through the window reads as 2x amber pace"
     );
-    assert_eq!(reset_time_style(&rows[0]), Some(theme.soft()));
+    assert_eq!(reset_time_style(&rows[0]), Some(theme.body()));
 }
 
 #[test]
@@ -390,7 +390,11 @@ fn provider_window_states_control_countdowns_and_empty_tracks() {
     assert_eq!(label, "7d");
     let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
     assert_eq!(label_fg, glyph_fg, "unknown label mirrors its dim track");
-    assert_ne!(glyph_fg, Some(Color::Red), "unknown is not exhausted");
+    assert_ne!(
+        glyph_fg,
+        theme.alarm(Modifier::empty()).fg,
+        "unknown is not exhausted"
+    );
     assert!(!has_reset, "unknown windows have no reset countdown");
     assert!(
         !rows[0].spans.iter().any(|span| span.content.contains('▰')),

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 
 /// Paused: a media `pause` mark carrying the text-presentation selector
 /// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a
@@ -186,10 +187,10 @@ fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifi
     }
 }
 
-/// The completed-compaction count marker's tone: yellow, so the count stays
-/// separate from cache-write's violet.
+/// The completed-compaction count marker's tone: the warn slot, kept separate
+/// from cache-write's violet.
 pub(in crate::sidebar_pane::render) fn compacting_style(theme: &Theme) -> Style {
-    theme.style(Color::Yellow, Modifier::empty())
+    theme.styled(Component::Compaction, Modifier::empty())
 }
 
 pub(in crate::sidebar_pane::render) fn compacting_head_style(
@@ -302,7 +303,7 @@ pub(in crate::sidebar_pane::render) fn emphasize(
             theme.style(color, Modifier::empty())
         }),
         CardEmphasis::Soft => {
-            natural_color.map_or_else(|| theme.soft(), |color| theme.soft_brand(color))
+            natural_color.map_or_else(|| theme.body(), |color| theme.body_brand(color))
         }
     }
 }
@@ -390,6 +391,6 @@ pub(in crate::sidebar_pane::render) fn attention_floor_color(
     if animation.color_overridden() {
         animation.color()
     } else {
-        Color::Yellow
+        theme.component(Component::AttentionFloor)
     }
 }

@@ -20,9 +20,9 @@ pub(crate) const ALARM: anstyle::Style = fg(TONES.alarm);
 pub(crate) const ACCENT: anstyle::Style = fg(TONES.accent);
 pub(crate) const COOL: anstyle::Style = fg(TONES.cool);
 pub(crate) const META: anstyle::Style = fg(TONES.meta);
-pub(crate) const SOFT: anstyle::Style = fg(TONES.soft);
-pub(crate) const DIM: anstyle::Style = fg(TONES.dim);
+pub(crate) const BODY: anstyle::Style = fg(TONES.body);
+pub(crate) const MUTED: anstyle::Style = fg(TONES.muted);
 pub(crate) const FAINT: anstyle::Style = fg(TONES.faint);
 
-/// Table and key/value headers: the `dim` tone, bolded — present but recessed.
-pub(crate) const HEADER: anstyle::Style = fg(TONES.dim).bold();
+/// Table and key/value headers: the `muted` tone, bolded — present but recessed.
+pub(crate) const HEADER: anstyle::Style = fg(TONES.muted).bold();

@@ -1,0 +1,144 @@
+//! Layer 3 — component tokens: the specific UI uses of color. Each names a
+//! role (the sessions glyph, a token-total marker, a flash) and resolves to a
+//! semantic token, so the call site states intent while the hue stays one
+//! central decision. Resolution reads the already-resolved [`Palette`] slots,
+//! so a scheme or per-slot override flows through every component that aliases
+//! it.
+//!
+//! The `resolve` match below is the single mapping from UI role to meaning.
+//! Two kinds of color stay off this layer: runtime-severity tones (the health
+//! ramp, breathing pulses) are amount-driven and live on [`Theme`](super::Theme)
+//! methods, and a branch that *selects* a health tier (mana/pace/link bands)
+//! reaches for the chromatic severity accessors (`good`/`warn`/`caution`/`alarm`)
+//! so the branch structure carries the intent. Component tokens are for the
+//! fixed categorical and neutral roles, where the slot alone would not say why.
+//!
+//! Categorical slots (`accent`/`cool`/`meta`) are never emitted bare — every
+//! such use names a component here, so intent is visible where color is used.
+
+use ratatui::style::Color;
+
+use super::Palette;
+
+/// A specific UI use of color. Resolves through [`Component::resolve`] to a
+/// semantic tone; never to a raw terminal color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Component {
+    /// `◎` sessions glyph — the cockpit summary and the W/M ledger rows.
+    Sessions,
+    /// The unselected lane gutter spine.
+    LaneSpine,
+    /// A worktree group header.
+    WorktreeHeader,
+    /// The `⇡/⇣` commit-delta cluster on a worktree header — the branch facts
+    /// rhyme with the worktree name's accent.
+    BranchDelta,
+    /// The `◌` cache-read token marker and the bar's cache-read run.
+    CacheRead,
+    /// The `W:`/`M:` timeframe label on a ledger row.
+    LedgerLabel,
+    /// The `◇` token-total marker.
+    TokenTotal,
+    /// The process `C` (CPU) marker.
+    ProcCpu,
+    /// The process `M` (memory) marker.
+    ProcMem,
+    /// The process `⇅` (I/O) marker.
+    ProcIo,
+    /// The `↗` output token marker — generated output, conventionally green.
+    Output,
+    /// The `↘` fresh-input token marker — the expensive freshly-read tokens
+    /// wear the alarm tone the 100%-fill context meter shows.
+    Input,
+    /// The `◍` cache-write token marker — the compaction/delegation violet.
+    CacheWrite,
+    /// The `↻` completed-compaction count marker.
+    Compaction,
+    /// The `⧉` subagents header.
+    SubagentHeader,
+    /// The `⇅ rc` remote-control flag.
+    RemoteControl,
+    /// The default attention-floor tone for an unanswered `?`/`!` ask when no
+    /// status animation overrides it.
+    AttentionFloor,
+    /// The unknown-provider fallback for an agent card's name.
+    UnknownBrand,
+    /// The capability-line window token, by size class: a neutral→cool→accent
+    /// salience ramp so a bigger window reads louder without borrowing any
+    /// provider identity. Small (`<128k`).
+    WindowSmall,
+    /// Window token, `128k`+ tier.
+    WindowMedium,
+    /// Window token, `258k`+ tier.
+    WindowLarge,
+    /// Window token, `1M`+ tier — the loudest, an accent (never a brand clay).
+    WindowHuge,
+    /// Transition flash: a card entering `waiting`.
+    FlashWaiting,
+    /// Transition flash: a card entering `failed`.
+    FlashFailed,
+    /// Transition flash: an ask resolving.
+    FlashResolved,
+    /// Transition flash: a paused row lifting.
+    FlashLifted,
+    /// Transition flash: the spine under a fresh selection.
+    FlashSelectionLanded,
+    /// Transition flash: a new card appearing.
+    FlashMaterialized,
+}
+
+#[cfg(test)]
+impl Component {
+    /// Every variant, for the exhaustive golden/coverage tests. Keep in sync
+    /// with the enum; the no-wildcard match in [`Component::resolve`] (and the
+    /// golden table's mirror) makes a new variant a compile error until it is
+    /// mapped.
+    pub(crate) const ALL: &'static [Component] = &[
+        Component::Sessions,
+        Component::LaneSpine,
+        Component::WorktreeHeader,
+        Component::BranchDelta,
+        Component::CacheRead,
+        Component::LedgerLabel,
+        Component::TokenTotal,
+        Component::ProcCpu,
+        Component::ProcMem,
+        Component::ProcIo,
+        Component::Output,
+        Component::Input,
+        Component::CacheWrite,
+        Component::Compaction,
+        Component::SubagentHeader,
+        Component::RemoteControl,
+        Component::AttentionFloor,
+        Component::UnknownBrand,
+        Component::WindowSmall,
+        Component::WindowMedium,
+        Component::WindowLarge,
+        Component::WindowHuge,
+        Component::FlashWaiting,
+        Component::FlashFailed,
+        Component::FlashResolved,
+        Component::FlashLifted,
+        Component::FlashSelectionLanded,
+        Component::FlashMaterialized,
+    ];
+}
+
+impl Component {
+    /// The one mapping from UI role to a resolved palette tone.
+    pub(crate) fn resolve(self, palette: &Palette) -> Color {
+        use Component::*;
+        match self {
+            Sessions | LaneSpine | WorktreeHeader | BranchDelta | CacheRead | WindowHuge
+            | FlashSelectionLanded => palette.accent,
+            LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
+            SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
+            ProcMem | Output | FlashResolved | FlashLifted => palette.good,
+            Compaction | AttentionFloor | FlashWaiting => palette.warn,
+            Input | FlashFailed => palette.alarm,
+            WindowMedium | UnknownBrand | FlashMaterialized => palette.muted,
+            WindowSmall => palette.faint,
+        }
+    }
+}

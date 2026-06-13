@@ -1,6 +1,7 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
 use crate::sidebar_pane::render::animation::{BREATH_SHALLOW_AMPLITUDE, BreathSample};
+use crate::sidebar_pane::render::theme::Component;
 
 fn truecolor_theme() -> Theme {
     let mut sidebar = crate::config::SidebarConfig::default();
@@ -59,14 +60,39 @@ fn elapsed_glyph_fills_by_the_quarter_hour() {
 fn window_style_tints_by_size_class_but_stays_subordinate() {
     let theme = Theme::fixed(false);
     let banded = |window| window_style(&theme, window);
-    assert_eq!(banded(32_000), theme.dim());
-    assert_eq!(banded(127_999), theme.dim());
-    assert_eq!(banded(128_000), theme.style(Color::Blue, Modifier::DIM));
-    assert_eq!(banded(200_000), theme.style(Color::Blue, Modifier::DIM));
-    assert_eq!(banded(258_000), theme.style(Color::Yellow, Modifier::DIM));
-    assert_eq!(banded(999_999), theme.style(Color::Yellow, Modifier::DIM));
-    assert_eq!(banded(1_000_000), theme.style(theme.clay(), Modifier::DIM));
-    assert_eq!(banded(1_050_000), theme.style(theme.clay(), Modifier::DIM));
+    // A neutral→cool→accent salience ramp by size class — no provider brand.
+    assert_eq!(
+        banded(32_000),
+        theme.styled(Component::WindowSmall, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(127_999),
+        theme.styled(Component::WindowSmall, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(128_000),
+        theme.styled(Component::WindowMedium, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(200_000),
+        theme.styled(Component::WindowMedium, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(258_000),
+        theme.styled(Component::WindowLarge, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(999_999),
+        theme.styled(Component::WindowLarge, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(1_000_000),
+        theme.styled(Component::WindowHuge, Modifier::DIM)
+    );
+    assert_eq!(
+        banded(1_050_000),
+        theme.styled(Component::WindowHuge, Modifier::DIM)
+    );
 
     let plain = Theme::fixed(true);
     for window in [32_000, 128_000, 258_000, 1_050_000] {
@@ -98,7 +124,7 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     for status in [AgentStatus::Waiting, AgentStatus::Failed] {
         assert_eq!(
             agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false, false).fg,
-            theme.style(Color::Yellow, Modifier::empty()).fg
+            theme.warn(Modifier::empty()).fg
         );
         assert_eq!(
             agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false, false).fg,
@@ -128,7 +154,7 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
             false,
         )
         .fg,
-        theme.soft().fg
+        theme.body().fg
     );
     let working = agent_role_style_at(&theme, AgentStatus::Running, TurnPhase::Acting, 0)
         .fg
@@ -143,10 +169,10 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
         false,
     )
     .fg;
-    assert_eq!(calm_running, theme.soft_brand(working).fg);
+    assert_eq!(calm_running, theme.body_brand(working).fg);
     assert_ne!(
         calm_running,
-        theme.soft().fg,
+        theme.body().fg,
         "a calm running lead keeps a muted working hue, not flat gray"
     );
 }
@@ -499,15 +525,15 @@ fn loading_dots_stay_static_while_attention_pulse_paces_with_age() {
 #[test]
 fn activity_age_style_slides_with_the_clock_age() {
     let theme = Theme::fixed(false);
-    let red = theme.style(Color::Red, Modifier::empty());
+    let red = theme.alarm(Modifier::empty());
     let heat = |age_secs: i64| {
         theme.style(
             theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
             Modifier::empty(),
         )
     };
-    assert_eq!(activity_age_style(&theme, 60), theme.dim());
-    assert_eq!(activity_age_style(&theme, 900), theme.dim());
+    assert_eq!(activity_age_style(&theme, 60), theme.muted());
+    assert_eq!(activity_age_style(&theme, 900), theme.muted());
     assert_eq!(
         activity_age_style(&theme, 901),
         heat(901),
@@ -626,7 +652,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
             true,
             false
         ),
-        theme.soft(),
+        theme.body(),
         "unread idle stays soft because idle is not an attention tier"
     );
     assert_eq!(
@@ -651,7 +677,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
     let custom = Theme::fixed_for_sidebar(false, &sidebar);
     assert_eq!(
         status_style(&custom, AgentStatus::Idle),
-        custom.style(Color::Green, Modifier::empty()),
+        custom.good(Modifier::empty()),
         "an explicit idle color still paints the glyph"
     );
     assert_eq!(
@@ -664,7 +690,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
             true,
             true
         ),
-        custom.style(Color::Green, Modifier::empty()),
+        custom.good(Modifier::empty()),
         "selected idle uses the configured idle color at full strength"
     );
 }

@@ -21,6 +21,7 @@ mod embedded_themes;
 mod fmt;
 mod labels;
 mod odometer;
+mod oklab;
 pub mod scheme;
 mod scrollbar;
 mod sections;

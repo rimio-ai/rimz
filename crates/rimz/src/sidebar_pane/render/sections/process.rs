@@ -4,14 +4,14 @@
 use crate::feed::AgentStatus;
 use crate::{ProcessState, SidebarRow};
 use jiff::Timestamp;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::fmt::{age_short, clip, fmt_cpu, fmt_io, fmt_rss};
 use crate::sidebar_pane::render::labels::{
     status_glyph, status_style, working_glyph, working_style,
 };
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{Tier, pin_right, trim_spans_to_width};
 
@@ -56,11 +56,11 @@ pub(super) fn process_row_line(
     let mut left = vec![
         Span::styled(lead, lead_style),
         Span::raw(" "),
-        Span::styled(row.name.clone(), theme.soft()),
+        Span::styled(row.name.clone(), theme.body()),
     ];
     if let Some(user) = foreign_user {
         left.push(Span::raw(" "));
-        left.push(Span::styled(format!("({user})"), theme.dim()));
+        left.push(Span::styled(format!("({user})"), theme.muted()));
     }
     // At L2 width, active process rows pin resource stats right:
     // `C  11%  M 1.1G  ⇅   3M/s`. Idle shells and editors stay bare; the
@@ -101,21 +101,21 @@ pub(in crate::sidebar_pane::render) fn proc_stats_spans(
     else {
         return Vec::new();
     };
-    let slots: [(&str, Color, usize, String); 3] = [
-        ("C", Color::Blue, CPU_SLOT, fmt_cpu(cpu_pct)),
-        ("M", Color::Green, RSS_SLOT, fmt_rss(rss_kb)),
-        ("⇅", Color::Magenta, IO_SLOT, fmt_io(io_bps)),
+    let slots: [(&str, Component, usize, String); 3] = [
+        ("C", Component::ProcCpu, CPU_SLOT, fmt_cpu(cpu_pct)),
+        ("M", Component::ProcMem, RSS_SLOT, fmt_rss(rss_kb)),
+        ("⇅", Component::ProcIo, IO_SLOT, fmt_io(io_bps)),
     ];
     let mut spans = Vec::with_capacity(3 * slots.len());
     for (i, (marker, tone, width, figure)) in slots.into_iter().enumerate() {
         if i > 0 {
-            spans.push(Span::styled("  ", theme.dim()));
+            spans.push(Span::styled("  ", theme.muted()));
         }
         spans.push(Span::styled(
             format!("{marker} "),
-            theme.style(tone, Modifier::DIM),
+            theme.styled(tone, Modifier::DIM),
         ));
-        spans.push(Span::styled(format!("{figure:>width$}"), theme.dim()));
+        spans.push(Span::styled(format!("{figure:>width$}"), theme.muted()));
     }
     spans
 }
@@ -133,7 +133,7 @@ pub(super) fn process_detail_line(
     let detail = row.as_process()?.command_detail.as_deref()?;
     let left = vec![
         Span::raw("  "),
-        Span::styled(detail.to_owned(), theme.soft()),
+        Span::styled(detail.to_owned(), theme.body()),
     ];
     Some(Line::from(trim_spans_to_width(left, width)))
 }
@@ -166,6 +166,6 @@ pub(super) fn composed_row(
         Span::raw(" "),
         Span::raw(task),
         Span::raw(" ".repeat(padding)),
-        Span::styled(age, theme.soft()),
+        Span::styled(age, theme.body()),
     ])
 }

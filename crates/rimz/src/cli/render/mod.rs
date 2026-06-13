@@ -176,7 +176,7 @@ impl Table {
     }
 }
 
-/// A block of aligned `key: value` lines. Keys render in [`palette::DIM`]; the
+/// A block of aligned `key: value` lines. Keys render in [`palette::MUTED`]; the
 /// value column aligns to the widest key, and each value keeps its own style.
 /// Reports that nest pairs under a heading set an [`KeyVals::indent`].
 pub(crate) struct KeyVals {
@@ -214,7 +214,7 @@ impl KeyVals {
             let label = format!("{key}:");
             let pad = label_w.saturating_sub(label.width());
             write!(w, "{:indent$}", "", indent = self.indent)?;
-            cell(label).fg(palette::DIM).write_styled(w)?;
+            cell(label).fg(palette::MUTED).write_styled(w)?;
             write!(w, "{:pad$} ", "", pad = pad)?;
             value.write_styled(w)?;
             writeln!(w)?;

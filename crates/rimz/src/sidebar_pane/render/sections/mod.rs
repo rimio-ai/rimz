@@ -16,7 +16,7 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
-use super::theme::Theme;
+use super::theme::{Component, Theme};
 
 mod agent_card;
 mod cockpit;
@@ -39,21 +39,10 @@ pub(super) use worktree::worktree_group_lines;
 /// session count reads the same in both places.
 const SESSIONS_GLYPH: &str = "◎";
 
-/// A brighter sage than the resting dollar green, held for a couple of frames as
-/// a figure lands — the quiet "ka-chunk" of a money count-up. Shared by the
-/// cockpit headline and the agent cards' `$cost`, so every settle brightens the
-/// same; drops to plain bold under `NO_COLOR` like every other tone.
-const VALUE_FLASH: Color = Color::Indexed(150);
-
 /// An active provider-tab pick's `NO_COLOR` caps — when a chip fill drops with
 /// the colors, these notch the pick by shape inside the rail's reserved cells.
 const TAB_CAP_LEFT: char = '┤';
 const TAB_CAP_RIGHT: char = '├';
-
-/// The active chip's ink: near-black, crisp on every mid-brightness fill — the
-/// provider tab rail's brand fill and the make-up bucket fills alike. A fixed
-/// ink tone, not a semantic palette slot.
-const TAB_INK: Color = Color::Indexed(16);
 
 /// The selected card's left accent: a bold half-block `▌` running the card's
 /// full height — the one loud lane marker on screen, mirrored by the right
@@ -132,8 +121,14 @@ fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize)
     let (left_cell, right_cell) = match gutter {
         Gutter::Blank => (Span::raw(" "), Span::raw(" ")),
         Gutter::Lane => (
-            Span::styled(LANE_SPINE, theme.style(Color::Cyan, Modifier::DIM)),
-            Span::styled(LANE_SPINE_RIGHT, theme.style(Color::Cyan, Modifier::DIM)),
+            Span::styled(
+                LANE_SPINE,
+                theme.styled(Component::LaneSpine, Modifier::DIM),
+            ),
+            Span::styled(
+                LANE_SPINE_RIGHT,
+                theme.styled(Component::LaneSpine, Modifier::DIM),
+            ),
         ),
         Gutter::Selected => (
             Span::styled(SELECTED_SPINE, theme.selection()),
@@ -232,6 +227,6 @@ fn take_cells(content: &str, width: usize) -> String {
 fn metric_spans(theme: &Theme, glyph: &str, color: Color, value: &str) -> Vec<Span<'static>> {
     vec![
         Span::styled(glyph.to_owned(), theme.style(color, Modifier::empty())),
-        Span::styled(format!(" {value}"), theme.soft()),
+        Span::styled(format!(" {value}"), theme.body()),
     ]
 }

@@ -245,6 +245,10 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 
 Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
+### Architectural invariants
+
+`cargo xtask invariants` is a grep-and-shape gate over the tracked tree — a low-cost trip-wire paired with the type system and review, not a substitute for either. It guards the boundaries the compiler can't: decision-channel integrity, sidebar/ledger separation, the trust hash, pane-primitive use, the render snapshot clock, inline-test size, [UI-color provenance](../reference/theme.md#how-a-tone-resolves), and more. A new boundary lands here as an `ensure_*` check with a self-test.
+
 ### Contributor command surface
 
 `cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `docs-links`, `pricing-refresh`, `screenshot`, `ci`. Shell scripts are not added; new automation lands in `xtask/`.

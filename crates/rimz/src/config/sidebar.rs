@@ -225,13 +225,13 @@ pub struct SidebarThemeConfig {
     /// Delegation/meta: the `⇅ rc` flag, the subagent `⧉` marker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub meta: Option<ThemeColor>,
-    /// Soft content text: stat figures, capability tokens, subagent lines —
-    /// a step above `dim`, just below full-strength text.
+    /// Body content text: stat figures, capability tokens, subagent lines —
+    /// a step above `muted`, just below full-strength text.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub soft: Option<ThemeColor>,
-    /// Dim chrome: labels, ages, subordinate values.
+    pub body: Option<ThemeColor>,
+    /// Muted chrome: labels, ages, subordinate values.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub dim: Option<ThemeColor>,
+    pub muted: Option<ThemeColor>,
     /// Faintest chrome: bar tracks, `·` separators, dotted dividers.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub faint: Option<ThemeColor>,

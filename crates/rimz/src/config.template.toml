@@ -102,8 +102,8 @@
 ## accent = "#72b3aa"
 ## cool = "#7fa8de"
 ## meta = "#b49be0"
-## soft = "#a6a19a"
-## dim = "#767168"
+## body = "#a6a19a"
+## muted = "#767168"
 ## faint = "#45423d"
 ## rule = "#343230"
 ## selection = "#8ab3e0"
@@ -114,7 +114,7 @@
 # string split per Unicode codepoint or an array for multi-codepoint glyphs;
 # every frame must occupy exactly one terminal cell.
 # Colors are palette slots ("good", "warn", "alarm", "accent", "cool", "meta",
-# "soft", "dim", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
+# "body", "muted", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
 # effect is "static" or "breathe"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
 # Every role follows the same frames/color/effect/speed model. For waiting,
 # failed, and unread success rows, omitted effect keeps the shipped row pulse;

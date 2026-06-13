@@ -1,7 +1,7 @@
 use crate::feed::AgentStatus;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use super::fmt::age_short;
@@ -41,7 +41,7 @@ pub(super) fn repo_header_lines(
     vec![Line::from(vec![
         Span::styled(name, bold),
         Span::raw(" ".repeat(gap)),
-        Span::styled(path, theme.dim()),
+        Span::styled(path, theme.muted()),
     ])]
 }
 
@@ -80,12 +80,12 @@ pub(super) fn abbreviate_under(path: &str, home: Option<&str>) -> String {
     }
 }
 
-/// A full-width `─` hairline rule in the soft gray — the structural seams read
-/// at a glance rather than receding into the chrome. Seals the header from
-/// the cockpit and brackets the provider dashboard — the structure the dropped
-/// border once carried.
+/// A full-width `─` hairline rule in the dedicated rule tone — the structural
+/// seam reads as chrome a step below the body text rather than competing with
+/// it. Seals the header from the cockpit and brackets the provider dashboard —
+/// the structure the dropped border once carried.
 pub(super) fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
-    Line::styled("─".repeat(width.max(1)), theme.soft())
+    Line::styled("─".repeat(width.max(1)), theme.rule())
 }
 
 pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<Line<'static>> {
@@ -93,7 +93,7 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
         let elapsed = age_short(alert.since, now);
         vec![Line::styled(
             format!("! Sidebar degraded for {elapsed}: {}", alert.reason),
-            theme.style(Color::Red, Modifier::BOLD),
+            theme.alarm(Modifier::BOLD),
         )]
     } else {
         let elapsed = alert
@@ -102,7 +102,7 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
             format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
-            theme.style(Color::Yellow, Modifier::DIM),
+            theme.warn(Modifier::DIM),
         )]
     }
 }
@@ -121,14 +121,14 @@ pub(super) fn truth_notice_lines(
             "⚠ pane source degraded · {} carried {noun} · {elapsed}",
             notice.carried
         ),
-        theme.style(Color::Yellow, Modifier::DIM),
+        theme.warn(Modifier::DIM),
     )]
 }
 
 pub(super) fn gate_notice_lines(theme: &Theme, notice: &GateNotice) -> Vec<Line<'static>> {
     vec![Line::styled(
         format!("⚠ pane updates held · {}", gate_rule_label(notice.rule)),
-        theme.style(Color::Yellow, Modifier::DIM),
+        theme.warn(Modifier::DIM),
     )]
 }
 
@@ -213,12 +213,12 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
         text
     };
     let style = match link.freshness {
-        SidebarLinkFreshness::Stale => theme.dim(),
+        SidebarLinkFreshness::Stale => theme.muted(),
         SidebarLinkFreshness::Fresh => match link_badge_level(link.rtt_ms, link.miss_pct) {
-            LinkBadgeLevel::Calm => theme.soft(),
-            LinkBadgeLevel::Minor => theme.style(Color::Yellow, Modifier::empty()),
-            LinkBadgeLevel::Major => theme.style(Color::LightRed, Modifier::empty()),
-            LinkBadgeLevel::Critical => theme.style(Color::Red, Modifier::BOLD),
+            LinkBadgeLevel::Calm => theme.body(),
+            LinkBadgeLevel::Minor => theme.warn(Modifier::empty()),
+            LinkBadgeLevel::Major => theme.caution(Modifier::empty()),
+            LinkBadgeLevel::Critical => theme.alarm(Modifier::BOLD),
         },
     };
     Span::styled(text, style)

@@ -31,7 +31,7 @@ use ratatui::layout::Rect;
 use ratatui::style::Color;
 use tachyonfx::{CellFilter, Effect, Interpolation, fx};
 
-use super::theme::Theme;
+use super::theme::{Component, Theme};
 use super::{BodyFilter, row_passes_filter};
 
 /// Cap on the elapsed time fed into a one-shot per painted frame. A calm room
@@ -277,15 +277,23 @@ fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> 
 /// whose true tone the terminal owns (tachyonfx would lerp them via a
 /// hardcoded white fallback, wrong on a light scheme).
 fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
-    let (target, tone, ms) = match kind {
-        TransitionKind::EnteredWaiting => (Target::Card, Color::Yellow, FLASH_ENTERED_MS),
-        TransitionKind::EnteredFailed => (Target::Card, Color::Red, FLASH_ENTERED_MS),
-        TransitionKind::AskResolved => (Target::Card, Color::Green, FLASH_RESOLVED_MS),
-        TransitionKind::PausedLifted => (Target::Card, Color::Green, FLASH_LIFTED_MS),
-        TransitionKind::SelectionLanded => (Target::Spine, Color::Cyan, FLASH_SELECTED_MS),
-        TransitionKind::Materialized => (Target::Card, Color::DarkGray, FLASH_MATERIALIZE_MS),
+    let (target, component, ms) = match kind {
+        TransitionKind::EnteredWaiting => (Target::Card, Component::FlashWaiting, FLASH_ENTERED_MS),
+        TransitionKind::EnteredFailed => (Target::Card, Component::FlashFailed, FLASH_ENTERED_MS),
+        TransitionKind::AskResolved => (Target::Card, Component::FlashResolved, FLASH_RESOLVED_MS),
+        TransitionKind::PausedLifted => (Target::Card, Component::FlashLifted, FLASH_LIFTED_MS),
+        TransitionKind::SelectionLanded => (
+            Target::Spine,
+            Component::FlashSelectionLanded,
+            FLASH_SELECTED_MS,
+        ),
+        TransitionKind::Materialized => (
+            Target::Card,
+            Component::FlashMaterialized,
+            FLASH_MATERIALIZE_MS,
+        ),
     };
-    let mut fx = fx::fade_from_fg(theme.tone(tone), (ms, Interpolation::QuadOut));
+    let mut fx = fx::fade_from_fg(theme.component(component), (ms, Interpolation::QuadOut));
     fx.filter(CellFilter::Not(CellFilter::FgColor(Color::Reset).into()));
     (target, fx)
 }

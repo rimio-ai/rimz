@@ -17,13 +17,13 @@ use crate::sidebar_pane::render::fmt::{
     time_remaining, tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
-    CardAttention, CardEmphasis, SEGMENT_CACHE_READ, TOKENS_TOTAL, activity_age_style, agent_glyph,
+    CardAttention, CardEmphasis, TOKENS_TOTAL, activity_age_style, agent_glyph,
     agent_lead_style_with_attention, agent_role_style_at, compacting_glyph, compacting_head_style,
     context_breakdown_spans, context_compaction_spans, context_gauge_spans, context_total_spans,
     elapsed_glyph, emphasize, loading_dots, resolver_glyph, resolver_style, severity_heat_amount,
     severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 
 mod description;
 mod gauge;
@@ -32,9 +32,7 @@ mod identity;
 use self::{description::*, gauge::*, identity::*};
 
 use super::process::{composed_row, process_detail_line, process_row_line};
-use super::{
-    Gutter, Tier, VALUE_FLASH, content_width, pin_right, trim_spans_to_width, with_gutter,
-};
+use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
 
 /// The context-meter label — a framed square reading as "the window", replacing
 /// the `ctx` word now that it is the row's one bar (the account-scoped budget
@@ -222,9 +220,9 @@ fn sub_agent_lines(
         vec![
             Span::styled(
                 format!("  {SUBAGENTS_GLYPH}"),
-                theme.style(Color::Magenta, Modifier::empty()),
+                theme.styled(Component::SubagentHeader, Modifier::empty()),
             ),
-            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.soft()),
+            Span::styled(format!(" subagents ({})", sub_agents.len()), theme.body()),
         ],
         width,
     ))];
@@ -258,7 +256,7 @@ fn sub_agent_lines(
                 agent_role_style_at(theme, sub.status, sub.phase, animation_phase),
             ),
             Span::raw(" "),
-            Span::styled(sub.name.clone(), theme.soft()),
+            Span::styled(sub.name.clone(), theme.body()),
         ];
         // Prefer the `subagentStatusLine` description; fall back to the task
         // descriptor, shown only when it differs from the name (the name already
@@ -269,7 +267,7 @@ fn sub_agent_lines(
             .as_deref()
             .or(sub.task.as_deref().filter(|task| *task != sub.name));
         if let Some(detail) = detail {
-            spans.push(Span::styled(format!(" — {detail}"), theme.soft()));
+            spans.push(Span::styled(format!(" — {detail}"), theme.body()));
         }
         lines.push(Line::from(trim_spans_to_width(spans, width)));
 
@@ -332,11 +330,11 @@ fn append_sub_agent_tokens(
         Some(total) => {
             left.push(Span::styled(
                 TOKENS_TOTAL,
-                theme.style(Color::Blue, Modifier::empty()),
+                theme.styled(Component::TokenTotal, Modifier::empty()),
             ));
             left.push(Span::styled(
                 format!(" {:>token_col$}", tokens_int(total)),
-                theme.soft(),
+                theme.body(),
             ));
             true
         }
@@ -362,13 +360,13 @@ fn append_sub_agent_model(
     match model {
         Some(model) => {
             if *prev_rendered {
-                left.push(Span::styled(" · ", theme.dim()));
+                left.push(Span::styled(" · ", theme.muted()));
             } else {
                 left.push(Span::raw(" ".repeat(seam)));
             }
             left.push(Span::styled(
                 format!("{:<model_col$}", model_label(model)),
-                theme.dim(),
+                theme.muted(),
             ));
             *prev_rendered = true;
         }
@@ -388,11 +386,11 @@ fn append_sub_agent_effort(
         return;
     };
     if prev_rendered {
-        left.push(Span::styled(" · ", theme.dim()));
+        left.push(Span::styled(" · ", theme.muted()));
     } else if token_col > 0 || model_col > 0 {
         left.push(Span::raw("   "));
     }
-    left.push(Span::styled(effort.to_owned(), theme.dim()));
+    left.push(Span::styled(effort.to_owned(), theme.muted()));
 }
 
 fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> {

@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 
 #[test]
 fn agent_context_line_renders_compaction_markers() {
@@ -255,8 +256,8 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
-    let input = theme.style(theme.input_tone(), Modifier::empty());
-    let cache_write = theme.style(theme.cache_write_tone(), Modifier::empty());
+    let input = theme.style(theme.component(Component::Input), Modifier::empty());
+    let cache_write = theme.style(theme.component(Component::CacheWrite), Modifier::empty());
     assert!(
         bar_styles.contains(&input),
         "the fresh-input accent colors the bar tail"
@@ -330,8 +331,8 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
-    let cache_write = theme.style(theme.cache_write_tone(), Modifier::empty());
-    let input = theme.style(theme.input_tone(), Modifier::empty());
+    let cache_write = theme.style(theme.component(Component::CacheWrite), Modifier::empty());
+    let input = theme.style(theme.component(Component::Input), Modifier::empty());
     let write_at = bar_styles
         .iter()
         .position(|style| *style == cache_write)
@@ -387,7 +388,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     };
     assert_eq!(
         age_style(4 * 60, '◔'),
-        theme.dim(),
+        theme.muted(),
         "warm cache rests at the dim weight"
     );
     assert_eq!(
@@ -402,7 +403,7 @@ fn context_line_age_tone_slides_with_the_clock_age() {
     );
     assert_eq!(
         age_style(2 * 60 * 60, '◉'),
-        theme.style(Color::Red, Modifier::empty()),
+        theme.alarm(Modifier::empty()),
         "red once a resume would pay for the context again"
     );
 }

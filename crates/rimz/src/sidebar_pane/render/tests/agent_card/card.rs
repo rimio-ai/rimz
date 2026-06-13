@@ -19,7 +19,7 @@ fn idle_agent_card_lead_uses_soft_gray_when_unselected() {
         .find(|span| span.content.as_ref() == "○")
         .expect("idle card lead glyph renders as its own span");
 
-    assert_eq!(lead.style, theme.soft());
+    assert_eq!(lead.style, theme.body());
 }
 
 #[test]

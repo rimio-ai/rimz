@@ -7,15 +7,8 @@ use serde::Deserialize;
 use crate::config::{PaletteTones, parse_hex};
 
 use super::embedded_themes;
-
-type Rgb = (u8, u8, u8);
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-struct AnsiScheme {
-    palette: [Option<Rgb>; 16],
-    background: Option<Rgb>,
-    foreground: Option<Rgb>,
-}
+use super::oklab::Rgb;
+use super::theme::RawPalette;
 
 #[derive(Debug, Deserialize)]
 struct AlacrittyTheme {
@@ -129,56 +122,51 @@ fn expand_home(path: &Path) -> PathBuf {
 }
 
 pub(crate) fn parse_palette_tones(text: &str) -> Result<PaletteTones, String> {
-    derive_palette(&parse_alacritty_scheme(text)?)
+    Ok(parse_raw_palette(text)?.derive_tones())
 }
 
-fn parse_alacritty_scheme(text: &str) -> Result<AnsiScheme, String> {
+/// Parse an Alacritty theme into the [`RawPalette`] the semantic layer derives
+/// from. Background, foreground, and the six normal ANSI hues are required;
+/// `colors.bright.blue` is the selection accent, falling back to `normal.blue`.
+fn parse_raw_palette(text: &str) -> Result<RawPalette, String> {
     let theme: AlacrittyTheme =
         toml::from_str(text).map_err(|err| format!("parsing Alacritty theme TOML: {err}"))?;
     let colors = theme.colors.unwrap_or_default();
-    let mut scheme = AnsiScheme::default();
-
     let primary = colors.primary.unwrap_or_default();
-    scheme.background = Some(parse_required_color(
-        "colors.primary.background",
-        primary.background.as_deref(),
-    )?);
-    scheme.foreground = Some(parse_required_color(
-        "colors.primary.foreground",
-        primary.foreground.as_deref(),
-    )?);
-
     let normal = colors.normal.unwrap_or_default();
-    set_required_palette_slot(&mut scheme, 1, "colors.normal.red", normal.red.as_deref())?;
-    set_required_palette_slot(
-        &mut scheme,
-        2,
-        "colors.normal.green",
-        normal.green.as_deref(),
-    )?;
-    set_required_palette_slot(
-        &mut scheme,
-        3,
-        "colors.normal.yellow",
-        normal.yellow.as_deref(),
-    )?;
-    set_required_palette_slot(&mut scheme, 4, "colors.normal.blue", normal.blue.as_deref())?;
-    set_required_palette_slot(
-        &mut scheme,
-        5,
-        "colors.normal.magenta",
-        normal.magenta.as_deref(),
-    )?;
-    set_required_palette_slot(&mut scheme, 6, "colors.normal.cyan", normal.cyan.as_deref())?;
 
-    let bright_blue = colors
+    // Required keys are validated in a stable order — primary first, then the
+    // normal hues — so a malformed scheme reports the earliest missing key.
+    let background =
+        parse_required_color("colors.primary.background", primary.background.as_deref())?;
+    let foreground =
+        parse_required_color("colors.primary.foreground", primary.foreground.as_deref())?;
+    let red = parse_required_color("colors.normal.red", normal.red.as_deref())?;
+    let green = parse_required_color("colors.normal.green", normal.green.as_deref())?;
+    let yellow = parse_required_color("colors.normal.yellow", normal.yellow.as_deref())?;
+    let blue = parse_required_color("colors.normal.blue", normal.blue.as_deref())?;
+    let magenta = parse_required_color("colors.normal.magenta", normal.magenta.as_deref())?;
+    let cyan = parse_required_color("colors.normal.cyan", normal.cyan.as_deref())?;
+    let bright_blue = match colors
         .bright
         .as_ref()
         .and_then(|bright| bright.blue.as_deref())
-        .or(normal.blue.as_deref());
-    set_palette_slot(&mut scheme, 12, "colors.bright.blue", bright_blue)?;
+    {
+        Some(value) => parse_color("colors.bright.blue", value)?,
+        None => blue,
+    };
 
-    Ok(scheme)
+    Ok(RawPalette {
+        background,
+        foreground,
+        red,
+        green,
+        yellow,
+        blue,
+        magenta,
+        cyan,
+        bright_blue,
+    })
 }
 
 fn parse_required_color(key: &str, value: Option<&str>) -> Result<Rgb, String> {
@@ -186,154 +174,8 @@ fn parse_required_color(key: &str, value: Option<&str>) -> Result<Rgb, String> {
     parse_color(key, value)
 }
 
-fn parse_optional_color(key: &str, value: Option<&str>) -> Result<Option<Rgb>, String> {
-    value.map(|value| parse_color(key, value)).transpose()
-}
-
-fn set_required_palette_slot(
-    scheme: &mut AnsiScheme,
-    index: usize,
-    key: &str,
-    value: Option<&str>,
-) -> Result<(), String> {
-    scheme.palette[index] = Some(parse_required_color(key, value)?);
-    Ok(())
-}
-
-fn set_palette_slot(
-    scheme: &mut AnsiScheme,
-    index: usize,
-    key: &str,
-    value: Option<&str>,
-) -> Result<(), String> {
-    scheme.palette[index] = parse_optional_color(key, value)?;
-    Ok(())
-}
-
 fn parse_color(key: &str, value: &str) -> Result<Rgb, String> {
     parse_hex(value).map_err(|err| format!("{key}: {err}"))
-}
-
-fn derive_palette(scheme: &AnsiScheme) -> Result<PaletteTones, String> {
-    let color = |index: usize| {
-        scheme.palette[index].ok_or_else(|| format!("palette index {index} is missing"))
-    };
-    let background = scheme
-        .background
-        .ok_or_else(|| "background is missing".to_owned())?;
-    let foreground = scheme
-        .foreground
-        .ok_or_else(|| "foreground is missing".to_owned())?;
-    let red = color(1)?;
-    let green = color(2)?;
-    let yellow = color(3)?;
-    let blue = color(4)?;
-    let magenta = color(5)?;
-    let cyan = color(6)?;
-    let bright_blue = color(12)?;
-    Ok(PaletteTones {
-        good: green,
-        warn: yellow,
-        caution: blend_oklab(yellow, red, 0.5),
-        alarm: red,
-        accent: cyan,
-        cool: blue,
-        meta: magenta,
-        soft: blend_oklab(background, foreground, 0.65),
-        dim: blend_oklab(background, foreground, 0.45),
-        faint: blend_oklab(background, foreground, 0.25),
-        rule: blend_oklab(background, foreground, 0.18),
-        selection: bright_blue,
-    })
-}
-
-pub(super) fn blend_oklab(left: Rgb, right: Rgb, amount: f32) -> Rgb {
-    let left = Oklab::from_rgb(left);
-    let right = Oklab::from_rgb(right);
-    Oklab {
-        l: lerp(left.l, right.l, amount),
-        a: lerp(left.a, right.a, amount),
-        b: lerp(left.b, right.b, amount),
-    }
-    .to_rgb()
-}
-
-pub(super) fn lift_lightness(rgb: Rgb, delta: f32) -> Rgb {
-    let mut color = Oklab::from_rgb(rgb);
-    color.l = (color.l + delta).clamp(0.0, 1.0);
-    color.to_rgb()
-}
-
-fn lerp(left: f32, right: f32, amount: f32) -> f32 {
-    left + (right - left) * amount
-}
-
-#[derive(Clone, Copy, Debug)]
-struct Oklab {
-    l: f32,
-    a: f32,
-    b: f32,
-}
-
-impl Oklab {
-    fn from_rgb((red, green, blue): Rgb) -> Self {
-        let r = srgb_to_linear(red);
-        let g = srgb_to_linear(green);
-        let b = srgb_to_linear(blue);
-
-        let l = 0.412_221_46 * r + 0.536_332_55 * g + 0.051_445_995 * b;
-        let m = 0.211_903_5 * r + 0.680_699_5 * g + 0.107_396_96 * b;
-        let s = 0.088_302_46 * r + 0.281_718_85 * g + 0.629_978_7 * b;
-
-        let l_ = l.cbrt();
-        let m_ = m.cbrt();
-        let s_ = s.cbrt();
-
-        Self {
-            l: 0.210_454_26 * l_ + 0.793_617_8 * m_ - 0.004_072_047 * s_,
-            a: 1.977_998_5 * l_ - 2.428_592_2 * m_ + 0.450_593_7 * s_,
-            b: 0.025_904_037 * l_ + 0.782_771_77 * m_ - 0.808_675_77 * s_,
-        }
-    }
-
-    fn to_rgb(self) -> Rgb {
-        let l_ = self.l + 0.396_337_78 * self.a + 0.215_803_76 * self.b;
-        let m_ = self.l - 0.105_561_346 * self.a - 0.063_854_17 * self.b;
-        let s_ = self.l - 0.089_484_18 * self.a - 1.291_485_5 * self.b;
-
-        let l = l_ * l_ * l_;
-        let m = m_ * m_ * m_;
-        let s = s_ * s_ * s_;
-
-        let red = 4.076_741_7 * l - 3.307_711_6 * m + 0.230_969_94 * s;
-        let green = -1.268_438 * l + 2.609_757_4 * m - 0.341_319_4 * s;
-        let blue = -0.004_196_086_3 * l - 0.703_418_6 * m + 1.707_614_7 * s;
-
-        (
-            linear_to_srgb(red),
-            linear_to_srgb(green),
-            linear_to_srgb(blue),
-        )
-    }
-}
-
-fn srgb_to_linear(value: u8) -> f32 {
-    let value = f32::from(value) / 255.0;
-    if value <= 0.04045 {
-        value / 12.92
-    } else {
-        ((value + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn linear_to_srgb(value: f32) -> u8 {
-    let value = value.clamp(0.0, 1.0);
-    let value = if value <= 0.003_130_8 {
-        12.92 * value
-    } else {
-        1.055 * value.powf(1.0 / 2.4) - 0.055
-    };
-    (value * 255.0).round().clamp(0.0, 255.0) as u8
 }
 
 #[cfg(test)]
@@ -416,7 +258,7 @@ foreground = '#d0d0d0'
     fn light_alacritty_theme_ladder_darkens_toward_foreground() {
         let tones = parse_palette_tones(LIGHT_SCHEME).expect("parse scheme");
         assert!(
-            tones.soft.0 < tones.dim.0 && tones.dim.0 < tones.faint.0,
+            tones.body.0 < tones.muted.0 && tones.muted.0 < tones.faint.0,
             "light scheme ladder darkens toward foreground"
         );
     }
@@ -446,17 +288,5 @@ foreground = '#d0d0d0'
             );
             assert!(validate_explicit_scheme(removed).is_err());
         }
-    }
-
-    #[test]
-    fn lift_lightness_preserves_oklab_hue_axes() {
-        let base = Oklab::from_rgb((0xdf, 0xb6, 0x6d));
-        let lifted = Oklab::from_rgb(lift_lightness((0xdf, 0xb6, 0x6d), 0.05));
-        assert!(
-            lifted.l > base.l,
-            "lightness should move upward through OKLab"
-        );
-        assert!((lifted.a - base.a).abs() < 0.01);
-        assert!((lifted.b - base.b).abs() < 0.01);
     }
 }

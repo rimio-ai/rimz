@@ -1,5 +1,6 @@
 use super::*;
 use crate::config::ContextSeverityConfig;
+use crate::sidebar_pane::render::theme::Component;
 use jiff::SignedDuration;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
@@ -25,16 +26,6 @@ pub(in crate::sidebar_pane::render) const CONTEXT_FILLED: &str = "▤";
 /// session has condensed its window. Yellow, distinct from cache-write violet.
 pub(in crate::sidebar_pane::render) const CONTEXT_COMPACTIONS: &str = "↻";
 
-/// The context-window composition colors — one tone per segment, shared by the
-/// bar's accent runs and the context line's `◌`/`◍`/`↘`/`↗` markers so the line
-/// reads as the bar's legend by construction. Cache-read carries the bar's
-/// current health tone and uses a teal `◌` marker; cache-write uses the
-/// compaction/delegation violet; fresh input uses the context-alarm red; output
-/// stays green. The `◇` fleet total stays blue so the expensive-token hot tones
-/// stay clear.
-pub(in crate::sidebar_pane::render) const SEGMENT_CACHE_READ: Color = Color::Cyan;
-pub(in crate::sidebar_pane::render) const SEGMENT_OUTPUT: Color = Color::Green;
-
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
 /// rows). Each marker wears its one color everywhere: the `◇` total in blue,
@@ -54,16 +45,16 @@ pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
     fmt: fn(u64) -> String,
 ) -> Vec<Span<'static>> {
     let mut spans = tokens_total_spans(theme, total, fmt);
-    let mut field = |glyph: &str, color: Color, value: u64| {
+    let mut field = |glyph: &str, component: Component, value: u64| {
         spans.push(Span::styled(
             format!(" {glyph} "),
-            theme.style(color, Modifier::empty()),
+            theme.styled(component, Modifier::empty()),
         ));
-        spans.push(Span::styled(fmt(value), theme.soft()));
+        spans.push(Span::styled(fmt(value), theme.body()));
     };
-    field(TOKENS_IN, theme.input_tone(), input);
-    field(TOKENS_OUT, SEGMENT_OUTPUT, output);
-    field(TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read);
+    field(TOKENS_IN, Component::Input, input);
+    field(TOKENS_OUT, Component::Output, output);
+    field(TOKENS_CACHED, Component::CacheRead, cache_read);
     spans
 }
 
@@ -93,18 +84,21 @@ pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
     let mut spans = context_total_spans(theme, severity, filled, fmt);
     // The `·` seam frames the first *rendered* column, wherever it lands.
     let mut seam = " · ";
-    for (glyph, color, value) in [
-        (TOKENS_CACHED, SEGMENT_CACHE_READ, cache_read),
-        (TOKENS_CACHE_WRITE, theme.cache_write_tone(), cache_write),
-        (TOKENS_IN, theme.input_tone(), input),
-        (TOKENS_OUT, SEGMENT_OUTPUT, output),
+    for (glyph, component, value) in [
+        (TOKENS_CACHED, Component::CacheRead, cache_read),
+        (TOKENS_CACHE_WRITE, Component::CacheWrite, cache_write),
+        (TOKENS_IN, Component::Input, input),
+        (TOKENS_OUT, Component::Output, output),
     ] {
         if value == 0 {
             continue;
         }
-        spans.push(Span::styled(seam, theme.dim()));
-        spans.push(Span::styled(glyph, theme.style(color, Modifier::empty())));
-        spans.push(Span::styled(format!(" {}", fmt(value)), theme.dim()));
+        spans.push(Span::styled(seam, theme.muted()));
+        spans.push(Span::styled(
+            glyph,
+            theme.styled(component, Modifier::empty()),
+        ));
+        spans.push(Span::styled(format!(" {}", fmt(value)), theme.muted()));
         seam = " ";
     }
     spans
@@ -122,9 +116,9 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
         return Vec::new();
     }
     vec![
-        Span::styled(" · ", theme.dim()),
+        Span::styled(" · ", theme.muted()),
         Span::styled(CONTEXT_COMPACTIONS, compacting_style(theme)),
-        Span::styled(format!(" {count}"), theme.dim()),
+        Span::styled(format!(" {count}"), theme.muted()),
     ]
 }
 
@@ -144,7 +138,7 @@ pub(in crate::sidebar_pane::render) fn context_total_spans(
 ) -> Vec<Span<'static>> {
     vec![
         Span::styled(CONTEXT_FILLED, theme.style(severity, Modifier::empty())),
-        Span::styled(format!(" {}", fmt(filled)), theme.dim()),
+        Span::styled(format!(" {}", fmt(filled)), theme.muted()),
     ]
 }
 
@@ -299,20 +293,22 @@ fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f3
 }
 
 /// The window token's tone: subordinate chrome — a capability label, not a
-/// status signal; the context-meter severity ramp owns the loud color slot —
-/// tinted by size class so the magnitude reads at a glance: clay amber for a
-/// 1m+ window, gold for the 258k tier, sky blue for 128k, and the dim chrome
-/// below that, level with the model/effort tokens beside it. The tinted bands
-/// ride the `DIM` modifier so the token never outshines the meter; under
-/// `NO_COLOR` every band collapses to the same bare DIM weight.
+/// status signal; the context-meter severity ramp owns the loud color slot — so
+/// the magnitude reads at a glance through a neutral→cool→accent *salience*
+/// ramp by size class: faint below 128k, the muted body gray at 128k+, sky blue
+/// (cool) at 258k+, and the loud accent at 1m+. The ramp borrows no provider
+/// identity, so a big window never reads as a brand. Every band rides the `DIM`
+/// modifier so the token stays level with the model/effort tokens beside it and
+/// never outshines the meter; under `NO_COLOR` every band collapses to the same
+/// bare DIM weight.
 pub(in crate::sidebar_pane::render) fn window_style(theme: &Theme, window: u64) -> Style {
-    let color = match window {
-        1_000_000.. => theme.clay(),
-        258_000.. => Color::Yellow,
-        128_000.. => Color::Blue,
-        _ => return theme.dim(),
+    let component = match window {
+        1_000_000.. => Component::WindowHuge,
+        258_000.. => Component::WindowLarge,
+        128_000.. => Component::WindowMedium,
+        _ => Component::WindowSmall,
     };
-    theme.style(color, Modifier::DIM)
+    theme.styled(component, Modifier::DIM)
 }
 
 /// The context meter's health bar: the dominant cache-read run paints in the
@@ -461,7 +457,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     if remaining_pct == 0 {
         return vec![Span::styled(
             std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
-            theme.style(Color::Red, Modifier::empty()),
+            theme.alarm(Modifier::empty()),
         )];
     }
     let filled = filled_cells(remaining_pct, width).max(1);
@@ -469,7 +465,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
         filled,
         width,
         mana_style(theme, remaining_pct, zones),
-        theme.dim(),
+        theme.muted(),
         MANA_FILLED,
         MANA_TRACK,
     )
@@ -484,31 +480,31 @@ pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
         std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
-        theme.dim(),
+        theme.muted(),
     )]
 }
 
-/// The mana bar's tone at `remaining_pct` budget left: red when near-spent (or
-/// fully spent), then the same gold → clay-amber escalation the age and
-/// context ramps speak, resting green while the budget sits above every
-/// warning zone. Each `[sidebar.budget]` zone names the exclusive upper bound
-/// of remaining budget where its tier applies ([`BudgetZonesConfig`]); checked
-/// worst-first, so a misordered user config degrades to the worse tier. Shared
-/// by the bar fill and the `5h`/`7d` label beside it so the label mirrors its
-/// bar's tone.
+/// The mana bar's tone at `remaining_pct` budget left: alarm when near-spent
+/// (or fully spent), then the same gold → amber escalation the age and context
+/// ramps speak through the shared health slots, resting green while the budget
+/// sits above every warning zone. Each `[sidebar.budget]` zone names the
+/// exclusive upper bound of remaining budget where its tier applies
+/// ([`BudgetZonesConfig`]); checked worst-first, so a misordered user config
+/// degrades to the worse tier. Shared by the bar fill and the `5h`/`7d` label
+/// beside it so the label mirrors its bar's tone.
 pub(in crate::sidebar_pane::render) fn mana_style(
     theme: &Theme,
     remaining_pct: u8,
     zones: &BudgetZonesConfig,
 ) -> Style {
     if remaining_pct < zones.red {
-        theme.style(Color::Red, Modifier::empty())
+        theme.alarm(Modifier::empty())
     } else if remaining_pct < zones.amber {
-        theme.style(theme.clay(), Modifier::empty())
+        theme.caution(Modifier::empty())
     } else if remaining_pct < zones.yellow {
-        theme.style(Color::Yellow, Modifier::empty())
+        theme.warn(Modifier::empty())
     } else {
-        theme.style(Color::Green, Modifier::empty())
+        theme.good(Modifier::empty())
     }
 }
 
@@ -551,16 +547,16 @@ pub(in crate::sidebar_pane::render) fn pace_style(
 ) -> Style {
     let pace_pct = ratio * 100.0;
     let style = if pace_pct > f64::from(pace.red) {
-        theme.style(Color::Red, Modifier::empty())
+        theme.alarm(Modifier::empty())
     } else if pace_pct > f64::from(pace.amber) {
-        theme.style(theme.clay(), Modifier::empty())
+        theme.caution(Modifier::empty())
     } else if pace_pct > f64::from(pace.yellow) {
-        theme.style(Color::Yellow, Modifier::empty())
+        theme.warn(Modifier::empty())
     } else {
-        theme.soft()
+        theme.body()
     };
     if style.fg.is_none() && pace_pct > f64::from(pace.yellow) {
-        theme.soft()
+        theme.body()
     } else {
         style
     }
@@ -608,8 +604,8 @@ pub(in crate::sidebar_pane::render) fn todo_spans(
         ))
         .collect();
     vec![
-        Span::styled(dots, theme.dim()),
-        Span::styled(format!(" {done}/{total}"), theme.soft()),
+        Span::styled(dots, theme.muted()),
+        Span::styled(format!(" {done}/{total}"), theme.body()),
     ]
 }
 
@@ -626,21 +622,24 @@ pub(in crate::sidebar_pane::render) fn tokens_total_spans(
     fmt: fn(u64) -> String,
 ) -> Vec<Span<'static>> {
     vec![
-        Span::styled(TOKENS_TOTAL, theme.style(Color::Blue, Modifier::empty())),
-        Span::styled(format!(" {}", fmt(total)), theme.soft()),
+        Span::styled(
+            TOKENS_TOTAL,
+            theme.styled(Component::TokenTotal, Modifier::empty()),
+        ),
+        Span::styled(format!(" {}", fmt(total)), theme.body()),
     ]
 }
 
 /// `⇡3 ⇣1`-style commit delta against the trunk: ahead then behind, zero
-/// components omitted. Both dim cyan — commit-level branch facts rhyme with
-/// the bold-cyan worktree name and stay a category apart from the green/red
+/// components omitted. Both the dim accent — commit-level branch facts rhyme
+/// with the worktree name's accent and stay a category apart from the green/red
 /// line-level churn; the `⇡`/`⇣` shape carries the direction under `NO_COLOR`.
 pub(in crate::sidebar_pane::render) fn branch_delta_spans(
     theme: &Theme,
     ahead: u32,
     behind: u32,
 ) -> Vec<Span<'static>> {
-    let style = theme.style(Color::Cyan, Modifier::DIM);
+    let style = theme.styled(Component::BranchDelta, Modifier::DIM);
     let mut spans = Vec::new();
     if ahead > 0 {
         spans.push(Span::styled(format!("⇡{ahead}"), style));
@@ -666,7 +665,7 @@ pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
         format!("≡ {trunk}"),
-        theme.style(Color::Green, Modifier::DIM),
+        theme.good(Modifier::DIM),
     )]
 }
 
@@ -682,7 +681,7 @@ pub(in crate::sidebar_pane::render) fn trunk_clear_spans(
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
         format!("✓ {trunk}"),
-        theme.style(Color::Green, Modifier::DIM),
+        theme.good(Modifier::DIM),
     )]
 }
 
@@ -694,14 +693,8 @@ pub(in crate::sidebar_pane::render) fn diff_spans(
     removed: u32,
 ) -> Vec<Span<'static>> {
     vec![
-        Span::styled(
-            format!("+{added}"),
-            theme.style(Color::Green, Modifier::DIM),
-        ),
+        Span::styled(format!("+{added}"), theme.good(Modifier::DIM)),
         Span::raw(" "),
-        Span::styled(
-            format!("-{removed}"),
-            theme.style(Color::Red, Modifier::DIM),
-        ),
+        Span::styled(format!("-{removed}"), theme.alarm(Modifier::DIM)),
     ]
 }

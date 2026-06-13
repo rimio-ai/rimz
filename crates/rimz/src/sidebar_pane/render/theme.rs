@@ -22,16 +22,33 @@ use crate::config::{
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
-use super::animation::{AnimationRole, BreathSample, ResolvedAnimations};
+use super::animation::{BreathSample, ResolvedAnimations};
+use super::oklab;
 use super::scheme;
 
-pub(crate) const CLAUDE_CLAY_RGB: (u8, u8, u8) = (0xd9, 0x77, 0x57);
-const MONEY_GREEN_RGB: (u8, u8, u8) = (0x85, 0xbb, 0x65);
+mod component;
+mod identity;
+mod raw;
 
-/// How far an unselected card name's brand hue blends toward the soft body gray
-/// (`0.0` = full brand, `1.0` = plain soft). Balanced: recessed to the body tier
+pub(crate) use component::Component;
+pub(crate) use identity::Identity;
+pub(crate) use raw::RawPalette;
+
+/// How far an unselected card name's brand hue blends toward the body gray
+/// (`0.0` = full brand, `1.0` = plain body). Balanced: recessed to the body tier
 /// while staying recognizably the provider's color.
-const SOFT_BRAND_BLEND: f32 = 0.6;
+const BODY_BRAND_BLEND: f32 = 0.6;
+
+/// The chip ink: a fixed near-black laid on a colored chip fill, crisp on every
+/// mid-brightness fill — the provider tab rail's brand fill and the make-up
+/// bucket fills alike. Held fixed, not a palette slot.
+const CHIP_INK: Color = Color::Indexed(16);
+
+/// The money settle flash: a brighter sage than the resting dollar green, held
+/// for a couple of frames as a value lands — the quiet "ka-chunk" of a count-up.
+/// Shared by the cockpit headline and the agent cards' `$cost`. A fixed
+/// identity-adjacent tone; drops to plain bold under `no_color` like every other.
+const VALUE_FLASH_INK: Color = Color::Indexed(150);
 
 /// Stops on the context **health** ramp, ordered calm → alarm:
 /// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
@@ -66,12 +83,11 @@ pub(crate) struct Palette {
     accent: Color,
     cool: Color,
     meta: Color,
-    soft: Color,
-    dim: Color,
+    body: Color,
+    muted: Color,
     faint: Color,
     rule: Color,
     selection: Color,
-    clay: Color,
 }
 
 impl Palette {
@@ -112,13 +128,18 @@ impl Palette {
             accent: slot(theme.accent, tones.accent),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),
-            soft: slot(theme.soft, tones.soft),
-            dim: slot(theme.dim, tones.dim),
+            body: slot(theme.body, tones.body),
+            muted: slot(theme.muted, tones.muted),
             faint: slot(theme.faint, tones.faint),
             rule: slot(theme.rule, tones.rule),
             selection: slot(theme.selection, tones.selection),
-            clay: rgb_color(CLAUDE_CLAY_RGB, depth),
         }
+    }
+
+    /// Resolve an external-identity tone at the palette's depth. The base hue is
+    /// fixed; only the truecolor-vs-indexed emission differs.
+    pub(crate) fn identity(&self, id: Identity) -> Color {
+        rgb_color(id.base_rgb(), self.depth)
     }
 
     pub(crate) fn animation_color(&self, color: AnimationColor) -> Color {
@@ -129,10 +150,10 @@ impl Palette {
             AnimationColor::Accent => self.accent,
             AnimationColor::Cool => self.cool,
             AnimationColor::Meta => self.meta,
-            AnimationColor::Soft => self.soft,
-            AnimationColor::Dim => self.dim,
+            AnimationColor::Body => self.body,
+            AnimationColor::Muted => self.muted,
             AnimationColor::Faint => self.faint,
-            AnimationColor::Clay => self.clay,
+            AnimationColor::Clay => self.identity(Identity::Claude),
             AnimationColor::Indexed(index) => Color::Indexed(index),
             AnimationColor::Rgb(red, green, blue) => rgb_color((red, green, blue), self.depth),
         }
@@ -183,7 +204,7 @@ fn ramp_tone(ramp: &[(u8, u8, u8)], amount: f32) -> (u8, u8, u8) {
             let segments = (ramp.len() - 1) as f32;
             let scaled = amount.clamp(0.0, 1.0) * segments;
             let lower = (scaled.floor() as usize).min(ramp.len() - 2);
-            scheme::blend_oklab(ramp[lower], ramp[lower + 1], scaled - lower as f32)
+            oklab::blend(ramp[lower], ramp[lower + 1], scaled - lower as f32)
         }
     }
 }
@@ -323,24 +344,35 @@ impl Theme {
             }
     }
 
+    /// Emit a style at `fg` with `modifier`, dropping the color under
+    /// `NO_COLOR`. `fg` is an already-resolved tone — a component token, a
+    /// semantic accessor, an identity, or dynamic ramp output — never a raw
+    /// terminal carrier (the `ensure_no_hardcoded_ui_colors` gate keeps render
+    /// code honest), so there is no remap here.
     pub(crate) fn style(&self, fg: Color, modifier: Modifier) -> Style {
         let style = Style::default().add_modifier(modifier);
-        if self.no_color {
-            style
-        } else {
-            style.fg(self.resolve(fg))
-        }
+        if self.no_color { style } else { style.fg(fg) }
+    }
+
+    /// The resolved tone for a component token, at the active depth.
+    pub(crate) fn component(&self, component: Component) -> Color {
+        component.resolve(&self.palette)
+    }
+
+    /// A component token's tone as a `Style` with `modifier`, honoring
+    /// `NO_COLOR`.
+    pub(crate) fn styled(&self, component: Component, modifier: Modifier) -> Style {
+        self.style(self.component(component), modifier)
     }
 
     pub(crate) fn breathe(&self, fg: Color, sample: BreathSample) -> Style {
         if self.no_color {
             return Style::default().add_modifier(sample.modifier());
         }
-        let resolved = self.resolve(fg);
-        let Some(rgb) = color_to_rgb(resolved) else {
+        let Some(rgb) = color_to_rgb(fg) else {
             return Style::default();
         };
-        let lifted = scheme::lift_lightness(rgb, sample.lightness_delta());
+        let lifted = oklab::lift_lightness(rgb, sample.lightness_delta());
         let color = rgb_color(lifted, self.depth);
         let mut style = Style::default().fg(color);
         if self.depth == ColorDepth::Indexed
@@ -363,10 +395,10 @@ impl Theme {
         if self.no_color {
             return Style::default().add_modifier(sample.grow_modifier());
         }
-        let Some(rgb) = color_to_rgb(self.resolve(fg)) else {
+        let Some(rgb) = color_to_rgb(fg) else {
             return Style::default().add_modifier(sample.grow_modifier());
         };
-        let lifted = scheme::lift_lightness(rgb, sample.grow_delta());
+        let lifted = oklab::lift_lightness(rgb, sample.grow_delta());
         Style::default()
             .fg(rgb_color(lifted, self.depth))
             .add_modifier(Modifier::BOLD)
@@ -375,20 +407,25 @@ impl Theme {
     /// The body-text tone as a concrete color, so a pulsing description can lift
     /// and dim (and join the glow pass) instead of riding the terminal default
     /// the lightness shift cannot move.
-    pub(super) fn soft_tone(&self) -> Color {
-        self.palette.soft
+    pub(super) fn body_tone(&self) -> Color {
+        self.palette.body
     }
 
-    pub(crate) fn chip(&self, fg: Color, bg: Color, modifier: Modifier) -> Style {
+    /// A chip: a fixed near-black ink ([`CHIP_INK`]) on a colored fill. Under
+    /// `no_color` the fill drops and only the modifier survives.
+    pub(crate) fn chip(&self, bg: Color, modifier: Modifier) -> Style {
         let style = Style::default().add_modifier(modifier);
         if self.no_color {
             style
         } else {
-            style.fg(self.resolve(fg)).bg(self.resolve(bg))
+            style.fg(CHIP_INK).bg(bg)
         }
     }
 
-    fn gray(&self, color: Color) -> Style {
+    /// A neutral chrome tone laid flat: the color as `fg`, or a `DIM` weight
+    /// toggle under `no_color`. The shared body of [`body`](Self::body),
+    /// [`muted`](Self::muted), and [`faint`](Self::faint).
+    fn chrome(&self, color: Color) -> Style {
         if self.no_color {
             Style::default().add_modifier(Modifier::DIM)
         } else {
@@ -396,37 +433,34 @@ impl Theme {
         }
     }
 
-    pub(crate) fn dim(&self) -> Style {
-        self.gray(self.palette.dim)
+    pub(crate) fn muted(&self) -> Style {
+        self.chrome(self.palette.muted)
     }
 
-    pub(crate) fn soft(&self) -> Style {
-        self.gray(self.palette.soft)
+    pub(crate) fn body(&self) -> Style {
+        self.chrome(self.palette.body)
     }
 
-    /// A provider brand tone softened to the body tier: the brand hue blended
-    /// toward the soft body gray in OKLab, so a calm unselected card's name
-    /// keeps its provider color while resting at the same recessed weight as the
-    /// rest of the row. `no_color` keeps the soft `DIM` fallback — no hue
-    /// survives there — and an unresolvable color falls back to plain `soft()`.
-    pub(crate) fn soft_brand(&self, brand: Color) -> Style {
+    /// A provider brand tone recessed to the body tier: the brand hue blended
+    /// toward the body gray in OKLab, so a calm unselected card's name keeps its
+    /// provider color while resting at the same recessed weight as the rest of
+    /// the row. `no_color` keeps the `DIM` fallback — no hue survives there — and
+    /// an unresolvable color falls back to plain `body()`.
+    pub(crate) fn body_brand(&self, brand: Color) -> Style {
         if self.no_color {
-            return self.soft();
+            return self.body();
         }
-        match (
-            color_to_rgb(self.resolve(brand)),
-            color_to_rgb(self.palette.soft),
-        ) {
-            (Some(brand_rgb), Some(soft_rgb)) => {
-                let muted = scheme::blend_oklab(brand_rgb, soft_rgb, SOFT_BRAND_BLEND);
-                Style::default().fg(rgb_color(muted, self.depth))
+        match (color_to_rgb(brand), color_to_rgb(self.palette.body)) {
+            (Some(brand_rgb), Some(body_rgb)) => {
+                let blended = oklab::blend(brand_rgb, body_rgb, BODY_BRAND_BLEND);
+                Style::default().fg(rgb_color(blended, self.depth))
             }
-            _ => self.soft(),
+            _ => self.body(),
         }
     }
 
     pub(crate) fn faint(&self) -> Style {
-        self.gray(self.palette.faint)
+        self.chrome(self.palette.faint)
     }
 
     pub(crate) fn rule(&self) -> Style {
@@ -437,8 +471,34 @@ impl Theme {
         self.style(self.palette.selection, Modifier::BOLD)
     }
 
+    /// The chromatic health family as `Style` accessors — the four ramp slots a
+    /// runtime branch selects between (mana/pace/link bands), and the fixed
+    /// positive/negative chrome (diff churn, trunk markers). Naming the tier is
+    /// the intent; a [`Component`] would only restate the slot. `accent`/`cool`/
+    /// `meta` deliberately have no bare accessor — those always name a component.
+    pub(crate) fn good(&self, modifier: Modifier) -> Style {
+        self.style(self.palette.good, modifier)
+    }
+
+    pub(crate) fn warn(&self, modifier: Modifier) -> Style {
+        self.style(self.palette.warn, modifier)
+    }
+
+    pub(crate) fn caution(&self, modifier: Modifier) -> Style {
+        self.style(self.palette.caution, modifier)
+    }
+
+    pub(crate) fn alarm(&self, modifier: Modifier) -> Style {
+        self.style(self.palette.alarm, modifier)
+    }
+
+    /// An external-identity tone (brand clay, dollar green) at the active depth.
+    pub(crate) fn identity(&self, id: Identity) -> Color {
+        self.palette.identity(id)
+    }
+
     pub(crate) fn clay(&self) -> Color {
-        self.palette.clay
+        self.identity(Identity::Claude)
     }
 
     /// The context **health** tone for `amount` ∈ `[0, 1]`: a piecewise OKLab
@@ -458,49 +518,26 @@ impl Theme {
         self.heat_tone(mapped)
     }
 
-    /// Cache-write tone: the compaction/delegation violet, matching the color
-    /// family the completed-compaction marker used before it moved to yellow.
-    pub(super) fn cache_write_tone(&self) -> Color {
-        self.animations.role(AnimationRole::Compacting).color()
-    }
-
-    /// Fresh-input tone: the same alarm red a 100% context-fill meter wears.
-    pub(super) fn input_tone(&self) -> Color {
-        self.heat_tone(1.0)
-    }
-
-    /// Money tone: a fixed dollar green emitted like provider brand colors —
+    /// Money tone: the fixed dollar green emitted like any identity tone —
     /// true RGB at truecolor depth, nearest xterm bucket at indexed depth.
     pub(crate) fn money_tone(&self) -> Color {
-        rgb_color(MONEY_GREEN_RGB, self.depth)
+        self.identity(Identity::Money)
     }
 
     pub(crate) fn money_style(&self, modifier: Modifier) -> Style {
         self.style(self.money_tone(), modifier)
     }
 
+    /// The bold money settle flash ([`VALUE_FLASH_INK`]) a count-up holds for a
+    /// couple of frames as a figure lands. `no_color` keeps the bold weight.
+    pub(crate) fn value_flash(&self) -> Style {
+        self.style(VALUE_FLASH_INK, Modifier::BOLD)
+    }
+
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
         match (self.depth, panel.color_rgb) {
             (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),
             _ => Color::Indexed(panel.color),
-        }
-    }
-
-    pub(super) fn tone(&self, color: Color) -> Color {
-        self.resolve(color)
-    }
-
-    fn resolve(&self, color: Color) -> Color {
-        match color {
-            Color::Green => self.palette.good,
-            Color::Yellow => self.palette.warn,
-            Color::LightRed => self.palette.caution,
-            Color::Red => self.palette.alarm,
-            Color::Cyan => self.palette.accent,
-            Color::Blue => self.palette.cool,
-            Color::Magenta => self.palette.meta,
-            Color::DarkGray | Color::Gray => self.palette.dim,
-            other => other,
         }
     }
 }

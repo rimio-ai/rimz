@@ -174,7 +174,7 @@ fn print_human(rows: &[WorkspaceRow]) -> std::io::Result<()> {
         table.row([
             render::cell(row.workspace_id.as_str()).fg(render::palette::ACCENT),
             render::cell(row.session_name.as_str()),
-            render::cell(row.project_root.as_str()).fg(render::palette::SOFT),
+            render::cell(row.project_root.as_str()).fg(render::palette::BODY),
             render::cell(running).fg(running_style),
             render::cell(last).dash(),
         ]);

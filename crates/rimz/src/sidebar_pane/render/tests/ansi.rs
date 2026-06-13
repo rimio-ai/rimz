@@ -52,7 +52,7 @@ fn fixed_line_ansi_renderer_emits_one_reset_terminated_line_per_frame_row() {
 }
 #[test]
 fn no_color_theme_suppresses_color_not_shape_modifiers() {
-    let style = Theme::fixed(true).style(Color::Red, Modifier::BOLD);
+    let style = Theme::fixed(true).alarm(Modifier::BOLD);
 
     assert_eq!(style.fg, None);
     assert!(style.add_modifier.contains(Modifier::BOLD));

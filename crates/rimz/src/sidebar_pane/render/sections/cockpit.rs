@@ -2,15 +2,15 @@
 //! live-agent count with the animated count-up spend.
 
 use crate::SpendWindow;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::TallyAnim;
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::{attention_floor_color, token_breakdown_spans};
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{SESSIONS_GLYPH, VALUE_FLASH, metric_spans, pin_right};
+use super::{SESSIONS_GLYPH, metric_spans, pin_right};
 
 /// The cockpit's live-agent count glyph: `¤` for the agents in the room right
 /// now (the sessions-today `◎` lives in the shared [`SESSIONS_GLYPH`]).
@@ -31,7 +31,12 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
     today: Option<&SpendWindow>,
     width: usize,
 ) -> Line<'static> {
-    let left = metric_spans(theme, SESSIONS_GLYPH, Color::Cyan, &sessions.to_string());
+    let left = metric_spans(
+        theme,
+        SESSIONS_GLYPH,
+        theme.component(Component::Sessions),
+        &sessions.to_string(),
+    );
     let right = today
         .filter(|w| w.tokens > 0 || w.cache_read > 0)
         .map(|window| {
@@ -85,7 +90,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     let right = if today_usd > 0.0 {
         let usd = anim.today_usd.display(today_usd, phase);
         let style = if anim.today_usd.flashing(phase) {
-            theme.style(VALUE_FLASH, Modifier::BOLD)
+            theme.value_flash()
         } else {
             theme.money_style(Modifier::BOLD)
         };

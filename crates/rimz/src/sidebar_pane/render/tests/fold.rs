@@ -556,12 +556,12 @@ fn agent_name_follows_card_emphasis() {
     let unselected = name_style(usize::MAX).fg;
     assert_eq!(
         unselected,
-        theme.soft_brand(Color::Indexed(expected)).fg,
+        theme.body_brand(Color::Indexed(expected)).fg,
         "a calm unselected agent name keeps a muted brand tone"
     );
     assert_ne!(
         unselected,
-        theme.soft().fg,
+        theme.body().fg,
         "the muted brand tone is not the flat soft gray"
     );
     assert_ne!(

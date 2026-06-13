@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 use jiff::SignedDuration;
 
 fn text(spans: &[Span<'_>]) -> String {
@@ -19,8 +20,8 @@ fn indexed_from_truecolor(color: Color) -> Color {
 }
 
 fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
-    let write = theme.cache_write_tone();
-    let input = theme.input_tone();
+    let write = theme.component(Component::CacheWrite);
+    let input = theme.component(Component::Input);
     assert_eq!(
         input,
         theme.heat_tone(1.0),
@@ -28,8 +29,8 @@ fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
     );
     assert_eq!(
         write,
-        theme.tone(Color::Magenta),
-        "cache-write uses the compaction/delegation violet"
+        theme.component(Component::SubagentHeader),
+        "cache-write shares the compaction/delegation violet (meta) slot"
     );
     assert_ne!(write, input, "cache-write stays distinct from input red");
 }
@@ -133,9 +134,9 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     // row health tone, the trailing accents are cap-separated flat runs, and the caps
     // come out of the fill so the bar still ends exactly at its fill level.
     let segments = [
-        (8_000_u64, SEGMENT_CACHE_READ),
-        (5_000, plain.cache_write_tone()),
-        (2_000, plain.input_tone()),
+        (8_000_u64, plain.component(Component::CacheRead)),
+        (5_000, plain.component(Component::CacheWrite)),
+        (2_000, plain.component(Component::Input)),
     ];
     let rendered = text(&context_gauge_spans(&plain, 0.6, &segments, 60, 10));
     assert_eq!(rendered, "━━╸━╸━────");
@@ -164,7 +165,10 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     let spans = context_gauge_spans(
         &plain,
         0.5,
-        &[(0, SEGMENT_CACHE_READ), (0, plain.input_tone())],
+        &[
+            (0, plain.component(Component::CacheRead)),
+            (0, plain.component(Component::Input)),
+        ],
         50,
         4,
     );
@@ -174,9 +178,9 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     // In truecolor the cache-read run uses the flat severity tone, while
     // cache-write and fresh input stay flat in their accents.
     let segments = [
-        (9_000_u64, truecolor.tone(SEGMENT_CACHE_READ)),
-        (3_000, truecolor.cache_write_tone()),
-        (1_500, truecolor.input_tone()),
+        (9_000_u64, truecolor.component(Component::CacheRead)),
+        (3_000, truecolor.component(Component::CacheWrite)),
+        (1_500, truecolor.component(Component::Input)),
     ];
     let amount = 0.6;
     let mut runs: Vec<Vec<Option<Color>>> = vec![Vec::new()];
@@ -200,8 +204,8 @@ fn gauge_bars_map_severity_and_apportion_segments() {
             .all(|fg| *fg == Some(truecolor.heat_tone(amount))),
         "the cache-read run is the flat severity tone: {read:?}"
     );
-    let write_fg = Some(truecolor.cache_write_tone());
-    let input_fg = Some(truecolor.input_tone());
+    let write_fg = Some(truecolor.component(Component::CacheWrite));
+    let input_fg = Some(truecolor.component(Component::Input));
     assert!(
         !runs[1].is_empty() && runs[1].iter().all(|fg| *fg == write_fg),
         "cache-write is a flat accent"
@@ -214,13 +218,13 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     assert_cost_tones_are_hot_and_distinct(&indexed);
     assert_cost_tones_are_hot_and_distinct(&truecolor);
     assert_eq!(
-        indexed.input_tone(),
-        indexed_from_truecolor(truecolor.input_tone()),
+        indexed.component(Component::Input),
+        indexed_from_truecolor(truecolor.component(Component::Input)),
         "indexed input is the truecolor alarm red quantized to xterm"
     );
     assert_eq!(
-        indexed.cache_write_tone(),
-        indexed_from_truecolor(truecolor.cache_write_tone()),
+        indexed.component(Component::CacheWrite),
+        indexed_from_truecolor(truecolor.component(Component::CacheWrite)),
         "indexed cache-write is the truecolor violet quantized to xterm"
     );
 }
@@ -250,23 +254,24 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
             .fg
             .unwrap()
     };
-    // Green at half or more left, yellow below half, amber below a quarter,
-    // red below a tenth — band edges pinned on both sides.
+    // Green at half or more left, yellow below half, the caution amber below a
+    // quarter, red below a tenth — band edges pinned on both sides. The amber
+    // band now shares the health ramp's caution slot (no longer a brand clay).
     assert_eq!(fg(80), Color::Indexed(149));
     assert_eq!(fg(50), Color::Indexed(149));
     assert_eq!(fg(49), Color::Indexed(179));
     assert_eq!(fg(40), Color::Indexed(179));
     assert_eq!(fg(25), Color::Indexed(179));
-    assert_eq!(fg(24), Color::Indexed(173));
-    assert_eq!(fg(10), Color::Indexed(173));
+    assert_eq!(Some(fg(24)), lit.caution(Modifier::empty()).fg);
+    assert_eq!(Some(fg(10)), lit.caution(Modifier::empty()).fg);
     assert_eq!(fg(9), Color::Indexed(210));
     assert_eq!(fg(1), Color::Indexed(210));
     let track = &mana_bar_spans(&lit, 70, 10, &zones)[1];
-    assert_eq!(track.style, lit.dim());
+    assert_eq!(track.style, lit.muted());
     let spent = mana_bar_spans(&lit, 0, 10, &zones);
     assert_eq!(spent[0].style.fg, Some(Color::Indexed(210)));
-    assert_ne!(spent[0].style.fg, lit.dim().fg);
-    assert_ne!(spent[0].style.fg, lit.dim().fg);
+    assert_ne!(spent[0].style.fg, lit.muted().fg);
+    assert_ne!(spent[0].style.fg, lit.muted().fg);
 }
 
 #[test]
@@ -278,15 +283,14 @@ fn mana_style_honours_custom_and_misordered_zones() {
         red: 20,
         ..BudgetZonesConfig::default()
     };
-    let tone = |color| lit.style(color, Modifier::empty());
-    assert_eq!(mana_style(&lit, 70, &tuned), tone(Color::Yellow));
+    assert_eq!(mana_style(&lit, 70, &tuned), lit.warn(Modifier::empty()));
     assert_eq!(
         mana_style(&lit, 80, &tuned),
-        tone(Color::Green),
+        lit.good(Modifier::empty()),
         "healthy rests green"
     );
-    assert_eq!(mana_style(&lit, 39, &tuned), tone(lit.clay()));
-    assert_eq!(mana_style(&lit, 19, &tuned), tone(Color::Red));
+    assert_eq!(mana_style(&lit, 39, &tuned), lit.caution(Modifier::empty()));
+    assert_eq!(mana_style(&lit, 19, &tuned), lit.alarm(Modifier::empty()));
     let bar = mana_bar_spans(&lit, 70, 10, &tuned);
     assert_eq!(bar[0].style.fg, Some(Color::Indexed(179)));
 
@@ -296,8 +300,14 @@ fn mana_style_honours_custom_and_misordered_zones() {
         red: 50,
         ..BudgetZonesConfig::default()
     };
-    assert_eq!(mana_style(&lit, 30, &misordered), tone(Color::Red));
-    assert_eq!(mana_style(&lit, 50, &misordered), tone(Color::Green));
+    assert_eq!(
+        mana_style(&lit, 30, &misordered),
+        lit.alarm(Modifier::empty())
+    );
+    assert_eq!(
+        mana_style(&lit, 50, &misordered),
+        lit.good(Modifier::empty())
+    );
 }
 
 #[test]
@@ -333,33 +343,53 @@ fn pace_ratio_reads_burn_against_elapsed_window_and_edges() {
 fn pace_style_honours_boundaries_custom_zones_and_no_color() {
     let lit = Theme::fixed(false);
     let defaults = BudgetPaceConfig::default();
-    let tone = |color| lit.style(color, Modifier::empty());
-    assert_eq!(pace_style(&lit, 1.0, &defaults), lit.soft());
-    assert_eq!(pace_style(&lit, 1.01, &defaults), tone(Color::Yellow));
-    assert_eq!(pace_style(&lit, 1.5, &defaults), tone(Color::Yellow));
-    assert_eq!(pace_style(&lit, 1.51, &defaults), tone(lit.clay()));
-    assert_eq!(pace_style(&lit, 2.0, &defaults), tone(lit.clay()));
-    assert_eq!(pace_style(&lit, 2.01, &defaults), tone(Color::Red));
+    assert_eq!(pace_style(&lit, 1.0, &defaults), lit.body());
+    assert_eq!(
+        pace_style(&lit, 1.01, &defaults),
+        lit.warn(Modifier::empty())
+    );
+    assert_eq!(
+        pace_style(&lit, 1.5, &defaults),
+        lit.warn(Modifier::empty())
+    );
+    assert_eq!(
+        pace_style(&lit, 1.51, &defaults),
+        lit.caution(Modifier::empty())
+    );
+    assert_eq!(
+        pace_style(&lit, 2.0, &defaults),
+        lit.caution(Modifier::empty())
+    );
+    assert_eq!(
+        pace_style(&lit, 2.01, &defaults),
+        lit.alarm(Modifier::empty())
+    );
 
     let tuned = BudgetPaceConfig {
         yellow: 80,
         amber: 120,
         red: 160,
     };
-    assert_eq!(pace_style(&lit, 0.81, &tuned), tone(Color::Yellow));
-    assert_eq!(pace_style(&lit, 1.21, &tuned), tone(lit.clay()));
-    assert_eq!(pace_style(&lit, 1.61, &tuned), tone(Color::Red));
+    assert_eq!(pace_style(&lit, 0.81, &tuned), lit.warn(Modifier::empty()));
+    assert_eq!(
+        pace_style(&lit, 1.21, &tuned),
+        lit.caution(Modifier::empty())
+    );
+    assert_eq!(pace_style(&lit, 1.61, &tuned), lit.alarm(Modifier::empty()));
 
     let misordered = BudgetPaceConfig {
         yellow: 200,
         amber: 150,
         red: 100,
     };
-    assert_eq!(pace_style(&lit, 1.2, &misordered), tone(Color::Red));
-    assert_eq!(pace_style(&lit, 0.9, &misordered), lit.soft());
+    assert_eq!(
+        pace_style(&lit, 1.2, &misordered),
+        lit.alarm(Modifier::empty())
+    );
+    assert_eq!(pace_style(&lit, 0.9, &misordered), lit.body());
 
     let plain = Theme::fixed(true);
-    assert_eq!(pace_style(&plain, 2.5, &defaults), plain.soft());
+    assert_eq!(pace_style(&plain, 2.5, &defaults), plain.body());
 }
 
 #[test]
@@ -399,23 +429,23 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
     };
     assert_eq!(
         marker(TOKENS_TOTAL).fg,
-        lit.style(Color::Blue, Modifier::empty()).fg
+        Some(lit.component(Component::TokenTotal))
     );
-    assert_eq!(marker(TOKENS_IN).fg, Some(lit.input_tone()));
+    assert_eq!(marker(TOKENS_IN).fg, Some(lit.component(Component::Input)));
     assert_eq!(
         marker(TOKENS_OUT).fg,
-        lit.style(SEGMENT_OUTPUT, Modifier::empty()).fg
+        Some(lit.component(Component::Output))
     );
     assert_eq!(
         marker(TOKENS_CACHED).fg,
-        lit.style(SEGMENT_CACHE_READ, Modifier::empty()).fg
+        Some(lit.component(Component::CacheRead))
     );
     for span in spans.iter().filter(|span| {
         span.content
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c.is_ascii_whitespace())
     }) {
-        assert_eq!(span.style, lit.soft(), "figure {:?}", span.content);
+        assert_eq!(span.style, lit.body(), "figure {:?}", span.content);
     }
 }
 
@@ -457,38 +487,45 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     // The `▤` head wears the bar's severity tip; each composition marker legends
     // the bar in its own segment tone — cache-read cyan, cache-write compaction
     // violet, fresh input context-alarm red, output green.
-    let segment_fg = |color| theme.style(color, Modifier::empty()).fg;
     assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
     assert_eq!(
         tone(TOKENS_CACHED),
-        segment_fg(SEGMENT_CACHE_READ),
+        Some(theme.component(Component::CacheRead)),
         "cache read"
     );
     assert_eq!(
         tone(TOKENS_CACHE_WRITE),
-        Some(theme.cache_write_tone()),
+        Some(theme.component(Component::CacheWrite)),
         "cache write"
     );
-    assert_eq!(tone(TOKENS_IN), Some(theme.input_tone()), "fresh input");
-    assert_eq!(tone(TOKENS_OUT), segment_fg(SEGMENT_OUTPUT), "output");
+    assert_eq!(
+        tone(TOKENS_IN),
+        Some(theme.component(Component::Input)),
+        "fresh input"
+    );
+    assert_eq!(
+        tone(TOKENS_OUT),
+        Some(theme.component(Component::Output)),
+        "output"
+    );
     // Every figure reads dim — only the markers carry tones — and the `·`
     // seam shares the same dim gray chrome.
     for span in spans.iter().filter(|s| s.content.starts_with(' ')) {
         if span.content.trim().is_empty() || span.content.trim() == "·" {
             continue;
         }
-        assert_eq!(span.style, theme.dim(), "figure {:?}", span.content);
+        assert_eq!(span.style, theme.muted(), "figure {:?}", span.content);
     }
     let seam = spans
         .iter()
         .find(|s| s.content.trim() == "·")
         .expect("no seam span");
-    assert_eq!(seam.style, theme.dim(), "the seam stays dim chrome");
+    assert_eq!(seam.style, theme.muted(), "the seam stays dim chrome");
 
     let spans = context_compaction_spans(&theme, 2);
     assert_eq!(text(&spans), " · ↻ 2");
-    assert_eq!(spans[0].style, theme.dim(), "seam");
+    assert_eq!(spans[0].style, theme.muted(), "seam");
     assert_eq!(spans[1].style, compacting_style(&theme), "marker");
-    assert_eq!(spans[2].style, theme.dim(), "count");
+    assert_eq!(spans[2].style, theme.muted(), "count");
     assert!(context_compaction_spans(&theme, 0).is_empty());
 }

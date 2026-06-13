@@ -62,13 +62,13 @@ fn human_table(entries: &[RemoteAlias]) -> render::Table {
         let reconnect_style = if entry.reconnect {
             render::palette::GOOD
         } else {
-            render::palette::DIM
+            render::palette::MUTED
         };
         table.row([
             render::cell(entry.name.as_str()).fg(render::palette::ACCENT),
             render::cell(entry.target.as_str()),
             render::cell(reconnect).fg(reconnect_style),
-            render::cell(no_resume).fg(render::palette::SOFT),
+            render::cell(no_resume).fg(render::palette::BODY),
             render::cell(mux).dash(),
         ]);
     }

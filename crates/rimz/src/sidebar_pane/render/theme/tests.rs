@@ -4,7 +4,7 @@
 use super::*;
 use crate::config::{PaletteTones, SidebarAnimationsConfig, ThemeMode};
 
-fn indices(palette: Palette) -> [Color; 13] {
+fn indices(palette: Palette) -> [Color; 12] {
     [
         palette.good,
         palette.warn,
@@ -13,12 +13,11 @@ fn indices(palette: Palette) -> [Color; 13] {
         palette.accent,
         palette.cool,
         palette.meta,
-        palette.soft,
-        palette.dim,
+        palette.body,
+        palette.muted,
         palette.faint,
         palette.rule,
         palette.selection,
-        palette.clay,
     ]
 }
 
@@ -49,7 +48,6 @@ fn default_indexed_palette_matches_expected_indices() {
             Color::Indexed(238),
             Color::Indexed(237),
             Color::Indexed(111),
-            Color::Indexed(173),
         ]
     );
 }
@@ -66,16 +64,10 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
         ),
         ..Theme::default()
     };
+    assert_eq!(theme.good(Modifier::empty()).fg, Some(Color::Indexed(34)));
+    assert_eq!(theme.alarm(Modifier::empty()).fg, Some(Color::Indexed(210)));
     assert_eq!(
-        theme.style(Color::Green, Modifier::empty()).fg,
-        Some(Color::Indexed(34))
-    );
-    assert_eq!(
-        theme.style(Color::Red, Modifier::empty()).fg,
-        Some(Color::Indexed(210))
-    );
-    assert_eq!(
-        theme.style(Color::LightRed, Modifier::empty()).fg,
+        theme.caution(Modifier::empty()).fg,
         Some(Color::Indexed(210))
     );
     assert_eq!(
@@ -95,11 +87,11 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     };
 
     assert_eq!(
-        theme.style(Color::LightRed, Modifier::empty()).fg,
+        theme.caution(Modifier::empty()).fg,
         Some(Color::Indexed(214))
     );
     assert_eq!(
-        theme.style(Color::Yellow, Modifier::empty()).fg,
+        theme.warn(Modifier::empty()).fg,
         Some(Color::Indexed(179)),
         "warning stays separate from elevated caution"
     );
@@ -117,7 +109,7 @@ fn rgb_overrides_follow_depth() {
     };
     let truecolor = Theme::fixed_for_sidebar(false, &sidebar);
     assert_eq!(
-        truecolor.style(Color::Green, Modifier::empty()).fg,
+        truecolor.good(Modifier::empty()).fg,
         Some(Color::Rgb(0xa3, 0xbe, 0x8c))
     );
 
@@ -130,7 +122,7 @@ fn rgb_overrides_follow_depth() {
     };
     let indexed = Theme::fixed_for_sidebar(false, &sidebar);
     assert_eq!(
-        indexed.style(Color::Green, Modifier::empty()).fg,
+        indexed.good(Modifier::empty()).fg,
         Some(Color::Indexed(nearest_xterm_index(0xa3, 0xbe, 0x8c)))
     );
 }
@@ -178,32 +170,34 @@ fn breathe_emits_color_depth_fallbacks() {
             ..SidebarConfig::default()
         },
     );
-    let truecolor_trough = truecolor.breathe(Color::Yellow, trough);
-    let truecolor_peak = truecolor.breathe(Color::Yellow, peak);
+    let truecolor_trough = truecolor.breathe(Color::Indexed(179), trough);
+    let truecolor_peak = truecolor.breathe(Color::Indexed(179), peak);
     assert!(matches!(truecolor_trough.fg, Some(Color::Rgb(..))));
     assert!(matches!(truecolor_peak.fg, Some(Color::Rgb(..))));
     assert_ne!(truecolor_trough.fg, truecolor_peak.fg);
     assert!(truecolor_peak.add_modifier.is_empty());
 
     let indexed = Theme::fixed(false);
-    let indexed_trough = indexed.breathe(Color::Yellow, trough);
-    let indexed_peak = indexed.breathe(Color::Yellow, peak);
+    let indexed_trough = indexed.breathe(Color::Indexed(179), trough);
+    let indexed_peak = indexed.breathe(Color::Indexed(179), peak);
     assert!(matches!(indexed_trough.fg, Some(Color::Indexed(_))));
     assert!(matches!(indexed_peak.fg, Some(Color::Indexed(_))));
     assert_ne!(indexed_trough.fg, indexed_peak.fg);
 
     let plain = Theme::fixed(true);
-    assert_eq!(plain.breathe(Color::Yellow, trough).fg, None);
+    assert_eq!(plain.breathe(Color::Indexed(179), trough).fg, None);
     assert_eq!(
-        plain.breathe(Color::Yellow, trough).add_modifier,
+        plain.breathe(Color::Indexed(179), trough).add_modifier,
         Modifier::DIM
     );
     assert_eq!(
-        plain.breathe(Color::Yellow, shallow_peak).add_modifier,
+        plain
+            .breathe(Color::Indexed(179), shallow_peak)
+            .add_modifier,
         Modifier::empty()
     );
     assert_eq!(
-        plain.breathe(Color::Yellow, peak).add_modifier,
+        plain.breathe(Color::Indexed(179), peak).add_modifier,
         Modifier::BOLD
     );
 }
@@ -280,7 +274,7 @@ fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
         },
     );
     assert_eq!(
-        theme.style(Color::Red, Modifier::empty()).fg,
+        theme.alarm(Modifier::empty()).fg,
         Some(Color::Indexed(1)),
         "flat alarm uses the ANSI override"
     );
@@ -333,7 +327,7 @@ fn bundled_scheme_resolves_by_name() {
     let theme = Theme::fixed_for_sidebar(false, &sidebar);
     let (good_r, good_g, good_b) = PaletteTones::DEFAULT.good;
     assert_eq!(
-        theme.style(Color::Green, Modifier::empty()).fg,
+        theme.good(Modifier::empty()).fg,
         Some(Color::Indexed(nearest_xterm_index(good_r, good_g, good_b)))
     );
 }
@@ -384,13 +378,14 @@ fn money_tone_uses_fixed_dollar_green_at_active_depth() {
         indexed.money_tone(),
         Color::Indexed(nearest_xterm_index(0x85, 0xbb, 0x65))
     );
-    assert_ne!(truecolor.money_tone(), truecolor.tone(Color::Green));
+    // The fixed dollar green is distinct from the semantic good/green slot.
+    assert_ne!(truecolor.money_tone(), truecolor.heat_tone(0.0));
 }
 
 #[test]
 fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     let lit = Theme::fixed(false);
-    for (style, index) in [(lit.soft(), 103), (lit.dim(), 60), (lit.faint(), 238)] {
+    for (style, index) in [(lit.body(), 103), (lit.muted(), 60), (lit.faint(), 238)] {
         assert_eq!(style.fg, Some(Color::Indexed(index)));
         assert!(style.add_modifier.is_empty(), "no DIM attenuation when lit");
     }
@@ -401,7 +396,7 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     );
 
     let dark = Theme::fixed(true);
-    for style in [dark.soft(), dark.dim(), dark.faint(), dark.rule()] {
+    for style in [dark.body(), dark.muted(), dark.faint(), dark.rule()] {
         assert_eq!(style.fg, None);
         assert!(style.add_modifier.contains(Modifier::DIM));
     }
@@ -409,14 +404,14 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     let themed = Theme {
         palette: Palette::resolve_fixed(
             &SidebarThemeConfig {
-                soft: Some(ThemeColor::Indexed(252)),
+                body: Some(ThemeColor::Indexed(252)),
                 ..SidebarThemeConfig::default()
             },
             ColorDepth::Indexed,
         ),
         ..Theme::default()
     };
-    assert_eq!(themed.soft().fg, Some(Color::Indexed(252)));
+    assert_eq!(themed.body().fg, Some(Color::Indexed(252)));
 }
 
 #[test]
@@ -426,13 +421,14 @@ fn soft_brand_mutes_the_brand_hue_toward_the_body_tier() {
         palette: Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
-    let brand = Color::Rgb(CLAUDE_CLAY_RGB.0, CLAUDE_CLAY_RGB.1, CLAUDE_CLAY_RGB.2);
-    let muted = truecolor.soft_brand(brand);
+    let clay = Identity::Claude.base_rgb();
+    let brand = Color::Rgb(clay.0, clay.1, clay.2);
+    let muted = truecolor.body_brand(brand);
     assert!(matches!(muted.fg, Some(Color::Rgb(..))), "keeps a hue");
     assert!(muted.add_modifier.is_empty(), "no DIM attenuation when lit");
     assert_ne!(
         muted.fg,
-        truecolor.soft().fg,
+        truecolor.body().fg,
         "softened brand is not the flat soft gray"
     );
     assert_ne!(
@@ -443,8 +439,8 @@ fn soft_brand_mutes_the_brand_hue_toward_the_body_tier() {
 
     let dark = Theme::fixed(true);
     assert_eq!(
-        dark.soft_brand(brand),
-        dark.soft(),
+        dark.body_brand(brand),
+        dark.body(),
         "NO_COLOR keeps the soft DIM fallback — no hue survives"
     );
 }
@@ -462,12 +458,16 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
         ),
         ..Theme::default()
     };
-    let style = theme.style(Color::Red, Modifier::BOLD);
+    let style = theme.alarm(Modifier::BOLD);
     assert_eq!(style.fg, None, "NO_COLOR suppresses even a themed tone");
     assert!(style.add_modifier.contains(Modifier::BOLD));
 
-    let lit = Theme::fixed(false).chip(Color::Indexed(16), Color::Indexed(173), Modifier::BOLD);
-    assert_eq!(lit.fg, Some(Color::Indexed(16)));
+    let lit = Theme::fixed(false).chip(Color::Indexed(173), Modifier::BOLD);
+    assert_eq!(
+        lit.fg,
+        Some(Color::Indexed(16)),
+        "the chip lays the fixed near-black ink over the fill"
+    );
     assert_eq!(
         lit.bg,
         Some(Color::Indexed(173)),
@@ -475,7 +475,7 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
     );
     assert!(lit.add_modifier.contains(Modifier::BOLD));
 
-    let dark = Theme::fixed(true).chip(Color::Indexed(16), Color::Indexed(173), Modifier::BOLD);
+    let dark = Theme::fixed(true).chip(Color::Indexed(173), Modifier::BOLD);
     assert_eq!(dark.fg, None);
     assert_eq!(dark.bg, None, "NO_COLOR suppresses the chip fill too");
     assert!(dark.add_modifier.contains(Modifier::BOLD));
@@ -523,4 +523,64 @@ fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     let theme = Theme::for_sidebar(&pinned_off);
     assert_eq!(theme.glow, GlowMode::Never);
     assert!(!theme.effects_enabled());
+}
+
+fn truecolor_default() -> Theme {
+    Theme::fixed_for_sidebar(
+        false,
+        &SidebarConfig {
+            theme: SidebarThemeConfig {
+                mode: ThemeMode::Truecolor,
+                ..SidebarThemeConfig::default()
+            },
+            ..SidebarConfig::default()
+        },
+    )
+}
+
+/// The component-token oracle: every UI role resolves to the semantic slot it
+/// names, at both palette depths, and always to a concrete tone (never `Reset`
+/// or a raw carrier). The `match` below mirrors [`Component::resolve`]; the two
+/// independent tables must agree, so a moved arm fails here, and a new variant
+/// fails to compile until both are updated.
+#[test]
+fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
+    use Component::*;
+    for theme in [Theme::fixed(false), truecolor_default()] {
+        let p = theme.palette;
+        for &component in Component::ALL {
+            let expected = match component {
+                Sessions | LaneSpine | WorktreeHeader | BranchDelta | CacheRead | WindowHuge
+                | FlashSelectionLanded => p.accent,
+                LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
+                SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
+                ProcMem | Output | FlashResolved | FlashLifted => p.good,
+                Compaction | AttentionFloor | FlashWaiting => p.warn,
+                Input | FlashFailed => p.alarm,
+                WindowMedium | UnknownBrand | FlashMaterialized => p.muted,
+                WindowSmall => p.faint,
+            };
+            let got = theme.component(component);
+            assert_eq!(got, expected, "{component:?} resolves to its named slot");
+            assert!(
+                matches!(got, Color::Indexed(_) | Color::Rgb(..)),
+                "{component:?} resolves to a concrete tone, got {got:?}"
+            );
+        }
+    }
+}
+
+/// Under `NO_COLOR` every component drops its hue but keeps the requested
+/// modifier — the gauge/flash/marker still reads by shape and weight.
+#[test]
+fn components_collapse_to_modifier_only_under_no_color() {
+    let plain = Theme::fixed(true);
+    for &component in Component::ALL {
+        let style = plain.styled(component, Modifier::BOLD);
+        assert_eq!(style.fg, None, "{component:?} drops its hue under NO_COLOR");
+        assert!(
+            style.add_modifier.contains(Modifier::BOLD),
+            "{component:?} keeps its modifier under NO_COLOR"
+        );
+    }
 }

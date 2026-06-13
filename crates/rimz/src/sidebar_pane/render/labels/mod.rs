@@ -46,7 +46,7 @@ pub(super) fn age_heat_color(theme: &Theme, age_secs: i64) -> Option<Color> {
 /// `NO_COLOR`.
 pub(super) fn activity_age_style(theme: &Theme, age_secs: i64) -> Style {
     age_heat_color(theme, age_secs)
-        .map_or(theme.dim(), |color| theme.style(color, Modifier::empty()))
+        .map_or(theme.muted(), |color| theme.style(color, Modifier::empty()))
 }
 
 #[cfg(test)]

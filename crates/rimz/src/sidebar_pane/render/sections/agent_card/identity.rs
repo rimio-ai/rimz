@@ -19,7 +19,7 @@ pub(super) fn agent_name_style(
         .iter()
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
-        .unwrap_or(Color::DarkGray);
+        .unwrap_or_else(|| theme.component(Component::UnknownBrand));
     emphasize(theme, Some(brand), emphasis, pulse)
 }
 
@@ -177,7 +177,7 @@ pub(super) fn agent_identity_line(
     {
         let usd = cost_rolls.display(&row.id, target, animation_phase);
         let style = if cost_rolls.flashing(&row.id, animation_phase) {
-            theme.style(VALUE_FLASH, Modifier::BOLD)
+            theme.value_flash()
         } else {
             theme.money_style(Modifier::BOLD)
         };
@@ -206,21 +206,21 @@ pub(super) fn agent_identity_line(
     ];
     if tier != Tier::L0 {
         if let Some(model) = display_model(row) {
-            left.push(Span::styled(" · ", theme.dim()));
-            left.push(Span::styled(model, theme.dim()));
+            left.push(Span::styled(" · ", theme.muted()));
+            left.push(Span::styled(model, theme.muted()));
         }
         if tier == Tier::L2
             && let Some(effort) = display_effort(row)
         {
-            left.push(Span::styled(" · ", theme.dim()));
-            left.push(Span::styled(effort.to_owned(), theme.dim()));
+            left.push(Span::styled(" · ", theme.muted()));
+            left.push(Span::styled(effort.to_owned(), theme.muted()));
         }
         // The window token keeps the capability tokens' DIM weight — metadata,
         // not a status signal — but tints by size class (`window_style`) so
         // the magnitude reads at a glance; the context-meter severity ramp
         // keeps the loud color slot.
         if let Some(window) = display_context_window(row) {
-            left.push(Span::styled(" · ", theme.dim()));
+            left.push(Span::styled(" · ", theme.muted()));
             left.push(Span::styled(
                 window_short(window),
                 window_style(theme, window),

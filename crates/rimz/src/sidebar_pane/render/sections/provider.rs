@@ -12,13 +12,12 @@ use crate::sidebar_pane::render::fmt::{
     dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    SEGMENT_CACHE_READ, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL,
-    mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
-    unknown_mana_bar_spans,
+    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, mana_bar_spans, mana_style, pace_ratio,
+    pace_style, token_breakdown_spans, unknown_mana_bar_spans,
 };
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{SESSIONS_GLYPH, TAB_CAP_LEFT, TAB_CAP_RIGHT, TAB_INK, pin_right, trim_spans_to_width};
+use super::{SESSIONS_GLYPH, TAB_CAP_LEFT, TAB_CAP_RIGHT, pin_right, trim_spans_to_width};
 
 /// The provider dashboard's fixed art column width: the brand emblem is padded
 /// to this many cells so the stats/bar column to its right starts at one shared
@@ -119,33 +118,45 @@ fn wm_row(
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let value = theme.soft();
+    let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
     let left = vec![
         Span::raw(" "),
-        Span::styled(format!("{label}: "), marker(Color::Blue)),
-        Span::styled(SESSIONS_GLYPH, marker(Color::Cyan)),
+        Span::styled(
+            format!("{label}: "),
+            marker(theme.component(Component::LedgerLabel)),
+        ),
+        Span::styled(SESSIONS_GLYPH, marker(theme.component(Component::Sessions))),
         Span::styled(
             format!(" {:>w$}", window.sessions, w = cols.sessions),
             value,
         ),
         Span::raw("  "),
-        Span::styled(TOKENS_TOTAL, marker(Color::Blue)),
+        Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
         Span::styled(
             format!(" {:>w$}", tokens_short(window.tokens), w = cols.total),
             value,
         ),
-        Span::styled(format!(" {TOKENS_IN} "), marker(theme.input_tone())),
+        Span::styled(
+            format!(" {TOKENS_IN} "),
+            marker(theme.component(Component::Input)),
+        ),
         Span::styled(
             format!("{:>w$}", tokens_short(window.input), w = cols.input),
             value,
         ),
-        Span::styled(format!(" {TOKENS_OUT} "), marker(SEGMENT_OUTPUT)),
+        Span::styled(
+            format!(" {TOKENS_OUT} "),
+            marker(theme.component(Component::Output)),
+        ),
         Span::styled(
             format!("{:>w$}", tokens_short(window.output), w = cols.output),
             value,
         ),
-        Span::styled(format!(" {TOKENS_CACHED} "), marker(SEGMENT_CACHE_READ)),
+        Span::styled(
+            format!(" {TOKENS_CACHED} "),
+            marker(theme.component(Component::CacheRead)),
+        ),
         Span::styled(
             format!(
                 "{:>w$}",
@@ -270,7 +281,7 @@ fn provider_tab_rail(
     active_kind: &str,
     width: usize,
 ) -> (Line<'static>, Vec<ProviderTabHit>) {
-    let rail = theme.soft();
+    let rail = theme.body();
     let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rail);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut hits = Vec::new();
@@ -298,7 +309,7 @@ fn provider_tab_rail(
             // When `NO_COLOR` drops the fill, the `┤ ├` caps paint into
             // those cells instead as the pick's shape.
             let brand = theme.brand_tone(panel);
-            let chip = theme.chip(TAB_INK, brand, Modifier::BOLD);
+            let chip = theme.chip(brand, Modifier::BOLD);
             let (left, right) = if chip.bg.is_none() {
                 (
                     Span::styled(TAB_CAP_LEFT.to_string(), rail),
@@ -379,25 +390,25 @@ fn provider_header_line(
             left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
         }
         if let Some(plan) = panel.plan.as_deref() {
-            left.push(Span::styled(plan.to_owned(), theme.dim()));
+            left.push(Span::styled(plan.to_owned(), theme.muted()));
             left.push(Span::styled(" · ", theme.faint()));
         }
-        left.push(Span::styled(version, theme.dim()));
+        left.push(Span::styled(version, theme.muted()));
     } else {
         left.push(Span::styled(
             panel.product_name.clone(),
             theme.style(theme.brand_tone(panel), Modifier::BOLD),
         ));
-        left.push(Span::styled(format!(" {version}"), theme.dim()));
+        left.push(Span::styled(format!(" {version}"), theme.muted()));
         if let Some(plan) = panel.plan.as_deref() {
             left.push(Span::styled(" · ", theme.faint()));
-            left.push(Span::styled(plan.to_owned(), theme.dim()));
+            left.push(Span::styled(plan.to_owned(), theme.muted()));
         }
     }
     let right = if panel.remote_control {
         vec![Span::styled(
             "⇅ rc",
-            theme.style(Color::Magenta, Modifier::BOLD),
+            theme.styled(Component::RemoteControl, Modifier::BOLD),
         )]
     } else {
         Vec::new()
@@ -470,8 +481,11 @@ fn provider_stats_spans(
         .map(|spending| spending.today)
         .unwrap_or_default();
     let mut left = vec![
-        Span::styled(SESSIONS_GLYPH, theme.style(Color::Cyan, Modifier::empty())),
-        Span::styled(format!(" {}", today.sessions), theme.soft()),
+        Span::styled(
+            SESSIONS_GLYPH,
+            theme.styled(Component::Sessions, Modifier::empty()),
+        ),
+        Span::styled(format!(" {}", today.sessions), theme.body()),
         Span::raw("  "),
     ];
     left.extend(token_breakdown_spans(
@@ -674,7 +688,7 @@ fn metered_bar_row(
         window.resets_at.map(|at| reset_countdown(at, now))
     };
     let reset_marker_style = if reset.is_none() {
-        theme.soft()
+        theme.body()
     } else {
         window
             .used_percentage
@@ -688,7 +702,7 @@ fn metered_bar_row(
                 )
             })
             .map(|ratio| pace_style(theme, ratio, &zones.pace))
-            .unwrap_or_else(|| theme.soft())
+            .unwrap_or_else(|| theme.body())
     };
     let mut spans = vec![
         Span::styled(
@@ -713,7 +727,7 @@ fn metered_bar_row(
 fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     let mut spans = vec![
-        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.dim()),
+        Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), theme.muted()),
         Span::raw(" "),
     ];
     spans.extend(unknown_mana_bar_spans(theme, bar_width));
@@ -737,7 +751,7 @@ fn reset_value_spans(
     let countdown = pad_countdown(countdown);
     vec![
         Span::styled("↻", marker_style),
-        Span::styled(format!(" {countdown}"), theme.soft()),
+        Span::styled(format!(" {countdown}"), theme.body()),
         Span::raw(" "),
     ]
 }
@@ -762,7 +776,7 @@ fn extra_credits_bar_row(
     let remaining = credits.and_then(ExtraCredits::remaining_percentage);
     let label_style = remaining
         .map(|remaining| mana_style(theme, remaining, zones))
-        .unwrap_or_else(|| theme.dim());
+        .unwrap_or_else(|| theme.muted());
     let mut spans = vec![
         Span::styled(format!("{label:<PROVIDER_LABEL_WIDTH$}"), label_style),
         Span::raw(" "),

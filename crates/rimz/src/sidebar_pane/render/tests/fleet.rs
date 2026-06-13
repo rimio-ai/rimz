@@ -140,7 +140,11 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
     };
     let style = |color| theme.style(color, Modifier::empty()).fg;
     let heat = |age_secs: i64| style(theme.warm_heat_tone(age_heat_amount_for_test(age_secs)));
-    assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
+    assert_eq!(
+        bucket_fg(5 * 60),
+        theme.warn(Modifier::empty()).fg,
+        "yellow floor"
+    );
     assert_eq!(
         bucket_fg(40 * 60),
         heat(40 * 60),
@@ -148,7 +152,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
     );
     assert_eq!(
         bucket_fg(2 * 60 * 60),
-        style(Color::Red),
+        theme.alarm(Modifier::empty()).fg,
         "red past the hour"
     );
 }
@@ -179,17 +183,17 @@ fn state_glyphs_keep_their_cockpit_tier() {
     };
     assert_eq!(
         glyph_style("?"),
-        theme.style(Color::Yellow, Modifier::empty()),
+        theme.warn(Modifier::empty()),
         "a zero ? bucket rests at its yellow floor, unbolded"
     );
     assert_eq!(
         glyph_style("✓"),
-        theme.style(Color::Green, Modifier::empty()),
+        theme.good(Modifier::empty()),
         "a zero ✓ bucket keeps the quiet success tone at full strength"
     );
     assert_eq!(
         glyph_style("○"),
-        theme.soft(),
+        theme.body(),
         "a zero idle bucket carries the soft stat gray"
     );
     let zero_counts: Vec<_> = spans
@@ -198,13 +202,13 @@ fn state_glyphs_keep_their_cockpit_tier() {
         .collect();
     assert!(!zero_counts.is_empty(), "zero buckets render their counts");
     assert!(
-        zero_counts.iter().all(|span| span.style == theme.soft()),
+        zero_counts.iter().all(|span| span.style == theme.body()),
         "zero counts rest at the soft stat tier"
     );
     assert_eq!(labels::status_style(&theme, AgentStatus::Idle).fg, None);
     assert_eq!(
         labels::status_style(&theme, AgentStatus::Success),
-        theme.style(Color::Green, Modifier::empty()),
+        theme.good(Modifier::empty()),
         "success keeps the quiet success tone at full strength"
     );
 }
@@ -329,7 +333,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         .iter()
         .find(|span| span.content.as_ref() == "○ 1")
         .expect("the selected idle bucket stays one span");
-    assert_eq!(active.style.fg, theme.soft().fg);
+    assert_eq!(active.style.fg, theme.body().fg);
     assert!(
         active.style.add_modifier.contains(Modifier::REVERSED)
             && active.style.add_modifier.contains(Modifier::BOLD),

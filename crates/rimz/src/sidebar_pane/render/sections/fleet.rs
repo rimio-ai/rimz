@@ -14,7 +14,7 @@ use crate::sidebar_pane::render::labels::{
 };
 use crate::sidebar_pane::render::theme::Theme;
 
-use super::{TAB_INK, pin_right, trim_spans_to_width};
+use super::{pin_right, trim_spans_to_width};
 
 /// One clickable status bucket in the cockpit make-up line: the line index
 /// within [`fleet_header_lines`]'s returned lines (always 0 — the make-up is
@@ -137,7 +137,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Idle,
         status_chip_color(theme, AgentStatus::Idle),
         idle,
-        theme.soft(),
+        theme.body(),
     );
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
@@ -233,7 +233,7 @@ impl<'a> Cluster<'a> {
                 style.add_modifier
             };
             let pick = if let Some(glyph_color) = glyph_color {
-                let chip = self.theme.chip(TAB_INK, glyph_color, Modifier::empty());
+                let chip = self.theme.chip(glyph_color, Modifier::empty());
                 if chip.bg.is_none() {
                     chip.add_modifier(Modifier::REVERSED)
                 } else {
@@ -248,12 +248,12 @@ impl<'a> Cluster<'a> {
             ));
         } else if count == 0 {
             let glyph_style = if status == AgentStatus::Idle {
-                self.theme.soft()
+                self.theme.body()
             } else {
                 status_rest_style(self.theme, status)
             };
             self.push_span(Span::styled(glyph.to_owned(), glyph_style));
-            self.push_span(Span::styled(format!(" {count}"), self.theme.soft()));
+            self.push_span(Span::styled(format!(" {count}"), self.theme.body()));
             return;
         } else {
             self.push_span(Span::styled(format!("{glyph} {count}"), style));

@@ -359,12 +359,12 @@ fn emit_snapshot(snapshot: &rimz::SidebarSnapshot, json: bool) -> Result<()> {
         let waiting_style = if waiting > 0 {
             render::palette::WARN
         } else {
-            render::palette::DIM
+            render::palette::MUTED
         };
         let failed_style = if failed > 0 {
             render::palette::ALARM
         } else {
-            render::palette::DIM
+            render::palette::MUTED
         };
         let mut kv = render::KeyVals::new();
         kv.push(

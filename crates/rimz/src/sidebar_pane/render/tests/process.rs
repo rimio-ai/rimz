@@ -1,4 +1,5 @@
 use super::*;
+use crate::sidebar_pane::render::theme::Component;
 
 #[test]
 fn remote_control_host_pane_is_filtered_not_rendered() {
@@ -76,7 +77,7 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     // violet — while figures and seams stay in the dim process tone, and each
     // figure right-aligns into its fixed slot so a changing magnitude never
     // walks the cluster sideways.
-    use ratatui::style::{Color, Modifier};
+    use ratatui::style::Modifier;
 
     let busy = pane("%1", "cargo build --release", "/repo/main");
     let mut snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(vec![busy], None);
@@ -91,20 +92,20 @@ fn proc_stats_hold_a_fixed_dim_grid() {
     let spans = sections::proc_stats_spans(&theme, row);
     let text: String = spans.iter().map(|span| span.content.as_ref()).collect();
     assert_eq!(text, "C  34%  M 512M  ⇅   8M/s");
-    let dim = theme.dim();
+    let dim = theme.muted();
     let markers = [
-        ("C ", Color::Blue),
-        ("M ", Color::Green),
-        ("⇅ ", Color::Magenta),
+        ("C ", Component::ProcCpu),
+        ("M ", Component::ProcMem),
+        ("⇅ ", Component::ProcIo),
     ];
-    for (marker, tone) in markers {
+    for (marker, component) in markers {
         let span = spans
             .iter()
             .find(|span| span.content.as_ref() == marker)
             .unwrap_or_else(|| panic!("marker {marker:?} missing from the grid"));
         assert_eq!(
             span.style,
-            theme.style(tone, Modifier::DIM),
+            theme.styled(component, Modifier::DIM),
             "marker {marker:?} wears its own DIM-weighted tone"
         );
     }
@@ -231,7 +232,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
         };
         assert_eq!(
             span_style("zsh"),
-            theme.soft(),
+            theme.body(),
             "the program name drops to the soft tier below full strength (no_color={no_color})"
         );
         assert_eq!(

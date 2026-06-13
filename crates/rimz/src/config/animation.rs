@@ -175,8 +175,8 @@ pub enum AnimationColor {
     Accent,
     Cool,
     Meta,
-    Soft,
-    Dim,
+    Body,
+    Muted,
     Faint,
     Clay,
     Indexed(u8),
@@ -192,8 +192,8 @@ impl AnimationColor {
             Self::Accent => Some("accent"),
             Self::Cool => Some("cool"),
             Self::Meta => Some("meta"),
-            Self::Soft => Some("soft"),
-            Self::Dim => Some("dim"),
+            Self::Body => Some("body"),
+            Self::Muted => Some("muted"),
             Self::Faint => Some("faint"),
             Self::Clay => Some("clay"),
             Self::Indexed(_) | Self::Rgb(_, _, _) => None,
@@ -208,8 +208,8 @@ impl AnimationColor {
             "accent" => Some(Self::Accent),
             "cool" => Some(Self::Cool),
             "meta" => Some(Self::Meta),
-            "soft" => Some(Self::Soft),
-            "dim" => Some(Self::Dim),
+            "body" => Some(Self::Body),
+            "muted" => Some(Self::Muted),
             "faint" => Some(Self::Faint),
             "clay" => Some(Self::Clay),
             _ => None,
@@ -263,7 +263,7 @@ impl<'de> Deserialize<'de> for AnimationColor {
                         .map_err(E::custom);
                 }
                 Err(E::custom(format!(
-                    "unknown animation color `{value}`; expected good, warn, alarm, accent, cool, meta, soft, dim, faint, clay, #rrggbb, or 0-255"
+                    "unknown animation color `{value}`; expected good, warn, alarm, accent, cool, meta, body, muted, faint, clay, #rrggbb, or 0-255"
                 )))
             }
 

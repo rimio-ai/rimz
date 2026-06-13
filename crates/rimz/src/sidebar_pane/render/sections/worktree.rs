@@ -5,7 +5,7 @@
 use crate::config::{CardDensityMode, ContextSeverityConfig};
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 use jiff::Timestamp;
-use ratatui::style::{Color, Modifier};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::BodyFilter;
@@ -15,7 +15,7 @@ use crate::sidebar_pane::render::labels::{
     branch_delta_spans, diff_spans, status_glyph, trunk_clear_spans, trunk_equal_spans,
 };
 use crate::sidebar_pane::render::row_passes_filter;
-use crate::sidebar_pane::render::theme::Theme;
+use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::agent_card::row_lines;
 use super::{Gutter, Tier, content_width, with_gutter};
@@ -108,7 +108,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     if filter.is_none() && group.hidden_count > 0 {
         lines.push(with_gutter(
             theme,
-            Line::styled(format!("  +{} more", group.hidden_count), theme.dim()),
+            Line::styled(format!("  +{} more", group.hidden_count), theme.muted()),
             lane,
             width,
         ));
@@ -170,7 +170,10 @@ fn group_header(
     };
 
     let mut spans = vec![
-        Span::styled(left, theme.style(Color::Cyan, Modifier::BOLD)),
+        Span::styled(
+            left,
+            theme.styled(Component::WorktreeHeader, Modifier::BOLD),
+        ),
         Span::styled(fill, theme.faint()),
     ];
     spans.extend(right);
@@ -245,7 +248,7 @@ fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -
         Span::styled("┄".repeat(fill), theme.faint()),
     ];
     if !tally.is_empty() {
-        spans.push(Span::styled(tail, theme.dim()));
+        spans.push(Span::styled(tail, theme.muted()));
     }
     Line::from(spans)
 }

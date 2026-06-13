@@ -68,10 +68,10 @@ Twelve semantic slots cover everything the sidebar paints. Each accepts `#rrggbb
 | `caution` | the amber badge/gauge rung between warning and alarm, and the age-heat midpoint |
 | `alarm` | failed glyphs, high gauges, `-` removals |
 | `accent` | structure: worktree headers, the selected lane spine |
-| `cool` | cool informational: the `plan` posture pill, window tags, the `◇` token total |
+| `cool` | cool informational: the `plan` posture pill, the larger window tags, the `◇` token total |
 | `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker |
-| `soft` | soft content text: stat figures, capability tokens, subagent lines |
-| `dim` | dim chrome: labels, ages, subordinate values |
+| `body` | body content text: stat figures, capability tokens, subagent lines |
+| `muted` | muted chrome: labels, ages, subordinate values |
 | `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers |
 | `rule` | the darkest chrome (the scrollbar track), a step below `faint` |
 | `selection` | the selected-row `▌` accent bar |
@@ -89,6 +89,12 @@ The context meter resolves a health tone from the `good` → `warn` → `caution
 The context composition accents reuse stable sidebar tones: fresh input `↘` wears `heat_tone(1.0)`, the 100% context-fill red; cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
 
 Money amounts use a fixed dollar green (`#85bb65` at truecolor depth, nearest xterm bucket at indexed depth), separate from the `good` success slot.
+
+### How a tone resolves
+
+A painted tone passes through three layers. The **raw palette** is the imported terminal color — `background`, `foreground`, and the ANSI hues from the selected scheme. The **twelve semantic slots** above derive from it (the neutral chrome blended from background toward foreground in OKLab, the chromatic slots mapped from the ANSI hues) and are the layer you tune. **Component tokens** are the specific UI roles — the sessions glyph, a token marker, a worktree header, a transition flash — and each names its role and resolves to one semantic slot. They are internal: restyle the room through the twelve slots and every component that aliases a slot follows. The one place hue is decided stays the slot table, and a CI gate keeps render code from naming a raw color directly (see [rust-conventions.md](../contributing/rust-conventions.md#architectural-invariants)).
+
+The capability line's window token shows this layering: it reads its size through a neutral→cool→accent salience ramp — `faint` below 128k, `muted` at 128k, `cool` at 258k, `accent` at 1M+ — so a bigger window reads louder while borrowing no provider's brand color. Only true external identity (the provider brand emblems and the dollar green) holds a fixed hue outside the slots.
 
 ## Custom Theme Files
 
@@ -122,7 +128,7 @@ blue = '#7aa2f7'
 | `accent` | normal cyan |
 | `cool` | normal blue |
 | `meta` | normal magenta |
-| `soft` / `dim` / `faint` / `rule` | background toward foreground at 65% / 45% / 25% / 18% |
+| `body` / `muted` / `faint` / `rule` | background toward foreground at 65% / 45% / 25% / 18% |
 | `selection` | bright blue, or normal blue when bright blue is absent |
 
 Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
@@ -159,7 +165,7 @@ The built-in heads:
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `soft`, `dim`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped pulse, `effect = "static"` quiets it, and `speed` tunes it when the pulse is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
+`color` accepts the semantic palette slots `good`, `warn`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped pulse, `effect = "static"` quiets it, and `speed` tunes it when the pulse is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
 
 Every role uses the same model: frames, color, effect, and speed. The built-in attention pulse still applies age heat and unread depth across the lead glyph, the card name, the description, and the make-up `?`/`!` buckets unless an explicit static effect quiets it; the cockpit count and per-bucket counts use still representative frames.
 

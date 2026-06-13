@@ -64,7 +64,7 @@ pub(super) fn bar_row(
     spans.push(Span::raw(" "));
     spans.push(Span::styled(
         format!("{value:>BAR_VALUE_WIDTH$}"),
-        theme.dim(),
+        theme.muted(),
     ));
     Line::from(trim_spans_to_width(spans, width))
 }
@@ -189,16 +189,16 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
         let writes = usage.cache_creation_input_tokens.unwrap_or(0);
         let reads = usage.cache_read_input_tokens.unwrap_or(0);
         return (input + writes + reads > 0).then_some([
-            (reads, theme.tone(SEGMENT_CACHE_READ)),
-            (writes, theme.cache_write_tone()),
-            (input, theme.input_tone()),
+            (reads, theme.component(Component::CacheRead)),
+            (writes, theme.component(Component::CacheWrite)),
+            (input, theme.component(Component::Input)),
         ]);
     }
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
-        (split.cache_read, theme.tone(SEGMENT_CACHE_READ)),
-        (0, theme.cache_write_tone()),
-        (split.fresh_input, theme.input_tone()),
+        (split.cache_read, theme.component(Component::CacheRead)),
+        (0, theme.component(Component::CacheWrite)),
+        (split.fresh_input, theme.component(Component::Input)),
     ])
 }
 

@@ -88,7 +88,7 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
     writeln!(
         out,
         "{} {}",
-        render::paint(render::palette::DIM, "trust:"),
+        render::paint(render::palette::MUTED, "trust:"),
         render::paint(render::status::trust(report.state), banner),
     )?;
     let mut kv = render::KeyVals::new().indent(2);
@@ -111,13 +111,13 @@ fn print_report(report: &TrustReport, as_json: bool) -> std::io::Result<()> {
     if let Some(hash) = &report.current_hash {
         kv.push(
             "current hash",
-            render::cell(hash.as_str()).fg(render::palette::SOFT),
+            render::cell(hash.as_str()).fg(render::palette::BODY),
         );
     }
     if let Some(hash) = &report.granted_hash {
         kv.push(
             "granted hash",
-            render::cell(hash.as_str()).fg(render::palette::SOFT),
+            render::cell(hash.as_str()).fg(render::palette::BODY),
         );
     }
     if let Some(at) = report.granted_at {
