@@ -146,7 +146,7 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists glob patterns for untracked files to copy from the checkout into each new worktree. Seeding and cleanup state live in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
+`rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists glob patterns for untracked files to copy from the checkout into each new worktree. Seeding and cleanup state live in [internals/agents/harness.md](../internals/agents/harness.md#rimz-owned-worktrees).
 
 ### Agent Aliases And Layouts
 

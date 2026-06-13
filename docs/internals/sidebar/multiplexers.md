@@ -40,7 +40,7 @@ version()
 
 Backend-specific fast paths cannot become correctness requirements. If a feature exists only on Zellij, the tmux backend must still pass the same matrix without it.
 
-`open_tab` receives backend-neutral pane argv and layout geometry from the CLI. Agent resolution, prompts, and worktree cleanup are already compiled into the argv (`rimz agents exec …`), so the backend stays ignorant of agent kinds and worktree ownership. The shared layout IR and cleanup model live in [worktrees.md](../agents/worktrees.md).
+`open_tab` receives backend-neutral pane argv and layout geometry from the CLI. Agent resolution, prompts, and worktree cleanup are already compiled into the argv (`rimz agents exec …`), so the backend stays ignorant of agent kinds and worktree ownership. The shared layout IR and cleanup model live in [harness.md](../agents/harness.md#the-layout-ir).
 
 ### The identity pin
 

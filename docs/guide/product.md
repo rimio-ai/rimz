@@ -104,7 +104,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
-Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktrees.md](../internals/agents/worktrees.md)).
+Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([harness.md](../internals/agents/harness.md#cleanup)).
 
 ## Many repos, one room
 
@@ -133,7 +133,7 @@ For orchestration:
 - `rimz steer @<agent> -- "continue"` is the first-class nudge for wrapper scripts.
 - `rimz pane send` / `rimz pane capture` remain the universal pane fallback.
 
-Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#agents); the run record and completion mechanics live in [run.md](../internals/agents/run.md).
+Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#agents); the run record and completion mechanics live in [harness.md](../internals/agents/harness.md#supervised-runs).
 
 Scripts join the feed directly too. A deploy pipeline that pauses at a staging-to-prod gate calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"`, and the question lands in the sidebar with answer buttons alongside everything the agents are doing; you or a resolver answers it from anywhere, and the script owns the question end to end. `rimz event emit` announces milestones to the same column. It is the same primitives an agent integration uses, reached from a shell script, so anything an agent can surface, a script can too.
 
