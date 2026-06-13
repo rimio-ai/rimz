@@ -64,7 +64,7 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
     )?;
     let worktree_name = launch.worktree_name.clone();
     let cwd = launch.cwd;
-    let title = rimz::agents_spec::default_tab_title(&layout, &cwd);
+    let title = rimz::agents_spec::default_tab_title(&layout, &cwd, worktree_name.as_deref());
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,

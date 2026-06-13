@@ -14,6 +14,8 @@ use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
+/// Prefix marking a launch tab whose panes run in a Rimz-owned worktree.
+const WORKTREE_TAB_PREFIX: &str = "⑂ ";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
 const RESERVED_ALIAS_AND_LAYOUT_NAMES: &[&str] = &[
@@ -169,9 +171,12 @@ pub fn resolve_layout(
     })
 }
 
-pub fn default_tab_title(spec: &LayoutSpec, worktree: &Path) -> String {
+pub fn default_tab_title(spec: &LayoutSpec, cwd: &Path, worktree_name: Option<&str>) -> String {
+    if let Some(name) = worktree_name.filter(|name| !name.is_empty()) {
+        return format!("{WORKTREE_TAB_PREFIX}{name}");
+    }
     let kind = spec.first_agent_kind().unwrap_or("term");
-    crate::resume::build_label(kind, None, worktree)
+    crate::resume::build_label(kind, None, cwd)
 }
 
 pub fn is_known_layout_token(raw: &str, aliases: &AliasesConfig, layouts: &LayoutsConfig) -> bool {
@@ -912,14 +917,24 @@ mod tests {
 
     #[test]
     fn title_uses_first_agent_or_terminal_and_worktree_name() {
+        // No worktree → kind-prefixed, so multiple agent tabs in one room stay distinct.
         let agent = parse_layout_spec("term,codex", &AliasesConfig::default()).expect("parse");
         assert_eq!(
-            default_tab_title(&agent, Path::new("/code/query-engine")),
+            default_tab_title(&agent, Path::new("/code/query-engine"), None),
             "codex:query-engine"
         );
         assert_eq!(
-            default_tab_title(&LayoutSpec::single(Cell::shell()), Path::new("/code/main")),
+            default_tab_title(
+                &LayoutSpec::single(Cell::shell()),
+                Path::new("/code/main"),
+                None
+            ),
             "term:main"
+        );
+        // Worktree launch → worktree name behind the worktree glyph, no kind prefix.
+        assert_eq!(
+            default_tab_title(&agent, Path::new("/code/wt/tab-name"), Some("tab-name")),
+            "⑂ tab-name"
         );
     }
 }
