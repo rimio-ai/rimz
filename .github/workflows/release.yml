@@ -1,10 +1,18 @@
 name: Release
 
+# Release is downstream of CI. The rolling `latest-main` build publishes only
+# after the CI workflow finishes successfully on the default branch, so a red
+# commit never reaches the release page. `workflow_run` (Gitea >= 1.25) lets the
+# release key off CI's result instead of re-running the gate, so CI runs once
+# per commit. Version tags cut their own gated release on demand.
 on:
   workflow_dispatch:
   push:
-    branches: [main, master, ci-release]
     tags: ["v*"]
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main, master]
 
 permissions:
   code: write
@@ -19,11 +27,20 @@ env:
   ZIG_X86_64_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
 
 jobs:
-  dist:
+  release:
     name: build and publish dist archives
     runs-on: [linux_amd64, debian-13]
+    timeout-minutes: 30
+    # A `workflow_run` fires for every CI conclusion; gate on success so only a
+    # green default-branch build publishes. Tag pushes and manual dispatches run
+    # the gate themselves (the `cargo xtask ci` step below) before publishing.
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # Build the exact commit CI validated; for tags/dispatch this is the
+          # event's own ref.
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
 
       - name: Install Rust toolchain (from rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@stable
@@ -74,6 +91,30 @@ jobs:
           restore-keys: |
             ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
+      # The CI gate compiles and tests through `cargo xtask ci`, which needs the
+      # full plugin set. The `workflow_run` path skips the gate (CI already
+      # passed), so it skips these too — it only builds dist artifacts.
+      - name: Install CI gate plugins
+        if: ${{ github.event_name != 'workflow_run' }}
+        env:
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
+        run: |
+          set -euo pipefail
+          install_action_dir="$(mktemp -d)"
+          trap 'rm -rf "$install_action_dir"' EXIT
+          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
+          env \
+            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
+            DEFAULT_GITHUB_TOKEN= \
+            GH_TOKEN= \
+            GITHUB_ACTION_PATH="$install_action_dir" \
+            GITHUB_TOKEN= \
+            INPUT_CHECKSUM=true \
+            INPUT_FALLBACK=cargo-binstall \
+            RUNNER_ARCH=X64 \
+            RUNNER_OS=Linux \
+            bash --noprofile --norc "$install_action_dir/main.sh"
+
       - name: Install release packaging tools
         env:
           INPUT_TOOL: cargo-zigbuild
@@ -106,51 +147,60 @@ jobs:
           "$zig_dir/zig" version
           cargo zigbuild --help >/dev/null
 
+      # Self-gate: tag and manual-dispatch releases re-run the full gate on the
+      # release commit. The `workflow_run` path already passed CI, so it skips.
+      - name: Gate on CI
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: cargo xtask ci
+
       - name: Build distribution archives
         run: cargo xtask dist
 
-      - name: Prepare release metadata
+      - name: Resolve release identity
         shell: bash
+        env:
+          WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            # The push trigger is tags-only, so this is a `v*` version tag.
             release_tag="${GITHUB_REF_NAME}"
             release_title="Rimz ${GITHUB_REF_NAME}"
             release_prerelease=false
-            release_body="Automated release for ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
-          elif [ "${GITHUB_REF_NAME}" = "main" ] || [ "${GITHUB_REF_NAME}" = "master" ]; then
-            release_tag=nightly
-            release_title="Rimz nightly"
-            release_prerelease=true
-            release_body="Automated nightly build from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+            release_rolling=false
+            release_commit="${GITHUB_SHA}"
+            release_body="Release ${GITHUB_REF_NAME} at ${release_commit}."
           else
-            release_tag="nightly-${GITHUB_REF_NAME//\//-}"
-            release_title="Rimz nightly (${GITHUB_REF_NAME})"
+            # workflow_run (CI green on the default branch) or manual dispatch:
+            # the rolling build published under a moving `latest-main` tag.
+            release_tag="latest-main"
+            release_title="Rimz (latest main)"
             release_prerelease=true
-            release_body="Automated branch test build from ${GITHUB_REF_NAME} at ${GITHUB_SHA}."
+            release_rolling=true
+            release_commit="${WORKFLOW_RUN_HEAD_SHA:-$GITHUB_SHA}"
+            release_body="Rolling build from the default branch at ${release_commit}."
           fi
 
           {
             echo "RELEASE_TAG=${release_tag}"
             echo "RELEASE_TITLE=${release_title}"
             echo "RELEASE_PRERELEASE=${release_prerelease}"
+            echo "RELEASE_ROLLING=${release_rolling}"
+            echo "RELEASE_COMMIT=${release_commit}"
             echo "RELEASE_BODY<<RIMZ_RELEASE_BODY"
             printf '%s\n' "${release_body}"
             echo "RIMZ_RELEASE_BODY"
           } >> "$GITHUB_ENV"
 
       - name: Move rolling release tag
+        if: ${{ env.RELEASE_ROLLING == 'true' }}
         env:
           TOKEN: ${{ secrets.GITEA_TOKEN }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF_TYPE}" != "branch" ]; then
-            exit 0
-          fi
-
           git config user.name "gitea-actions"
           git config user.email "gitea-actions@localhost"
-          git tag -f "$RELEASE_TAG" "$GITHUB_SHA"
+          git tag -f "$RELEASE_TAG" "$RELEASE_COMMIT"
           git -c "http.extraheader=Authorization: token ${TOKEN}" \
             push origin "refs/tags/${RELEASE_TAG}" --force
 
@@ -197,7 +247,7 @@ jobs:
 
           print(json.dumps({
               "tag_name": os.environ["RELEASE_TAG"],
-              "target_commitish": os.environ["GITHUB_SHA"],
+              "target_commitish": os.environ["RELEASE_COMMIT"],
               "name": os.environ["RELEASE_TITLE"],
               "body": os.environ["RELEASE_BODY"],
               "draft": False,
