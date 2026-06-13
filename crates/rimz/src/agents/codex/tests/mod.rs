@@ -67,6 +67,28 @@ fn codex_commands_and_permission_args_match_run_posture() {
 }
 
 #[test]
+fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() {
+    let argv = CodexAdapter
+        .render_preset(&crate::agents::LaunchPreset {
+            model: Some("gpt-5-codex".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+        })
+        .expect("codex renders model, effort, and instructions file via -c overrides");
+    assert_eq!(
+        argv,
+        vec![
+            "--model",
+            "gpt-5-codex",
+            "-c",
+            "model_reasoning_effort=high",
+            "-c",
+            "model_instructions_file=/abs/prompt.md",
+        ]
+    );
+}
+
+#[test]
 fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
     // Codex's instances can be present before a session binds (lazy
     // `SessionStart`, daemon-routed unstamped hooks), so it opts into the

@@ -272,6 +272,7 @@ fn expand_alias(name: &str, alias: &Alias) -> Result<Cell> {
                 .render_preset(&crate::agents::LaunchPreset {
                     model: model.clone(),
                     effort: effort.clone(),
+                    system_prompt_file: None,
                 })
                 .map_err(|err| LayoutErr::InvalidAlias {
                     alias: name.to_owned(),

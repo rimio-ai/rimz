@@ -80,6 +80,127 @@ fn agents_print_cluster_accepts_json_with_print_flag() {
 }
 
 #[test]
+fn print_output_and_input_formats_parse_and_require_print() {
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "-p",
+        "--output-format",
+        "stream-json",
+    ])
+    .expect("parse output-format");
+    assert_eq!(parsed.args.output_format, Some(OutputFormat::StreamJson));
+
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "claude", "-p", "--input-format", "stream-json"])
+            .expect("parse input-format");
+    assert_eq!(parsed.args.input_format, Some(InputFormat::StreamJson));
+
+    // The removed boolean is gone, and the format flags need `--print`.
+    assert!(AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--stream"]).is_err());
+    assert!(
+        AgentsHarness::try_parse_from(["rimz", "claude", "hi", "--output-format", "json"]).is_err()
+    );
+}
+
+#[test]
+fn effort_and_system_prompt_file_parse_and_require_spec() {
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--effort",
+        "high",
+        "--system-prompt-file",
+        "/abs/prompt.md",
+    ])
+    .expect("parse shared launch params");
+    assert_eq!(parsed.args.effort.as_deref(), Some("high"));
+    assert_eq!(
+        parsed.args.system_prompt_file.as_deref(),
+        Some(Path::new("/abs/prompt.md"))
+    );
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "--effort", "high"])
+        .expect("parse effort without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject effort");
+    assert!(
+        err.to_string().contains("require an agent layout spec"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn system_prompt_file_resolves_a_file_and_rejects_a_directory() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("prompt.md");
+    std::fs::write(&file, "be concise").expect("write prompt");
+
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--system-prompt-file",
+        file.to_str().expect("utf8 file path"),
+    ])
+    .expect("parse system-prompt-file");
+    let preset = launch_override_preset(&parsed.args).expect("resolve prompt file");
+    assert_eq!(
+        preset.system_prompt_file.as_deref(),
+        Some(file.canonicalize().expect("canonicalize file").as_path())
+    );
+
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--system-prompt-file",
+        dir.path().to_str().expect("utf8 dir path"),
+    ])
+    .expect("parse system-prompt-file dir");
+    let err = launch_override_preset(&parsed.args).expect_err("reject a directory");
+    assert!(err.to_string().contains("is not a regular file"), "{err:#}");
+}
+
+#[test]
+fn preset_renders_effort_per_adapter_and_fails_fast_for_pi() {
+    let preset = rimz::agents::LaunchPreset {
+        effort: Some("high".to_owned()),
+        ..Default::default()
+    };
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("claude effort");
+    let [column] = layout.columns.as_slice() else {
+        panic!("single column");
+    };
+    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
+        panic!("single agent cell");
+    };
+    assert_eq!(args, &["--effort", "high"]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("codex effort");
+    let [column] = layout.columns.as_slice() else {
+        panic!("single column");
+    };
+    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
+        panic!("single agent cell");
+    };
+    assert_eq!(args, &["-c", "model_reasoning_effort=high"]);
+
+    // Pi has no effort flag: the launch refuses at the unsupported cell.
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("pi")));
+    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
+        .expect_err("pi rejects effort");
+    assert!(
+        err.to_string().contains("pi does not support --effort"),
+        "{err:#}"
+    );
+}
+
+#[test]
 fn wait_stream_flags_have_the_run_style_conflict_matrix() {
     assert!(AgentsHarness::try_parse_from(["rimz", "wait", "codex", "--from-start"]).is_err());
     assert!(
@@ -214,8 +335,10 @@ fn interactive_launch_without_mode_keeps_native_agent_permissions() {
         interactive_permission_mode_from_flags(false, false)
             .unwrap()
             .map(LaunchModeApplication::explicit),
+        &rimz::agents::LaunchPreset::default(),
         &[],
-    );
+    )
+    .expect("apply launch options");
 
     let [column] = layout.columns.as_slice() else {
         panic!("single column");
@@ -239,8 +362,10 @@ fn explicit_interactive_mode_applies_even_when_alias_added_args() {
         interactive_permission_mode_from_flags(false, true)
             .unwrap()
             .map(LaunchModeApplication::explicit),
+        &rimz::agents::LaunchPreset::default(),
         &[],
-    );
+    )
+    .expect("apply launch options");
 
     let [column] = layout.columns.as_slice() else {
         panic!("single column");
@@ -270,8 +395,10 @@ fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
         Some(LaunchModeApplication::implicit_default(
             PermissionMode::Auto,
         )),
+        &rimz::agents::LaunchPreset::default(),
         &[],
-    );
+    )
+    .expect("apply launch options");
 
     let [column] = layout.columns.as_slice() else {
         panic!("single column");
@@ -297,8 +424,10 @@ fn explicit_mode_skips_cells_with_virtual_or_alias_mode() {
     apply_launch_mode_and_passthrough(
         &mut layout,
         Some(LaunchModeApplication::explicit(PermissionMode::Yolo)),
+        &rimz::agents::LaunchPreset::default(),
         &[],
-    );
+    )
+    .expect("apply launch options");
 
     let [column] = layout.columns.as_slice() else {
         panic!("single column");

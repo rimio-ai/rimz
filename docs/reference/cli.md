@@ -79,11 +79,13 @@ rimz agents show <ref> [--json]
 rimz agents focus <ref>
 rimz agents wait <ref> [--timeout <duration>] [--stream [--from-start]] [--json]
 rimz agents stop <ref>
-rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--name <name>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [-- passthrough...]
-rimz agents <spec> [prompt] -p|--print [--timeout <duration>] [--detach] [--stream] [--json] [--keep]
+rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--name <name>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [--system-prompt-file <path>] [--effort <level>] [-- passthrough...]
+rimz agents <spec> [prompt] -p|--print [--system-prompt-file <path>] [--effort <level>] [--timeout <duration>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 ```
 
 `rimz agents` lists live agent cards by default. A launch spec is the layout grammar from `[agents.layouts]` and `[agents.aliases]`: commas split columns, plus signs stack rows, and cells are `term`, agent kinds, virtual `<kind>-<mode>` cells such as `codex-yolo`, or configured aliases. `-p` launches one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with `0` for success, `1` for failure, `124` for timeout, and `130` for cancellation. Hooks are the completion signal, so the selected agent's Rimz hooks must be installed and trusted.
+
+`--system-prompt-file` and `--effort` are shared launch params that each adapter renders into its native flags, so one flag works across providers; `--output-format` and `--input-format` shape how `-p` prints the run and reads the prompt. Both are detailed in [agents.md](./cli/agents.md).
 
 Use `steer` for immediate text into a live agent pane, and `queue` for durable delivery after the agent reaches a safe gate.
 

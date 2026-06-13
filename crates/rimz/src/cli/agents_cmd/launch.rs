@@ -26,8 +26,9 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
         &mut layout,
         interactive_permission_mode_from_flags(args.ask, args.yolo)?
             .map(LaunchModeApplication::explicit),
+        &launch_override_preset(&args)?,
         &args.passthrough,
-    );
+    )?;
     for kind in layout.agent_kinds() {
         agent_launch_env(&workspace.project_root, kind)?;
     }
@@ -317,10 +318,44 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.ask
         || args.yolo
         || args.print
+        || args.effort.is_some()
+        || args.system_prompt_file.is_some()
     {
         bail!("agent launch options require an agent layout spec");
     }
     Ok(())
+}
+
+/// Build the launch-override preset from the shared `--effort` /
+/// `--system-prompt-file` flags. The prompt file is resolved to an absolute
+/// path and required to exist — a missing file fails here, at the entry point,
+/// rather than downstream in the agent.
+pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::LaunchPreset> {
+    let system_prompt_file = match args.system_prompt_file.as_deref() {
+        Some(path) => {
+            let resolved = path
+                .canonicalize()
+                .with_context(|| format!("reading --system-prompt-file `{}`", path.display()))?;
+            if !resolved.is_file() {
+                bail!(
+                    "--system-prompt-file `{}` is not a regular file",
+                    path.display()
+                );
+            }
+            Some(resolved)
+        }
+        None => None,
+    };
+    Ok(rimz::agents::LaunchPreset {
+        model: None,
+        effort: args
+            .effort
+            .as_deref()
+            .map(str::trim)
+            .filter(|effort| !effort.is_empty())
+            .map(ToOwned::to_owned),
+        system_prompt_file,
+    })
 }
 
 pub(super) fn reject_prompt_that_looks_like_spec(
@@ -346,8 +381,9 @@ pub(super) fn reject_prompt_that_looks_like_spec(
 pub(super) fn apply_launch_mode_and_passthrough(
     layout: &mut LayoutSpec,
     mode: Option<LaunchModeApplication>,
+    preset: &rimz::agents::LaunchPreset,
     passthrough: &[String],
-) {
+) -> Result<()> {
     for column in &mut layout.columns {
         for cell in &mut column.rows {
             let Cell::Agent {
@@ -358,14 +394,30 @@ pub(super) fn apply_launch_mode_and_passthrough(
             else {
                 continue;
             };
+            let adapter = rimz::agents::find_adapter(kind);
             if let Some(application) = mode
                 && application.applies_to(*cell_mode)
-                && let Some(adapter) = rimz::agents::find_adapter(kind)
+                && let Some(adapter) = adapter
             {
                 args.extend(adapter.permission_args(application.mode));
                 *cell_mode = Some(application.mode);
             }
+            if !preset.is_empty() {
+                let adapter = adapter
+                    .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", kind.as_str()))?;
+                args.extend(adapter.render_preset(preset).map_err(launch_option_error)?);
+            }
             args.extend(passthrough.iter().cloned());
+        }
+    }
+    Ok(())
+}
+
+/// Map an unsupported-preset failure onto a CLI-shaped message naming the flag.
+fn launch_option_error(err: rimz::agents::PresetErr) -> anyhow::Error {
+    match err {
+        rimz::agents::PresetErr::UnsupportedField { agent, field } => {
+            anyhow::anyhow!("{agent} does not support --{field}")
         }
     }
 }

@@ -393,14 +393,15 @@ fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> 
 }
 
 pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
-    let prompt = args
-        .prompt
-        .clone()
-        .filter(|prompt| !prompt.trim().is_empty())
-        .ok_or_else(|| anyhow::anyhow!("expected a prompt for `rimz agents <spec> -p`"))?;
-    if args.detach && args.json {
-        bail!("--json cannot be combined with --detach");
+    if args.json {
+        bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
     }
+    let output_format = args.output_format.unwrap_or_default();
+    let input_format = args.input_format.unwrap_or_default();
+    if args.detach && output_format == OutputFormat::StreamJson {
+        bail!("--output-format stream-json cannot be combined with --detach");
+    }
+    let prompt = resolve_print_prompt(&args, input_format)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config()?;
     let mut layout = rimz::agents_spec::resolve_layout(
@@ -415,7 +416,12 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config.agents.layouts,
     )?;
     let mode_application = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
-    apply_launch_mode_and_passthrough(&mut layout, Some(mode_application), &args.passthrough);
+    apply_launch_mode_and_passthrough(
+        &mut layout,
+        Some(mode_application),
+        &launch_override_preset(&args)?,
+        &args.passthrough,
+    )?;
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");
@@ -564,7 +570,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         workspace_id: workspace.workspace_id.clone(),
         run_id: run_id.clone(),
     };
-    let record = if args.stream {
+    let record = if output_format == OutputFormat::StreamJson {
         supervised::stream::stream_blocking_run(
             sock,
             expected,
@@ -585,13 +591,39 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             &record,
         );
     }
-    if args.json {
-        supervised::output::print_json(&record)?;
-    } else if !args.stream {
-        supervised::output::print_run_output(&record)?;
+    match output_format {
+        OutputFormat::Text => supervised::output::print_run_output(&record)?,
+        OutputFormat::Json => supervised::output::print_json(&record)?,
+        // stream-json already emitted its events as the run progressed.
+        OutputFormat::StreamJson => {}
     }
     drop(socket_guard);
     std::process::exit(record.status.exit_code());
+}
+
+/// Resolve the supervised prompt from the positional argument or, for
+/// `--input-format stream-json`, from stream-json user messages on stdin.
+fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
+    match input_format {
+        InputFormat::Text => args
+            .prompt
+            .clone()
+            .filter(|prompt| !prompt.trim().is_empty())
+            .ok_or_else(|| anyhow::anyhow!("expected a prompt for `rimz agents <spec> -p`")),
+        InputFormat::StreamJson => {
+            if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
+                bail!(
+                    "--input-format stream-json reads the prompt from stdin; drop the positional PROMPT"
+                );
+            }
+            let prompt = supervised::read_stream_json_prompt(std::io::stdin().lock())
+                .context("reading stream-json prompt from stdin")?;
+            if prompt.trim().is_empty() {
+                bail!("--input-format stream-json received no user message text on stdin");
+            }
+            Ok(prompt)
+        }
+    }
 }
 
 fn wait_run_record(

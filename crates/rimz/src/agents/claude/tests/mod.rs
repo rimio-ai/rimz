@@ -57,3 +57,33 @@ fn claude_commands_and_permission_args_match_run_posture() {
         vec!["--dangerously-skip-permissions"]
     );
 }
+
+#[test]
+fn claude_render_preset_maps_model_effort_and_system_prompt_file() {
+    let argv = ClaudeAdapter
+        .render_preset(&crate::agents::LaunchPreset {
+            model: Some("opus".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+        })
+        .expect("claude renders model, effort, and system-prompt-file natively");
+    assert_eq!(
+        argv,
+        vec![
+            "--model",
+            "opus",
+            "--effort",
+            "high",
+            "--system-prompt-file",
+            "/abs/prompt.md",
+        ]
+    );
+
+    // Empty preset renders nothing.
+    assert!(
+        ClaudeAdapter
+            .render_preset(&crate::agents::LaunchPreset::default())
+            .expect("empty preset is valid")
+            .is_empty()
+    );
+}

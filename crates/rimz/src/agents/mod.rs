@@ -109,12 +109,16 @@ pub type Result<T> = std::result::Result<T, AgentErr>;
 pub struct LaunchPreset {
     pub model: Option<String>,
     pub effort: Option<String>,
+    /// Absolute path to a file whose contents replace the agent's base system
+    /// prompt. Resolved and existence-checked by the launcher before render.
+    pub system_prompt_file: Option<PathBuf>,
 }
 
 impl LaunchPreset {
     pub fn is_empty(&self) -> bool {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
+            && self.system_prompt_file.is_none()
     }
 }
 
@@ -603,6 +607,12 @@ pub trait AgentAdapter: Send + Sync {
             return Err(PresetErr::UnsupportedField {
                 agent: self.descriptor().kind,
                 field: "effort",
+            });
+        }
+        if preset.system_prompt_file.is_some() {
+            return Err(PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "system-prompt-file",
             });
         }
         Ok(Vec::new())

@@ -79,7 +79,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
-        Some(Subcmd::Agents(args)) => agents_cmd::run(args, &globals),
+        Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
@@ -331,7 +331,7 @@ enum Subcmd {
     /// Create, list, and remove Rimz-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
-    Agents(agents_cmd::AgentsArgs),
+    Agents(Box<agents_cmd::AgentsArgs>),
     /// Reload running sidebars in place (pick up a freshly-installed build).
     Reload(reload::ReloadArgs),
     /// Force a clean rebirth of this workspace's room, destroying a stuck or

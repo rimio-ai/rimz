@@ -161,5 +161,43 @@ pub(super) fn parse_timeout(raw: &str) -> std::result::Result<Duration, String> 
     crate::cli::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
 }
 
+/// Extract the prompt from stream-json user messages on stdin. Each non-empty
+/// line is one JSON object; `{"type":"user"}` envelopes contribute their
+/// `message.content` text (a bare string, or the `text` of each text block),
+/// joined with newlines. This is the standard headless stream-json input
+/// schema, so the parser is provider-agnostic.
+pub(super) fn read_stream_json_prompt<R: std::io::BufRead>(reader: R) -> Result<String> {
+    let mut parts: Vec<String> = Vec::new();
+    for line in reader.lines() {
+        let line = line.context("reading stdin")?;
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(trimmed)
+            .with_context(|| format!("parsing stream-json line `{trimmed}`"))?;
+        if value.get("type").and_then(serde_json::Value::as_str) != Some("user") {
+            continue;
+        }
+        match value
+            .get("message")
+            .and_then(|message| message.get("content"))
+        {
+            Some(serde_json::Value::String(text)) => parts.push(text.clone()),
+            Some(serde_json::Value::Array(blocks)) => {
+                for block in blocks {
+                    if block.get("type").and_then(serde_json::Value::as_str) == Some("text")
+                        && let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+                    {
+                        parts.push(text.to_owned());
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(parts.join("\n"))
+}
+
 #[cfg(test)]
 mod tests;

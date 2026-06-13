@@ -65,6 +65,38 @@ fn pi_descriptor_declares_capabilities_and_activity_events() {
 }
 
 #[test]
+fn pi_render_preset_rejects_unsupported_launch_fields() {
+    use crate::agents::{LaunchPreset, PresetErr};
+
+    assert_eq!(
+        PiAdapter.render_preset(&LaunchPreset {
+            effort: Some("high".to_owned()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "pi",
+            field: "effort",
+        })
+    );
+    assert_eq!(
+        PiAdapter.render_preset(&LaunchPreset {
+            system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+            ..Default::default()
+        }),
+        Err(PresetErr::UnsupportedField {
+            agent: "pi",
+            field: "system-prompt-file",
+        })
+    );
+    assert!(
+        PiAdapter
+            .render_preset(&LaunchPreset::default())
+            .expect("empty preset is valid")
+            .is_empty()
+    );
+}
+
+#[test]
 fn pi_observes_lifecycle_enrichment_and_error_bits() {
     let started = PiAdapter
         .observe_lifecycle(

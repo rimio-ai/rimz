@@ -17,8 +17,9 @@ rimz agents wait swift-otter --stream --from-start
 rimz agents stop run_0123456789abcdef0123456789abcdef
 rimz agents claude,codex --worktree=cli-docs
 rimz agents 'vim,codex+term' "review the CLI docs"
-rimz agents codex "prepare the release checklist" -p --timeout 30m --json
+rimz agents codex "prepare the release checklist" -p --timeout 30m --output-format json
 rimz agents claude "run the long migration audit" -p --detach
+rimz agents claude "review the diff" -p --effort high --system-prompt-file ./review-prompt.md
 ```
 
 ```sh
@@ -28,8 +29,8 @@ rimz agents show <REF> [--json]
 rimz agents focus <REF>
 rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [-- PASSTHROUGH...]
-rimz agents <SPEC> [PROMPT] -p|--print [--timeout <DURATION>] [--detach] [--stream] [--json] [--keep]
+rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--same-tab|--new-tab] [--no-focus] [--ask|--yolo] [--system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <LEVEL>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 ```
 
 Bare `rimz agents` lists live root-agent cards. `list --all` includes audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records.
@@ -40,11 +41,15 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 
 `PROMPT` is the optional second positional and is broadcast to every agent cell. Interactive launches pass no approval override by default, so each provider keeps its native prompts; `--ask` keeps/returns to native prompts where supported, and `--yolo` passes the adapter's bypass flags. `-- PASSTHROUGH...` appends raw agent argv to every agent cell after alias preset args and any explicit permission args. A second positional that is itself a known cell or layout is rejected with a `rimz agents a,b` hint so the removed space-separated fan-out form does not silently become a prompt.
 
+`--system-prompt-file <PATH>` and `--effort <LEVEL>` are shared launch params broadcast to every agent cell, like `PROMPT`. Each adapter renders them into its native flags: `--system-prompt-file` replaces the agent's base system prompt (Claude `--system-prompt-file <PATH>`; Codex `-c model_instructions_file=<PATH>`), and `--effort` sets reasoning effort (Claude `--effort <LEVEL>`; Codex `-c model_reasoning_effort=<LEVEL>`). The launcher resolves the prompt file to an absolute path and refuses a missing file before launch. Levels are provider-specific — Claude takes `low|medium|high|xhigh|max`, Codex takes `minimal|low|medium|high|xhigh` — and an agent that has no native flag for a param (Pi today) refuses the launch with the offending flag named. A configured alias preset still renders first, so an explicit `--effort` on the command line wins.
+
 `-w`/`--worktree` takes a value as `--worktree=docs` or a space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. A worktree launch names the backend tab `⑂ <NAME>` (the worktree name behind the worktree glyph); launches without a worktree name the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated worktree name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
 
 Placement follows intent. By default (the `auto` policy) a worktree launch or a multi-cell layout opens its own tab, while a single non-worktree agent splits the current view beside the launching pane. `--new-tab` forces a new tab; `--same-tab` forces the split for a single agent cell — including a single worktree launch — run from inside the room, and is rejected for a multi-cell layout. The per-machine `[agents] tab` default sets the policy when neither flag is given, and `tab = "same"` likewise splits a single worktree launch ([configuration.md](../configuration.md#agent-aliases-and-layouts)). `--no-focus` keeps focus on the launching pane in either case.
 
 `-p` launches exactly one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with the run status code: `0` completed, `1` failed, `124` timed out, `130` canceled. `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
+
+`--output-format` selects how `-p` renders the run: `text` (default) prints the final assistant message, `json` prints the full run record, and `stream-json` emits run events as NDJSON while the turn runs. `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT`, while `stream-json` reads user messages from stdin until EOF and refuses a positional `PROMPT`. `stream-json` output cannot combine with `--detach`. (`--json` selects JSON for `list` and bare `agents` card output, not for `-p`.)
 
 `show` prints one card and its newest attached run record when present. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate. `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.
 

@@ -8,6 +8,26 @@ use std::path::PathBuf;
 use tokio::net::UnixDatagram;
 
 #[test]
+fn stream_json_prompt_concatenates_user_message_text() {
+    // String content and text-block content both contribute; non-user
+    // envelopes (assistant, system) are ignored.
+    let input = "\
+{\"type\":\"user\",\"message\":{\"role\":\"user\",\"content\":\"first line\"}}
+{\"type\":\"assistant\",\"message\":{\"content\":\"ignored\"}}
+{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"second line\"},{\"type\":\"image\"}]}}
+";
+    let prompt = read_stream_json_prompt(std::io::Cursor::new(input)).expect("parse stream-json");
+    assert_eq!(prompt, "first line\nsecond line");
+}
+
+#[test]
+fn stream_json_prompt_rejects_malformed_lines() {
+    let err = read_stream_json_prompt(std::io::Cursor::new("not json\n"))
+        .expect_err("malformed stream-json line fails");
+    assert!(err.to_string().contains("stream-json line"), "{err:#}");
+}
+
+#[test]
 fn terminal_run_is_not_sendable() {
     let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
     let mut record = RunRecord::new(

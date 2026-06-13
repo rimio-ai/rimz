@@ -307,15 +307,14 @@ impl AgentAdapter for ClaudeAdapter {
         if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
             argv.extend(["--model".to_owned(), model.to_owned()]);
         }
-        if preset
-            .effort
-            .as_deref()
-            .is_some_and(|effort| !effort.is_empty())
-        {
-            return Err(super::PresetErr::UnsupportedField {
-                agent: self.descriptor().kind,
-                field: "effort",
-            });
+        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
+            argv.extend(["--effort".to_owned(), effort.to_owned()]);
+        }
+        if let Some(path) = preset.system_prompt_file.as_deref() {
+            argv.extend([
+                "--system-prompt-file".to_owned(),
+                path.to_string_lossy().into_owned(),
+            ]);
         }
         Ok(argv)
     }

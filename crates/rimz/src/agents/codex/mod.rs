@@ -283,6 +283,12 @@ impl AgentAdapter for CodexAdapter {
         if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
             argv.extend(["-c".to_owned(), format!("model_reasoning_effort={effort}")]);
         }
+        if let Some(path) = preset.system_prompt_file.as_deref() {
+            argv.extend([
+                "-c".to_owned(),
+                format!("model_instructions_file={}", path.to_string_lossy()),
+            ]);
+        }
         Ok(argv)
     }
 

@@ -14,7 +14,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 
 use super::{GlobalFlags, RoomTarget};
 use rimz::agents::AgentAdapter;
@@ -82,6 +82,12 @@ pub struct AgentsArgs {
     /// Skip provider permission prompts where supported.
     #[arg(long)]
     yolo: bool,
+    /// Replace each agent's base system prompt with a file's contents.
+    #[arg(long, value_name = "PATH")]
+    system_prompt_file: Option<PathBuf>,
+    /// Reasoning effort for the launched agents (provider-specific levels).
+    #[arg(long, value_name = "LEVEL")]
+    effort: Option<String>,
     /// Run one supervised agent prompt and print its final answer.
     #[arg(short = 'p', long = "print")]
     print: bool,
@@ -94,15 +100,42 @@ pub struct AgentsArgs {
     /// Launch the supervised run and print its agent name.
     #[arg(long, requires = "print")]
     detach: bool,
-    /// Print JSON output for list or supervised print runs.
+    /// Print JSON for `list` and bare `agents` card output.
     #[arg(long)]
     json: bool,
-    /// Stream supervised run progress as NDJSON.
-    #[arg(long, requires = "print", conflicts_with_all = ["detach", "json"])]
-    stream: bool,
+    /// How `--print` renders the supervised run (text, json, stream-json).
+    #[arg(long, value_name = "FORMAT", requires = "print")]
+    output_format: Option<OutputFormat>,
+    /// How `--print` reads the prompt (text positional, or stream-json on stdin).
+    #[arg(long, value_name = "FORMAT", requires = "print")]
+    input_format: Option<InputFormat>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
+}
+
+/// Output projection for a supervised `--print` run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(super) enum OutputFormat {
+    /// The final assistant message as plain text.
+    #[default]
+    Text,
+    /// The full run record as pretty JSON.
+    Json,
+    /// Newline-delimited JSON run events (NDJSON).
+    StreamJson,
+}
+
+/// Prompt source for a supervised `--print` run.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+#[value(rename_all = "kebab-case")]
+pub(super) enum InputFormat {
+    /// The positional `PROMPT` argument.
+    #[default]
+    Text,
+    /// Stream-json user messages read from stdin until EOF.
+    StreamJson,
 }
 
 #[derive(Debug, Subcommand)]
@@ -203,7 +236,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     }
     if args.json {
         bail!(
-            "--json is only supported with `rimz agents`, `rimz agents list`, and `rimz agents -p`"
+            "--json is only supported with `rimz agents` and `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
     launch_layout(args, globals)

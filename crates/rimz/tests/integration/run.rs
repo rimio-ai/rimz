@@ -129,6 +129,51 @@ fn run_rejects_invalid_agent_env_before_recording() {
 }
 
 #[test]
+fn print_json_flag_points_at_output_format() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args(["agents", "codex", "summarize", "-p", "--json"])
+        .output()
+        .expect("spawn agents print json");
+    assert!(
+        !out.status.success(),
+        "`-p --json` should be rejected in favor of --output-format"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("--output-format json"),
+        "stderr should redirect to --output-format\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn print_stream_json_input_refuses_a_positional_prompt() {
+    let env = Env::new();
+    let out = env
+        .rimz()
+        .args([
+            "agents",
+            "codex",
+            "summarize",
+            "-p",
+            "--input-format",
+            "stream-json",
+        ])
+        .output()
+        .expect("spawn agents print stream-json input");
+    assert!(
+        !out.status.success(),
+        "stream-json input plus a positional prompt should be rejected"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains("drop the positional PROMPT"),
+        "stderr should name the conflict\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
 fn run_stop_marks_canceled_and_wakes_waiter() {
     let env = Env::new();
     if env.skip_if_sandboxed() {
@@ -283,8 +328,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let runtime = env.runtime_paths();
     runtime.ensure_dirs().expect("runtime dirs");
     // A fresh `observed_at`: `read_all` ages out a sidecar past its TTL.
-    let mut context =
-        rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
     context.tokens = Some(rimz::agents::AgentTokenUsage {
         context_window_size: Some(1_000_000),
         used_percentage: Some(30),
@@ -318,8 +362,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         "show --json folds the rich context window: {parsed}"
     );
     assert_eq!(
-        parsed["agent"]["context"]["tokens"]["current_usage"]["cache_read_input_tokens"],
-        300_000,
+        parsed["agent"]["context"]["tokens"]["current_usage"]["cache_read_input_tokens"], 300_000,
         "folded usage reaches the payload: {parsed}"
     );
 
