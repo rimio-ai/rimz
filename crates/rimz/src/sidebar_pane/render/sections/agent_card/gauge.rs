@@ -72,7 +72,7 @@ pub(super) fn bar_row(
 /// The context meter — the resting card's one bar. `ctx` on the left, the
 /// **percent used** on the right (always — the window *size* moves to the
 /// expanded token line), the bar between. The fill amount and its calm-blue →
-/// yellow → amber → red severity ([`row_severity`], bands from
+/// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
 /// `[sidebar.context]`) come from the used percentage and the absolute tokens;
 /// when the statusline reports the per-message token breakdown a *calm* fill is
 /// split into colored segments (cache reads / cache writes / fresh input) that
@@ -90,7 +90,7 @@ pub(super) fn gauge_line(
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
     let severity = row_severity(row, bands);
-    let color = severity_color(theme, severity);
+    let color = row_severity_color(theme, row, bands, severity);
     // The severity decides composition-vs-solid: the segments (where the window
     // went) paint only while the meter rests calm; once it warms the bar goes
     // solid severity.
@@ -130,6 +130,21 @@ pub(super) fn row_severity(row: &SidebarRow, bands: &ContextSeverityConfig) -> C
                 bands,
             )
         })
+}
+
+fn row_severity_color(
+    theme: &Theme,
+    row: &SidebarRow,
+    bands: &ContextSeverityConfig,
+    severity: ContextSeverity,
+) -> Color {
+    severity_heat_color(
+        theme,
+        severity,
+        gauge_percent(row).unwrap_or(0),
+        row.context_used_tokens(),
+        bands,
+    )
 }
 
 /// A precise context-used fraction (0..=100) from the current-message token
@@ -227,10 +242,10 @@ pub(super) fn context_tokens_line(
             )]
         })
         .unwrap_or_default();
-    // The `▤` head mirrors the bar's severity — the same stamped verdict — so
-    // the absolute figure and the meter above it read at one urgency. A row
-    // with no gauge percent folds to 0 and lets the token overlay alone speak.
-    let severity = severity_color(theme, row_severity(row, bands));
+    // The `▤` head mirrors the bar's row-specific severity tone, so the absolute
+    // figure and the meter above it read at one urgency. A row with no gauge
+    // percent folds to 0 and lets the token overlay alone speak.
+    let severity = row_severity_color(theme, row, bands, row_severity(row, bands));
     let mut left = vec![Span::raw("  ")];
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())

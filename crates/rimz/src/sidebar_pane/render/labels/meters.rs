@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::ContextSeverityConfig;
 use jiff::SignedDuration;
 
 /// Token-composition glyphs for the `◇ ↘ ↗ ◌` fleet breakdown: a diamond for
@@ -208,23 +209,82 @@ fn two_tone_bar(
     spans
 }
 
-/// The context meter's **severity** tone — one calm-blue → yellow → amber →
-/// red ramp shared by the bar, the `▣` glyph, and the `▤` context-line head,
-/// so every context read on the card speaks one urgency. Calm reads **blue**
-/// ("cold — plenty of headroom"), keeping the meter clear of the green running
-/// vocabulary and of the composition segments. The *tier* is the domain's
-/// verdict ([`ContextSeverity`], classified on the producer and stamped on the
-/// row); the renderer only maps it to a tone here.
-pub(in crate::sidebar_pane::render) fn severity_color(
+/// The context meter's continuous tone for a concrete row. Calm reads blue;
+/// warm rows use the same OKLab warn → caution → alarm heat ramp as
+/// age/attention. Severity remains the domain verdict, while the renderer uses
+/// the row's position inside the configured bands to choose the heat amount,
+/// taking the worse of percent and token axes just like
+/// [`ContextSeverity::classify`]. A missing or stale axis falls back to the tier
+/// anchor so the color never understates a stamped severity.
+pub(in crate::sidebar_pane::render) fn severity_heat_color(
     theme: &Theme,
     severity: ContextSeverity,
+    percent: u8,
+    used_tokens: Option<u64>,
+    bands: &ContextSeverityConfig,
 ) -> Color {
-    match severity {
-        ContextSeverity::Calm => Color::Blue,
-        ContextSeverity::Yellow => Color::Yellow,
-        ContextSeverity::Amber => theme.clay(),
-        ContextSeverity::Red => Color::Red,
+    if severity == ContextSeverity::Calm {
+        return Color::Blue;
     }
+    let anchor = severity_heat_anchor(severity);
+    let amount = context_heat_amount(percent, used_tokens, bands)
+        .map_or(anchor, |amount| amount.max(anchor));
+    theme.heat_tone(amount)
+}
+
+fn severity_heat_anchor(severity: ContextSeverity) -> f32 {
+    match severity {
+        ContextSeverity::Calm | ContextSeverity::Yellow => 0.0,
+        ContextSeverity::Amber => 0.5,
+        ContextSeverity::Red => 1.0,
+    }
+}
+
+fn context_heat_amount(
+    percent: u8,
+    used_tokens: Option<u64>,
+    bands: &ContextSeverityConfig,
+) -> Option<f32> {
+    let pct_amount = axis_heat_amount(
+        u64::from(percent.min(100)),
+        u64::from(bands.yellow.percent),
+        u64::from(bands.amber.percent),
+        u64::from(bands.red.percent),
+    );
+    let token_amount = used_tokens.and_then(|tokens| {
+        axis_heat_amount(
+            tokens,
+            bands.yellow.tokens,
+            bands.amber.tokens,
+            bands.red.tokens,
+        )
+    });
+    match (pct_amount, token_amount) {
+        (Some(percent), Some(tokens)) => Some(percent.max(tokens)),
+        (Some(percent), None) => Some(percent),
+        (None, Some(tokens)) => Some(tokens),
+        (None, None) => None,
+    }
+}
+
+fn axis_heat_amount(value: u64, yellow: u64, amber: u64, red: u64) -> Option<f32> {
+    if value >= red {
+        Some(1.0)
+    } else if value >= amber {
+        Some(interpolate_heat(value, amber, red, 0.5, 1.0))
+    } else if value >= yellow {
+        Some(interpolate_heat(value, yellow, amber, 0.0, 0.5))
+    } else {
+        None
+    }
+}
+
+fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f32 {
+    if end <= start {
+        return high;
+    }
+    let position = (value - start) as f32 / (end - start) as f32;
+    low + (high - low) * position.clamp(0.0, 1.0)
 }
 
 /// The window token's tone: subordinate chrome — a capability label, not a

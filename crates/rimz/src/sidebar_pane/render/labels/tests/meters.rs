@@ -23,13 +23,58 @@ fn branch_delta_omits_zero_components() {
 #[test]
 fn gauge_bars_map_severity_and_apportion_segments() {
     let theme = Theme::fixed(false);
-    assert_eq!(severity_color(&theme, ContextSeverity::Calm), Color::Blue);
+    let bands = crate::config::ContextSeverityConfig::default();
     assert_eq!(
-        severity_color(&theme, ContextSeverity::Yellow),
-        Color::Yellow
+        severity_heat_color(&theme, ContextSeverity::Calm, 0, None, &bands),
+        Color::Blue
     );
-    assert_eq!(severity_color(&theme, ContextSeverity::Amber), theme.clay());
-    assert_eq!(severity_color(&theme, ContextSeverity::Red), Color::Red);
+    assert_eq!(
+        severity_heat_color(&theme, ContextSeverity::Yellow, 60, None, &bands),
+        theme.heat_tone(0.0)
+    );
+    assert_eq!(
+        severity_heat_color(&theme, ContextSeverity::Amber, 80, None, &bands),
+        theme.heat_tone(0.5)
+    );
+    assert_eq!(
+        severity_heat_color(&theme, ContextSeverity::Red, 95, None, &bands),
+        theme.heat_tone(1.0)
+    );
+
+    let truecolor = Theme::fixed_for_sidebar(
+        false,
+        &crate::config::SidebarConfig {
+            theme: crate::config::SidebarThemeConfig {
+                mode: crate::config::ThemeMode::Truecolor,
+                ..crate::config::SidebarThemeConfig::default()
+            },
+            ..crate::config::SidebarConfig::default()
+        },
+    );
+    for (severity, percent) in [
+        (ContextSeverity::Yellow, 60),
+        (ContextSeverity::Amber, 80),
+        (ContextSeverity::Red, 95),
+    ] {
+        assert!(
+            matches!(
+                severity_heat_color(&truecolor, severity, percent, None, &bands),
+                Color::Rgb(..)
+            ),
+            "{severity:?} should emit an RGB heat-ramp tone in truecolor"
+        );
+    }
+    let mid_yellow = severity_heat_color(&truecolor, ContextSeverity::Yellow, 70, None, &bands);
+    assert_eq!(mid_yellow, truecolor.heat_tone(0.25));
+    assert_ne!(mid_yellow, truecolor.heat_tone(0.0));
+    assert_ne!(mid_yellow, truecolor.heat_tone(0.5));
+    let token_red =
+        severity_heat_color(&truecolor, ContextSeverity::Red, 10, Some(420_000), &bands);
+    assert_eq!(
+        token_red,
+        truecolor.heat_tone(1.0),
+        "the token axis can drive the same heat scale"
+    );
     assert_eq!(apportion([3, 1, 1], 5), vec![3, 1, 1]);
     assert_eq!(apportion([1, 1, 1], 4).iter().sum::<usize>(), 4);
     assert_eq!(apportion([0, 0], 3), vec![0, 0]);
@@ -283,7 +328,7 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     let theme = Theme::fixed(false);
     let spans = context_breakdown_spans(
         &theme,
-        theme.clay(),
+        theme.heat_tone(0.5),
         76_500,
         68_200,
         6_600,

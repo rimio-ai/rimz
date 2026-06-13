@@ -21,7 +21,7 @@ use crate::sidebar_pane::render::labels::{
     agent_glyph, agent_lead_style, agent_role_style_at, compacting_glyph, compacting_head_style,
     context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
     gauge_spans, loading_dots, resolver_glyph, resolver_style, segmented_gauge_spans,
-    severity_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
+    severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
