@@ -103,8 +103,8 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert!(has_reset, "started windows keep their reset countdown");
     assert_eq!(
         label_fg,
-        theme.good(Modifier::empty()).fg,
-        "50% remaining stays in the green bar zone"
+        Some(theme.heat_tone(1.0 / 3.0)),
+        "50% remaining sits on the yellow zone, where the draining bar reaches warn"
     );
     assert_eq!(glyph_fg, label_fg, "the label still mirrors the bar");
     assert_eq!(
@@ -190,8 +190,8 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
     assert_eq!(label_fg, theme.alarm(Modifier::empty()).fg);
     assert_eq!(
         reset_marker_fg(&rows[0]),
-        theme.caution(Modifier::empty()).fg,
-        "spent exactly halfway through the window reads as 2x amber pace"
+        theme.alarm(Modifier::empty()).fg,
+        "spent exactly halfway through the window burns 2x — the red pace stop"
     );
     assert_eq!(reset_time_style(&rows[0]), Some(theme.body()));
 }

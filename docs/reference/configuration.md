@@ -195,9 +195,9 @@ red = 200
 
 The agent card context meter reads its health by the worse of two axes: fill percentage and absolute tokens in the window. It interpolates continuously across the theme's OKLab health scale: below `green` it stays healthy green; at `green` it starts warming toward yellow; at `yellow` it starts warming toward amber; at `amber` it starts warming toward red; at `red` it stays alarm red. A large-window model can still warm by sheer token count even when its percentage looks calm.
 
-The provider dashboard budget zones work in the opposite direction: they bound remaining budget from above. At or above `yellow` the bar stays green; below each threshold it moves through yellow, amber, and red. The template carries the shipped numbers.
+The provider dashboard budget bar slides the same OKLab health scale in the opposite direction: it anchors green at a brimming window, then warms continuously as it drains, reaching warn at `yellow`, amber at `amber`, and alarm red at `red` (staying red below it), with the spans between interpolated. The template carries the shipped numbers.
 
-Budget pace colors only the provider reset marker. `100` is even burn, where the used share matches the elapsed share of that window; thresholds apply above each bound, moving the marker from the countdown's soft tier through yellow, amber, and red while the bar keeps using the remaining-budget zones.
+Budget pace colors only the provider reset marker. `100` is even burn, where the used share matches the elapsed share of that window; a sustainable pace keeps the marker at the soft tier, then past `yellow` it slides the warm tail through amber to red while the bar keeps using the remaining-budget control points.
 
 ### Sidebar Rendering
 

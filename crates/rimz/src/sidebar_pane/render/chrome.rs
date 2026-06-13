@@ -8,7 +8,7 @@ use super::fmt::age_short;
 use super::labels::{status_glyph, thinking_glyph};
 use super::theme::Theme;
 use super::{Alert, GateNotice};
-use crate::remote::link::{LinkBadgeLevel, link_badge_level};
+use crate::remote::link::link_badge_heat;
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
 /// glyph in bold on the left, and — when the project root is known — its
@@ -214,12 +214,18 @@ fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'st
     };
     let style = match link.freshness {
         SidebarLinkFreshness::Stale => theme.muted(),
-        SidebarLinkFreshness::Fresh => match link_badge_level(link.rtt_ms, link.miss_pct) {
-            LinkBadgeLevel::Calm => theme.body(),
-            LinkBadgeLevel::Minor => theme.warn(Modifier::empty()),
-            LinkBadgeLevel::Major => theme.caution(Modifier::empty()),
-            LinkBadgeLevel::Critical => theme.alarm(Modifier::BOLD),
-        },
+        SidebarLinkFreshness::Fresh => {
+            link_badge_heat(link.rtt_ms, link.miss_pct).map_or(theme.body(), |amount| {
+                // A critical link (top of the warm tail) keeps its bold weight so
+                // it stays loud where color is off.
+                let modifier = if amount >= 1.0 {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                };
+                theme.style(theme.warm_heat_tone(amount), modifier)
+            })
+        }
     };
     Span::styled(text, style)
 }

@@ -325,23 +325,24 @@ pub struct ContextBand {
     pub tokens: u64,
 }
 
-/// The provider dashboard's budget color zones. The bar fields name the
-/// exclusive upper bound of *remaining* budget (in percent) where each tier
-/// applies, so the draining bar crosses into the tier as the remaining figure
-/// drops below the bound. At or above `yellow` the bar stays green. The nested
+/// The provider dashboard's budget ramp control points. The draining bar slides
+/// the full health ramp green → gold → amber → red, anchored green at a brimming
+/// window; each field names the *remaining* budget (in percent) at which the bar
+/// reaches that warm stop, with the spans between them interpolated. The nested
 /// pace fields color the reset marker by burn rate against elapsed window time
-/// once pace crosses the yellow threshold. A fully spent window's full-width red
-/// track is a shape rule independent of these zones.
+/// once pace leaves the sustainable floor. A fully spent window's full-width red
+/// track is a shape rule independent of these stops.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetZonesConfig {
-    /// Remaining % below which the bar leaves green for yellow.
+    /// Remaining % at which the draining bar reaches warn (gold); above it the
+    /// bar interpolates from green toward this stop.
     pub yellow: u8,
-    /// Remaining % below which yellow deepens to amber.
+    /// Remaining % at which the bar reaches caution (amber).
     pub amber: u8,
-    /// Remaining % below which the bar goes red.
+    /// Remaining % at which the bar reaches alarm (red), staying red below it.
     pub red: u8,
-    /// Pace thresholds for the reset marker.
+    /// Pace control points for the reset marker.
     pub pace: BudgetPaceConfig,
 }
 
@@ -356,17 +357,19 @@ impl Default for BudgetZonesConfig {
     }
 }
 
-/// `[sidebar.budget.pace]`: reset-marker color bands by burn rate. Values are
-/// percentages of even pace: `100` means budget use matches elapsed window time,
-/// `200` means it is burning twice as fast as the reset can sustain.
+/// `[sidebar.budget.pace]`: reset-marker warm-tail control points by burn rate.
+/// Values are percentages of even pace: `100` means budget use matches elapsed
+/// window time, `200` means it is burning twice as fast as the reset can sustain.
+/// A sustainable pace keeps the marker at the soft tier; past `yellow` it slides
+/// the warm tail gold → amber → red.
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct BudgetPaceConfig {
-    /// Pace % above which the marker leaves the default foreground for yellow.
+    /// Pace % at which the marker leaves the soft tier for warn (gold).
     pub yellow: u16,
-    /// Pace % above which yellow deepens to amber.
+    /// Pace % at which the marker reaches caution (amber).
     pub amber: u16,
-    /// Pace % above which the marker goes red.
+    /// Pace % at which the marker reaches alarm (red), staying red above it.
     pub red: u16,
 }
 

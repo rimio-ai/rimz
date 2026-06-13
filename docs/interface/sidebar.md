@@ -101,7 +101,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `●●●○○ 3/5`       | todo progress |
 | `$1.27`           | spend — dollar green, always two decimals; omitted while a session's cost still rounds to zero |
 | `▰▱` / `▱▱` / `ex` / `api` | provider account bar: included-window budget (`5h`/`7d`/`30d`, fill = left), unknown budget as a dim empty track, paid extra usage as `ex`, and API-key spend as `api`; a value of `∞` means uncapped or not reported |
-| `↻ 2h06m`         | when a provider budget resets; blue means the current burn pace sustains to reset, then yellow, amber, and red show faster spend, with soft tone when pace is unknowable. The same glyph appears as `↻ N` on an agent card's context line for completed compactions, disambiguated by zone and by bare integer versus duration |
+| `↻ 2h06m`         | when a provider budget resets; a sustainable burn pace keeps the marker soft, then it slides continuously from gold through amber to red as spend outruns the window, staying soft when pace is unknowable. The same glyph appears as `↻ N` on an agent card's context line for completed compactions, disambiguated by zone and by bare integer versus duration |
 
 **Structure and chrome.**
 
@@ -122,7 +122,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `⇅ rc`          | remote control is on for that provider |
 | `⇄ remote 210ms` | remote SSH link badge in the footer — RTT EWMA; loss appears only above `10%`, and `⇄ remote ?` means the last stats are stale |
 
-Remote-link badge tones are color-only: soft gray for calm, yellow for minor, amber for major, and bold red for critical. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge when it fits, and `? for help` pins to the footer's right edge.
+Remote-link badge tones are color-only: a calm link stays soft gray, then latency and loss slide it continuously from gold through amber to red, bold at the critical end. Under `NO_COLOR`, the numbers carry the state. The badge pins to the footer's left edge when it fits, and `? for help` pins to the footer's right edge.
 
 ## Zone 1 — the cockpit
 
@@ -323,7 +323,7 @@ The budgets are account-scoped — every session of a provider shares one accoun
 
 Each block's stats line speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right.
 
-A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, ramping green → yellow → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: blue when the current burn rate sustains to reset, then yellow, amber, and red as it outruns the window, falling back to the quiet soft tier when pace is unknowable. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. When paid extra usage is available or unknown, the second row becomes `ex`; known usage reads `$used/$limit`, a known remaining balance reads dollars, and an unknown or uncapped value reads `∞` over a dim empty track.
+A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, sliding continuously green → gold → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: soft when the current burn rate sustains to reset, then sliding gold → amber → red as it outruns the window, falling back to the quiet soft tier when pace is unknowable. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. When paid extra usage is available or unknown, the second row becomes `ex`; known usage reads `$used/$limit`, a known remaining balance reads dollars, and an unknown or uncapped value reads `∞` over a dim empty track.
 
 These are **sliding windows** that begin counting only on your first token, so until then the provider keeps sliding the reset a full window-length ahead. A window whose reset still sits ~a full window out has **not started** (it still reads ~1% used, not 0 — so it's the reset distance that gives it away). Any usage above that ~1% floor means it has already started, countdown and all; only a 0–1% window with a near-full reset qualifies. A not-started window shows a near-full bar with **no countdown**, reading "ready — send a message to start it" rather than a misleading ticking placeholder; the countdown appears once your first token fixes the reset and it begins ticking down.
 

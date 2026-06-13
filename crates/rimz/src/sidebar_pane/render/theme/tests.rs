@@ -67,8 +67,9 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     assert_eq!(theme.good(Modifier::empty()).fg, Some(Color::Indexed(34)));
     assert_eq!(theme.alarm(Modifier::empty()).fg, Some(Color::Indexed(210)));
     assert_eq!(
-        theme.caution(Modifier::empty()).fg,
-        Some(Color::Indexed(210))
+        theme.heat_tone(2.0 / 3.0),
+        Color::Indexed(210),
+        "the untouched caution slot still anchors the ramp's third stop"
     );
     assert_eq!(
         theme.style(Color::Indexed(173), Modifier::empty()).fg,
@@ -87,8 +88,9 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     };
 
     assert_eq!(
-        theme.caution(Modifier::empty()).fg,
-        Some(Color::Indexed(214))
+        theme.heat_tone(2.0 / 3.0),
+        Color::Indexed(214),
+        "the caution override flows through the ramp's third stop"
     );
     assert_eq!(
         theme.warn(Modifier::empty()).fg,

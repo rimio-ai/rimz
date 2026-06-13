@@ -292,6 +292,24 @@ fn interpolate_heat(value: u64, start: u64, end: u64, low: f32, high: f32) -> f3
     low + (high - low) * position.clamp(0.0, 1.0)
 }
 
+/// Position along the warm tail (`warn → caution → alarm`) for a value crossing
+/// three escalating thresholds `yellow < amber < red`. `None` at or below
+/// `yellow` so the caller keeps its resting tone; then `0.0` just past `yellow`,
+/// `0.5` at `amber`, and `1.0` at `red` and beyond — the sweep
+/// [`Theme::warm_heat_tone`] renders. Checked worst-first, so a misordered
+/// config degrades to the worse tier.
+fn warm_band_amount(value: u64, yellow: u64, amber: u64, red: u64) -> Option<f32> {
+    if value > red {
+        Some(1.0)
+    } else if value > amber {
+        Some(interpolate_heat(value, amber, red, 0.5, 1.0))
+    } else if value > yellow {
+        Some(interpolate_heat(value, yellow, amber, 0.0, 0.5))
+    } else {
+        None
+    }
+}
+
 /// The window token's tone: subordinate chrome — a capability label, not a
 /// status signal; the context-meter severity ramp owns the loud color slot — so
 /// the magnitude reads at a glance through a neutral→cool→accent *salience*
@@ -436,10 +454,11 @@ pub(in crate::sidebar_pane::render) fn apportion(
 /// The provider dashboard's draining budget ("mana / stamina") bar:
 /// `remaining_pct` of the width in `▰`, the rest a `▱` track, with no brackets.
 /// A full bar means budget *left*: it shortens as the window is spent, and the
-/// reset countdown beside it says when it refills. Ramps green → gold →
-/// clay-amber → red by how much remains on the `[sidebar.budget]` zones
-/// ([`mana_style`]), so a near-spent window reddens regardless of which window
-/// it is. The drained `▱` run rides the dim chrome — a step up from the faint
+/// reset countdown beside it says when it refills. Slides continuously green →
+/// gold → clay-amber → red along the health ramp by how much remains, with the
+/// `[sidebar.budget]` zones as the warm stops ([`mana_style`]), so a near-spent
+/// window reddens regardless of which window it is. The drained `▱` run rides
+/// the dim chrome — a step up from the faint
 /// context-gauge track, so the spent share stays legible on the dashboard. At
 /// 0% remaining — the budget fully spent — the whole empty track turns red;
 /// any nonzero remaining budget keeps at least one filled cell.
@@ -451,13 +470,14 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
 ) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
     // not the gray "no fill" track a plain drain leaves — an absent fill alone
-    // would read as the same calm chrome as a barely-touched window. Alarm the
-    // track itself so "used up" is unmistakable; it stays the empty `▱` glyph
-    // (no fill), only its tone changes.
+    // would read as the same calm chrome as a barely-touched window. Paint the
+    // empty `▱` track the bar's own spent tone (`mana_style` at 0%, the ramp's
+    // alarm-red endpoint) so the label keeps mirroring its bar and "used up" is
+    // unmistakable; only the tone changes, the glyph stays the empty track.
     if remaining_pct == 0 {
         return vec![Span::styled(
             std::iter::repeat_n(MANA_TRACK, width.max(1)).collect::<String>(),
-            theme.alarm(Modifier::empty()),
+            mana_style(theme, remaining_pct, zones),
         )];
     }
     let filled = filled_cells(remaining_pct, width).max(1);
@@ -484,27 +504,41 @@ pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
     )]
 }
 
-/// The mana bar's tone at `remaining_pct` budget left: alarm when near-spent
-/// (or fully spent), then the same gold → amber escalation the age and context
-/// ramps speak through the shared health slots, resting green while the budget
-/// sits above every warning zone. Each `[sidebar.budget]` zone names the
-/// exclusive upper bound of remaining budget where its tier applies
-/// ([`BudgetZonesConfig`]); checked worst-first, so a misordered user config
-/// degrades to the worse tier. Shared by the bar fill and the `5h`/`7d` label
-/// beside it so the label mirrors its bar's tone.
+/// The mana bar's tone at `remaining_pct` budget left: the full health ramp the
+/// context meter rides ([`Theme::heat_tone`]), anchored green at a brimming
+/// window and warming smoothly to red as it drains. Shared by the bar fill and
+/// the `5h`/`7d` label beside it so the label mirrors its bar's tone.
 pub(in crate::sidebar_pane::render) fn mana_style(
     theme: &Theme,
     remaining_pct: u8,
     zones: &BudgetZonesConfig,
 ) -> Style {
-    if remaining_pct < zones.red {
-        theme.alarm(Modifier::empty())
-    } else if remaining_pct < zones.amber {
-        theme.caution(Modifier::empty())
-    } else if remaining_pct < zones.yellow {
-        theme.warn(Modifier::empty())
+    theme.style(
+        theme.heat_tone(mana_heat_amount(remaining_pct, zones)),
+        Modifier::empty(),
+    )
+}
+
+/// The mana bar's heat amount: a full green→red drain anchored green at `100%`,
+/// with the `[sidebar.budget]` zones as the warm stops the remaining figure
+/// falls through — `100 → 0.0` green, `yellow → ⅓` warn, `amber → ⅔` caution,
+/// `red`/below `→ 1.0` alarm — so the bar warms continuously as it empties. Each
+/// zone names the exclusive upper bound of remaining budget where its tier is
+/// reached ([`BudgetZonesConfig`]); checked worst-first, so a misordered user
+/// config degrades to the worse tier.
+fn mana_heat_amount(remaining_pct: u8, zones: &BudgetZonesConfig) -> f32 {
+    let remaining = u64::from(remaining_pct.min(100));
+    let yellow = u64::from(zones.yellow);
+    let amber = u64::from(zones.amber);
+    let red = u64::from(zones.red);
+    if remaining < red {
+        1.0
+    } else if remaining < amber {
+        interpolate_heat(remaining, red, amber, 1.0, 2.0 / 3.0)
+    } else if remaining < yellow {
+        interpolate_heat(remaining, amber, yellow, 2.0 / 3.0, 1.0 / 3.0)
     } else {
-        theme.good(Modifier::empty())
+        interpolate_heat(remaining, yellow, 100, 1.0 / 3.0, 0.0)
     }
 }
 
@@ -535,31 +569,28 @@ pub(in crate::sidebar_pane::render) fn pace_ratio(
     Some((f64::from(used_percentage) / 100.0) / elapsed_share)
 }
 
-/// The reset countdown marker's tone at a burn-rate ratio. Each
-/// `[sidebar.budget.pace]` threshold names the exclusive upper bound of the
-/// calmer tier, checked worst-first so a misordered config degrades to the
-/// worse visible warning. Sustainable pace rests at the countdown's soft tier;
-/// color starts only once the burn rate outruns the configured yellow threshold.
+/// The reset countdown marker's tone at a burn-rate ratio. A sustainable pace
+/// rests at the countdown's soft tier; once the burn rate outruns the
+/// `[sidebar.budget.pace]` yellow threshold the marker slides the warm tail —
+/// gold at the threshold through amber to red — across the configured stops
+/// ([`warm_band_amount`], [`Theme::warm_heat_tone`]). Checked worst-first, so a
+/// misordered config degrades to the worse visible warning. With color off the
+/// marker keeps the soft tier — the countdown beside it carries the pace.
 pub(in crate::sidebar_pane::render) fn pace_style(
     theme: &Theme,
     ratio: f64,
     pace: &BudgetPaceConfig,
 ) -> Style {
-    let pace_pct = ratio * 100.0;
-    let style = if pace_pct > f64::from(pace.red) {
-        theme.alarm(Modifier::empty())
-    } else if pace_pct > f64::from(pace.amber) {
-        theme.caution(Modifier::empty())
-    } else if pace_pct > f64::from(pace.yellow) {
-        theme.warn(Modifier::empty())
-    } else {
-        theme.body()
-    };
-    if style.fg.is_none() && pace_pct > f64::from(pace.yellow) {
-        theme.body()
-    } else {
-        style
-    }
+    let pace_pct = (ratio * 100.0).max(0.0).round() as u64;
+    warm_band_amount(
+        pace_pct,
+        u64::from(pace.yellow),
+        u64::from(pace.amber),
+        u64::from(pace.red),
+    )
+    .map(|amount| theme.style(theme.warm_heat_tone(amount), Modifier::empty()))
+    .filter(|style| style.fg.is_some())
+    .unwrap_or_else(|| theme.body())
 }
 
 /// The unmetered ("infinite") bar: a full-width empty `▱` track aligned with

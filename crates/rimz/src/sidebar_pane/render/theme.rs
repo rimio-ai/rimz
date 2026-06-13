@@ -479,21 +479,19 @@ impl Theme {
         self.style(self.palette.selection, Modifier::BOLD)
     }
 
-    /// The chromatic health family as `Style` accessors — the four ramp slots a
-    /// runtime branch selects between (mana/pace/link bands), and the fixed
-    /// positive/negative chrome (diff churn, trunk markers). Naming the tier is
-    /// the intent; a [`Component`] would only restate the slot. `accent`/`cool`/
-    /// `meta` deliberately have no bare accessor — those always name a component.
+    /// Flat health-tone accessors for fixed chrome: `good` for the positive tier
+    /// (diff additions, trunk markers), `warn` for the attention/gate-notice
+    /// floor, and `alarm` for the negative tier (diff removals, a spent budget's
+    /// red track, a critical gate). The continuous green→red sweep lives in
+    /// [`heat_tone`](Self::heat_tone) / [`warm_heat_tone`](Self::warm_heat_tone),
+    /// so `caution` is reached only through the ramp and needs no flat accessor —
+    /// as `accent`/`cool`/`meta` always name a [`Component`] rather than a tier.
     pub(crate) fn good(&self, modifier: Modifier) -> Style {
         self.style(self.palette.good, modifier)
     }
 
     pub(crate) fn warn(&self, modifier: Modifier) -> Style {
         self.style(self.palette.warn, modifier)
-    }
-
-    pub(crate) fn caution(&self, modifier: Modifier) -> Style {
-        self.style(self.palette.caution, modifier)
     }
 
     pub(crate) fn alarm(&self, modifier: Modifier) -> Style {

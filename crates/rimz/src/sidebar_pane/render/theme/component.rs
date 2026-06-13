@@ -8,10 +8,12 @@
 //! The `resolve` match below is the single mapping from UI role to meaning.
 //! Two kinds of color stay off this layer: runtime-severity tones (the health
 //! ramp, breathing pulses) are amount-driven and live on [`Theme`](super::Theme)
-//! methods, and a branch that *selects* a health tier (mana/pace/link bands)
-//! reaches for the chromatic severity accessors (`good`/`warn`/`caution`/`alarm`)
-//! so the branch structure carries the intent. Component tokens are for the
-//! fixed categorical and neutral roles, where the slot alone would not say why.
+//! methods — every scale (context, mana, pace, link, age) slides the green→red
+//! ramp through [`heat_tone`](super::Theme::heat_tone) — while the flat
+//! `good`/`warn`/`alarm` accessors name the fixed positive/floor/negative chrome
+//! (diff churn, trunk markers, gate notices), where naming the tier is the
+//! intent. Component tokens are for the fixed categorical and neutral roles,
+//! where the slot alone would not say why.
 //!
 //! Categorical slots (`accent`/`cool`/`meta`) are never emitted bare — every
 //! such use names a component here, so intent is visible where color is used.

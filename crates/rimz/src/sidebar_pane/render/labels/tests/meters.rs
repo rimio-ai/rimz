@@ -254,46 +254,99 @@ fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
             .fg
             .unwrap()
     };
-    // Green at half or more left, yellow below half, the caution amber below a
-    // quarter, red below a tenth — band edges pinned on both sides. The amber
-    // band now shares the health ramp's caution slot (no longer a brand clay).
-    assert_eq!(fg(80), Color::Indexed(149));
-    assert_eq!(fg(50), Color::Indexed(149));
-    assert_eq!(fg(49), Color::Indexed(179));
-    assert_eq!(fg(40), Color::Indexed(179));
-    assert_eq!(fg(25), Color::Indexed(179));
-    assert_eq!(Some(fg(24)), lit.caution(Modifier::empty()).fg);
-    assert_eq!(Some(fg(10)), lit.caution(Modifier::empty()).fg);
-    assert_eq!(fg(9), Color::Indexed(210));
-    assert_eq!(fg(1), Color::Indexed(210));
+    // A brimming window rests green; the bar warms continuously to red as it
+    // drains, the zones (yellow 50, amber 25, red 10) landing on the ramp's warm
+    // stops and the spans between them interpolating rather than snapping.
+    assert_eq!(fg(100), lit.heat_tone(0.0), "full window is healthy green");
+    assert_eq!(fg(50), lit.heat_tone(1.0 / 3.0), "yellow zone reaches warn");
+    assert_eq!(
+        fg(25),
+        lit.heat_tone(2.0 / 3.0),
+        "amber zone reaches caution"
+    );
+    assert_eq!(fg(10), lit.heat_tone(1.0), "red zone reaches alarm");
+    assert_eq!(
+        fg(1),
+        lit.heat_tone(1.0),
+        "a near-spent window stays alarm red"
+    );
+    assert_ne!(
+        fg(75),
+        lit.heat_tone(0.0),
+        "a three-quarter window has left pure green"
+    );
     let track = &mana_bar_spans(&lit, 70, 10, &zones)[1];
     assert_eq!(track.style, lit.muted());
     let spent = mana_bar_spans(&lit, 0, 10, &zones);
-    assert_eq!(spent[0].style.fg, Some(Color::Indexed(210)));
+    assert_eq!(
+        spent[0].style.fg,
+        mana_style(&lit, 0, &zones).fg,
+        "the spent track wears the label's own tone so the two still mirror"
+    );
+    assert_eq!(
+        spent[0].style.fg,
+        Some(lit.heat_tone(1.0)),
+        "at the ramp's alarm-red endpoint"
+    );
     assert_ne!(spent[0].style.fg, lit.muted().fg);
-    assert_ne!(spent[0].style.fg, lit.muted().fg);
+}
+
+#[test]
+fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
+    // An ANSI alarm override (index < 16) flows to the flat `alarm()` slot but
+    // not the ramp, which keeps the scheme RGB for that stop. The spent track
+    // wears the bar's own `mana_style` tone, so it must follow the label down the
+    // ramp rather than diverging to the terminal ANSI red.
+    let sidebar = crate::config::SidebarConfig {
+        theme: crate::config::SidebarThemeConfig {
+            alarm: Some(crate::config::ThemeColor::Indexed(1)),
+            ..crate::config::SidebarThemeConfig::default()
+        },
+        ..crate::config::SidebarConfig::default()
+    };
+    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let zones = BudgetZonesConfig::default();
+    let track = mana_bar_spans(&theme, 0, 10, &zones)[0].style.fg;
+    assert_eq!(
+        track,
+        mana_style(&theme, 0, &zones).fg,
+        "track mirrors its label"
+    );
+    assert_eq!(
+        track,
+        Some(theme.heat_tone(1.0)),
+        "both wear the ramp's alarm endpoint"
+    );
+    assert_ne!(track, Some(Color::Indexed(1)), "not the terminal ANSI red");
 }
 
 #[test]
 fn mana_style_honours_custom_and_misordered_zones() {
     let lit = Theme::fixed(false);
+    let tone = |remaining, zones: &BudgetZonesConfig| mana_style(&lit, remaining, zones).fg;
     let tuned = BudgetZonesConfig {
         yellow: 80,
         amber: 40,
         red: 20,
         ..BudgetZonesConfig::default()
     };
-    assert_eq!(mana_style(&lit, 70, &tuned), lit.warn(Modifier::empty()));
+    // Custom zones move the warm stops: brimming green, warn at yellow, caution
+    // at amber, alarm at red (and below).
     assert_eq!(
-        mana_style(&lit, 80, &tuned),
-        lit.good(Modifier::empty()),
+        tone(100, &tuned),
+        Some(lit.heat_tone(0.0)),
         "healthy rests green"
     );
-    assert_eq!(mana_style(&lit, 39, &tuned), lit.caution(Modifier::empty()));
-    assert_eq!(mana_style(&lit, 19, &tuned), lit.alarm(Modifier::empty()));
-    let bar = mana_bar_spans(&lit, 70, 10, &tuned);
-    assert_eq!(bar[0].style.fg, Some(Color::Indexed(179)));
+    assert_eq!(tone(80, &tuned), Some(lit.heat_tone(1.0 / 3.0)));
+    assert_eq!(tone(40, &tuned), Some(lit.heat_tone(2.0 / 3.0)));
+    assert_eq!(tone(19, &tuned), Some(lit.heat_tone(1.0)));
+    assert_eq!(
+        mana_bar_spans(&lit, 80, 10, &tuned)[0].style.fg,
+        tone(80, &tuned)
+    );
 
+    // A misordered config degrades worst-first: a value under the (largest) red
+    // threshold reds out, while a value clear of every threshold stays green-side.
     let misordered = BudgetZonesConfig {
         yellow: 25,
         amber: 10,
@@ -301,13 +354,13 @@ fn mana_style_honours_custom_and_misordered_zones() {
         ..BudgetZonesConfig::default()
     };
     assert_eq!(
-        mana_style(&lit, 30, &misordered),
-        lit.alarm(Modifier::empty())
+        tone(30, &misordered),
+        Some(lit.heat_tone(1.0)),
+        "below red reds out"
     );
-    assert_eq!(
-        mana_style(&lit, 50, &misordered),
-        lit.good(Modifier::empty())
-    );
+    let clear = tone(50, &misordered).expect("tone");
+    assert_ne!(clear, lit.heat_tone(1.0), "a clear window is not alarm");
+    assert_ne!(clear, lit.heat_tone(2.0 / 3.0), "nor is it caution");
 }
 
 #[test]
@@ -340,29 +393,28 @@ fn pace_ratio_reads_burn_against_elapsed_window_and_edges() {
 }
 
 #[test]
-fn pace_style_honours_boundaries_custom_zones_and_no_color() {
+fn pace_style_floors_then_climbs_the_warm_tail() {
     let lit = Theme::fixed(false);
     let defaults = BudgetPaceConfig::default();
-    assert_eq!(pace_style(&lit, 1.0, &defaults), lit.body());
+    let fg = |ratio| pace_style(&lit, ratio, &defaults).fg;
+    // Sustainable pace rests at the soft tier; the warm tail starts only past the
+    // yellow threshold, reaching caution at amber and alarm at red (and beyond).
     assert_eq!(
-        pace_style(&lit, 1.01, &defaults),
-        lit.warn(Modifier::empty())
+        pace_style(&lit, 1.0, &defaults),
+        lit.body(),
+        "even pace rests soft"
     );
+    assert!(fg(1.01).is_some(), "any overburn leaves the floor");
     assert_eq!(
-        pace_style(&lit, 1.5, &defaults),
-        lit.warn(Modifier::empty())
+        fg(1.5),
+        Some(lit.warm_heat_tone(0.5)),
+        "amber stop is caution"
     );
+    assert_eq!(fg(2.0), Some(lit.warm_heat_tone(1.0)), "red stop is alarm");
     assert_eq!(
-        pace_style(&lit, 1.51, &defaults),
-        lit.caution(Modifier::empty())
-    );
-    assert_eq!(
-        pace_style(&lit, 2.0, &defaults),
-        lit.caution(Modifier::empty())
-    );
-    assert_eq!(
-        pace_style(&lit, 2.01, &defaults),
-        lit.alarm(Modifier::empty())
+        fg(2.01),
+        Some(lit.warm_heat_tone(1.0)),
+        "beyond red stays alarm"
     );
 
     let tuned = BudgetPaceConfig {
@@ -370,24 +422,30 @@ fn pace_style_honours_boundaries_custom_zones_and_no_color() {
         amber: 120,
         red: 160,
     };
-    assert_eq!(pace_style(&lit, 0.81, &tuned), lit.warn(Modifier::empty()));
+    let fg_tuned = |ratio| pace_style(&lit, ratio, &tuned).fg;
     assert_eq!(
-        pace_style(&lit, 1.21, &tuned),
-        lit.caution(Modifier::empty())
+        pace_style(&lit, 0.8, &tuned),
+        lit.body(),
+        "yellow stop still rests"
     );
-    assert_eq!(pace_style(&lit, 1.61, &tuned), lit.alarm(Modifier::empty()));
+    assert_eq!(fg_tuned(1.2), Some(lit.warm_heat_tone(0.5)));
+    assert_eq!(fg_tuned(1.6), Some(lit.warm_heat_tone(1.0)));
 
+    // A misordered config degrades worst-first: a value past the (smallest) red
+    // threshold reds out, while a calm value still rests.
     let misordered = BudgetPaceConfig {
         yellow: 200,
         amber: 150,
         red: 100,
     };
     assert_eq!(
-        pace_style(&lit, 1.2, &misordered),
-        lit.alarm(Modifier::empty())
+        pace_style(&lit, 1.2, &misordered).fg,
+        Some(lit.warm_heat_tone(1.0))
     );
     assert_eq!(pace_style(&lit, 0.9, &misordered), lit.body());
 
+    // NO_COLOR drops the hue; the marker recedes to the soft tier like its
+    // countdown, and the shape carries the pace.
     let plain = Theme::fixed(true);
     assert_eq!(pace_style(&plain, 2.5, &defaults), plain.body());
 }

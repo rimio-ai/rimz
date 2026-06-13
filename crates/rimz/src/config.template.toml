@@ -77,14 +77,14 @@
 # red = { percent = 90, tokens = 420000 }
 
 [sidebar.budget]
-# yellow = 50                         # remaining percent below which the bar leaves green
-# amber = 25                          # remaining percent below which yellow deepens
-# red = 10                            # remaining percent below which the bar goes red
+# yellow = 50                         # remaining percent where the draining bar reaches warn (gold)
+# amber = 25                          # remaining percent where the bar reaches caution (amber)
+# red = 10                            # remaining percent where the bar reaches alarm (red)
 
 [sidebar.budget.pace]
-# yellow = 100                        # pace percent above which the reset marker leaves countdown style
-# amber = 150                         # pace percent above which yellow deepens
-# red = 200                           # pace percent above which the reset marker goes red
+# yellow = 100                        # pace percent where the reset marker leaves the soft tier for warn
+# amber = 150                         # pace percent where the marker reaches caution (amber)
+# red = 200                           # pace percent where the marker reaches alarm (red)
 
 [sidebar.attention]
 # stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds
