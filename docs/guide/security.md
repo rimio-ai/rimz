@@ -89,6 +89,12 @@ max_payload_bytes  = 8192
 - `redacted` — keeps bounded payloads with built-in redaction. Default.
 - `full` — keeps hook payloads as delivered. `rimz doctor` warns.
 
+## Off-box error reporting
+
+Setting `[sentry] dsn` in the per-machine config (or `RIMZ_SENTRY_DSN`) routes Rimz diagnostics to a Sentry project. It is off by default: with no DSN, no client is created and Rimz makes no network calls. The target is a per-machine setting and never the committed project config, so a clone or pull cannot redirect a contributor's telemetry to a foreign endpoint, and the DSN stays off the project trust surface.
+
+When on, Rimz sends its own `warn!`/`error!` events and the agent turn-error warning (the rate-limit, overload, and other provider conditions Rimz observes, reported at warning level). Those payloads carry Rimz error text, file paths that appear in errors, the agent kind and turn-error class, and a `workspace` tag. The hostname is stripped and Sentry's default PII is off; hook payloads, prompts, and transcripts are never forwarded. Reporting is best-effort enrichment — a malformed DSN logs the fix and stays off, and a network failure never blocks a Rimz path.
+
 ## Version drift
 
 When an agent version is outside the tested range:

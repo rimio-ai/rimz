@@ -502,16 +502,34 @@ fn merge_turn_error_marker(
     context_agent_id: &str,
     marker: rimz::agents::AgentTurnError,
 ) -> bool {
+    let kind = agent.descriptor().kind;
+    let class = marker.class;
+    let label = marker.label.clone();
     match rimz::ledger::agent_context::merge_turn_error(
         ledger.runtime_paths(),
-        agent.descriptor().kind,
+        kind,
         context_agent_id,
         marker,
     ) {
-        Ok(updated) => updated,
+        Ok(updated) => {
+            if updated {
+                // The agent's turn ended on a provider condition (rate limit,
+                // overload, or other API failure) — observed, not a Rimz fault.
+                // Warn once per transition; the Sentry bridge lifts it to a
+                // warning event keyed by `class`.
+                warn!(
+                    target: "rimz::agent::turn_error",
+                    agent = kind,
+                    class = ?class,
+                    label = label.as_deref().unwrap_or_default(),
+                    "agent turn ended on a provider error",
+                );
+            }
+            updated
+        }
         Err(err) => {
             warn!(
-                agent = agent.descriptor().kind,
+                agent = kind,
                 event = %event_name,
                 error = %err,
                 "lifecycle: failed to merge turn-error marker",

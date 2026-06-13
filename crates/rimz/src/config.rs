@@ -25,6 +25,7 @@ mod mux;
 mod notifications;
 mod remote_control;
 mod resume;
+mod sentry;
 mod sidebar;
 mod worktree;
 
@@ -45,6 +46,7 @@ pub use notifications::{
 };
 pub use remote_control::RemoteControlConfig;
 pub use resume::ResumeConfig;
+pub use sentry::SentryConfig;
 pub use sidebar::{
     AttentionConfig, BudgetPaceConfig, BudgetZonesConfig, CardDensityMode, ContextBand,
     ContextSeverityConfig, GlowMode, ProviderTabsMode, ScrollbarMode, SidebarConfig,
@@ -99,6 +101,7 @@ pub struct MachineConfig {
     pub zellij: ZellijConfig,
     pub tmux: TmuxConfig,
     pub resume: ResumeConfig,
+    pub sentry: SentryConfig,
 }
 
 impl MachineConfig {

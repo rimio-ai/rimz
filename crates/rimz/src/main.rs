@@ -10,23 +10,36 @@
 mod cli;
 
 use anyhow::Result;
-use tracing_subscriber::EnvFilter;
+use rimz::observability;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{EnvFilter, Layer};
 
 const DEFAULT_LOG_FILTER: &str = "warn";
 const SIDEBAR_SERVE_LOG_FILTER: &str = "off";
 
 fn main() -> Result<()> {
-    install_tracing();
+    // Sentry is created before the subscriber so its bridge layer attaches to a
+    // live client; the guard is held for the whole process and flushes on exit.
+    let reporting = observability::init();
+    install_tracing(reporting.enabled());
+    reporting.report();
     cli::dispatch()
 }
 
-fn install_tracing() {
+fn install_tracing(report_to_sentry: bool) {
     let filter = EnvFilter::try_from_default_env()
         .or_else(|_| EnvFilter::try_new(default_log_filter()))
         .unwrap_or_else(|_| EnvFilter::new("warn"));
-    tracing_subscriber::fmt()
-        .with_env_filter(filter)
+    // The env filter is per-layer on the fmt sink, so the sidebar's `off`
+    // silences stderr without gating the Sentry layer's own `WARN` capture.
+    let fmt_layer = tracing_subscriber::fmt::layer()
         .with_writer(std::io::stderr)
+        .with_filter(filter);
+    let sentry_layer = report_to_sentry.then(observability::sentry_tracing_layer);
+    tracing_subscriber::registry()
+        .with(fmt_layer)
+        .with(sentry_layer)
         .init();
 }
 

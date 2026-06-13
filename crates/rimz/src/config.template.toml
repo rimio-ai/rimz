@@ -205,3 +205,11 @@
 [resume]
 # on_rebirth = true                   # re-seed prior agents when a room is reborn
 # max = 8                             # cap auto-resumed agents per rebirth
+
+[sentry]
+# Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no
+# network calls. When set, Rimz warn/error events and observed agent
+# rate-limit/overload conditions report to this project (machine name and PII
+# withheld). RIMZ_SENTRY_DSN / RIMZ_SENTRY_ENVIRONMENT override these.
+## dsn = "https://examplePublicKey@o0.ingest.sentry.io/0"
+## environment = "production"         # deployment tag attached to every event

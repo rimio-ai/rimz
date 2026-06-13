@@ -23,6 +23,7 @@ pub mod launch;
 pub mod ledger;
 pub mod message;
 pub mod mux;
+pub mod observability;
 pub mod osc;
 pub mod petname;
 pub mod proc;

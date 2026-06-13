@@ -618,3 +618,24 @@ fn provider_style_parses_art_and_color() {
     assert_eq!(claude.ascii_art.as_deref(), Some(" ▐▛███▜▌"));
     assert_eq!(claude.product_name, None);
 }
+
+#[test]
+fn sentry_config_defaults_off_and_parses() {
+    let dir = tempdir().expect("tempdir");
+    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(defaults.sentry, SentryConfig::default());
+    assert!(defaults.sentry.dsn.is_none());
+
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sentry]\n\
+             dsn = \"https://key@o1.ingest.sentry.io/2\"\n\
+             environment = \"dev\"\n",
+    ))
+    .expect("load");
+    assert_eq!(
+        config.sentry.dsn.as_deref(),
+        Some("https://key@o1.ingest.sentry.io/2")
+    );
+    assert_eq!(config.sentry.environment.as_deref(), Some("dev"));
+}

@@ -31,7 +31,7 @@ Per-machine settings load leniently: a missing file is the default config, and u
 
 ## `config.toml` Per Machine
 
-Nine sections make up the per-machine file:
+Ten sections make up the per-machine file:
 
 | Section | Purpose |
 | --- | --- |
@@ -44,6 +44,7 @@ Nine sections make up the per-machine file:
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding policy when a room is reborn |
+| `[sentry]` | off-box error reporting target |
 
 Every field, its default, and an inline note lives in the generated template:
 
@@ -125,6 +126,16 @@ max = 8
 ```
 
 When a session is reborn after a reboot, multiplexer crash, reset, or clean Rimz rebirth, Rimz re-seeds prior agents from the durable rollup. Each restored agent starts idle in its own pane, so no model work happens until you type. `on_rebirth = false` or `--no-resume` comes up empty for a fresh room, and `max` bounds how many agents one birth relaunches. Mechanics live in [internals/sidebar/sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth).
+
+### Off-Box Error Reporting
+
+```toml
+[sentry]
+dsn         = "https://examplePublicKey@o0.ingest.sentry.io/0"
+environment = "production"
+```
+
+Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit/overload conditions to a Sentry project an operator can watch; agent-generated conditions report at warning level. With no `dsn`, reporting stays off and Rimz makes no network calls. `RIMZ_SENTRY_DSN` and `RIMZ_SENTRY_ENVIRONMENT` override the config for a single invocation. The DSN lives per-machine — never in the committed project config — so a clone never inherits it; events carry a `workspace` tag so one machine-wide project still filters per repository. The hostname and personal data are withheld; the full telemetry surface is in [security.md → Off-box error reporting](../guide/security.md#off-box-error-reporting). Mechanics live in [internals/health/observability.md](../internals/health/observability.md).
 
 ### Worktrees
 
