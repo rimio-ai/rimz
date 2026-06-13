@@ -96,6 +96,12 @@ A painted tone passes through three layers. The **raw palette** is the imported 
 
 The capability line's window token shows this layering: it reads its size through a neutral→cool→accent salience ramp — `faint` below 128k, `muted` at 128k, `cool` at 258k, `accent` at 1M+ — so a bigger window reads louder while borrowing no provider's brand color. Only true external identity (the provider brand emblems and the dollar green) holds a fixed hue outside the slots.
 
+### Subtle steps and color depth
+
+A subtle tone step — a small lightness dim or a breathing lift — renders as color only at truecolor depth. The 256-color cube spaces its channel levels about forty apart, coarser than such a step, so quantizing a sub-cell shift either snaps to a distant cell (a hard jump in the wrong direction) or collides with the base tone (no change at all). At indexed depth a subtle adjustment falls back to the discrete signal the cube carries honestly — a weight modifier (`DIM` or `BOLD`) for an animated pulse, or the unmodified base tone for a static recession — the same shape `NO_COLOR` already uses.
+
+The calm card name shows the rule: at truecolor it dims its brand lightness a step, and at 256-color it keeps the full brand while the selection bar and the description carry the calm cue. Tones that already differ by a full cube cell — the neutral ladder and the health ramp — stay color at every depth, since each step lands on its own index.
+
 ## Custom Theme Files
 
 Custom themes are Alacritty TOML files. A minimal valid theme:
@@ -132,6 +138,8 @@ blue = '#7aa2f7'
 | `selection` | bright blue, or normal blue when bright blue is absent |
 
 Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
+
+Brightening runs in the same space and holds hue: a lift raises OKLab lightness and eases chroma toward the gamut boundary rather than letting the RGB channels hard-clamp, so the unread blink pulses brighter without drifting toward white or a neighboring hue.
 
 ## Animations
 
