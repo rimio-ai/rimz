@@ -54,14 +54,18 @@ impl RemindState {
         }
 
         let notification = unread_reminder_notification(scope.count);
+        // The reminder scope is already unread `waiting`/`failed` rows, and its
+        // paneless path borrows non-unread sibling panes to reach a detached
+        // ask — so ring directly rather than re-checking each borrowed pane's
+        // row. The daemon exclusion in `bell_targets_own_view` still applies.
         if let Err(err) = emit_terminal_notification(
             config,
             terminal,
             snapshot,
-            &config.notification_prefs,
             &notification.title,
             &notification.body,
             &scope.panes,
+            false,
         ) {
             debug!(error = %err, "terminal unread reminder emit failed");
         }

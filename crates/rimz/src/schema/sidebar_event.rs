@@ -103,10 +103,22 @@ pub enum SidebarEvent {
         body: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panes: Vec<PaneId>,
+        /// Whether the renderer rings the sticky tab bell only when the targeted
+        /// agent row is unread — the same `UnreadTracker` signal stamped onto
+        /// `SidebarRow::unread`. Agent notifications set this so a row that has
+        /// returned to running (no longer unread) does not ring; link
+        /// reachability alerts clear it to ring directly. `#[serde(default)]`
+        /// keeps the agent default (`true`) for older producers.
+        #[serde(default = "default_recheck_unread")]
+        recheck_unread: bool,
     },
     /// Reload request. Current renderers also accept [`RELOAD_CONTROL_WORD`] so
     /// reload survives sidebar-event envelope version skew.
     Reload,
+}
+
+fn default_recheck_unread() -> bool {
+    true
 }
 
 impl SidebarEvent {
@@ -187,6 +199,7 @@ mod tests {
                 title: "Rimz: claude needs you".to_owned(),
                 body: "claude sess-1 is waiting for input".to_owned(),
                 panes: vec![PaneId::from_parts(MuxName::Zellij, "terminal_4")],
+                recheck_unread: true,
             },
             SidebarEvent::Reload,
         ];
@@ -227,6 +240,7 @@ mod tests {
             title: "Rimz: claude needs you".to_owned(),
             body: "claude sess-1 is waiting for input".to_owned(),
             panes: Vec::new(),
+            recheck_unread: true,
         });
         let encoded = serde_json::to_vec(&expected).expect("serialize event envelope");
         assert!(!String::from_utf8_lossy(&encoded).contains("panes"));
@@ -234,5 +248,22 @@ mod tests {
         let decoded: SidebarEventEnvelope =
             serde_json::from_slice(&encoded).expect("decode event envelope");
         assert_eq!(decoded, expected);
+
+        // An older producer omits `recheck_unread`; it defaults to the agent
+        // path (`true`) so the renderer still gates the bell on row unread.
+        let mut legacy = serde_json::to_value(&expected).expect("event to value");
+        legacy["event"]
+            .as_object_mut()
+            .expect("event object")
+            .remove("recheck_unread");
+        let decoded_legacy: SidebarEventEnvelope =
+            serde_json::from_value(legacy).expect("decode legacy notify");
+        assert!(matches!(
+            decoded_legacy.event,
+            SidebarEvent::Notify {
+                recheck_unread: true,
+                ..
+            }
+        ));
     }
 }

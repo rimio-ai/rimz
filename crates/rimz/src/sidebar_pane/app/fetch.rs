@@ -302,6 +302,13 @@ fn evaluate_and_deliver_notifications(
             tracing::debug!(error = %err, "notify-command spawn failed");
         }
         let panes = notification_panes(snapshot, &notification);
+        // Agent notifications ring the sticky tab bell only while the targeted
+        // row is still unread; link reachability alerts ring directly.
+        let recheck_unread = !matches!(
+            notification.notification_kind,
+            crate::sidebar::notify::NotificationKind::LinkDegraded
+                | crate::sidebar::notify::NotificationKind::LinkRecovered
+        );
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
             Some(&config.session_name),
@@ -309,6 +316,7 @@ fn evaluate_and_deliver_notifications(
                 title: notification.title,
                 body: notification.body,
                 panes,
+                recheck_unread,
             },
         ) {
             tracing::debug!(error = %err, "notification event broadcast failed");

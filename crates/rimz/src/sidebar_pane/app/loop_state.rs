@@ -167,15 +167,20 @@ impl LoopState {
             SidebarEvent::PaneFramePublished => {
                 fetch.request(FetchRequest::pane_frame_published(), true);
             }
-            SidebarEvent::Notify { title, body, panes } => {
+            SidebarEvent::Notify {
+                title,
+                body,
+                panes,
+                recheck_unread,
+            } => {
                 match emit_terminal_notification(
                     config,
                     terminal,
                     &self.current,
-                    &config.notification_prefs,
                     &title,
                     &body,
                     &panes,
+                    recheck_unread,
                 ) {
                     Ok(true) => self.remind.note_ring(crate::sidebar::cache::unix_now_ms()),
                     Ok(false) => {}

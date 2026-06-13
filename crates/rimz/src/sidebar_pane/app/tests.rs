@@ -190,6 +190,107 @@ fn notification_targeting_matches_mux_reachability_rules() {
 }
 
 #[test]
+fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
+    use crate::feed::AgentStatus;
+
+    let ws = workspace();
+    let work = PaneId::from_parts(MuxName::Zellij, "terminal_11");
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_99");
+
+    let scene = |unread: bool, status: AgentStatus, daemon: bool| {
+        let mut snap = snapshot(&ws);
+        snap.panes_produced_at_ms = Some(1);
+        snap.own_view = Some(crate::SidebarOwnView {
+            sibling_count: 2,
+            own_is_active: true,
+            active_pane_id: None,
+            working_pane_ids: vec![work.clone()],
+            focus_contested: false,
+            own_view_is_daemon: daemon,
+        });
+        snap.worktree_groups = vec![crate::SidebarWorktreeGroup {
+            key: "/repo/main".to_owned(),
+            label: "main".to_owned(),
+            kind: crate::SidebarWorktreeKind::Worktree,
+            status_counts: Vec::new(),
+            rows: vec![crate::SidebarRow {
+                id: "agent-1".to_owned(),
+                name: "claude".to_owned(),
+                pane: Some(pane("terminal_11", "tab_1", false)),
+                worktree_path: Some("/repo/main".to_owned()),
+                worktree_branch: Some("main".to_owned()),
+                unread,
+                inactive: false,
+                last_activity: Timestamp::now(),
+                card: crate::RowCard::Agent(Box::new(crate::AgentCard {
+                    status: Some(status),
+                    phase: crate::agents::TurnPhase::Idle,
+                    ..crate::AgentCard::default()
+                })),
+            }],
+            hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
+            commits_ahead: None,
+            commits_behind: None,
+            trunk: None,
+            clean: None,
+        }];
+        snap
+    };
+
+    // Agent path: rings only while the owned row is unread.
+    let unread_waiting = scene(true, AgentStatus::Waiting, false);
+    assert!(bell_targets_own_view(
+        &unread_waiting,
+        std::slice::from_ref(&work),
+        true
+    ));
+
+    // Resumed to running and no longer unread — a thinking agent never rings.
+    let running = scene(false, AgentStatus::Running, false);
+    assert!(!bell_targets_own_view(
+        &running,
+        std::slice::from_ref(&work),
+        true
+    ));
+
+    // A foreign pane the view does not own never rings.
+    assert!(!bell_targets_own_view(
+        &unread_waiting,
+        std::slice::from_ref(&foreign),
+        true
+    ));
+
+    // Link/reminder path bypasses the unread re-check and rings on an owned pane.
+    assert!(bell_targets_own_view(
+        &running,
+        std::slice::from_ref(&work),
+        false
+    ));
+
+    // A daemon-only view (rimzd) never rings, on either path.
+    let daemon = scene(true, AgentStatus::Waiting, true);
+    assert!(!bell_targets_own_view(
+        &daemon,
+        std::slice::from_ref(&work),
+        true
+    ));
+    assert!(!bell_targets_own_view(
+        &daemon,
+        std::slice::from_ref(&work),
+        false
+    ));
+
+    // No own view at all never rings.
+    assert!(!bell_targets_own_view(
+        &snapshot(&ws),
+        std::slice::from_ref(&work),
+        false
+    ));
+}
+
+#[test]
 fn focus_stranded_targets_recent_own_pane_events_only() {
     let (snapshot, sidebar, _first_work, second_work) = focus_fixture();
     let ui = UiState {
