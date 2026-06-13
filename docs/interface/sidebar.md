@@ -20,7 +20,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ─────────────────────────────────────────────────────
  ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
 
-▏⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in · commits diff · lines diff
+▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in · commits diff · lines diff
 ▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · effort · context window · usd value
 ▌  ledger refactor                                        ← line 2: session description
 ▌  ▣ ━━━━━━━━━━━━━━━━─────────────────────────── 38.2%    ← context window progress: how full the context window is
@@ -113,7 +113,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
 | `⑂ name`        | a group header with a git story — a worktree's live branch, or a directory room's child repo |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
-| `▏`             | the selection lane — the worktree you're in |
+| `▎`             | the selection lane — the worktree you're in |
 | `▌`             | the selected card |
 | `┄ external ┄`  | out-of-project panes (scripts, CI, stray shells) |
 | `─`             | a section hairline |
@@ -231,7 +231,7 @@ The description, tokens, and elapsed time ride in from Claude's `subagentStatusL
 A waiting or failed agent is the whole point. Its glyph leads, bold, and the card rises to the top of its worktree:
 
 ```
-▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
+▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄
 ▌! claude · Opus · 1m
 ▌  db migrate
 ▌  ▢ ──────────────────────────────────────────    0%    ← context meter — empty window
@@ -253,24 +253,24 @@ The label is the program the pane runs, read past a `sudo` wrapper and through a
 
 ### Worktree groups and the selection lane
 
-Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a thin `▏` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
+Worktrees stack as bounded blocks. The one **holding your selection** reads as a single bracketed lane: a slim `▎` spine down its header and every row, a dotted `┄` seal on its header, and the selected card itself lit with a bold `▌`. Every other worktree carries a blank gutter, so the lane is the only marker on screen and the selection is unmistakable.
 
 The worktree header carries the worktree's git story on the right: the `⇡`/`⇣` commit delta against the trunk, then the worktree's total diff (`⇡3 ⇣1 +230 -23`, zero components dropped) — untracked file content counts into the `+`, so work `git diff` can't see still reads as work. A worktree holding nothing of its own — zero commits ahead, a zero diff, and a clean `git status` (no uncommitted changes, no untracked files) — collapses the whole cluster to a landed marker: `≡ main` when it sits exactly at the trunk tip (this checkout IS main), `✓ main` once the trunk has moved on — done, safe to remove; behind never blocks removability, it only picks the marker. The trunk worktree itself wears neither — "landed on itself" says nothing, so its header keeps the plain cluster. The trunk is auto-detected (`main` → `master` → the remote's default) and overridable per machine ([configuration](../reference/configuration.md#sidebar-rendering)).
 
 ```
-▏⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
-▏⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
-▏⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
+▎⑂ feature-migration ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡3 ⇣1  +230 -23    ← in flight: commits ahead/behind, then the diff
+▎⑂ feature-current ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ≡ main    ← at the trunk tip: this checkout IS main
+▎⑂ feature-landed ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ✓ main    ← landed, trunk moved on: safe to remove
 ```
 
 ```
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌? claude
 ▌  permission
 ▌  ▢ ──────────────────────────────────────────    0%
-▏⣾ codex · GPT 5.5
-▏  add tests
-▏  ▢ ──────────────────────────────────────────    0%
+▎⣾ codex · GPT 5.5
+▎  add tests
+▎  ▢ ──────────────────────────────────────────    0%
 
  ┄ external ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← out-of-project panes, attention-only tally
  ? deploy.sh
@@ -282,7 +282,7 @@ The `external` block is the catch-all for panes outside the project — untether
 A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the same way with its child repos as the pods: each child repo keeps the full `⑂` header with its own per-repo git story, while the panes the room root itself holds sit under a **name-only header** — the directory's basename in bold, no fork glyph, no git cluster, because a plain directory has neither a fork nor a trunk to measure against. It is still a jump target and still wears the selection lane.
 
 ```
-▏⑂ query-engine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3    ← a child repo: full pod header, per-repo stats
+▎⑂ query-engine ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ ⇡2  +12 -3    ← a child repo: full pod header, per-repo stats
 ▌⣾ claude
 ▌  db migrate
 
@@ -295,14 +295,14 @@ A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the 
 **The cap.** Each worktree shows a capped number of rows (configurable) with a dim `+K more`. The cap trims only the idle/process tail; active, blocked, paused, finished, and focused rows stay visible:
 
 ```
-▏⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
+▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄    ← selected worktree: lane spine + dotted seal
 ▌⣾ codex
 ▌  task-0
 ▌  ▢ ──────────────────────────────────────────    0%
-▏⣾ codex
-▏  task-1
-▏  ▢ ──────────────────────────────────────────    0%
-▏  +3 more
+▎⣾ codex
+▎  task-1
+▎  ▢ ──────────────────────────────────────────    0%
+▎  +3 more
 ```
 
 ### Jump — the row is the link

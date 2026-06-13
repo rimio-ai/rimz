@@ -71,13 +71,13 @@ fn fleet_header_is_fixed_and_splits_the_make_up() {
     );
     assert!(!buckets.contains('⠁'), "no thinking bucket: {buckets}");
     // The default selection lands on the first row, so its worktree reads as
-    // one lane: the header gains the dotted seal and a `▏` lane spine.
+    // one lane: the header gains the dotted seal and a `▎` lane spine.
     assert!(
         screen.lines().any(|line| line.contains("main")),
         "fleet header wrapped or shifted:\n{screen}"
     );
     assert!(
-        screen.contains('▏'),
+        screen.contains('▎'),
         "the selected worktree shows the lane spine:\n{screen}"
     );
 }

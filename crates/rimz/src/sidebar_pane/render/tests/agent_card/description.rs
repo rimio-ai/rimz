@@ -42,6 +42,38 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
     );
 }
 
+#[test]
+fn line_two_control_characters_collapse_before_framing() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    let mut context = codex_context(fixed_now());
+    context.session_preview = Some("ship\nwide\tlabel\rnow\u{0007}".to_owned());
+    codex.context = Some(context);
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![codex]), 44, 12);
+    let line = rendered
+        .lines()
+        .find(|line| line.contains("ship wide label now"))
+        .unwrap_or_else(|| panic!("single-line description rendered:\n{rendered}"));
+
+    assert_eq!(
+        line.chars().nth(43),
+        Some('▐'),
+        "the selected card's right rail stays in the final column:\n{rendered}"
+    );
+    for leaked in ['\n', '\r', '\t', '\u{0007}'] {
+        assert!(
+            !line.contains(leaked),
+            "description line contains no control character {leaked:?}: {line:?}"
+        );
+    }
+}
+
 fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'static>> {
     let theme = Theme::fixed(true);
     let mut row_index = 0;

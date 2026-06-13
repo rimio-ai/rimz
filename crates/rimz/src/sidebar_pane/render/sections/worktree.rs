@@ -48,7 +48,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     map: &mut Vec<Option<usize>>,
 ) {
     // Does the selection live in this worktree? If so the whole group reads as
-    // one bracketed lane: the resting `▏` spine on the header and every row,
+    // one bracketed lane: the resting `▎` spine on the header and every row,
     // with the selected card itself lit bold `▌`. The `external` catch-all is
     // never a lane.
     let first_row = *row_index;

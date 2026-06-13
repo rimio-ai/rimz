@@ -29,18 +29,21 @@ pub(super) fn description_line(
         Some(sample) => theme.pulse(theme.soft_tone(), sample),
         None => theme.style(theme.soft_tone(), Modifier::BOLD),
     };
-    let body = if let Some(label) = agent(row).and_then(|agent| agent.turn_error_label.as_deref()) {
+    let body = if let Some(label) = agent(row)
+        .and_then(|agent| agent.turn_error_label.as_deref())
+        .and_then(single_line_description)
+    {
         let style = if row.unread {
             unread_body().add_modifier(Modifier::ITALIC)
         } else {
             theme.soft().add_modifier(Modifier::ITALIC)
         };
-        Span::styled(label.to_owned(), style)
+        Span::styled(label, style)
     } else {
-        match descriptor(row) {
-            Some(text) if row.unread => Span::styled(text.to_owned(), unread_body()),
-            Some(text) if selected => Span::raw(text.to_owned()),
-            Some(text) => Span::styled(text.to_owned(), theme.soft()),
+        match descriptor(row).and_then(single_line_description) {
+            Some(text) if row.unread => Span::styled(text, unread_body()),
+            Some(text) if selected => Span::raw(text),
+            Some(text) => Span::styled(text, theme.soft()),
             None if shows_loading_dots(row) => {
                 Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
             }
@@ -95,7 +98,29 @@ pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
 }
 
 pub(super) fn usable_description(value: &str) -> bool {
-    !value.is_empty() && !looks_like_control_text(value)
+    single_line_description(value).is_some() && !looks_like_control_text(value)
+}
+
+fn single_line_description(value: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut pending_space = false;
+    for ch in value.chars() {
+        if ch.is_whitespace() {
+            if !out.is_empty() {
+                pending_space = true;
+            }
+            continue;
+        }
+        if ch.is_control() {
+            continue;
+        }
+        if pending_space {
+            out.push(' ');
+            pending_space = false;
+        }
+        out.push(ch);
+    }
+    (!out.is_empty()).then_some(out)
 }
 
 /// Whether an agent row paints the idle loading-dots cue in place of a

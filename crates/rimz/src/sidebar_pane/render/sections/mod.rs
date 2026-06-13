@@ -64,11 +64,11 @@ const SELECTED_SPINE: &str = "▌";
 /// same right-rail vocabulary the scrollbar thumb uses.
 const SELECTED_SPINE_RIGHT: &str = "▐";
 
-/// The selected *worktree's* resting lane spine: a thin `▏` (lighter than the
+/// The selected *worktree's* resting lane spine: a slim `▎` (lighter than the
 /// selected card's `▌`) down the whole selected group — header and every row —
 /// so the worktree holding the selection reads as one bracketed lane, mirrored
 /// by the right rail's `▕`. Non-selected worktrees carry no spine at all.
-const LANE_SPINE: &str = "▏";
+const LANE_SPINE: &str = "▎";
 
 /// The selected worktree's right rail: the mirrored hairline `▕`. This is the
 /// same right-rail vocabulary the scrollbar track uses.
@@ -107,13 +107,13 @@ impl Tier {
 }
 
 /// The gutter state that frames a line with one left cell and one right rail
-/// cell — blank for chrome and resting worktrees, the resting lane `▏`/`▕` for
+/// cell — blank for chrome and resting worktrees, the resting lane `▎`/`▕` for
 /// the selected worktree, the bold `▌`/`▐` accent for the selected card itself.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Gutter {
     /// No marker — chrome and non-selected worktrees.
     Blank,
-    /// The selected worktree's resting lane spine (`▏`/`▕`, dim teal).
+    /// The selected worktree's resting lane spine (`▎`/`▕`, dim teal).
     Lane,
     /// The selected card's bold accent spine (`▌`/`▐`).
     Selected,

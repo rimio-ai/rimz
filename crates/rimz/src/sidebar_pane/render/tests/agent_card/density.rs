@@ -297,7 +297,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
         .find(|line| line.contains("⧉ subagents (1)"))
         .expect("expanded mode should render the parent's subagent section");
     assert!(
-        subagent_line.contains("▏  ⧉ subagents (1)"),
+        subagent_line.contains("▎  ⧉ subagents (1)"),
         "expanded mode opens the non-selected parent's subagents:\n{rendered}"
     );
     assert_snapshot("card_density_expanded_non_selected_subagents", rendered);
