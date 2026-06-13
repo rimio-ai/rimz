@@ -23,10 +23,11 @@ use crate::config::{
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
-use super::animation::{BreathSample, ResolvedAnimations};
+use super::animation::{AnimationRole, BreathSample, ResolvedAnimations};
 use super::scheme;
 
 pub(crate) const CLAUDE_CLAY_RGB: (u8, u8, u8) = (0xd9, 0x77, 0x57);
+const MONEY_GREEN_RGB: (u8, u8, u8) = (0x85, 0xbb, 0x65);
 
 /// Stops on the context **health** ramp, ordered calm → alarm:
 /// `[good, warn, caution, alarm]` — green → gold → orange → rose-red. Prepending
@@ -168,10 +169,10 @@ impl Palette {
         Palette {
             depth,
             heat_ramp: [
-                heat_ramp_slot(theme.good, tones.good),
-                heat_ramp_slot(theme.warn, tones.warn),
-                heat_ramp_slot(theme.caution, tones.caution),
-                heat_ramp_slot(theme.alarm, tones.alarm),
+                derived_rgb_slot(theme.good, tones.good),
+                derived_rgb_slot(theme.warn, tones.warn),
+                derived_rgb_slot(theme.caution, tones.caution),
+                derived_rgb_slot(theme.alarm, tones.alarm),
             ],
             good: slot(theme.good, tones.good),
             warn: slot(theme.warn, tones.warn),
@@ -218,7 +219,7 @@ fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {
     }
 }
 
-fn heat_ramp_slot(color: Option<ThemeColor>, builtin: (u8, u8, u8)) -> (u8, u8, u8) {
+fn derived_rgb_slot(color: Option<ThemeColor>, builtin: (u8, u8, u8)) -> (u8, u8, u8) {
     match color {
         Some(ThemeColor::Rgb(red, green, blue)) => (red, green, blue),
         Some(ThemeColor::Indexed(index)) if index >= 16 => xterm_rgb(index),
@@ -458,7 +459,7 @@ impl Theme {
     /// The context **health** tone for `amount` ∈ `[0, 1]`: a piecewise OKLab
     /// blend across the full `[good, warn, caution, alarm]` ramp, so `0.0` reads
     /// healthy green and `1.0` reads alarm red, with even perceptual steps
-    /// between. Drives the context meter's gradient sweep and severity glyph.
+    /// between. Drives the context meter's health tone and severity glyph.
     pub(super) fn heat_tone(&self, amount: f32) -> Color {
         rgb_color(ramp_tone(&self.palette.heat_ramp, amount), self.depth)
     }
@@ -470,6 +471,27 @@ impl Theme {
     pub(super) fn warm_heat_tone(&self, amount: f32) -> Color {
         let mapped = HEAT_RAMP_WARM_START + amount.clamp(0.0, 1.0) * (1.0 - HEAT_RAMP_WARM_START);
         self.heat_tone(mapped)
+    }
+
+    /// Cache-write tone: the compaction/delegation violet, matching the color
+    /// family the completed-compaction marker used before it moved to yellow.
+    pub(super) fn cache_write_tone(&self) -> Color {
+        self.animations.role(AnimationRole::Compacting).color()
+    }
+
+    /// Fresh-input tone: the same alarm red a 100% context-fill meter wears.
+    pub(super) fn input_tone(&self) -> Color {
+        self.heat_tone(1.0)
+    }
+
+    /// Money tone: a fixed dollar green emitted like provider brand colors —
+    /// true RGB at truecolor depth, nearest xterm bucket at indexed depth.
+    pub(crate) fn money_tone(&self) -> Color {
+        rgb_color(MONEY_GREEN_RGB, self.depth)
+    }
+
+    pub(crate) fn money_style(&self, modifier: Modifier) -> Style {
+        self.style(self.money_tone(), modifier)
     }
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
@@ -872,6 +894,22 @@ mod tests {
             },
         );
         assert_eq!(truecolor.brand_tone(&panel), Color::Rgb(0xd9, 0x77, 0x57));
+    }
+
+    #[test]
+    fn money_tone_uses_fixed_dollar_green_at_active_depth() {
+        let truecolor = Theme {
+            depth: ColorDepth::Truecolor,
+            palette: Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Truecolor),
+            ..Theme::default()
+        };
+        let indexed = Theme::fixed(false);
+        assert_eq!(truecolor.money_tone(), Color::Rgb(0x85, 0xbb, 0x65));
+        assert_eq!(
+            indexed.money_tone(),
+            Color::Indexed(nearest_xterm_index(0x85, 0xbb, 0x65))
+        );
+        assert_ne!(truecolor.money_tone(), truecolor.tone(Color::Green));
     }
 
     #[test]

@@ -9,6 +9,31 @@ fn assert_no_fg(spans: &[Span<'_>]) {
     assert!(spans.iter().all(|span| span.style.fg.is_none()));
 }
 
+fn rgb(color: Color) -> (u8, u8, u8) {
+    crate::sidebar_pane::render::theme::color_to_rgb(color).expect("color rgb")
+}
+
+fn indexed_from_truecolor(color: Color) -> Color {
+    let (red, green, blue) = rgb(color);
+    Color::Indexed(crate::config::nearest_xterm_index(red, green, blue))
+}
+
+fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
+    let write = theme.cache_write_tone();
+    let input = theme.input_tone();
+    assert_eq!(
+        input,
+        theme.heat_tone(1.0),
+        "fresh input matches the context-fill alarm endpoint"
+    );
+    assert_eq!(
+        write,
+        theme.tone(Color::Magenta),
+        "cache-write uses the compaction/delegation violet"
+    );
+    assert_ne!(write, input, "cache-write stays distinct from input red");
+}
+
 #[test]
 fn branch_delta_omits_zero_components() {
     let theme = Theme::fixed(true);
@@ -30,15 +55,19 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         "calm rests at the healthy green start of the ramp"
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Yellow, 60, None, &bands),
+        severity_heat_color(&theme, ContextSeverity::Yellow, 40, None, &bands),
         theme.heat_tone(0.0)
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Amber, 80, None, &bands),
-        theme.heat_tone(0.5)
+        severity_heat_color(&theme, ContextSeverity::Yellow, 60, None, &bands),
+        theme.heat_tone(1.0 / 3.0)
     );
     assert_eq!(
-        severity_heat_color(&theme, ContextSeverity::Red, 95, None, &bands),
+        severity_heat_color(&theme, ContextSeverity::Amber, 75, None, &bands),
+        theme.heat_tone(2.0 / 3.0)
+    );
+    assert_eq!(
+        severity_heat_color(&theme, ContextSeverity::Red, 90, None, &bands),
         theme.heat_tone(1.0)
     );
 
@@ -53,9 +82,9 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         },
     );
     for (severity, percent) in [
-        (ContextSeverity::Yellow, 60),
-        (ContextSeverity::Amber, 80),
-        (ContextSeverity::Red, 95),
+        (ContextSeverity::Yellow, 40),
+        (ContextSeverity::Amber, 75),
+        (ContextSeverity::Red, 90),
     ] {
         assert!(
             matches!(
@@ -65,10 +94,18 @@ fn gauge_bars_map_severity_and_apportion_segments() {
             "{severity:?} should emit an RGB heat-ramp tone in truecolor"
         );
     }
-    let mid_yellow = severity_heat_color(&truecolor, ContextSeverity::Yellow, 70, None, &bands);
-    assert_eq!(mid_yellow, truecolor.heat_tone(0.25));
-    assert_ne!(mid_yellow, truecolor.heat_tone(0.0));
-    assert_ne!(mid_yellow, truecolor.heat_tone(0.5));
+    let warming = severity_heat_color(&truecolor, ContextSeverity::Yellow, 50, None, &bands);
+    assert_eq!(warming, truecolor.heat_tone(1.0 / 6.0));
+    assert_ne!(warming, truecolor.heat_tone(0.0));
+    assert_ne!(warming, truecolor.heat_tone(1.0 / 3.0));
+    let token_warming = severity_heat_color(
+        &truecolor,
+        ContextSeverity::Yellow,
+        10,
+        Some(130_000),
+        &bands,
+    );
+    assert_eq!(token_warming, truecolor.heat_tone(1.0 / 6.0));
     let token_red =
         severity_heat_color(&truecolor, ContextSeverity::Red, 10, Some(420_000), &bands);
     assert_eq!(
@@ -87,34 +124,35 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         (0, 5, "─────"),
         (100, 5, "━━━━━"),
     ] {
-        let spans = gradient_gauge_spans(&plain, 0.5, &[], percent, width);
+        let spans = context_gauge_spans(&plain, 0.5, &[], percent, width);
         assert_eq!(text(&spans), expected, "{percent}% over width {width}");
         assert_no_fg(&spans);
     }
 
     // Composition rides the bar at every severity: the cache-read run takes the
-    // gradient, the trailing accents are dot-separated flat runs, and the gaps
+    // row health tone, the trailing accents are cap-separated flat runs, and the caps
     // come out of the fill so the bar still ends exactly at its fill level.
     let segments = [
         (8_000_u64, SEGMENT_CACHE_READ),
-        (5_000, SEGMENT_CACHE_WRITE),
-        (2_000, SEGMENT_INPUT),
+        (5_000, plain.cache_write_tone()),
+        (2_000, plain.input_tone()),
     ];
-    let rendered = text(&gradient_gauge_spans(&plain, 0.6, &segments, 60, 10));
+    let rendered = text(&context_gauge_spans(&plain, 0.6, &segments, 60, 10));
+    assert_eq!(rendered, "━━╸━╸━────");
     assert_eq!(
         rendered.chars().count(),
         10,
         "the bar fills its width exactly"
     );
     assert_eq!(
-        rendered.matches('◦').count(),
+        rendered.matches('╸').count(),
         2,
-        "a separator sets off each accent run"
+        "a narrow cap sets off each accent run"
     );
     assert_eq!(
-        rendered.chars().filter(|c| *c == '━').count() + rendered.matches('◦').count(),
+        rendered.chars().filter(|c| *c == '━').count() + rendered.matches('╸').count(),
         6,
-        "fill plus separators occupy the 60% run"
+        "fill plus caps occupy the 60% run"
     );
     assert_eq!(
         rendered.matches('─').count(),
@@ -122,28 +160,29 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         "the track fills the remainder"
     );
 
-    // A weightless split falls back to a single gradient sweep.
-    let spans = gradient_gauge_spans(
+    // A weightless split falls back to a single flat health run.
+    let spans = context_gauge_spans(
         &plain,
         0.5,
-        &[(0, SEGMENT_CACHE_READ), (0, SEGMENT_INPUT)],
+        &[(0, SEGMENT_CACHE_READ), (0, plain.input_tone())],
         50,
         4,
     );
     assert_eq!(text(&spans), "━━──");
     assert_no_fg(&spans);
 
-    // In truecolor the cache-read run sweeps distinct RGB tones up to the
-    // severity tip, while cache-write and fresh input stay flat in their accents.
+    // In truecolor the cache-read run uses the flat severity tone, while
+    // cache-write and fresh input stay flat in their accents.
     let segments = [
-        (9_000_u64, SEGMENT_CACHE_READ),
-        (3_000, SEGMENT_CACHE_WRITE),
-        (1_500, SEGMENT_INPUT),
+        (9_000_u64, truecolor.tone(SEGMENT_CACHE_READ)),
+        (3_000, truecolor.cache_write_tone()),
+        (1_500, truecolor.input_tone()),
     ];
+    let amount = 0.6;
     let mut runs: Vec<Vec<Option<Color>>> = vec![Vec::new()];
-    for span in &gradient_gauge_spans(&truecolor, 1.0, &segments, 90, 16) {
+    for span in &context_gauge_spans(&truecolor, amount, &segments, 90, 16) {
         let content = span.content.as_ref();
-        if content == "◦" {
+        if content == "╸" {
             runs.push(Vec::new());
         } else if !content.is_empty() && content.chars().all(|glyph| glyph == '━') {
             runs.last_mut()
@@ -154,16 +193,15 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     let read = &runs[0];
     assert!(
         read.len() >= 2 && read.iter().all(|fg| matches!(fg, Some(Color::Rgb(..)))),
-        "the cache-read run is a truecolor sweep: {read:?}"
+        "the cache-read run is truecolor: {read:?}"
     );
-    assert_ne!(read.first(), read.last(), "the sweep moves across its run");
-    assert_eq!(
-        *read.last().unwrap(),
-        Some(truecolor.heat_tone(1.0)),
-        "the sweep tips at the severity tone"
+    assert!(
+        read.iter()
+            .all(|fg| *fg == Some(truecolor.heat_tone(amount))),
+        "the cache-read run is the flat severity tone: {read:?}"
     );
-    let write_fg = truecolor.style(SEGMENT_CACHE_WRITE, Modifier::empty()).fg;
-    let input_fg = truecolor.style(SEGMENT_INPUT, Modifier::empty()).fg;
+    let write_fg = Some(truecolor.cache_write_tone());
+    let input_fg = Some(truecolor.input_tone());
     assert!(
         !runs[1].is_empty() && runs[1].iter().all(|fg| *fg == write_fg),
         "cache-write is a flat accent"
@@ -171,6 +209,19 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     assert!(
         !runs[2].is_empty() && runs[2].iter().all(|fg| *fg == input_fg),
         "fresh input is a flat accent"
+    );
+    let indexed = Theme::fixed(false);
+    assert_cost_tones_are_hot_and_distinct(&indexed);
+    assert_cost_tones_are_hot_and_distinct(&truecolor);
+    assert_eq!(
+        indexed.input_tone(),
+        indexed_from_truecolor(truecolor.input_tone()),
+        "indexed input is the truecolor alarm red quantized to xterm"
+    );
+    assert_eq!(
+        indexed.cache_write_tone(),
+        indexed_from_truecolor(truecolor.cache_write_tone()),
+        "indexed cache-write is the truecolor violet quantized to xterm"
     );
 }
 
@@ -347,12 +398,9 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
     };
     assert_eq!(
         marker(TOKENS_TOTAL).fg,
-        lit.style(Color::Magenta, Modifier::empty()).fg
+        lit.style(Color::Blue, Modifier::empty()).fg
     );
-    assert_eq!(
-        marker(TOKENS_IN).fg,
-        lit.style(SEGMENT_INPUT, Modifier::empty()).fg
-    );
+    assert_eq!(marker(TOKENS_IN).fg, Some(lit.input_tone()));
     assert_eq!(
         marker(TOKENS_OUT).fg,
         lit.style(SEGMENT_OUTPUT, Modifier::empty()).fg
@@ -406,8 +454,8 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
             .fg
     };
     // The `▤` head wears the bar's severity tip; each composition marker legends
-    // the bar in its own segment tone — cache-read cyan, cache-write violet,
-    // fresh input blue, output green — all off the warm severity band.
+    // the bar in its own segment tone — cache-read cyan, cache-write compaction
+    // violet, fresh input context-alarm red, output green.
     let segment_fg = |color| theme.style(color, Modifier::empty()).fg;
     assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
     assert_eq!(
@@ -417,10 +465,10 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     );
     assert_eq!(
         tone(TOKENS_CACHE_WRITE),
-        segment_fg(SEGMENT_CACHE_WRITE),
+        Some(theme.cache_write_tone()),
         "cache write"
     );
-    assert_eq!(tone(TOKENS_IN), segment_fg(SEGMENT_INPUT), "fresh input");
+    assert_eq!(tone(TOKENS_IN), Some(theme.input_tone()), "fresh input");
     assert_eq!(tone(TOKENS_OUT), segment_fg(SEGMENT_OUTPUT), "output");
     // Every figure reads dim — only the markers carry tones — and the `·`
     // seam shares the same dim gray chrome.

@@ -17,11 +17,11 @@ use crate::sidebar_pane::render::fmt::{
     time_remaining, tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
-    SEGMENT_CACHE_READ, SEGMENT_CACHE_WRITE, SEGMENT_INPUT, TOKENS_TOTAL, activity_age_style,
-    agent_glyph, agent_lead_style, agent_role_style_at, compacting_glyph, compacting_head_style,
-    context_breakdown_spans, context_compaction_spans, context_total_spans, elapsed_glyph,
-    gradient_gauge_spans, loading_dots, resolver_glyph, resolver_style, severity_heat_amount,
-    severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
+    SEGMENT_CACHE_READ, TOKENS_TOTAL, activity_age_style, agent_glyph, agent_lead_style,
+    agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
+    context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph,
+    loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
+    subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -322,7 +322,7 @@ fn append_sub_agent_tokens(
         Some(total) => {
             left.push(Span::styled(
                 TOKENS_TOTAL,
-                theme.style(Color::Magenta, Modifier::empty()),
+                theme.style(Color::Blue, Modifier::empty()),
             ));
             left.push(Span::styled(
                 format!(" {:>token_col$}", tokens_int(total)),

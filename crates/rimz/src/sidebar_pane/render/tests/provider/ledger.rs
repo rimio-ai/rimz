@@ -3,7 +3,7 @@ use super::*;
 /// The fleet ledger pinned at the bottom of the dashboard: the static
 /// `W:` (week) and `M:` (month) rows, each reading `◎ sessions  ◇ ↘ ↗ ◌
 /// $spend` across every provider — precise one-decimal token figures and the
-/// bold money-green spend, right-aligned into one aligned grid. Today's
+/// bold dollar-green spend, right-aligned into one aligned grid. Today's
 /// headline stays in the cockpit's animated `$`, never repeated here.
 #[test]
 fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {

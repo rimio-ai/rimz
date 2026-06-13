@@ -39,7 +39,7 @@ pub(super) use worktree::worktree_group_lines;
 /// session count reads the same in both places.
 const SESSIONS_GLYPH: &str = "◎";
 
-/// A brighter sage than the resting money-green, held for a couple of frames as
+/// A brighter sage than the resting dollar green, held for a couple of frames as
 /// a figure lands — the quiet "ka-chunk" of a money count-up. Shared by the
 /// cockpit headline and the agent cards' `$cost`, so every settle brightens the
 /// same; drops to plain bold under `NO_COLOR` like every other tone.

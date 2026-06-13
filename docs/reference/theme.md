@@ -63,13 +63,13 @@ Twelve semantic slots cover everything the sidebar paints. Each accepts `#rrggbb
 
 | slot | colors | clay default |
 | --- | --- | --- |
-| `good` | calm/positive: running tallies, low gauges, `+` additions, cache reads | `#96c293` |
-| `warn` | caution: waiting glyphs at rest, mid gauges, cache writes | `#dfb66d` |
+| `good` | calm/positive: running tallies, low gauges, `+` additions | `#96c293` |
+| `warn` | caution: waiting glyphs at rest, mid gauges | `#dfb66d` |
 | `caution` | the amber badge/gauge rung between warning and alarm, and the age-heat midpoint | `#e0915c` |
-| `alarm` | failed glyphs, high gauges, `-` removals, fresh input | `#de6e6e` |
+| `alarm` | failed glyphs, high gauges, `-` removals | `#de6e6e` |
 | `accent` | structure: worktree headers, the selected lane spine | `#72b3aa` |
-| `cool` | cool informational: the `plan` posture pill, window tags | `#7fa8de` |
-| `meta` | delegation: the `⇅ rc` flag, the subagent `⧉` marker | `#b49be0` |
+| `cool` | cool informational: the `plan` posture pill, window tags, the `◇` token total | `#7fa8de` |
+| `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker | `#b49be0` |
 | `soft` | soft content text: stat figures, capability tokens, subagent lines | `#a6a19a` |
 | `dim` | dim chrome: labels, ages, subordinate values | `#767168` |
 | `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers | `#45423d` |
@@ -84,7 +84,11 @@ warn = 173         # a raw xterm index stays exact at every depth
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
 
-The context meter interpolates a health ramp — `good` → `warn` → `caution` → `alarm`, a healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. Age and attention heat ride the warm tail of that same ramp (`warn` → `caution` → `alarm`), since an idle agent reads stale rather than healthy. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
+The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. Age and attention heat ride the warm tail of the same ramp (`warn` → `caution` → `alarm`), since an idle agent reads stale rather than healthy. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
+
+The context composition accents reuse stable sidebar tones: fresh input `↘` wears `heat_tone(1.0)`, the 100% context-fill red; cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
+
+Money amounts use a fixed dollar green (`#85bb65` at truecolor depth, nearest xterm bucket at indexed depth), separate from the `good` success slot.
 
 ## Custom Theme Files
 

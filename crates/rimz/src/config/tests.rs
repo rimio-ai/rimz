@@ -546,14 +546,18 @@ fn context_severity_bands_default_and_parse() {
     let defaults = ContextSeverityConfig::default();
     assert_eq!(config.sidebar.context, defaults);
     assert_eq!(
+        (defaults.green.percent, defaults.green.tokens),
+        (40, 100_000)
+    );
+    assert_eq!(
         (defaults.yellow.percent, defaults.yellow.tokens),
         (60, 160_000)
     );
     assert_eq!(
         (defaults.amber.percent, defaults.amber.tokens),
-        (80, 258_000)
+        (75, 258_000)
     );
-    assert_eq!((defaults.red.percent, defaults.red.tokens), (95, 420_000));
+    assert_eq!((defaults.red.percent, defaults.red.tokens), (90, 420_000));
     let tuned = MachineConfig::load_from(&write(
         &dir,
         "[sidebar.context]\nred = { percent = 50, tokens = 100000 }\n",
@@ -566,6 +570,7 @@ fn context_severity_bands_default_and_parse() {
             tokens: 100_000
         }
     );
+    assert_eq!(tuned.sidebar.context.green, defaults.green);
     assert_eq!(tuned.sidebar.context.yellow, defaults.yellow);
     assert_eq!(tuned.sidebar.context.amber, defaults.amber);
 }

@@ -106,8 +106,8 @@ pub struct SidebarConfig {
     /// shrunk to it once, when it is created. Creation-time only: a manual
     /// resize afterwards sticks.
     pub max_cols: NonZeroU16,
-    /// The context meter's severity bands — where the card's context read
-    /// leaves calm blue for yellow, amber, and red. Display-only; it tunes the
+    /// The context meter's color stops — where the card's context read leaves
+    /// calm green and reaches yellow, amber, and red. Display-only; it tunes the
     /// colour ramp, never the ledger.
     pub context: ContextSeverityConfig,
     /// The provider dashboard's budget-bar color zones — where the draining
@@ -273,45 +273,49 @@ impl Default for AttentionConfig {
     }
 }
 
-/// The context meter's severity bands: each tier names the inclusive lower
-/// bound where it begins, on both axes — the fill percentage and the absolute
-/// tokens in the window. Severity is the worse of the two axes, so a
-/// large-window model calm by percentage still warms by sheer volume. Below
-/// `yellow` on both axes the meter rests calm blue.
+/// The context meter's severity bands: `green` is where the meter starts
+/// leaving calm, then `yellow`, `amber`, and `red` name the reached color stops
+/// on both axes — the fill percentage and the absolute tokens in the window.
+/// Severity is the worse of the two axes, so a large-window model calm by
+/// percentage still warms by sheer volume. Below `green` on both axes the meter
+/// rests calm green.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ContextSeverityConfig {
-    /// Where the meter leaves calm blue for yellow.
+    /// Where the meter leaves calm green and starts warming toward yellow.
+    pub green: ContextBand,
+    /// Where the meter reaches yellow and starts warming toward amber.
     pub yellow: ContextBand,
-    /// Where yellow deepens to amber.
+    /// Where the meter reaches amber and starts warming toward red.
     pub amber: ContextBand,
-    /// Where amber escalates to red.
+    /// Where the meter reaches red and stays red.
     pub red: ContextBand,
 }
 
 impl Default for ContextSeverityConfig {
     fn default() -> Self {
         Self {
+            green: ContextBand {
+                percent: 40,
+                tokens: 100_000,
+            },
             yellow: ContextBand {
                 percent: 60,
                 tokens: 160_000,
             },
-            // 258k matches Codex's effective GPT-5.5 window (272k catalog ×
-            // 95%), so a Codex session deepens to amber as it crosses its own
-            // ceiling.
             amber: ContextBand {
-                percent: 80,
+                percent: 75,
                 tokens: 258_000,
             },
             red: ContextBand {
-                percent: 95,
+                percent: 90,
                 tokens: 420_000,
             },
         }
     }
 }
 
-/// One severity tier's entry thresholds: the tier begins once *either* axis
+/// One context color stop's thresholds: the stop is reached once *either* axis
 /// reaches its value (`value >= threshold`, inclusive).
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct ContextBand {

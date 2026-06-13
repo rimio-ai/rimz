@@ -12,8 +12,8 @@ use crate::sidebar_pane::render::fmt::{
     dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    SEGMENT_CACHE_READ, SEGMENT_INPUT, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT,
-    TOKENS_TOTAL, mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
+    SEGMENT_CACHE_READ, SEGMENT_OUTPUT, TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL,
+    mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
     unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::theme::Theme;
@@ -55,8 +55,8 @@ const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
 /// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
 /// at the soft tier — the ledger is the exact record next to the cockpit's
 /// coarse live read — each marker in its one shared color (the sky-blue window
-/// tag, the teal `◎`, the violet `◇`, the segment-toned arrows and ring) and
-/// the `$` bold money-green; the
+/// tag, the teal `◎`, the blue `◇`, the segment-toned arrows and ring) and the
+/// `$` bold dollar green; the
 /// spend deliberately does **not** animate (only today's headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
 /// every number column lines up. Empty (dropped) until something is recorded.
@@ -130,12 +130,12 @@ fn wm_row(
             value,
         ),
         Span::raw("  "),
-        Span::styled(TOKENS_TOTAL, marker(Color::Magenta)),
+        Span::styled(TOKENS_TOTAL, marker(Color::Blue)),
         Span::styled(
             format!(" {:>w$}", tokens_short(window.tokens), w = cols.total),
             value,
         ),
-        Span::styled(format!(" {TOKENS_IN} "), marker(SEGMENT_INPUT)),
+        Span::styled(format!(" {TOKENS_IN} "), marker(theme.input_tone())),
         Span::styled(
             format!("{:>w$}", tokens_short(window.input), w = cols.input),
             value,
@@ -157,7 +157,7 @@ fn wm_row(
     ];
     let right = vec![Span::styled(
         format!("{:>w$}", dollars2(window.usd), w = cols.usd),
-        theme.style(Color::Green, Modifier::BOLD),
+        theme.money_style(Modifier::BOLD),
     )];
     pin_right(left, right, width)
 }
@@ -449,7 +449,7 @@ fn provider_body_lines(
 /// The provider's aggregate stats line beside the emblem: today's `◎` session
 /// count then the token breakdown `◇ ↘ ↗ ◌` (integer magnitudes) on the
 /// left — the fleet-ledger rows' exact vocabulary, scoped to this provider —
-/// with the bold money-green spend pinned to the right edge of the bar
+/// with the bold dollar-green spend pinned to the right edge of the bar
 /// `region`. Always rendered — an idle account reads `◎ 0  ◇ 0 …  $0.00` so
 /// the line above the budget bars is never blank. Every figure is today's
 /// transcript-history burn for this provider, summed across every session from
@@ -484,7 +484,7 @@ fn provider_stats_spans(
     ));
     let right = vec![Span::styled(
         dollars2(today.usd),
-        theme.style(Color::Green, Modifier::BOLD),
+        theme.money_style(Modifier::BOLD),
     )];
     pin_right(left, right, region).spans
 }
@@ -786,7 +786,7 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
     if value == "∞" {
         return vec![
             Span::raw(" ".repeat(PROVIDER_RESET_MARKER_PAD)),
-            Span::styled(value, theme.style(Color::Green, Modifier::BOLD)),
+            Span::styled(value, theme.money_style(Modifier::BOLD)),
             Span::raw(
                 " ".repeat(PROVIDER_VALUE_WIDTH.saturating_sub(PROVIDER_RESET_MARKER_PAD + 1)),
             ),
@@ -797,7 +797,7 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
     let pad = value_width.saturating_sub(clipped.chars().count());
     vec![
         Span::raw(" ".repeat(pad)),
-        Span::styled(clipped, theme.style(Color::Green, Modifier::BOLD)),
+        Span::styled(clipped, theme.money_style(Modifier::BOLD)),
         Span::raw(" "),
     ]
 }

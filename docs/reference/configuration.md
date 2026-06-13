@@ -178,7 +178,10 @@ A bare alias string is shell-split as a raw command pane. An alias table with `a
 
 ```toml
 [sidebar.context]
-red = { percent = 95, tokens = 420000 }
+green = { percent = 40, tokens = 100000 }
+yellow = { percent = 60, tokens = 160000 }
+amber = { percent = 75, tokens = 258000 }
+red = { percent = 90, tokens = 420000 }
 
 [sidebar.budget]
 red = 10
@@ -189,7 +192,7 @@ amber = 150
 red = 200
 ```
 
-The agent card context meter reads its health by the worse of two axes: fill percentage and absolute tokens in the window. It interpolates continuously across the theme's OKLab health scale — a healthy green at rest, then gold, orange, and alarm red as the window fills. A large-window model can still warm by sheer token count even when its percentage looks calm.
+The agent card context meter reads its health by the worse of two axes: fill percentage and absolute tokens in the window. It interpolates continuously across the theme's OKLab health scale: below `green` it stays healthy green; at `green` it starts warming toward yellow; at `yellow` it starts warming toward amber; at `amber` it starts warming toward red; at `red` it stays alarm red. A large-window model can still warm by sheer token count even when its percentage looks calm.
 
 The provider dashboard budget zones work in the opposite direction: they bound remaining budget from above. At or above `yellow` the bar stays green; below each threshold it moves through yellow, amber, and red. The template carries the shipped numbers.
 

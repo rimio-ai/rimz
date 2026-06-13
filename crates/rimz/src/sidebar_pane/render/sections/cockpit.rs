@@ -58,7 +58,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 /// [`TallyAnim`] roll — big decaying steps, then penny by penny onto the exact
 /// figure — and brightens for a beat the instant it settles (the W/M ledger
 /// rows below stay static). Always present — an empty room reads `¤ 0`; the
-/// bold money-green `$` joins the right edge once today records spend.
+/// bold dollar-green `$` joins the right edge once today records spend.
 pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
     theme: &Theme,
     live_agents: usize,
@@ -88,7 +88,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         let style = if anim.today_usd.flashing(phase) {
             theme.style(VALUE_FLASH, Modifier::BOLD)
         } else {
-            theme.style(Color::Green, Modifier::BOLD)
+            theme.money_style(Modifier::BOLD)
         };
         vec![Span::styled(dollars2(usd), style)]
     } else {

@@ -90,14 +90,14 @@ pub(super) fn gauge_line(
     let percent = gauge_percent(row)?;
     let value = pct_label(precise_context_pct(row), percent);
     let severity = row_severity(row, bands);
-    // One health amount drives the whole row: the bar's green→severity gradient
-    // sweep and its tip, the `▣` glyph, and the `▤` line below — so glyph, bar,
-    // and figure read one urgency. The composition segments (where the window
-    // went) ride the bar at every severity; the dominant cache-read run carries
-    // the sweep while cache-write and fresh input stay flat accents beside it.
+    // One health amount drives the whole row: the bar's filled run, the `▣`
+    // glyph, and the `▤` line below all use the same tone. The composition
+    // segments (where the window went) ride the bar at every severity; the
+    // dominant cache-read run carries the row health color while cache-write and
+    // fresh input stay flat accents beside it.
     let amount = severity_heat_amount(severity, percent, row.context_used_tokens(), bands);
     let color = theme.heat_tone(amount);
-    let segments = gauge_segments(row);
+    let segments = gauge_segments(theme, row);
     let glyph = if percent == 0 {
         CONTEXT_EMPTY_GLYPH
     } else {
@@ -109,8 +109,8 @@ pub(super) fn gauge_line(
         theme.style(color, Modifier::empty()),
         &value,
         |bar_width| match &segments {
-            Some(segments) => gradient_gauge_spans(theme, amount, segments, percent, bar_width),
-            None => gradient_gauge_spans(theme, amount, &[], percent, bar_width),
+            Some(segments) => context_gauge_spans(theme, amount, segments, percent, bar_width),
+            None => context_gauge_spans(theme, amount, &[], percent, bar_width),
         },
         width,
     ))
@@ -170,16 +170,17 @@ pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 }
 
 /// The context bar's color segments, when the per-message breakdown is known,
-/// left to right: cache reads (blue), cache writes (violet), fresh `input`
-/// (red) — the shared `SEGMENT_*` tones the context line's markers also wear,
-/// so the line legends the bar by construction. The rich statusline blob is
-/// preferred; the row-level [`SidebarRow::call_split`] (Codex's rollout
-/// `last_token_usage`, which reports no cache-write) stands in when the blob
-/// carries no split. `None` when neither source reported one (a fresh
-/// session, or a statusline blob cleared by `/compact` — a rollout-fed split
-/// refreshes with the next call instead), so the bar falls back to a
+/// left to right: cache reads (row health tone, seeded with teal), cache writes
+/// (compaction/delegation violet), fresh `input` (context-alarm red) — the same
+/// tones the context line's markers wear, so the line legends the bar by
+/// construction. The rich statusline blob is preferred; the row-level
+/// [`SidebarRow::call_split`]
+/// (Codex's rollout `last_token_usage`, which reports no cache-write) stands in
+/// when the blob carries no split. `None` when neither source reported one (a
+/// fresh session, or a statusline blob cleared by `/compact` — a rollout-fed
+/// split refreshes with the next call instead), so the bar falls back to a
 /// single-color ramp.
-pub(super) fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
+pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, Color); 3]> {
     if let Some(usage) = ctx(row)
         .and_then(|context| context.tokens.as_ref())
         .and_then(|tokens| tokens.current_usage.as_ref())
@@ -188,16 +189,16 @@ pub(super) fn gauge_segments(row: &SidebarRow) -> Option<[(u64, Color); 3]> {
         let writes = usage.cache_creation_input_tokens.unwrap_or(0);
         let reads = usage.cache_read_input_tokens.unwrap_or(0);
         return (input + writes + reads > 0).then_some([
-            (reads, SEGMENT_CACHE_READ),
-            (writes, SEGMENT_CACHE_WRITE),
-            (input, SEGMENT_INPUT),
+            (reads, theme.tone(SEGMENT_CACHE_READ)),
+            (writes, theme.cache_write_tone()),
+            (input, theme.input_tone()),
         ]);
     }
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
-        (split.cache_read, SEGMENT_CACHE_READ),
-        (0, SEGMENT_CACHE_WRITE),
-        (split.fresh_input, SEGMENT_INPUT),
+        (split.cache_read, theme.tone(SEGMENT_CACHE_READ)),
+        (0, theme.cache_write_tone()),
+        (split.fresh_input, theme.input_tone()),
     ])
 }
 

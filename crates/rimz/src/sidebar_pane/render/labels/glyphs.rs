@@ -186,11 +186,10 @@ fn role_style_with_modifier(theme: &Theme, role: AnimationRole, modifier: Modifi
     }
 }
 
-/// The compacting head's tone: cool violet, the token/context-domain color the
-/// `◇` token glyph already uses, so a pulsing context-condense reads as
-/// housekeeping rather than the clay working fill.
+/// The completed-compaction count marker's tone: yellow, so the count stays
+/// separate from cache-write's violet.
 pub(in crate::sidebar_pane::render) fn compacting_style(theme: &Theme) -> Style {
-    role_style(theme, AnimationRole::Compacting, 0)
+    theme.style(Color::Yellow, Modifier::empty())
 }
 
 pub(in crate::sidebar_pane::render) fn compacting_head_style(

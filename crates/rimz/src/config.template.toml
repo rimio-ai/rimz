@@ -71,9 +71,10 @@
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
 [sidebar.context]
+# green = { percent = 40, tokens = 100000 }
 # yellow = { percent = 60, tokens = 160000 }
-# amber = { percent = 80, tokens = 258000 }
-# red = { percent = 95, tokens = 420000 }
+# amber = { percent = 75, tokens = 258000 }
+# red = { percent = 90, tokens = 420000 }
 
 [sidebar.budget]
 # yellow = 50                         # remaining percent below which the bar leaves green

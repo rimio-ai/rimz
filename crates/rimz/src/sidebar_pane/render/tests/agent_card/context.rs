@@ -207,7 +207,7 @@ fn codex_card_renders_the_per_call_composition() {
     assert_snapshot("codex_card_context_composition", rendered);
 }
 /// The bar's composition comes from the row-level split too: with no rich blob,
-/// a Codex card's fill leads with the cache-read gradient sweep, then the
+/// a Codex card's fill leads with the cache-read health run, then the
 /// fresh-input accent — and no cache-write segment exists to paint — so the
 /// context line stays the bar's legend by construction. Style-level, since text
 /// goldens cannot see the segment colors.
@@ -255,8 +255,8 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
-    let input = theme.style(labels::SEGMENT_INPUT, Modifier::empty());
-    let cache_write = theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty());
+    let input = theme.style(theme.input_tone(), Modifier::empty());
+    let cache_write = theme.style(theme.cache_write_tone(), Modifier::empty());
     assert!(
         bar_styles.contains(&input),
         "the fresh-input accent colors the bar tail"
@@ -271,13 +271,13 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         .expect("the fresh-input accent");
     assert!(
         input_at >= 1 && bar_styles[..input_at].iter().all(|style| *style != input),
-        "the cache-read gradient leads the bar before fresh input: {bar_styles:?}"
+        "the cache-read health run leads the bar before fresh input: {bar_styles:?}"
     );
 }
 /// When all per-call input buckets are present, the context bar reads left to
-/// right like the context line: the cache-read gradient sweep, then the
+/// right like the context line: the cache-read health run, then the
 /// cache-write and fresh-input accents in order. Style-level because the
-/// terminal text only shows the `━` run and its `◦` separators.
+/// terminal text only shows the `━` run and its narrow segment caps.
 #[test]
 fn calm_context_bar_orders_cache_read_before_cache_write() {
     let theme = Theme::fixed(false);
@@ -330,8 +330,8 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         .filter(|span| span.content.contains('━'))
         .map(|span| span.style)
         .collect();
-    let cache_write = theme.style(labels::SEGMENT_CACHE_WRITE, Modifier::empty());
-    let input = theme.style(labels::SEGMENT_INPUT, Modifier::empty());
+    let cache_write = theme.style(theme.cache_write_tone(), Modifier::empty());
+    let input = theme.style(theme.input_tone(), Modifier::empty());
     let write_at = bar_styles
         .iter()
         .position(|style| *style == cache_write)
@@ -349,7 +349,7 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
             && bar_styles[..write_at]
                 .iter()
                 .all(|style| *style != cache_write && *style != input),
-        "the cache-read gradient leads the bar before the accents: {bar_styles:?}"
+        "the cache-read health run leads the bar before the accents: {bar_styles:?}"
     );
 }
 /// The card's age cluster pairs a clock-fill glyph (the face fills with the

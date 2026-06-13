@@ -660,9 +660,10 @@ pub enum ContextSeverity {
 
 impl ContextSeverity {
     /// The worse of the fill-percentage ramp and the absolute-token overlay,
-    /// each tier entered at its configured inclusive lower bound
-    /// ([`ContextSeverityConfig`](crate::config::ContextSeverityConfig)), so a
-    /// large-window model calm by percentage still climbs by sheer volume.
+    /// each tier entered at its configured inclusive lower bound. The `green`
+    /// stop is where the Yellow tier starts warming; `amber` and `red` enter at
+    /// their named stops. A large-window model calm by percentage still climbs
+    /// by sheer volume.
     /// Checked worst-first, so a misordered user config degrades to the
     /// highest matching tier.
     pub fn classify(
@@ -679,7 +680,7 @@ impl ContextSeverity {
             Self::Red
         } else if reaches(&bands.amber) {
             Self::Amber
-        } else if reaches(&bands.yellow) {
+        } else if reaches(&bands.green) {
             Self::Yellow
         } else {
             Self::Calm
@@ -1080,29 +1081,29 @@ mod tests {
     }
 
     /// The context tier climbs calm → yellow → amber → red, taking the worse
-    /// of two axes — fill percentage and absolute tokens — with each tier
-    /// entered at its inclusive lower bound. Defaults: yellow at 60% / 160k,
-    /// amber at 80% / 258k, red at 95% / 420k.
+    /// of two axes — fill percentage and absolute tokens. Defaults: the Yellow
+    /// tier starts warming at 40% / 100k, amber starts at 75% / 258k, and red
+    /// starts at 90% / 420k.
     #[test]
     fn context_severity_takes_the_worse_of_percent_and_tokens() {
         let bands = crate::config::ContextSeverityConfig::default();
         let tier = |percent, tokens| ContextSeverity::classify(percent, tokens, &bands);
         // Low fill, low tokens: calm.
         assert_eq!(tier(20, Some(50_000)), ContextSeverity::Calm);
-        // Just under both yellow bounds stays calm; the bound itself enters.
-        assert_eq!(tier(59, Some(159_999)), ContextSeverity::Calm);
-        assert_eq!(tier(60, Some(10_000)), ContextSeverity::Yellow);
-        assert_eq!(tier(10, Some(160_000)), ContextSeverity::Yellow);
+        // Just under both green-start bounds stays calm; the bound itself enters.
+        assert_eq!(tier(39, Some(99_999)), ContextSeverity::Calm);
+        assert_eq!(tier(40, Some(10_000)), ContextSeverity::Yellow);
+        assert_eq!(tier(10, Some(100_000)), ContextSeverity::Yellow);
         // The percentage ramp alone climbs through all four tiers.
-        assert_eq!(tier(80, Some(10_000)), ContextSeverity::Amber);
-        assert_eq!(tier(95, Some(10_000)), ContextSeverity::Red);
+        assert_eq!(tier(75, Some(10_000)), ContextSeverity::Amber);
+        assert_eq!(tier(90, Some(10_000)), ContextSeverity::Red);
         // Calm by percentage, but the token volume escalates it.
         assert_eq!(tier(20, Some(258_000)), ContextSeverity::Amber);
         assert_eq!(tier(20, Some(420_000)), ContextSeverity::Red);
         // The worse severity wins regardless of which axis it comes from.
-        assert_eq!(tier(94, Some(419_999)), ContextSeverity::Amber);
+        assert_eq!(tier(89, Some(419_999)), ContextSeverity::Amber);
         // No token reading falls back to the percentage ramp alone.
-        assert_eq!(tier(80, None), ContextSeverity::Amber);
+        assert_eq!(tier(75, None), ContextSeverity::Amber);
         assert_eq!(tier(10, None), ContextSeverity::Calm);
         // An out-of-range percent clamps to full and reads red.
         assert_eq!(tier(200, None), ContextSeverity::Red);
@@ -1117,17 +1118,21 @@ mod tests {
     fn context_severity_honours_custom_and_misordered_bands() {
         use crate::config::{ContextBand, ContextSeverityConfig};
         let tight = ContextSeverityConfig {
-            yellow: ContextBand {
+            green: ContextBand {
                 percent: 10,
                 tokens: 1_000,
             },
-            amber: ContextBand {
+            yellow: ContextBand {
                 percent: 20,
                 tokens: 2_000,
             },
-            red: ContextBand {
+            amber: ContextBand {
                 percent: 30,
                 tokens: 3_000,
+            },
+            red: ContextBand {
+                percent: 40,
+                tokens: 4_000,
             },
         };
         assert_eq!(
@@ -1136,16 +1141,24 @@ mod tests {
         );
         assert_eq!(
             ContextSeverity::classify(25, Some(0), &tight),
+            ContextSeverity::Yellow
+        );
+        assert_eq!(
+            ContextSeverity::classify(35, Some(0), &tight),
             ContextSeverity::Amber
         );
         assert_eq!(
-            ContextSeverity::classify(5, Some(3_000), &tight),
+            ContextSeverity::classify(5, Some(4_000), &tight),
             ContextSeverity::Red
         );
 
         // Red configured *below* yellow: a mid fill reaches the red band even
         // though the calmer tiers do not — worst-first keeps the warning loud.
         let misordered = ContextSeverityConfig {
+            green: ContextBand {
+                percent: 95,
+                tokens: 950_000,
+            },
             yellow: ContextBand {
                 percent: 90,
                 tokens: 900_000,

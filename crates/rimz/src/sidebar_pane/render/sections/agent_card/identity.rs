@@ -143,7 +143,7 @@ fn agent_card_lead_style(
 /// Line 1 for an agent: the leading cell (the working fill or thinking head
 /// while active; a blocked `?`/`!` breathes a slow brightness pulse), the agent
 /// name, then the dim capability tokens (`· model · effort · window`) with the
-/// bold `$cost` (money-green) pinned right — counting up through the row's
+/// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
 /// The window token is the model's context window (`258k`, `1M`) — the
 /// context-sidecar reading first, the hook-derived fallback second,
@@ -164,7 +164,7 @@ pub(super) fn agent_identity_line(
     cost_rolls: &CostRolls,
 ) -> Line<'static> {
     // Right cluster, built first so the left trims to whatever's left: the
-    // session cost, bold in money-green, read through the row's stepped roll so
+    // session cost, bold in dollar green, read through the row's stepped roll so
     // an increase ticks up rather than jumps. A cost that rounds to $0.00 — an
     // idle agent that has spent nothing yet — is omitted, not printed as zero
     // (the filter reads the authoritative target, never a mid-climb value).
@@ -178,7 +178,7 @@ pub(super) fn agent_identity_line(
         let style = if cost_rolls.flashing(&row.id, animation_phase) {
             theme.style(VALUE_FLASH, Modifier::BOLD)
         } else {
-            theme.style(Color::Green, Modifier::BOLD)
+            theme.money_style(Modifier::BOLD)
         };
         right.push(Span::styled(dollars2(usd), style));
     }
