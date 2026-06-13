@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 
 use crate::agents::find_adapter;
 use crate::feed::AgentState;
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::mux::ResumePane;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
@@ -66,30 +66,34 @@ impl ResumePlan {
 
 /// Plan the resume seeds for one reborn session from the durable agent rollup.
 ///
-/// `agents` is the audit rollup (dead-process agents intact); `session_name`
-/// scopes to this workspace's session; `ended` is the `(kind, agent_id)` set the
-/// user closed cleanly ([`crate::ledger::snapshot::agent_tombstones_for_events`]);
-/// `max` caps the auto-launched panes; `worktree_exists` decides whether a
-/// candidate's worktree is still on disk (production passes `|p| p.is_dir()`);
-/// `rimz_bin` is the `rimz` executable each pane's wrapper argv names
-/// (production passes `std::env::current_exe()`).
+/// `agents` is the audit rollup (dead-process agents intact); `ended` is the
+/// `(kind, agent_id)` set the user closed cleanly
+/// ([`crate::ledger::snapshot::agent_tombstones_for_events`]); `max` caps the
+/// auto-launched panes; `worktree_exists` decides whether a candidate's worktree
+/// is still on disk (production passes `|p| p.is_dir()`); `rimz_bin` is the
+/// `rimz` executable each pane's wrapper argv names (production passes
+/// `std::env::current_exe()`).
 ///
 /// A candidate qualifies when it is a root agent (subagents ride their parent),
-/// was bound to a pane in *this* session, still carries a session id and a
-/// worktree, and was not cleanly ended. A relaunched agent (same kind+worktree)
-/// collapses to its newest session, mirroring the sidebar's supersession reap,
-/// so resume never doubles it.
+/// was bound to a pane in the incarnation that died, still carries a session id
+/// and a worktree, and was not cleanly ended. The rollup is workspace-scoped and
+/// a `session.rebirth` boundary clears every pane stamp recorded before it, so a
+/// surviving (non-`None`) pane stamp means the agent was live in the incarnation
+/// the rebirth replaces — exactly the set to bring back. One pane hosts one
+/// agent: a relaunch that re-used a pane id collapses to its newest stamp —
+/// the same rule the live sidebar binds by (`stamped_agent_for_pane`, in
+/// `ledger::snapshot::panes`) — so resume never doubles a pane, while two
+/// concurrent agents in one worktree (distinct panes) each keep their own.
 pub fn plan_resume(
     agents: &[AgentState],
-    session_name: &str,
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
     max: usize,
     worktree_exists: impl Fn(&Path) -> bool,
     rimz_bin: &Path,
 ) -> ResumePlan {
-    // Root agents that were bound to a pane in this session, still identified,
-    // and not cleanly ended. A subagent is paneless and rides its parent, so it
-    // is filtered out here and never resumed standalone.
+    // Root agents that were bound to a pane in the dead incarnation, still
+    // identified, and not cleanly ended. A subagent is paneless and rides its
+    // parent, so it is filtered out here and never resumed standalone.
     let mut candidates: Vec<&AgentState> = agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
@@ -100,12 +104,7 @@ pub fn plan_resume(
                 .as_deref()
                 .is_some_and(|path| !path.is_empty())
         })
-        .filter(|agent| {
-            agent
-                .pane
-                .as_ref()
-                .is_some_and(|pane| pane.session_name == session_name)
-        })
+        .filter(|agent| agent.pane.is_some())
         .filter(|agent| !ended.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .collect();
 
@@ -118,21 +117,25 @@ pub fn plan_resume(
             .then_with(|| a.agent_id.cmp(&b.agent_id))
     });
 
-    let mut seen: HashSet<(AgentKind, String, Option<String>)> = HashSet::new();
+    let mut seen: HashSet<PaneId> = HashSet::new();
     let mut plan = ResumePlan::default();
     for agent in candidates {
-        // `worktree_path` is `Some(non-empty)` by the filter above.
-        let worktree = agent.worktree_path.clone().unwrap_or_default();
-        let key = (
-            agent.kind.clone(),
-            worktree.clone(),
-            agent.worktree_branch.clone(),
-        );
-        // A superseded older relaunch in the same worktree: the sidebar showed
-        // only the newest, so resume only the newest.
-        if !seen.insert(key) {
+        // `pane` is `Some` and `worktree_path` is `Some(non-empty)` by the
+        // filters above. The pane is the unit of identity: an older relaunch
+        // that re-used this pane id is superseded by the newest stamp (the
+        // candidates are newest-first, so the first one seen for a pane wins),
+        // mirroring the live binding's `stamped_agent_for_pane`. Distinct panes
+        // — including two same-kind agents in one worktree — each get a seed.
+        let pane_id = agent
+            .pane
+            .as_ref()
+            .expect("candidates are filtered to a stamped pane")
+            .pane_id
+            .clone();
+        if !seen.insert(pane_id) {
             continue;
         }
+        let worktree = agent.worktree_path.clone().unwrap_or_default();
         let cwd = PathBuf::from(&worktree);
         let label = build_label(&agent.kind, agent.worktree_branch.as_deref(), &cwd);
         if !worktree_exists(&cwd) {
@@ -210,12 +213,10 @@ mod tests {
     use crate::ids::{MuxName, PaneId};
     use jiff::Timestamp;
 
-    const SESSION: &str = "rimz-code-query-engine";
-
-    fn pane_in(session: &str, raw: &str) -> PaneRef {
+    fn pane(raw: &str) -> PaneRef {
         PaneRef {
             pane_id: PaneId::from_parts(MuxName::Zellij, raw),
-            session_name: session.to_owned(),
+            session_name: String::new(),
             view_id: None,
             view_kind: None,
             view_name: None,
@@ -231,7 +232,7 @@ mod tests {
         }
     }
 
-    /// A root agent bound to a pane in `SESSION`, active `secs_ago` seconds back.
+    /// A root agent bound to a pane, active `secs_ago` seconds back.
     fn agent(
         kind: &str,
         id: &str,
@@ -247,7 +248,7 @@ mod tests {
             kind_ordinal: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
-            pane: Some(pane_in(SESSION, &format!("terminal_{id}"))),
+            pane: Some(pane(&format!("terminal_{id}"))),
             agent_pid: None,
             agent_process_start: None,
             runtime_owner: None,
@@ -280,12 +281,28 @@ mod tests {
         }
     }
 
+    /// As [`agent`], but stamped on an explicit pane id so a test can model two
+    /// sessions sharing one pane (a relaunch in place) rather than the default
+    /// one-pane-per-id.
+    fn agent_on_pane(
+        kind: &str,
+        id: &str,
+        worktree: &str,
+        branch: Option<&str>,
+        secs_ago: i64,
+        pane_raw: &str,
+    ) -> AgentState {
+        let mut agent = agent(kind, id, worktree, branch, secs_ago);
+        agent.pane = Some(pane(pane_raw));
+        agent
+    }
+
     fn no_ended() -> BTreeSet<(AgentKind, AgentSessionId)> {
         BTreeSet::new()
     }
 
     #[test]
-    fn resumes_root_agents_in_this_session_most_recent_first() {
+    fn resumes_root_agents_most_recent_first() {
         let agents = vec![
             agent("codex", "c1", "/code/query-engine", Some("main"), 30),
             agent(
@@ -298,7 +315,6 @@ mod tests {
         ];
         let plan = plan_resume(
             &agents,
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -328,7 +344,6 @@ mod tests {
         child.parent_agent_id = Some("parent".into());
         let plan = plan_resume(
             &[child],
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -339,27 +354,14 @@ mod tests {
     }
 
     #[test]
-    fn skips_agents_from_another_session() {
-        let mut other = agent("claude", "a1", "/code/query-engine", Some("main"), 1);
-        other.pane = Some(pane_in("rimz-some-other-room", "terminal_a1"));
-        let plan = plan_resume(
-            &[other],
-            SESSION,
-            &no_ended(),
-            DEFAULT_RESUME_MAX,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
-        assert!(plan.is_empty());
-    }
-
-    #[test]
     fn skips_paneless_agents() {
+        // A `None` pane is both a subagent/ghost with no presence and the shape
+        // a rebirth boundary leaves behind for an agent that was not live in the
+        // dying incarnation — neither is resumed.
         let mut paneless = agent("claude", "a1", "/code/query-engine", Some("main"), 1);
         paneless.pane = None;
         let plan = plan_resume(
             &[paneless],
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -377,7 +379,6 @@ mod tests {
                 .collect();
         let plan = plan_resume(
             &agents,
-            SESSION,
             &ended,
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -391,7 +392,6 @@ mod tests {
         let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
         let plan = plan_resume(
             &agents,
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| false,
@@ -409,13 +409,28 @@ mod tests {
 
     #[test]
     fn dedups_a_relaunched_agent_keeping_the_newest() {
+        // A relaunch in place re-uses the same pane id; the older stamp is
+        // superseded by the newest, exactly as the live sidebar binds the pane.
         let agents = vec![
-            agent("claude", "old", "/code/query-engine", Some("main"), 60),
-            agent("claude", "new", "/code/query-engine", Some("main"), 2),
+            agent_on_pane(
+                "claude",
+                "old",
+                "/code/query-engine",
+                Some("main"),
+                60,
+                "terminal_4",
+            ),
+            agent_on_pane(
+                "claude",
+                "new",
+                "/code/query-engine",
+                Some("main"),
+                2,
+                "terminal_4",
+            ),
         ];
         let plan = plan_resume(
             &agents,
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -431,6 +446,43 @@ mod tests {
     }
 
     #[test]
+    fn collapses_a_relaunch_that_changed_branch_on_one_pane() {
+        // Same pane, a branch checkout between the two sessions. The pane is the
+        // identity, so the differing branch must not leak a second resume pane —
+        // the `(kind, worktree, branch)` key used to double this.
+        let agents = vec![
+            agent_on_pane(
+                "claude",
+                "old",
+                "/code/query-engine",
+                Some("main"),
+                60,
+                "terminal_4",
+            ),
+            agent_on_pane(
+                "claude",
+                "new",
+                "/code/query-engine",
+                Some("feature"),
+                2,
+                "terminal_4",
+            ),
+        ];
+        let plan = plan_resume(
+            &agents,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
+        assert_eq!(plan.panes.len(), 1);
+        assert_eq!(
+            plan.panes[0].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "new"]
+        );
+    }
+
+    #[test]
     fn keeps_two_kinds_in_one_worktree() {
         let agents = vec![
             agent("claude", "a1", "/code/query-engine", Some("main"), 5),
@@ -438,7 +490,6 @@ mod tests {
         ];
         let plan = plan_resume(
             &agents,
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -448,19 +499,54 @@ mod tests {
     }
 
     #[test]
+    fn keeps_two_same_kind_agents_in_one_worktree() {
+        // Two Claude sessions running side by side in one worktree — distinct
+        // panes, so each is its own live agent. The `(kind, worktree, branch)`
+        // key used to collapse them to one; pane identity keeps both.
+        let agents = vec![
+            agent_on_pane(
+                "claude",
+                "a1",
+                "/code/query-engine",
+                Some("main"),
+                5,
+                "terminal_4",
+            ),
+            agent_on_pane(
+                "claude",
+                "a2",
+                "/code/query-engine",
+                Some("main"),
+                9,
+                "terminal_5",
+            ),
+        ];
+        let plan = plan_resume(
+            &agents,
+            &no_ended(),
+            DEFAULT_RESUME_MAX,
+            |_| true,
+            Path::new("/bin/rimz"),
+        );
+        assert_eq!(plan.panes.len(), 2);
+        // Freshest leads (the focus target); both sessions are resumed.
+        assert_eq!(
+            plan.panes[0].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
+        );
+        assert_eq!(
+            plan.panes[1].command,
+            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a2"]
+        );
+    }
+
+    #[test]
     fn caps_and_reports_the_overflow() {
         let agents = vec![
             agent("claude", "a1", "/code/wt-1", Some("b1"), 5),
             agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
         ];
-        let plan = plan_resume(
-            &agents,
-            SESSION,
-            &no_ended(),
-            1,
-            |_| true,
-            Path::new("/bin/rimz"),
-        );
+        let plan = plan_resume(&agents, &no_ended(), 1, |_| true, Path::new("/bin/rimz"));
         assert_eq!(plan.panes.len(), 1);
         // The freshest survives the cap; the older overflows.
         assert_eq!(
@@ -475,7 +561,6 @@ mod tests {
     fn empty_when_no_agents() {
         let plan = plan_resume(
             &[],
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,
@@ -490,7 +575,6 @@ mod tests {
         let agents = vec![agent("codex", "c1", "/code/query-engine", None, 1)];
         let plan = plan_resume(
             &agents,
-            SESSION,
             &no_ended(),
             DEFAULT_RESUME_MAX,
             |_| true,

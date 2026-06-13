@@ -91,6 +91,25 @@ fn root_session_reaper_drops_only_unprovable_ghosts() {
             expected: vec!["newer", "older"],
         },
         Case {
+            label: "relaunch reusing a pane collapses across a branch checkout",
+            agents: {
+                let mut older = agent("claude", "older", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .branch("main")
+                    .in_pane("%1")
+                    .active_ago(120);
+                older.agent_pid = Some(111);
+                let mut newer = agent("claude", "newer", AgentStatus::Running, 0)
+                    .worktree("/repo/a")
+                    .branch("feature")
+                    .in_pane("%1")
+                    .active_ago(60);
+                newer.agent_pid = Some(222);
+                vec![older, newer]
+            },
+            expected: vec!["newer"],
+        },
+        Case {
             label: "distinct stamped panes are concurrent live sessions",
             agents: {
                 let mut older = agent("claude", "older", AgentStatus::Running, 0)

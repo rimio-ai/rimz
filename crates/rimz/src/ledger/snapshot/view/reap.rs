@@ -72,8 +72,8 @@ impl SidebarSnapshot {
     ///     not reported in hours. A recent pidless session (a just-launched
     ///     agent) is kept.
     /// (b) an older session **superseded** by a strictly-newer same-kind
-    ///     session on the same `(worktree_path, worktree_branch)`, when the
-    ///     older holds no live pane the newer doesn't already occupy. This
+    ///     session that took over its pane — or, for two paneless remnants, its
+    ///     `(worktree_path, worktree_branch)` (`older_yields_pane`). This
     ///     collapses relaunch-in-place and shared-pid ghosts to the newest
     ///     while never dropping a concurrent agent that owns its own pane.
     pub fn reap_stale_sessions(&mut self) {
@@ -101,8 +101,6 @@ impl SidebarSnapshot {
                             && newer.kind == older.kind
                             && newer.agent_id != older.agent_id
                             && newer.last_activity > older.last_activity
-                            && newer.worktree_path == older.worktree_path
-                            && newer.worktree_branch == older.worktree_branch
                             && older_yields_pane(older, newer)
                     })
             })
@@ -189,18 +187,21 @@ fn session_age_secs(now: Timestamp, agent: &AgentState) -> i64 {
     now.duration_since(agent.last_activity).as_secs()
 }
 
-/// True when reaping `older` cannot drop a concurrently-live agent: either it
-/// is paneless and the newer session is paneless too (indistinguishable daemon
-/// remnants), or it stamped the very pane `newer` now occupies (a relaunch in
-/// place). An older paneless session does not yield to a newer distinctly
-/// stamped pane: it may still be the occupant of another same-cwd lazy agent
-/// pane that only the projection can bind.
+/// True when reaping `older` cannot drop a concurrently-live agent. The pane is
+/// the unit of identity: an older session yields when the newer one took over
+/// its exact pane (a relaunch in place — regardless of any branch checkout
+/// between the two), or when both are paneless remnants of the same worktree
+/// (indistinguishable daemon/shared-pid ghosts). An older paneless session does
+/// not yield to a newer distinctly stamped pane: it may still be the occupant of
+/// another same-cwd lazy agent pane that only the projection can bind.
 fn older_yields_pane(older: &AgentState, newer: &AgentState) -> bool {
     match (older.pane.as_ref(), newer.pane.as_ref()) {
-        (None, None) => true,
-        (None, Some(_)) => false,
         (Some(older_pane), Some(newer_pane)) => newer_pane.pane_id == older_pane.pane_id,
-        (Some(_), None) => false,
+        (None, None) => {
+            older.worktree_path == newer.worktree_path
+                && older.worktree_branch == newer.worktree_branch
+        }
+        (None, Some(_)) | (Some(_), None) => false,
     }
 }
 

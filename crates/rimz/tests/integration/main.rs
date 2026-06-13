@@ -31,6 +31,7 @@ mod reload;
 mod remote_attach;
 mod reset;
 mod resolver;
+mod resume;
 mod run;
 mod sidebar_launch;
 mod sidebar_snapshot;

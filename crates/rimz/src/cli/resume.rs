@@ -19,7 +19,6 @@ pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &s
 /// an empty plan (the birth comes up bare) and never blocks the launch.
 pub(super) fn plan_room_resume(
     workspace_id: &rimz::WorkspaceId,
-    session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
 ) -> rimz::resume::ResumePlan {
@@ -35,7 +34,6 @@ pub(super) fn plan_room_resume(
         let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
         Ok(rimz::resume::plan_resume(
             &projection.agents,
-            session_name,
             &ended,
             resume_cfg.max,
             |path| path.is_dir(),

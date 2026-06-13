@@ -448,7 +448,6 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         let plan = plan_room_resume(
             &workspace.workspace_id,
-            &workspace.session_name,
             &machine_config.resume,
             args.no_resume,
         );
@@ -555,12 +554,7 @@ fn attach_cwd(
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
     } else {
-        let plan = plan_room_resume(
-            &workspace.workspace_id,
-            &workspace.session_name,
-            &machine_config.resume,
-            no_resume,
-        );
+        let plan = plan_room_resume(&workspace.workspace_id, &machine_config.resume, no_resume);
         record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
         plan
     };
@@ -624,12 +618,8 @@ fn attach_named(
             let resume_plan = if was_live {
                 rimz::resume::ResumePlan::default()
             } else {
-                let plan = plan_room_resume(
-                    &record.workspace_id,
-                    &record.session_name,
-                    &machine_config.resume,
-                    no_resume,
-                );
+                let plan =
+                    plan_room_resume(&record.workspace_id, &machine_config.resume, no_resume);
                 record_rebirth_boundary(&record.workspace_id, &record.session_name);
                 plan
             };
