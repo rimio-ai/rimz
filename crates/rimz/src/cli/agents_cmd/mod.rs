@@ -60,7 +60,7 @@ pub struct AgentsArgs {
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
     /// Use a Rimz-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
-    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "", require_equals = true)]
+    #[arg(long, value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
     worktree: Option<String>,
     /// Durable name for a single launched agent.
     #[arg(long)]

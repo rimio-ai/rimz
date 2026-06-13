@@ -37,6 +37,16 @@ fn agents_launch_parses_spec_prompt_and_worktree_name() {
 }
 
 #[test]
+fn agents_launch_accepts_space_separated_worktree() {
+    let parsed = AgentsHarness::try_parse_from(["rimz", "peer", "--worktree", "unread-tune"])
+        .expect("parse agents launch space-separated worktree");
+
+    assert_eq!(parsed.args.spec.as_deref(), Some("peer"));
+    assert_eq!(parsed.args.worktree.as_deref(), Some("unread-tune"));
+    assert!(parsed.args.prompt.is_none());
+}
+
+#[test]
 fn agents_list_verb_does_not_parse_as_launch_spec() {
     let parsed =
         AgentsHarness::try_parse_from(["rimz", "list", "--json"]).expect("parse agents list");
