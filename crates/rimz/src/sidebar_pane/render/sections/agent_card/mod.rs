@@ -17,11 +17,11 @@ use crate::sidebar_pane::render::fmt::{
     time_remaining, tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
-    SEGMENT_CACHE_READ, TOKENS_TOTAL, activity_age_style, agent_glyph, agent_lead_style,
-    agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
-    context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph,
-    loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
-    subagent_glyph, subagent_head_style, todo_spans, window_style,
+    CardAttention, CardEmphasis, SEGMENT_CACHE_READ, TOKENS_TOTAL, activity_age_style, agent_glyph,
+    agent_lead_style_with_attention, agent_role_style_at, compacting_glyph, compacting_head_style,
+    context_breakdown_spans, context_compaction_spans, context_gauge_spans, context_total_spans,
+    elapsed_glyph, emphasize, loading_dots, resolver_glyph, resolver_style, severity_heat_amount,
+    severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, window_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -85,6 +85,15 @@ pub(super) fn row_lines(
     gutter: Gutter,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
+    let status = row.status().unwrap_or(AgentStatus::Idle);
+    let attention = CardAttention::new(
+        theme,
+        status,
+        age_secs(row.last_activity, now),
+        animation_phase,
+        row.unread,
+        selected,
+    );
     // Auto/expanded modes keep the stable card shape: selection only appends
     // subagents (expanded appends them on every card). Compact is deliberately
     // different: resting cards trim by status, and the selected card opens back
@@ -95,6 +104,7 @@ pub(super) fn row_lines(
         now,
         tier,
         width: cw,
+        attention,
         animation_phase,
         cost_rolls,
     };
@@ -116,10 +126,9 @@ pub(super) fn row_lines(
                     inner.push(description_line(
                         theme,
                         row,
-                        now,
                         tier,
                         cw,
-                        selected,
+                        attention,
                         animation_phase,
                     ));
                     if let Some(line) = gauge_line(theme, row, bands, cw) {
@@ -130,10 +139,9 @@ pub(super) fn row_lines(
                     inner.push(description_line(
                         theme,
                         row,
-                        now,
                         tier,
                         cw,
-                        selected,
+                        attention,
                         animation_phase,
                     ));
                 }
@@ -142,10 +150,9 @@ pub(super) fn row_lines(
             inner.push(description_line(
                 theme,
                 row,
-                now,
                 tier,
                 cw,
-                selected,
+                attention,
                 animation_phase,
             ));
             // A just-started idle agent sits on the 0% baseline gauge with no

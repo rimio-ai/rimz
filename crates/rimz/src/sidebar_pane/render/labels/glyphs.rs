@@ -220,6 +220,85 @@ pub(in crate::sidebar_pane::render) fn working_style(theme: &Theme, animation_ph
     role_style(theme, AnimationRole::Working, animation_phase)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::sidebar_pane::render) enum CardEmphasis {
+    Blink,
+    Normal,
+    Soft,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::sidebar_pane::render) struct CardAttention {
+    pub(in crate::sidebar_pane::render) emphasis: CardEmphasis,
+    pub(in crate::sidebar_pane::render) pulse: Option<BreathSample>,
+}
+
+impl CardAttention {
+    pub(in crate::sidebar_pane::render) fn new(
+        theme: &Theme,
+        status: AgentStatus,
+        age_secs: i64,
+        animation_phase: u64,
+        unread: bool,
+        selected: bool,
+    ) -> Self {
+        let emphasis = card_emphasis(status, unread, selected);
+        let pulse = if emphasis == CardEmphasis::Blink {
+            attention_blink_sample(theme, status, age_secs, animation_phase)
+        } else {
+            None
+        };
+        Self { emphasis, pulse }
+    }
+}
+
+pub(in crate::sidebar_pane::render) fn card_emphasis(
+    status: AgentStatus,
+    unread: bool,
+    selected: bool,
+) -> CardEmphasis {
+    if unread && (status.is_actionable() || status == AgentStatus::Success) {
+        CardEmphasis::Blink
+    } else if status.needs_a_look() || selected {
+        CardEmphasis::Normal
+    } else {
+        CardEmphasis::Soft
+    }
+}
+
+pub(in crate::sidebar_pane::render) fn attention_blink_sample(
+    theme: &Theme,
+    status: AgentStatus,
+    age_secs: i64,
+    animation_phase: u64,
+) -> Option<BreathSample> {
+    theme.animations.status(status).attention_pulse(
+        animation_phase,
+        age_secs,
+        BREATH_DEEP_AMPLITUDE,
+    )
+}
+
+pub(in crate::sidebar_pane::render) fn emphasize(
+    theme: &Theme,
+    natural_color: Option<Color>,
+    emphasis: CardEmphasis,
+    pulse: Option<BreathSample>,
+) -> Style {
+    match emphasis {
+        CardEmphasis::Blink => match (natural_color, pulse) {
+            (Some(color), Some(sample)) => theme.pulse(color, sample),
+            (Some(color), None) => theme.style(color, Modifier::BOLD),
+            (None, Some(sample)) => Style::default().add_modifier(sample.grow_modifier()),
+            (None, None) => Style::default().add_modifier(Modifier::BOLD),
+        },
+        CardEmphasis::Normal => natural_color.map_or_else(Style::default, |color| {
+            theme.style(color, Modifier::empty())
+        }),
+        CardEmphasis::Soft => theme.soft(),
+    }
+}
+
 /// Style for an agent row's leading cell. A running agent's working spinner and
 /// its thinking head both paint in Claude clay by default, so the live head
 /// aligns with the agent's own UI; every other state takes its [`status_style`].
@@ -241,6 +320,7 @@ pub(in crate::sidebar_pane::render) fn agent_role_style_at(
     role_style(theme, agent_role(status, phase), animation_phase)
 }
 
+#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn agent_lead_style(
     theme: &Theme,
     status: AgentStatus,
@@ -248,41 +328,41 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
     age_secs: i64,
     animation_phase: u64,
     unread: bool,
+    selected: bool,
 ) -> Style {
+    let attention = CardAttention::new(theme, status, age_secs, animation_phase, unread, selected);
+    agent_lead_style_with_attention(theme, status, phase, age_secs, attention)
+}
+
+pub(in crate::sidebar_pane::render) fn agent_lead_style_with_attention(
+    theme: &Theme,
+    status: AgentStatus,
+    phase: TurnPhase,
+    age_secs: i64,
+    attention: CardAttention,
+) -> Style {
+    let natural_color = agent_natural_color(theme, status, phase, age_secs);
+    emphasize(theme, natural_color, attention.emphasis, attention.pulse)
+}
+
+fn agent_natural_color(
+    theme: &Theme,
+    status: AgentStatus,
+    phase: TurnPhase,
+    age_secs: i64,
+) -> Option<Color> {
     let role = agent_role(status, phase);
-    let animation = theme.animations.status(status);
-    let style = if status.is_actionable() {
-        let color =
-            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status));
-        if unread {
-            // The hard unread pulse — the same sample the name and description
-            // swing on — so the whole card blinks bright↔dim together.
-            match animation.attention_pulse(animation_phase, age_secs, BREATH_DEEP_AMPLITUDE) {
-                Some(sample) => theme.pulse(color, sample),
-                None => theme.style(color, Modifier::BOLD),
-            }
+    if status.is_actionable() {
+        Some(
+            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status)),
+        )
+    } else {
+        let animation = theme.animations.role(role);
+        if role == AnimationRole::Idle && !animation.color_overridden() {
+            None
         } else {
-            // Read but still actionable: a gentle resting breath, not a blink.
-            match animation.attention_pulse(animation_phase, age_secs, BREATH_SHALLOW_AMPLITUDE) {
-                Some(sample) => theme.breathe(color, sample),
-                None => theme.style(color, Modifier::empty()),
-            }
+            Some(animation.color())
         }
-    } else if unread && status == AgentStatus::Success {
-        match animation.attention_pulse(animation_phase, age_secs, BREATH_DEEP_AMPLITUDE) {
-            Some(sample) => theme.pulse(animation.color(), sample),
-            None => theme.style(animation.color(), Modifier::BOLD),
-        }
-    } else {
-        role_style(theme, role, animation_phase)
-    };
-    let uses_unread_pulse = status.is_actionable() || status == AgentStatus::Success;
-    if unread && !uses_unread_pulse {
-        // Parked unread states (paused) hold a steady bold — nothing to act on
-        // until the provider recovers, so they never join the blink.
-        style.add_modifier(Modifier::BOLD)
-    } else {
-        style
     }
 }
 

@@ -17,6 +17,7 @@ const FRESH_ATTENTION_PERIOD: f32 = 26.0;
 const HOT_ATTENTION_PERIOD: f32 = 12.0;
 const BREATH_MIDPOINT: f32 = 0.35;
 
+#[cfg(test)]
 pub(crate) const BREATH_SHALLOW_AMPLITUDE: f32 = 0.08;
 /// The unread/attention pulse depth: a hard upward swing so the blink grows from
 /// the element's resting tone to a bright crest, never dimming below it.

@@ -410,14 +410,13 @@ impl Theme {
         style
     }
 
-    /// The hard attention pulse: a grow-only swell from the element's resting
-    /// tone up to a bright, bold crest and back — never dimming below rest. It
-    /// lifts both the lightness **and** the weight together, in every depth, so
-    /// the blink is unmistakable; stronger than the calm
-    /// [`breathe`](Self::breathe) (a quiet truecolor wave with no weight). The
-    /// glyph, name, and description of an unread row, and the `?`/`!` make-up
-    /// buckets, share one sample so they swell in unison. `no_color` and a
-    /// colorless `fg` keep the weight swell alone.
+    /// The hard attention pulse: a grow-only lightness swell from the element's
+    /// resting tone to a bright crest and back, held bold for the whole colored
+    /// cycle so the blink stays smooth instead of snapping weight at the peak.
+    /// It is stronger than the calm [`breathe`](Self::breathe). The glyph,
+    /// name, and description of an unread row, and the `?`/`!`/`✓` make-up
+    /// buckets, share one sample so they brighten in unison. `no_color` and a
+    /// colorless `fg` keep the grow-only weight toggle as the fallback signal.
     pub(super) fn pulse(&self, fg: Color, sample: BreathSample) -> Style {
         if self.no_color {
             return Style::default().add_modifier(sample.grow_modifier());
@@ -428,7 +427,7 @@ impl Theme {
         let lifted = scheme::lift_lightness(rgb, sample.grow_delta());
         Style::default()
             .fg(rgb_color(lifted, self.depth))
-            .add_modifier(sample.grow_modifier())
+            .add_modifier(Modifier::BOLD)
     }
 
     /// The body-text tone as a concrete color, so a pulsing description can lift

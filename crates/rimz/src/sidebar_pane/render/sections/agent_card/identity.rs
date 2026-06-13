@@ -1,18 +1,17 @@
 use super::*;
 
-use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
+use crate::sidebar_pane::render::animation::BreathSample;
 
-/// The agent name's style: the matching provider brand color at full weight, so
-/// the name ties to the provider dashboard. Falls back to mid-gray chrome (no
-/// DIM modifier) when no provider matches the kind. An unread row pulses the
-/// name on the shared attention `pulse` sample so it blinks in unison with the
-/// lead glyph and the description; with no sample (configured static) it holds
-/// bold.
+/// The agent name's style under the row's card emphasis. The normal tier wears
+/// the matching provider brand color, tying the card to the provider dashboard;
+/// the soft tier rests with the row; the blink tier pulses on the shared sample
+/// with the lead glyph and description. Unknown providers fall back to mid-gray
+/// chrome.
 pub(super) fn agent_name_style(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     kind: &str,
-    unread: bool,
+    emphasis: CardEmphasis,
     pulse: Option<BreathSample>,
 ) -> Style {
     let brand = providers
@@ -20,35 +19,7 @@ pub(super) fn agent_name_style(
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
         .unwrap_or(Color::DarkGray);
-    match (unread, pulse) {
-        (true, Some(sample)) => theme.pulse(brand, sample),
-        (true, None) => theme.style(brand, Modifier::BOLD),
-        (false, _) => theme.style(brand, Modifier::empty()),
-    }
-}
-
-/// The unread attention pulse for a row, or `None` when the row is read, parked
-/// (paused — nothing to act on), or a configured `effect = "static"` quiets it.
-/// One sample feeds the lead glyph, the name, and the description so the
-/// blinking states (actionable `?`/`!` and an unread result) swing as a group.
-pub(super) fn unread_pulse(
-    theme: &Theme,
-    row: &SidebarRow,
-    now: Timestamp,
-    animation_phase: u64,
-) -> Option<BreathSample> {
-    if !row.unread {
-        return None;
-    }
-    let status = row.status()?;
-    if !(status.is_actionable() || status == AgentStatus::Success) {
-        return None;
-    }
-    theme.animations.status(status).attention_pulse(
-        animation_phase,
-        age_secs(row.last_activity, now),
-        BREATH_DEEP_AMPLITUDE,
-    )
+    emphasize(theme, Some(brand), emphasis, pulse)
 }
 
 pub(super) struct IdentityLineContext<'a> {
@@ -57,6 +28,7 @@ pub(super) struct IdentityLineContext<'a> {
     pub(super) now: Timestamp,
     pub(super) tier: Tier,
     pub(super) width: usize,
+    pub(super) attention: CardAttention,
     pub(super) animation_phase: u64,
     pub(super) cost_rolls: &'a CostRolls,
 }
@@ -101,6 +73,7 @@ pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> L
         status,
         ctx.tier,
         ctx.width,
+        ctx.attention,
         ctx.animation_phase,
         ctx.cost_rolls,
     )
@@ -118,6 +91,7 @@ pub(super) fn agent_lead_cell(
     row: &SidebarRow,
     status: AgentStatus,
     now: Timestamp,
+    attention: CardAttention,
     animation_phase: u64,
 ) -> Span<'static> {
     let actionable = status.is_actionable();
@@ -140,10 +114,9 @@ pub(super) fn agent_lead_cell(
             subagent_head_style(theme, animation_phase),
         );
     }
-    // A blocked `?`/`!` breathes — a slow brightness pulse via
-    // `attention_glyph_style` — to pull the eye back to an unanswered row. It
-    // never blanks, so the one-cell column never shifts as it swells and fades.
-    let style = agent_card_lead_style(theme, row, status, now, animation_phase);
+    // The card emphasis carries the row's attention level; the glyph never
+    // blanks, so the one-cell column never shifts as it brightens.
+    let style = agent_card_lead_style(theme, row, status, now, attention);
     Span::styled(
         agent_glyph(theme, status, row.phase(), animation_phase),
         style,
@@ -155,23 +128,19 @@ fn agent_card_lead_style(
     row: &SidebarRow,
     status: AgentStatus,
     now: Timestamp,
-    animation_phase: u64,
+    attention: CardAttention,
 ) -> Style {
-    if status == AgentStatus::Idle {
-        return theme.soft();
-    }
-    agent_lead_style(
+    agent_lead_style_with_attention(
         theme,
         status,
         row.phase(),
         age_secs(row.last_activity, now),
-        animation_phase,
-        row.unread,
+        attention,
     )
 }
 
 /// Line 1 for an agent: the leading cell (the working fill or thinking head
-/// while active; a blocked `?`/`!` breathes a slow brightness pulse), the agent
+/// while active; attention rows use the card emphasis), the agent
 /// name, then the dim capability tokens (`· model · effort · window`) with the
 /// bold `$cost` (dollar green) pinned right — counting up through the row's
 /// stepped [`CostRolls`] roll as a turn lands, with the shared settle brighten.
@@ -190,6 +159,7 @@ pub(super) fn agent_identity_line(
     status: AgentStatus,
     tier: Tier,
     width: usize,
+    attention: CardAttention,
     animation_phase: u64,
     cost_rolls: &CostRolls,
 ) -> Line<'static> {
@@ -219,13 +189,18 @@ pub(super) fn agent_identity_line(
     // `waiting`/`failed` row sits unanswered. The kind name reads at normal
     // weight in the provider's brand color (or mid-gray chrome for unknown
     // kinds); the bright slot is saved for the task below.
-    let pulse = unread_pulse(theme, row, now, animation_phase);
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, now, animation_phase),
+        agent_lead_cell(theme, row, status, now, attention, animation_phase),
         Span::raw(" "),
         Span::styled(
             clip(&row.name, NAME_MAX),
-            agent_name_style(theme, providers, &row.name, row.unread, pulse),
+            agent_name_style(
+                theme,
+                providers,
+                &row.name,
+                attention.emphasis,
+                attention.pulse,
+            ),
         ),
     ];
     if tier != Tier::L0 {

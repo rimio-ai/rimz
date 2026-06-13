@@ -1,6 +1,6 @@
 use super::super::super::age_heat_amount_for_test;
 use super::*;
-use crate::sidebar_pane::render::animation::BreathSample;
+use crate::sidebar_pane::render::animation::{BREATH_SHALLOW_AMPLITUDE, BreathSample};
 
 fn truecolor_theme() -> Theme {
     let mut sidebar = crate::config::SidebarConfig::default();
@@ -12,6 +12,33 @@ fn truecolor_theme_with(sidebar: &crate::config::SidebarConfig) -> Theme {
     let mut sidebar = sidebar.clone();
     sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
     Theme::fixed_for_sidebar(false, &sidebar)
+}
+
+#[test]
+fn card_emphasis_maps_attention_tiers() {
+    for status in [
+        AgentStatus::Waiting,
+        AgentStatus::Failed,
+        AgentStatus::Success,
+    ] {
+        assert_eq!(card_emphasis(status, true, false), CardEmphasis::Blink);
+        assert_eq!(card_emphasis(status, false, false), CardEmphasis::Normal);
+    }
+
+    assert_eq!(
+        card_emphasis(AgentStatus::Paused, true, false),
+        CardEmphasis::Normal,
+        "paused unread is worth a look but never joins the blink"
+    );
+    assert_eq!(
+        card_emphasis(AgentStatus::Running, false, true),
+        CardEmphasis::Normal,
+        "selection lifts non-attention rows to the normal tier"
+    );
+    for status in [AgentStatus::Running, AgentStatus::Idle] {
+        assert_eq!(card_emphasis(status, true, false), CardEmphasis::Soft);
+        assert_eq!(card_emphasis(status, false, false), CardEmphasis::Soft);
+    }
 }
 
 #[test]
@@ -55,40 +82,34 @@ fn window_style_tints_by_size_class_but_stays_subordinate() {
 #[test]
 fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
     let theme = truecolor_theme();
-    let pulsed = |color: Color, age_secs: i64| {
+    let heat = |age_secs: i64| {
         theme
-            .breathe(
-                color,
-                BreathSample::for_age(0, age_secs, BREATH_SHALLOW_AMPLITUDE),
+            .style(
+                theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
+                Modifier::empty(),
             )
             .fg
-    };
-    let heat = |age_secs: i64| {
-        pulsed(
-            theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
-            age_secs,
-        )
     };
 
     // Both attention states floor at yellow while the age heat is still
     // resting — a row that needs a human never reads as dim chrome — then
-    // slide with the clock age. The glyph breathes, so the expected color is
-    // the current pulse sample over the current heat hue.
+    // slide with the clock age. Read rows rest at the heat tone instead of
+    // breathing.
     for status in [AgentStatus::Waiting, AgentStatus::Failed] {
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false).fg,
-            pulsed(Color::Yellow, 5 * 60)
+            agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false, false).fg,
+            theme.style(Color::Yellow, Modifier::empty()).fg
         );
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false, false).fg,
             heat(25 * 60)
         );
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 50 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 50 * 60, 0, false, false).fg,
             heat(50 * 60)
         );
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 61 * 60, 0, false).fg,
+            agent_lead_style(&theme, status, TurnPhase::Idle, 61 * 60, 0, false, false).fg,
             heat(61 * 60)
         );
     }
@@ -100,10 +121,11 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
             TurnPhase::Idle,
             2 * 60 * 60,
             0,
-            false
+            false,
+            false,
         )
         .fg,
-        agent_style_at(&theme, AgentStatus::Idle, 0).fg
+        theme.soft().fg
     );
     assert_eq!(
         agent_lead_style(
@@ -112,10 +134,11 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
             TurnPhase::Acting,
             2 * 60 * 60,
             0,
-            false
+            false,
+            false,
         )
         .fg,
-        agent_style_at(&theme, AgentStatus::Running, 0).fg
+        theme.soft().fg
     );
 }
 
@@ -129,7 +152,8 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
             TurnPhase::Idle,
             5 * 60,
             0,
-            false
+            true,
+            false,
         )
         .fg,
         agent_lead_style(
@@ -138,10 +162,11 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
             TurnPhase::Idle,
             5 * 60,
             12,
-            false
+            true,
+            false,
         )
         .fg,
-        "the default actionable head still breathes"
+        "the default unread actionable head blinks"
     );
 
     let mut quiet = crate::config::SidebarConfig::default();
@@ -156,6 +181,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         TurnPhase::Idle,
         5 * 60,
         0,
+        true,
         false,
     );
     let quiet_later = agent_lead_style(
@@ -164,11 +190,12 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         TurnPhase::Idle,
         5 * 60,
         12,
+        true,
         false,
     );
     assert_eq!(
         quiet_start, quiet_later,
-        "an explicit static waiting effect quiets the age pulse"
+        "an explicit static waiting effect quiets the unread blink"
     );
 
     let mut fast = crate::config::SidebarConfig::default();
@@ -184,7 +211,8 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
             TurnPhase::Idle,
             5 * 60,
             1,
-            false
+            true,
+            false,
         )
         .fg,
         agent_lead_style(
@@ -193,10 +221,11 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
             TurnPhase::Idle,
             5 * 60,
             2,
-            false
+            true,
+            false,
         )
         .fg,
-        "configured speed modulates the actionable pulse phase"
+        "configured speed modulates the unread blink phase"
     );
 }
 
@@ -217,6 +246,7 @@ fn unread_success_can_be_configured_static() {
             5 * 60,
             0,
             true,
+            false,
         ),
         agent_lead_style(
             &theme,
@@ -225,6 +255,7 @@ fn unread_success_can_be_configured_static() {
             5 * 60,
             12,
             true,
+            false,
         ),
         "an explicit static success effect quiets unread-result pulsing"
     );
@@ -240,6 +271,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         0,
         false,
+        false,
     );
     let unread_trough = agent_lead_style(
         &theme,
@@ -248,6 +280,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         0,
         true,
+        false,
     );
     let unread_peak = agent_lead_style(
         &theme,
@@ -256,11 +289,12 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         12,
         true,
+        false,
     );
 
-    // Grow-only: the blink rests at the read tone and swells to a bright, bold
-    // crest — it never dims below rest, even in truecolor.
-    assert_eq!(unread_trough.add_modifier, Modifier::empty());
+    // Grow-only: the blink holds bold through the colored cycle while the
+    // lightness swells; it never dims below rest, even in truecolor.
+    assert_eq!(unread_trough.add_modifier, Modifier::BOLD);
     assert_eq!(unread_peak.add_modifier, Modifier::BOLD);
     assert_ne!(unread_trough.fg, unread_peak.fg);
     assert_ne!(read.fg, unread_peak.fg);
@@ -272,6 +306,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         12,
         false,
+        false,
     );
     let unread_waiting_peak = agent_lead_style(
         &theme,
@@ -280,6 +315,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         12,
         true,
+        false,
     );
     assert_ne!(
         read_waiting_peak.fg, unread_waiting_peak.fg,
@@ -293,15 +329,11 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         2 * 60 * 60,
         0,
         false,
+        false,
     );
     assert_eq!(
         red_read.fg,
-        theme
-            .breathe(
-                theme.heat_tone(1.0),
-                BreathSample::for_age(0, 2 * 60 * 60, BREATH_SHALLOW_AMPLITUDE),
-            )
-            .fg
+        theme.style(theme.heat_tone(1.0), Modifier::empty()).fg
     );
     assert_eq!(red_read.add_modifier, Modifier::empty());
 
@@ -313,6 +345,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         12,
         false,
+        false,
     );
     let unread_waiting_plain = agent_lead_style(
         &plain,
@@ -321,6 +354,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         5 * 60,
         12,
         true,
+        false,
     );
     assert_eq!(read_waiting_plain.add_modifier, Modifier::empty());
     assert_eq!(unread_waiting_plain.add_modifier, Modifier::BOLD);
@@ -334,6 +368,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             5 * 60,
             0,
             true,
+            false,
         )
         .add_modifier,
         Modifier::empty()
@@ -346,6 +381,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             5 * 60,
             0,
             true,
+            false,
         )
         .add_modifier,
         Modifier::empty()
@@ -358,6 +394,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
             5 * 60,
             12,
             true,
+            false,
         )
         .add_modifier,
         Modifier::BOLD
@@ -365,7 +402,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
 }
 
 #[test]
-fn unread_paused_is_bold_and_static() {
+fn unread_paused_is_normal_and_static() {
     let theme = truecolor_theme();
     let first = agent_lead_style(
         &theme,
@@ -374,6 +411,7 @@ fn unread_paused_is_bold_and_static() {
         5 * 60,
         0,
         true,
+        false,
     );
     let later = agent_lead_style(
         &theme,
@@ -382,10 +420,17 @@ fn unread_paused_is_bold_and_static() {
         5 * 60,
         12,
         true,
+        false,
     );
 
     assert_eq!(first, later);
-    assert!(first.add_modifier.contains(Modifier::BOLD));
+    assert_eq!(
+        first,
+        theme.style(
+            theme.animations.status(AgentStatus::Paused).color(),
+            Modifier::empty()
+        )
+    );
 }
 
 #[test]
@@ -496,6 +541,7 @@ fn paused_glyph_is_single_cell_amber_and_never_heats() {
         2 * 60 * 60,
         0,
         false,
+        false,
     );
     assert_eq!(long_parked.fg, Some(Color::Indexed(179)));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
@@ -562,9 +608,30 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
     assert_eq!(status_style(&theme, AgentStatus::Idle).fg, None);
     assert_eq!(agent_style_at(&theme, AgentStatus::Idle, 0).fg, None);
     assert_eq!(
-        agent_lead_style(&theme, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
-        Style::default().add_modifier(Modifier::BOLD),
-        "unread idle stays still without adding a color and keeps the unread weight"
+        agent_lead_style(
+            &theme,
+            AgentStatus::Idle,
+            TurnPhase::Idle,
+            5 * 60,
+            0,
+            true,
+            false
+        ),
+        theme.soft(),
+        "unread idle stays soft because idle is not an attention tier"
+    );
+    assert_eq!(
+        agent_lead_style(
+            &theme,
+            AgentStatus::Idle,
+            TurnPhase::Idle,
+            5 * 60,
+            0,
+            false,
+            true
+        ),
+        Style::default(),
+        "selected default idle is normal-weight terminal fg, not the Good tone"
     );
 
     let mut sidebar = crate::config::SidebarConfig::default();
@@ -579,8 +646,16 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
         "an explicit idle color still paints the glyph"
     );
     assert_eq!(
-        agent_lead_style(&custom, AgentStatus::Idle, TurnPhase::Idle, 5 * 60, 0, true),
-        custom.style(Color::Green, Modifier::BOLD),
-        "configured idle color stays still on unread idle and keeps the unread weight"
+        agent_lead_style(
+            &custom,
+            AgentStatus::Idle,
+            TurnPhase::Idle,
+            5 * 60,
+            0,
+            true,
+            true
+        ),
+        custom.style(Color::Green, Modifier::empty()),
+        "selected idle uses the configured idle color at full strength"
     );
 }

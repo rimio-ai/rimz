@@ -74,13 +74,16 @@ fn line_two_control_characters_collapse_before_framing() {
     }
 }
 
-fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'static>> {
-    let theme = Theme::fixed(true);
+fn rendered_group_lines_with(
+    snapshot: &SidebarSnapshot,
+    theme: &Theme,
+    phase: u64,
+) -> Vec<Line<'static>> {
     let mut row_index = 0;
     let mut lines = Vec::new();
     let mut map = Vec::new();
     worktree_group_lines(
-        &theme,
+        theme,
         &snapshot.worktree_groups[0],
         &snapshot.providers,
         snapshot.now,
@@ -96,6 +99,10 @@ fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'
         &mut map,
     );
     lines
+}
+
+fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'static>> {
+    rendered_group_lines_with(snapshot, &Theme::fixed(true), phase)
 }
 
 fn span_for<'a>(lines: &'a [Line<'static>], text: &str) -> &'a Span<'static> {
@@ -118,8 +125,9 @@ fn unread_descriptor_grows_bold_without_dimming() {
     );
     let mut unread = snapshot_with(Vec::new(), vec![agent.clone()]);
     unread.worktree_groups[0].rows[0].unread = true;
-    // The unread descriptor blinks with the lead glyph and the name: it swells
-    // to bold at the crest and rests at plain weight between — never dimming.
+    // Under NO_COLOR the unread descriptor shares the lead glyph/name blink
+    // through a grow-only weight toggle: plain at the trough, bold near the
+    // crest, never dim.
     let unread_mods: Vec<_> = (0..32)
         .map(|phase| {
             span_for(&rendered_group_lines_at(&unread, phase), "done")
@@ -139,6 +147,43 @@ fn unread_descriptor_grows_bold_without_dimming() {
             .add_modifier;
         assert!(!modifier.contains(Modifier::BOLD));
     }
+}
+
+#[test]
+fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
+    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let agent = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![agent]);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+
+    let styles: Vec<_> = (0..32)
+        .map(|phase| span_for(&rendered_group_lines_with(&snapshot, &theme, phase), "done").style)
+        .collect();
+    assert!(
+        styles
+            .iter()
+            .all(|style| style.add_modifier == Modifier::BOLD),
+        "colored unread descriptors hold bold through the whole pulse"
+    );
+    assert!(
+        styles.iter().any(|style| style.fg != styles[0].fg),
+        "the colored pulse changes lightness phase to phase"
+    );
+    assert!(
+        styles
+            .iter()
+            .all(|style| !style.add_modifier.contains(Modifier::DIM)),
+        "the grow-only colored pulse never dims"
+    );
 }
 
 #[test]
@@ -165,7 +210,7 @@ fn unread_turn_error_label_pulses_and_stays_italic() {
         .collect();
     assert!(
         mods.iter().any(|m| m.contains(Modifier::BOLD)),
-        "the unread error label blinks bold at the pulse peak"
+        "the unread error label blinks bold throughout the colored pulse"
     );
     assert!(
         mods.iter().all(|m| m.contains(Modifier::ITALIC)),

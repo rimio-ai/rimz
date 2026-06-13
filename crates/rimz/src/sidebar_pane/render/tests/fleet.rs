@@ -1,5 +1,4 @@
 use super::*;
-use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample};
 
 /// The cockpit summary leads with today's sessions (`◎ N`, under the name)
 /// over the live-agent count (`¤ N`); the cockpit below it splits the
@@ -114,8 +113,8 @@ fn cockpit_reads_workspace_tally_while_ledger_reads_global_tally() {
         "global ledger week/month stay visible:\n{rendered}"
     );
 }
-/// The cockpit `?`/`!` buckets echo the per-row glyph escalation: each
-/// wears its oldest contributing row's age heat over the same yellow floor
+/// The read cockpit `?`/`!` buckets echo the per-row glyph escalation at rest:
+/// each wears its oldest contributing row's age heat over the same yellow floor
 /// — warm while fresh, sliding until full alarm at the hour.
 #[test]
 fn attention_bucket_wears_the_oldest_rows_age_heat() {
@@ -139,13 +138,7 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
             .map(|span| span.style.fg)
             .expect("the make-up line carries the ? bucket")
     };
-    // The bucket pulses, so at phase 0 (the trough) every tone wears the same
-    // lightness shift; the heat hue still tracks the oldest row's age.
-    let style = |color| {
-        theme
-            .pulse(color, BreathSample::for_age(0, 0, BREATH_DEEP_AMPLITUDE))
-            .fg
-    };
+    let style = |color| theme.style(color, Modifier::empty()).fg;
     let heat = |age_secs: i64| style(theme.warm_heat_tone(age_heat_amount_for_test(age_secs)));
     assert_eq!(bucket_fg(5 * 60), style(Color::Yellow), "yellow floor");
     assert_eq!(
@@ -391,10 +384,10 @@ fn make_up_clipped_bucket_drops_its_hit() {
 }
 
 #[test]
-fn attention_bucket_pulses_with_age_not_unread() {
+fn make_up_buckets_pulse_only_while_unread() {
     let theme = Theme::fixed(false);
     let mut snapshot = make_up_snapshot();
-    let bucket_modifier = |snapshot: &SidebarSnapshot, animation_phase| {
+    let bucket_style = |snapshot: &SidebarSnapshot, content: &str, animation_phase| {
         fleet_header_lines(
             &theme,
             &snapshot.worktree_groups,
@@ -406,22 +399,19 @@ fn attention_bucket_pulses_with_age_not_unread() {
         .0
         .into_iter()
         .flat_map(|line| line.spans)
-        .find(|span| span.content.as_ref() == "! 1")
-        .expect("failed bucket")
+        .find(|span| span.content.as_ref() == content)
+        .unwrap_or_else(|| panic!("{content} bucket"))
         .style
-        .add_modifier
     };
-    // The make-up `! 1` bucket blinks: it swells to bold at the crest and rests
-    // at plain weight between — never dimming.
     let read: Vec<_> = (0..32)
-        .map(|phase| bucket_modifier(&snapshot, phase))
+        .map(|phase| bucket_style(&snapshot, "! 1", phase))
         .collect();
-    assert!(read.iter().any(|m| m.contains(Modifier::BOLD)));
-    assert!(read.iter().any(|m| m.is_empty()));
-    assert!(read.iter().all(|m| !m.contains(Modifier::DIM)));
+    assert!(read.iter().all(|style| style.add_modifier.is_empty()));
+    assert!(
+        read.iter().all(|style| style.fg == read[0].fg),
+        "read buckets stay static phase to phase"
+    );
 
-    // The blink is the aggregate age echo, not a per-row signal: flagging the
-    // failed row unread leaves the bucket identical phase for phase.
     snapshot
         .worktree_groups
         .iter_mut()
@@ -430,9 +420,57 @@ fn attention_bucket_pulses_with_age_not_unread() {
         .expect("failed row")
         .unread = true;
     let unread: Vec<_> = (0..32)
-        .map(|phase| bucket_modifier(&snapshot, phase))
+        .map(|phase| bucket_style(&snapshot, "! 1", phase))
         .collect();
-    assert_eq!(read, unread, "the bucket blink ignores per-row unread");
+    assert!(
+        unread
+            .iter()
+            .all(|style| style.add_modifier == Modifier::BOLD)
+    );
+    assert!(
+        unread
+            .iter()
+            .all(|style| !style.add_modifier.contains(Modifier::DIM))
+    );
+    assert!(
+        unread.iter().any(|style| style.fg != read[0].fg),
+        "unread buckets brighten against the read tone"
+    );
+
+    let mut success = agent(
+        "done",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("finished"),
+    );
+    success.last_activity = fixed_now() - Duration::from_secs(5 * 60);
+    let mut success_snapshot = snapshot_with(Vec::new(), vec![success]);
+    let read_success: Vec<_> = (0..32)
+        .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
+        .collect();
+    assert!(
+        read_success
+            .iter()
+            .all(|style| style == &labels::status_rest_style(&theme, AgentStatus::Success))
+    );
+
+    success_snapshot.worktree_groups[0].rows[0].unread = true;
+    let unread_success: Vec<_> = (0..32)
+        .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
+        .collect();
+    assert!(
+        unread_success
+            .iter()
+            .all(|style| style.add_modifier == Modifier::BOLD)
+    );
+    assert!(
+        unread_success
+            .iter()
+            .any(|style| style.fg != read_success[0].fg),
+        "unread success joins the blink"
+    );
 }
 
 #[test]

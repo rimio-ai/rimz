@@ -513,11 +513,11 @@ fn consecutive_cards_stack_without_a_blank_separator() {
         rendered.join("\n")
     );
 }
-/// The agent name wears its provider's brand color (Claude's clay), tying the
-/// card to the provider dashboard. Read the expected index off the snapshot's
-/// own panel so the test follows config overrides.
+/// The agent name uses the provider brand color in the card's normal tier and
+/// softens with the rest of a calm unselected card. Read the expected index off
+/// the snapshot's own panel so the test follows config overrides.
 #[test]
-fn agent_name_wears_its_provider_brand_color() {
+fn agent_name_follows_card_emphasis() {
     let theme = Theme::fixed(false); // color on, so the brand tone survives
     let state = agent(
         "claude-1",
@@ -540,15 +540,22 @@ fn agent_name_wears_its_provider_brand_color() {
     )];
     let expected = snapshot.providers[0].color;
 
-    let lines = group_lines(&snapshot, &theme, usize::MAX);
-    let name = lines
-        .iter()
-        .flat_map(|line| &line.spans)
-        .find(|span| span.content == "claude")
-        .expect("the agent name span");
+    let name_style = |selected_index| {
+        group_lines(&snapshot, &theme, selected_index)
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .find(|span| span.content == "claude")
+            .expect("the agent name span")
+            .style
+    };
     assert_eq!(
-        name.style.fg,
+        name_style(0).fg,
         Some(Color::Indexed(expected)),
-        "the agent name wears the provider color"
+        "the selected agent name wears the provider color"
+    );
+    assert_eq!(
+        name_style(usize::MAX).fg,
+        theme.soft().fg,
+        "a calm unselected agent name softens with the row"
     );
 }

@@ -8,42 +8,40 @@ use super::*;
 /// falls to an em dash. A turn that died on a provider API error takes the line
 /// over the fall-through — the soft upstream error text (`turn_error_label`,
 /// quoted verbatim) is the row's most important fact while the `!` escalation
-/// holds, and the fall-through returns once it clears. An unread descriptor
-/// renders bold while the row waits for a look. At L2 the todo progress
+/// holds, and the fall-through returns once it clears. The row emphasis that
+/// drives the glyph and name also drives the description: unread actionable
+/// rows and unread results blink, rows worth a look or selected rows read at
+/// full body weight, and calm unselected rows soften. At L2 the todo progress
 /// (`●●●○○ 3/5`) pins to a right column, aligning under the cost/age above so
 /// the dots read as a tidy gutter instead of floating after the text.
 pub(super) fn description_line(
     theme: &Theme,
     row: &SidebarRow,
-    now: Timestamp,
     tier: Tier,
     width: usize,
-    selected: bool,
+    attention: CardAttention,
     animation_phase: u64,
 ) -> Line<'static> {
+    let emphasis = attention.emphasis;
     // The shared unread pulse, on a concrete body tone so the description lifts
-    // and dims in unison with the lead glyph and the name — and joins the glow
-    // pass, which the terminal-default fg would skip.
-    let pulse = unread_pulse(theme, row, now, animation_phase);
-    let unread_body = || match pulse {
-        Some(sample) => theme.pulse(theme.soft_tone(), sample),
-        None => theme.style(theme.soft_tone(), Modifier::BOLD),
+    // in unison with the lead glyph and the name — and joins the glow pass,
+    // which the terminal-default fg would skip.
+    let body_style = || match emphasis {
+        CardEmphasis::Blink => match attention.pulse {
+            Some(sample) => theme.pulse(theme.soft_tone(), sample),
+            None => theme.style(theme.soft_tone(), Modifier::BOLD),
+        },
+        CardEmphasis::Normal => Style::default(),
+        CardEmphasis::Soft => theme.soft(),
     };
     let body = if let Some(label) = agent(row)
         .and_then(|agent| agent.turn_error_label.as_deref())
         .and_then(single_line_description)
     {
-        let style = if row.unread {
-            unread_body().add_modifier(Modifier::ITALIC)
-        } else {
-            theme.soft().add_modifier(Modifier::ITALIC)
-        };
-        Span::styled(label, style)
+        Span::styled(label, body_style().add_modifier(Modifier::ITALIC))
     } else {
         match descriptor(row).and_then(single_line_description) {
-            Some(text) if row.unread => Span::styled(text, unread_body()),
-            Some(text) if selected => Span::raw(text),
-            Some(text) => Span::styled(text, theme.soft()),
+            Some(text) => Span::styled(text, body_style()),
             None if shows_loading_dots(row) => {
                 Span::styled(loading_dots(animation_phase).to_owned(), theme.dim())
             }

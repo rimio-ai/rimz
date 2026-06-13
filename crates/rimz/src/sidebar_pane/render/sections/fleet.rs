@@ -7,10 +7,10 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::BodyFilter;
-use crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat_color, attention_floor_color, status_chip_color, status_glyph, status_rest_style,
+    age_heat_color, attention_blink_sample, attention_floor_color, status_chip_color, status_glyph,
+    status_rest_style,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -42,9 +42,11 @@ pub(crate) struct MakeUpHit {
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
-/// rows worth a glance — `waiting` `?` and `failed` `!` (each wearing its
-/// oldest row's continuous age heat over a yellow floor), parked `paused` `⏸` (held
-/// amber, never heating), then `success` `✓`. The right cluster is the
+/// rows worth a glance — `waiting` `?` and `failed` `!` (each blinking only
+/// while a visible matching row is unread, otherwise wearing its oldest row's
+/// age heat at rest), parked `paused` `⏸` (held amber, never heating), then
+/// `success` `✓` (blinking only while a visible success row is unread). The
+/// right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
 /// bucket renders; colored statuses use their semantic tone, idle rests at the
@@ -88,11 +90,11 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         return (Vec::new(), Vec::new());
     }
 
-    // Top line — the make-up split by who might want you. The left cluster gathers
-    // the rows worth a glance: `waiting` `?` and `failed` `!` (the oldest row's
-    // continuous heat over a yellow floor), parked `paused` `⏸`, then success. The right
-    // cluster is the live-capacity tail: working, then idle. Every bucket shows
-    // its count.
+    // Top line — the make-up split by who might want you. The left cluster
+    // gathers the rows worth a glance: `waiting` `?` and `failed` `!` (unread
+    // rows blink; read rows keep the oldest row's age heat at rest), parked
+    // `paused` `⏸`, then success. The right cluster is the live-capacity tail:
+    // working, then idle. Every bucket shows its count.
     let mut left = Cluster::new(theme, status_filter);
     left.push_count(
         AgentStatus::Waiting,
@@ -122,7 +124,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Success,
         status_chip_color(theme, AgentStatus::Success),
         success,
-        status_rest_style(theme, AgentStatus::Success),
+        success_bucket_style(theme, groups, now, animation_phase),
     );
     let mut right = Cluster::new(theme, status_filter);
     right.push_count(
@@ -289,13 +291,11 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
     (main, subs)
 }
 
-/// The cockpit attention bucket's tone: bold, wearing the oldest contributing
-/// row's continuous age heat over the same yellow floor as the per-row glyph —
-/// the aggregate echo of
-/// [`agent_lead_style`](crate::sidebar_pane::render::labels::agent_lead_style)'s
-/// escalation. Reads the rendered rows (capped-away agents are excluded — the
-/// bucket count still spans them, but a hidden agent never drives the visible
-/// heat).
+/// The cockpit `?`/`!` bucket's tone: an unread visible row makes the bucket
+/// blink on that row's age heat; otherwise it rests on the oldest visible
+/// matching row's heat. Reads the rendered rows (capped-away agents are
+/// excluded — the bucket count still spans them, but a hidden agent never
+/// drives the visible blink or heat).
 fn attention_bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -303,25 +303,63 @@ fn attention_bucket_style(
     now: Timestamp,
     animation_phase: u64,
 ) -> Style {
-    let oldest = groups
+    let oldest_unread = groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.status() == Some(status) && row.unread)
+        .map(|row| age_secs(row.last_activity, now))
+        .max();
+    if let Some(age) = oldest_unread {
+        let color = attention_heat_color(theme, status, age);
+        return match attention_blink_sample(theme, status, age, animation_phase) {
+            Some(sample) => theme.pulse(color, sample),
+            None => theme.style(color, Modifier::BOLD),
+        };
+    }
+    let oldest_any = oldest_matching_age(groups, status, now);
+    theme.style(
+        attention_heat_color(theme, status, oldest_any.unwrap_or(0)),
+        Modifier::empty(),
+    )
+}
+
+fn success_bucket_style(
+    theme: &Theme,
+    groups: &[SidebarWorktreeGroup],
+    now: Timestamp,
+    animation_phase: u64,
+) -> Style {
+    let oldest_unread = groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.status() == Some(AgentStatus::Success) && row.unread)
+        .map(|row| age_secs(row.last_activity, now))
+        .max();
+    let color = theme.animations.status(AgentStatus::Success).color();
+    if let Some(age) = oldest_unread {
+        return match attention_blink_sample(theme, AgentStatus::Success, age, animation_phase) {
+            Some(sample) => theme.pulse(color, sample),
+            None => theme.style(color, Modifier::BOLD),
+        };
+    }
+    status_rest_style(theme, AgentStatus::Success)
+}
+
+fn oldest_matching_age(
+    groups: &[SidebarWorktreeGroup],
+    status: AgentStatus,
+    now: Timestamp,
+) -> Option<i64> {
+    groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.status() == Some(status))
         .map(|row| age_secs(row.last_activity, now))
         .max()
-        .unwrap_or(0);
-    let color =
-        age_heat_color(theme, oldest).unwrap_or_else(|| attention_floor_color(theme, status));
-    // The bucket pulses on its oldest row's age, the aggregate echo of the
-    // per-row blink, so the make-up line breathes in step with the cards.
-    match theme.animations.status(status).attention_pulse(
-        animation_phase,
-        oldest,
-        BREATH_DEEP_AMPLITUDE,
-    ) {
-        Some(sample) => theme.pulse(color, sample),
-        None => theme.style(color, Modifier::BOLD),
-    }
+}
+
+fn attention_heat_color(theme: &Theme, status: AgentStatus, age_secs: i64) -> Color {
+    age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status))
 }
 
 /// The full-fleet count for one make-up bucket — the sum of every group's
