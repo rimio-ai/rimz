@@ -155,6 +155,8 @@ fn agent(
     AgentState {
         agent_id: id.into(),
         kind: crate::ids::AgentKind::new_unchecked(kind),
+        name: None,
+        kind_ordinal: None,
         status,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,

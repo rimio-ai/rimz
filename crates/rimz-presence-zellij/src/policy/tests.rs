@@ -390,7 +390,7 @@ fn foreground_overlay_reaches_live_roster_payload() {
 
 #[test]
 fn launch_chrome_foreground_does_not_reach_live_roster_payload() {
-    let launch = "rimz tab --layout claude,codex --worktree quality-pass";
+    let launch = "rimz agents claude,codex --worktree=quality-pass";
     let foreground = BTreeMap::from([(7, launch.to_owned())]);
     let live_roster = tabs(vec![PaneFields {
         id: 7,
@@ -407,23 +407,27 @@ fn launch_chrome_foreground_does_not_reach_live_roster_payload() {
 }
 
 #[test]
-fn launch_chrome_classifier_scopes_to_rimz_tab() {
+fn launch_chrome_classifier_scopes_to_agents_launches() {
     assert!(command_args_are_launch_chrome(&[
         "rimz".to_owned(),
-        "tab".to_owned(),
-        "--layout".to_owned(),
+        "agents".to_owned(),
         "claude,codex".to_owned(),
-        "--worktree".to_owned(),
-        "quality-pass".to_owned(),
+        "--worktree=quality-pass".to_owned(),
     ]));
     assert!(command_args_are_launch_chrome(&[
-        "/home/me/.cargo/bin/rimz tab --layout claude,codex --worktree quality-pass".to_owned(),
+        "/home/me/.cargo/bin/rimz agents claude,codex --worktree=quality-pass".to_owned(),
     ]));
     assert!(!command_args_are_launch_chrome(&[
         "rimz".to_owned(),
         "agents".to_owned(),
         "exec".to_owned(),
         "codex".to_owned(),
+    ]));
+    assert!(!command_args_are_launch_chrome(&[
+        "rimz".to_owned(),
+        "agents".to_owned(),
+        "wait".to_owned(),
+        "swift-otter".to_owned(),
     ]));
     assert!(!command_args_are_launch_chrome(&[
         "cargo".to_owned(),
@@ -459,7 +463,7 @@ fn foreground_command_update_forgets_finished_empty_and_launch_chrome_events() {
         "an empty foreground event clears the retained command"
     );
     assert_eq!(
-        foreground_command_update(&["rimz tab --layout claude,codex".to_owned()], true),
+        foreground_command_update(&["rimz agents claude,codex".to_owned()], true),
         ForegroundCommandUpdate::Forget,
         "launch chrome clears instead of publishing as foreground work"
     );

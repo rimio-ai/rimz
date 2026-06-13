@@ -14,6 +14,7 @@ use crate::ledger::run_store::{self, RunStoreErr};
 use crate::ledger::{SidebarSnapshot, StatePaths};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -75,6 +76,8 @@ pub struct RunRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_path: Option<String>,
@@ -104,6 +107,7 @@ impl RunRecord {
             workspace_id,
             kind,
             agent_id: None,
+            agent_name: None,
             pane_id: None,
             transcript_path: None,
             status: RunStatus::Pending,
@@ -225,7 +229,10 @@ pub fn record_lifecycle(
     match (&record.agent_id, &observation.agent_id) {
         (Some(bound), Some(observed)) if observed != bound => return Ok(None),
         (Some(_), None) => return Ok(None),
-        (None, Some(observed)) => record.agent_id = Some(observed.clone()),
+        (None, Some(observed)) => {
+            record.agent_id = Some(observed.clone());
+            record.agent_name = observation.agent_name.clone().or(record.agent_name);
+        }
         (None, None) | (Some(_), Some(_)) => {}
     }
 
@@ -731,6 +738,8 @@ mod tests {
         AgentState {
             agent_id: AgentSessionId::from(id),
             kind: AgentKind::new_unchecked(kind),
+            name: None,
+            kind_ordinal: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,

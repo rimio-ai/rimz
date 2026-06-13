@@ -84,7 +84,7 @@ pub struct ExpectedRunFrame {
 
 /// Wakeup frame the ledger writer sends to a per-request socket when a
 /// resolution lands, when a request is closed without a decision, or to a
-/// per-run socket when `rimz run` reaches a terminal state. Intentionally small:
+/// per-run socket when a supervised `rimz agents -p` turn reaches a terminal state. Intentionally small:
 /// disk files carry decision payloads.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]

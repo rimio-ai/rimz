@@ -21,7 +21,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, tab keywords and layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent aliases and layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -36,7 +36,7 @@ Nine sections make up the per-machine file:
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[tab]` | tab keywords and named tab layouts for `rimz tab --layout` |
+| `[agents]` | launch aliases and named layouts for `rimz agents <spec>` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[accounts]` | provider account-usage enrichment and display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
@@ -134,32 +134,34 @@ dir = "../{repo}-worktrees"
 base = "fresh"
 ```
 
-`rimz worktree`, `rimz tab --worktree`, and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Cleanup state lives in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
+`rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. Cleanup state lives in [internals/agents/worktrees.md](../internals/agents/worktrees.md).
 
-### Tab Keywords And Layouts
+### Agent Aliases And Layouts
 
 ```toml
-[tab.keywords]
+[agents.aliases]
 vim = "nvim -p"
 htop = "htop"
 
-[tab.keywords.claude-plan]
+[agents.aliases.claude-plan]
 agent = "claude"
+model = "claude-opus-4-8"
 args = "--permission-mode plan"
 
-[tab.keywords.codex-yolo]
+[agents.aliases.codex-yolo]
 agent = "codex"
 mode = "yolo"
-args = "--model gpt-5-codex -c model_reasoning_effort=high"
+model = "gpt-5-codex"
+effort = "high"
 
-[tab.layouts]
+[agents.layouts]
 review = "claude-plan,codex-yolo+vim"
 debug = "pi,htop+term"
 ```
 
-Named layouts feed `rimz tab --layout <name>`, and inline specs such as `rimz tab --layout "claude,codex+term"` use the same cell resolver. A layout is a shape string: commas split columns, plus signs stack rows in a column, and each cell is a keyword. Keywords resolve in this order: user entries in `[tab.keywords]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` agent variants such as `claude-auto`, `codex-ask`, or `codex-yolo`. Non-`ask` virtual modes exist only when that adapter contributes permission argv for the posture. The built-in `peer = "claude,codex"` exists even when unset, and `[tab.layouts.peer]` overrides it for this machine. Layout names that collide with a keyword, `term`, an agent kind, or a virtual mode name are reserved for inline single-cell specs.
+Named layouts feed `rimz agents <name>`, and inline specs such as `rimz agents "claude,codex+term"` use the same cell resolver. A layout is a shape string: commas split columns, plus signs stack rows in a column, and each cell is an alias or built-in cell. Cells resolve in this order: user entries in `[agents.aliases]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` agent variants such as `claude-auto`, `codex-ask`, or `codex-yolo`. Non-`ask` virtual modes exist only when that adapter contributes permission argv for the posture. The built-in `peer = "claude,codex"` exists even when unset, and `[agents.layouts.peer]` overrides it for this machine. Alias and layout names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`; aliases may shadow agent kinds such as `claude` to set local defaults for that kind.
 
-A bare keyword string is shell-split as a raw command pane. A keyword table with `agent = "<kind>"` opens an agent cell; `mode = "auto" | "ask" | "yolo"` adds that adapter's permission argv first, then `args` is shell-split and appended. Launch posture and model flags live on keywords, so a named layout composes variants like `claude-plan` or `codex-yolo` directly.
+A bare alias string is shell-split as a raw command pane. An alias table with `agent = "<kind>"` opens an agent cell; `model` and `effort` render through the adapter, `mode = "auto" | "ask" | "yolo"` adds that adapter's permission argv, then `args` is shell-split and appended. Claude supports `model`; Codex supports `model` and `effort`; unsupported typed fields fail config load with the fix rather than being ignored. Per-machine configs with `[tab]`, `[tab.keywords]`, or `[tab.layouts]` hard-error; rename them to `[agents]`, `[agents.aliases]`, and `[agents.layouts]`.
 
 ### Sidebar Bands
 

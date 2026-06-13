@@ -4,7 +4,7 @@ Rimz accepts human-authored text for a live agent now (`rimz steer`) or for the 
 
 ## Targets
 
-Message commands resolve `TARGET` as a normalized pane id (`tmux:%1`, `zellij:terminal_3`), a known agent kind (`claude`, `codex`, `pi`), or an agent session id or unique session-id prefix. Kind and session targets resolve against root agents in the current workspace snapshot. `--worktree` narrows matches by branch, path basename, or full path. Ambiguous matches and misses fail with candidate `(kind, session, pane)` labels.
+Message commands resolve `TARGET` with the same card ref grammar as [`rimz agents`](../../reference/cli/agents.md): a normalized pane id (`tmux:%1`, `zellij:terminal_3`), exact pet name, kind ordinal (`claude-2`), unique kind, or agent session id/prefix. Add `@<worktree>` inline or pass `--worktree` to narrow matches by branch, path basename, or full path. Ambiguous matches and misses fail with candidate `(name, kind ordinal, worktree, pane)` labels.
 
 ## Steer
 

@@ -52,6 +52,50 @@ fn carryover_session_end_tombstones_older_agent_state() {
 }
 
 #[test]
+fn legacy_carryover_agents_get_card_identity() {
+    let mut carried = agent("claude", "agent-1", AgentStatus::Idle, 1_000);
+    carried.name = None;
+    carried.kind_ordinal = None;
+
+    let merged = agent_rollup_with_carryover(&[], vec![carried]);
+
+    assert_eq!(merged.len(), 1);
+    assert!(merged[0].name.is_some());
+    assert_eq!(merged[0].kind_ordinal, Some(1));
+}
+
+#[test]
+fn rebirth_after_rotation_reassigns_carryover_ordinals_without_colliding_with_live_agents() {
+    let workspace = WorkspaceId::from_project_root(Path::new("/tmp/x"));
+    let mut carried = agent("claude", "old-session", AgentStatus::Idle, 1_000);
+    carried.name = Some("lucid-atlas".to_owned());
+    carried.kind_ordinal = Some(1);
+    let events = vec![
+        EventEnvelope::session_rebirth(workspace.clone(), "session"),
+        lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "new-session",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    ];
+
+    let merged = agent_rollup_with_carryover(&events, vec![carried]);
+    let old = merged
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "old-session")
+        .expect("carryover agent survives audit rollup");
+    let new = merged
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "new-session")
+        .expect("new live agent");
+
+    assert_eq!(new.kind_ordinal, Some(1));
+    assert_eq!(old.kind_ordinal, Some(2));
+}
+
+#[test]
 fn carryover_round_trips_on_disk() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("agents.carryover.json");
@@ -67,6 +111,7 @@ fn carryover_round_trips_on_disk() {
             agent.worktree_branch = Some("main".into());
             agent
         }],
+        agent_identity: AgentIdentityState::default(),
     };
     write_carryover(&path, &carryover).unwrap();
     let loaded = read_carryover(&path).unwrap();

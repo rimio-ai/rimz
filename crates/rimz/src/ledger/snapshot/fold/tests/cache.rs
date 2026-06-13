@@ -26,6 +26,8 @@ fn mismatched_rollup_cache_falls_back_to_the_cold_fold() {
             offset,
         },
         raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+        agent_identity: AgentIdentityState::default(),
+        saw_session_rebirth: false,
         tombstones: Vec::new(),
     };
     let assert_cold = |label: &str| {
@@ -76,6 +78,8 @@ fn rollup_parse_cache_hits_on_identity_and_misses_on_republish() {
             offset: 10,
         },
         raw_agents: vec![agent("claude", id, AgentStatus::Running, 1_000)],
+        agent_identity: AgentIdentityState::default(),
+        saw_session_rebirth: false,
         tombstones: Vec::new(),
     };
     write_rollup_cache(&path, &cache_with("aaaa")).unwrap();
@@ -145,6 +149,8 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
                 offset: 0,
             },
             raw_agents: vec![agent("claude", "ghost", AgentStatus::Running, 0)],
+            agent_identity: AgentIdentityState::default(),
+            saw_session_rebirth: false,
             tombstones: Vec::new(),
         },
     )
@@ -157,4 +163,65 @@ fn cursor_serves_the_held_fold_while_the_log_is_unchanged() {
         held.iter().all(|a| a.agent_id != "ghost"),
         "an unchanged log serves the in-memory base, not the disk base"
     );
+}
+
+#[test]
+fn cached_rebirth_continues_to_reset_carryover_identity_after_extent() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+    paths.ensure_dirs().unwrap();
+    let mut carried =
+        agent("claude", "old-session", AgentStatus::Idle, 1_000).in_pane("terminal_1");
+    carried.name = Some("lucid-atlas".to_owned());
+    carried.kind_ordinal = Some(1);
+    write_carryover(
+        &paths.agents_carryover,
+        &EventCarryover {
+            agents: vec![carried],
+            agent_identity: AgentIdentityState::default(),
+        },
+    )
+    .unwrap();
+    event_log::append(
+        &paths.events_log,
+        &EventEnvelope::session_rebirth(workspace.clone(), "session"),
+    )
+    .unwrap();
+    let (rebirth_cache, first) = catch_up_rollup(&paths).unwrap();
+    assert!(rebirth_cache.saw_session_rebirth);
+    assert!(
+        first
+            .iter()
+            .all(|agent| agent.pane.is_none() && agent.kind_ordinal.is_some()),
+        "the rebirth fold clears stale pane stamps and backfills card identity"
+    );
+    write_rollup_cache(&paths.rollup_cache, &rebirth_cache).unwrap();
+
+    event_log::append(
+        &paths.events_log,
+        &lifecycle_at(
+            &workspace,
+            "claude",
+            "SessionStart",
+            "new-session",
+            lifecycle::LifecycleSignal::Registered,
+        ),
+    )
+    .unwrap();
+    let (next_cache, next) = catch_up_rollup(&paths).unwrap();
+    let old = next
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "old-session")
+        .expect("carryover survivor");
+    let new = next
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "new-session")
+        .expect("fresh active-log agent");
+
+    assert!(next_cache.saw_session_rebirth);
+    assert!(old.pane.is_none());
+    assert_ne!(old.kind_ordinal, new.kind_ordinal);
+    assert!(old.kind_ordinal.is_some());
+    assert!(new.kind_ordinal.is_some());
 }

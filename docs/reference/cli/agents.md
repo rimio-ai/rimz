@@ -1,104 +1,98 @@
 # Agent Control CLI
 
-Agent commands launch supervised work, type into live panes, queue follow-up text, and manage the worktrees those agents use.
+Agent commands list the room's agent cards, launch laid-out agent panes, run supervised script turns, type into live panes, queue follow-up text, and manage Rimz-owned worktrees.
 
 Run these commands from inside the Rimz room or anywhere that resolves to the same workspace. Every command also accepts the global `--mux <name>` backend override and `--root <path>` workspace-root override.
 
-## Run one supervised agent turn
+## Agents
 
-`rimz run` starts one supervised agent turn and returns the answer to the shell.
-
-```sh
-rimz run "review the latest diff and summarize the risks"
-rimz run --agent codex --worktree cli-docs "rewrite the CLI docs for run and queue"
-rimz run --ask --timeout 30m --json "prepare the release checklist"
-rimz run --detach --agent claude "run the long migration audit"
-```
-
-Use prompt mode for one new agent turn, or a child command to inspect and control an existing run.
+`rimz agents` is the card surface and the single agent launcher.
 
 ```sh
-rimz run [OPTIONS] [PROMPT]
-rimz run status [--json] <RUN_ID>
-rimz run list [--json]
-rimz run stop <RUN_ID>
-rimz run send <RUN_ID> [--enter] -- <TEXT>
-rimz run stream <RUN_ID> [--from-start] [--timeout <DURATION>]
+rimz agents
+rimz agents list --json
+rimz agents show swift-otter
+rimz agents focus claude-2@cli-docs
+rimz agents wait swift-otter --stream --from-start
+rimz agents stop run_0123456789abcdef0123456789abcdef
+rimz agents claude,codex --worktree=cli-docs
+rimz agents 'vim,codex+term' "review the CLI docs"
+rimz agents codex "prepare the release checklist" -p --timeout 30m --json
+rimz agents claude "run the long migration audit" -p --detach
 ```
 
-Prompt mode launches the selected agent in the current room, waits for the root turn to finish, prints the final assistant message, and exits with the run status code. `--agent <kind>` pins an adapter such as `claude` or `codex`; without it, Rimz selects the first installed, trusted, launchable agent. `--worktree [NAME]` runs the prompt in a Rimz-owned worktree; a bare flag creates a fresh worktree and a value reuses or creates that named worktree.
+```sh
+rimz agents [--json]
+rimz agents list|ls [--json] [--all] [--worktree <WORKTREE>]
+rimz agents show <REF> [--json]
+rimz agents focus <REF>
+rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
+rimz agents stop <REF>
+rimz agents <SPEC> [PROMPT] [--worktree[=<NAME>]] [--name <PETNAME>] [--no-focus] [--ask|--yolo] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] -p|--print [--timeout <DURATION>] [--detach] [--stream] [--json] [--keep]
+```
 
-Permissions default to the adapter's normal editable mode. `--ask` leaves provider permission prompts in place, and `--yolo` passes the adapter's explicit bypass mode where supported. Use one permission mode per run.
+Bare `rimz agents` lists live root-agent cards. `list --all` includes audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records.
 
-`--timeout <DURATION>` accepts values such as `30s`, `5m`, `1h`, and `1d`; omitted means the command waits as long as the run takes. `--keep` leaves the agent pane open after a terminal run. `--detach` prints the run id and returns immediately. `--json` prints the terminal run record instead of only the final message. `--stream` prints NDJSON progress for a blocking run.
+`<SPEC>` is the layout grammar: commas split columns, plus signs stack rows, and each cell is `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` cell such as `claude-auto` or `codex-yolo`, or a configured `[agents.aliases]` entry. Named layouts come from `[agents.layouts]`; the built-in `peer` layout is `claude,codex`.
 
-`status` shows one run in the current workspace, with `--json` returning the run record plus live status when the run is still active. `list` prints retained runs newest first, and `--json` emits the records. `stop` marks an active run `canceled`, wakes blocked waiters, and closes the run pane when it can; an already-terminal run reports its prior status and exits successfully.
+`PROMPT` is the optional second positional and is broadcast to every agent cell. Interactive launches pass no approval override by default, so each provider keeps its native prompts; `--ask` keeps/returns to native prompts where supported, and `--yolo` passes the adapter's bypass flags. `-- PASSTHROUGH...` appends raw agent argv to every agent cell after alias preset args and any explicit permission args. A second positional that is itself a known cell or layout is rejected with a `rimz agents a,b` hint so the removed space-separated fan-out form does not silently become a prompt.
 
-`send` types into the run pane through the public pane-send primitive and appends Enter only with `--enter`. It fails for terminal runs and for runs whose pane has not bound yet. `stream` attaches to an existing run and emits NDJSON until the run reaches a terminal status; `--from-start` replays available assistant messages from the beginning, and `--timeout` stops watching without changing the run record.
+`--worktree` requires `=` when it carries a value: `--worktree=docs` reuses or creates that worktree, while bare `--worktree` creates a fresh generated worktree. A single-agent launch into a fresh generated worktree uses the generated worktree name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
 
-Streaming output is newline-delimited JSON. Consumers read `message` events for assistant progress, `status` events for live-state changes, and one `end` event with the terminal status and `last_message`; `end.last_message` is the deliverable.
+`-p` launches exactly one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with the run status code: `0` completed, `1` failed, `124` timed out, `130` canceled. `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
 
-Exit codes are `0` for `completed`, `1` for `failed`, `124` for `timed_out` or a stream watch timeout, and `130` for `canceled`.
+`show` prints one card and its newest attached run record when present. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate. `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.
 
-Supervised runs require installed and trusted hooks because hooks provide the completion signal. Details live in [run internals](../../internals/agents/run.md).
+`<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`), an exact pet name, a kind ordinal (`claude-2`), a unique kind in scope, or a unique session-id prefix. Add `@<worktree>` to the selector or pass `--worktree` where available; both forms narrow by branch, generated worktree name, or directory basename.
 
-## Steer a live agent
+Supervised `-p` runs require installed and trusted hooks because hooks provide the completion signal. Details live in [run internals](../../internals/agents/run.md).
+
+## Steer A Live Agent
 
 `rimz steer` sends human-authored text to one live agent pane immediately.
 
 ```sh
-rimz steer claude -- "Please inspect the failing test and propose the smallest fix."
-rimz steer codex --worktree cli-docs --no-enter -- "Use the docs branch only."
+rimz steer swift-otter -- "Please inspect the failing test and propose the smallest fix."
+rimz steer claude-2@cli-docs --no-enter -- "Use the docs branch only."
 rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."
 ```
 
 ```sh
-rimz steer [OPTIONS] <TARGET> -- <TEXT>
+rimz steer [OPTIONS] <REF> [--worktree <WORKTREE>] [--no-enter] [--force] -- <TEXT...>
 ```
 
-`<TARGET>` is one of three forms:
-
-- `tmux:%1` or `zellij:terminal_3`: a normalized pane id.
-- `claude`, `codex`, or another known agent kind: exactly one live root agent of that kind must match.
-- An agent session id or unique session-id prefix.
-
-`--worktree <name-or-path>` filters kind and session targets by worktree branch, basename, or full path. Ambiguous and missing targets print candidate agents.
-
-By default, `steer` appends Enter after the text. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
+Targets use the same card ref grammar as `agents show`. By default, `steer` appends Enter after the text. `--no-enter` types without submitting. A pending ask attached to the agent reserves the next input for that ask; `--force` records the override and sends anyway. The audit event records metadata and text length, not message content.
 
 Target resolution and pane-answering resolver behavior are covered in [resolver internals](../../internals/agents/resolvers.md).
 
-## Queue the next message
+## Queue The Next Message
 
 `rimz queue` stores text for one agent and delivers it after the agent reaches a safe turn boundary.
 
 ```sh
-rimz queue claude -- "After this turn, add focused tests for the parser."
-rimz queue add codex --worktree cli-docs --on any -- "If the run failed, capture the error first."
+rimz queue swift-otter -- "After this turn, add focused tests for the parser."
+rimz queue add codex@cli-docs --on any -- "If the run failed, capture the error first."
 rimz queue list --json
 rimz queue remove msg_01J...
-rimz queue clear claude --worktree cli-docs
+rimz queue clear claude-2@cli-docs
 ```
-
-Use the bare form for the common add path, or spell the same action as `queue add` when a script prefers explicit subcommands.
 
 ```sh
-rimz queue [OPTIONS] <TARGET> -- <TEXT>
-rimz queue add [OPTIONS] <TARGET> -- <TEXT>
-rimz queue list [--json] [TARGET]
+rimz queue [OPTIONS] <REF> [--worktree <WORKTREE>] [--on done|any] [--no-enter] -- <TEXT...>
+rimz queue add [OPTIONS] <REF> [--worktree <WORKTREE>] [--on done|any] [--no-enter] -- <TEXT...>
+rimz queue list [--json] [REF]
 rimz queue remove <MESSAGE_ID>
-rimz queue clear [--worktree <WORKTREE>] <TARGET>
+rimz queue clear [--worktree <WORKTREE>] <REF>
 ```
 
-The bare form and `queue add` do the same work. Targets use the same pane, kind, and session grammar as `steer`. `--on done` is the default gate and delivers after the agent is `idle` or `success`. `--on any` also delivers after `failed`. `running`, `waiting`, and `paused` keep the message pending. `--no-enter` stores the text without the final Enter. `--worktree <name-or-path>` filters the target the same way `steer` does.
+The bare form and `queue add` do the same work. `--on done` is the default gate and delivers after the agent is `idle` or `success`. `--on any` also delivers after `failed`. `running`, `waiting`, and `paused` keep the message pending. `--no-enter` stores the text without the final Enter.
 
 Delivery is FIFO per agent and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap.
 
-`queue list` prints durable records, with `--json` for automation. `queue remove` removes one open message. `queue clear` removes every open message for the resolved agent and prints the removal count.
-
 Queued delivery requires installed and trusted hooks because turn-end hooks trigger the delivery helper. Details live in [message internals](../../internals/agents/messages.md).
 
-## Drive panes
+## Drive Panes
 
 `rimz pane` exposes the public pane primitives that humans, resolvers, and scripts share.
 
@@ -120,49 +114,11 @@ rimz pane split
 rimz pane detach [--session-name <NAME>]
 ```
 
-`list` shows panes in the selected session; the default session is the cwd's workspace session. `--json` returns structured pane records. `capture` prints visible pane text, `--lines <N>` limits the capture, `--ansi` preserves ANSI styling, and `--json` returns the capture object.
-
-`send` types literal text and named keys in order. Use `--` before text that starts with `-`. `--enter` appends Enter after text and explicit keys. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
-
-`focus` moves attention to a pane. `--pane-process-start <TIMESTAMP>` refuses focus when a reused pane id no longer matches the sidebar snapshot; pair it with `--session-name` when focusing from cached UI state. `split` opens a new pane in the current view with Rimz workspace environment variables. `detach` detaches the attached client while leaving the session running; tmux and Zellij differ in exact client scope.
+`list` shows panes in the selected session; the default session is the cwd's workspace session. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention to a pane. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
 
 Pane capture is untrusted terminal text. Scripts and resolvers match bounded patterns before sending text back, and `pane send` is treated as the same explicit input path as `steer` and queued delivery. Resolver patterns and pane-send discipline live in [resolver internals](../../internals/agents/resolvers.md).
 
-## Open agent tabs
-
-`rimz tab` opens one laid-out tab or window in the current room.
-
-```sh
-rimz tab
-rimz tab --layout peer --worktree cli-docs --prompt "Work on the CLI docs."
-rimz tab --layout 'claude,codex+term' --name "docs review" --no-focus
-```
-
-```sh
-rimz tab [--layout <NAME|SPEC>] [--worktree [NAME]] [--name <TITLE>] [--prompt <TEXT>] [--no-focus]
-```
-
-`--layout` accepts a named `[tab.layouts]` entry or an inline spec. Commas split columns, plus signs stack rows, and cells are keywords: `term`, agent kinds, adapter-supported `<kind>-<mode>` variants, or entries from `[tab.keywords]`; for example, `claude,codex+term` opens one Claude column and one stacked Codex plus shell column. With no layout, Rimz opens one terminal.
-
-`--worktree [NAME]` creates or reuses a Rimz-owned worktree and runs every cell in it. A bare flag creates a generated worktree name. `--name` sets the tab or window title, `--prompt` passes text to agent cells, and `--no-focus` leaves focus where it is.
-
-`rimz agents` is launcher sugar for one or more single-agent tabs.
-
-```sh
-rimz agents claude codex
-rimz agents claude claude --worktree --prompt "Take separate approaches and report back."
-rimz agents codex --worktree cli-docs --no-focus
-```
-
-```sh
-rimz agents [KIND]... [--worktree [NAME]] [--prompt <TEXT>] [--no-focus]
-```
-
-Each positional `KIND` opens in its own tab or window. Repeating a kind opens a small fleet. A bare `--worktree` creates one fresh worktree per launched agent; a named worktree is shared by all launched agents. `--prompt` broadcasts to every launched agent, and `--no-focus` leaves focus unchanged.
-
-Worktree launchers require a git repository-backed room. Plain `tab` and `agents` run in the room root; `--worktree` fails in directory or marker rooms. Worktree launch and cleanup details live in [worktree internals](../../internals/agents/worktrees.md).
-
-## Manage Rimz-owned worktrees
+## Manage Rimz-Owned Worktrees
 
 `rimz worktree` creates, lists, and removes Rimz-owned git worktrees.
 

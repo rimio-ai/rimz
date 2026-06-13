@@ -8,7 +8,9 @@ use serde_json::{Value, json};
 use crate::agents::AgentLifecycleObservation;
 use crate::feed::FeedItem;
 use crate::feed::RuntimeOwner;
-use crate::ids::{AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, WorkspaceId};
+use crate::ids::{
+    AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
+};
 use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
 use crate::schema::EVENT_SCHEMA_VERSION;
 
@@ -18,6 +20,37 @@ pub struct AgentLifecyclePayload {
     pub event_name: Option<String>,
     #[serde(flatten)]
     pub observation: AgentLifecycleObservation,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentLaunchState {
+    #[default]
+    Starting,
+    Bound,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AgentLaunchPayload {
+    pub agent_id: AgentSessionId,
+    pub agent_name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_ordinal: Option<u32>,
+    #[serde(default)]
+    pub state: AgentLaunchState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<RunId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pane_id: Option<PaneId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_owner: Option<RuntimeOwner>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -132,6 +165,8 @@ impl AgentLifecyclePayload {
             event_name: optional_string(params, "event_name"),
             observation: AgentLifecycleObservation {
                 agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
+                agent_name: optional_string(params, "agent_name"),
+                kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
                 agent_pid: optional_deserialize(params, "agent_pid"),
                 agent_process_start: optional_string(params, "agent_process_start"),
@@ -164,6 +199,7 @@ impl AgentLifecyclePayload {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EventKind<'a> {
     AgentLifecycle(Box<AgentLifecyclePayload>),
+    AgentLaunch(AgentLaunchPayload),
     AgentSteered(AgentSteeredPayload),
     Message {
         method: MessageEventMethod,
@@ -234,11 +270,35 @@ impl EventEnvelope {
         )
     }
 
+    pub fn agent_launched(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        kind: &AgentKind,
+        payload: AgentLaunchPayload,
+    ) -> Self {
+        let params = serde_json::to_value(&payload)
+            .expect("AgentLaunchPayload contains only JSON-serializable fields");
+        Self::new(
+            workspace_id,
+            session_name,
+            kind.as_str(),
+            "agent",
+            "agent.launched",
+            params,
+        )
+    }
+
     pub fn kind(&self) -> EventKind<'_> {
         match self.method.as_str() {
             "agent.lifecycle" => AgentLifecyclePayload::from_params(&self.params)
                 .map(Box::new)
                 .map(EventKind::AgentLifecycle)
+                .unwrap_or(EventKind::Other {
+                    method: self.method.as_str(),
+                    params: &self.params,
+                }),
+            "agent.launched" => serde_json::from_value(self.params.clone())
+                .map(EventKind::AgentLaunch)
                 .unwrap_or(EventKind::Other {
                     method: self.method.as_str(),
                     params: &self.params,
@@ -375,6 +435,8 @@ mod tests {
     fn lifecycle_observation() -> AgentLifecycleObservation {
         AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from("sess-1")),
+            agent_name: Some("amber-atlas".to_owned()),
+            kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
                 errored: false,
                 parked_on_background: false,
@@ -428,6 +490,8 @@ mod tests {
             json!({
                 "event_name": "Stop",
                 "agent_id": "sess-1",
+                "agent_name": "amber-atlas",
+                "kind_ordinal": 2,
                 "signal": {
                     "signal": "turn_ended",
                     "errored": false,
@@ -492,6 +556,8 @@ mod tests {
 
         for key in [
             "agent_pid",
+            "agent_name",
+            "kind_ordinal",
             "agent_process_start",
             "runtime_owner",
             "worktree_path",
@@ -588,6 +654,7 @@ mod tests {
             workspace_id: workspace(),
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("sess-1"),
+            agent_name: Some("lucid-atlas".to_owned()),
             text: "secret prompt body".to_owned(),
             enter: true,
             gate: DeliveryGate::Done,

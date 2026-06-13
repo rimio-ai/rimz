@@ -85,6 +85,8 @@ pub struct MessageRecord {
     pub workspace_id: WorkspaceId,
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
     pub text: String,
     pub enter: bool,
     pub gate: DeliveryGate,
@@ -115,6 +117,7 @@ impl MessageRecord {
             workspace_id,
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
+            agent_name: agent.name.clone(),
             text,
             enter,
             gate,
@@ -130,6 +133,15 @@ impl MessageRecord {
 
     pub fn same_agent(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> bool {
         self.kind == *kind && self.agent_id == *agent_id
+    }
+
+    pub fn same_agent_card(&self, agent: &AgentState) -> bool {
+        self.same_agent(&agent.kind, &agent.agent_id)
+            || (self.kind == agent.kind
+                && self
+                    .agent_name
+                    .as_deref()
+                    .is_some_and(|name| agent.name.as_deref() == Some(name)))
     }
 }
 
@@ -238,5 +250,62 @@ mod tests {
             Some(now + jiff::SignedDuration::from_secs(60)),
             now
         ));
+    }
+
+    #[test]
+    fn message_matches_registered_card_by_remembered_name() {
+        let mut provisional = agent("launch_1", Some("lucid-atlas"));
+        let message = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &provisional,
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        provisional.agent_id = AgentSessionId::from("real-session");
+
+        assert!(message.same_agent_card(&provisional));
+    }
+
+    fn agent(id: &str, name: Option<&str>) -> AgentState {
+        let now = Timestamp::now();
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked("claude"),
+            name: name.map(ToOwned::to_owned),
+            kind_ordinal: Some(1),
+            status: AgentStatus::Idle,
+            phase: crate::agents::TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
+        }
     }
 }

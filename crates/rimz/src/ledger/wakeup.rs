@@ -84,7 +84,7 @@ pub fn wake_per_request(rt: &RuntimePaths, item: &FeedItem) -> Result<()> {
     Ok(())
 }
 
-/// Send a `run_completed` datagram to the `rimz run` waiter. The run record on
+/// Send a `run_completed` datagram to the supervised agents waiter. The run record on
 /// disk is authoritative; this socket only cuts latency for the blocking CLI.
 pub fn wake_run(rt: &RuntimePaths, record: &RunRecord) -> Result<()> {
     let target = run_socket_path(rt, &record.run_id);
@@ -138,7 +138,8 @@ fn agent_signal(event: &EventEnvelope) -> Option<String> {
             let payload = *payload;
             Some(payload.observation.signal.tag().to_owned())
         }
-        EventKind::AgentSteered(_)
+        EventKind::AgentLaunch(_)
+        | EventKind::AgentSteered(_)
         | EventKind::Message { .. }
         | EventKind::SessionRebirth
         | EventKind::Other { .. } => None,

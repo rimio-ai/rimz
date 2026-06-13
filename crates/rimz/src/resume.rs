@@ -163,19 +163,27 @@ pub fn plan_resume(
         // which applies trusted `[[agents]]` env and the adapter's launch
         // pins before spawning the resume argv.
         plan.panes.push(ResumePane {
-            command: vec![
-                rimz_bin.to_string_lossy().into_owned(),
-                "agents".to_owned(),
-                "exec".to_owned(),
-                agent.kind.as_str().to_owned(),
-                "--resume".to_owned(),
-                agent.agent_id.as_str().to_owned(),
-            ],
+            command: resume_command(rimz_bin, agent),
             cwd,
             label,
         });
     }
     plan
+}
+
+fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
+    let mut command = vec![
+        rimz_bin.to_string_lossy().into_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        agent.kind.as_str().to_owned(),
+        "--resume".to_owned(),
+        agent.agent_id.as_str().to_owned(),
+    ];
+    if let Some(name) = agent.name.as_deref() {
+        command.extend(["--agent-name".to_owned(), name.to_owned()]);
+    }
+    command
 }
 
 /// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
@@ -235,6 +243,8 @@ mod tests {
         AgentState {
             agent_id: id.into(),
             kind: AgentKind::new_unchecked(kind),
+            name: None,
+            kind_ordinal: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: Some(pane_in(SESSION, &format!("terminal_{id}"))),

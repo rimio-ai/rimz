@@ -4,22 +4,23 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::run::PermissionMode;
 
-/// Tab-launch preferences. Layout entries are shape strings whose cells resolve
-/// through keyword parsing in [`crate::tab_layout`].
+/// Agent-launch preferences. Layout entries are shape strings whose cells
+/// resolve through alias parsing in [`crate::agents_spec`].
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct TabConfig {
-    pub keywords: KeywordsConfig,
+pub struct AgentsConfig {
+    #[serde(default)]
+    pub aliases: AliasesConfig,
     pub layouts: LayoutsConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
-pub struct KeywordsConfig(pub BTreeMap<String, Keyword>);
+pub struct AliasesConfig(pub BTreeMap<String, Alias>);
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(untagged)]
-pub enum Keyword {
+pub enum Alias {
     Command(String),
     CommandTable {
         command: String,
@@ -29,23 +30,29 @@ pub enum Keyword {
         #[serde(default)]
         mode: Option<PermissionMode>,
         #[serde(default)]
+        model: Option<String>,
+        #[serde(default)]
+        effort: Option<String>,
+        #[serde(default)]
         args: Option<String>,
     },
 }
 
-impl<'de> Deserialize<'de> for Keyword {
+impl<'de> Deserialize<'de> for Alias {
     fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        match KeywordInput::deserialize(deserializer)? {
-            KeywordInput::Command(command) => Ok(Self::Command(command)),
-            KeywordInput::CommandTable(command) => Ok(Self::CommandTable {
+        match AliasInput::deserialize(deserializer)? {
+            AliasInput::Command(command) => Ok(Self::Command(command)),
+            AliasInput::CommandTable(command) => Ok(Self::CommandTable {
                 command: command.command,
             }),
-            KeywordInput::Agent(agent) => Ok(Self::Agent {
+            AliasInput::Agent(agent) => Ok(Self::Agent {
                 agent: agent.agent,
                 mode: agent.mode,
+                model: agent.model,
+                effort: agent.effort,
                 args: agent.args,
             }),
         }
@@ -54,7 +61,7 @@ impl<'de> Deserialize<'de> for Keyword {
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum KeywordInput {
+enum AliasInput {
     Command(String),
     CommandTable(CommandKeyword),
     Agent(AgentKeyword),
@@ -72,6 +79,10 @@ struct AgentKeyword {
     agent: String,
     #[serde(default)]
     mode: Option<PermissionMode>,
+    #[serde(default)]
+    model: Option<String>,
+    #[serde(default)]
+    effort: Option<String>,
     #[serde(default)]
     args: Option<String>,
 }

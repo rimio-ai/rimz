@@ -1,59 +1,11 @@
 use super::*;
-use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, WakeupFrame};
 use rimz::feed::{AgentState, AgentStatus, PaneRef};
-use rimz::ids::{AgentSessionId, MuxName, PaneId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, WorkspaceId};
 use rimz::ledger::{RuntimePaths, StatePaths};
+use rimz::run::{PermissionMode, RunStatus};
 use std::path::PathBuf;
 use tokio::net::UnixDatagram;
-
-#[derive(Debug, Parser)]
-struct RunHarness {
-    #[command(flatten)]
-    args: RunArgs,
-}
-
-#[test]
-fn permission_mode_rejects_conflicting_flags() {
-    let args = RunArgs {
-        command: None,
-        prompt: Some("hi".to_owned()),
-        agent: Some("claude".to_owned()),
-        worktree: None,
-        ask: true,
-        yolo: true,
-        timeout: None,
-        keep: false,
-        detach: false,
-        json: false,
-        stream: false,
-    };
-    assert!(permission_mode(&args).is_err());
-}
-
-#[test]
-fn send_subcommand_requires_separator_and_parses_enter() {
-    let run_id = rimz::RunId::new();
-    let parsed =
-        RunHarness::try_parse_from(["run", "send", run_id.as_str(), "--enter", "--", "continue"])
-            .expect("parse send");
-    let Some(RunSubcmd::Send {
-        run_id: parsed_id,
-        enter,
-        text,
-    }) = parsed.args.command
-    else {
-        panic!("expected send subcommand");
-    };
-    assert_eq!(parsed_id, run_id);
-    assert!(enter);
-    assert_eq!(text, "continue");
-
-    assert!(
-        RunHarness::try_parse_from(["run", "send", run_id.as_str(), "continue"]).is_err(),
-        "the free text must live after --"
-    );
-}
 
 #[test]
 fn terminal_run_is_not_sendable() {
@@ -374,6 +326,8 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
     AgentState {
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked(kind),
+        name: None,
+        kind_ordinal: None,
         status,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,

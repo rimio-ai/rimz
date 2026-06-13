@@ -197,6 +197,8 @@ mod tests {
             AgentState {
                 agent_id: AgentSessionId::from(id),
                 kind: AgentKind::new_unchecked("claude"),
+                name: None,
+                kind_ordinal: None,
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
                 pane: Some(pane()),

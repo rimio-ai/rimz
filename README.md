@@ -40,7 +40,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 - **Extremely Lightweight:** a single binary that wraps the harnesses you already run (Claude Code, Codex, Pi) inside your familiar zellij or tmux: same keybinds, same terminal, and the official web, desktop, and mobile apps all keep working
 - **Local or Remote, Continuously:** start the room on your macbook or a server, close the laptop, and reattach from anywhere; the link heals itself, and even a reboot brings the room back with layout and agents resumed
 - **Worktrees, for every Agent:** open agents together, side by side in the same worktree with dynamic layout. For example use `claude,codex` to start Claude planning and Codex reviewing for agentic peer programming, or use `vim,codex+term` to start editor, agent and terminal side by side.
-- **Scriptable and Steerable:** the `claude -p` you missed, brought back as `rimz run`. Plus `steer` and `queue` which add dynamic control over agent harness, easily integrate agents into your scripts, your CI, your workflow with observability
+- **Scriptable and Steerable:** the `claude -p` you missed, brought back as `rimz agents -p`. Plus `steer` and `queue` which add dynamic control over agent harness, easily integrate agents into your scripts, your CI, your workflow with observability
 - **Auto Recover, while you're Away:** agents keep working after you step away. A rate-limit park resumes the moment the window resets, API hiccups recover on their own, context compacts along the way, and routine questions fall to a resolver chain that always ends with you
 
 ## How it works
@@ -78,8 +78,8 @@ rimz
 claude                                      # or: codex, pi
 
 # 4 — Worktrees, dynamic layout
-rimz tab --layout claude,codex --worktree feat/x      # Claude + Codex, side by side
-rimz tab --layout 'vim,claude+term' --worktree feat/y # vim beside a stacked Claude and shell
+rimz agents claude,codex --worktree=feat/x      # Claude + Codex, side by side
+rimz agents 'vim,claude+term' --worktree=feat/y # vim beside a stacked Claude and shell
 
 # 5 — Step away; everything keeps running
 #     zellij: Ctrl-O d · tmux: prefix d
@@ -100,14 +100,14 @@ rimz remote connect dev        # the room rebuilds, every agent where you left i
 **Two agents, one feature.** Built-in and inline layouts compose any grid, the sidebar groups cards by worktree with per-tree diff churn, and a worktree is removed only after its work proves landed on the base branch.
 
 ```sh
-rimz tab --layout peer --worktree feat/great    # customizable layout alias, peer for claude,codex
-rimz tab --layout 'vim,codex+term'              # or layout dynamically
+rimz agents peer --worktree=feat/great    # customizable layout alias, peer for claude,codex
+rimz agents 'vim,codex+term'              # or layout dynamically
 ```
 
 **Pipelines, steering, and queues.** A run that stops to ask survives the stop: the question takes the normal path to your sidebar and your phone, you answer from anywhere, and the run finishes while the script is still blocking.
 
 ```sh
-rimz run --worktree deps --timeout 4h "update dependencies, run the suite, open a PR"
+rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the suite, open a PR"
 rimz steer claude -- "focus on the failing parser test"
 rimz queue codex --on done -- "open a PR summary"
 ```

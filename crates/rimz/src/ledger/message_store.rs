@@ -201,6 +201,8 @@ mod tests {
         AgentState {
             agent_id: AgentSessionId::from("sess-1"),
             kind: AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

@@ -1,7 +1,7 @@
-//! Durable per-run records for `rimz run`.
+//! Durable per-run records for supervised `rimz agents -p` turns.
 //!
 //! Run records are cold-path durable state: a waiting CLI may exit, a user may
-//! inspect the result later with `rimz run status`, and the final assistant text
+//! inspect the result later with `rimz agents show`, and the final assistant text
 //! is the product output. Writes therefore use fsyncing temp-file-plus-rename,
 //! unlike feed/cache sidecars whose correctness rides the event log.
 

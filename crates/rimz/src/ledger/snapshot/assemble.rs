@@ -121,6 +121,9 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
             .reflects_log
             .is_some_and(|extent| extent.offset == log_len)
     };
+    let snapshot_is_current = |snapshot: &SidebarSnapshot| {
+        stamp_is_current(snapshot) && agent_identities_are_current(snapshot)
+    };
     let len = meta.len();
     let path = paths.latest_snapshot.as_path();
     if let Some(mut snapshot) = LATEST_PARSE_CACHE.with(|cache| cache.get(path, latest_mtime, len))
@@ -130,7 +133,7 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
         // rebuilds (stall, compaction, reset windows) must fold against the
         // reader's now, not the long-gone parse.
         snapshot.now = Timestamp::now();
-        return stamp_is_current(&snapshot).then_some(snapshot);
+        return snapshot_is_current(&snapshot).then_some(snapshot);
     }
     let bytes = fs::read(&paths.latest_snapshot).ok()?;
     let mut snapshot: SidebarSnapshot = serde_json::from_slice(&bytes).ok()?;
@@ -139,13 +142,25 @@ pub fn read_fresh_latest(paths: &StatePaths) -> Option<SidebarSnapshot> {
     // stale-stamped snapshot is still worth caching so the next delta skips
     // the re-parse.
     LATEST_PARSE_CACHE.with(|cache| cache.store(path, latest_mtime, len, snapshot.clone()));
-    stamp_is_current(&snapshot).then_some(snapshot)
+    snapshot_is_current(&snapshot).then_some(snapshot)
 }
 
 thread_local! {
     /// This thread's last `latest.json` parse — the rollup a long-lived
     /// consumer thread re-reads on every ledger delta.
     static LATEST_PARSE_CACHE: ParseCache<SidebarSnapshot> = const { ParseCache::new() };
+}
+
+fn agent_identities_are_current(snapshot: &SidebarSnapshot) -> bool {
+    snapshot.agents.iter().all(|agent| {
+        agent.name.as_deref().is_some_and(|name| {
+            crate::petname::valid_name(name)
+                && !crate::petname::collides_with_reserved_prefix(
+                    name,
+                    crate::agents::known_kinds(),
+                )
+        }) && agent.kind_ordinal.is_some()
+    })
 }
 
 pub(crate) fn display_name_for(paths: &StatePaths) -> String {
@@ -266,9 +281,40 @@ mod tests {
         );
     }
 
+    #[test]
+    fn read_fresh_latest_rejects_snapshots_without_card_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let workspace = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace.clone(), dir.path()).unwrap();
+        paths.ensure_dirs().unwrap();
+        event_log::append(&paths.events_log, &lifecycle(&workspace, "a", None)).unwrap();
+        rebuild(&paths).unwrap();
+
+        let mut legacy = read_fresh_latest(&paths).expect("fresh snapshot");
+        assert!(
+            agent_identities_are_current(&legacy),
+            "rebuilt snapshots carry card identity"
+        );
+        legacy.agents[0].name = None;
+        legacy.agents[0].kind_ordinal = None;
+        atomic::write_temp_then_rename_cache(&paths.latest_snapshot, &legacy).unwrap();
+
+        assert!(
+            read_fresh_latest(&paths).is_none(),
+            "old latest.json without name/ordinal is not fresh for the new CLI"
+        );
+        let rebuilt = build_from(&paths).unwrap();
+        assert!(
+            agent_identities_are_current(&rebuilt),
+            "fallback rebuild backfills deterministic card identity"
+        );
+    }
+
     fn lifecycle(workspace: &WorkspaceId, agent_id: &str, agent_pid: Option<u32>) -> EventEnvelope {
         let observation = AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from(agent_id)),
+            agent_name: None,
+            kind_ordinal: None,
             signal: LifecycleSignal::Registered,
             agent_pid,
             agent_process_start: None,

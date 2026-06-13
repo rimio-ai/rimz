@@ -351,9 +351,9 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let required = [
         "[worktree]",
-        "[tab]",
-        "[tab.keywords]",
-        "[tab.layouts]",
+        "[agents]",
+        "[agents.aliases]",
+        "[agents.layouts]",
         "[remote_control]",
         "[accounts]",
         "[accounts.usage_limit_usd]",

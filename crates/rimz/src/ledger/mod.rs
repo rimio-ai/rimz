@@ -55,8 +55,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::feed::{AbandonReason, FeedItem, FeedStatus, Surface};
-use crate::ids::{RequestId, ResolverId, WorkspaceId};
-use crate::schema::event::EventEnvelope;
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, RunId, WorkspaceId};
+use crate::schema::event::{AgentLaunchState, EventEnvelope};
 
 pub use crate::ledger::feed_store::FeedStoreErr;
 pub use crate::ledger::paths::{RuntimePaths, StatePaths};
@@ -133,6 +133,8 @@ pub enum LedgerErr {
     Wakeup(#[from] wakeup::WakeupErr),
     #[error(transparent)]
     WorkspaceRecord(#[from] workspace_record::WorkspaceRecordErr),
+    #[error("{0}")]
+    AgentLaunchIdentity(String),
     #[error("io error on {path}: {source}")]
     Io {
         path: PathBuf,
@@ -182,6 +184,40 @@ pub struct EventLogRotationOutcome {
     pub rotation: event_log::RotationOutcome,
     pub pruned: event_log::PruneOutcome,
     pub carryover_agents: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentLaunchName {
+    Mint,
+    Soft(String),
+    Explicit(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchRequest {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub name: AgentLaunchName,
+    pub run_id: Option<RunId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchIdentity {
+    pub kind: AgentKind,
+    pub agent_id: AgentSessionId,
+    pub name: String,
+    pub run_id: Option<RunId>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentLaunchAppend {
+    pub workspace_id: WorkspaceId,
+    pub session_name: String,
+    pub cwd: PathBuf,
+    pub worktree_name: Option<String>,
+    pub prompt: Option<String>,
+    pub state: AgentLaunchState,
+    pub pane_id: Option<PaneId>,
 }
 
 #[derive(Clone, Debug)]

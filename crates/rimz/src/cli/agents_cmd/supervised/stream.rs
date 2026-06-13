@@ -9,7 +9,7 @@ use rimz::agents::AgentAdapter;
 use rimz::bridge::{self, ExpectedRunFrame, RunWakeOutcome};
 use rimz::run::{RunLiveStatus, RunRecord};
 
-pub(super) fn stream_blocking_run(
+pub(crate) fn stream_blocking_run(
     sock: std::os::unix::net::UnixDatagram,
     expected: ExpectedRunFrame,
     ledger: &rimz::Ledger,
@@ -56,7 +56,7 @@ pub(super) fn stream_blocking_run(
     })
 }
 
-pub(super) fn stream_attached_run(
+pub(crate) fn stream_attached_run(
     ledger: &rimz::Ledger,
     run_id: &rimz::RunId,
     adapter: &dyn AgentAdapter,

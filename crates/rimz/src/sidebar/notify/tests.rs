@@ -56,6 +56,8 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
     AgentState {
         agent_id: AgentSessionId::from(id),
         kind: AgentKind::new_unchecked("claude"),
+        name: None,
+        kind_ordinal: None,
         status,
         phase: TurnPhase::Idle,
         pane: Some(PaneRef {

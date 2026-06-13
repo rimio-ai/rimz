@@ -123,6 +123,8 @@ fn message_agent() -> AgentState {
     AgentState {
         agent_id: AgentSessionId::from("claude-migrate"),
         kind: AgentKind::new_unchecked("claude"),
+        name: None,
+        kind_ordinal: None,
         status: AgentStatus::Idle,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,
@@ -248,6 +250,8 @@ fn workspace_rotate_events_archives_and_preserves_agent_rollup() {
 fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
+        agent_name: None,
+        kind_ordinal: None,
         signal,
         agent_pid: None,
         agent_process_start: None,

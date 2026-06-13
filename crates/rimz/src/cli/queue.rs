@@ -11,7 +11,6 @@ use rimz::ids::{MessageId, PaneId};
 use rimz::message::{
     DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head, settle_duration_from_env,
 };
-use rimz::target::{AgentTarget, resolve_agent};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
 #[derive(Debug, Args)]
@@ -31,7 +30,7 @@ pub struct QueueArgs {
     worktree: Option<String>,
     /// Text to deliver.
     #[arg(last = true)]
-    text: Option<String>,
+    text: Vec<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -72,7 +71,7 @@ struct AddArgs {
     #[arg(long)]
     worktree: Option<String>,
     #[arg(last = true)]
-    text: String,
+    text: Vec<String>,
 }
 
 pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
@@ -80,7 +79,7 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
         Some(QueueSubcmd::Add(add)) => add_message(
             add.target,
             add.worktree,
-            add.text,
+            join_text(add.text)?,
             !add.no_enter,
             add.on,
             globals,
@@ -93,9 +92,7 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
             let target = args.target.ok_or_else(|| {
                 anyhow::anyhow!("expected a target, or `rimz queue list|remove|clear`")
             })?;
-            let text = args
-                .text
-                .ok_or_else(|| anyhow::anyhow!("expected text after `--`"))?;
+            let text = join_text(args.text)?;
             add_message(
                 target,
                 args.worktree,
@@ -106,6 +103,13 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
             )
         }
     }
+}
+
+fn join_text(text: Vec<String>) -> Result<String> {
+    if text.is_empty() {
+        bail!("expected text after `--`");
+    }
+    Ok(text.join(" "))
 }
 
 fn add_message(
@@ -120,8 +124,7 @@ fn add_message(
         bail!("expected non-empty text");
     }
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let target = AgentTarget::parse(&target, rimz::agents::known_kinds())?;
-    let agent = resolve_agent(&snapshot, &target, worktree.as_deref())?;
+    let agent = super::resolve_agent_card(&snapshot, &target, worktree.as_deref())?;
     preflight_queue_hooks(agent)?;
     let message = MessageRecord::new(workspace.workspace_id.clone(), agent, text, enter, gate);
     let message_id = message.message_id.clone();
@@ -138,9 +141,8 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
     let (_workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
     let mut messages = ledger.list_messages()?;
     if let Some(raw) = target {
-        let target = AgentTarget::parse(&raw, rimz::agents::known_kinds())?;
-        let agent = resolve_agent(&snapshot, &target, None)?;
-        messages.retain(|message| message.same_agent(&agent.kind, &agent.agent_id));
+        let agent = super::resolve_agent_card(&snapshot, &raw, None)?;
+        messages.retain(|message| message.same_agent_card(agent));
     }
     if json {
         let rendered = serde_json::to_string_pretty(&messages)?;
@@ -178,9 +180,13 @@ fn remove_message(message_id: MessageId, globals: &GlobalFlags) -> Result<()> {
 
 fn clear_messages(target: String, worktree: Option<String>, globals: &GlobalFlags) -> Result<()> {
     let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
-    let target = AgentTarget::parse(&target, rimz::agents::known_kinds())?;
-    let agent = resolve_agent(&snapshot, &target, worktree.as_deref())?;
-    let count = ledger.clear_messages_for(&agent.kind, &agent.agent_id, &workspace.session_name)?;
+    let agent = super::resolve_agent_card(&snapshot, &target, worktree.as_deref())?;
+    let count = ledger.clear_messages_for(
+        &agent.kind,
+        &agent.agent_id,
+        agent.name.as_deref(),
+        &workspace.session_name,
+    )?;
     #[expect(clippy::print_stdout, reason = "command result is removal count")]
     {
         println!("{count}");
@@ -268,7 +274,7 @@ fn delivery_candidate(
     let Some(agent) = snapshot
         .agents
         .iter()
-        .find(|agent| message.same_agent(&agent.kind, &agent.agent_id))
+        .find(|agent| message.same_agent_card(agent))
     else {
         return Ok(None);
     };

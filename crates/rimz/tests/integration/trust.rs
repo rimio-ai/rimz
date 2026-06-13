@@ -251,16 +251,16 @@ fn untrusted_agent_env_refuses_a_resume_launch() {
         .stderr(contains("rimz trust grant"));
 }
 
-/// `rimz tab` gates agent-cell env at the command entry point: an untrusted
+/// `rimz agents` gates agent-cell env at the command entry point: an untrusted
 /// configured env refuses the whole command before the worktree is created or
 /// the tab opens, instead of leaving a failed agent pane behind.
 #[test]
-fn untrusted_agent_env_refuses_a_tab_launch_before_side_effects() {
+fn untrusted_agent_env_refuses_an_agents_launch_before_side_effects() {
     let env = Env::new();
     env.write_config(&env.project_root, CODEX_ENV_CONFIG);
 
     env.rimz()
-        .args(["tab", "--layout", "codex", "--worktree", "wt-a"])
+        .args(["agents", "codex", "--worktree=wt-a"])
         .assert()
         .failure()
         .stderr(contains("rimz trust grant"));

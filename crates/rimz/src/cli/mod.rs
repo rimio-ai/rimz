@@ -2,6 +2,7 @@
 //! exposes a single `run(...)` entry called from `dispatch`.
 
 mod agents_cmd;
+mod agents_launch;
 mod attach_exec;
 mod claude;
 mod codex;
@@ -24,14 +25,12 @@ mod reset;
 mod resolver;
 mod resume;
 mod room_recovery;
-mod run;
 mod session_record;
 mod setup;
 mod sidebar;
 mod start_notice;
 mod statusline;
 mod steer;
-mod tab;
 mod trust;
 mod workspace;
 mod worktree;
@@ -42,6 +41,7 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
 use rimz::agents::{HookInstallPreview, StatusLineChange};
+use rimz::feed::AgentState;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::workspace_record;
 use rimz::mux::{
@@ -75,7 +75,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Feed(args)) => feed::run(args, &globals),
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
-        Some(Subcmd::Tab(args)) => tab::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
@@ -83,7 +82,6 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Steer(args)) => steer::run(args, &globals),
         Some(Subcmd::Queue(args)) => queue::run(args, &globals),
         Some(Subcmd::Resolver(args)) => resolver::run(args, &globals),
-        Some(Subcmd::Run(args)) => run::run(args, &globals),
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
@@ -97,16 +95,73 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Start(args)) => start(args, &globals),
         Some(Subcmd::Attach(args)) => attach(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
-        None => start(
-            StartArgs {
-                path: cli.path.unwrap_or_else(|| PathBuf::from(".")),
-                attach: cli.attach,
-                no_resume: cli.no_resume,
-                refresh_ms: cli.refresh_ms,
-            },
-            &globals,
-        ),
+        None => {
+            let path = cli.path.unwrap_or_else(|| PathBuf::from("."));
+            reject_removed_agent_command_path(&path)?;
+            start(
+                StartArgs {
+                    path,
+                    attach: cli.attach,
+                    no_resume: cli.no_resume,
+                    refresh_ms: cli.refresh_ms,
+                },
+                &globals,
+            )
+        }
     }
+}
+
+fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
+    if path == Path::new("run") {
+        anyhow::bail!(
+            "`rimz run` has moved to `rimz agents <spec> <prompt> -p`; use `rimz agents show|wait|stop <ref>` for run records"
+        );
+    }
+    if path == Path::new("tab") {
+        anyhow::bail!(
+            "`rimz tab` has moved to `rimz agents <spec> [prompt]`; layouts now come from `[agents.layouts]`"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn resolve_agent_card<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    raw: &str,
+    worktree_filter: Option<&str>,
+) -> Result<&'a AgentState> {
+    match rimz::target::resolve_card(snapshot, raw, worktree_filter) {
+        Ok(agent) => Ok(agent),
+        Err(rimz::TargetErr::NoMatch { target, candidates }) => {
+            if let Some(hint) = launch_ref_hint(raw)? {
+                anyhow::bail!("{hint}; live agents: {candidates}");
+            }
+            Err(rimz::TargetErr::NoMatch { target, candidates }.into())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
+    if raw.contains(':') {
+        return Ok(None);
+    }
+    let selector = raw
+        .split_once('@')
+        .map(|(selector, _scope)| selector)
+        .unwrap_or(raw);
+    let config = machine_config()?;
+    if config.agents.aliases.0.contains_key(selector) {
+        return Ok(Some(format!(
+            "`{selector}` is a launch alias, not a running agent"
+        )));
+    }
+    if selector == "peer" || config.agents.layouts.0.contains_key(selector) {
+        return Ok(Some(format!(
+            "`{selector}` is a launch layout, not a running agent"
+        )));
+    }
+    Ok(None)
 }
 
 #[derive(Debug, Parser)]
@@ -170,8 +225,6 @@ enum Subcmd {
     Gc(gc::GcArgs),
     /// Create, list, and remove Rimz-owned git worktrees.
     Worktree(worktree::WorktreeArgs),
-    /// Open one laid-out tab/window in the current Rimz room.
-    Tab(tab::TabArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(agents_cmd::AgentsArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
@@ -187,8 +240,6 @@ enum Subcmd {
     Queue(queue::QueueArgs),
     /// Manage the per-machine resolver allowlist.
     Resolver(resolver::ResolverArgs),
-    /// Run one supervised agent prompt and print its final answer.
-    Run(run::RunArgs),
     /// Sidebar helper API. The sidebar calls these; humans usually do not.
     #[command(hide = true)]
     Sidebar(sidebar::SidebarArgs),
@@ -229,6 +280,18 @@ pub struct StartArgs {
     /// Override the sidebar render cadence for this launch.
     #[arg(long)]
     pub refresh_ms: Option<u16>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removed_run_and_tab_tokens_do_not_fall_through_to_path_start() {
+        assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
+        assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
+        assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
+    }
 }
 
 #[derive(Debug, Args, Default)]
@@ -324,7 +387,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     report_start_notices(&workspace)?;
-    let machine_config = machine_config();
+    let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     // One terminal probe per command flow: the width picks every sidebar
@@ -466,7 +529,7 @@ fn attach_cwd(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
-    let machine_config = machine_config();
+    let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     let detected_size = rimz::mux::detect_terminal_size();
@@ -532,7 +595,7 @@ fn attach_named(
     } else {
         MissingSessionReport::Warn
     };
-    let machine_config = machine_config();
+    let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
     let detected_size = rimz::mux::detect_terminal_size();
@@ -692,17 +755,8 @@ pub(crate) fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
 }
 
-fn machine_config() -> rimz::config::MachineConfig {
-    match rimz::config::MachineConfig::load() {
-        Ok(config) => config,
-        Err(err) => {
-            tracing::warn!(
-                error = %err,
-                "reading per-machine config; using built-in defaults",
-            );
-            rimz::config::MachineConfig::default()
-        }
-    }
+pub(crate) fn machine_config() -> Result<rimz::config::MachineConfig> {
+    rimz::config::MachineConfig::load().context("loading per-machine config")
 }
 
 pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger> {

@@ -107,18 +107,18 @@ fn run_rejects_invalid_agent_env_before_recording() {
 
     let out = env
         .rimz()
-        .args(["run", "--agent", "codex", "summarize"])
+        .args(["agents", "codex", "summarize", "-p"])
         .output()
-        .expect("spawn run");
+        .expect("spawn agents print");
     assert!(
         !out.status.success(),
-        "run should reject invalid launch env\nstdout:\n{}\nstderr:\n{}",
+        "agents -p should reject invalid launch env\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     assert!(
         String::from_utf8_lossy(&out.stderr).contains("BAD=KEY"),
-        "run error should name the invalid key\nstderr:\n{}",
+        "agents -p error should name the invalid key\nstderr:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
     let records = rimz::run::list(env.ledger().paths()).expect("list runs");
@@ -150,12 +150,12 @@ fn run_stop_marks_canceled_and_wakes_waiter() {
 
     let out = env
         .rimz()
-        .args(["run", "stop", run_id.as_str()])
+        .args(["agents", "stop", run_id.as_str()])
         .output()
-        .expect("spawn run stop");
+        .expect("spawn agents stop");
     assert!(
         out.status.success(),
-        "run stop failed\nstdout:\n{}\nstderr:\n{}",
+        "agents stop failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -216,18 +216,107 @@ fn run_status_honors_pinned_room_inside_nested_repo() {
         .current_dir(&nested)
         .env(rimz::workspace::ENV_WORKSPACE_ID, env.workspace_id.as_str())
         .env(rimz::workspace::ENV_PROJECT_ROOT, &env.project_root)
-        .args(["run", "status", run_id.as_str(), "--json"])
+        .args(["agents", "show", run_id.as_str(), "--json"])
         .output()
-        .expect("spawn run status");
+        .expect("spawn agents show");
     assert!(
         out.status.success(),
-        "run status should read the pinned room ledger\nstdout:\n{}\nstderr:\n{}",
+        "agents show should read the pinned room ledger\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("status json");
-    assert_eq!(parsed["run_id"], run_id.as_str());
-    assert_eq!(parsed["workspace_id"], env.workspace_id.as_str());
+    assert_eq!(parsed["run"]["run_id"], run_id.as_str());
+    assert_eq!(parsed["run"]["workspace_id"], env.workspace_id.as_str());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
+    let env = Env::new();
+    let ledger = env.ledger();
+    let observation = rimz::agents::AgentLifecycleObservation {
+        agent_id: Some("sess-stale".into()),
+        agent_name: Some("lucid-atlas".to_owned()),
+        kind_ordinal: None,
+        signal: rimz::agents::LifecycleSignal::Registered,
+        agent_pid: Some(u32::MAX),
+        agent_process_start: None,
+        runtime_owner: Some(rimz::RuntimeOwner::new(
+            rimz::RuntimeOwnerKind::Agent,
+            "sess-stale",
+            u32::MAX,
+            None,
+        )),
+        worktree_path: None,
+        worktree_branch: None,
+        task: None,
+        prompt: None,
+        transcript_path: None,
+        model: None,
+        effort: None,
+        context_pct: None,
+        context_window: None,
+        total_tokens: None,
+        turn_error: None,
+        cache_read_input_tokens: None,
+        fresh_input_tokens: None,
+        output_tokens: None,
+        todo_done: None,
+        todo_total: None,
+        pane_id: None,
+        parent_agent_id: None,
+    };
+    ledger
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            env.workspace_id.clone(),
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append stale lifecycle");
+
+    let out = env
+        .rimz()
+        .args(["agents", "show", "lucid-atlas", "--json"])
+        .output()
+        .expect("spawn agents show");
+
+    assert!(
+        out.status.success(),
+        "agents show should resolve stale card from audit rollup\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let parsed: serde_json::Value = serde_json::from_slice(&out.stdout).expect("show json");
+    assert_eq!(parsed["agent"]["agent_id"], "sess-stale");
+    assert_eq!(parsed["stale"], true);
+
+    let out = env
+        .rimz()
+        .args(["agents", "list", "--all"])
+        .output()
+        .expect("spawn agents list --all");
+    assert!(
+        out.status.success(),
+        "agents list --all should print the audit table\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("LIFECYCLE"),
+        "missing lifecycle column: {stdout}"
+    );
+    assert!(
+        stdout.contains("lucid-atlas"),
+        "missing stale card: {stdout}"
+    );
+    assert!(
+        stdout.contains("stale"),
+        "stale audit card should be labelled: {stdout}"
+    );
 }
 
 #[test]
@@ -250,11 +339,17 @@ fn run_stream_polls_transcript_until_terminal_record() {
 
     let child = env
         .rimz()
-        .args(["run", "stream", run_id.as_str(), "--from-start"])
+        .args([
+            "agents",
+            "wait",
+            run_id.as_str(),
+            "--stream",
+            "--from-start",
+        ])
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .expect("spawn run stream");
+        .expect("spawn agents wait stream");
     std::thread::sleep(Duration::from_millis(100));
     std::fs::OpenOptions::new()
         .append(true)
@@ -271,10 +366,10 @@ fn run_stream_polls_transcript_until_terminal_record() {
     terminal.completed_at = Some(terminal.updated_at);
     rimz::ledger::run_store::write(&ledger.paths().runs_dir, &terminal).expect("write terminal");
 
-    let out = child.wait_with_output().expect("wait run stream");
+    let out = child.wait_with_output().expect("wait agents stream");
     assert!(
         out.status.success(),
-        "run stream failed\nstdout:\n{}\nstderr:\n{}",
+        "agents wait --stream failed\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -306,13 +401,20 @@ fn run_stream_timeout_stops_watching_without_timing_out_run() {
 
     let out = env
         .rimz()
-        .args(["run", "stream", run_id.as_str(), "--timeout", "0s"])
+        .args([
+            "agents",
+            "wait",
+            run_id.as_str(),
+            "--stream",
+            "--timeout",
+            "0s",
+        ])
         .output()
-        .expect("spawn run stream timeout");
+        .expect("spawn agents wait stream timeout");
     assert_eq!(
         out.status.code(),
         Some(124),
-        "run stream timeout should exit 124 without marking the run terminal\nstdout:\n{}\nstderr:\n{}",
+        "agents wait stream timeout should exit 124 without marking the run terminal\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );

@@ -7,7 +7,7 @@
 This page is the map. Detailed examples and full command notes live in the command-group references:
 
 - [Getting started](./cli/getting-started.md) — `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor`.
-- [Agent control](./cli/agents.md) — `run`, `steer`, `queue`, `pane`, `tab`, `agents`, `worktree`.
+- [Agent control](./cli/agents.md) — `agents`, `steer`, `queue`, `pane`, `worktree`.
 - [Feed, resolvers, hooks, and trust](./cli/feed.md) — `feed`, `event`, `resolver`, `hooks`, `trust`.
 - [Maintenance](./cli/maintenance.md) — `config`, `workspace`, `reload`, `reset`, `gc`, `ping`.
 
@@ -30,10 +30,10 @@ rimz remote add dev dev-box:~/code/query-engine
 rimz remote connect dev
 ```
 
-Use `run` for one supervised agent turn from a script, `steer` for immediate text into a live agent, and `queue` for the next instruction after a safe turn boundary.
+Use `agents -p` for one supervised agent turn from a script, `steer` for immediate text into a live agent, and `queue` for the next instruction after a safe turn boundary.
 
 ```sh
-rimz run --worktree docs --timeout 2h "update the CLI reference and run markdown checks"
+rimz agents codex --worktree=docs --timeout 2h -p "update the CLI reference and run markdown checks"
 rimz steer claude -- "focus on the failing parser test"
 rimz queue codex --on done -- "open a PR summary when the tests pass"
 ```
@@ -70,18 +70,20 @@ rimz remote list [--json]   # alias: ls
 
 Full remote examples and target grammar live in [Getting started](./cli/getting-started.md#remote-rooms). Link-health mechanics live in [remote.md](../internals/reach/remote.md).
 
-## Run agents in tabs and worktrees
+## Launch and control agents
 
 ```sh
-rimz run [--agent <kind>] [--worktree [name]] [--ask|--yolo] [--timeout <duration>] [--keep] [--detach|--json|--stream] [prompt]
-rimz run status <run-id> [--json]
-rimz run list [--json]
-rimz run stop <run-id>
-rimz run send <run-id> [--enter] -- <text>
-rimz run stream <run-id> [--from-start] [--timeout <duration>]
+rimz agents [--json]
+rimz agents list|ls [--json] [--worktree <name>]
+rimz agents show <ref> [--json]
+rimz agents focus <ref>
+rimz agents wait <ref> [--timeout <duration>] [--stream [--from-start]] [--json]
+rimz agents stop <ref>
+rimz agents <spec> [prompt] [--worktree[=<name>]] [--name <name>] [--no-focus] [--ask|--yolo] [-- passthrough...]
+rimz agents <spec> [prompt] -p|--print [--timeout <duration>] [--detach] [--stream] [--json] [--keep]
 ```
 
-`rimz run` launches one real agent pane, waits for the root turn, prints the final assistant message, and exits with `0` for success, `1` for failure, `124` for timeout, and `130` for cancellation. Hooks are the completion signal, so the selected agent's Rimz hooks must be installed and trusted.
+`rimz agents` lists live agent cards by default. A launch spec is the layout grammar from `[agents.layouts]` and `[agents.aliases]`: commas split columns, plus signs stack rows, and cells are `term`, agent kinds, virtual `<kind>-<mode>` cells such as `codex-yolo`, or configured aliases. `-p` launches one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with `0` for success, `1` for failure, `124` for timeout, and `130` for cancellation. Hooks are the completion signal, so the selected agent's Rimz hooks must be installed and trusted.
 
 Use `steer` for immediate text into a live agent pane, and `queue` for durable delivery after the agent reaches a safe gate.
 
@@ -94,9 +96,9 @@ rimz queue remove <message-id>
 rimz queue clear [--worktree <name>] <target>
 ```
 
-`TARGET` is a pane id such as `tmux:%1` or `zellij:terminal_3`, an agent kind such as `claude`, `codex`, or `pi`, an agent session id, or a unique session-id prefix. `--worktree` narrows kind and session matches by branch, worktree name, or path. `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment.
+`TARGET` is a pane id such as `tmux:%1` or `zellij:terminal_3`, an agent pet name, a kind ordinal such as `claude-2`, an agent kind such as `claude`, `codex`, or `pi`, an agent session id, or a unique session-id prefix. Append `@<worktree>` or pass `--worktree` to narrow matches by branch, worktree name, or path. `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment.
 
-Full agent, pane, tab, and worktree examples live in [Agent control](./cli/agents.md).
+Full agent, pane, and worktree examples live in [Agent control](./cli/agents.md).
 
 ## Publish events and ask questions
 
@@ -120,13 +122,11 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | --- | --- | --- |
 | `rimz`, `start` | Open or create the current project room. | [Getting started](./cli/getting-started.md#start-the-room) |
 | `remote` | Connect to rooms over SSH and manage remote aliases. | [Getting started](./cli/getting-started.md#remote-rooms) |
-| `run` | Launch one supervised agent prompt for scripts or ad hoc work. | [Agent control](./cli/agents.md#run-one-supervised-agent-turn) |
 | `steer` | Type into a live agent pane immediately. | [Agent control](./cli/agents.md#steer-a-live-agent) |
 | `queue` | Deliver the next instruction when an agent finishes a turn. | [Agent control](./cli/agents.md#queue-the-next-message) |
 | `pane` | List, capture, send to, focus, split, or detach mux panes. | [Agent control](./cli/agents.md#drive-panes) |
 | `feed` | Post feed items, ask script questions, and resolve decisions. | [Feed](./cli/feed.md#feed-items-and-decisions) |
-| `tab` | Open one laid-out tab or window in the room. | [Agent control](./cli/agents.md#open-agent-tabs) |
-| `agents` | Launch one or more agent tabs. | [Agent control](./cli/agents.md#open-agent-tabs) |
+| `agents` | List, launch, focus, wait for, and stop agent cards. | [Agent control](./cli/agents.md#agents) |
 | `worktree` | Create, list, and remove Rimz-owned git worktrees. | [Agent control](./cli/agents.md#manage-rimz-owned-worktrees) |
 | `list` | Show known rooms and their live backend. | [Getting started](./cli/getting-started.md#list-rooms) |
 | `doctor` | Diagnose backend, hook, trust, resolver, and room-tree state. | [Getting started](./cli/getting-started.md#setup-and-doctor) |

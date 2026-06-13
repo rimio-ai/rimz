@@ -665,7 +665,7 @@ impl ZellijBackend {
     }
 
     /// The fixed sidebar width carried by Zellij's `new_tab_template`.
-    /// `rimz tab --layout` supplies its own layout and therefore bypasses that
+    /// `rimz agents <spec>` supplies its own layout and therefore bypasses that
     /// template, so it mirrors the template's width explicitly when Zellij can
     /// report it. A failure falls back to this command's birth verdict.
     pub(super) fn new_tab_template_sidebar_cols(

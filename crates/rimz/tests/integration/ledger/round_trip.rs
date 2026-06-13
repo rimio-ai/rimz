@@ -451,6 +451,8 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
     // One committed agent, so a clean projection has an agent to lose.
     let obs = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("agent-1".into()),
+        agent_name: None,
+        kind_ordinal: None,
         signal: rimz::agents::lifecycle::LifecycleSignal::Registered,
         agent_pid: None,
         agent_process_start: None,

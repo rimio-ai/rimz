@@ -2,16 +2,17 @@
 //! [`AgentState`] rollups, carrying turn, phase, subagent, and model
 //! state forward.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
+use serde::{Deserialize, Serialize};
 use tracing::debug;
 
 use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
 use crate::feed::{AgentState, AgentStatus, PaneRef, RuntimeOwner, RuntimeOwnerKind};
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::schema::event::{EventEnvelope, EventKind};
+use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
 /// newest last). The events are durable, so the cap bounds only the projected
@@ -41,10 +42,67 @@ fn canonical_model(model: &str) -> String {
 /// `context_window`, worktree, pane) carry forward from the prior state when
 /// the event omits them. A `UserPromptSubmit` therefore moves the agent to
 /// running without erasing its model line.
+#[cfg(test)]
 pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
-    reduce_agent_states_seeded(BTreeMap::new(), events)
+    reduce_agent_states_seeded_with_identity(BTreeMap::new(), AgentIdentityState::default(), events)
+        .0
         .into_values()
         .collect()
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub(crate) struct AgentIdentityState {
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    names: BTreeMap<String, (AgentKind, AgentSessionId)>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    next_ordinal: BTreeMap<AgentKind, u32>,
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    consumed_launches: BTreeSet<AgentSessionId>,
+}
+
+impl AgentIdentityState {
+    pub(crate) fn with_ordinals_reset(mut self) -> Self {
+        self.next_ordinal.clear();
+        self
+    }
+
+    pub(crate) fn without_consumed_launches(mut self) -> Self {
+        self.consumed_launches.clear();
+        self
+    }
+}
+
+pub(super) fn backfill_agent_identities(
+    agents: &mut [AgentState],
+    state: AgentIdentityState,
+) -> AgentIdentityState {
+    let mut map: BTreeMap<(AgentKind, AgentSessionId), AgentState> = agents
+        .iter()
+        .map(|agent| ((agent.kind.clone(), agent.agent_id.clone()), agent.clone()))
+        .collect();
+    let mut allocator = CardIdentityAllocator::from_map_and_state(&map, state);
+    let mut order: Vec<_> = agents
+        .iter()
+        .enumerate()
+        .map(|(index, agent)| (agent.kind.clone(), agent.agent_id.clone(), index))
+        .collect();
+    order.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+
+    for (kind, agent_id, index) in order {
+        if has_card_identity(&agents[index]) {
+            continue;
+        }
+        let key = (kind.clone(), agent_id.clone());
+        let identity = allocator.assign_existing(&kind, &agent_id, map.get(&key));
+        agents[index].name = Some(identity.name);
+        agents[index].kind_ordinal = Some(identity.kind_ordinal);
+        map.insert(key, agents[index].clone());
+    }
+    allocator.state()
+}
+
+fn has_card_identity(agent: &AgentState) -> bool {
+    agent.name.as_deref().is_some_and(usable_name) && agent.kind_ordinal.is_some()
 }
 
 /// [`reduce_agent_states`] resuming from a prior fold map. Each lifecycle
@@ -53,11 +111,24 @@ pub(super) fn reduce_agent_states(events: &[EventEnvelope]) -> Vec<AgentState> {
 /// folding a delta onto the map the earlier prefix produced equals folding
 /// the whole log from scratch, the property the incremental
 /// [`catch_up_rollup`] and the rotation carryover both stand on.
+#[cfg(test)]
 pub(super) fn reduce_agent_states_seeded(
     seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
     events: &[EventEnvelope],
 ) -> BTreeMap<(AgentKind, AgentSessionId), AgentState> {
+    reduce_agent_states_seeded_with_identity(seed, AgentIdentityState::default(), events).0
+}
+
+pub(super) fn reduce_agent_states_seeded_with_identity(
+    seed: BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity_state: AgentIdentityState,
+    events: &[EventEnvelope],
+) -> (
+    BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    AgentIdentityState,
+) {
     let mut map = seed;
+    let mut identity = CardIdentityAllocator::from_map_and_state(&map, identity_state);
     for event in events {
         // A mux rebirth renumbers panes from zero, so every stamp recorded
         // before the boundary names a pane that no longer exists — and the
@@ -70,7 +141,14 @@ pub(super) fn reduce_agent_states_seeded(
             EventKind::SessionRebirth => {
                 for state in map.values_mut() {
                     state.pane = None;
+                    state.kind_ordinal = None;
                 }
+                identity.reset_ordinals();
+                continue;
+            }
+            EventKind::AgentLaunch(payload) => {
+                let kind = AgentKind::new_unchecked(event.source.clone());
+                reduce_agent_launch(&mut map, &mut identity, event, &kind, payload);
                 continue;
             }
             EventKind::AgentLifecycle(payload) => *payload,
@@ -112,15 +190,27 @@ pub(super) fn reduce_agent_states_seeded(
             );
             continue;
         };
+        let key = (kind.clone(), agent_id.clone());
+        let mut provisional_prior = None;
+        if let Some(agent_name) = observation.agent_name.as_deref()
+            && !map.contains_key(&key)
+            && let Some(provisional_key) =
+                identity.adoptable_owner_for_name(&map, &kind, agent_name, &key)
+        {
+            provisional_prior = map.remove(&provisional_key);
+            identity.release_key(&provisional_key);
+            identity.consume_launch_key(&provisional_key);
+        }
         let event_name = payload.event_name.as_deref();
         let event_parent_agent_id =
             non_empty_string(observation.parent_agent_id.as_deref()).map(AgentSessionId::from);
         let event_task = non_empty_string(observation.task.as_deref());
         if matches!(signal, lifecycle::LifecycleSignal::Ended) {
-            map.remove(&(kind, agent_id));
+            identity.release_key(&key);
+            map.remove(&key);
             continue;
         }
-        let prior = map.get(&(kind.clone(), agent_id.clone()));
+        let prior = map.get(&key).or(provisional_prior.as_ref());
         if matches!(signal, lifecycle::LifecycleSignal::SubagentStopped { .. })
             && prior.is_none()
             && event_parent_agent_id.is_some()
@@ -152,6 +242,7 @@ pub(super) fn reduce_agent_states_seeded(
                 "non-start lifecycle event created an unseen session in the reducer",
             );
         }
+        let card_identity = identity.assign(&kind, &agent_id, &observation, prior);
         let state = assemble_agent_state(AgentStateInput {
             kind: &kind,
             agent_id: &agent_id,
@@ -163,10 +254,338 @@ pub(super) fn reduce_agent_states_seeded(
             event_parent_agent_id,
             event_task,
             establishes_identity,
+            card_identity,
         });
-        map.insert((kind, agent_id), state);
+        map.insert(key, state);
     }
-    map
+    (map, identity.state())
+}
+
+#[derive(Clone, Debug)]
+struct CardIdentity {
+    name: String,
+    kind_ordinal: u32,
+}
+
+fn reduce_agent_launch(
+    map: &mut BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+    identity: &mut CardIdentityAllocator,
+    event: &EventEnvelope,
+    kind: &AgentKind,
+    payload: AgentLaunchPayload,
+) {
+    if !usable_name(&payload.agent_name) {
+        debug!(
+            target: "rimz::agent::launch",
+            event_id = %event.event_id,
+            workspace = %event.workspace_id,
+            kind = %kind,
+            agent_name = %payload.agent_name,
+            "agent.launched event with invalid name ignored",
+        );
+        return;
+    }
+    let key = (kind.clone(), payload.agent_id.clone());
+    if identity.launch_consumed(&payload.agent_id) {
+        return;
+    }
+    if is_provisional_agent_id(&payload.agent_id)
+        && let Some(owner) = identity.owner_for_name(&payload.agent_name)
+        && owner.0 == *kind
+        && owner != key
+        && map.contains_key(&owner)
+    {
+        identity.consume_launch_key(&key);
+        return;
+    }
+    if matches!(payload.state, AgentLaunchState::Failed)
+        && !map.contains_key(&key)
+        && identity.owner_for_name(&payload.agent_name).is_none()
+    {
+        return;
+    }
+    if let Some(owner) = identity.owner_for_name(&payload.agent_name)
+        && owner != key
+        && !map.contains_key(&owner)
+    {
+        identity.release_key(&owner);
+    }
+    let prior = map.get(&key);
+    let card_identity = identity.assign_launch(kind, &payload.agent_id, &payload, prior);
+    let state = assemble_launch_state(kind, event, payload, prior, card_identity);
+    map.insert(key, state);
+}
+
+#[derive(Default)]
+struct CardIdentityAllocator {
+    names: BTreeMap<String, (AgentKind, AgentSessionId)>,
+    ordinals: BTreeMap<(AgentKind, u32), AgentSessionId>,
+    next_ordinal: BTreeMap<AgentKind, u32>,
+    consumed_launches: BTreeSet<AgentSessionId>,
+}
+
+impl CardIdentityAllocator {
+    fn from_map_and_state(
+        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+        state: AgentIdentityState,
+    ) -> Self {
+        let mut allocator = Self {
+            names: state.names,
+            next_ordinal: state.next_ordinal,
+            consumed_launches: state.consumed_launches,
+            ordinals: BTreeMap::new(),
+        };
+        allocator.names.retain(|_, owner| map.contains_key(owner));
+        for ((kind, agent_id), state) in map {
+            if let Some(name) = state.name.as_deref().filter(|name| usable_name(name)) {
+                allocator
+                    .names
+                    .entry(name.to_owned())
+                    .or_insert_with(|| (kind.clone(), agent_id.clone()));
+            }
+            if let Some(ordinal) = state.kind_ordinal {
+                allocator
+                    .ordinals
+                    .entry((kind.clone(), ordinal))
+                    .or_insert_with(|| agent_id.clone());
+                allocator
+                    .next_ordinal
+                    .entry(kind.clone())
+                    .and_modify(|next| *next = (*next).max(ordinal.saturating_add(1)))
+                    .or_insert(ordinal.saturating_add(1));
+            }
+        }
+        allocator
+    }
+
+    fn state(&mut self) -> AgentIdentityState {
+        for (kind, ordinal) in self.ordinals.keys() {
+            self.next_ordinal
+                .entry(kind.clone())
+                .and_modify(|next| *next = (*next).max(ordinal.saturating_add(1)))
+                .or_insert(ordinal.saturating_add(1));
+        }
+        AgentIdentityState {
+            names: self.names.clone(),
+            next_ordinal: self.next_ordinal.clone(),
+            consumed_launches: BTreeSet::new(),
+        }
+    }
+
+    fn reset_ordinals(&mut self) {
+        self.ordinals.clear();
+        self.next_ordinal.clear();
+    }
+
+    fn owner_for_name(&self, name: &str) -> Option<(AgentKind, AgentSessionId)> {
+        self.names.get(name).cloned()
+    }
+
+    fn adoptable_owner_for_name(
+        &self,
+        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+        kind: &AgentKind,
+        name: &str,
+        new_key: &(AgentKind, AgentSessionId),
+    ) -> Option<(AgentKind, AgentSessionId)> {
+        let owner = self.names.get(name)?;
+        if owner.0 != *kind || owner == new_key {
+            return None;
+        }
+        if is_provisional_agent_id(&owner.1) {
+            return Some(owner.clone());
+        }
+        let prior = map.get(owner)?;
+        (prior.kind_ordinal.is_none() || prior.pane.is_none()).then(|| owner.clone())
+    }
+
+    fn release_key(&mut self, key: &(AgentKind, AgentSessionId)) {
+        self.names.retain(|_, owner| owner != key);
+        self.ordinals.retain(|_, owner| owner != &key.1);
+    }
+
+    fn consume_launch_key(&mut self, key: &(AgentKind, AgentSessionId)) {
+        if is_provisional_agent_id(&key.1) {
+            self.consumed_launches.insert(key.1.clone());
+        }
+    }
+
+    fn launch_consumed(&self, agent_id: &AgentSessionId) -> bool {
+        self.consumed_launches.contains(agent_id)
+    }
+
+    fn assign(
+        &mut self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        observation: &AgentLifecycleObservation,
+        prior: Option<&AgentState>,
+    ) -> CardIdentity {
+        let key = (kind.clone(), agent_id.clone());
+        let name = self.assign_name(&key, observation, prior);
+        let kind_ordinal = self.assign_ordinal(kind, agent_id, observation, prior);
+        CardIdentity { name, kind_ordinal }
+    }
+
+    fn assign_launch(
+        &mut self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        payload: &AgentLaunchPayload,
+        prior: Option<&AgentState>,
+    ) -> CardIdentity {
+        let key = (kind.clone(), agent_id.clone());
+        let name =
+            self.assign_name_candidate(&key, Some(payload.agent_name.as_str()), prior, agent_id);
+        let candidate = payload
+            .kind_ordinal
+            .or_else(|| prior.and_then(|state| state.kind_ordinal));
+        let kind_ordinal = self.assign_ordinal_candidate(kind, agent_id, candidate, prior);
+        CardIdentity { name, kind_ordinal }
+    }
+
+    fn assign_existing(
+        &mut self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        prior: Option<&AgentState>,
+    ) -> CardIdentity {
+        let key = (kind.clone(), agent_id.clone());
+        let name = self.assign_name_candidate(&key, None, prior, agent_id);
+        let candidate = prior.and_then(|state| state.kind_ordinal);
+        let kind_ordinal = self.assign_ordinal_candidate(kind, agent_id, candidate, prior);
+        CardIdentity { name, kind_ordinal }
+    }
+
+    fn assign_name(
+        &mut self,
+        key: &(AgentKind, AgentSessionId),
+        observation: &AgentLifecycleObservation,
+        prior: Option<&AgentState>,
+    ) -> String {
+        let candidate = observation
+            .agent_name
+            .as_deref()
+            .filter(|name| usable_name(name))
+            .or_else(|| {
+                prior
+                    .and_then(|state| state.name.as_deref())
+                    .filter(|name| usable_name(name))
+            });
+        self.assign_name_candidate(key, candidate, prior, &key.1)
+    }
+
+    fn assign_name_candidate(
+        &mut self,
+        key: &(AgentKind, AgentSessionId),
+        candidate: Option<&str>,
+        prior: Option<&AgentState>,
+        fallback_id: &AgentSessionId,
+    ) -> String {
+        if let Some(name) = candidate
+            && self.name_available_for(name, key)
+        {
+            self.names.insert(name.to_owned(), key.clone());
+            return name.to_owned();
+        }
+        if let Some(name) = prior
+            .and_then(|state| state.name.as_deref())
+            .filter(|name| usable_name(name))
+            && self.name_available_for(name, key)
+        {
+            self.names.insert(name.to_owned(), key.clone());
+            return name.to_owned();
+        }
+        let taken = self
+            .names
+            .iter()
+            .filter(|(_name, owner)| *owner != key)
+            .map(|(name, _owner)| name.as_str());
+        let name = crate::petname::mint_for_session(fallback_id, taken);
+        self.names.insert(name.clone(), key.clone());
+        name
+    }
+
+    fn name_available_for(&self, name: &str, key: &(AgentKind, AgentSessionId)) -> bool {
+        self.names.get(name).is_none_or(|owner| owner == key)
+    }
+
+    fn assign_ordinal(
+        &mut self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        observation: &AgentLifecycleObservation,
+        prior: Option<&AgentState>,
+    ) -> u32 {
+        let candidate = observation
+            .kind_ordinal
+            .or_else(|| prior.and_then(|state| state.kind_ordinal));
+        self.assign_ordinal_candidate(kind, agent_id, candidate, prior)
+    }
+
+    fn assign_ordinal_candidate(
+        &mut self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        candidate: Option<u32>,
+        prior: Option<&AgentState>,
+    ) -> u32 {
+        if let Some(ordinal) = candidate
+            && self.ordinal_candidate_allowed(kind, agent_id, ordinal, prior)
+        {
+            self.ordinals
+                .insert((kind.clone(), ordinal), agent_id.clone());
+            self.next_ordinal
+                .entry(kind.clone())
+                .and_modify(|next| *next = (*next).max(ordinal.saturating_add(1)))
+                .or_insert(ordinal.saturating_add(1));
+            return ordinal;
+        }
+        let mut next = self.next_ordinal.get(kind).copied().unwrap_or(1).max(1);
+        while !self.ordinal_available_for(kind, agent_id, next) {
+            next = next.saturating_add(1);
+        }
+        self.ordinals.insert((kind.clone(), next), agent_id.clone());
+        self.next_ordinal
+            .insert(kind.clone(), next.saturating_add(1));
+        next
+    }
+
+    fn ordinal_available_for(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        ordinal: u32,
+    ) -> bool {
+        self.ordinals
+            .get(&(kind.clone(), ordinal))
+            .is_none_or(|owner| owner == agent_id)
+    }
+
+    fn ordinal_candidate_allowed(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        ordinal: u32,
+        prior: Option<&AgentState>,
+    ) -> bool {
+        if !self.ordinal_available_for(kind, agent_id, ordinal) {
+            return false;
+        }
+        if prior.and_then(|state| state.kind_ordinal) == Some(ordinal) {
+            return true;
+        }
+        ordinal >= self.next_ordinal.get(kind).copied().unwrap_or(1)
+    }
+}
+
+fn usable_name(name: &str) -> bool {
+    crate::petname::valid_name(name)
+        && !crate::petname::collides_with_reserved_prefix(name, crate::agents::known_kinds())
+}
+
+fn is_provisional_agent_id(agent_id: &AgentSessionId) -> bool {
+    agent_id.as_str().starts_with("launch_")
 }
 
 struct AgentStateInput<'a> {
@@ -180,6 +599,7 @@ struct AgentStateInput<'a> {
     event_parent_agent_id: Option<AgentSessionId>,
     event_task: Option<String>,
     establishes_identity: bool,
+    card_identity: CardIdentity,
 }
 
 fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
@@ -204,6 +624,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     AgentState {
         agent_id: input.agent_id.clone(),
         kind: input.kind.clone(),
+        name: Some(input.card_identity.name),
+        kind_ordinal: Some(input.card_identity.kind_ordinal),
         status: lifecycle.status,
         phase: lifecycle.phase,
         pane: pane_projection(input.observation, input.prior),
@@ -236,6 +658,88 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         last_seen: input.event.timestamp,
         last_activity: input.event.timestamp,
         registered_at: lifecycle.registered_at,
+    }
+}
+
+fn assemble_launch_state(
+    kind: &AgentKind,
+    event: &EventEnvelope,
+    payload: AgentLaunchPayload,
+    prior: Option<&AgentState>,
+    card_identity: CardIdentity,
+) -> AgentState {
+    let pane = payload
+        .pane_id
+        .clone()
+        .map(PaneRef::from_id)
+        .or_else(|| prior.and_then(|state| state.pane.clone()));
+    let runtime_owner = payload
+        .runtime_owner
+        .clone()
+        .or_else(|| prior.and_then(|state| state.runtime_owner.clone()));
+    let agent_pid = runtime_owner.as_ref().map(|owner| owner.pid);
+    let agent_process_start = runtime_owner
+        .as_ref()
+        .and_then(|owner| owner.process_start.clone());
+    let prompt = payload
+        .prompt
+        .clone()
+        .or_else(|| prior.and_then(|state| state.prompt.clone()));
+    let recent_prompts = match prompt.as_ref() {
+        Some(prompt) => vec![prompt.clone()],
+        None => prior
+            .map(|state| state.recent_prompts.clone())
+            .unwrap_or_default(),
+    };
+    let status = match payload.state {
+        AgentLaunchState::Failed => AgentStatus::Failed,
+        AgentLaunchState::Starting | AgentLaunchState::Bound => AgentStatus::Running,
+    };
+    let phase = match payload.state {
+        AgentLaunchState::Failed => lifecycle::TurnPhase::Idle,
+        AgentLaunchState::Starting | AgentLaunchState::Bound => lifecycle::TurnPhase::Reasoning,
+    };
+    AgentState {
+        agent_id: payload.agent_id,
+        kind: kind.clone(),
+        name: Some(card_identity.name),
+        kind_ordinal: Some(card_identity.kind_ordinal),
+        status,
+        phase,
+        pane,
+        agent_pid,
+        agent_process_start,
+        runtime_owner,
+        parent_agent_id: None,
+        worktree_path: payload
+            .worktree_path
+            .or_else(|| prior.and_then(|state| state.worktree_path.clone())),
+        worktree_branch: payload
+            .worktree_branch
+            .or_else(|| prior.and_then(|state| state.worktree_branch.clone())),
+        task: prompt.clone(),
+        prompt,
+        transcript_path: prior.and_then(|state| state.transcript_path.clone()),
+        recent_prompts,
+        model: prior.and_then(|state| state.model.clone()),
+        effort: prior.and_then(|state| state.effort.clone()),
+        context_pct: prior.and_then(|state| state.context_pct),
+        context_window: prior.and_then(|state| state.context_window),
+        total_tokens: prior.and_then(|state| state.total_tokens),
+        cache_read_input_tokens: prior.and_then(|state| state.cache_read_input_tokens),
+        fresh_input_tokens: prior.and_then(|state| state.fresh_input_tokens),
+        output_tokens: prior.and_then(|state| state.output_tokens),
+        todo_done: prior.and_then(|state| state.todo_done),
+        todo_total: prior.and_then(|state| state.todo_total),
+        context: None,
+        subagent_description: None,
+        subagent_started_at: None,
+        turn_started_at: Some(event.timestamp),
+        compacting_since: None,
+        compaction_count: prior.map_or(0, |state| state.compaction_count),
+        last_seen: event.timestamp,
+        last_activity: event.timestamp,
+        registered_at: prior.and_then(|state| state.registered_at),
     }
 }
 

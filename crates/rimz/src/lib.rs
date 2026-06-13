@@ -10,6 +10,7 @@
 
 pub mod agent_activity;
 pub mod agents;
+pub mod agents_spec;
 pub mod binding_log;
 pub mod bridge;
 pub mod build_id;
@@ -23,6 +24,7 @@ pub mod ledger;
 pub mod message;
 pub mod mux;
 pub mod osc;
+pub mod petname;
 pub mod proc;
 pub mod reload;
 pub mod remote;
@@ -35,7 +37,6 @@ pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
-pub mod tab_layout;
 pub mod target;
 pub mod trust;
 pub mod tui;
@@ -60,5 +61,5 @@ pub use crate::ledger::{
     WorkspaceRecord,
 };
 pub use crate::schema::event::EventEnvelope;
-pub use crate::target::{AgentTarget, TargetErr};
+pub use crate::target::TargetErr;
 pub use crate::workspace::{ResolvedWorkspace, WorkspaceResolver};

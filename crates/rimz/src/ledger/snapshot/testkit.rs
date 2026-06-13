@@ -101,6 +101,8 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
     AgentState {
         agent_id: id.into(),
         kind: AgentKind::new_unchecked(kind),
+        name: None,
+        kind_ordinal: None,
         status,
         phase: TurnPhase::Idle,
         pane: None,

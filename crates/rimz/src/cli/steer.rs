@@ -6,7 +6,6 @@ use clap::Args;
 use super::{GlobalFlags, open_ledger};
 use rimz::feed::pending_ask_for;
 use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};
-use rimz::target::{AgentTarget, resolve_agent};
 use rimz::workspace::WorkspaceResolver;
 
 #[derive(Debug, Args)]
@@ -24,18 +23,18 @@ pub struct SteerArgs {
     force: bool,
     /// Text to type into the agent pane.
     #[arg(last = true)]
-    text: String,
+    text: Vec<String>,
 }
 
 pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
     if args.text.is_empty() {
         bail!("expected non-empty text");
     }
+    let mut text = args.text.join(" ");
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
-    let target = AgentTarget::parse(&args.target, rimz::agents::known_kinds())?;
-    let agent = resolve_agent(&snapshot, &target, args.worktree.as_deref())?;
+    let agent = super::resolve_agent_card(&snapshot, &args.target, args.worktree.as_deref())?;
     if !args.force
         && let Some(ask) = pending_ask_for(
             agent,
@@ -60,8 +59,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         )
     })?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    let text_len = args.text.len();
-    let mut text = args.text;
+    let text_len = text.len();
     if !args.no_enter {
         text.push('\r');
     }

@@ -136,7 +136,7 @@ fn set(args: SetArgs) -> Result<()> {
     set_document_value(&mut doc, &key, value)?;
 
     let rendered = doc.to_string();
-    toml::from_str::<MachineConfig>(&rendered)
+    MachineConfig::parse_text(&path, &rendered)
         .with_context(|| format!("validating `{}`", args.key))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
@@ -211,8 +211,8 @@ fn is_known_get_key(path: &[String]) -> bool {
     let joined = path.join(".");
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
-        || matches!(path, [root] if root == "tab")
-        || matches!(path, [root, child] if root == "tab" && matches!(child.as_str(), "keywords" | "layouts"))
+        || matches!(path, [root] if root == "agents")
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "aliases" | "layouts"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || matches!(path, [root, child] if root == "sidebar" && child == "providers")
@@ -222,21 +222,21 @@ fn is_known_get_key(path: &[String]) -> bool {
 fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
     let joined = path.join(".");
     exact_set_keys().contains(&joined)
-        || is_tab_key(path)
+        || is_agents_key(path)
         || is_account_usage_limit_key(path)
         || is_provider_style_key(path)
         || is_sidebar_animation_set_key(path)
 }
 
-fn is_tab_key(path: &[String]) -> bool {
-    matches!(path, [root, child, _] if root == "tab" && child == "layouts")
-        || matches!(path, [root, child, _] if root == "tab" && child == "keywords")
+fn is_agents_key(path: &[String]) -> bool {
+    matches!(path, [root, child, _] if root == "agents" && child == "layouts")
+        || matches!(path, [root, child, _] if root == "agents" && child == "aliases")
         || matches!(
             path,
             [root, child, _, leaf]
-                if root == "tab"
-                    && child == "keywords"
-                    && matches!(leaf.as_str(), "command" | "agent" | "mode" | "args")
+                if root == "agents"
+                    && child == "aliases"
+                    && matches!(leaf.as_str(), "command" | "agent" | "mode" | "model" | "effort" | "args")
         )
 }
 
@@ -440,12 +440,14 @@ mod tests {
             "sidebar.budget.pace.red",
             "accounts.oauth_usage",
             "accounts.usage_limit_usd.codex",
-            "tab.layouts.review",
-            "tab.keywords.vim",
-            "tab.keywords.codex-yolo.agent",
-            "tab.keywords.codex-yolo.mode",
-            "tab.keywords.codex-yolo.args",
-            "tab.keywords.htop.command",
+            "agents.layouts.review",
+            "agents.aliases.vim",
+            "agents.aliases.codex-yolo.agent",
+            "agents.aliases.codex-yolo.mode",
+            "agents.aliases.codex-yolo.model",
+            "agents.aliases.codex-yolo.effort",
+            "agents.aliases.codex-yolo.args",
+            "agents.aliases.htop.command",
             "zellij.auto_layout",
             "sidebar.providers.claude.color",
             "sidebar.theme.mode",
@@ -464,8 +466,8 @@ mod tests {
             "accounts.nope",
             "accounts.usage_limit_usd",
             "accounts.usage_limit_usd.codex.extra",
-            "tab.layouts.peer.shape",
-            "tab.keywords.codex-yolo.flags",
+            "agents.layouts.peer.shape",
+            "agents.aliases.codex-yolo.flags",
             "sidebar.providers.claude.nope",
             "sidebar.animations",
             "sidebar.animations.nope.frames",

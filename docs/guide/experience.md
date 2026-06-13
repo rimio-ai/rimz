@@ -280,7 +280,7 @@ By now the reader is hooked on the observe-and-route loop, and the product grows
 
 Resolvers are the morning-after upgrade: tired of approving `cargo check` for the eighth time, the reader enrols a resolver once — one of the two that ship ready-made (`hook_bridge_resolver.py` for routine permissions, `pane_send_resolver.py` for well-known terminal prompts), or a small process of their own wrapping a smarter model. The resolver slots ahead of the reader and the chain still ends with them, which is what lets the fleet keep working while they sleep. Mechanics are in [resolvers.md](../internals/agents/resolvers.md).
 
-Unattended runs are the same idea with no human at the end of the chain, and `rimz run "<prompt>"` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline on the feed](./product.md#put-your-pipeline-on-the-feed).
+Unattended runs are the same idea with no human at the end of the chain, and `rimz agents <kind> "<prompt>" -p` makes the whole shape scriptable; the detail lives in [product.md → Put your pipeline on the feed](./product.md#put-your-pipeline-on-the-feed).
 
 And because agents and scripts share one CLI, a deploy or migration script can post to the same sidebar and block on its own question, answerable straight from the column ([the pipeline scenario](./product.md#put-your-pipeline-on-the-feed)).
 

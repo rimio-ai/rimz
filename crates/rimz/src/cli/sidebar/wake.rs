@@ -99,7 +99,16 @@ fn command_is_launch_chrome(command: &str) -> bool {
     let Some(program) = tokens.next() else {
         return false;
     };
-    program_basename(program) == "rimz" && tokens.next() == Some("tab")
+    if program_basename(program) != "rimz" || tokens.next() != Some("agents") {
+        return false;
+    }
+    let Some(spec_or_command) = tokens.next() else {
+        return false;
+    };
+    !matches!(
+        spec_or_command,
+        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
+    )
 }
 
 fn program_basename(program: &str) -> &str {
@@ -124,4 +133,21 @@ pub(crate) fn rimz_cli_program() -> PathBuf {
     env_path("RIMZ_BIN")
         .or_else(|| std::env::current_exe().ok())
         .unwrap_or_else(|| PathBuf::from(bin_name("rimz")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn launch_chrome_is_agents_launch_not_agents_subcommand() {
+        assert!(command_is_launch_chrome(
+            "rimz agents claude,codex --worktree=quality-pass"
+        ));
+        assert!(command_is_launch_chrome(
+            "/home/me/.cargo/bin/rimz agents claude --worktree"
+        ));
+        assert!(!command_is_launch_chrome("rimz agents exec codex"));
+        assert!(!command_is_launch_chrome("rimz agents wait swift-otter"));
+    }
 }

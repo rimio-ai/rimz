@@ -505,6 +505,8 @@ mod tests {
         let agent = AgentState {
             agent_id: "codex-1".into(),
             kind: AgentKind::new_unchecked("codex"),
+            name: None,
+            kind_ordinal: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             pane: None,

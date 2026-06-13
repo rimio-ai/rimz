@@ -96,11 +96,11 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 ## Two agents, one feature
 
-`rimz tab --layout peer --worktree feat/great` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements while the other reviews, both in the same files, isolated from your checkout.
+`rimz agents peer --worktree=feat/great` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements while the other reviews, both in the same files, isolated from your checkout.
 
-`peer` is a built-in layout, and inline specs compose any grid — `rimz tab --layout 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[tab.keywords]` lets named layouts in `[tab.layouts]` compose agent variants and raw commands.
+`peer` is a built-in layout, and inline specs compose any grid — `rimz agents 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[agents.aliases]` lets named layouts in `[agents.layouts]` compose agent variants and raw commands.
 
-`rimz agents claude claude --worktree --prompt "take separate approaches and report back"` fans one prompt out to parallel attempts, each in its own fresh worktree ([agent-control reference](../reference/cli/agents.md#open-agent-tabs)).
+`rimz agents claude "take one approach" --worktree` and a second `rimz agents claude "take another approach" --worktree` launch parallel attempts, each in its own fresh worktree ([agent-control reference](../reference/cli/agents.md#agents)).
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
@@ -114,11 +114,11 @@ One sidebar triages the whole machine: an agent blocking in `~/code/query-engine
 
 ## Put your pipeline on the feed
 
-`rimz run "<prompt>"` launches one supervised agent turn in the room: it opens a real agent pane, waits for the turn to finish, prints the final assistant message, and exits `0` on success, `1` on failure, `124` on timeout, `130` on cancel — script ergonomics over an agent you can still see and steer.
+`rimz agents <kind> "<prompt>" -p` launches one supervised agent turn in the room: it opens a real agent pane, waits for the turn to finish, prints the final assistant message, and exits `0` on success, `1` on failure, `124` on timeout, `130` on cancel — script ergonomics over an agent you can still see and steer.
 
 ```sh
 # cron, 02:00 — refresh the deps and open a PR
-rimz run --worktree deps --timeout 4h "update dependencies, run the test suite, open a PR"
+rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the test suite, open a PR"
 ```
 
 Because the agent runs in a real pane, a run that stops to ask survives the stop: the question takes the normal path — a resolver answers the routine ones, anything left pops to the cockpit and your notification channel — and you attach from anywhere, answer in the agent's own UI, and the run picks up and finishes while the script is still blocking.
@@ -127,13 +127,13 @@ A failing migration at 3 a.m. becomes a push on your phone, a one-line fix typed
 
 For orchestration:
 
-- `--detach` prints the run id and returns immediately.
-- `rimz run status <id>` reports the durable result, with live phase while the run is active.
-- `rimz run stream <id>` or `rimz run --stream` streams the turn as it happens.
-- `rimz run send <id> --enter -- "continue"` is the first-class nudge for wrapper scripts.
+- `--detach` prints the agent pet name and returns immediately.
+- `rimz agents show <ref>` reports the card and attached durable run.
+- `rimz agents wait <ref> --stream` or `rimz agents <kind> "<prompt>" -p --stream` streams the turn as it happens.
+- `rimz steer <ref> -- "continue"` is the first-class nudge for wrapper scripts.
 - `rimz pane send` / `rimz pane capture` remain the universal pane fallback.
 
-Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#run-one-supervised-agent-turn); the run record and completion mechanics live in [run.md](../internals/agents/run.md).
+Flags and selection rules live in [the agent-control reference](../reference/cli/agents.md#agents); the run record and completion mechanics live in [run.md](../internals/agents/run.md).
 
 Scripts join the feed directly too. A deploy pipeline that pauses at a staging-to-prod gate calls `rimz feed ask --title "Promote build 2026.05.18-rc.4?"`, and the question lands in the sidebar with answer buttons alongside everything the agents are doing; you or a resolver answers it from anywhere, and the script owns the question end to end. `rimz event emit` announces milestones to the same column. It is the same primitives an agent integration uses, reached from a shell script, so anything an agent can surface, a script can too.
 
@@ -141,7 +141,7 @@ Scripts join the feed directly too. A deploy pipeline that pauses at a staging-t
 
 How an unattended run answers permissions on its own is a posture you choose, and two patterns work.
 
-The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through (`rimz run --yolo` passes the adapter's flag for you; `--ask` leaves the provider's prompts in place). Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
+The first is the agent's own bypass flag. Launch each agent with `claude --dangerously-skip-permissions` or `codex --dangerously-bypass-approvals-and-sandbox` and it runs straight through (`rimz agents <kind> "<prompt>" -p --yolo` passes the adapter's flag for you; `--ask` leaves the provider's prompts in place). Rimz still observes everything it reports through lifecycle hooks (sessions, completions, failures). The tradeoff is that the agent skips permission events at the source, so the ledger records what other hooks report rather than a complete per-decision audit trail.
 
 The second is a permissive resolver. Enrol a resolver that answers `allow` to anything (or anything matching a policy); the bundled `hook_bridge_resolver.py` example is exactly this. Every permission request still flows through Rimz, gets a decision attributed to that resolver, and lands in the ledger as a real audit record. Prefer this when you need full audit fidelity.
 

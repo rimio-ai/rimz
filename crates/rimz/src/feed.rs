@@ -777,6 +777,10 @@ pub const COMPACTING_WINDOW_SECS: i64 = 90;
 pub struct AgentState {
     pub agent_id: AgentSessionId,
     pub kind: AgentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_ordinal: Option<u32>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -1021,6 +1025,8 @@ mod tests {
         let mut agent = AgentState {
             agent_id: AgentSessionId::from("sess-1"),
             kind: AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: None,

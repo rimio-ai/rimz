@@ -84,6 +84,9 @@ fn record_lifecycle_observation(
     if let Some(mut observation) = agent.observe_lifecycle(event_name, payload) {
         attach_agent_owner(agent.descriptor().kind, &mut observation);
         attach_agent_pane(&mut observation);
+        if observation.agent_name.is_none() {
+            observation.agent_name = env_agent_name().or_else(|| proc_agent_name(&observation));
+        }
         if observation.worktree_path.is_none() {
             observation.worktree_path = Some(workspace.worktree_root.display().to_string());
         }
@@ -275,7 +278,7 @@ fn spawn_queue_delivery_if_checkpoint(
         }
     };
     let kind = rimz::ids::AgentKind::new_unchecked(agent.descriptor().kind);
-    let Some(head) = rimz::message::queue_head(pending.iter(), &kind, agent_id) else {
+    let Some(head) = queue_head_for_observation(pending.iter(), &kind, agent_id, recorded) else {
         return;
     };
     spawn_refresh_detached(&rimz::agents::RefreshSpawn {
@@ -290,6 +293,26 @@ fn spawn_queue_delivery_if_checkpoint(
     });
 }
 
+fn queue_head_for_observation<'a>(
+    pending: impl IntoIterator<Item = &'a rimz::message::MessageRecord>,
+    kind: &rimz::ids::AgentKind,
+    agent_id: &rimz::ids::AgentSessionId,
+    recorded: &RecordedLifecycle,
+) -> Option<&'a rimz::message::MessageRecord> {
+    let pending = pending.into_iter().collect::<Vec<_>>();
+    rimz::message::queue_head(pending.iter().copied(), kind, agent_id).or_else(|| {
+        let agent_name = recorded.observation.agent_name.as_deref()?;
+        pending
+            .into_iter()
+            .filter(|message| {
+                message.status == rimz::message::MessageStatus::Pending
+                    && message.kind == *kind
+                    && message.agent_name.as_deref() == Some(agent_name)
+            })
+            .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
+    })
+}
+
 fn env_run_id() -> Option<rimz::RunId> {
     let raw = std::env::var(rimz::run::ENV_RUN_ID).ok()?;
     match raw.parse() {
@@ -302,6 +325,31 @@ fn env_run_id() -> Option<rimz::RunId> {
             );
             None
         }
+    }
+}
+
+fn env_agent_name() -> Option<String> {
+    let raw = std::env::var(rimz::run::ENV_AGENT_NAME).ok()?;
+    validate_agent_name_env(raw, "env")
+}
+
+fn proc_agent_name(observation: &AgentLifecycleObservation) -> Option<String> {
+    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_NAME)?;
+    validate_agent_name_env(raw, "process")
+}
+
+fn validate_agent_name_env(raw: String, source: &str) -> Option<String> {
+    if rimz::petname::valid_name(&raw)
+        && !rimz::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
+    {
+        Some(raw)
+    } else {
+        warn!(
+            agent_name = %raw,
+            source,
+            "lifecycle: ignoring invalid Rimz agent name",
+        );
+        None
     }
 }
 
@@ -571,4 +619,84 @@ pub(super) fn append_lifecycle_event(
             transition.compaction_closed
                 || matches!(transition.kind, TransitionKind::Reconciled { .. })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rimz::ids::{AgentKind, AgentSessionId, WorkspaceId};
+    use rimz::message::{DeliveryGate, MessageRecord, MessageStatus};
+
+    #[test]
+    fn queue_checkpoint_matches_provisional_message_by_card_name() {
+        let kind = AgentKind::new_unchecked("claude");
+        let agent_id = AgentSessionId::from("real-session");
+        let recorded = recorded("real-session", Some("lucid-atlas"));
+        let message = message("launch_a", Some("lucid-atlas"));
+
+        let head = queue_head_for_observation([&message], &kind, &agent_id, &recorded)
+            .expect("name fallback queue head");
+
+        assert_eq!(head.message_id, message.message_id);
+    }
+
+    fn recorded(agent_id: &str, agent_name: Option<&str>) -> RecordedLifecycle {
+        let observation = AgentLifecycleObservation {
+            agent_id: Some(AgentSessionId::from(agent_id)),
+            agent_name: agent_name.map(ToOwned::to_owned),
+            kind_ordinal: None,
+            signal: LifecycleSignal::TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            },
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            turn_error: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            pane_id: None,
+            parent_agent_id: None,
+        };
+        RecordedLifecycle {
+            model_hint: None,
+            observation,
+        }
+    }
+
+    fn message(agent_id: &str, agent_name: Option<&str>) -> MessageRecord {
+        let now = jiff::Timestamp::now();
+        MessageRecord {
+            message_id: rimz::MessageId::new(),
+            workspace_id: WorkspaceId::from_project_root(std::path::Path::new(
+                "/tmp/rimz-hook-queue",
+            )),
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from(agent_id),
+            agent_name: agent_name.map(ToOwned::to_owned),
+            text: "next".to_owned(),
+            enter: true,
+            gate: DeliveryGate::Done,
+            status: MessageStatus::Pending,
+            enqueued_at: now,
+            updated_at: now,
+            attempts: 0,
+            last_attempt_at: None,
+            last_error: None,
+            delivered_at: None,
+        }
+    }
 }

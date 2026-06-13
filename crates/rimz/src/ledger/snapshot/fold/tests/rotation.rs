@@ -33,6 +33,7 @@ fn cursor_reloads_across_a_rotation() {
         &paths.agents_carryover,
         &EventCarryover {
             agents: cache.raw_agents.clone(),
+            agent_identity: cache.agent_identity.clone(),
         },
     )
     .unwrap();
@@ -132,6 +133,7 @@ fn reseed_for_rotation_bumps_generation_and_starts_an_empty_fold() {
         &paths.agents_carryover,
         &EventCarryover {
             agents: cache.raw_agents.clone(),
+            agent_identity: cache.agent_identity.clone(),
         },
     )
     .unwrap();

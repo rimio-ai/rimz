@@ -477,7 +477,16 @@ fn foreground_is_launch_chrome(command: &str) -> bool {
     let Some(program) = tokens.next() else {
         return false;
     };
-    program_basename(program) == "rimz" && tokens.next() == Some("tab")
+    if program_basename(program) != "rimz" || tokens.next() != Some("agents") {
+        return false;
+    }
+    let Some(spec_or_command) = tokens.next() else {
+        return false;
+    };
+    !matches!(
+        spec_or_command,
+        "list" | "ls" | "show" | "focus" | "wait" | "stop" | "exec"
+    )
 }
 
 fn program_basename(program: &str) -> &str {

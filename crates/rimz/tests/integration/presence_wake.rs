@@ -622,13 +622,13 @@ fn wake_command_changed_broadcasts_event_without_patching_pane_frame() {
 }
 
 #[test]
-fn wake_command_changed_treats_rimz_tab_as_nudge_and_strips_topology_command() {
+fn wake_command_changed_treats_agents_launch_as_nudge_and_strips_topology_command() {
     let env = WakeEnv::new();
     if crate::common::af_unix_bind_sandboxed(&env.runtime.sock_dir) {
         tracing::warn!("skipping: AF_UNIX bind is forbidden in this sandbox");
         return;
     }
-    let launch = "rimz tab --layout claude,codex --worktree quality-pass";
+    let launch = "rimz agents claude,codex --worktree=quality-pass";
     let mut topology = env.topology_cache(unix_now_ms());
     topology
         .panes
@@ -672,7 +672,7 @@ fn wake_command_changed_treats_rimz_tab_as_nudge_and_strips_topology_command() {
         .expect("working pane remains cached");
     assert_eq!(
         working.pane_command, None,
-        "rimz tab launch chrome must not republish as foreground process truth"
+        "rimz agents launch chrome must not republish as foreground process truth"
     );
     env.assert_no_mux_fork();
 }

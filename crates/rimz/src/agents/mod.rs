@@ -105,6 +105,30 @@ pub enum AgentErr {
 
 pub type Result<T> = std::result::Result<T, AgentErr>;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LaunchPreset {
+    pub model: Option<String>,
+    pub effort: Option<String>,
+}
+
+impl LaunchPreset {
+    pub fn is_empty(&self) -> bool {
+        self.model.as_deref().is_none_or(str::is_empty)
+            && self.effort.as_deref().is_none_or(str::is_empty)
+    }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum PresetErr {
+    #[error(
+        "agent `{agent}` does not support alias field `{field}`; remove it or put provider-specific flags in `args`"
+    )]
+    UnsupportedField {
+        agent: &'static str,
+        field: &'static str,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AgentHookClass {
     /// Non-blocking event that may carry a status/mode/task transition for
@@ -397,7 +421,7 @@ pub trait AgentAdapter: Send + Sync {
     }
 
     /// Extract the user-facing final assistant text for a completed supervised
-    /// `rimz run`. The adapter owns native payload and transcript shapes; the
+    /// `rimz agents -p`. The adapter owns native payload and transcript shapes; the
     /// run store receives only this normalized string.
     fn last_assistant_message(
         &self,
@@ -544,11 +568,37 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Extra launch argv for a supervised `rimz run` permission posture. The
-    /// adapter owns provider-specific CLI flags; the run command only chooses
+    /// Extra launch argv for a supervised agent permission posture. The
+    /// adapter owns provider-specific CLI flags; the CLI only chooses
     /// the posture.
     fn permission_args(&self, _mode: PermissionMode) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Render typed per-machine launch alias presets into provider-native argv.
+    /// Unsupported fields fail at launch so config cannot silently drop intent.
+    fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {
+        if preset
+            .model
+            .as_deref()
+            .is_some_and(|model| !model.is_empty())
+        {
+            return Err(PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "model",
+            });
+        }
+        if preset
+            .effort
+            .as_deref()
+            .is_some_and(|effort| !effort.is_empty())
+        {
+            return Err(PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "effort",
+            });
+        }
+        Ok(Vec::new())
     }
 
     /// The argv that launches a fresh interactive session of this agent in the
@@ -700,7 +750,7 @@ pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
 
 /// Read a torn-write-safe JSONL suffix from a transcript path, returning the
 /// consumed bytes and next cursor offset. Same cursor discipline as spending,
-/// exposed for `rimz run --stream` without making the helper module public.
+/// exposed for `rimz agents wait --stream` without making the helper module public.
 pub fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
     transcript_fs::read_spend_lines(path, offset)
 }

@@ -6,8 +6,10 @@
 //! Rimz drives *your* box or link *your* accounts, so they live outside the
 //! repo and outside the trust hash — a clone never inherits them.
 //!
-//! Loading is best-effort by contract: a missing file is the default config,
-//! and unknown keys are ignored so an older binary tolerates a newer file.
+//! A missing file is the default config, and unknown keys are ignored so an
+//! older binary tolerates a newer file. Invalid migrated launch config fails at
+//! load time; background readers may still choose defaults for best-effort
+//! rendering.
 
 use std::path::{Path, PathBuf};
 
@@ -16,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::ledger::paths::config_home;
 
 mod accounts;
+mod agents;
 mod animation;
 mod color;
 mod mux;
@@ -23,10 +26,10 @@ mod notifications;
 mod remote_control;
 mod resume;
 mod sidebar;
-mod tab;
 mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
+pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig,
@@ -47,7 +50,6 @@ pub use sidebar::{
     ContextSeverityConfig, GlowMode, ProviderTabsMode, ScrollbarMode, SidebarConfig,
     SidebarProviderStyle, SidebarThemeConfig,
 };
-pub use tab::{Keyword, KeywordsConfig, LayoutsConfig, TabConfig};
 pub use worktree::{WorktreeBase, WorktreeConfig};
 
 const CONFIG_FILE: &str = "config.toml";
@@ -68,6 +70,16 @@ pub enum ConfigErr {
         #[source]
         source: toml::de::Error,
     },
+    #[error(
+        "per-machine config at {path} uses [tab]; rename it to [agents] with [agents.aliases] and [agents.layouts]"
+    )]
+    LegacyTab { path: PathBuf },
+    #[error("invalid per-machine agents config at {path}: {source}")]
+    Agents {
+        path: PathBuf,
+        #[source]
+        source: crate::agents_spec::LayoutErr,
+    },
 }
 
 pub type Result<T> = std::result::Result<T, ConfigErr>;
@@ -80,7 +92,7 @@ pub type Result<T> = std::result::Result<T, ConfigErr>;
 pub struct MachineConfig {
     pub accounts: AccountsConfig,
     pub worktree: WorktreeConfig,
-    pub tab: TabConfig,
+    pub agents: AgentsConfig,
     pub remote_control: RemoteControlConfig,
     pub notifications: NotificationsPrefs,
     pub sidebar: SidebarConfig,
@@ -111,16 +123,38 @@ impl MachineConfig {
     /// Load from an explicit path — the test and tooling seam.
     pub fn load_from(path: &Path) -> Result<Self> {
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text).map_err(|source| ConfigErr::Parse {
-                path: path.to_path_buf(),
-                source,
-            }),
+            Ok(text) => Self::parse_text(path, &text),
             Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(source) => Err(ConfigErr::Io {
                 path: path.to_path_buf(),
                 source,
             }),
         }
+    }
+
+    pub fn parse_text(path: &Path, text: &str) -> Result<Self> {
+        let value = toml::from_str::<toml::Value>(text).map_err(|source| ConfigErr::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        if value
+            .as_table()
+            .is_some_and(|table| table.contains_key("tab"))
+        {
+            return Err(ConfigErr::LegacyTab {
+                path: path.to_path_buf(),
+            });
+        }
+        let config: Self = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        crate::agents_spec::validate_config(&config.agents.aliases, &config.agents.layouts)
+            .map_err(|source| ConfigErr::Agents {
+                path: path.to_path_buf(),
+                source,
+            })?;
+        Ok(config)
     }
 }
 

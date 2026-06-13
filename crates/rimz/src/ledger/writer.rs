@@ -3,16 +3,19 @@
 //! commit. The read side (snapshots, projections) stays in `mod.rs`; nothing
 //! here is imported outside the ledger module.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::feed::FeedItem;
-use crate::schema::event::EventEnvelope;
+use crate::feed::RuntimeOwnerKind;
+use crate::schema::event::{AgentLaunchPayload, EventEnvelope};
 use crate::workspace::ResolvedWorkspace;
 
 use super::{
-    AskExpiry, EventLogRotationOutcome, Ledger, Result, StatePaths, WorkspaceRewriteOutcome,
-    event_log, feed_store, lock, message_store, snapshot, workspace_record,
+    AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest, AskExpiry,
+    EventLogRotationOutcome, Ledger, LedgerErr, Result, StatePaths, WorkspaceRewriteOutcome,
+    event_log, feed_store, lock, message_store, runtime, snapshot, workspace_record,
 };
 
 mod debounce;
@@ -39,12 +42,13 @@ fn stage_agent_carryover_for_rotation(paths: &StatePaths, min_bytes: u64) -> Res
         return Ok((false, existing.agents.len()));
     }
 
-    let (_cache, merged_agents) = snapshot::catch_up_rollup(paths)?;
+    let (cache, merged_agents) = snapshot::catch_up_rollup(paths)?;
     let carryover_agents = merged_agents.len();
     snapshot::write_carryover(
         &paths.agents_carryover,
         &snapshot::EventCarryover {
             agents: merged_agents,
+            agent_identity: cache.agent_identity.without_consumed_launches(),
         },
     )?;
     Ok((true, carryover_agents))
@@ -124,6 +128,39 @@ impl Ledger {
     #[must_use = "durability barrier; check the result"]
     pub fn append_event(&self, event: &EventEnvelope) -> Result<()> {
         self.append_event_and_expire(event, None).map(|_| ())
+    }
+
+    /// Allocate final agent card identities from the current live rollup and
+    /// append their launch events under the same workspace lock.
+    #[must_use = "durability barrier; check the result"]
+    pub fn append_agent_launches_allocating(
+        &self,
+        requests: &[AgentLaunchRequest],
+        append: &AgentLaunchAppend,
+    ) -> Result<Vec<AgentLaunchIdentity>> {
+        let (abandoned, events, identities) = {
+            let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
+            let abandoned =
+                expiry::sweep_dead_owned_items_debounced(&self.inner.paths, &append.session_name)?;
+            let snapshot = snapshot::build_from(&self.inner.paths)?;
+            let identities = allocate_agent_launch_identities(requests, &snapshot.agents)?;
+            let events = identities
+                .iter()
+                .map(|identity| agent_launch_event(append, identity))
+                .collect::<Vec<_>>();
+            for event in &events {
+                event_log::append(&self.inner.paths.events_log, event)?;
+            }
+            (abandoned, events, identities)
+        };
+        for request_id in &abandoned {
+            self.wake_sidebars_best_effort(request_id);
+        }
+        for event in &events {
+            self.wake_sidebars_for_event_best_effort(event);
+        }
+        self.publish_snapshot_best_effort();
+        Ok(identities)
     }
 
     /// Append a lifecycle event and expire the session's superseded pending
@@ -346,6 +383,108 @@ impl Ledger {
     }
 }
 
+fn allocate_agent_launch_identities(
+    requests: &[AgentLaunchRequest],
+    agents: &[crate::feed::AgentState],
+) -> Result<Vec<AgentLaunchIdentity>> {
+    // Pet names are live-card handles, not permanent ids: ended cards release
+    // them so long-lived rooms do not grow a retired-name set. Kind ordinals
+    // stay monotonic in the reducer for history/script-stable references.
+    let mut taken: BTreeSet<String> = agents
+        .iter()
+        .filter_map(|agent| agent.name.clone())
+        .collect();
+    let session_ids = agents
+        .iter()
+        .map(|agent| agent.agent_id.as_str())
+        .collect::<Vec<_>>();
+    let mut identities = Vec::with_capacity(requests.len());
+    for request in requests {
+        let name = match &request.name {
+            AgentLaunchName::Explicit(name) => {
+                validate_agent_launch_name(name)?;
+                if name_taken(name, &taken, &session_ids) {
+                    return Err(LedgerErr::AgentLaunchIdentity(format!(
+                        "agent name `{name}` is already in use"
+                    )));
+                }
+                name.clone()
+            }
+            AgentLaunchName::Soft(name)
+                if valid_agent_launch_name(name) && !name_taken(name, &taken, &session_ids) =>
+            {
+                name.clone()
+            }
+            AgentLaunchName::Soft(_) | AgentLaunchName::Mint => {
+                mint_available_agent_name(&taken, &session_ids)
+            }
+        };
+        taken.insert(name.clone());
+        identities.push(AgentLaunchIdentity {
+            kind: request.kind.clone(),
+            agent_id: request.agent_id.clone(),
+            name,
+            run_id: request.run_id.clone(),
+        });
+    }
+    Ok(identities)
+}
+
+fn validate_agent_launch_name(name: &str) -> Result<()> {
+    if valid_agent_launch_name(name) {
+        Ok(())
+    } else {
+        Err(LedgerErr::AgentLaunchIdentity(format!(
+            "invalid agent name `{name}`; use ASCII letters, numbers, and `-`"
+        )))
+    }
+}
+
+fn valid_agent_launch_name(name: &str) -> bool {
+    crate::petname::valid_name(name)
+        && !crate::petname::collides_with_reserved_prefix(name, crate::agents::known_kinds())
+}
+
+fn name_taken(name: &str, taken: &BTreeSet<String>, session_ids: &[&str]) -> bool {
+    taken.contains(name) || session_ids.iter().any(|session| session.starts_with(name))
+}
+
+fn mint_available_agent_name(taken: &BTreeSet<String>, session_ids: &[&str]) -> String {
+    loop {
+        let candidate = crate::petname::mint(taken.iter().map(String::as_str));
+        if valid_agent_launch_name(&candidate) && !name_taken(&candidate, taken, session_ids) {
+            return candidate;
+        }
+    }
+}
+
+fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity) -> EventEnvelope {
+    let runtime_owner = append.pane_id.as_ref().map(|_| {
+        runtime::current_process_owner(RuntimeOwnerKind::Agent, identity.agent_id.as_str())
+    });
+    EventEnvelope::agent_launched(
+        append.workspace_id.clone(),
+        append.session_name.clone(),
+        &identity.kind,
+        AgentLaunchPayload {
+            agent_id: identity.agent_id.clone(),
+            agent_name: identity.name.clone(),
+            kind_ordinal: None,
+            state: append.state,
+            run_id: identity.run_id.clone(),
+            pane_id: append.pane_id.clone(),
+            runtime_owner,
+            worktree_path: Some(append.cwd.to_string_lossy().into_owned()),
+            worktree_branch: append.worktree_name.clone(),
+            prompt: append
+                .prompt
+                .as_deref()
+                .filter(|prompt| !prompt.trim().is_empty())
+                .map(ToOwned::to_owned),
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -353,7 +492,10 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::agents::TurnPhase;
+    use crate::feed::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
+    use crate::ids::{AgentKind, AgentSessionId};
     use crate::ledger::paths::{RuntimePaths, StatePaths};
 
     #[test]
@@ -389,5 +531,147 @@ mod tests {
             .expect("rotate event log");
 
         assert!(rotate_called.get(), "test rotate hook should run");
+    }
+
+    #[test]
+    fn rotation_carryover_drops_consumed_launch_tombstones() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let workspace_id = WorkspaceId::from_project_root(dir.path());
+        let paths = StatePaths::under(workspace_id.clone(), dir.path()).expect("state paths");
+        let runtime = RuntimePaths::under(workspace_id.clone(), dir.path()).expect("runtime paths");
+        let ledger = Ledger::open(paths.clone(), runtime).expect("open ledger");
+        let kind = AgentKind::new_unchecked("claude");
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::agent_launched(
+                workspace_id.clone(),
+                "rimz-test",
+                &kind,
+                AgentLaunchPayload {
+                    agent_id: AgentSessionId::from("launch_a"),
+                    agent_name: "lucid-atlas".to_owned(),
+                    kind_ordinal: None,
+                    state: crate::schema::event::AgentLaunchState::Bound,
+                    run_id: None,
+                    pane_id: None,
+                    runtime_owner: None,
+                    worktree_path: Some(dir.path().to_string_lossy().into_owned()),
+                    worktree_branch: Some("main".to_owned()),
+                    prompt: Some("boot".to_owned()),
+                },
+            ),
+        )
+        .expect("append launch");
+        event_log::append(
+            &paths.events_log,
+            &EventEnvelope::new(
+                workspace_id,
+                "rimz-test",
+                "claude",
+                "agent-hook",
+                "agent.lifecycle",
+                json!({
+                    "agent_id": "real-session",
+                    "agent_name": "lucid-atlas",
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+        )
+        .expect("append lifecycle");
+
+        ledger.rotate_event_log(1, None).expect("rotate event log");
+
+        let carryover = std::fs::read_to_string(&paths.agents_carryover).expect("read carryover");
+        assert!(carryover.contains("real-session"));
+        assert!(
+            !carryover.contains("consumed_launches"),
+            "launch replay tombstones are active-log state and must not grow across rotations"
+        );
+    }
+
+    #[test]
+    fn launch_identity_allocation_rejects_explicit_live_name_or_session_prefix() {
+        let agents = vec![
+            agent_state("claude", "sess-live-alpha", Some("lucid-atlas")),
+            agent_state("claude", "prefix-session", Some("solid-lumen")),
+        ];
+        let duplicate = AgentLaunchRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launch_a"),
+            name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
+            run_id: None,
+        };
+        let prefix = AgentLaunchRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launch_b"),
+            name: AgentLaunchName::Explicit("prefix".to_owned()),
+            run_id: None,
+        };
+
+        assert!(allocate_agent_launch_identities(&[duplicate], &agents).is_err());
+        assert!(allocate_agent_launch_identities(&[prefix], &agents).is_err());
+    }
+
+    #[test]
+    fn soft_launch_name_falls_back_when_it_collides() {
+        let agents = vec![agent_state(
+            "claude",
+            "sess-live-alpha",
+            Some("lucid-atlas"),
+        )];
+        let request = AgentLaunchRequest {
+            kind: AgentKind::new_unchecked("claude"),
+            agent_id: AgentSessionId::from("launch_a"),
+            name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
+            run_id: None,
+        };
+
+        let identities = allocate_agent_launch_identities(&[request], &agents).unwrap();
+
+        assert_eq!(identities.len(), 1);
+        assert_ne!(identities[0].name, "lucid-atlas");
+        assert!(valid_agent_launch_name(&identities[0].name));
+    }
+
+    fn agent_state(kind: &str, id: &str, name: Option<&str>) -> AgentState {
+        let now = jiff::Timestamp::now();
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked(kind),
+            name: name.map(ToOwned::to_owned),
+            kind_ordinal: Some(1),
+            status: AgentStatus::Idle,
+            phase: TurnPhase::Idle,
+            pane: None,
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: None,
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen: now,
+            last_activity: now,
+            registered_at: Some(now),
+        }
     }
 }

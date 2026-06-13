@@ -84,8 +84,8 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
   - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
   - [messages.md](./docs/internals/agents/messages.md) — state-aware `steer` and durable per-agent queued messages: target grammar, record layout, gates, delivery, attempts, and hazards.
-  - [run.md](./docs/internals/agents/run.md) — supervised `rimz run`: run records, per-run wakeups, hook completion, pane cleanup.
-  - [worktrees.md](./docs/internals/agents/worktrees.md) — Rimz-owned git worktrees, agent tab layouts, supervised cleanup, and backend tab rendering.
+  - [run.md](./docs/internals/agents/run.md) — supervised `rimz agents -p`: run records, per-run wakeups, hook completion, pane cleanup.
+  - [worktrees.md](./docs/internals/agents/worktrees.md) — Rimz-owned git worktrees, agent layouts, supervised cleanup, and backend tab rendering.
 - **`sidebar/`** — the room and the substrate beneath it.
   - [sidebar.md](./docs/internals/sidebar/sidebar.md) — sidebar mechanics: presence, ranking, launch, reload recovery, and view-model behaviour (the on-screen look lives in [interface/sidebar.md](./docs/interface/sidebar.md)).
   - [state.md](./docs/internals/sidebar/state.md) — sidebar pulled truth, typed realtime events, fusion, process roles, and timing cadences.

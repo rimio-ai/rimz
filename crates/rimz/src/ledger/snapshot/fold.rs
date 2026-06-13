@@ -8,7 +8,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use super::project::{reduce_agent_states, reduce_agent_states_seeded};
+use super::project::{
+    AgentIdentityState, backfill_agent_identities, reduce_agent_states_seeded_with_identity,
+};
 use super::{Result, SnapshotErr};
 use crate::agents::lifecycle::LifecycleSignal;
 use crate::feed::AgentState;
@@ -25,6 +27,8 @@ use crate::schema::event::{EventEnvelope, EventKind};
 pub(crate) struct EventCarryover {
     #[serde(default)]
     pub agents: Vec<AgentState>,
+    #[serde(default)]
+    pub agent_identity: AgentIdentityState,
 }
 
 pub(crate) fn read_carryover(path: &Path) -> Result<EventCarryover> {
@@ -51,21 +55,33 @@ pub(crate) fn agent_rollup_with_carryover(
     events: &[EventEnvelope],
     mut carryover_agents: Vec<AgentState>,
 ) -> Vec<AgentState> {
+    let mut carryover_identity =
+        backfill_agent_identities(&mut carryover_agents, AgentIdentityState::default());
     // The carryover predates every event in the current log, so a rebirth
     // boundary anywhere in `events` postdates every carryover stamp — clear
     // them here, mirroring the in-order clear the seeded reducer applies to
     // within-log stamps (`reduce_agent_states_seeded`).
-    if events
+    let has_rebirth = events
         .iter()
-        .any(|event| matches!(event.kind(), EventKind::SessionRebirth))
-    {
+        .any(|event| matches!(event.kind(), EventKind::SessionRebirth));
+    if has_rebirth {
         for agent in &mut carryover_agents {
             agent.pane = None;
+            agent.kind_ordinal = None;
         }
+        carryover_identity = carryover_identity.with_ordinals_reset();
     }
-    let live = reduce_agent_states(events);
+    let live =
+        reduce_agent_states_seeded_with_identity(BTreeMap::new(), carryover_identity, events)
+            .0
+            .into_values()
+            .collect::<Vec<_>>();
     let tombstones = agent_tombstones_for_events(events);
-    merge_agent_rollups_with_tombstones(&carryover_agents, &live, &tombstones)
+    let mut merged = merge_agent_rollups_with_tombstones(&carryover_agents, &live, &tombstones);
+    if has_rebirth {
+        backfill_agent_identities(&mut merged, AgentIdentityState::default());
+    }
+    merged
 }
 
 pub(super) fn merge_agent_rollups_with_tombstones(
@@ -117,7 +133,7 @@ pub fn agent_tombstones_for_events(
 
 /// Bump when [`RollupCache`]'s shape changes — a mismatched cache reads as
 /// absent and cold-rebuilds.
-const ROLLUP_CACHE_VERSION: u32 = 4;
+const ROLLUP_CACHE_VERSION: u32 = 8;
 
 /// The resumable agent-rollup fold base persisted in `snapshots/rollup.json`:
 /// the raw pre-projection fold map and this generation's tombstones, stamped
@@ -129,6 +145,10 @@ pub(crate) struct RollupCache {
     pub version: u32,
     pub extent: event_log::LogExtent,
     pub raw_agents: Vec<AgentState>,
+    #[serde(default)]
+    pub agent_identity: AgentIdentityState,
+    #[serde(default)]
+    pub saw_session_rebirth: bool,
     pub tombstones: Vec<(AgentKind, AgentSessionId)>,
 }
 
@@ -191,10 +211,15 @@ fn catch_up_from(
     base: Option<RollupCache>,
     paths: &StatePaths,
 ) -> Result<(RollupCache, Vec<AgentState>)> {
-    let (seed, mut tombstones, generation, start) = match base {
+    let mut carryover = read_carryover(&paths.agents_carryover)?;
+    carryover.agent_identity =
+        backfill_agent_identities(&mut carryover.agents, carryover.agent_identity);
+    let (seed, identity, mut tombstones, generation, start, mut saw_session_rebirth) = match base {
         Some(RollupCache {
             extent,
             raw_agents,
+            agent_identity,
+            saw_session_rebirth,
             tombstones,
             ..
         }) => {
@@ -204,16 +229,43 @@ fn catch_up_from(
                 .collect();
             let tombstones: BTreeSet<(AgentKind, AgentSessionId)> =
                 tombstones.into_iter().collect();
-            (seed, tombstones, extent.generation, extent.offset)
+            (
+                seed,
+                agent_identity,
+                tombstones,
+                extent.generation,
+                extent.offset,
+                saw_session_rebirth,
+            )
         }
-        None => (BTreeMap::new(), BTreeSet::new(), 0, 0),
+        None => (
+            BTreeMap::new(),
+            carryover.agent_identity.clone(),
+            BTreeSet::new(),
+            0,
+            0,
+            false,
+        ),
     };
     let (delta, end) = event_log::read_from_offset(&paths.events_log, start)?;
-    let map = reduce_agent_states_seeded(seed, &delta);
+    saw_session_rebirth |= events_have_rebirth(&delta);
+    let (map, mut agent_identity) =
+        reduce_agent_states_seeded_with_identity(seed, identity, &delta);
     tombstones.extend(agent_tombstones_for_events(&delta));
-    let raw_agents: Vec<AgentState> = map.into_values().collect();
-    let carryover = read_carryover(&paths.agents_carryover)?;
-    let merged = merge_agent_rollups_with_tombstones(&carryover.agents, &raw_agents, &tombstones);
+    let mut raw_agents: Vec<AgentState> = map.into_values().collect();
+    if saw_session_rebirth {
+        for agent in &mut carryover.agents {
+            agent.pane = None;
+            agent.kind_ordinal = None;
+        }
+        carryover.agent_identity = carryover.agent_identity.with_ordinals_reset();
+        agent_identity = backfill_agent_identities(&mut raw_agents, agent_identity);
+    }
+    let mut merged =
+        merge_agent_rollups_with_tombstones(&carryover.agents, &raw_agents, &tombstones);
+    if saw_session_rebirth {
+        backfill_agent_identities(&mut merged, AgentIdentityState::default());
+    }
     let refreshed = RollupCache {
         version: ROLLUP_CACHE_VERSION,
         extent: event_log::LogExtent {
@@ -221,9 +273,17 @@ fn catch_up_from(
             offset: end,
         },
         raw_agents,
+        agent_identity,
+        saw_session_rebirth,
         tombstones: tombstones.into_iter().collect(),
     };
     Ok((refreshed, merged))
+}
+
+fn events_have_rebirth(events: &[EventEnvelope]) -> bool {
+    events
+        .iter()
+        .any(|event| matches!(event.kind(), EventKind::SessionRebirth))
 }
 
 /// Reseed `snapshots/rollup.json` for the next log generation. Called by
@@ -245,6 +305,10 @@ pub(crate) fn reseed_rollup_cache_for_rotation(paths: &StatePaths) -> Result<()>
                 offset: 0,
             },
             raw_agents: Vec::new(),
+            agent_identity: read_carryover(&paths.agents_carryover)?
+                .agent_identity
+                .without_consumed_launches(),
+            saw_session_rebirth: false,
             tombstones: Vec::new(),
         },
     )

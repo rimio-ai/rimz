@@ -1,3 +1,4 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use super::*;
@@ -5,11 +6,12 @@ use super::*;
 use super::super::view::{attach_sub_agents, row_from_agent, sub_agent_from_state};
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::AgentStatus;
-use crate::ids::WorkspaceId;
+use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
 use crate::ledger::snapshot::SidebarSnapshot;
 use crate::ledger::snapshot::testkit::*;
-use crate::schema::event::EventEnvelope;
+use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use jiff::Timestamp;
+use serde_json::json;
 
 fn project_workspace() -> WorkspaceId {
     WorkspaceId::from_project_root(Path::new("/tmp/x"))
@@ -44,6 +46,31 @@ fn raw_lifecycle_at(
     event
 }
 
+fn raw_launch(
+    state: AgentLaunchState,
+    agent_id: &str,
+    agent_name: &str,
+    pane_id: Option<&str>,
+) -> EventEnvelope {
+    EventEnvelope::agent_launched(
+        project_workspace(),
+        "session",
+        &AgentKind::new_unchecked("claude"),
+        AgentLaunchPayload {
+            agent_id: agent_id.into(),
+            agent_name: agent_name.to_owned(),
+            kind_ordinal: None,
+            state,
+            run_id: None,
+            pane_id: pane_id.map(|raw| PaneId::parse(raw).expect("pane id")),
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: Some("boot".to_owned()),
+        },
+    )
+}
+
 mod capability;
 mod compaction;
 mod pane_binding;
@@ -51,3 +78,403 @@ mod phase_status;
 mod prompt_task;
 mod subagents;
 mod timestamps;
+
+#[test]
+fn assigns_and_carries_card_identity() {
+    let events = vec![
+        raw_lifecycle_at(
+            "claude",
+            1,
+            json!({
+                "agent_id": "session-a",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "session-a",
+                "signal": { "signal": "turn_started" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            3,
+            json!({
+                "agent_id": "session-b",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    let first = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "session-a")
+        .expect("session-a");
+    assert_eq!(first.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(first.kind_ordinal, Some(1));
+    let second = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "session-b")
+        .expect("session-b");
+    assert!(
+        second
+            .name
+            .as_deref()
+            .is_some_and(|name| name.contains('-'))
+    );
+    assert_ne!(second.name, first.name);
+    assert_eq!(second.kind_ordinal, Some(2));
+}
+
+#[test]
+fn rebirth_resets_ordinals_and_keeps_names() {
+    let events = vec![
+        raw_lifecycle_at(
+            "claude",
+            1,
+            json!({
+                "agent_id": "session-a",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        EventEnvelope::session_rebirth(project_workspace(), "session"),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "session-a",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    let agent = agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "session-a")
+        .expect("session-a");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(agent.kind_ordinal, Some(1));
+}
+
+#[test]
+fn launch_event_creates_provisional_card() {
+    let agents = reduce_agent_states(&[raw_launch(
+        AgentLaunchState::Bound,
+        "launch_a",
+        "lucid-atlas",
+        Some("zellij:terminal_1"),
+    )]);
+
+    assert_eq!(agents.len(), 1);
+    let agent = &agents[0];
+    assert_eq!(agent.agent_id.as_str(), "launch_a");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(agent.kind_ordinal, Some(1));
+    assert_eq!(agent.status, AgentStatus::Running);
+    assert_eq!(agent.phase, TurnPhase::Reasoning);
+    assert_eq!(
+        agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+        Some("zellij:terminal_1".to_owned())
+    );
+}
+
+#[test]
+fn bound_launch_event_keeps_the_starting_ordinal() {
+    let agents = reduce_agent_states(&[
+        raw_launch(AgentLaunchState::Starting, "launch_a", "lucid-atlas", None),
+        raw_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            "lucid-atlas",
+            Some("zellij:terminal_1"),
+        ),
+    ]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "launch_a");
+    assert_eq!(agents[0].kind_ordinal, Some(1));
+    assert_eq!(
+        agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
+        Some("zellij:terminal_1".to_owned())
+    );
+}
+
+#[test]
+fn lifecycle_registration_merges_provisional_card_by_name() {
+    let events = vec![
+        raw_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            "lucid-atlas",
+            Some("zellij:terminal_1"),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "real-session",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    assert_eq!(agents.len(), 1);
+    let agent = &agents[0];
+    assert_eq!(agent.agent_id.as_str(), "real-session");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(agent.kind_ordinal, Some(1));
+    assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));
+    assert_eq!(
+        agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+        Some("zellij:terminal_1".to_owned())
+    );
+}
+
+#[test]
+fn consumed_launches_are_not_persisted_after_provisional_merge() {
+    let (_, identity) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        AgentIdentityState::default(),
+        &[
+            raw_launch(
+                AgentLaunchState::Bound,
+                "launch_a",
+                "lucid-atlas",
+                Some("zellij:terminal_1"),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                2,
+                json!({
+                    "agent_id": "real-session",
+                    "agent_name": "lucid-atlas",
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+        ],
+    );
+
+    assert!(
+        identity.consumed_launches.is_empty(),
+        "launch tombstones are reducer-local state, not room-lifetime identity"
+    );
+}
+
+#[test]
+fn failed_launch_event_does_not_resurrect_a_consumed_provisional() {
+    let events = vec![
+        raw_launch(AgentLaunchState::Starting, "launch_a", "lucid-atlas", None),
+        raw_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            "lucid-atlas",
+            Some("zellij:terminal_1"),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "real-session",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            3,
+            json!({
+                "event_name": "SessionEnd",
+                "agent_id": "real-session",
+                "signal": { "signal": "ended" },
+            }),
+        ),
+        raw_launch(AgentLaunchState::Failed, "launch_a", "lucid-atlas", None),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    assert!(
+        agents.is_empty(),
+        "late wrapper failure must not recreate a failed provisional card: {agents:#?}"
+    );
+}
+
+#[test]
+fn late_launch_event_does_not_recreate_provisional_when_name_is_owned() {
+    let real = reduce_agent_states(&[raw_lifecycle_at(
+        "claude",
+        1,
+        json!({
+            "agent_id": "real-session",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+        }),
+    )])
+    .pop()
+    .expect("registered card");
+    let kind = AgentKind::new_unchecked("claude");
+    let real_id = AgentSessionId::from("real-session");
+    let seed = BTreeMap::from([((kind.clone(), real_id.clone()), real)]);
+    let identity = AgentIdentityState {
+        names: BTreeMap::from([("lucid-atlas".to_owned(), (kind.clone(), real_id))]),
+        next_ordinal: BTreeMap::from([(kind, 2)]),
+        consumed_launches: BTreeSet::new(),
+    };
+
+    let (agents, _) = reduce_agent_states_seeded_with_identity(
+        seed,
+        identity,
+        &[raw_launch(
+            AgentLaunchState::Failed,
+            "launch_a",
+            "lucid-atlas",
+            None,
+        )],
+    );
+
+    assert_eq!(agents.len(), 1);
+    assert!(
+        agents
+            .values()
+            .any(|agent| agent.agent_id == "real-session")
+    );
+    assert!(
+        agents.values().all(|agent| agent.agent_id != "launch_a"),
+        "a late wrapper failure must not create a second provisional card"
+    );
+}
+
+#[test]
+fn failed_launch_without_prior_or_owner_is_ignored() {
+    let agents = reduce_agent_states(&[raw_launch(
+        AgentLaunchState::Failed,
+        "launch_a",
+        "lucid-atlas",
+        None,
+    )]);
+
+    assert!(
+        agents.is_empty(),
+        "a lone failed launch has no live provisional card to update"
+    );
+}
+
+#[test]
+fn rebirth_registration_with_new_session_id_adopts_prior_named_card() {
+    let events = vec![
+        raw_lifecycle_at(
+            "claude",
+            1,
+            json!({
+                "agent_id": "old-session",
+                "agent_name": "lucid-atlas",
+                "worktree_path": "/tmp/x",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        EventEnvelope::session_rebirth(project_workspace(), "session"),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "new-session",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+
+    assert_eq!(agents.len(), 1);
+    let agent = &agents[0];
+    assert_eq!(agent.agent_id.as_str(), "new-session");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(agent.kind_ordinal, Some(1));
+    assert_eq!(agent.worktree_path.as_deref(), Some("/tmp/x"));
+}
+
+#[test]
+fn ended_session_releases_card_name_for_later_launch() {
+    let events = vec![
+        raw_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            "lucid-atlas",
+            Some("zellij:terminal_1"),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            2,
+            json!({
+                "agent_id": "real-session",
+                "agent_name": "lucid-atlas",
+                "signal": { "signal": "registered" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            3,
+            json!({
+                "event_name": "SessionEnd",
+                "agent_id": "real-session",
+                "signal": { "signal": "ended" },
+            }),
+        ),
+        raw_launch(
+            AgentLaunchState::Bound,
+            "launch_b",
+            "lucid-atlas",
+            Some("zellij:terminal_2"),
+        ),
+    ];
+
+    let agents = reduce_agent_states(&events);
+    assert_eq!(agents.len(), 1);
+    let agent = &agents[0];
+    assert_eq!(agent.agent_id.as_str(), "launch_b");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(
+        agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+        Some("zellij:terminal_2".to_owned())
+    );
+}
+
+#[test]
+fn stale_identity_state_does_not_block_reused_launch_name() {
+    let stale = AgentIdentityState {
+        names: BTreeMap::from([(
+            "lucid-atlas".to_owned(),
+            (
+                AgentKind::new_unchecked("claude"),
+                AgentSessionId::from("gone-session"),
+            ),
+        )]),
+        next_ordinal: BTreeMap::new(),
+        consumed_launches: BTreeSet::new(),
+    };
+    let (agents, _) = reduce_agent_states_seeded_with_identity(
+        BTreeMap::new(),
+        stale,
+        &[raw_launch(
+            AgentLaunchState::Bound,
+            "launch_a",
+            "lucid-atlas",
+            Some("zellij:terminal_1"),
+        )],
+    );
+
+    let agent = agents
+        .values()
+        .next()
+        .expect("launch with reused name should survive");
+    assert_eq!(agent.agent_id.as_str(), "launch_a");
+    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
+}

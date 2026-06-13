@@ -263,6 +263,20 @@ impl AgentAdapter for CodexAdapter {
         }
     }
 
+    fn render_preset(
+        &self,
+        preset: &super::LaunchPreset,
+    ) -> std::result::Result<Vec<String>, super::PresetErr> {
+        let mut argv = Vec::new();
+        if let Some(model) = preset.model.as_deref().filter(|model| !model.is_empty()) {
+            argv.extend(["--model".to_owned(), model.to_owned()]);
+        }
+        if let Some(effort) = preset.effort.as_deref().filter(|effort| !effort.is_empty()) {
+            argv.extend(["-c".to_owned(), format!("model_reasoning_effort={effort}")]);
+        }
+        Ok(argv)
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = vec!["codex".to_owned()];
         argv.extend(extra_args.iter().cloned());

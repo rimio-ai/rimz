@@ -28,6 +28,13 @@ pub struct AgentLifecycleObservation {
     /// Codex root `session_id`, or Codex subagent `agent_id`). The CLI uses
     /// this as the `agent_id`.
     pub agent_id: Option<AgentSessionId>,
+    /// Rimz-minted durable card name. Launchers pass this through
+    /// `RIMZ_AGENT_NAME`; hand-launched agents get a deterministic fallback
+    /// during reduction.
+    pub agent_name: Option<String>,
+    /// Display ordinal within this kind for the current room incarnation.
+    /// The reducer derives it when the event omits it.
+    pub kind_ordinal: Option<u32>,
     /// The agent-agnostic lifecycle intent this event carries. The reducer and
     /// the ingestion path fold it onto the rollup through the one
     /// [`step`](super::lifecycle::step) table; the adapter no longer decides a
@@ -103,6 +110,8 @@ impl AgentLifecycleObservation {
     pub(crate) fn new(agent_id: Option<AgentSessionId>, signal: LifecycleSignal) -> Self {
         Self {
             agent_id,
+            agent_name: None,
+            kind_ordinal: None,
             signal,
             agent_pid: None,
             agent_process_start: None,

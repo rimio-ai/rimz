@@ -1,17 +1,20 @@
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail};
+use anyhow::Result;
+#[cfg(test)]
+use anyhow::bail;
 
-use super::super::{GlobalFlags, MissingSessionReport, pick_mux_for_session};
+#[cfg(test)]
 use super::output;
+use crate::cli::{GlobalFlags, MissingSessionReport, pick_mux_for_session};
 use rimz::ids::PaneId;
 use rimz::mux::PaneListOptions;
 use rimz::run::RunRecord;
 
-pub(super) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
+pub(crate) const STOP_BACKSTOP_GRACE: Duration = Duration::from_secs(3);
 const STOP_BACKSTOP_POLL: Duration = Duration::from_millis(250);
 
-pub(super) fn backend_for_workspace_session(
+pub(crate) fn backend_for_workspace_session(
     workspace: &rimz::ResolvedWorkspace,
     globals: &GlobalFlags,
 ) -> Result<Box<dyn rimz::mux::MuxBackend>> {
@@ -23,7 +26,7 @@ pub(super) fn backend_for_workspace_session(
     Ok(rimz::mux::backend_for(mux))
 }
 
-pub(super) fn close_run_pane(
+pub(crate) fn close_run_pane(
     backend: &dyn rimz::mux::MuxBackend,
     ledger: &rimz::Ledger,
     session_name: &str,
@@ -53,7 +56,7 @@ pub(super) fn close_run_pane(
     }
 }
 
-pub(super) fn close_stopped_run_pane_after_grace(
+pub(crate) fn close_stopped_run_pane_after_grace(
     backend: &dyn rimz::mux::MuxBackend,
     ledger: &rimz::Ledger,
     session_name: &str,
@@ -99,7 +102,7 @@ pub(super) fn close_stopped_run_pane_after_grace(
     }
 }
 
-pub(super) fn latest_resolved_run_pane(
+pub(crate) fn latest_resolved_run_pane(
     ledger: &rimz::Ledger,
     session_name: &str,
     fallback: &RunRecord,
@@ -121,12 +124,12 @@ fn latest_run_record(ledger: &rimz::Ledger, fallback: &RunRecord) -> RunRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(super) struct ResolvedRunPane {
-    pub(super) pane_id: PaneId,
-    pub(super) session_name: String,
+pub(crate) struct ResolvedRunPane {
+    pub(crate) pane_id: PaneId,
+    pub(crate) session_name: String,
 }
 
-pub(super) fn resolve_run_pane(
+pub(crate) fn resolve_run_pane(
     ledger: &rimz::Ledger,
     session_name: &str,
     record: &RunRecord,
@@ -156,7 +159,7 @@ fn resolve_run_pane_from_snapshot(
     resolve_run_pane_in_snapshot(&snapshot, session_name, record)
 }
 
-pub(super) fn resolve_run_pane_in_snapshot(
+pub(crate) fn resolve_run_pane_in_snapshot(
     snapshot: &rimz::SidebarSnapshot,
     session_name: &str,
     record: &RunRecord,
@@ -177,7 +180,8 @@ pub(super) fn resolve_run_pane_in_snapshot(
     })
 }
 
-pub(super) fn ensure_sendable(record: &RunRecord) -> Result<()> {
+#[cfg(test)]
+pub(crate) fn ensure_sendable(record: &RunRecord) -> Result<()> {
     if record.status.is_terminal() {
         bail!(
             "run {} is {}; nothing to send",

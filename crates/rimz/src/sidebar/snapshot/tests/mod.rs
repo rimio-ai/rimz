@@ -84,6 +84,8 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
     AgentState {
         agent_id: agent_id.into(),
         kind: crate::ids::AgentKind::new_unchecked(kind),
+        name: Some(test_agent_name(agent_id)),
+        kind_ordinal: Some(test_agent_ordinal(agent_id)),
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,
         pane: None,
@@ -117,6 +119,26 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         last_activity: now,
         registered_at: Some(now),
     }
+}
+
+fn test_agent_name(agent_id: &str) -> String {
+    let slug = agent_id
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '-' {
+                ch
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("test-{slug}")
+}
+
+fn test_agent_ordinal(agent_id: &str) -> u32 {
+    agent_id
+        .bytes()
+        .fold(1u32, |acc, byte| acc.wrapping_add(byte as u32))
 }
 
 fn child_agent(kind: &str, parent_id: &str, agent_id: &str) -> AgentState {

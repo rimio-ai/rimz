@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use jiff::Timestamp;
 
 use crate::ids::{AgentKind, AgentSessionId, MessageId};
@@ -179,6 +177,7 @@ impl Ledger {
         &self,
         kind: &AgentKind,
         agent_id: &AgentSessionId,
+        agent_name: Option<&str>,
         session_name: &str,
     ) -> Result<usize> {
         let mut removed = Vec::new();
@@ -186,7 +185,11 @@ impl Ledger {
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             for mut message in message_store::list(&self.inner.paths.queue_dir)? {
-                if !message.status.is_open() || !message.same_agent(kind, agent_id) {
+                let same_card = message.same_agent(kind, agent_id)
+                    || (message.kind == *kind
+                        && agent_name.is_some()
+                        && message.agent_name.as_deref() == agent_name);
+                if !message.status.is_open() || !same_card {
                     continue;
                 }
                 message.status = MessageStatus::Removed;
@@ -215,18 +218,16 @@ impl Ledger {
     #[must_use = "durability barrier; check the result"]
     pub fn abandon_orphan_messages(&self, session_name: &str) -> Result<usize> {
         let snapshot = self.snapshot()?;
-        let live: BTreeSet<(AgentKind, AgentSessionId)> = snapshot
-            .agents
-            .into_iter()
-            .map(|agent| (agent.kind, agent.agent_id))
-            .collect();
+        let live_agents = snapshot.agents;
         let mut abandoned = Vec::new();
         let mut events = Vec::new();
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             for mut message in message_store::list(&self.inner.paths.queue_dir)? {
                 if !message.status.is_open()
-                    || live.contains(&(message.kind.clone(), message.agent_id.clone()))
+                    || live_agents
+                        .iter()
+                        .any(|agent| message.same_agent_card(agent))
                 {
                     continue;
                 }
@@ -260,6 +261,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::agents::AgentLifecycleObservation;
+    use crate::agents::lifecycle::LifecycleSignal;
     use crate::feed::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
     use crate::message::DeliveryGate;
@@ -315,6 +318,43 @@ mod tests {
     }
 
     #[test]
+    fn orphan_gc_keeps_provisional_message_when_registered_card_name_is_live() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let mut provisional = agent();
+        provisional.agent_id = AgentSessionId::from("launch_a");
+        provisional.name = Some("lucid-atlas".to_owned());
+        let message = MessageRecord::new(
+            workspace_id.clone(),
+            &provisional,
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        ledger.queue_message(&message, "session").unwrap();
+
+        let mut observation = AgentLifecycleObservation::new(
+            Some(AgentSessionId::from("real-session")),
+            LifecycleSignal::Registered,
+        );
+        observation.agent_name = Some("lucid-atlas".to_owned());
+        let event = EventEnvelope::agent_lifecycle(
+            workspace_id,
+            "session",
+            "claude",
+            "SessionStart",
+            &observation,
+        );
+        ledger.append_event(&event).unwrap();
+
+        let abandoned = ledger.abandon_orphan_messages("session").unwrap();
+
+        assert_eq!(abandoned, 0);
+        let messages = ledger.list_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].status, MessageStatus::Pending);
+    }
+
+    #[test]
     fn only_fifo_head_can_be_claimed() {
         let (_dir, ledger, workspace_id) = ledger();
         let first = message(&workspace_id);
@@ -362,6 +402,8 @@ mod tests {
         AgentState {
             agent_id: AgentSessionId::from("sess-1"),
             kind: AgentKind::new_unchecked("claude"),
+            name: None,
+            kind_ordinal: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

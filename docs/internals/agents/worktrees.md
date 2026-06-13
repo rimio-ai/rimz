@@ -1,8 +1,8 @@
-# Worktrees And Agent Tabs
+# Worktrees And Agent Layouts
 
 > See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes.
 
-Rimz launches agent fleets by separating three choices: **agents** choose which tools run, **tab layout** chooses the shape on screen, and **worktree** chooses where they run.
+Rimz launches agent fleets by separating three choices: **agents** choose which tools run, **layout** chooses the shape on screen, and **worktree** chooses where they run.
 
 ## Rimz-owned worktrees
 
@@ -33,9 +33,9 @@ Rimz sidebar panes are chrome: they inherit the tab cwd for launch, and worktree
 
 `rimz gc` also sweeps clean, marked worktrees whose work has landed on their base in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.
 
-## Tab layout IR
+## Agent layout IR
 
-`rimz tab --layout` resolves either a named `[tab.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a keyword: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` variant such as `claude-auto` or `codex-yolo`, or a `[tab.keywords]` entry.
+`rimz agents <spec>` resolves either a named `[agents.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is an alias or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` variant such as `claude-auto` or `codex-yolo`, or a `[agents.aliases]` entry.
 
 ```text
 claude,codex+term
@@ -43,9 +43,9 @@ vim,htop+zsh
 claude-auto,codex-yolo
 ```
 
-The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user keywords. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` layout is `claude,codex`; no layout means one `term` cell.
+The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user aliases. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` layout is `claude,codex`; bare `rimz agents` lists cards, while the hidden layout default remains one `term` cell for internal callers.
 
-The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt`, optional `--worktree-path`, and `-- <args>` from their keyword; command cells run their raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees.
+The CLI converts cells to backend-neutral `LayoutPanes`: agent cells run `rimz agents exec <kind>` with optional `--prompt`, optional `--worktree-path`, and `-- <args>` from their alias; command cells run their raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees.
 
 ## Backend shape
 
