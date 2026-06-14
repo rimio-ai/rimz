@@ -1,5 +1,6 @@
-use crate::SidebarSnapshot;
 use crate::config::ScrollbarMode;
+use crate::feed::AgentStatus;
+use crate::{SidebarSnapshot, SidebarWorktreeGroup};
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
@@ -433,6 +434,7 @@ pub(super) fn top_lines(
     // status buckets carry their own hit map instead, translated here onto the
     // zone's line index and into the `pad_chrome` gutter's column space.
     let make_up_base = lines.len();
+    let lead_unread_status = lead_unread(&snapshot.worktree_groups).map(|(_, status)| status);
     let (fleet_lines, mut make_up_hits) = fleet_header_lines(
         theme,
         &snapshot.worktree_groups,
@@ -440,6 +442,7 @@ pub(super) fn top_lines(
         ui.make_up_filter,
         ui.animation_phase,
         inner,
+        lead_unread_status,
     );
     for hit in &mut make_up_hits {
         hit.line += make_up_base;
@@ -462,6 +465,28 @@ pub(super) fn top_lines(
 /// empty rooms keep the scroll zone clear. [`compose_lines`] windows this zone
 /// by the scroll offset and pins the cockpit above it and the bottom chrome
 /// below.
+/// The single highest-priority unread row that warrants the continuous attention
+/// signal: the oldest (min `last_activity`) unread row that needs an *answer* —
+/// `waiting` or `failed`. Only this row keeps the configured shimmer/blink; every
+/// other unread row (an unread `✓` result is a look, not an act) settles to the
+/// steady bright crest, so the one pane that most needs you is the only thing in
+/// continuous motion. Computed over the whole unfiltered roster — the lead is a
+/// global attention fact, like the cockpit buckets — so a make-up filter never
+/// shifts it, and it mirrors the `␣` triage head (oldest actionable first).
+/// `None` when nothing unread needs an answer.
+pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, AgentStatus)> {
+    groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.unread)
+        .filter_map(|row| {
+            let status = row.status()?;
+            status.is_actionable().then_some((row, status))
+        })
+        .min_by_key(|(row, _)| row.last_activity)
+        .map(|(row, status)| (row.id.as_str(), status))
+}
+
 pub(super) fn scroll_lines(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -478,6 +503,7 @@ pub(super) fn scroll_lines(
 
     if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;
+        let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
         // A group the make-up filter empties is skipped whole — header,
         // rows, and separator — so the filtered body holds only worktrees
         // with a matching row; the external catch-all is just another group.
@@ -508,6 +534,7 @@ pub(super) fn scroll_lines(
                 ui.selected_index,
                 ui.animation_phase,
                 &ui.cost_rolls,
+                lead_unread_id,
                 &mut lines,
                 &mut map,
             );

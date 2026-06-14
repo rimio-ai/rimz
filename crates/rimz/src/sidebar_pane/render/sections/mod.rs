@@ -120,14 +120,31 @@ pub(super) enum Gutter {
 /// line would drop a line-level style (`Line::styled` chrome like the dim `+K
 /// more`), so the incoming style is patched onto each content span — the gutter
 /// cells keep their own tone untouched.
-fn with_gutter(theme: &Theme, line: Line<'static>, gutter: Gutter, width: usize) -> Line<'static> {
+///
+/// `wash` is the resolved unread-card background ([`Theme::unread_wash`]) for an
+/// unread card that is not itself the selection; it grounds the card in a faint
+/// status-hued panel so the whole row reads as unseen at a glance. The neutral
+/// selection band always wins when both apply, so a selected card never doubles
+/// the cue, and chrome (header, `+K more`) passes `None`.
+fn with_gutter(
+    theme: &Theme,
+    line: Line<'static>,
+    gutter: Gutter,
+    wash: Option<Color>,
+    width: usize,
+) -> Line<'static> {
     // The selected card rests on a background band: a dark fill behind every one
     // of its lines, padding included, so the whole card reads as one lit block.
-    // The lane bracket and chrome carry no band; `NO_COLOR` drops it and the
-    // bright spine plus bold weight carry the selection alone.
+    // At truecolor depth a post-pass ([`super::lift_selection_band`]) eases that
+    // fill a touch darker from the bright spine to the rail, giving the panel
+    // depth without splitting the composed spans. An unread non-selected card
+    // grounds in its status-hued `wash` here instead — the same panel surface,
+    // tinted toward what the row needs. The lane bracket and chrome carry no
+    // band; `NO_COLOR` drops it and the bright spine plus bold weight carry the
+    // selection alone.
     let band = match gutter {
         Gutter::Selected => theme.selection_band(),
-        Gutter::Blank | Gutter::Lane => None,
+        Gutter::Blank | Gutter::Lane => wash,
     };
     let (left_cell, right_cell) = match gutter {
         Gutter::Blank => (Span::raw(" "), Span::raw(" ")),

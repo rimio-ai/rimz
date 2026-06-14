@@ -86,10 +86,14 @@ pub(crate) enum Component {
     FlashResolved,
     /// Transition flash: a paused row lifting.
     FlashLifted,
+    /// Transition flash: a turn finishing well — the one positive develop a
+    /// completion announces with before it settles to the static unread crest.
+    FlashCompleted,
     /// Transition flash: the spine under a fresh selection.
     FlashSelectionLanded,
-    /// Transition flash: a new card appearing.
-    FlashMaterialized,
+    /// The dim recede tone a fresh card develops in from — its ink resolves up
+    /// from this faint floor to its natural color as the card arrives.
+    CardRecede,
 }
 
 #[cfg(test)]
@@ -125,8 +129,9 @@ impl Component {
         Component::FlashFailed,
         Component::FlashResolved,
         Component::FlashLifted,
+        Component::FlashCompleted,
         Component::FlashSelectionLanded,
-        Component::FlashMaterialized,
+        Component::CardRecede,
     ];
 }
 
@@ -140,12 +145,12 @@ impl Component {
             WorktreeHeader | BranchDelta => palette.body,
             LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
-            ProcMem | Output | FlashResolved | FlashLifted => palette.good,
+            ProcMem | Output | FlashResolved | FlashLifted | FlashCompleted => palette.good,
             Compaction | AttentionFloor | FlashWaiting => palette.warn,
             Input => palette.expense,
             FlashFailed => palette.alarm,
-            WindowMedium | UnknownBrand | FlashMaterialized => palette.muted,
-            WindowSmall => palette.faint,
+            WindowMedium | UnknownBrand => palette.muted,
+            WindowSmall | CardRecede => palette.faint,
         }
     }
 }

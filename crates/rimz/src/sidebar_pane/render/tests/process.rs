@@ -218,6 +218,7 @@ fn process_rows_dim_a_step_below_agent_cards() {
             0,
             0,
             &CostRolls::default(),
+            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             &mut lines,
             &mut map,
         );
@@ -282,6 +283,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         0,
         0,
         &CostRolls::default(),
+        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
     );

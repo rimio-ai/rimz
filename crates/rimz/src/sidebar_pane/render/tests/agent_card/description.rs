@@ -95,6 +95,7 @@ fn rendered_group_lines_with(
         0,
         phase,
         &CostRolls::default(),
+        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
     );
@@ -131,10 +132,12 @@ fn span_for<'a>(lines: &'a [Line<'static>], text: &str) -> &'a Span<'static> {
 
 #[test]
 fn unread_descriptor_grows_bold_without_dimming() {
+    // A single actionable row leads, so it carries the 2-pole blink the lead row
+    // keeps under `blink`; a non-lead unread row would settle to a steady crest.
     let agent = agent(
         "claude-1",
         "claude",
-        AgentStatus::Success,
+        AgentStatus::Failed,
         Some("/repo/main"),
         Some("main"),
         Some("done"),
@@ -170,10 +173,12 @@ fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
     let mut sidebar = blink_sidebar();
     sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
     let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    // The lead unread row — the one that needs an answer — carries the continuous
+    // pulse; a `failed` row is actionable, so a single one leads.
     let agent = agent(
         "claude-1",
         "claude",
-        AgentStatus::Success,
+        AgentStatus::Failed,
         Some("/repo/main"),
         Some("main"),
         Some("done"),

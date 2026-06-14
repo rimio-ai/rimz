@@ -246,10 +246,11 @@ impl CardAttention {
         animation_phase: u64,
         unread: bool,
         selected: bool,
+        is_lead: bool,
     ) -> Self {
         let emphasis = card_emphasis(status, unread, selected);
         let anim = if emphasis == CardEmphasis::Blink {
-            unread_anim(theme, status, age_secs, animation_phase)
+            unread_anim(theme, status, age_secs, animation_phase, is_lead)
         } else {
             None
         };
@@ -271,21 +272,32 @@ pub(in crate::sidebar_pane::render) fn card_emphasis(
     }
 }
 
-/// The shared unread treatment for a row of `status` at `age_secs`, under the
-/// configured [`unread_effect`](crate::sidebar_pane::render::animation::ResolvedAnimations::unread_effect):
-/// the shimmer beam, the steady bright crest, or the 2-pole blink — or `None`
-/// when a per-role `effect = "static"` quiets it.
+/// The shared unread treatment for a row of `status` at `age_secs`. The single
+/// **lead** unread row — the oldest one that needs an answer — wears the
+/// configured [`unread_effect`](crate::sidebar_pane::render::animation::ResolvedAnimations::unread_effect)
+/// (the shimmer beam or the 2-pole blink), so the one pane that most needs you is
+/// the only thing in continuous motion; every other unread row settles to the
+/// steady [`bright`](crate::sidebar_pane::render::animation::UnreadEffect::Bright)
+/// crest — unmistakable by contrast, but still. `None` when a per-role `effect =
+/// "static"` quiets it. `is_lead` is the renderer's reservation flag; with no
+/// reservation context (`None` lead, as in a single-row unit test) every unread
+/// row reads as its own lead.
 pub(in crate::sidebar_pane::render) fn unread_anim(
     theme: &Theme,
     status: AgentStatus,
     age_secs: i64,
     animation_phase: u64,
+    is_lead: bool,
 ) -> Option<UnreadAnim> {
-    theme.animations.status(status).unread_anim(
-        theme.animations.unread_effect(),
-        animation_phase,
-        age_secs,
-    )
+    let effect = if is_lead {
+        theme.animations.unread_effect()
+    } else {
+        UnreadEffect::Bright
+    };
+    theme
+        .animations
+        .status(status)
+        .unread_anim(effect, animation_phase, age_secs)
 }
 
 /// One cell under a concrete unread treatment, on its resolved base `color`. The
@@ -421,7 +433,15 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
     unread: bool,
     selected: bool,
 ) -> Style {
-    let attention = CardAttention::new(theme, status, age_secs, animation_phase, unread, selected);
+    let attention = CardAttention::new(
+        theme,
+        status,
+        age_secs,
+        animation_phase,
+        unread,
+        selected,
+        true,
+    );
     agent_lead_style_with_attention(theme, status, phase, age_secs, attention)
 }
 

@@ -222,6 +222,7 @@ fn expanded_card_lists_subagents_only_when_selected() {
             selected_index,
             0,
             &CostRolls::default(),
+            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
             &mut lines,
             &mut map,
         );

@@ -19,6 +19,7 @@ use crate::config::{
     AnimationColor, ColorDepth, GlowMode, Semantic, SidebarConfig, SidebarThemeConfig, ThemeColor,
     nearest_xterm_index, xterm_rgb,
 };
+use crate::feed::AgentStatus;
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
@@ -40,6 +41,24 @@ pub(crate) use raw::RawPalette;
 /// color. A fixed step (rather than a blend toward the body tone) keeps the
 /// recession visible for every brand, including one already at the body weight.
 const SOFT_BRAND_DIM: f32 = 0.05;
+
+/// How far the selected card's background band eases darker in OKLab lightness
+/// from its bright `▌` spine (column 0) to the right rail — the "lit panel"
+/// falloff. A subtle step: reads as depth on the selection anchor, never a
+/// stripe. Truecolor only; the indexed cube is too coarse for the sub-cell ramp
+/// and keeps the flat band.
+const SELECTION_BAND_FALLOFF: f32 = 0.08;
+
+/// How far the unread card wash pulls the dark selection panel toward the row's
+/// status hue, as an OKLab blend fraction. The wash grounds on the same
+/// `selection_bg` panel selection uses — so an unread card reads as a card panel,
+/// one depth language with selection — then tints it toward `good` (a finished
+/// `✓`), `warn` (a waiting `?`), or `alarm` (a failed `!`): far enough that the
+/// hue is unmistakable at a scanning glance, short enough that the panel stays
+/// dark behind the text. A whole-card surface carries the unread cue where a
+/// one-cell glyph is too small to catch the eye, while staying perfectly still —
+/// the fleet stays calm and the single lead row keeps the only motion.
+const UNREAD_WASH_TINT: f32 = 0.42;
 
 /// The chip ink: a fixed near-black laid on a colored chip fill, crisp on every
 /// mid-brightness fill — the provider tab rail's brand fill and the make-up
@@ -570,12 +589,86 @@ impl Theme {
         self.style(self.palette.selection, Modifier::BOLD)
     }
 
-    /// The selected card's background band tone, or `None` under `NO_COLOR`. A
-    /// dark fill lands on its own cube cell, so it renders at both truecolor and
-    /// indexed depth; only `NO_COLOR` drops it and lets the bright spine and bold
-    /// weight carry the selection alone.
+    /// The selected card's background band tone for `column` of a `span`-cell
+    /// card, or `None` under `NO_COLOR`. At truecolor the band reads as lit from
+    /// its bright `▌` spine: column 0 holds the full `selection_bg` and each
+    /// column eases up to [`SELECTION_BAND_FALLOFF`] darker in OKLab lightness
+    /// toward the right rail, so the whole card reads as one lit panel — depth,
+    /// no motion. At indexed depth the 6×6×6 cube is too coarse for that
+    /// sub-cell ramp, so every column returns the flat dark fill (the
+    /// subtle-step-falls-back-to-flat rule the breathe lift already follows),
+    /// which lands on its own cube cell and paints at both indexed and
+    /// truecolor. `None` under `NO_COLOR`, where the bright spine and bold weight
+    /// carry the selection alone.
+    pub(super) fn selection_band_at(&self, column: usize, span: usize) -> Option<Color> {
+        if self.no_color {
+            return None;
+        }
+        let base = self.palette.selection_bg;
+        match self.depth {
+            ColorDepth::Indexed => Some(base),
+            ColorDepth::Truecolor => {
+                let Some(rgb) = color_to_rgb(base) else {
+                    return Some(base);
+                };
+                let t = if span <= 1 {
+                    0.0
+                } else {
+                    column.min(span - 1) as f32 / (span - 1) as f32
+                };
+                let dimmed = oklab::lift_lightness(rgb, -t * SELECTION_BAND_FALLOFF);
+                Some(rgb_color(dimmed, self.depth))
+            }
+        }
+    }
+
+    /// The flat selection-band tone composition lays behind every selected-card
+    /// line — the spine-column reading of the band ([`selection_band_at`] at
+    /// column 0), so the truecolor lift post-pass recognises a banded cell by
+    /// this exact tone. `None` under `NO_COLOR`.
+    ///
+    /// [`selection_band_at`]: Self::selection_band_at
     pub(super) fn selection_band(&self) -> Option<Color> {
-        (!self.no_color).then_some(self.palette.selection_bg)
+        self.selection_band_at(0, 1)
+    }
+
+    /// Whether the truecolor lit-panel band post-pass has anything to do: the
+    /// per-column lightness falloff is a sub-cell step the indexed cube cannot
+    /// carry, so it paints only at truecolor depth (and never under `NO_COLOR`,
+    /// which drops the band entirely).
+    pub(super) fn band_is_lit(&self) -> bool {
+        !self.no_color && matches!(self.depth, ColorDepth::Truecolor)
+    }
+
+    /// The faint full-card background an unread card rests on, hued by what the
+    /// row needs: the dark selection panel cast [`UNREAD_WASH_TINT`] toward the
+    /// status tone — `good` for a finished `✓`, `warn` for a waiting `?`, `alarm`
+    /// for a failed `!`. A whole-card surface reads at a scanning glance where a
+    /// one-cell glyph cannot, and it holds still, so motion stays reserved to the
+    /// single lead row. The tone is flat — the per-column lit falloff stays the
+    /// selected card's signature, so an unread card never reads as selected, and
+    /// [`super::lift_selection_band`] leaves it untouched. `None` under
+    /// `NO_COLOR`, where weight carries the unread look, and for the calm states
+    /// that never originate one ([`AgentStatus::marks_unread`]).
+    pub(super) fn unread_wash(&self, status: AgentStatus) -> Option<Color> {
+        if self.no_color {
+            return None;
+        }
+        let hue = match status {
+            AgentStatus::Success => self.palette.good,
+            AgentStatus::Waiting => self.palette.warn,
+            AgentStatus::Failed => self.palette.alarm,
+            AgentStatus::Idle | AgentStatus::Running | AgentStatus::Paused => return None,
+        };
+        let (Some(ground), Some(tint)) =
+            (color_to_rgb(self.palette.selection_bg), color_to_rgb(hue))
+        else {
+            return None;
+        };
+        Some(rgb_color(
+            oklab::blend(ground, tint, UNREAD_WASH_TINT),
+            self.depth,
+        ))
     }
 
     /// Flat health-tone accessors for fixed chrome: `good` for the positive tier

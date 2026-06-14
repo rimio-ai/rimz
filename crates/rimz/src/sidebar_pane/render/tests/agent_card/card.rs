@@ -231,3 +231,55 @@ fn render_omits_history_sections() {
     assert!(!rendered.contains("Recent activity"));
     assert!(!rendered.contains("Recently answered"));
 }
+
+#[test]
+fn unread_result_card_rests_on_a_status_hued_wash() {
+    let mut done = agent(
+        "done-1",
+        "claude",
+        AgentStatus::Success,
+        Some("/repo/main"),
+        Some("main"),
+        Some("shipped"),
+    );
+    done.last_activity = fixed_now() - Duration::from_secs(60);
+    let mut snapshot = snapshot_with(Vec::new(), vec![done]);
+    snapshot.worktree_groups[0].rows[0].unread = true;
+    // Indexed depth so the wash lands on a single cube cell the assertion can pin.
+    let theme = Theme::fixed(false);
+    let wash = theme
+        .unread_wash(AgentStatus::Success)
+        .expect("a finished card washes at indexed depth");
+
+    // Nothing selected (index out of range), so this unread result is not the
+    // selection: the whole card grounds on its status-hued wash.
+    let lines = group_lines(&snapshot, &theme, 99);
+    let name = lines
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "claude")
+        .expect("the unread card name renders");
+    assert_eq!(
+        name.style.bg,
+        Some(wash),
+        "the unread result rests on the status-hued wash, not bare ground"
+    );
+    assert_ne!(
+        Some(wash),
+        theme.selection_band(),
+        "the wash is its own hued panel, never the neutral selection band"
+    );
+
+    // The look clears on read: a read result carries no wash.
+    snapshot.worktree_groups[0].rows[0].unread = false;
+    let read = group_lines(&snapshot, &theme, 99);
+    let read_name = read
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.as_ref() == "claude")
+        .expect("the read card name renders");
+    assert_eq!(
+        read_name.style.bg, None,
+        "a read result rests on no wash — the cue clears on the look"
+    );
+}

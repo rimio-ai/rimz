@@ -246,6 +246,7 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         0,
         0,
         &CostRolls::default(),
+        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
     );
@@ -327,6 +328,7 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         0,
         0,
         &CostRolls::default(),
+        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
         &mut lines,
         &mut map,
     );

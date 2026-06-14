@@ -34,6 +34,7 @@ use self::chrome::hairline_rule;
 #[cfg(test)]
 use self::chrome::{abbreviate_under, center_line, help_lines};
 pub(crate) use self::compose::compose_lines;
+use self::compose::lead_unread;
 #[cfg(test)]
 use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
@@ -49,6 +50,7 @@ use crate::config::{AnimationSpec, ProviderTabsMode};
 use crate::feed::AgentStatus;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -73,16 +75,16 @@ pub fn draw(frame: &mut Frame<'_>, snapshot: &SidebarSnapshot, alert: Option<&Al
 
 /// Whether any visible row is in an animated state — a running agent (working
 /// or pre-edit thinking), a resolver mid-flight, an active process spinning on
-/// real work (a build, a test, a `sudo` install), or a row whose lead glyph
-/// pulses (`?`/`!` attention and unread results). The serve loop uses this as
-/// the broad "does anything move?" gate; [`animation_cadence`] decides whether
-/// the movement needs the fast frame grid or the breath grid. A fully settled
-/// sidebar (only quiet read idle/done rows) keeps idling on the slow data tick.
-/// A stalled agent is projected to `failed`
-/// upstream, so it reads as a pulsing `!` here. The cockpit's today-spend count-up rides a
-/// separate gate
-/// (`UiState::tally`), so a finished-turn climb keeps the tick alive even when
-/// every row is otherwise static.
+/// real work (a build, a test, a `sudo` install), or the single lead unread
+/// `?`/`!` row whose configured effect flows. The serve loop uses this as the
+/// broad "does anything move?" gate; [`animation_cadence`] decides whether the
+/// movement needs the fast frame grid or the breath grid. A fully settled
+/// sidebar — quiet read idle/done rows, and every unread row past the lead
+/// resting at its static crest — keeps idling on the slow data tick. A stalled
+/// agent is projected to `failed` upstream, so it reads as a pulsing `!` here.
+/// The cockpit's today-spend count-up rides a separate gate (`UiState::tally`),
+/// so a finished-turn climb keeps the tick alive even when every row is
+/// otherwise static.
 pub fn has_live_animation(snapshot: &SidebarSnapshot) -> bool {
     animation_cadence(snapshot) != AnimationCadence::None
 }
@@ -101,12 +103,12 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             if row.resolver().is_some() || row.status() == Some(AgentStatus::Running) {
                 return AnimationCadence::Fast;
             }
-            // Read `?`/`!` rows honour configured static effects. Any unread
-            // row keeps the breath grid alive for the cockpit unread count,
-            // even when the row's own glyph is held still.
-            if row.unread {
-                breath = true;
-            } else if let Some(status) = row.status()
+            // A read `?`/`!` row honours its configured effect. Unread motion is
+            // reserved to the single lead row (checked once below); every other
+            // unread row settles to the static `bright` crest and asks nothing
+            // of the grid.
+            if !row.unread
+                && let Some(status) = row.status()
                 && status.is_actionable()
             {
                 breath |= status_needs_motion(&snapshot.sidebar.animations, status);
@@ -115,11 +117,37 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
             return AnimationCadence::Fast;
         }
     }
+    // The lead unread row wears the continuous unread effect, so it keeps the
+    // breath grid warm — but only when that effect actually moves frame to
+    // frame, not when it rests at the static `bright` crest or its role is
+    // quieted to `static`. The cockpit lead bucket pulses with it, so this one
+    // condition covers both the row and its bucket.
+    breath |= lead_unread_needs_motion(snapshot);
     if breath || snapshot.sidebar.animations.has_resting_motion() {
         AnimationCadence::Breath
     } else {
         AnimationCadence::None
     }
+}
+
+/// Whether the single lead unread row carries per-frame motion the breath grid
+/// must serve. The lead is the oldest actionable unread ask ([`lead_unread`]);
+/// it animates when the configured unread effect flows (shimmer or blink, not
+/// the held `bright` crest) and the lead's role has not been quieted to
+/// `static`.
+fn lead_unread_needs_motion(snapshot: &SidebarSnapshot) -> bool {
+    let Some((_, status)) = lead_unread(&snapshot.worktree_groups) else {
+        return false;
+    };
+    unread_effect_animates(snapshot.sidebar.animations.unread)
+        && status_needs_motion(&snapshot.sidebar.animations, status)
+}
+
+/// Whether the configured unread effect flows on the phase grid. `shimmer` and
+/// `blink` move; the held `bright` crest is static, so a lead row wearing it
+/// asks nothing of the breath grid.
+fn unread_effect_animates(effect: Option<crate::config::UnreadEffect>) -> bool {
+    !matches!(effect, Some(crate::config::UnreadEffect::Bright))
 }
 
 fn status_needs_motion(
@@ -129,7 +157,6 @@ fn status_needs_motion(
     let spec = match status {
         AgentStatus::Waiting => animations.waiting.as_ref(),
         AgentStatus::Failed => animations.failed.as_ref(),
-        AgentStatus::Success => animations.success.as_ref(),
         _ => None,
     };
     spec_needs_motion(spec)
@@ -166,12 +193,18 @@ pub fn draw_with_ui(
     ui.scroll_offset = composed.scroll_offset;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
+    let theme = Theme::for_sidebar(&snapshot.sidebar);
+    // The lit-panel finish: at truecolor depth, ease the selected card's flat
+    // background band a touch darker from its bright spine to the rail, so the
+    // selection anchor reads as one lit panel with depth. A steady (non-animated)
+    // background recolor over the cells composition already banded — so the
+    // composed spans stay whole and every span-content test reads unchanged.
+    lift_selection_band(frame.buffer_mut(), &theme);
     // The transition garnish tier: a color-only effects pass over the buffer
     // the paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
     // `[sidebar] glow = "never"` opt-out — pays nothing, not even the
     // transition observation.
-    let theme = Theme::for_sidebar(&snapshot.sidebar);
     if theme.effects_enabled() {
         ui.effects.apply(
             snapshot,
@@ -183,6 +216,36 @@ pub fn draw_with_ui(
             frame.buffer_mut(),
             area,
         );
+    }
+}
+
+/// Ease the selected card's flat background band darker per column at truecolor
+/// depth — the "lit panel" finish. Composition lays the band as one flat tone
+/// (`Theme::selection_band`); here each banded cell takes its column's reading
+/// from `Theme::selection_band_at`, full at the bright spine (column 0) and a
+/// touch darker toward the rail, so the selection anchor reads as one lit panel
+/// with depth. Only cells carrying the exact flat band tone are touched, so the
+/// provider and make-up chip fills and every other background are left alone. A
+/// no-op at indexed depth and under `NO_COLOR`, where the band is flat or gone —
+/// the same subtle-step-falls-back-to-flat rule the breathe lift follows — so
+/// the composed spans the golden frames and span tests read stay untouched.
+fn lift_selection_band(buffer: &mut Buffer, theme: &Theme) {
+    if !theme.band_is_lit() {
+        return;
+    }
+    let Some(flat) = theme.selection_band() else {
+        return;
+    };
+    let width = buffer.area.width as usize;
+    if width == 0 {
+        return;
+    }
+    for (index, cell) in buffer.content.iter_mut().enumerate() {
+        if cell.bg == flat
+            && let Some(tone) = theme.selection_band_at(index % width, width)
+        {
+            cell.bg = tone;
+        }
     }
 }
 

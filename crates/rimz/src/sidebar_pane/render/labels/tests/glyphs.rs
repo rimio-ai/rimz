@@ -448,7 +448,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
 #[test]
 fn shimmer_flows_the_unread_name_across_cells() {
     let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
-    let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false);
+    let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, true);
     let color = Some(theme.component(Component::UnknownBrand));
     let spans = unread_run_spans(&theme, color, attention.anim, "claude");
     assert!(
@@ -465,11 +465,49 @@ fn shimmer_flows_the_unread_name_across_cells() {
 }
 
 #[test]
+fn only_the_lead_unread_row_keeps_the_configured_effect() {
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
+    // The lead unread row keeps the configured shimmer; every other unread row
+    // settles to the steady bright crest — one pane in motion, the rest still.
+    assert!(matches!(
+        unread_anim(&theme, AgentStatus::Failed, 5 * 60, 6, true),
+        Some(UnreadAnim::Shimmer(_)),
+    ));
+    assert!(matches!(
+        unread_anim(&theme, AgentStatus::Failed, 5 * 60, 6, false),
+        Some(UnreadAnim::Bright),
+    ));
+
+    // The name run follows the decision: the lead shimmers across one span per
+    // cell, while a non-lead unread name holds a single bright span.
+    let color = Some(theme.component(Component::UnknownBrand));
+    let lead = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, true);
+    let calm = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, false);
+    assert!(
+        unread_run_spans(&theme, color, lead.anim, "claude").len() > 1,
+        "the lead name shimmers per cell",
+    );
+    assert_eq!(
+        unread_run_spans(&theme, color, calm.anim, "claude").len(),
+        1,
+        "a non-lead unread name holds one bright span",
+    );
+}
+
+#[test]
 fn bright_holds_one_constant_unread_span() {
     let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Bright));
     let color = Some(theme.component(Component::UnknownBrand));
     let run = |phase| {
-        let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, phase, true, false);
+        let attention = CardAttention::new(
+            &theme,
+            AgentStatus::Failed,
+            5 * 60,
+            phase,
+            true,
+            false,
+            true,
+        );
         unread_run_spans(&theme, color, attention.anim, "claude")
     };
     let early = run(0);

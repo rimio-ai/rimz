@@ -242,14 +242,52 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     );
     assert_eq!(animation_cadence(&calm), AnimationCadence::None);
 
+    // An unread `✓` result never leads the attention ladder: it settles to the
+    // static bright crest, asking nothing of the breath grid. A static unread
+    // row keeping the grid warm forever was the whole perf cost the lead-row
+    // reservation removes.
     calm.worktree_groups[0].rows[0].unread = true;
-    assert_eq!(animation_cadence(&calm), AnimationCadence::Breath);
-    calm.sidebar.animations.success =
-        Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
     assert_eq!(
         animation_cadence(&calm),
+        AnimationCadence::None,
+        "an unread result settles to a static crest — no motion to keep the grid warm"
+    );
+
+    // The single lead unread row — the oldest actionable ask — wears the
+    // continuous unread effect, so it does keep the breath grid alive.
+    let mut lead = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "claude-1",
+            "claude",
+            AgentStatus::Waiting,
+            Some("/repo/main"),
+            Some("main"),
+            Some("allow cargo fmt"),
+        )],
+    );
+    lead.worktree_groups[0].rows[0].unread = true;
+    assert_eq!(
+        animation_cadence(&lead),
         AnimationCadence::Breath,
-        "unread rows keep the breath grid alive for the cockpit unread counter"
+        "the lead unread ask flows its shimmer beam — continuous motion the grid serves"
+    );
+    // ...unless that effect is the held `bright` crest, which is static — then
+    // even the lead asks nothing of the grid.
+    lead.sidebar.animations.unread = Some(crate::config::UnreadEffect::Bright);
+    assert_eq!(
+        animation_cadence(&lead),
+        AnimationCadence::None,
+        "the `bright` unread crest holds still, so even the lead leaves the grid asleep"
+    );
+    // ...or its role is quieted to `static`, which stills the lead's motion too.
+    lead.sidebar.animations.unread = None;
+    lead.sidebar.animations.waiting =
+        Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
+    assert_eq!(
+        animation_cadence(&lead),
+        AnimationCadence::None,
+        "a static-quieted waiting role stills the lead's unread motion"
     );
 
     let mut idle = snapshot_with(

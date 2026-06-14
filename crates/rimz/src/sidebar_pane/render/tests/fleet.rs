@@ -130,13 +130,21 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         );
         waiting.last_activity = fixed_now() - Duration::from_secs(idle_secs);
         let snapshot = snapshot_with(Vec::new(), vec![waiting]);
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 60)
-            .0
-            .iter()
-            .flat_map(|line| line.spans.iter())
-            .find(|span| span.content.contains('?'))
-            .map(|span| span.style.fg)
-            .expect("the make-up line carries the ? bucket")
+        fleet_header_lines(
+            &theme,
+            &snapshot.worktree_groups,
+            snapshot.now,
+            None,
+            0,
+            60,
+            None,
+        )
+        .0
+        .iter()
+        .flat_map(|line| line.spans.iter())
+        .find(|span| span.content.contains('?'))
+        .map(|span| span.style.fg)
+        .expect("the make-up line carries the ? bucket")
     };
     let style = |color| theme.style(color, Modifier::empty()).fg;
     let heat = |age_secs: i64| style(theme.warm_heat_tone(age_heat_amount_for_test(age_secs)));
@@ -172,7 +180,16 @@ fn state_glyphs_keep_their_cockpit_tier() {
         Some("a"),
     );
     let snapshot = snapshot_with(Vec::new(), vec![working]);
-    let lines = fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 60).0;
+    let lines = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        None,
+        0,
+        60,
+        None,
+    )
+    .0;
     let spans: Vec<_> = lines.iter().flat_map(|line| line.spans.iter()).collect();
     let glyph_style = |glyph: &str| {
         spans
@@ -227,6 +244,7 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
             filter,
             0,
             38,
+            None,
         )
     };
     let (resting_lines, resting_hits) = compose(None);
@@ -270,8 +288,15 @@ fn make_up_filter_keeps_every_glyph_still_across_picks() {
 fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
     let theme = Theme::fixed(true);
     let snapshot = make_up_snapshot();
-    let (resting_lines, resting_hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 38);
+    let (resting_lines, resting_hits) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        None,
+        0,
+        38,
+        None,
+    );
     let (lines, hits) = fleet_header_lines(
         &theme,
         &snapshot.worktree_groups,
@@ -279,6 +304,7 @@ fn make_up_filter_no_color_marks_the_fixed_bucket_cells() {
         Some(BodyFilter::Status(AgentStatus::Failed)),
         0,
         38,
+        None,
     );
     assert_eq!(resting_hits, hits, "the pick keeps click targets fixed");
     let text = make_up_text(&lines);
@@ -327,6 +353,7 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
         Some(BodyFilter::Status(AgentStatus::Idle)),
         0,
         38,
+        None,
     );
     let active = lines[0]
         .spans
@@ -349,8 +376,15 @@ fn selected_idle_filter_preserves_soft_gray_with_reverse_video() {
 fn make_up_zero_buckets_emit_no_hit_and_hits_cover_their_text() {
     let theme = Theme::fixed(false);
     let snapshot = make_up_snapshot();
-    let (lines, hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 38);
+    let (lines, hits) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        None,
+        0,
+        38,
+        None,
+    );
     let text = make_up_text(&lines);
     assert_eq!(
         hits.iter().map(|hit| hit.status).collect::<Vec<_>>(),
@@ -374,8 +408,15 @@ fn make_up_clipped_bucket_drops_its_hit() {
     let snapshot = make_up_snapshot();
     // 18 columns forces the left-packed fallback and clips the live-capacity tail, so
     // the right-cluster `⢿ 1` bucket falls past the edge.
-    let (_, hits) =
-        fleet_header_lines(&theme, &snapshot.worktree_groups, snapshot.now, None, 0, 18);
+    let (_, hits) = fleet_header_lines(
+        &theme,
+        &snapshot.worktree_groups,
+        snapshot.now,
+        None,
+        0,
+        18,
+        None,
+    );
     assert!(
         hits.iter().all(|hit| usize::from(hit.col_end) <= 18),
         "no hit points past the visible edge: {hits:?}"
@@ -399,6 +440,7 @@ fn make_up_buckets_pulse_only_while_unread() {
             None,
             animation_phase,
             38,
+            lead_unread(&snapshot.worktree_groups).map(|(_, status)| status),
         )
         .0
         .into_iter()
@@ -472,25 +514,20 @@ fn make_up_buckets_pulse_only_while_unread() {
     let unread_success: Vec<_> = (0..32)
         .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
         .collect();
-    // Unread success joins the unread effect; at indexed depth it rides weight,
-    // bolding as the beam passes, plain between, holding the success tone.
+    // An unread result is a look, not an act, so the success bucket never leads —
+    // it settles to the steady bright crest: held bold throughout, the success
+    // tone constant, the moving beam reserved for the lead actionable bucket.
     assert!(
         unread_success
             .iter()
-            .any(|style| style.add_modifier == Modifier::BOLD),
-        "unread success bolds as the beam passes"
-    );
-    assert!(
-        unread_success
-            .iter()
-            .any(|style| style.add_modifier.is_empty()),
-        "and rests plain between passes"
+            .all(|style| style.add_modifier == Modifier::BOLD),
+        "unread success holds a steady bold crest, never resting plain"
     );
     assert!(
         unread_success
             .iter()
             .all(|style| style.fg == unread_success[0].fg),
-        "the indexed fallback keeps the success tone — the cue is weight"
+        "the success tone holds steady — bright, not a moving beam"
     );
 }
 

@@ -29,6 +29,7 @@ use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use tachyonfx::pattern::SweepPattern;
 use tachyonfx::{CellFilter, Effect, Interpolation, fx};
 
 use super::theme::{Component, Theme};
@@ -46,6 +47,12 @@ const FLASH_LIFTED_MS: u32 = 400;
 const FLASH_SELECTED_MS: u32 = 180;
 const FLASH_MATERIALIZE_MS: u32 = 250;
 
+/// The sweep gradient span, in columns, for a card flash's wipe-in lead: the
+/// width of the soft leading edge as the flash tone enters from the spine. A
+/// few cells reads as cast light travelling in, not a hard bar; a card narrower
+/// than the span just resolves the wipe more gently.
+const SWEEP_SPAN: u16 = 6;
+
 /// The state-transition cues the observer spawns. Each is a one-shot: it
 /// plays once over its row and expires.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +61,7 @@ pub(crate) enum TransitionKind {
     EnteredFailed,
     AskResolved,
     PausedLifted,
+    Completed,
     SelectionLanded,
     Materialized,
 }
@@ -129,13 +137,13 @@ impl EffectState {
     /// just wrote — so geometry and content can never disagree.
     ///
     /// Two row universes, deliberately split: transitions observe the *whole*
-    /// room, so toggling the make-up filter never reads as a wave of
-    /// evictions and arrivals (no flash storm, and a hidden row's real
-    /// transition still fires the moment the filter clears it); geometry
-    /// resolves against the *filtered* rows, whose ordinals are what
-    /// `line_map` carries — an unfiltered index would land a cue on a
-    /// stranger's card. A cue for a row the filter hides finds no run and
-    /// ends, exactly like a row scrolled off.
+    /// room, so toggling the make-up filter never reads as a wave of evictions
+    /// and arrivals — no flash storm. Geometry resolves against the *filtered*
+    /// rows, whose ordinals are what `line_map` carries — an unfiltered index
+    /// would land a cue on a stranger's card. A cue for a row the filter hides
+    /// finds no run and ends that frame, exactly like a row scrolled off: the
+    /// transition is still *recorded* either way, so clearing the filter later
+    /// reveals the row already settled rather than replaying a now-stale flash.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply(
         &mut self,
@@ -249,9 +257,11 @@ fn step_ms(last: Option<u64>, phase: u64, frame_ms: u64) -> u64 {
 
 /// The transition cue a status change earns, if any. Entering an actionable
 /// state outranks everything (a `paused → waiting` flap reads as the new
-/// ask, not the lift); leaving the paused park and settling an ask each
-/// carry their own cue; everything else is status churn the row's own glyph
-/// already tells.
+/// ask, not the lift); leaving the paused park and settling an ask each carry
+/// their own cue; a fresh turn finishing well (`running`/`idle → success`,
+/// where nothing more urgent is in play) gives the eye one gentle completion
+/// cue — its announce-once moment before it settles to the static unread crest;
+/// everything else is status churn the row's own glyph already tells.
 fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> {
     if seen == status {
         return None;
@@ -268,34 +278,85 @@ fn transition(seen: AgentStatus, status: AgentStatus) -> Option<TransitionKind> 
     if seen.is_actionable() {
         return Some(TransitionKind::AskResolved);
     }
+    if status == AgentStatus::Success {
+        return Some(TransitionKind::Completed);
+    }
     None
 }
 
 /// The one-shot's target and decay for `kind`, toned through the active
-/// palette. Every flash is a foreground-only fade from the cue tone back to
-/// each cell's own color — and skips default-foreground (`Reset`) cells,
-/// whose true tone the terminal owns (tachyonfx would lerp them via a
-/// hardcoded white fallback, wrong on a light scheme).
+/// palette. An actionable status-change card flash *settles*: the cue tone wipes
+/// in from the spine, then dissolves back to rest ([`directional_settle`]). A
+/// fresh card *develops in*, and a finished turn *announces once* the same gentle
+/// way — a uniform tone resolving back to rest ([`single_fade`]): the new card
+/// from the dim recede tone ([`Component::CardRecede`]), the completion from the
+/// positive [`Component::FlashCompleted`] crest. The spine flick under a landed
+/// selection stays a plain fade. Every effect is foreground-only and skips
+/// default-foreground (`Reset`) cells, whose true tone the terminal owns.
 fn build_oneshot(kind: TransitionKind, theme: &Theme) -> (Target, Effect) {
-    let (target, component, ms) = match kind {
-        TransitionKind::EnteredWaiting => (Target::Card, Component::FlashWaiting, FLASH_ENTERED_MS),
-        TransitionKind::EnteredFailed => (Target::Card, Component::FlashFailed, FLASH_ENTERED_MS),
-        TransitionKind::AskResolved => (Target::Card, Component::FlashResolved, FLASH_RESOLVED_MS),
-        TransitionKind::PausedLifted => (Target::Card, Component::FlashLifted, FLASH_LIFTED_MS),
-        TransitionKind::SelectionLanded => (
-            Target::Spine,
-            Component::FlashSelectionLanded,
+    let fx = match kind {
+        TransitionKind::EnteredWaiting => {
+            directional_settle(theme.component(Component::FlashWaiting), FLASH_ENTERED_MS)
+        }
+        TransitionKind::EnteredFailed => {
+            directional_settle(theme.component(Component::FlashFailed), FLASH_ENTERED_MS)
+        }
+        TransitionKind::AskResolved => {
+            directional_settle(theme.component(Component::FlashResolved), FLASH_RESOLVED_MS)
+        }
+        TransitionKind::PausedLifted => {
+            directional_settle(theme.component(Component::FlashLifted), FLASH_LIFTED_MS)
+        }
+        TransitionKind::Completed => single_fade(
+            theme.component(Component::FlashCompleted),
+            FLASH_RESOLVED_MS,
+        ),
+        TransitionKind::SelectionLanded => single_fade(
+            theme.component(Component::FlashSelectionLanded),
             FLASH_SELECTED_MS,
         ),
-        TransitionKind::Materialized => (
-            Target::Card,
-            Component::FlashMaterialized,
-            FLASH_MATERIALIZE_MS,
-        ),
+        TransitionKind::Materialized => {
+            single_fade(theme.component(Component::CardRecede), FLASH_MATERIALIZE_MS)
+        }
     };
-    let mut fx = fx::fade_from_fg(theme.component(component), (ms, Interpolation::QuadOut));
-    fx.filter(CellFilter::Not(CellFilter::FgColor(Color::Reset).into()));
+    let target = match kind {
+        TransitionKind::SelectionLanded => Target::Spine,
+        _ => Target::Card,
+    };
     (target, fx)
+}
+
+/// The cell filter every flash carries: skip default-foreground (`Reset`)
+/// cells, whose true tone the terminal owns — tachyonfx would otherwise lerp
+/// them through a hardcoded white/black fallback, wrong on a light scheme. A
+/// fresh guard per effect (and per `sequence` child) since a container runs
+/// each child's own filter.
+fn reset_guard() -> CellFilter {
+    CellFilter::Not(CellFilter::FgColor(Color::Reset).into())
+}
+
+/// A plain foreground fade from `tone` back to each cell's own color — the
+/// uniform develop the spine flick and the card's develop-in arrival ride.
+fn single_fade(tone: Color, ms: u32) -> Effect {
+    fx::fade_from_fg(tone, (ms, Interpolation::QuadOut)).with_filter(reset_guard())
+}
+
+/// A directional settle: the flash tone wipes in from the spine column (left
+/// edge) across the card on a short lead, then dissolves back to each cell's
+/// resting tone. Both phases are foreground fades — the sweep is a spatial
+/// *pattern* on the lead fade's alpha, never a cell translation — so the pass
+/// stays color-only. The split holds `wipe + settle == ms`, keeping a cue's
+/// total decay window (and the fast-grid decay tests) exactly where a plain
+/// fade had it.
+fn directional_settle(flash: Color, ms: u32) -> Effect {
+    let wipe = (ms * 2 / 5).min(ms);
+    let settle = ms - wipe;
+    fx::sequence(&[
+        fx::fade_to_fg(flash, (wipe, Interpolation::CircOut))
+            .with_pattern(SweepPattern::left_to_right(SWEEP_SPAN))
+            .with_filter(reset_guard()),
+        fx::fade_from_fg(flash, (settle, Interpolation::QuadOut)).with_filter(reset_guard()),
+    ])
 }
 
 /// The contiguous line run `line_map` assigns to visible row `index` — the
@@ -499,9 +560,14 @@ mod tests {
         assert_eq!(transition(Paused, Running), Some(PausedLifted));
         // Entering an actionable state outranks the lift.
         assert_eq!(transition(Paused, Waiting), Some(EnteredWaiting));
+        // A fresh turn finishing well earns its one announce cue...
+        assert_eq!(transition(Running, Success), Some(Completed));
+        assert_eq!(transition(Idle, Success), Some(Completed));
+        // ...but settling an ask outranks the completion (the ask clearing is
+        // the salient change, not the success underneath it).
+        assert_eq!(transition(Waiting, Success), Some(AskResolved));
         // Plain work churn carries no cue.
         assert_eq!(transition(Idle, Running), None);
-        assert_eq!(transition(Running, Success), None);
         assert_eq!(transition(Waiting, Waiting), None);
     }
 

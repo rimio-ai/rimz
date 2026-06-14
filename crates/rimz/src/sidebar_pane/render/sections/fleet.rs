@@ -70,6 +70,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
     filter: Option<BodyFilter>,
     animation_phase: u64,
     width: usize,
+    lead_unread_status: Option<AgentStatus>,
 ) -> (Vec<Line<'static>>, Vec<MakeUpHit>) {
     let status_filter = match filter {
         Some(BodyFilter::Status(status)) => Some(status),
@@ -100,13 +101,27 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         AgentStatus::Waiting,
         status_chip_color(theme, AgentStatus::Waiting),
         waiting,
-        attention_bucket_style(theme, groups, AgentStatus::Waiting, now, animation_phase),
+        attention_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Waiting,
+            now,
+            animation_phase,
+            lead_unread_status == Some(AgentStatus::Waiting),
+        ),
     );
     left.push_count(
         AgentStatus::Failed,
         status_chip_color(theme, AgentStatus::Failed),
         failed,
-        attention_bucket_style(theme, groups, AgentStatus::Failed, now, animation_phase),
+        attention_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Failed,
+            now,
+            animation_phase,
+            lead_unread_status == Some(AgentStatus::Failed),
+        ),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
     // but still a row worth spotting. It renders like every other bucket — the
@@ -291,17 +306,20 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
     (main, subs)
 }
 
-/// The cockpit `?`/`!` bucket's tone: an unread visible row makes the bucket
-/// blink on that row's age heat; otherwise it rests on the oldest visible
-/// matching row's heat. Reads the rendered rows (capped-away agents are
-/// excluded — the bucket count still spans them, but a hidden agent never
-/// drives the visible blink or heat).
+/// The cockpit `?`/`!` bucket's tone, in lockstep with its rows: when this
+/// bucket owns the lead unread row (`is_lead_bucket`) it carries the configured
+/// continuous signal on that row's age heat; an unread bucket that is *not* the
+/// lead settles to the steady bright crest, and a read bucket rests on the
+/// oldest visible matching row's heat. Reads the rendered rows (capped-away
+/// agents are excluded — the bucket count still spans them, but a hidden agent
+/// never drives the visible signal or heat).
 fn attention_bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
     status: AgentStatus,
     now: Timestamp,
     animation_phase: u64,
+    is_lead_bucket: bool,
 ) -> Style {
     let oldest_unread = groups
         .iter()
@@ -311,7 +329,7 @@ fn attention_bucket_style(
         .max();
     if let Some(age) = oldest_unread {
         let color = attention_heat_color(theme, status, age);
-        return match unread_anim(theme, status, age, animation_phase) {
+        return match unread_anim(theme, status, age, animation_phase, is_lead_bucket) {
             Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
             None => theme.style(color, Modifier::BOLD),
         };
@@ -337,7 +355,9 @@ fn success_bucket_style(
         .max();
     let color = theme.animations.status(AgentStatus::Success).color();
     if let Some(age) = oldest_unread {
-        return match unread_anim(theme, AgentStatus::Success, age, animation_phase) {
+        // A finished result is a look, never an act, so the success bucket is
+        // never the lead — it settles to the steady bright crest.
+        return match unread_anim(theme, AgentStatus::Success, age, animation_phase, false) {
             Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
             None => theme.style(color, Modifier::BOLD),
         };

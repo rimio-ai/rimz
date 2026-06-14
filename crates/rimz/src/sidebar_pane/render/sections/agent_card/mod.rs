@@ -82,9 +82,14 @@ pub(super) fn row_lines(
     cost_rolls: &CostRolls,
     bands: &ContextSeverityConfig,
     gutter: Gutter,
+    lead_unread: Option<&str>,
 ) -> Vec<Line<'static>> {
     let cw = content_width(width);
     let status = row.status().unwrap_or(AgentStatus::Idle);
+    // The single lead unread row — the oldest one that needs an answer — keeps the
+    // configured continuous signal; every other unread row settles to the steady
+    // bright crest, so one pane is the only thing in motion.
+    let is_lead = lead_unread == Some(row.id.as_str());
     let attention = CardAttention::new(
         theme,
         status,
@@ -92,7 +97,16 @@ pub(super) fn row_lines(
         animation_phase,
         row.unread,
         selected,
+        is_lead,
     );
+    // An unread card that is not the selection grounds on a faint status-hued
+    // wash — a whole-card surface that reads at a scanning glance where the
+    // one-cell glyph is too small to. Gated on the same `Blink` emphasis the rest
+    // of the unread treatment reads from, so the wash and the glyph/name/buckets
+    // turn on together; selection's neutral band wins when both apply.
+    let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
+        .then(|| theme.unread_wash(status))
+        .flatten();
     // Auto/expanded modes keep the stable card shape: selection only appends
     // subagents (expanded appends them on every card). Compact is deliberately
     // different: resting cards trim by status, and the selected card opens back
@@ -184,7 +198,7 @@ pub(super) fn row_lines(
     }
     inner
         .into_iter()
-        .map(|line| with_gutter(theme, line, gutter, width))
+        .map(|line| with_gutter(theme, line, gutter, wash, width))
         .collect()
 }
 

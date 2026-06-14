@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::config::{Semantic, SidebarAnimationsConfig, ThemeMode};
+use crate::feed::AgentStatus;
 
 fn indices(palette: Palette) -> [Color; 13] {
     [
@@ -574,12 +575,12 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 WorktreeHeader | BranchDelta => p.body,
                 LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
-                ProcMem | Output | FlashResolved | FlashLifted => p.good,
+                ProcMem | Output | FlashResolved | FlashLifted | FlashCompleted => p.good,
                 Compaction | AttentionFloor | FlashWaiting => p.warn,
                 Input => p.expense,
                 FlashFailed => p.alarm,
-                WindowMedium | UnknownBrand | FlashMaterialized => p.muted,
-                WindowSmall => p.faint,
+                WindowMedium | UnknownBrand => p.muted,
+                WindowSmall | CardRecede => p.faint,
             };
             let got = theme.component(component);
             assert_eq!(got, expected, "{component:?} resolves to its named slot");
@@ -651,4 +652,152 @@ fn components_collapse_to_modifier_only_under_no_color() {
             "{component:?} keeps its modifier under NO_COLOR"
         );
     }
+}
+
+/// A perceptual-luminance proxy so the lit-band assertions can read "darker"
+/// without reaching into the private OKLab type.
+fn luminance(color: Color) -> f32 {
+    let (red, green, blue) = color_to_rgb(color).expect("a concrete band tone");
+    0.2126 * f32::from(red) + 0.7152 * f32::from(green) + 0.0722 * f32::from(blue)
+}
+
+#[test]
+fn selection_band_eases_darker_from_spine_to_rail_at_truecolor() {
+    let theme = truecolor_default();
+    let span = 30usize;
+    let flat = theme.selection_band().expect("a band at truecolor");
+    // The spine column reads the full flat band; every column past it eases no
+    // brighter and the rail lands strictly darker — the lit-panel falloff. The
+    // per-column step is sub-cell, so adjacent columns may quantize equal, but
+    // the run never brightens and the ends differ clearly.
+    assert_eq!(theme.selection_band_at(0, span), Some(flat));
+    let mut prev = luminance(flat);
+    for col in 1..span {
+        let tone = theme.selection_band_at(col, span).expect("a band tone");
+        let lum = luminance(tone);
+        assert!(lum <= prev + 1e-3, "column {col} never eases brighter");
+        prev = lum;
+    }
+    let rail = theme
+        .selection_band_at(span - 1, span)
+        .expect("a rail tone");
+    assert!(
+        luminance(rail) < luminance(flat),
+        "the rail reads darker than the spine: {} !< {}",
+        luminance(rail),
+        luminance(flat),
+    );
+}
+
+#[test]
+fn selection_band_holds_flat_at_indexed_depth() {
+    let theme = Theme::fixed(false);
+    let flat = theme
+        .selection_band()
+        .expect("a flat band at indexed depth");
+    for col in 0..30 {
+        assert_eq!(
+            theme.selection_band_at(col, 30),
+            Some(flat),
+            "the indexed cube keeps the band flat — the falloff is a sub-cell step",
+        );
+    }
+    assert!(
+        !theme.band_is_lit(),
+        "no lit post-pass runs at indexed depth"
+    );
+}
+
+#[test]
+fn selection_band_drops_under_no_color() {
+    let theme = Theme::fixed(true);
+    assert_eq!(theme.selection_band(), None);
+    for col in 0..30 {
+        assert_eq!(theme.selection_band_at(col, 30), None);
+    }
+    assert!(!theme.band_is_lit());
+}
+
+#[test]
+fn band_is_lit_only_at_truecolor_depth() {
+    assert!(truecolor_default().band_is_lit());
+    assert!(!Theme::fixed(false).band_is_lit());
+    assert!(!Theme::fixed(true).band_is_lit());
+}
+
+/// Euclidean sRGB distance, so a wash can be shown to lean toward a hue without
+/// reaching into the private OKLab type.
+fn rgb_dist(left: Color, right: Color) -> f32 {
+    let left = color_to_rgb(left).expect("a concrete tone");
+    let right = color_to_rgb(right).expect("a concrete tone");
+    let square = |a: u8, b: u8| (f32::from(a) - f32::from(b)).powi(2);
+    (square(left.0, right.0) + square(left.1, right.1) + square(left.2, right.2)).sqrt()
+}
+
+#[test]
+fn unread_wash_grounds_a_card_panel_tinted_by_status_hue() {
+    let theme = truecolor_default();
+    let selection = theme
+        .selection_band()
+        .expect("a selection band at truecolor");
+    let done = theme
+        .unread_wash(AgentStatus::Success)
+        .expect("a finished card washes");
+    let waiting = theme
+        .unread_wash(AgentStatus::Waiting)
+        .expect("a waiting card washes");
+    let failed = theme
+        .unread_wash(AgentStatus::Failed)
+        .expect("a failed card washes");
+
+    // A hued panel, never the neutral selection band — a selected and an unread
+    // card never read alike — and each status wears its own hue.
+    for wash in [done, waiting, failed] {
+        assert_ne!(
+            wash, selection,
+            "the unread wash is not the selection panel"
+        );
+    }
+    assert_ne!(done, waiting);
+    assert_ne!(done, failed);
+    assert_ne!(waiting, failed);
+
+    // Each wash leans toward its status tone: it sits closer to that hue than the
+    // neutral selection panel does, so the tint reads as the row's status family.
+    assert!(
+        rgb_dist(done, theme.palette.good) < rgb_dist(selection, theme.palette.good),
+        "the done wash leans toward green, away from the neutral panel"
+    );
+    assert!(
+        rgb_dist(failed, theme.palette.alarm) < rgb_dist(selection, theme.palette.alarm),
+        "the failed wash leans toward the alarm hue"
+    );
+    assert!(
+        rgb_dist(waiting, theme.palette.warn) < rgb_dist(selection, theme.palette.warn),
+        "the waiting wash leans toward the warn hue"
+    );
+
+    // And it stays a dark background — well below its own bright status tone — so
+    // the card's text holds over it.
+    assert!(
+        luminance(done) < luminance(theme.palette.good),
+        "the wash stays a dark panel beneath its bright status tone"
+    );
+}
+
+#[test]
+fn unread_wash_is_absent_for_calm_states_and_under_no_color() {
+    let theme = truecolor_default();
+    for status in [AgentStatus::Idle, AgentStatus::Running, AgentStatus::Paused] {
+        assert_eq!(
+            theme.unread_wash(status),
+            None,
+            "{status:?} never originates an unread look, so it carries no wash"
+        );
+    }
+    assert_eq!(
+        Theme::fixed(true).unread_wash(AgentStatus::Success),
+        None,
+        "NO_COLOR drops the wash; weight carries the unread look"
+    );
 }
