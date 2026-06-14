@@ -59,8 +59,7 @@ pub enum NotifyTraceEvent {
     /// The producer flushed a notification for delivery (desktop/command/bell
     /// broadcast). The triggering status edge rides each agent.
     NotificationEmitted {
-        /// `waiting` | `failed` | `paused` | `success` | `reminder` |
-        /// `link_degraded` | `link_recovered`.
+        /// `waiting` | `failed` | `paused` | `success` | `reminder`.
         notification_kind: String,
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         agents: Vec<TraceAgent>,

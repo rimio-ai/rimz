@@ -4,7 +4,7 @@ use crate::sidebar::notify::{
     LinkAlert, LinkNotificationState, Notification, NotificationAgent, NotificationKind,
 };
 use crate::sidebar_pane::app::fixtures::{pane, workspace};
-use crate::{MuxName, SidebarInstanceId, SidebarOwnView, WorkspaceId};
+use crate::{MuxName, SidebarInstanceId, WorkspaceId};
 
 #[test]
 fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
@@ -63,7 +63,7 @@ fn refresh_override_stamps_folded_snapshot() {
 }
 
 #[test]
-fn notification_panes_target_agents_or_the_current_view() {
+fn notification_panes_target_agent_panes() {
     let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
     let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let notification = Notification {
@@ -78,35 +78,7 @@ fn notification_panes_target_agents_or_the_current_view() {
         unread_count: None,
     };
 
-    let snapshot = super::super::state::placeholder_snapshot(workspace());
-    assert_eq!(
-        notification_panes(&snapshot, &notification),
-        vec![first, second]
-    );
-
-    let first = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let second = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let mut snapshot = super::super::state::placeholder_snapshot(workspace());
-    snapshot.own_view = Some(SidebarOwnView {
-        sibling_count: 2,
-        own_is_active: false,
-        active_pane_id: Some(first.clone()),
-        working_pane_ids: vec![first.clone(), second.clone()],
-        focus_contested: false,
-        own_view_is_daemon: false,
-    });
-    let notification = Notification {
-        agents: Vec::new(),
-        notification_kind: NotificationKind::LinkDegraded,
-        title: "Rimz: remote link degraded".to_owned(),
-        body: "RTT 230ms, 4% loss.".to_owned(),
-        unread_count: None,
-    };
-
-    assert_eq!(
-        notification_panes(&snapshot, &notification),
-        vec![first, second]
-    );
+    assert_eq!(notification_panes(&notification), vec![first, second]);
 }
 
 #[test]

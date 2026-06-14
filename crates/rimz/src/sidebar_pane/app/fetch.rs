@@ -316,29 +316,19 @@ fn evaluate_notifications(
         tracing::debug!(error = %err, "unread episodes persist failed");
     }
 
-    let mut notifications = state.evaluate(snapshot, &unread.opened, prefs, now_ms);
-    let link = link_state.evaluate(snapshot, prefs, now_ms);
-    if let Some(alert) = link.alert {
+    let notifications = state.evaluate(snapshot, &unread.opened, prefs, now_ms);
+    if let Some(alert) = link_state.evaluate(snapshot, now_ms) {
         emit_link_alert(diag, alert);
-    }
-    if let Some(notification) = link.notification {
-        notifications.push(notification);
     }
     notifications
         .into_iter()
         .map(|notification| {
-            let panes = notification_panes(snapshot, &notification);
+            let panes = notification_panes(&notification);
             let notification_kind = notification.kind_env().to_owned();
-            let recheck_unread = !matches!(
-                notification.notification_kind,
-                crate::sidebar::notify::NotificationKind::LinkDegraded
-                    | crate::sidebar::notify::NotificationKind::LinkRecovered
-            );
             NotificationDelivery {
                 notification,
                 panes,
                 notification_kind,
-                recheck_unread,
             }
         })
         .collect()
@@ -368,7 +358,7 @@ fn deliver_notifications(
                 title: notification.title,
                 body: notification.body,
                 panes: delivery.panes,
-                recheck_unread: delivery.recheck_unread,
+                recheck_unread: true,
                 notification_kind: Some(delivery.notification_kind),
             },
         ) {
@@ -382,7 +372,6 @@ struct NotificationDelivery {
     notification: Notification,
     panes: Vec<PaneId>,
     notification_kind: String,
-    recheck_unread: bool,
 }
 
 fn emit_unread_reconcile_trace(
@@ -453,27 +442,12 @@ fn emit_link_alert(diag: Option<&crate::diag::DiagSink>, alert: LinkAlert) {
     });
 }
 
-fn notification_panes(snapshot: &SidebarSnapshot, notification: &Notification) -> Vec<PaneId> {
-    let panes = notification
+fn notification_panes(notification: &Notification) -> Vec<PaneId> {
+    notification
         .agents
         .iter()
         .filter_map(|agent| agent.pane_id.clone())
-        .collect::<Vec<_>>();
-    if !panes.is_empty() {
-        return panes;
-    }
-    if matches!(
-        notification.notification_kind,
-        crate::sidebar::notify::NotificationKind::LinkDegraded
-            | crate::sidebar::notify::NotificationKind::LinkRecovered
-    ) {
-        return snapshot
-            .own_view
-            .as_ref()
-            .map(|view| view.working_pane_ids.clone())
-            .unwrap_or_default();
-    }
-    Vec::new()
+        .collect()
 }
 
 /// Whether this cycle pays the produce, decided from cheap pre-reads. Pure, so

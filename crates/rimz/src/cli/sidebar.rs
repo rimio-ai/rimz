@@ -804,8 +804,6 @@ fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
         "paused" => Ok(NotificationKind::Paused),
         "success" => Ok(NotificationKind::Success),
         "coalesced" => Ok(NotificationKind::Coalesced),
-        "link_degraded" => Ok(NotificationKind::LinkDegraded),
-        "link_recovered" => Ok(NotificationKind::LinkRecovered),
         "reminder" => Ok(NotificationKind::Reminder),
         other => bail!("unknown notification kind `{other}`"),
     }

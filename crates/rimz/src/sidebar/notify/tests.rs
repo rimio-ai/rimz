@@ -422,11 +422,10 @@ fn notified_agents_are_pruned_when_they_disappear() {
 }
 
 #[test]
-fn link_degraded_notifies_after_hysteresis() {
+fn link_degraded_opens_diagnostic_after_hysteresis() {
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-        &prefs(),
         0,
     );
 
@@ -434,28 +433,18 @@ fn link_degraded_notifies_after_hysteresis() {
         state
             .evaluate(
                 &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 9_999,
             )
-            .notification
             .is_none(),
         "degraded must hold for the full window"
     );
-    let out = state.evaluate(
+    let alert = state.evaluate(
         &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-        &prefs(),
         10_000,
     );
 
-    let notification = out.notification.expect("degraded notification");
     assert_eq!(
-        notification.notification_kind,
-        NotificationKind::LinkDegraded
-    );
-    assert_eq!(notification.title, "Rimz: remote link degraded");
-    assert!(notification.body.contains("RTT 230ms"));
-    assert_eq!(
-        out.alert,
+        alert,
         Some(LinkAlert {
             tier: LinkTier::Degraded,
             rtt_ms: Some(230),
@@ -471,44 +460,32 @@ fn stale_link_stats_pause_degraded_hysteresis() {
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-        &prefs(),
         0,
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Stale),
-                &prefs(),
                 9_000,
             )
-            .notification
             .is_none()
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 20_000,
             )
-            .notification
             .is_none(),
         "the stale span is not counted toward the hold"
     );
 
-    let out = state.evaluate(
+    let alert = state.evaluate(
         &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
-        &prefs(),
         21_000,
     );
     assert_eq!(
-        out.notification
-            .expect("remaining fresh degraded window elapsed")
-            .notification_kind,
-        NotificationKind::LinkDegraded
-    );
-    assert_eq!(
-        out.alert,
+        alert,
         Some(LinkAlert {
             tier: LinkTier::Degraded,
             rtt_ms: Some(230),
@@ -520,21 +497,18 @@ fn stale_link_stats_pause_degraded_hysteresis() {
 }
 
 #[test]
-fn link_recovered_notifies_after_good_hysteresis() {
+fn link_recovery_closes_diagnostic_after_good_hysteresis() {
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-        &prefs(),
         0,
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 10_000,
             )
-            .notification
             .is_some(),
         "the link first enters an active degraded episode"
     );
@@ -542,10 +516,8 @@ fn link_recovered_notifies_after_good_hysteresis() {
         state
             .evaluate(
                 &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 10_000,
             )
-            .notification
             .is_none(),
         "the first good sample starts the recovery clock"
     );
@@ -553,27 +525,18 @@ fn link_recovered_notifies_after_good_hysteresis() {
         state
             .evaluate(
                 &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 39_999,
             )
-            .notification
             .is_none(),
         "good health must hold before recovery"
     );
-    let out = state.evaluate(
+    let alert = state.evaluate(
         &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-        &prefs(),
         40_000,
     );
 
-    let notification = out.notification.expect("recovery notification");
     assert_eq!(
-        notification.notification_kind,
-        NotificationKind::LinkRecovered
-    );
-    assert_eq!(notification.title, "Rimz: remote link recovered");
-    assert_eq!(
-        out.alert,
+        alert,
         Some(LinkAlert {
             tier: LinkTier::Good,
             rtt_ms: Some(42),
@@ -589,29 +552,22 @@ fn disappearing_active_link_closes_diagnostic_episode() {
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-        &prefs(),
         0,
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 10_000,
             )
-            .alert
             .is_some(),
         "the link first enters an active degraded episode"
     );
 
-    let out = state.evaluate(&snapshot(Vec::new()), &prefs(), 15_000);
+    let alert = state.evaluate(&snapshot(Vec::new()), 15_000);
 
-    assert!(
-        out.notification.is_none(),
-        "an expired sidecar closes diagnostics without a user notification"
-    );
     assert_eq!(
-        out.alert,
+        alert,
         Some(LinkAlert {
             tier: LinkTier::Good,
             rtt_ms: None,
@@ -621,10 +577,7 @@ fn disappearing_active_link_closes_diagnostic_episode() {
         })
     );
     assert!(
-        state
-            .evaluate(&snapshot(Vec::new()), &prefs(), 16_000)
-            .alert
-            .is_none(),
+        state.evaluate(&snapshot(Vec::new()), 16_000).is_none(),
         "the expiry close is emitted once"
     );
 }
@@ -634,17 +587,14 @@ fn stale_link_stats_pause_recovery_hysteresis() {
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-        &prefs(),
         0,
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 10_000,
             )
-            .notification
             .is_some(),
         "the link first enters an active degraded episode"
     );
@@ -652,10 +602,8 @@ fn stale_link_stats_pause_recovery_hysteresis() {
         state
             .evaluate(
                 &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 10_000,
             )
-            .notification
             .is_none(),
         "the first good sample starts the recovery clock"
     );
@@ -663,37 +611,26 @@ fn stale_link_stats_pause_recovery_hysteresis() {
         state
             .evaluate(
                 &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Stale),
-                &prefs(),
                 39_000,
             )
-            .notification
             .is_none()
     );
     assert!(
         state
             .evaluate(
                 &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                &prefs(),
                 50_000,
             )
-            .notification
             .is_none(),
         "the stale span is not counted toward recovery"
     );
 
-    let out = state.evaluate(
+    let alert = state.evaluate(
         &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-        &prefs(),
         51_000,
     );
     assert_eq!(
-        out.notification
-            .expect("remaining fresh good window elapsed")
-            .notification_kind,
-        NotificationKind::LinkRecovered
-    );
-    assert_eq!(
-        out.alert,
+        alert,
         Some(LinkAlert {
             tier: LinkTier::Good,
             rtt_ms: Some(42),

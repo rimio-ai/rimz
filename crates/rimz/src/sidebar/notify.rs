@@ -63,8 +63,6 @@ pub enum NotificationKind {
     Coalesced,
     LinkLost,
     LinkRestored,
-    LinkDegraded,
-    LinkRecovered,
     Reminder,
 }
 
@@ -78,8 +76,6 @@ impl NotificationKind {
             Self::Coalesced => "coalesced",
             Self::LinkLost => "link_lost",
             Self::LinkRestored => "link_restored",
-            Self::LinkDegraded => "link_degraded",
-            Self::LinkRecovered => "link_recovered",
             Self::Reminder => "reminder",
         }
     }
@@ -94,6 +90,10 @@ pub struct LinkAlert {
     pub recovered_after_ms: Option<u64>,
 }
 
+/// Tracks remote-link health episodes for the diagnostic record. The badge owns
+/// the live user-facing signal while bytes flow; this layer only bounds an
+/// episode (degraded held past [`LINK_DEGRADED_HOLD_MS`], recovered past
+/// [`LINK_RECOVERY_HOLD_MS`]) and emits a [`LinkAlert`] at each edge.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct LinkNotificationState {
     seeded: bool,
@@ -101,22 +101,14 @@ pub struct LinkNotificationState {
     active_since_ms: Option<u64>,
     good_since_ms: Option<u64>,
     paused_at_ms: Option<u64>,
-    last_notified_at_ms: Option<u64>,
-}
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct LinkNotificationEvaluation {
-    pub notification: Option<Notification>,
-    pub alert: Option<LinkAlert>,
 }
 
 impl LinkNotificationState {
     pub(crate) fn evaluate(
         &mut self,
         snapshot: &SidebarSnapshot,
-        prefs: &NotificationsPrefs,
         now_ms: u64,
-    ) -> LinkNotificationEvaluation {
+    ) -> Option<LinkAlert> {
         let link = match snapshot.link.as_ref() {
             Some(link) if link.freshness == SidebarLinkFreshness::Fresh => {
                 self.resume_timers(now_ms);
@@ -125,12 +117,12 @@ impl LinkNotificationState {
             Some(_) => {
                 self.seeded = true;
                 self.pause_timers(now_ms);
-                return LinkNotificationEvaluation::default();
+                return None;
             }
             None => {
-                let evaluation = self.expire_episode(now_ms);
+                let alert = self.expire_episode(now_ms);
                 self.seeded = true;
-                return evaluation;
+                return alert;
             }
         };
         if !self.seeded {
@@ -138,13 +130,13 @@ impl LinkNotificationState {
             if link.tier >= LinkTier::Degraded {
                 self.degraded_since_ms = Some(now_ms);
             }
-            return LinkNotificationEvaluation::default();
+            return None;
         }
 
         if link.tier >= LinkTier::Degraded {
-            self.observe_degraded(link, prefs, now_ms)
+            self.observe_degraded(link, now_ms)
         } else {
-            self.observe_good(link, prefs, now_ms)
+            self.observe_good(link, now_ms)
         }
     }
 
@@ -174,7 +166,7 @@ impl LinkNotificationState {
         self.paused_at_ms = None;
     }
 
-    fn expire_episode(&mut self, now_ms: u64) -> LinkNotificationEvaluation {
+    fn expire_episode(&mut self, now_ms: u64) -> Option<LinkAlert> {
         let alert = self.active_since_ms.map(|active_since_ms| LinkAlert {
             tier: LinkTier::Good,
             rtt_ms: None,
@@ -183,85 +175,47 @@ impl LinkNotificationState {
             recovered_after_ms: Some(now_ms.saturating_sub(active_since_ms)),
         });
         self.reset_episode();
-        LinkNotificationEvaluation {
-            notification: None,
-            alert,
-        }
+        alert
     }
 
-    fn observe_degraded(
-        &mut self,
-        link: &SidebarLinkHealth,
-        prefs: &NotificationsPrefs,
-        now_ms: u64,
-    ) -> LinkNotificationEvaluation {
+    fn observe_degraded(&mut self, link: &SidebarLinkHealth, now_ms: u64) -> Option<LinkAlert> {
         self.good_since_ms = None;
         self.paused_at_ms = None;
         let since_ms = *self.degraded_since_ms.get_or_insert(now_ms);
         if self.active_since_ms.is_some() || now_ms.saturating_sub(since_ms) < LINK_DEGRADED_HOLD_MS
         {
-            return LinkNotificationEvaluation::default();
+            return None;
         }
         self.active_since_ms = Some(since_ms);
-        let alert = LinkAlert {
+        Some(LinkAlert {
             tier: link.tier,
             rtt_ms: link.rtt_ms,
             miss_pct: link.miss_pct,
             since_ms,
             recovered_after_ms: None,
-        };
-        LinkNotificationEvaluation {
-            notification: self.notify_if_enabled(prefs, now_ms, link_degraded_notification(link)),
-            alert: Some(alert),
-        }
+        })
     }
 
-    fn observe_good(
-        &mut self,
-        link: &SidebarLinkHealth,
-        prefs: &NotificationsPrefs,
-        now_ms: u64,
-    ) -> LinkNotificationEvaluation {
+    fn observe_good(&mut self, link: &SidebarLinkHealth, now_ms: u64) -> Option<LinkAlert> {
         self.degraded_since_ms = None;
         self.paused_at_ms = None;
         let Some(active_since_ms) = self.active_since_ms else {
             self.good_since_ms = None;
-            return LinkNotificationEvaluation::default();
+            return None;
         };
         let good_since_ms = *self.good_since_ms.get_or_insert(now_ms);
         if now_ms.saturating_sub(good_since_ms) < LINK_RECOVERY_HOLD_MS {
-            return LinkNotificationEvaluation::default();
+            return None;
         }
         self.active_since_ms = None;
         self.good_since_ms = None;
-        let alert = LinkAlert {
+        Some(LinkAlert {
             tier: link.tier,
             rtt_ms: link.rtt_ms,
             miss_pct: link.miss_pct,
             since_ms: active_since_ms,
             recovered_after_ms: Some(now_ms.saturating_sub(active_since_ms)),
-        };
-        LinkNotificationEvaluation {
-            notification: self.notify_if_enabled(prefs, now_ms, link_recovered_notification(link)),
-            alert: Some(alert),
-        }
-    }
-
-    fn notify_if_enabled(
-        &mut self,
-        prefs: &NotificationsPrefs,
-        now_ms: u64,
-        notification: Notification,
-    ) -> Option<Notification> {
-        if !prefs.enabled
-            || self
-                .last_notified_at_ms
-                .is_some_and(|last| now_ms.saturating_sub(last) < prefs.debounce_ms)
-        {
-            return None;
-        }
-        self.last_notified_at_ms = Some(now_ms);
-        Some(notification)
+        })
     }
 }
 
@@ -521,34 +475,6 @@ fn coalesced_notification(pending: Vec<PendingNotification>) -> Notification {
         body,
         unread_count: None,
     }
-}
-
-fn link_degraded_notification(link: &SidebarLinkHealth) -> Notification {
-    Notification {
-        agents: Vec::new(),
-        notification_kind: NotificationKind::LinkDegraded,
-        title: "Rimz: remote link degraded".to_owned(),
-        body: link_notification_body(link),
-        unread_count: None,
-    }
-}
-
-fn link_recovered_notification(link: &SidebarLinkHealth) -> Notification {
-    Notification {
-        agents: Vec::new(),
-        notification_kind: NotificationKind::LinkRecovered,
-        title: "Rimz: remote link recovered".to_owned(),
-        body: link_notification_body(link),
-        unread_count: None,
-    }
-}
-
-fn link_notification_body(link: &SidebarLinkHealth) -> String {
-    let rtt = link
-        .rtt_ms
-        .map(|rtt| format!("RTT {rtt}ms"))
-        .unwrap_or_else(|| "RTT unknown".to_owned());
-    format!("{rtt}, {}% loss.", link.miss_pct)
 }
 
 fn row_is_unread(snapshot: &SidebarSnapshot, row_id: &str) -> bool {

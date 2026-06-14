@@ -56,9 +56,8 @@ pub(super) fn emit_terminal_notification(
 /// siblings are infrastructure host panes, never agents that need you), and an
 /// agent notification rings only while a targeted, owned pane's row is still
 /// unread — the durable unread episode bit folded onto `SidebarRow::unread`,
-/// which stays set until a human looks. Link reachability alerts and pre-vetted
-/// unread reminders clear `recheck_unread` to ring whenever they own a targeted,
-/// non-daemon pane.
+/// which stays set until a human looks. Pre-vetted unread reminders clear
+/// `recheck_unread` to ring whenever they own a targeted, non-daemon pane.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum BellDecision {
     Fired,
