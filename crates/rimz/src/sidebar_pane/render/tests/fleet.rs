@@ -113,11 +113,10 @@ fn cockpit_reads_workspace_tally_while_ledger_reads_global_tally() {
         "global ledger week/month stay visible:\n{rendered}"
     );
 }
-/// The read cockpit `?`/`!` buckets echo the per-row glyph escalation at rest:
-/// each wears its oldest contributing row's age heat over the same yellow floor
-/// — warm while fresh, sliding until full alarm at the hour.
+/// The read cockpit `?`/`!` buckets hold their fixed semantic tone at rest —
+/// `?` yellow — regardless of how old the oldest contributing row is.
 #[test]
-fn attention_bucket_wears_the_oldest_rows_age_heat() {
+fn attention_bucket_holds_a_fixed_tone() {
     let theme = Theme::fixed(false);
     let bucket_fg = |idle_secs: u64| {
         let mut waiting = agent(
@@ -146,23 +145,13 @@ fn attention_bucket_wears_the_oldest_rows_age_heat() {
         .map(|span| span.style.fg)
         .expect("the make-up line carries the ? bucket")
     };
-    let style = |color| theme.style(color, Modifier::empty()).fg;
-    let heat = |age_secs: i64| style(theme.warm_heat_tone(age_heat_amount_for_test(age_secs)));
-    assert_eq!(
-        bucket_fg(5 * 60),
-        theme.warn(Modifier::empty()).fg,
-        "yellow floor"
-    );
-    assert_eq!(
-        bucket_fg(40 * 60),
-        heat(40 * 60),
-        "mid-ramp tone follows the oldest row"
-    );
-    assert_eq!(
-        bucket_fg(2 * 60 * 60),
-        theme.alarm(Modifier::empty()).fg,
-        "red past the hour"
-    );
+    for idle_secs in [5 * 60, 40 * 60, 2 * 60 * 60] {
+        assert_eq!(
+            bucket_fg(idle_secs),
+            theme.warn(Modifier::empty()).fg,
+            "the ? bucket holds yellow at {idle_secs}s, no age slide",
+        );
+    }
 }
 /// State glyphs keep their cockpit tier. A zero bucket keeps its resting style
 /// and rests only its count at the soft stat tier; idle's glyph and count read

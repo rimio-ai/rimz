@@ -222,9 +222,9 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// back to the bare `▤` rollup total when neither source has a split (Claude
 /// before the first API call and right after `/compact`), so the line shows
 /// *something* for every agent. The age rides the right edge only once it
-/// crosses a full minute
-/// — a just-active agent shows the breakdown alone, left-aligned, rather than
-/// a misleading `1m` — as the clock-fill glyph ([`elapsed_glyph`]) over the
+/// crosses five minutes
+/// — a recently active agent shows the breakdown alone, left-aligned, rather than
+/// a noisy sub-`5m` clock — as the clock-fill glyph ([`elapsed_glyph`]) over the
 /// continuous age tone ([`activity_age_style`]): dim while warm, then sliding
 /// through warn, caution, and alarm toward the hour, when resuming would likely
 /// re-read the whole context uncached.

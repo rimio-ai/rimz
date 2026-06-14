@@ -32,9 +32,9 @@ pub(super) fn age_short(at: Timestamp, now: Timestamp) -> String {
 
 /// A row's last-activity age, floored to its highest whole unit: `{m}m` up to an
 /// hour, whole hours `{h}h` from 1h on, capped at `>1d` from a day on — a coarse
-/// "how long since this agent last did something". Sub-minute ages never reach
-/// here; [`activity_short`] withholds them so the card stays quiet until a real
-/// gap opens.
+/// "how long since this agent last did something". Ages under five minutes never
+/// reach here; [`activity_short`] withholds them so the card stays quiet until a
+/// real gap opens.
 pub(super) fn activity_label(seconds: i64) -> String {
     if seconds < 60 * 60 {
         format!("{}m", seconds / 60)
@@ -45,12 +45,13 @@ pub(super) fn activity_label(seconds: i64) -> String {
     }
 }
 
-/// The last-activity age once it crosses a full minute (floored), or `None` while
-/// it is still sub-minute — a just-active agent shows nothing rather than a
-/// misleading `1m`, so the age surfaces only once a real gap has opened.
+/// The last-activity age once it crosses five minutes (floored), or `None` while
+/// it is still under — a recently-active agent shows nothing rather than a
+/// fresh clock, so the age surfaces only once a real gap has opened and the card
+/// stays quiet through normal turn churn.
 pub(super) fn activity_short(at: Timestamp, now: Timestamp) -> Option<String> {
     let seconds = age_secs(at, now);
-    (seconds >= 60).then(|| activity_label(seconds))
+    (seconds >= 300).then(|| activity_label(seconds))
 }
 
 /// A subagent's elapsed work span in the age vocabulary, never seconds: `<1m`
@@ -436,7 +437,7 @@ mod tests {
     }
 
     #[test]
-    fn activity_labels_floor_and_sub_minute_ages_stay_quiet() {
+    fn activity_labels_floor_and_sub_five_minute_ages_stay_quiet() {
         for (seconds, expected) in [
             (60, "1m"),
             (119, "1m"),
@@ -452,14 +453,14 @@ mod tests {
 
         let now = Timestamp::now();
         assert_eq!(activity_short(now, now), None);
-        assert_eq!(activity_short(now - Duration::from_secs(59), now), None);
+        assert_eq!(activity_short(now - Duration::from_secs(299), now), None);
         assert_eq!(
-            activity_short(now - Duration::from_secs(60), now),
-            Some("1m".to_owned())
+            activity_short(now - Duration::from_secs(300), now),
+            Some("5m".to_owned())
         );
         assert_eq!(
-            activity_short(now - Duration::from_secs(150), now),
-            Some("2m".to_owned())
+            activity_short(now - Duration::from_secs(7 * 60), now),
+            Some("7m".to_owned())
         );
     }
 

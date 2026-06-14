@@ -100,9 +100,9 @@ pub(in crate::sidebar_pane::render) fn subagent_glyph(
 /// The leading cell for an agent row. A `running` agent shows the thinking
 /// head (reasoning, before the turn's first file edit) or fills (acting or
 /// parked); calm terminal states use their status animation frames; attention
-/// states keep their single fixed head while their urgency lives in color and
-/// modifier effects. Stall is already folded into `Failed` upstream, so it
-/// falls through to the static `!`.
+/// states keep their single fixed head and fixed status tone while their urgency
+/// lives in the unread modifier effects. Stall is already folded into `Failed`
+/// upstream, so it falls through to the static `!`.
 pub(in crate::sidebar_pane::render) fn agent_glyph(
     theme: &Theme,
     status: AgentStatus,
@@ -442,38 +442,31 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style(
         selected,
         true,
     );
-    agent_lead_style_with_attention(theme, status, phase, age_secs, attention)
+    agent_lead_style_with_attention(theme, status, phase, attention)
 }
 
 pub(in crate::sidebar_pane::render) fn agent_lead_style_with_attention(
     theme: &Theme,
     status: AgentStatus,
     phase: TurnPhase,
-    age_secs: i64,
     attention: CardAttention,
 ) -> Style {
-    let natural_color = agent_natural_color(theme, status, phase, age_secs);
+    let natural_color = agent_natural_color(theme, status, phase);
     emphasize(theme, natural_color, attention.emphasis, attention.anim)
 }
 
-fn agent_natural_color(
-    theme: &Theme,
-    status: AgentStatus,
-    phase: TurnPhase,
-    age_secs: i64,
-) -> Option<Color> {
+/// The lead glyph's resting color: the status/phase role's fixed animation tone —
+/// waiting yellow, failed red, paused blue, a working head clay — held steady,
+/// with a bare (un-themed) idle staying transparent so an idle card reads as
+/// plain identity. The unread attention effect (carried by [`CardAttention`])
+/// supplies any motion; the tone itself never slides with age.
+fn agent_natural_color(theme: &Theme, status: AgentStatus, phase: TurnPhase) -> Option<Color> {
     let role = agent_role(status, phase);
-    if status.is_actionable() {
-        Some(
-            age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status)),
-        )
+    let animation = theme.animations.role(role);
+    if role == AnimationRole::Idle && !animation.color_overridden() {
+        None
     } else {
-        let animation = theme.animations.role(role);
-        if role == AnimationRole::Idle && !animation.color_overridden() {
-            None
-        } else {
-            Some(animation.color())
-        }
+        Some(animation.color())
     }
 }
 
@@ -482,17 +475,5 @@ fn agent_role(status: AgentStatus, phase: TurnPhase) -> AnimationRole {
         AnimationRole::Thinking
     } else {
         crate::sidebar_pane::render::animation::ResolvedAnimations::status_role(status)
-    }
-}
-
-pub(in crate::sidebar_pane::render) fn attention_floor_color(
-    theme: &Theme,
-    status: AgentStatus,
-) -> Color {
-    let animation = theme.animations.status(status);
-    if animation.color_overridden() {
-        animation.color()
-    } else {
-        theme.component(Component::AttentionFloor)
     }
 }

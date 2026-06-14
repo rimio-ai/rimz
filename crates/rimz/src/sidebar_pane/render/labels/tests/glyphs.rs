@@ -110,40 +110,42 @@ fn window_style_tints_by_size_class_but_stays_subordinate() {
 }
 
 #[test]
-fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
+fn attention_glyph_holds_a_fixed_tone_and_never_heats() {
     let theme = truecolor_theme();
-    let heat = |age_secs: i64| {
-        theme
-            .style(
-                theme.warm_heat_tone(age_heat_amount_for_test(age_secs)),
-                Modifier::empty(),
-            )
-            .fg
-    };
 
-    // Both attention states floor at yellow while the age heat is still
-    // resting — a row that needs a human never reads as dim chrome — then
-    // slide with the clock age. Read rows rest at the heat tone instead of
-    // breathing.
-    for status in [AgentStatus::Waiting, AgentStatus::Failed] {
+    // The attention heads hold their fixed semantic tone at any age — waiting
+    // yellow, failed red — never sliding with the clock. A read row (unread
+    // false) carries that flat tone directly.
+    for age_secs in [5 * 60, 25 * 60, 50 * 60, 61 * 60] {
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 5 * 60, 0, false, false).fg,
-            theme.warn(Modifier::empty()).fg
+            agent_lead_style(
+                &theme,
+                AgentStatus::Waiting,
+                TurnPhase::Idle,
+                age_secs,
+                0,
+                false,
+                false
+            )
+            .fg,
+            theme.warn(Modifier::empty()).fg,
+            "waiting holds the yellow tone at {age_secs}s",
         );
         assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 25 * 60, 0, false, false).fg,
-            heat(25 * 60)
-        );
-        assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 50 * 60, 0, false, false).fg,
-            heat(50 * 60)
-        );
-        assert_eq!(
-            agent_lead_style(&theme, status, TurnPhase::Idle, 61 * 60, 0, false, false).fg,
-            heat(61 * 60)
+            agent_lead_style(
+                &theme,
+                AgentStatus::Failed,
+                TurnPhase::Idle,
+                age_secs,
+                0,
+                false,
+                false
+            )
+            .fg,
+            theme.alarm(Modifier::empty()).fg,
+            "failed holds alarm red at {age_secs}s",
         );
     }
-    assert_ne!(heat(25 * 60), heat(50 * 60), "age heat is not constant");
     // A calm, unselected lead softens to the body tier with the name and
     // description. An idle lead carries no hue, so it rests at plain soft gray;
     // a running lead keeps its working color, muted toward the same tier.
@@ -653,7 +655,7 @@ fn activity_age_style_slides_with_the_clock_age() {
 }
 
 #[test]
-fn paused_glyph_is_single_cell_amber_and_never_heats() {
+fn paused_glyph_is_single_cell_blue_and_never_heats() {
     let theme = Theme::fixed(false);
     assert_eq!(status_glyph(&theme, AgentStatus::Paused), PAUSED_GLYPH);
     let mut chars = PAUSED_GLYPH.chars();
@@ -666,8 +668,11 @@ fn paused_glyph_is_single_cell_amber_and_never_heats() {
         1
     );
 
+    // Paused wears the cool blue slot (which `TokenTotal` also aliases), held
+    // flat — it never heats while parked.
+    let blue = theme.component(Component::TokenTotal);
     let style = status_style(&theme, AgentStatus::Paused);
-    assert_eq!(style.fg, Some(Color::Indexed(215)));
+    assert_eq!(style.fg, Some(blue));
     assert!(!style.add_modifier.contains(Modifier::BOLD));
     let long_parked = agent_lead_style(
         &theme,
@@ -678,7 +683,7 @@ fn paused_glyph_is_single_cell_amber_and_never_heats() {
         false,
         false,
     );
-    assert_eq!(long_parked.fg, Some(Color::Indexed(215)));
+    assert_eq!(long_parked.fg, Some(blue));
     assert!(!long_parked.add_modifier.contains(Modifier::BOLD));
 }
 

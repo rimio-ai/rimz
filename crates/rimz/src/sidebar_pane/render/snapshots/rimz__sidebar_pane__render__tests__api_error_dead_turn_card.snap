@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -13,6 +14,6 @@ expression: screen
 ▌! claude · Opus 4.8 · high · 200k              $1.27▐
 ▌  API Error: Server Error                           ▐
 ▌  ▣ ━━━━━━━━━━━━━━╸━────────────────────────── 38.2%▐
-▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                  ◔ <t>▐
+▌  ▤ 76k · ◌ 68k ◍ 6k ↘ 1k ↗ 2k                      ▐
 
                                            ? for help

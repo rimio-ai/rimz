@@ -112,21 +112,18 @@ const HEAT_RAMP_STOPS: usize = 4;
 /// sweep.
 const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
 
-/// The fresh-input "expense" tone derives from `caution` the same way `caution`
-/// itself derives from `warn` — [`oklab::warm_toward`], one step further toward
-/// the alarm, then deepened a touch. `caution` is the gold `warn` rotated `0.22`
-/// toward the red; rotating the resulting amber a further fraction toward the
-/// alarm hue, enriching its chroma, and dropping its lightness a step lands a
-/// deep, hot vermilion: costlier-looking than the bright amber tier, yet warmer
-/// and quieter than the rose `alarm` so danger keeps its exclusive slot. The
-/// deepen step also carries the separation at indexed depth — without it the
-/// light amber and the light rose collapse into adjacent xterm cells. Levers:
-/// raise `ROTATE` toward the alarm hue, `CHROMA` enriches where a scheme leaves
-/// gamut room, `DEEPEN` makes it read hotter and lands its own indexed cell.
-/// Tuned against a rendered frame.
-const INPUT_EXPENSE_ROTATE: f32 = 0.40;
-const INPUT_EXPENSE_CHROMA: f32 = 1.15;
-const INPUT_EXPENSE_DEEPEN: f32 = -0.04;
+/// The fresh-input "expense" tone is the reddest marker in the sidebar: it sits
+/// past the ramp's `alarm` stop, so the input read always reads redder than the
+/// context bar's scaled-to-red cache-read run — even at a near-full window, where
+/// that run reaches `alarm`. Take `alarm` (`heat_ramp[3]`, the ramp's reddest
+/// stop) directly, enrich its chroma toward the gamut edge, and deepen its
+/// lightness: a deep, hot red that holds alarm's hue but burns hotter than the
+/// lighter rose. The deepen step also carries the separation at indexed depth —
+/// without it a tone only a touch off the rose collapses into alarm's xterm cell.
+/// Levers: `CHROMA` enriches where a scheme leaves gamut room; `DEEPEN` makes it
+/// read hotter and lands its own indexed cell. Tuned against a rendered frame.
+const INPUT_EXPENSE_CHROMA: f32 = 1.30;
+const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
 /// catalog. `[sidebar.theme] scheme` left unset resolves to this. The baked-in
@@ -142,9 +139,10 @@ pub(crate) struct Palette {
     warn: Color,
     caution: Color,
     alarm: Color,
-    /// The fresh-input cost tone — `caution` warmed further toward `alarm` into a
-    /// vermilion, costlier-looking than the amber tier yet short of the danger
-    /// alarm. Derived like `heat_ramp`, not a tunable slot.
+    /// The fresh-input cost tone — `alarm` deepened a step past the ramp's red
+    /// stop into the reddest marker on screen, so the costliest read always reads
+    /// hotter than the bar's scaled-to-red health run. Derived like `heat_ramp`,
+    /// not a tunable slot.
     expense: Color,
     accent: Color,
     cool: Color,
@@ -186,17 +184,13 @@ impl Palette {
             derived_rgb_slot(theme.caution, tones.caution),
             derived_rgb_slot(theme.alarm, tones.alarm),
         ];
-        // Reuse the ramp's already-derived caution (stop 2) and alarm (stop 3)
-        // RGB to warm the fresh-input vermilion one step past the amber tier,
-        // then deepen it so it reads hotter and lands its own cell at any depth.
+        // `alarm` (stop 3) is the ramp's reddest tone; the input read must read
+        // redder still. Take it directly, enrich its chroma in place (a rotation
+        // of zero holds the hue), then deepen its lightness — a hotter red on the
+        // same hue that lands its own cell at any depth.
         let expense = rgb_color(
             oklab::lift_lightness(
-                oklab::warm_toward(
-                    heat_ramp[2],
-                    heat_ramp[3],
-                    INPUT_EXPENSE_ROTATE,
-                    INPUT_EXPENSE_CHROMA,
-                ),
+                oklab::warm_toward(heat_ramp[3], heat_ramp[3], 0.0, INPUT_EXPENSE_CHROMA),
                 INPUT_EXPENSE_DEEPEN,
             ),
             depth,

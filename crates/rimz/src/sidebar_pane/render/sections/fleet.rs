@@ -9,8 +9,7 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat_color, attention_cell_style, attention_floor_color, status_chip_color, status_glyph,
-    status_rest_style, unread_anim,
+    attention_cell_style, status_chip_color, status_glyph, status_rest_style, unread_anim,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -44,8 +43,8 @@ pub(crate) struct MakeUpHit {
 /// The line splits the make-up by who might want you. The left cluster is the
 /// rows worth a glance — `waiting` `?`, `failed` `!`, parked `paused` `⏸`, and
 /// `success` `✓` (each blinking only while a visible matching row is unread;
-/// read `?`/`!` wear oldest-row age heat, while read `⏸`/`✓` hold their status
-/// tone). The
+/// read buckets hold their fixed status tone — `?` yellow, `!` red, `⏸` blue,
+/// `✓` green — at any age). The
 /// right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
@@ -93,7 +92,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
 
     // Top line — the make-up split by who might want you. The left cluster
     // gathers the rows worth a glance: `waiting` `?` and `failed` `!` (unread
-    // rows blink; read rows keep the oldest row's age heat at rest), parked
+    // rows blink; read rows rest on their fixed status tone), parked
     // `paused` `⏸`, then success. The right cluster is the live-capacity tail:
     // working, then idle. Every bucket shows its count.
     let mut left = Cluster::new(theme, status_filter);
@@ -124,7 +123,7 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         ),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
-    // but still a row worth spotting. It rests on held amber and takes the shared
+    // but still a row worth spotting. It rests on held blue and takes the shared
     // unread treatment when the inbox bit is set.
     left.push_count(
         AgentStatus::Paused,
@@ -335,13 +334,13 @@ pub(in crate::sidebar_pane::render) fn fleet_size(
     (main, subs)
 }
 
-/// The cockpit `?`/`!` bucket's tone, in lockstep with its rows: when this
+/// The cockpit `?`/`!` bucket's tone, in lockstep with its rows: it wears the
+/// status's fixed semantic tone — waiting yellow, failed red — and when this
 /// bucket owns the lead unread row (`is_lead_bucket`) it carries the configured
-/// continuous signal on that row's age heat; an unread bucket that is *not* the
-/// lead settles to the steady bright crest, and a read bucket rests on the
-/// oldest visible matching row's heat. Reads the rendered rows (capped-away
-/// agents are excluded — the bucket count still spans them, but a hidden agent
-/// never drives the visible signal or heat).
+/// continuous attention signal on that row; an unread bucket that is *not* the
+/// lead settles to the steady bright crest, and a read bucket holds the flat
+/// tone. Reads the rendered rows (capped-away agents are excluded — the bucket
+/// count still spans them, but a hidden agent never drives the visible signal).
 fn attention_bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
@@ -356,18 +355,16 @@ fn attention_bucket_style(
         .filter(|row| row.status() == Some(status) && row.unread)
         .map(|row| age_secs(row.last_activity, now))
         .max();
+    // The bucket wears its status's fixed semantic tone — waiting yellow, failed
+    // red — held steady; the unread lead row carries any motion, never age.
+    let color = theme.animations.status(status).color();
     if let Some(age) = oldest_unread {
-        let color = attention_heat_color(theme, status, age);
         return match unread_anim(theme, status, age, animation_phase, is_lead_bucket) {
             Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
             None => theme.style(color, Modifier::BOLD),
         };
     }
-    let oldest_any = oldest_matching_age(groups, status, now);
-    theme.style(
-        attention_heat_color(theme, status, oldest_any.unwrap_or(0)),
-        Modifier::empty(),
-    )
+    theme.style(color, Modifier::empty())
 }
 
 fn unread_bucket_style(
@@ -398,23 +395,6 @@ fn unread_bucket_style(
         };
     }
     rest_style
-}
-
-fn oldest_matching_age(
-    groups: &[SidebarWorktreeGroup],
-    status: AgentStatus,
-    now: Timestamp,
-) -> Option<i64> {
-    groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.status() == Some(status))
-        .map(|row| age_secs(row.last_activity, now))
-        .max()
-}
-
-fn attention_heat_color(theme: &Theme, status: AgentStatus, age_secs: i64) -> Color {
-    age_heat_color(theme, age_secs).unwrap_or_else(|| attention_floor_color(theme, status))
 }
 
 /// The full-fleet count for one make-up bucket — the sum of every group's

@@ -76,7 +76,6 @@ pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> L
         ctx.theme,
         row,
         ctx.providers,
-        ctx.now,
         status,
         ctx.tier,
         ctx.width,
@@ -97,7 +96,6 @@ pub(super) fn agent_lead_cell(
     theme: &Theme,
     row: &SidebarRow,
     status: AgentStatus,
-    now: Timestamp,
     attention: CardAttention,
     animation_phase: u64,
 ) -> Span<'static> {
@@ -123,26 +121,10 @@ pub(super) fn agent_lead_cell(
     }
     // The card emphasis carries the row's attention level; the glyph never
     // blanks, so the one-cell column never shifts as it brightens.
-    let style = agent_card_lead_style(theme, row, status, now, attention);
+    let style = agent_lead_style_with_attention(theme, status, row.phase(), attention);
     Span::styled(
         agent_glyph(theme, status, row.phase(), animation_phase),
         style,
-    )
-}
-
-fn agent_card_lead_style(
-    theme: &Theme,
-    row: &SidebarRow,
-    status: AgentStatus,
-    now: Timestamp,
-    attention: CardAttention,
-) -> Style {
-    agent_lead_style_with_attention(
-        theme,
-        status,
-        row.phase(),
-        age_secs(row.last_activity, now),
-        attention,
     )
 }
 
@@ -155,14 +137,14 @@ fn agent_card_lead_style(
 /// context-sidecar reading first, the hook-derived fallback second,
 /// omitted when neither has named it. Capability tokens degrade by width tier:
 /// L2 carries model + effort + window, L1 drops effort, L0 keeps just the name
-/// — cost always pins right. A blocked `?`/`!` glyph slides through the age
-/// heat ramp toward alarm, so a long-ignored ask escalates without a timestamp.
+/// — cost always pins right. A blocked `?`/`!`/`⏸` glyph holds its fixed status
+/// tone — yellow, red, blue — with the unread attention effect, not age, drawing
+/// the eye to an unanswered ask.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn agent_identity_line(
     theme: &Theme,
     row: &SidebarRow,
     providers: &[SidebarProviderPanel],
-    now: Timestamp,
     status: AgentStatus,
     tier: Tier,
     width: usize,
@@ -192,12 +174,12 @@ pub(super) fn agent_identity_line(
 
     // Left cluster: glyph + name + the capability tokens at the dim chrome —
     // metadata, a step under the soft stat figures — over `·` seams of the
-    // same weight. The glyph heats continuously with the age clock once a
-    // `waiting`/`failed` row sits unanswered. The kind name reads at normal
-    // weight in the provider's brand color (or mid-gray chrome for unknown
-    // kinds); the bright slot is saved for the task below.
+    // same weight. The glyph holds its fixed status tone; the unread attention
+    // effect supplies any motion. The kind name reads at normal weight in the
+    // provider's brand color (or mid-gray chrome for unknown kinds); the bright
+    // slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
-        agent_lead_cell(theme, row, status, now, attention, animation_phase),
+        agent_lead_cell(theme, row, status, attention, animation_phase),
         Span::raw(" "),
     ];
     left.extend(attention_name_spans(theme, providers, &row.name, attention));

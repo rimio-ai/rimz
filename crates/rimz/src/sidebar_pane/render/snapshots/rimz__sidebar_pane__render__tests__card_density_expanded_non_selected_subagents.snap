@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -18,5 +19,5 @@ expression: screen
 ▎  delegated sweep                                   🮇
 ▎  ⧉ subagents (1)                                   🮇
 ▎    ✓ Explore — map the render path                 🮇
-▎      ◇ 31k · opus · high                      ◔  2m🮇
+
                                            ? for help

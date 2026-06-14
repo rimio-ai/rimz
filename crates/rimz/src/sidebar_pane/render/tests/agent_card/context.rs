@@ -51,7 +51,7 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
         Some("db migrate"),
     );
     claude.context = Some(claude_context(fixed_now()));
-    claude.last_activity = fixed_now() - Duration::from_secs(90);
+    claude.last_activity = fixed_now() - Duration::from_secs(7 * 60);
     let stamped = pane("%1", "claude", "/repo/main");
     claude.pane = Some(stamped.clone());
     let live = stamped;
@@ -70,8 +70,8 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
         "the pane's resource stats stay off the card:\n{rendered}"
     );
     assert!(
-        rendered.contains("◔ 1m"),
-        "the age clock keeps the right pin:\n{rendered}"
+        rendered.contains("◔ 7m"),
+        "the age clock keeps the right pin once a five-minute gap opens:\n{rendered}"
     );
     assert_snapshot("agent_card_context_age", rendered);
 }
@@ -401,9 +401,9 @@ fn context_line_age_tone_slides_with_the_clock_age() {
         )
     };
     assert_eq!(
-        age_style(4 * 60, '◔'),
+        age_style(7 * 60, '◔'),
         theme.muted(),
-        "warm cache rests at the dim weight"
+        "warm cache rests at the dim weight once the clock shows past five minutes"
     );
     assert_eq!(
         age_style(25 * 60, '◑'),

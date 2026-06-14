@@ -51,9 +51,10 @@ pub(crate) enum Component {
     ProcIo,
     /// The `↗` output token marker — generated output, conventionally green.
     Output,
-    /// The `↘` fresh-input token marker — the expensive freshly-read tokens wear
-    /// the `expense` vermilion: `caution` warmed further toward `alarm`, costlier
-    /// than the amber tier while staying under the alarm so danger keeps red.
+    /// The `↘` fresh-input token marker — the costliest read wears the `expense`
+    /// red, the reddest marker in the sidebar: `alarm` saturated and deepened a
+    /// step past the ramp's red stop, so the input read always reads redder than
+    /// the context bar's scaled-to-red cache-read run.
     Input,
     /// The `◍` cache-write token marker — the compaction/delegation violet.
     CacheWrite,
@@ -63,9 +64,6 @@ pub(crate) enum Component {
     SubagentHeader,
     /// The `⇅ rc` remote-control flag.
     RemoteControl,
-    /// The default attention-floor tone for an unanswered `?`/`!` ask when no
-    /// status animation overrides it.
-    AttentionFloor,
     /// The unknown-provider fallback for an agent card's name.
     UnknownBrand,
     /// The capability-line window token, by size class: a neutral→cool→accent
@@ -119,7 +117,6 @@ impl Component {
         Component::Compaction,
         Component::SubagentHeader,
         Component::RemoteControl,
-        Component::AttentionFloor,
         Component::UnknownBrand,
         Component::WindowSmall,
         Component::WindowMedium,
@@ -146,7 +143,7 @@ impl Component {
             LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
             ProcMem | Output | FlashResolved | FlashLifted | FlashCompleted => palette.good,
-            Compaction | AttentionFloor | FlashWaiting => palette.warn,
+            Compaction | FlashWaiting => palette.warn,
             Input => palette.expense,
             FlashFailed => palette.alarm,
             WindowMedium | UnknownBrand => palette.muted,

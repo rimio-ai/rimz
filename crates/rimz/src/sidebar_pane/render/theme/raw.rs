@@ -52,8 +52,8 @@ impl RawPalette {
             // Warm the gold warn-yellow toward the alarm red and enrich it rather
             // than blending into it, so the caution rung lands a vivid amber-orange
             // (not a desaturated coral) on every scheme — the warm "hot/costly"
-            // tier the gauge mid-band, age heat, and paused share. Fresh input
-            // warms one step further toward the alarm (`Palette` expense tone).
+            // tier the gauge mid-band and age heat share. Fresh input warms one
+            // step further past the alarm (`Palette` expense tone).
             caution: oklab::warm_toward(self.yellow, self.red, 0.22, 1.35),
             alarm: self.red,
             accent: self.cyan,

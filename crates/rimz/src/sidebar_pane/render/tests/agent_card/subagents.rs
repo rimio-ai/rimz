@@ -1,17 +1,14 @@
 use super::*;
 
 #[test]
-fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
-    // A selected parent expands its `⧉ subagents` list. Each child reads two
-    // lines: the live head (the thinking orbit while it reasons, `✓` once
-    // it lands), the type, and its `subagentStatusLine` description, then the
-    // token spend `◇`, model, and effort left with the clock-fill elapsed
-    // work pinned right. The first child is finished, so its elapsed is
-    // frozen at `last_activity − started` (exactly 60s here, independent of
-    // wall-clock) — a deterministic ` 1m` in the fixed three-cell slot — and
-    // it carries the effort its `SubagentStop` reported; the second is still
-    // running ~30s in, so it reads the sub-minute `<1m` (never seconds), and
-    // the two right-pinned clusters stack into one column.
+fn render_selected_card_collapses_finished_subagent_and_keeps_running_metadata() {
+    // A selected parent expands its `⧉ subagents` list. A finished child
+    // collapses to its single type line — the head holds its `✓` verdict and the
+    // description rides beside it, while the metadata row (tokens · model ·
+    // effort and the elapsed clock) is dropped, since a done child needs no live
+    // work span. A still-running child keeps both lines: the live thinking head,
+    // type, and description, then the token spend `◇` and model left with the
+    // live sub-minute `<1m` clock-fill elapsed pinned right.
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -75,10 +72,11 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         rendered.contains("⧉ subagents (2)"),
         "the expanded card lists its children:\n{rendered}"
     );
-    // Line 1: type + the description of what the parent asked it to do.
+    // The finished child collapses to one line: its type + the description of
+    // what the parent asked it to do.
     assert!(
         rendered.contains("Explore — locate the render seam"),
-        "line 1 carries the description:\n{rendered}"
+        "the finished child keeps its type line:\n{rendered}"
     );
     // The running child's leading cell is the thinking orbit (frame 0 at the
     // test's fixed animation phase), the agent-row head vocabulary verbatim.
@@ -86,29 +84,30 @@ fn render_selected_card_shows_subagent_description_tokens_and_elapsed() {
         rendered.contains("⠁ review — audit the trust hash"),
         "a reasoning child wears the thinking head:\n{rendered}"
     );
-    // Line 2: token spend, model, and effort left, elapsed work right-pinned.
-    // 12_400 → the whole-unit `12k`, the bare id prettified to `Opus 4.8` and
-    // padded to the widest sibling model (`Haiku 4.5`) so the effort column
-    // stacks, the stop-reported effort after it, 60s frozen → ` 1m`
-    // right-aligned in the fixed slot.
+    // The running child keeps its metadata row — token spend and model left
+    // (`3k` sized to the one rendered row, no sibling to pad to), the live
+    // sub-minute `<1m` clock pinned right.
     assert!(
-        rendered.contains("◇ 12k · Opus 4.8  · high"),
-        "line 2 carries the token spend, model, and effort:\n{rendered}"
+        rendered.contains("◇ 3k · Haiku 4.5"),
+        "the running child carries its token spend and model:\n{rendered}"
     );
-    // The narrower `3k` right-aligns under the sibling's `12k`, so the `·`
-    // seams and models stack into one column.
-    assert!(
-        rendered.contains("◇  3k · Haiku 4.5"),
-        "the sibling carries its own model, column-aligned:\n{rendered}"
-    );
-    assert!(
-        rendered.contains("◔  1m"),
-        "line 2 carries the frozen elapsed in the fixed slot:\n{rendered}"
-    );
-    // The running child reads the sub-minute `<1m`, never a seconds figure.
     assert!(
         rendered.contains("◔ <1m"),
-        "a sub-minute child reads `<1m`:\n{rendered}"
+        "the running child reads the live sub-minute clock:\n{rendered}"
+    );
+    // The finished child drops its whole metadata row: its `12k` token spend —
+    // unique to that child — is gone, so no second line renders for it. (Its
+    // model and effort happen to match the parent's, so the row's absence reads
+    // through the token figure.)
+    assert!(
+        !rendered.contains("12k"),
+        "the finished child's metadata row is dropped:\n{rendered}"
+    );
+    // Exactly one subagent metadata row renders — the running child's.
+    assert_eq!(
+        rendered.matches('◇').count(),
+        1,
+        "only the running child carries a `◇` metadata row:\n{rendered}"
     );
     assert_snapshot("subagent_two_line_entry", rendered);
 }
@@ -117,7 +116,8 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     // A child missing a field a sibling carries blank-fills that slot, so the
     // card's metadata lines stay one column grid: the token-less child's model
     // starts exactly under its sibling's, with no bare `◇` and no orphan `·`
-    // seam leading the line.
+    // seam leading the line. Both children are running so both render a metadata
+    // row — a finished child collapses to one line instead (covered separately).
     let mut parent = agent(
         "claude-1",
         "claude",
@@ -131,7 +131,7 @@ fn subagent_metadata_blank_fills_the_per_card_grid() {
     let mut spender = agent(
         "child-1",
         "claude",
-        AgentStatus::Success,
+        AgentStatus::Running,
         None,
         None,
         Some("Explore"),

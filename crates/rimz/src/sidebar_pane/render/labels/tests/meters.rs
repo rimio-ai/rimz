@@ -31,7 +31,7 @@ fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
     assert_ne!(
         input,
         theme.heat_tone(1.0),
-        "fresh input stays under the 100% alarm red, so red stays exclusive to danger"
+        "fresh input deepens past the 100% alarm red into its own redder cell — the reddest marker on screen (redder-than-alarm proven in theme tests)"
     );
     assert_ne!(
         read, input,

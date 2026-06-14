@@ -575,7 +575,7 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
                 LedgerLabel | TokenTotal | ProcCpu | WindowLarge => p.cool,
                 SubagentHeader | RemoteControl | ProcIo | CacheWrite => p.meta,
                 ProcMem | Output | FlashResolved | FlashLifted | FlashCompleted => p.good,
-                Compaction | AttentionFloor | FlashWaiting => p.warn,
+                Compaction | FlashWaiting => p.warn,
                 Input => p.expense,
                 FlashFailed => p.alarm,
                 WindowMedium | UnknownBrand => p.muted,
@@ -591,50 +591,47 @@ fn component_golden_table_pins_every_role_to_its_slot_at_both_depths() {
     }
 }
 
-/// The fresh-input `expense` tone is a real step past the amber `caution` toward
-/// the rose `alarm`, becoming neither: redder than caution (warming toward red
-/// drops the green channel) yet warmer than the danger rose (an orange-red, so
-/// its blue channel sits below the alarm's pinker blue). Locks the vermilion so a
-/// future retune can't collapse it back to caution or overshoot the danger slot.
+/// The fresh-input `expense` tone is the reddest marker in the sidebar: it sits
+/// past the ramp's rose `alarm` stop, so the input read always reads redder than
+/// the context bar's scaled-to-red cache-read run. Locks it deeper and more
+/// saturated than `alarm` — a hotter red on the same hue family — so a future
+/// retune can't soften it back under the danger rose.
 #[test]
-fn expense_sits_between_caution_and_alarm() {
+fn expense_reads_redder_than_alarm() {
     let p = truecolor_default().palette;
     let expense = color_to_rgb(p.expense).expect("expense is a concrete tone");
-    let caution = color_to_rgb(p.caution).expect("caution is a concrete tone");
     let alarm = color_to_rgb(p.alarm).expect("alarm is a concrete tone");
 
-    assert_ne!(expense, caution, "expense is not the amber caution");
-    assert_ne!(expense, alarm, "expense is not the danger alarm");
+    assert_ne!(expense, alarm, "expense is not the danger rose alarm");
+
+    // Redder: a higher red share of total channel weight than the lighter rose.
+    let red_share = |(r, g, b): (u8, u8, u8)| {
+        f32::from(r) / (f32::from(r) + f32::from(g) + f32::from(b)).max(1.0)
+    };
     assert!(
-        expense.1 < caution.1,
-        "expense reads redder than caution: {expense:?} vs {caution:?}"
+        red_share(expense) > red_share(alarm),
+        "expense reads redder than alarm: {expense:?} vs {alarm:?}"
     );
+    // Deeper and more saturated: a hotter red drops both green and blue.
     assert!(
-        expense.2 < alarm.2,
-        "expense stays warmer (more orange) than the rose alarm: {expense:?} vs {alarm:?}"
+        expense.1 < alarm.1 && expense.2 < alarm.2,
+        "expense is a deeper, more saturated red than alarm: {expense:?} vs {alarm:?}"
     );
 
-    // And it genuinely sits on the shortest-path hue arc from caution to alarm —
-    // a partial rotation toward the rose, not a darker off-hue tone that merely
-    // passes the channel checks above.
-    let arc = |from: (u8, u8, u8), to: (u8, u8, u8)| {
-        use crate::sidebar_pane::render::oklab::hue_angle;
-        use std::f32::consts::{PI, TAU};
-        let mut delta = hue_angle(to) - hue_angle(from);
-        while delta > PI {
-            delta -= TAU;
-        }
-        while delta < -PI {
-            delta += TAU;
-        }
-        delta
-    };
-    let to_alarm = arc(caution, alarm);
-    let to_expense = arc(caution, expense);
+    // Held on alarm's hue family — a hotter step rather than a rotation into
+    // orange or magenta, so the marker reads as red, not as a warmer cost tier.
+    use crate::sidebar_pane::render::oklab::hue_angle;
+    use std::f32::consts::{PI, TAU};
+    let mut arc = hue_angle(expense) - hue_angle(alarm);
+    while arc > PI {
+        arc -= TAU;
+    }
+    while arc < -PI {
+        arc += TAU;
+    }
     assert!(
-        to_expense.signum() == to_alarm.signum() && to_expense.abs() < to_alarm.abs(),
-        "expense hue lies between caution and alarm: caution→expense {to_expense:.3}rad, \
-         caution→alarm {to_alarm:.3}rad"
+        arc.abs() < 0.20,
+        "expense holds alarm's red hue family (arc {arc:.3}rad)"
     );
 }
 

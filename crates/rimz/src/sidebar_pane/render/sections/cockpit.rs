@@ -7,7 +7,7 @@ use ratatui::text::{Line, Span};
 
 use crate::sidebar_pane::render::TallyAnim;
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
-use crate::sidebar_pane::render::labels::{attention_floor_color, token_breakdown_spans};
+use crate::sidebar_pane::render::labels::token_breakdown_spans;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
 use super::{SESSIONS_GLYPH, metric_spans, pin_right};
@@ -82,7 +82,10 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
         left.push(Span::styled(
             format!(" ({unread_agents})"),
             theme.style(
-                attention_floor_color(theme, crate::feed::AgentStatus::Waiting),
+                theme
+                    .animations
+                    .status(crate::feed::AgentStatus::Waiting)
+                    .color(),
                 Modifier::BOLD,
             ),
         ));

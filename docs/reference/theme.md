@@ -61,16 +61,16 @@ mode = "auto"        # or "truecolor", "256"
 
 Thirteen semantic slots cover everything the sidebar paints. Each accepts `#rrggbb` hex or a raw 0–255 xterm index under `[sidebar.theme]`; an omitted slot keeps the selected scheme's tone (the bundled `TokyoNight Night` palette by default). Slot names follow the semantics rather than the shipped hues, so a light-terminal re-theme still reads `good`/`warn`/`alarm`.
 
-The palette runs a loudness hierarchy — attention loudest, selection next, structure quiet, data coded, chrome quietest. Two rules keep it honest: `alarm` red is reserved for danger (failures, removals, the full-context crest), and one warm `caution` amber means "hot/costly/parked" everywhere.
+The palette runs a loudness hierarchy — attention loudest, selection next, structure quiet, data coded, chrome quietest. Two rules keep it honest: `alarm` red marks danger (failures, removals, the full-context crest), and one warm `caution` amber means "hot/costly" everywhere — with the fresh-input `↘` burning a step redder than `alarm` itself, so the costliest read is the hottest marker on screen.
 
 | slot | colors |
 | --- | --- |
 | `good` | calm/positive: running tallies, low gauges, `+` additions, the `↗` output marker |
 | `warn` | the caution floor: waiting `?` glyphs at rest, the low-mid gauge rung |
-| `caution` | the warm amber "hot/costly/parked" tier: the gauge mid-band, the age-heat midpoint, and the paused `⏸` glyph (the fresh-input `↘` marker warms one step further toward `alarm`) |
-| `alarm` | danger only: failed glyphs, the 100% gauge crest, `-` removals |
+| `caution` | the warm amber "hot/costly" tier: the gauge mid-band and the age-heat midpoint (the fresh-input `↘` marker burns redder still — see `alarm`) |
+| `alarm` | danger: failed `!` glyphs, the 100% gauge crest, `-` removals; the fresh-input `↘` marker derives a deeper red a step past it |
 | `accent` | data: the `◎` sessions glyph and the `◌` cache-read marker |
-| `cool` | cool informational: the `plan` posture pill, the larger window tags, the `◇` token total |
+| `cool` | cool informational: the `plan` posture pill, the larger window tags, the `◇` token total, and the paused `⏸` glyph |
 | `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker |
 | `body` | body content text: stat figures, capability tokens, subagent lines, and the worktree header |
 | `muted` | muted chrome: labels, ages, subordinate values |
@@ -87,15 +87,15 @@ warn = 173         # a raw xterm index stays exact at every depth
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
 
-The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. The provider budget ("mana") bar rides the same full ramp: it anchors green at a brimming window and warms continuously toward red as it drains, with the `[sidebar.budget]` zones as its warm stops. The recede-when-healthy readers — age and attention heat, the reset-countdown burn pace, and the remote link badge — keep a quiet resting tone and ride only the warm tail of the ramp (`warn` → `caution` → `alarm`) once they leave their calm zone, since a fresh agent, a sustainable pace, or a healthy link reads quiet rather than healthy-green. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The attention floor before the ramp wears the flat `warn` slot, so `warn = 0..15` steps from the terminal ANSI color to the scheme warn RGB when age heat begins.
+The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. The provider budget ("mana") bar rides the same full ramp: it anchors green at a brimming window and warms continuously toward red as it drains, with the `[sidebar.budget]` zones as its warm stops. The recede-when-healthy readers — the card age clock, the reset-countdown burn pace, and the remote link badge — keep a quiet resting tone and ride only the warm tail of the ramp (`warn` → `caution` → `alarm`) once they leave their calm zone, since a fresh agent, a sustainable pace, or a healthy link reads quiet rather than healthy-green. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The waiting `?`, failed `!`, and paused `⏸` glyphs wear their flat `warn`, `alarm`, and `cool` slots, held steady at any age, so a slot override restyles them directly.
 
-The context composition accents reuse stable sidebar tones: fresh input `↘` wears a vermilion warmed one step past the `caution` amber toward `alarm` — the costliest read in the breakdown, yet kept under the danger red so `alarm` stays exclusive to danger (retune it through the `caution` and `alarm` slots it derives from); cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
+The context composition accents reuse stable sidebar tones: fresh input `↘` wears a deep red a step past the `alarm` stop — the costliest read in the breakdown and the reddest marker on screen, so it always reads hotter than the bar's scaled-to-red cache-read run (retune it through the `alarm` slot it derives from); cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
 
 Money amounts use a fixed dollar green (`#85bb65` at truecolor depth, nearest xterm bucket at indexed depth), separate from the `good` success slot.
 
 ### How a tone resolves
 
-A painted tone passes through three layers. The **raw palette** is the imported terminal color — `background`, `foreground`, the ANSI hues, and `colors.selection.background` from the selected scheme. The **thirteen semantic slots** above derive from it — the neutral chrome blended from background toward foreground in OKLab, the chromatic slots mapped from the ANSI hues, with `caution` warmed from yellow toward red into a vivid amber and `selection` lifted into its own bright cool tone over the dark `selection_bg` band — and are the layer you tune. **Component tokens** are the specific UI roles — the sessions glyph, a token marker, a worktree header, a transition flash — and each names its role and resolves to a semantic slot, or to a tone derived from the slots (the fresh-input `↘` marker warms `caution` a step toward `alarm` into the expense vermilion). They are internal: restyle the room through the thirteen slots and every component that aliases or derives from them follows. The one place hue is decided stays the slot table, and a CI gate keeps render code from naming a raw color directly (see [rust-conventions.md](../contributing/rust-conventions.md#architectural-invariants)).
+A painted tone passes through three layers. The **raw palette** is the imported terminal color — `background`, `foreground`, the ANSI hues, and `colors.selection.background` from the selected scheme. The **thirteen semantic slots** above derive from it — the neutral chrome blended from background toward foreground in OKLab, the chromatic slots mapped from the ANSI hues, with `caution` warmed from yellow toward red into a vivid amber and `selection` lifted into its own bright cool tone over the dark `selection_bg` band — and are the layer you tune. **Component tokens** are the specific UI roles — the sessions glyph, a token marker, a worktree header, a transition flash — and each names its role and resolves to a semantic slot, or to a tone derived from the slots (the fresh-input `↘` marker deepens `alarm` a step past the ramp's red stop into the expense red). They are internal: restyle the room through the thirteen slots and every component that aliases or derives from them follows. The one place hue is decided stays the slot table, and a CI gate keeps render code from naming a raw color directly (see [rust-conventions.md](../contributing/rust-conventions.md#architectural-invariants)).
 
 The capability line's window token shows this layering: it reads its size through a neutral→cool→accent salience ramp — `faint` below 128k, `muted` at 128k, `cool` at 258k, `accent` at 1M+ — so a bigger window reads louder while borrowing no provider's brand color. Only true external identity (the provider brand emblems and the dollar green) holds a fixed hue outside the slots.
 
@@ -173,7 +173,7 @@ The built-in heads:
 | `resolving` | `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` | `meta` | fast |
 | `idle` | `○` | `good` | normal |
 | `success` | `✓` | `good` | normal |
-| `paused` | `⏸︎` | `caution` | — |
+| `paused` | `⏸︎` | `cool` | — |
 | `waiting` | `?` | `warn` | — |
 | `failed` | `!` | `alarm` | — |
 
@@ -181,7 +181,7 @@ The built-in heads:
 
 `color` accepts the semantic palette slots `good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the [unread attention effect](#unread-attention) below, `effect = "static"` quiets it to a constant bold tone, and `speed` paces it. A literal frame blink is a frame sequence such as `frames = [" ", "!"]`.
 
-Every role uses the same model: frames, color, effect, and speed. The unread attention signal carries across the lead glyph, the card name, the description, and the make-up `?`/`!`/`✓` buckets as one group — age heat sliding their base tone toward alarm — until the pane is focused; the cockpit count and per-bucket counts use still representative frames.
+Every role uses the same model: frames, color, effect, and speed. The unread attention signal carries across the lead glyph, the card name, the description, and the make-up `?`/`!`/`✓` buckets as one group — each holding its fixed tone until the pane is focused; the cockpit count and per-bucket counts use still representative frames.
 
 ### Unread attention
 

@@ -221,8 +221,9 @@ pub(super) fn row_lines(
 /// lines. The description, tokens,
 /// and elapsed ride in from
 /// Claude's `subagentStatusLine`; the model, effort, and phase from the
-/// child's own lifecycle events. A child with none of them degrades to the
-/// bare type line, with line 2 dropped.
+/// child's own lifecycle events. A child with none of them — and any finished
+/// child, whose work span is over — degrades to the bare type line, with line 2
+/// dropped.
 fn sub_agent_lines(
     theme: &Theme,
     sub_agents: &[SidebarSubAgent],
@@ -247,15 +248,18 @@ fn sub_agent_lines(
     // sibling, so the `·` seams, the models, and the efforts stack into
     // columns across children (the elapsed cluster already stacks via its
     // fixed right-pinned slot). A column exists only while some child carries
-    // the field; a child missing a carried field blank-fills the slot.
+    // the field; a child missing a carried field blank-fills the slot. Finished
+    // children render no metadata row, so they never widen a column.
     let token_col = sub_agents
         .iter()
+        .filter(|sub| !sub_agent_finished(sub))
         .filter_map(sub_agent_tokens)
         .map(|total| tokens_int(total).chars().count())
         .max()
         .unwrap_or(0);
     let model_col = sub_agents
         .iter()
+        .filter(|sub| !sub_agent_finished(sub))
         .filter_map(|sub| sub.model.as_deref())
         .map(|model| model_label(model).chars().count())
         .max()
@@ -298,6 +302,14 @@ fn sub_agent_tokens(sub: &SidebarSubAgent) -> Option<u64> {
     sub.total_tokens.filter(|total| *total > 0)
 }
 
+/// A finished subagent — its turn has ended in a verdict. The card collapses it
+/// to its single type line: the metadata row (tokens · model · effort and the
+/// frozen elapsed clock) is dropped, since a done child needs no live work span.
+/// A still-running child keeps its metadata row with the live elapsed.
+fn sub_agent_finished(sub: &SidebarSubAgent) -> bool {
+    matches!(sub.status, AgentStatus::Success | AgentStatus::Failed)
+}
+
 fn sub_agent_metadata_line(
     theme: &Theme,
     sub: &SidebarSubAgent,
@@ -305,6 +317,9 @@ fn sub_agent_metadata_line(
     model_col: usize,
     width: usize,
 ) -> Option<Line<'static>> {
+    if sub_agent_finished(sub) {
+        return None;
+    }
     let tokens = sub_agent_tokens(sub);
     let elapsed = sub.elapsed_secs;
     let model = sub.model.as_deref();
