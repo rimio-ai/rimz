@@ -179,6 +179,78 @@ fn turn_error_detector_self_clears_only_on_newer_live_clocked_records() {
 }
 
 #[test]
+fn turn_complete_detector_marks_clean_review_completion() {
+    // A Codex `/review` runs in review mode and closes on a clean
+    // `task_complete` that fires no `Stop` hook — the success twin of the
+    // dead-turn detector. The tail mirrors a real review session: task start,
+    // the `/review` prompt, the review exit, the final agent message, then a
+    // clean `task_complete`.
+    let task_started = json!({"timestamp":"2026-06-14T05:51:39.805Z","type":"event_msg","payload":{"type":"task_started"}});
+    let user_message = json!({"timestamp":"2026-06-14T05:51:40.861Z","type":"event_msg","payload":{"type":"user_message","message":"/review"}});
+    let exited = json!({"timestamp":"2026-06-14T05:59:49.267Z","type":"event_msg","payload":{"type":"exited_review_mode"}});
+    let agent_message = json!({"timestamp":"2026-06-14T05:59:49.267Z","type":"event_msg","payload":{"type":"agent_message","message":"patch is correct"}});
+    let task_complete = json!({"timestamp":"2026-06-14T05:59:49.268Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":null}});
+    let tail =
+        format!("{task_started}\n{user_message}\n{exited}\n{agent_message}\n{task_complete}\n");
+    assert_eq!(
+        detect_turn_complete(&tail),
+        Some(
+            "2026-06-14T05:59:49.268Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        ),
+        "a clean task_complete at the tail marks the turn done"
+    );
+}
+
+#[test]
+fn turn_complete_detector_skips_errored_and_superseded_turns() {
+    // An errored `task_complete` is a death, owned by `detect_turn_error`.
+    let errored = json!({
+        "timestamp": "2026-06-14T05:59:49.268Z",
+        "type": "event_msg",
+        "payload": { "type": "task_complete", "error": { "message": "API Error" } }
+    })
+    .to_string();
+    assert!(
+        detect_turn_complete(&errored).is_none(),
+        "an errored task_complete is a dead turn, not a completion"
+    );
+
+    // An empty-or-absent-error `task_complete` is ambiguous: the death detector
+    // treats it as benign, so the completion detector must not claim success
+    // over it either. Only a record with no `error` field at all settles.
+    for empty_error in [json!(false), serde_json::Value::Null, json!(""), json!({})] {
+        let ambiguous = json!({
+            "timestamp": "2026-06-14T05:59:49.268Z",
+            "type": "event_msg",
+            "payload": { "type": "task_complete", "error": empty_error }
+        })
+        .to_string();
+        assert!(
+            detect_turn_complete(&ambiguous).is_none(),
+            "an empty-error task_complete is too ambiguous to mark a completion"
+        );
+    }
+
+    // A fresh turn already underway after a prior completion is not at rest.
+    let complete = json!({
+        "timestamp": "2026-06-14T05:59:49.268Z",
+        "type": "event_msg",
+        "payload": { "type": "task_complete" }
+    });
+    let next_turn = json!({
+        "timestamp": "2026-06-14T06:01:00.000Z",
+        "type": "event_msg",
+        "payload": { "type": "user_message", "message": "another prompt" }
+    });
+    assert!(
+        detect_turn_complete(&format!("{complete}\n{next_turn}\n")).is_none(),
+        "a newer prompt means a fresh turn, not a completed one"
+    );
+}
+
+#[test]
 fn absent_or_empty_transcripts_distinguish_zero_from_unknown() {
     // A brand-new session has a rollout with no `token_count` event yet.
     // It must read as 0% (empty gauge), not `None` (no gauge), so a

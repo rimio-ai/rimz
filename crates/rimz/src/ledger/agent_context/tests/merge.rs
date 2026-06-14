@@ -155,6 +155,7 @@ fn full_local_refresh() -> LocalContextRefresh {
             }),
         )),
         cost: Some(cost(0.12)),
+        turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
     }
@@ -166,6 +167,7 @@ fn unpriced_refresh() -> LocalContextRefresh {
         effort: Some("high".to_owned()),
         tokens: Some(tokens(1_000, 10, 90, None)),
         cost: None,
+        turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
     }
@@ -184,6 +186,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
         effort: Some("high".to_owned()),
         tokens: Some(codex_tokens(258_000, Some(current_usage(0, 0, 0, 0)))),
         cost: None,
+        turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
     }
@@ -195,6 +198,7 @@ fn fallback_window_refresh() -> LocalContextRefresh {
         effort: Some("high".to_owned()),
         tokens: Some(tokens(258_000, 10, 90, None)),
         cost: None,
+        turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
     }

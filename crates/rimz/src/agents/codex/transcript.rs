@@ -44,13 +44,19 @@ pub fn refresh_transcript_context(
         return None;
     }
 
-    let usage = usage_from_transcript(&path);
+    let tail = read_transcript_tail(&path);
+    let usage = tail
+        .as_deref()
+        .map(usage_from_transcript_tail)
+        .unwrap_or_default();
+    let turn_complete = tail.as_deref().and_then(detect_turn_complete);
     let (tokens, cost, model_id) = transcript_enrichment(&usage, model_hint);
     Some(LocalContextRefresh {
         model_id,
         effort,
         tokens,
         cost,
+        turn_complete,
         transcript_path: Some(path.to_string_lossy().into_owned()),
         transcript_stat: Some(stat),
     })
@@ -294,7 +300,9 @@ fn sorted_subdirs_desc(path: &Path) -> Vec<PathBuf> {
 /// the current `model_context_window`, `last_token_usage` (gauge), and
 /// `total_token_usage` (cumulative billing totals). This reads a bounded tail
 /// and takes the most recent record. Best-effort: any IO or parse failure
-/// yields empty fields (enrichment, never correctness).
+/// yields empty fields (enrichment, never correctness). Test-only: the refresh
+/// path reads the tail once for usage and turn-completion together.
+#[cfg(test)]
 pub(super) fn usage_from_transcript(path: &Path) -> TranscriptUsage {
     let Some(text) = read_transcript_tail(path) else {
         return TranscriptUsage::default();
@@ -330,6 +338,44 @@ pub(super) fn detect_turn_error(tail: &str) -> Option<AgentTurnError> {
         let label = turn_error_label(payload);
         let class = classify_turn_error(codex_error_info(payload), label.as_deref());
         return Some(AgentTurnError { class, at, label });
+    }
+    None
+}
+
+/// Detect a cleanly-completed Codex turn from the rollout tail. Codex closes a
+/// turn — including a `/review` turn that runs in review mode and fires no
+/// `Stop` hook — with an `event_msg`/`task_complete` payload that carries no
+/// `error` field at all. Returns that record's timestamp only when the session
+/// is at rest on it: scanning the tail newest-first, the first turn-boundary
+/// record is a clean `task_complete`. A later `user_message`/`task_started` (a
+/// fresh turn already underway), an errored `task_complete` (owned by
+/// [`detect_turn_error`]), or an ambiguous empty `error` (`null`/`false`/`""`/`{}`)
+/// yields `None`. The display-only success sibling of [`detect_turn_error`]; the
+/// projection compares the timestamp against the row's `last_activity`, so a
+/// stale completion never reclassifies fresh work.
+pub(super) fn detect_turn_complete(tail: &str) -> Option<Timestamp> {
+    for line in tail.lines().rev() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        let Some(payload) = event_msg_payload(&value) else {
+            continue;
+        };
+        match payload.get("type").and_then(Value::as_str) {
+            // Only an explicitly clean completion — no `error` field at all —
+            // settles the turn. A real error belongs to `detect_turn_error`, and
+            // an empty `error` (`null`/`false`/`""`/`{}`) is too ambiguous to
+            // claim success over, so it falls through to the stall fallback.
+            Some("task_complete") if payload.get("error").is_none() => {
+                return record_timestamp(&value);
+            }
+            Some("task_complete" | "user_message" | "task_started") => return None,
+            _ => continue,
+        }
     }
     None
 }

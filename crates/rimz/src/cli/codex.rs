@@ -388,6 +388,7 @@ mod tests {
                     total_cost_usd: Some(0.42),
                     ..AgentCost::default()
                 }),
+                turn_complete: None,
                 transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
                 transcript_stat: Some(TranscriptStat {
                     mtime_secs: 10,
@@ -445,6 +446,7 @@ mod tests {
                 sub_provider: None,
             }),
             turn_error: None,
+            turn_complete: None,
             observed_at: app_at,
         }
     }

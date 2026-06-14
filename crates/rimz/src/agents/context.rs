@@ -75,6 +75,15 @@ pub struct AgentContext {
     /// marker belongs to a prior turn.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub turn_error: Option<AgentTurnError>,
+    /// A turn that completed cleanly, detected from the rollout tail when the
+    /// turn fired no `Stop` hook to record its end — Codex's `/review` runs in
+    /// review mode and closes on a `task_complete` without a `Stop`. Display-only
+    /// like [`turn_error`](Self::turn_error) and self-clearing the same way: the
+    /// projection settles a falsely-`running` row to `success` while the marker
+    /// postdates `last_activity`, and a newer prompt advancing `last_activity`
+    /// past it drops the row back to its lifecycle status.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn_complete: Option<Timestamp>,
     /// When the producer observed this record. The snapshot reaper drops a
     /// sidecar past the ghost-session TTL even if a `SessionEnd` was missed.
     pub observed_at: Timestamp,

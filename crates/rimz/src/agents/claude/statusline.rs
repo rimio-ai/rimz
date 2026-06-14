@@ -413,6 +413,9 @@ impl StatuslinePayload {
             // The payload carries no turn error either; the handler folds the
             // transcript-tail detection in post-hoc (`observe_turn_error`).
             turn_error: None,
+            // Claude's turns end on a reliable `Stop` hook, so the success
+            // marker stays a Codex-only concern (review mode fires no `Stop`).
+            turn_complete: None,
             observed_at,
         }
     }

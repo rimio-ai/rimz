@@ -145,6 +145,7 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         pr: None,
         account: None,
         turn_error: None,
+        turn_complete: None,
         observed_at: row_time(),
     }
 }

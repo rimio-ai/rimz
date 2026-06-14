@@ -28,6 +28,7 @@ fn ctx(observed_at: Timestamp) -> AgentContext {
         pr: None,
         account: None,
         turn_error: None,
+        turn_complete: None,
         observed_at,
     }
 }

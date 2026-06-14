@@ -36,6 +36,7 @@ pub mod version;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tracing::{debug, error};
@@ -310,6 +311,11 @@ pub struct LocalContextRefresh {
     pub effort: Option<String>,
     pub tokens: Option<AgentTokenUsage>,
     pub cost: Option<AgentCost>,
+    /// Timestamp of a cleanly-completed turn read from the rollout tail
+    /// (`detect_turn_complete`), set when the session is at rest on a
+    /// `task_complete` that fired no `Stop` hook (a `/review` turn). The
+    /// projection reads it to settle a falsely-`running` row to `success`.
+    pub turn_complete: Option<Timestamp>,
     pub transcript_path: Option<String>,
     pub transcript_stat: Option<TranscriptStat>,
 }

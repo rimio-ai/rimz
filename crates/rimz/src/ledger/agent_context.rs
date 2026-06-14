@@ -162,6 +162,10 @@ pub fn merge_local_context(
     if refresh.cost.is_some() {
         record.context.cost = refresh.cost;
     }
+    // Overwrite each refresh: a clean `task_complete` at the tail sets the
+    // marker, and a fresh turn already underway clears it (the detector returns
+    // `None`), so a stale completion never outlives its turn.
+    record.context.turn_complete = refresh.turn_complete;
     record.context.observed_at = observed_at;
     record.transcript_path = refresh.transcript_path;
     record.transcript_stat = refresh.transcript_stat;
@@ -280,6 +284,7 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
         pr: None,
         account: None,
         turn_error: None,
+        turn_complete: None,
         observed_at,
     }
 }

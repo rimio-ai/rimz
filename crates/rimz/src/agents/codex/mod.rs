@@ -58,8 +58,8 @@ use self::transcript::{
 };
 #[cfg(test)]
 use self::transcript::{
-    configured_model_at, configured_reasoning_effort_at, find_session_transcript_under,
-    transcript_enrichment, transcript_stat, usage_from_transcript,
+    configured_model_at, configured_reasoning_effort_at, detect_turn_complete,
+    find_session_transcript_under, transcript_enrichment, transcript_stat, usage_from_transcript,
 };
 use super::context::AgentContext;
 use super::descriptor::{

@@ -778,6 +778,28 @@ pub fn is_turn_dead(
             .is_some_and(|error| error.at > last_activity)
 }
 
+/// Whether a `running` agent's latest turn completed cleanly with no `Stop` hook
+/// to record it — the rollout-tail marker (`AgentContext::turn_complete`, folded
+/// in via the context sidecar) postdates the agent's `last_activity`. The
+/// success sibling of [`is_turn_dead`]: a Codex `/review` runs in review mode and
+/// ends on a `task_complete` that fires no `Stop`, so the lifecycle state machine
+/// never leaves `running`; this settles the row to `success` instead of letting
+/// the stall window misread a finished review as failed. Only `Running` can be
+/// turn-complete — a hook-reported turn end already resolved every other status.
+/// Self-clearing like [`is_turn_dead`]: any newer hook event advances
+/// `last_activity` past the marker. A Rimz-derived projection over enrichment,
+/// never a status the agent reports.
+pub fn is_turn_complete(
+    status: AgentStatus,
+    context: Option<&crate::agents::context::AgentContext>,
+    last_activity: Timestamp,
+) -> bool {
+    status == AgentStatus::Running
+        && context
+            .and_then(|context| context.turn_complete)
+            .is_some_and(|at| at > last_activity)
+}
+
 /// How long after its last compaction-start signal an agent still reads as
 /// "compacting". The session's next lifecycle signal clears
 /// [`AgentState::compacting_since`], but a crash mid-compact with no next

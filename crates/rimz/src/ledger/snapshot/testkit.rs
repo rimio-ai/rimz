@@ -160,6 +160,9 @@ pub(super) trait AgentStateFx: Sized {
     fn turn_error_class(self, secs_ago: i64, label: &str, class: TurnErrorClass) -> Self;
     fn paused_turn_error(self, secs_ago: i64, label: &str) -> Self;
     fn overloaded_turn_error(self, secs_ago: i64, label: &str) -> Self;
+    /// Attach a clean turn-completion marker stamped `secs_ago` before the
+    /// [`epoch`] — the success twin of [`turn_error`](Self::turn_error).
+    fn turn_complete(self, secs_ago: i64) -> Self;
     /// Stamp the compaction head `secs` before the [`epoch`].
     fn compacting_ago(self, secs: i64) -> Self;
 }
@@ -224,6 +227,12 @@ impl AgentStateFx for AgentState {
         self.turn_error_class(secs_ago, label, TurnErrorClass::PausedOverloaded)
     }
 
+    fn turn_complete(mut self, secs_ago: i64) -> Self {
+        self.context.get_or_insert_with(bare_context).turn_complete =
+            Some(epoch() - std::time::Duration::from_secs(secs_ago as u64));
+        self
+    }
+
     fn compacting_ago(mut self, secs: i64) -> Self {
         self.compacting_since = Some(epoch() - std::time::Duration::from_secs(secs as u64));
         self
@@ -251,6 +260,7 @@ pub(super) fn bare_context() -> AgentContext {
         pr: None,
         account: None,
         turn_error: None,
+        turn_complete: None,
         observed_at: epoch(),
     }
 }
