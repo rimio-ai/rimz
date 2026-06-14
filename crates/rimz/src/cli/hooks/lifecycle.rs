@@ -621,7 +621,14 @@ pub(super) fn log_lifecycle_transition(
         .find(|agent| agent.kind == kind && agent.agent_id == agent_id)
         .map(|agent| agent.lifecycle());
     if prev.is_none() && !observation.signal.establishes_identity() {
-        warn!(
+        // Create-on-miss: a non-start event for an agent with no prior rollup
+        // entry materializes the session, which the reducer does by design.
+        // The authoritative reducer logs this same condition at debug! (see
+        // `snapshot/project.rs`), and the cached snapshot read here can lag a
+        // just-appended start, so a warn! is a per-event false positive that
+        // floods the off-box channel. Keep it at debug! for local binding
+        // diagnosis, matching the reducer; it never reaches Sentry.
+        debug!(
             target: "rimz::agent::binding",
             kind,
             agent_id,

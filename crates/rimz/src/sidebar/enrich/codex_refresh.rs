@@ -207,7 +207,11 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-context")
     {
-        tracing::warn!(
+        // Best-effort enrichment on a per-frame path: a missing `codex` binary
+        // makes this fail (ENOENT) on every due frame, so a warn! here floods
+        // the off-box channel with an environment fact that is not a Rimz fault.
+        // Keep it at debug! for local diagnosis; it never reaches Sentry.
+        tracing::debug!(
             session = %session_id,
             workspace = %runtime.workspace_id,
             tags.operation = "codex.context_refresh.spawn",

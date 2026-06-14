@@ -1,5 +1,5 @@
 use jiff::Timestamp;
-use tracing::warn;
+use tracing::{debug, warn};
 
 use crate::feed::{AgentState, AgentStatus};
 use crate::ledger::snapshot::row::{SidebarRow, SidebarSubAgent};
@@ -68,7 +68,12 @@ pub(in crate::ledger::snapshot) fn attach_sub_agents(
         if let Some(parent) = parent {
             parent.sub_agents.push(sub_agent_from_state(child, now));
         } else {
-            warn!(
+            // Transient projection state: the child was observed before its
+            // parent's row materialized within this fold. Diagnostic-only — the
+            // sidebar re-folds every frame, so a warn! here floods the off-box
+            // channel with a per-frame repeat of an expected race. Keep it at
+            // debug! for local sidebar diagnosis; it never reaches Sentry.
+            debug!(
                 target: "rimz::agent::lifecycle",
                 kind = %child.kind,
                 parent = parent_id,
