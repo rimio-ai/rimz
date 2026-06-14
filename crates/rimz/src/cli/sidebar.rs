@@ -5,7 +5,7 @@
 //! `produce_snapshot` (or the in-process consumer read for `--no-produce`),
 //! and emits — the CLI owns argv, fallback intent, and stdout alone. The
 //! elder renderer produces in process on its fetch worker, so this arm serves
-//! inspection, scripting, and the plugin rail's `--no-produce` read.
+//! inspection and scripting.
 
 use std::io::{self, Read};
 use std::path::PathBuf;

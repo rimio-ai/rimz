@@ -53,7 +53,7 @@ pub fn rollup_snapshot(
 /// `list-panes` cadence only governs genuine pane open/close.
 ///
 /// This is the producer's fast-lane twin: the native renderer calls it directly
-/// each tick, and the `--no-produce` CLI path (the plugin rail's read) shares it.
+/// each tick, and the `--no-produce` CLI path shares it.
 ///
 /// The rollup folds through the caller's [`RollupCursor`], so a long-lived
 /// reader (the sidebar fetch worker owns one across its loop) pays O(new log

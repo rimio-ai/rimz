@@ -28,7 +28,7 @@ Re-fetch these to refresh this mirror. The canonical type definitions live in th
 
 ## Plugin API
 
-Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. Rimz ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/sidebar/multiplexers.md#zellij-presence-channel)). The planned sidebar rail ([internals/sidebar/sidebar.md](../../internals/sidebar/sidebar.md#zellij-plugin-rail-planned)) would be a second consumer of this surface.
+Plugins are wasm32-wasip1 binaries loaded into Zellij's plugin host. Rimz ships one: [`rimz-presence-zellij`](../../../crates/rimz-presence-zellij/) ([multiplexers.md → presence channel](../../internals/sidebar/multiplexers.md#zellij-presence-channel)).
 
 ### Lifecycle
 

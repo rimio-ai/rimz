@@ -21,7 +21,6 @@ Every field that can cause a process to run enters the hash. The current project
 
 - `[[layout.initial_panes]]` — `name`, `command`, `cwd`, `env`.
 - `[layout.tmux]` — `status_left`, `status_right`, `popup_command`.
-- `[layout.zellij]` — `plugin_command`.
 - `[[agents]]` — `name`, `launch_command`, `env`.
 - `[[hooks]]` — `event`, `command`.
 - `[env]` — every key/value (PATH-affecting overrides included).

@@ -150,7 +150,7 @@ After every ledger write the CLI or hook subprocess:
 1. Walks fresh `heartbeat/sidebar.*.json` entries on the current sidebar protocol version (TTL ~5s).
 2. Sends a small wakeup datagram — a typed `SidebarEventEnvelope` carrying a `ledger_delta` event body ([`schema/sidebar_event.rs`](../../../crates/rimz/src/schema/sidebar_event.rs); taxonomy in [state.md](./state.md#event-taxonomy)) — to each socket path carried verbatim by a fresh heartbeat, normally `sock/sidebar.<short_instance_id>.sock`.
 
-The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance. The `MuxBackend::wake_sidebar` pipe primitive (`zellij --session <name> pipe --name rimz::feed`) is dormant: it has no consumer until the opt-in Zellij plugin rail is built, so the walk spawns no `zellij` subprocess per write. When that rail lands it re-arms the pipe, gated on rail presence (see [multiplexers.md](./multiplexers.md)).
+The socket datagram is the only wakeup the walk fires, on both backends — one per fresh instance.
 
 The native sidebar's response to a wakeup is an in-process fetch cycle: it first folds the event-fresh rollup over the published pane frame and, if it is the producer, reconciles through `rimz::sidebar::produce`. A missed wakeup is closed by the next tick (`--tick-seconds`, default 1s).
 
