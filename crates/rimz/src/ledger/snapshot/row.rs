@@ -260,11 +260,18 @@ pub struct AgentCard {
 
 impl AgentCard {
     /// The context gauge's value (0..=100): the statusline's authoritative
-    /// `used_percentage` when present, else the transcript-derived scalar.
+    /// `used_percentage` when it is paired with its own window, else the
+    /// fold-derived scalar. The pairing matters — the identity line shows
+    /// `context_window_size` when present, so trusting a percentage only
+    /// alongside that window keeps the bar and the window label on one
+    /// denominator. A percentage with no window would otherwise be drawn
+    /// against the fold's window (the original mismatch), so it falls through to
+    /// `context_pct`, which the fold derived against that same window.
     pub fn context_gauge_percent(&self) -> Option<u8> {
         self.context
             .as_ref()
             .and_then(|context| context.tokens.as_ref())
+            .filter(|tokens| tokens.context_window_size.is_some())
             .and_then(|tokens| tokens.used_percentage)
             .or(self.context_pct)
     }

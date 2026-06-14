@@ -151,9 +151,11 @@ fn row_severity_color(
 /// A precise context-used fraction (0..=100) from the current-message token
 /// composition over the window size, so the `ctx` value can read a decimal
 /// (`78.2%`). The composition (`input + cache_creation + cache_read`) is exactly
-/// what `used_percentage` measures, so the decimal refines the same number.
-/// `None` (no breakdown, or no window size) falls the value back to the integer
-/// gauge percent.
+/// what `used_percentage` measures, so the decimal refines the same number a
+/// statusline reports. `None` (no breakdown, or no window size) falls the value
+/// back to the integer gauge percent — which the fold now derives from the same
+/// window the card displays, so a hook-only agent still reads a consistent
+/// (integer) percentage.
 pub(super) fn precise_context_pct(row: &SidebarRow) -> Option<f64> {
     let window = ctx(row)?.tokens.as_ref()?.context_window_size? as f64;
     if window <= 0.0 {

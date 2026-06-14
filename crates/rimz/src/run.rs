@@ -294,6 +294,10 @@ fn agent_context_pct(agent: &AgentState) -> Option<u8> {
         .context
         .as_ref()
         .and_then(|context| context.tokens.as_ref())
+        // Trust a statusline percentage only alongside its own window; without
+        // one, the fold-derived scalar (tied to the resolved window) is the
+        // consistent reading.
+        .filter(|tokens| tokens.context_window_size.is_some())
         .and_then(|tokens| tokens.used_percentage)
         .or(agent.context_pct)
 }

@@ -148,3 +148,44 @@ fn context_with_cost(total_cost_usd: f64) -> AgentContext {
         observed_at: row_time(),
     }
 }
+
+fn context_with_tokens(tokens: AgentTokenUsage) -> AgentContext {
+    AgentContext {
+        tokens: Some(tokens),
+        ..context_with_cost(0.0)
+    }
+}
+
+#[test]
+fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window() {
+    // A sidecar percentage drawn against an unknown window cannot share a
+    // denominator with the displayed window, so the gauge prefers the
+    // fold-derived scalar — which the fold tied to the resolved window — over
+    // it, avoiding a bar that disagrees with its window label.
+    let untethered = AgentCard {
+        context_pct: Some(16),
+        context_window: Some(1_000_000),
+        context: Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: None,
+            used_percentage: Some(82),
+            remaining_percentage: Some(18),
+            current_usage: None,
+        })),
+        ..AgentCard::default()
+    };
+    assert_eq!(untethered.context_gauge_percent(), Some(16));
+
+    // With its own window present, the sidecar percentage is authoritative and
+    // shares the denominator the identity line shows.
+    let tethered = AgentCard {
+        context_pct: Some(16),
+        context: Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: Some(1_000_000),
+            used_percentage: Some(40),
+            remaining_percentage: Some(60),
+            current_usage: None,
+        })),
+        ..AgentCard::default()
+    };
+    assert_eq!(tethered.context_gauge_percent(), Some(40));
+}

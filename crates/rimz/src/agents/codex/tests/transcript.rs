@@ -22,7 +22,6 @@ fn transcript_tail_populates_context_split_cumulative_totals_and_model() {
     )
     .unwrap();
     let usage = usage_from_transcript(&path);
-    assert_eq!(usage.context_pct, Some(50));
     assert_eq!(usage.reported_context_window(), Some(258_400));
     assert_eq!(usage.total_tokens, Some(130_000));
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
@@ -193,7 +192,6 @@ fn absent_or_empty_transcripts_distinguish_zero_from_unknown() {
     )
     .unwrap();
     let usage = usage_from_transcript(&path);
-    assert_eq!(usage.context_pct, Some(0));
     assert_eq!(usage.context_window, Some(258_000));
     assert_eq!(usage.reported_context_window(), None);
     assert_eq!(usage.total_tokens, Some(0));
@@ -205,7 +203,6 @@ fn absent_or_empty_transcripts_distinguish_zero_from_unknown() {
     // No readable rollout means unknown, not zero — the gauge stays
     // hidden rather than asserting a false 0%.
     let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
-    assert_eq!(usage.context_pct, None);
     assert_eq!(usage.context_window, None);
     assert_eq!(usage.total_tokens, None);
 }
@@ -213,7 +210,6 @@ fn absent_or_empty_transcripts_distinguish_zero_from_unknown() {
 #[test]
 fn transcript_enrichment_maps_codex_split_to_rich_usage() {
     let usage = TranscriptUsage {
-        context_pct: Some(42),
         context_window: Some(10_000),
         context_window_reported: true,
         total_tokens: Some(4_200),
@@ -229,8 +225,10 @@ fn transcript_enrichment_maps_codex_split_to_rich_usage() {
     let tokens = tokens.expect("tokens are mapped");
     let current = tokens.current_usage.expect("current usage is mapped");
     assert_eq!(tokens.context_window_size, Some(10_000));
-    assert_eq!(tokens.used_percentage, Some(42));
-    assert_eq!(tokens.remaining_percentage, Some(58));
+    // No baked percentage: the gauge derives it from `current_usage` over the
+    // window downstream, so the rich blob leaves the percentage unset.
+    assert_eq!(tokens.used_percentage, None);
+    assert_eq!(tokens.remaining_percentage, None);
     assert_eq!(current.input_tokens, Some(200));
     assert_eq!(current.cache_read_input_tokens, Some(1_000));
     assert_eq!(current.cache_creation_input_tokens, None);
@@ -249,7 +247,6 @@ fn transcript_enrichment_maps_codex_split_to_rich_usage() {
 #[test]
 fn transcript_enrichment_prices_cumulative_totals_from_usage_or_model_hint() {
     let usage = TranscriptUsage {
-        context_pct: None,
         context_window: None,
         context_window_reported: false,
         total_tokens: None,
@@ -270,7 +267,6 @@ fn transcript_enrichment_prices_cumulative_totals_from_usage_or_model_hint() {
     assert!((cost - expected).abs() < f64::EPSILON);
 
     let usage = TranscriptUsage {
-        context_pct: None,
         context_window: None,
         context_window_reported: false,
         total_tokens: None,
@@ -320,11 +316,18 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_re
         .unwrap();
     let refresh = refresh_transcript_context("sess-1", None, None, Some(&path_string), Some(&stat))
         .expect("changed stat refreshes");
+    // The refresh carries the derivation inputs (window + current usage), not a
+    // baked percentage — the gauge derives 50% (50 of 100) downstream.
+    let tokens = refresh
+        .tokens
+        .as_ref()
+        .expect("changed stat refreshes tokens");
+    assert_eq!(tokens.context_window_size, Some(100));
     assert_eq!(
-        refresh
-            .tokens
+        tokens
+            .current_usage
             .as_ref()
-            .and_then(|tokens| tokens.used_percentage),
+            .and_then(|usage| usage.input_tokens),
         Some(50)
     );
     assert_ne!(refresh.transcript_stat, Some(stat));
@@ -342,8 +345,8 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_re
         refresh
             .tokens
             .as_ref()
-            .and_then(|tokens| tokens.used_percentage),
-        Some(50)
+            .and_then(|tokens| tokens.context_window_size),
+        Some(100)
     );
 }
 

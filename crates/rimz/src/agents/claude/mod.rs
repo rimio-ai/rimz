@@ -57,7 +57,7 @@ use super::descriptor::{
 };
 use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::LifecycleSignal;
-use super::observation::{payload_context_pct, payload_total_tokens};
+use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation,
@@ -136,7 +136,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
             background_sessions: true,
         },
     },
-    default_context_window: None,
+    default_context_window: Some(200_000),
     default_model: None,
     hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
@@ -856,13 +856,11 @@ fn build_claude_observation(
         .and_then(|p| p.common.model.clone())
         .or_else(|| optional_payload_string(payload, &["model"]));
     let model = payload_model.clone().or(usage.model);
-    let window = context_window_for(model.as_deref()).max(1);
-    let context_pct = payload_context_pct(
-        payload,
-        usage
-            .context_tokens
-            .map(|tokens| (tokens.saturating_mul(100) / window).min(100) as u8),
-    );
+    // Assert a window only when the `[1m]` marker is actually present; a
+    // marker-less hook leaves it `None` so the established window carries
+    // forward. The gauge percentage is derived downstream from the folded
+    // window, never baked here against a guessed denominator.
+    let context_window = context_window_for(model.as_deref());
     let (todo_done, todo_total) = todos_from_payload(payload);
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
@@ -873,8 +871,7 @@ fn build_claude_observation(
     observation.transcript_path = transcript_path;
     observation.model = model;
     observation.effort = claude_effort(payload, parts);
-    observation.context_pct = context_pct;
-    observation.context_window = payload_model.is_some().then_some(window);
+    observation.context_window = context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation.todo_done = todo_done;
     observation.todo_total = todo_total;
@@ -959,14 +956,11 @@ fn todos_from_payload(payload: &Value) -> (Option<u32>, Option<u32>) {
     (Some(done), Some(total))
 }
 
-/// Context-window usage derived from a Claude transcript tail. Carries the raw
-/// context-token count, not a percentage: the window divisor depends on the
-/// model variant, and the authoritative model (with its `[1m]` marker) rides
-/// the hook payload — not the transcript — so the caller resolves the model and
-/// computes the percentage.
+/// Context-window usage derived from a Claude transcript tail. Carries the
+/// latest turn's token total (context-occupying input plus output), the gauge
+/// numerator the fold scales against the resolved window.
 #[derive(Default)]
 struct TranscriptUsage {
-    context_tokens: Option<u64>,
     total_tokens: Option<u64>,
     model: Option<String>,
 }
@@ -979,25 +973,24 @@ impl TranscriptUsage {
     /// not zero.
     fn fresh() -> Self {
         Self {
-            context_tokens: Some(0),
             total_tokens: Some(0),
             model: None,
         }
     }
 }
 
-/// Claude's context window depends on the model variant. The 1M-token beta is
-/// signalled by a `[1m]` marker on the model id (`claude-opus-4-8[1m]`);
-/// everything else is the standard 200k window. The marker only rides the hook
-/// payload's `model` field — the transcript always writes the bare id — so
-/// callers must resolve the payload model before asking, or the bump is lost.
-fn context_window_for(model: Option<&str>) -> u64 {
-    const STANDARD: u64 = 200_000;
+/// The 1M-token context window when the model id carries the `[1m]` beta marker
+/// (`claude-opus-4-8[1m]`), else `None` — a bare id is *unknown*, not 200k. The
+/// marker rides only the hook payload's `model` field (the transcript always
+/// writes the bare id), so a marker-less hook cannot distinguish a true 200k
+/// model from a 1M model whose payload dropped the marker. Returning `None`
+/// keeps the last established window (and the 200k descriptor default applies
+/// when none was ever seen), so the gauge never downgrades a 1M agent to 200k.
+fn context_window_for(model: Option<&str>) -> Option<u64> {
     const EXTENDED: u64 = 1_000_000;
-    match model {
-        Some(model) if model.contains("[1m]") => EXTENDED,
-        _ => STANDARD,
-    }
+    model
+        .filter(|model| model.contains("[1m]"))
+        .map(|_| EXTENDED)
 }
 
 /// Derive context-window usage from the tail of a Claude transcript JSONL.
@@ -1037,10 +1030,9 @@ fn usage_from_transcript(path: &str) -> TranscriptUsage {
             .and_then(Value::as_str)
             .filter(|model| !model.is_empty())
             .map(ToOwned::to_owned);
-        // Raw tokens only: the window divisor is resolved by the caller from
-        // the payload model, which is the one carrying the `[1m]` marker.
+        // Raw tokens only: the window divisor is resolved downstream from the
+        // folded window, which carries the `[1m]`-marked model's bump.
         return TranscriptUsage {
-            context_tokens: Some(context_tokens),
             total_tokens: Some(context_tokens + output),
             model,
         };

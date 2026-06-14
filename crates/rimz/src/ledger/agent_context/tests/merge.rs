@@ -125,10 +125,8 @@ fn prior_tokens(observed_at: Timestamp) -> AgentContextRecord {
 
 fn prior_established_codex_usage(observed_at: Timestamp) -> AgentContextRecord {
     let mut record = codex_record(observed_at);
-    record.context.tokens = Some(tokens(
+    record.context.tokens = Some(codex_tokens(
         258_400,
-        50,
-        50,
         Some(current_usage(9_200, 800, 0, 120_000)),
     ));
     record
@@ -184,7 +182,7 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: None,
         effort: Some("high".to_owned()),
-        tokens: Some(tokens(258_000, 0, 100, Some(current_usage(0, 0, 0, 0)))),
+        tokens: Some(codex_tokens(258_000, Some(current_usage(0, 0, 0, 0)))),
         cost: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
@@ -250,21 +248,17 @@ fn assert_prior_tokens(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) 
 fn assert_established_codex_usage(merged: &AgentContextRecord, _: Timestamp, _: Timestamp) {
     let tokens = merged.context.tokens.as_ref().unwrap();
     assert_eq!(
-        tokens.used_percentage,
-        Some(50),
-        "a fresh placeholder must not blink an established Codex meter to 0",
-    );
-    assert_eq!(
-        tokens.context_window_size,
-        Some(258_400),
-        "the established exact window stays paired with the preserved usage",
-    );
-    assert_eq!(
         tokens
             .current_usage
             .as_ref()
             .and_then(|usage| usage.cache_read_input_tokens),
         Some(120_000),
+        "a fresh zero placeholder must not blink an established Codex meter to empty",
+    );
+    assert_eq!(
+        tokens.context_window_size,
+        Some(258_400),
+        "the established exact window stays paired with the preserved usage",
     );
     assert_eq!(
         merged.transcript_stat,
@@ -297,6 +291,20 @@ fn tokens(
         context_window_size: Some(context_window_size),
         used_percentage: Some(used_percentage),
         remaining_percentage: Some(remaining_percentage),
+        current_usage,
+    }
+}
+
+/// A Codex token record in its real shape: no baked percentage (the gauge
+/// derives it downstream from `current_usage` over the window).
+fn codex_tokens(
+    context_window_size: u64,
+    current_usage: Option<AgentCurrentUsage>,
+) -> AgentTokenUsage {
+    AgentTokenUsage {
+        context_window_size: Some(context_window_size),
+        used_percentage: None,
+        remaining_percentage: None,
         current_usage,
     }
 }

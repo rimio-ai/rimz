@@ -604,7 +604,7 @@ struct AgentStateInput<'a> {
 
 fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
     let lifecycle = lifecycle_projection(input.prior, input.event.timestamp, input.signal);
-    let enrichment = enrichment_projection(input.observation, input.prior);
+    let enrichment = enrichment_projection(input.observation, input.prior, input.kind);
     let parent_agent_id = input
         .event_parent_agent_id
         .or_else(|| input.prior.and_then(|p| p.parent_agent_id.clone()));
@@ -801,26 +801,46 @@ struct EnrichmentProjection {
 fn enrichment_projection(
     observation: &AgentLifecycleObservation,
     prior: Option<&AgentState>,
+    kind: &AgentKind,
 ) -> EnrichmentProjection {
+    let context_window = observation
+        .context_window
+        .or_else(|| prior.and_then(|p| p.context_window));
+    let total_tokens = observation
+        .total_tokens
+        .or_else(|| prior.and_then(|p| p.total_tokens));
+    let cache_read_input_tokens = observation
+        .cache_read_input_tokens
+        .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
+    let fresh_input_tokens = observation
+        .fresh_input_tokens
+        .or_else(|| prior.and_then(|p| p.fresh_input_tokens));
+    let output_tokens = observation
+        .output_tokens
+        .or_else(|| prior.and_then(|p| p.output_tokens));
+    // One denominator for the gauge: the percentage is derived from the same
+    // window that is stored and displayed, so the bar can never disagree with
+    // the window label. An adapter that stamps an authoritative percentage (pi,
+    // from its in-process gauge) overrides; otherwise derive from the resolved
+    // window (folded, else the kind's descriptor default). Carry the prior
+    // value only when neither the explicit stamp nor a numerator exists.
+    let resolved_window = context_window.or_else(|| {
+        crate::agents::descriptor_by_kind(kind.as_str())
+            .and_then(|descriptor| descriptor.default_context_window)
+    });
+    let used_tokens =
+        context_used_tokens(cache_read_input_tokens, fresh_input_tokens, total_tokens);
+    let context_pct = observation
+        .context_pct
+        .or_else(|| derive_context_pct(used_tokens, resolved_window))
+        .or_else(|| prior.and_then(|p| p.context_pct));
     EnrichmentProjection {
-        context_pct: observation
-            .context_pct
-            .or_else(|| prior.and_then(|p| p.context_pct)),
-        context_window: observation
-            .context_window
-            .or_else(|| prior.and_then(|p| p.context_window)),
-        total_tokens: observation
-            .total_tokens
-            .or_else(|| prior.and_then(|p| p.total_tokens)),
-        cache_read_input_tokens: observation
-            .cache_read_input_tokens
-            .or_else(|| prior.and_then(|p| p.cache_read_input_tokens)),
-        fresh_input_tokens: observation
-            .fresh_input_tokens
-            .or_else(|| prior.and_then(|p| p.fresh_input_tokens)),
-        output_tokens: observation
-            .output_tokens
-            .or_else(|| prior.and_then(|p| p.output_tokens)),
+        context_pct,
+        context_window,
+        total_tokens,
+        cache_read_input_tokens,
+        fresh_input_tokens,
+        output_tokens,
         todo_done: observation
             .todo_done
             .or_else(|| prior.and_then(|p| p.todo_done)),
@@ -828,6 +848,28 @@ fn enrichment_projection(
             .todo_total
             .or_else(|| prior.and_then(|p| p.todo_total)),
     }
+}
+
+/// Tokens currently occupying the window: the per-call context split
+/// (`cache_read + fresh_input`) when the adapter persists it, else the latest
+/// turn's token total. This is the gauge numerator the percentage scales.
+fn context_used_tokens(
+    cache_read_input_tokens: Option<u64>,
+    fresh_input_tokens: Option<u64>,
+    total_tokens: Option<u64>,
+) -> Option<u64> {
+    match fresh_input_tokens {
+        Some(fresh) => Some(cache_read_input_tokens.unwrap_or(0) + fresh),
+        None => total_tokens,
+    }
+}
+
+/// The integer context-fill percentage (0..=100) of `used` tokens over the
+/// resolved `window`. `None` when either input is unknown so the gauge falls
+/// back rather than rendering a fabricated 0%.
+fn derive_context_pct(used: Option<u64>, window: Option<u64>) -> Option<u8> {
+    let (used, window) = (used?, window?);
+    (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
 }
 
 struct WorktreeProjection {

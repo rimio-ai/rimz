@@ -10,10 +10,12 @@
 //! Owns hook install / uninstall through a non-destructive merge into
 //! `~/.codex/config.toml` using Codex's inline `[[hooks.Event]]` tables.
 //!
-//! Realtime details split across two sources. Usage (`context_pct`,
-//! `total_tokens`, token composition, and cost) is read from the rollout tail
+//! Realtime details split across two sources. Usage (the context window, raw
+//! token totals, token composition, and cost) is read from the rollout tail
 //! through [`refresh_transcript_context`], because the Codex app-server exposes
 //! token usage only on a live, subscribing `thread/resume` — never read-only.
+//! The adapter emits raw tokens and the window, not a baked percentage; the
+//! snapshot fold derives the gauge percentage from them.
 //! Metadata Claude gets from its statusline (rate-limit windows, model display
 //! name, thread preview/name, version) comes from the app-server read-only
 //! methods via [`refresh_app_server_context`], spawned out-of-band by `rimz codex
@@ -66,7 +68,7 @@ use super::descriptor::{
 };
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
-use super::observation::{payload_context_pct, payload_total_tokens};
+use super::observation::payload_total_tokens;
 use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError,
@@ -810,7 +812,6 @@ fn build_codex_observation(
     let reported_context_window = usage.reported_context_window();
     observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
     observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
-    observation.context_pct = payload_context_pct(payload, usage.context_pct);
     observation.context_window = reported_context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation.cache_read_input_tokens = usage.last_cached_input_tokens;

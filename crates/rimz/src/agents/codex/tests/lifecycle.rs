@@ -303,12 +303,15 @@ fn codex_context_refreshes_are_bounded_to_turn_and_progress_events() {
     let refresh = CodexAdapter
         .local_context_refresh("PostToolUse", &ctx)
         .expect("PostToolUse reads local transcript context");
+    // The refresh carries the window and current-usage breakdown; the gauge
+    // derives the percentage (500 of 1000 = 50%) downstream rather than baking
+    // it into the sidecar.
     assert_eq!(
         refresh
             .tokens
             .as_ref()
-            .and_then(|tokens| tokens.used_percentage),
-        Some(50)
+            .and_then(|tokens| tokens.context_window_size),
+        Some(1000)
     );
     assert!(
         CodexAdapter

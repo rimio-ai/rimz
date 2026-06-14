@@ -59,7 +59,6 @@ pub fn refresh_transcript_context(
 /// Context-window usage derived from a Codex rollout tail.
 #[derive(Default)]
 pub(super) struct TranscriptUsage {
-    pub(super) context_pct: Option<u8>,
     /// The model's context window from the rollout's `model_context_window`
     /// (e.g. 258k for GPT-5.5) — the card's window label.
     pub(super) context_window: Option<u64>,
@@ -104,18 +103,19 @@ pub(super) fn transcript_enrichment(
     } else {
         None
     };
-    let tokens =
-        if usage.context_window.is_some() || usage.context_pct.is_some() || current_usage.is_some()
-        {
-            Some(AgentTokenUsage {
-                context_window_size: usage.context_window,
-                used_percentage: usage.context_pct,
-                remaining_percentage: usage.context_pct.map(|pct| 100u8.saturating_sub(pct)),
-                current_usage,
-            })
-        } else {
-            None
-        };
+    let tokens = if usage.context_window.is_some() || current_usage.is_some() {
+        // No baked percentage: the gauge derives it downstream from
+        // `current_usage` over `context_window_size`, so the bar can never
+        // disagree with the window it is drawn against.
+        Some(AgentTokenUsage {
+            context_window_size: usage.context_window,
+            used_percentage: None,
+            remaining_percentage: None,
+            current_usage,
+        })
+    } else {
+        None
+    };
 
     let model_id = model_hint
         .filter(|model| !model.is_empty())
@@ -204,7 +204,6 @@ impl TranscriptUsage {
     /// not zero. Mirrors the Claude adapter's `fresh()` semantics.
     fn fresh() -> Self {
         Self {
-            context_pct: Some(0),
             context_window: Some(DEFAULT_CONTEXT_WINDOW),
             context_window_reported: false,
             total_tokens: Some(0),
@@ -648,14 +647,7 @@ fn usage_from_last_record(
     } else {
         DEFAULT_CONTEXT_WINDOW
     };
-    let context_pct = last
-        .input
-        .unwrap_or(0)
-        .saturating_mul(100)
-        .checked_div(context_window)
-        .map(|pct| pct.min(100) as u8);
     TranscriptUsage {
-        context_pct,
         context_window: Some(context_window),
         context_window_reported,
         total_tokens: last.total,

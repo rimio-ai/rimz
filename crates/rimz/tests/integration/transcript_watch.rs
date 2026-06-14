@@ -59,8 +59,16 @@ fn simulated_rollout_event_merges_fresh_tokens_into_the_sidecar() {
 
     let merged = agent_context::read_one(runtime, "codex", SESSION_ID).expect("merged sidecar");
     let tokens = merged.context.tokens.as_ref().expect("tokens merged");
-    assert_eq!(tokens.used_percentage, Some(50));
+    // The sidecar carries the derivation inputs (window + current usage), not a
+    // baked percentage; the gauge derives 50% (500 of 1000) downstream.
     assert_eq!(tokens.context_window_size, Some(1000));
+    assert_eq!(
+        tokens
+            .current_usage
+            .as_ref()
+            .and_then(|usage| usage.input_tokens),
+        Some(200)
+    );
     assert!(
         merged.transcript_stat.is_some(),
         "refresh persists the stat gate for the next trigger"

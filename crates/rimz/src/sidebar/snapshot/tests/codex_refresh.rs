@@ -128,12 +128,19 @@ fn codex_transcript_backstop_is_stat_gated() {
 
     refresh_codex_transcript_context(&runtime, "sess-1", Some("gpt-5"));
     let first = crate::ledger::agent_context::read_one(&runtime, "codex", "sess-1").unwrap();
+    // The sidecar carries the derivation inputs (window + current usage), not a
+    // baked percentage; the gauge derives 50% (50 of 100) downstream.
+    let first_tokens = first
+        .context
+        .tokens
+        .as_ref()
+        .expect("first refresh writes tokens");
+    assert_eq!(first_tokens.context_window_size, Some(100));
     assert_eq!(
-        first
-            .context
-            .tokens
+        first_tokens
+            .current_usage
             .as_ref()
-            .and_then(|t| t.used_percentage),
+            .and_then(|usage| usage.input_tokens),
         Some(50)
     );
     let observed_at = first.context.observed_at;
@@ -161,7 +168,8 @@ fn codex_transcript_backstop_is_stat_gated() {
             .context
             .tokens
             .as_ref()
-            .and_then(|t| t.used_percentage),
+            .and_then(|t| t.current_usage.as_ref())
+            .and_then(|usage| usage.input_tokens),
         Some(80)
     );
     assert_ne!(third.transcript_stat, stat);

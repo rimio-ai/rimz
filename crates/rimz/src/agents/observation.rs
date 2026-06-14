@@ -147,11 +147,12 @@ impl AgentLifecycleObservation {
     }
 }
 
-/// Resolve the context-window percentage: an explicit payload field wins
+/// An authoritative context-window percentage stamped on the payload
 /// (`context_pct` / `context_window_pct`, clamped to `0..=100`), else the
-/// transcript-derived `fallback`. Both adapters share the override; they differ
-/// only in how `fallback` is computed (Claude from raw tokens ÷ window, Codex
-/// from the rollout's precomputed percentage).
+/// `fallback`. Pi's extension stamps its in-process gauge on every envelope and
+/// is the one adapter that reports a percentage directly; Claude and Codex omit
+/// it and let the snapshot fold derive the gauge from tokens over the resolved
+/// window, so the bar can never disagree with the window it is drawn against.
 pub(crate) fn payload_context_pct(payload: &Value, fallback: Option<u8>) -> Option<u8> {
     payload
         .get("context_pct")

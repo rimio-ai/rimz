@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -10,7 +11,7 @@ expression: screen
  ? 2   ! 0   ⏸︎ 0   ✓ 0      ⢿ 1   ○ 0
 
 ▎⑂ main ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄🮇
-▌? claude                            ▐
+▌? claude · 200k                     ▐
 ▌  investigate destructive query guar▐
 ▌  ▢ ──────────────────────────    0%▐
 ▎⣾ codex · GPT 5.5 · 258k            🮇

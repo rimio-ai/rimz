@@ -219,8 +219,12 @@ fn should_preserve_tokens(kind: &str, refresh: &AgentTokenUsage) -> bool {
 }
 
 fn inferred_fresh_codex_tokens(tokens: &AgentTokenUsage) -> bool {
-    tokens.used_percentage == Some(0)
-        && tokens.remaining_percentage == Some(100)
+    // A fresh rollout tail (no `token_count` event yet) carries an all-zero
+    // current usage and no percentage. Codex no longer bakes a percentage, so
+    // the zeroed `current_usage` under an absent percentage is the fresh
+    // sentinel — recognise it and keep the prior established record rather than
+    // overwriting real context with zeros and a default window.
+    tokens.used_percentage.is_none()
         && tokens
             .current_usage
             .as_ref()

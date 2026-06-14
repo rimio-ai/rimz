@@ -3,7 +3,9 @@ use super::*;
 #[test]
 fn transcript_tail_populates_context_gauge() {
     // Claude reports token usage only in the transcript JSONL; the Stop hook
-    // reads its tail to fill the context gauge. 100k of a 200k window = 50%.
+    // reads its tail for the gauge numerator. A bare model id carries no `[1m]`
+    // marker, so the adapter asserts no window — the fold applies the 200k
+    // descriptor default and derives the percentage (100k of 200k = 50%).
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
     std::fs::write(
@@ -20,17 +22,18 @@ fn transcript_tail_populates_context_gauge() {
             }),
         )
         .unwrap();
-    assert_eq!(obs.context_pct, Some(50));
     assert_eq!(obs.total_tokens, Some(100_500));
+    assert_eq!(obs.context_window, None);
     assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
 }
 
 #[test]
 fn payload_one_million_marker_widens_the_context_window() {
     // The 1M beta is signalled by a `[1m]` marker that rides only the hook
-    // payload's model field — the transcript writes the bare id. The gauge
-    // must divide by the payload-resolved window: 100k of 1M = 10%, where
-    // the bare-id default would have over-read it as 50%.
+    // payload's model field — the transcript writes the bare id. The adapter
+    // asserts the 1M window from the payload-resolved model; the fold divides
+    // by it (100k of 1M = 10%, where the bare-id 200k default would over-read
+    // it as 50%).
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
     std::fs::write(
@@ -48,7 +51,7 @@ fn payload_one_million_marker_widens_the_context_window() {
             }),
         )
         .unwrap();
-    assert_eq!(obs.context_pct, Some(10));
+    assert_eq!(obs.context_window, Some(1_000_000));
     assert_eq!(obs.total_tokens, Some(100_500));
     assert_eq!(obs.model.as_deref(), Some("claude-opus-4-8[1m]"));
 }
@@ -150,8 +153,9 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
 #[test]
 fn fresh_transcript_reports_zero_context_not_unknown() {
     // A brand-new session has a transcript with no assistant usage yet. It
-    // must read as 0% (empty gauge), not None (no gauge), so a just-launched
-    // idle agent shows an empty context bar.
+    // must report an explicit zero numerator (total_tokens = 0), not None, so
+    // the fold derives an empty (0%) gauge for a just-launched idle agent
+    // rather than hiding the bar.
     let dir = tempfile::tempdir().unwrap();
     let transcript = dir.path().join("session.jsonl");
     std::fs::write(
@@ -168,8 +172,8 @@ fn fresh_transcript_reports_zero_context_not_unknown() {
             }),
         )
         .unwrap();
-    assert_eq!(obs.context_pct, Some(0));
     assert_eq!(obs.total_tokens, Some(0));
+    assert_eq!(obs.context_window, None);
 }
 
 #[test]
@@ -185,8 +189,8 @@ fn missing_transcript_leaves_context_unknown() {
             }),
         )
         .unwrap();
-    assert_eq!(obs.context_pct, None);
     assert_eq!(obs.total_tokens, None);
+    assert_eq!(obs.context_window, None);
 }
 
 #[test]
@@ -208,6 +212,6 @@ fn transcript_requires_session_id() {
             &json!({ "transcript_path": transcript.to_str().unwrap() }),
         )
         .unwrap();
-    assert_eq!(obs.context_pct, None);
     assert_eq!(obs.total_tokens, None);
+    assert_eq!(obs.context_window, None);
 }
