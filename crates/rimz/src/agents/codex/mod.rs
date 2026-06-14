@@ -106,8 +106,16 @@ pub fn fetch_oauth_usage() -> Option<AccountUsageSnapshot> {
                 extra_credits: usage.extra_credits,
             })
         }
+        Err(err) if !err.should_report() => {
+            tracing::debug!(error = %err, "codex OAuth usage unavailable");
+            None
+        }
         Err(err) => {
-            tracing::debug!(error = %err, "codex OAuth usage fetch failed");
+            tracing::warn!(
+                tags.operation = "codex.oauth_usage",
+                error = &err as &dyn std::error::Error,
+                "codex OAuth usage fetch failed",
+            );
             None
         }
     }

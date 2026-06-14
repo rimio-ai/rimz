@@ -372,7 +372,8 @@ impl MuxBackend for TmuxBackend {
                     tracing::warn!(
                         session = %opts.session_name,
                         pane = %pane.as_str(),
-                        error = %err,
+                        tags.operation = "tmux.reconcile.close_stray",
+                        error = &err as &dyn std::error::Error,
                         "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
                     );
                 }
@@ -395,7 +396,8 @@ impl MuxBackend for TmuxBackend {
                     tracing::warn!(
                         session = %opts.session_name,
                         window = %window,
-                        error = %err,
+                        tags.operation = "tmux.reconcile.add",
+                        error = &err as &dyn std::error::Error,
                         "sidebar reconcile: in-place add failed; leaving the window without a sidebar",
                     );
                     report.failed += 1;

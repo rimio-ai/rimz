@@ -287,7 +287,12 @@ pub(super) fn read_accounts_cache(path: &Path) -> AccountsCache {
 /// and leaves the prior cache in place.
 pub(super) fn write_accounts_cache(path: &Path, cache: &AccountsCache) {
     if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
-        tracing::warn!(path = %path.display(), error = %err, "sidebar accounts cache write failed");
+        tracing::warn!(
+            path = %path.display(),
+            tags.operation = "cache.accounts_write",
+            error = &err as &dyn std::error::Error,
+            "sidebar accounts cache write failed",
+        );
     }
 }
 

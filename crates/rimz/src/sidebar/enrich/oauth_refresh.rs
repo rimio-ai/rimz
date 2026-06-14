@@ -98,7 +98,12 @@ fn spawn_claude_usage_refresh(
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
-            tracing::warn!(error = %err, "sidebar: cannot locate rimz to refresh claude usage");
+            tracing::warn!(
+                workspace = %runtime.workspace_id,
+                tags.operation = "claude.usage_refresh.locate_exe",
+                error = &err as &dyn std::error::Error,
+                "sidebar: cannot locate rimz to refresh claude usage",
+            );
             return;
         }
     };
@@ -118,9 +123,20 @@ fn spawn_claude_usage_refresh(
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        workspace = %runtime.workspace_id,
+        merge_windows,
+        "sidebar: spawning claude usage refresh",
+    );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "claude-refresh-usage")
     {
-        tracing::warn!(error = %err, "sidebar: failed to spawn claude usage refresh");
+        tracing::warn!(
+            workspace = %runtime.workspace_id,
+            tags.operation = "claude.usage_refresh.spawn",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn claude usage refresh",
+        );
     }
 }
 

@@ -88,6 +88,20 @@ enum AppServerSubcmd {
     },
 }
 
+impl CodexArgs {
+    /// The low-cardinality command label and, for a session-scoped helper, its
+    /// session id — for the Sentry command scope.
+    pub(crate) fn scope(&self) -> (&'static str, Option<&str>) {
+        match &self.command {
+            CodexSubcmd::RefreshContext { session_id, .. } => {
+                ("codex refresh-context", Some(session_id.as_str()))
+            }
+            CodexSubcmd::RefreshRateLimits { .. } => ("codex refresh-rate-limits", None),
+            CodexSubcmd::AppServer(_) => ("codex app-server", None),
+        }
+    }
+}
+
 pub fn run(args: CodexArgs, _globals: &GlobalFlags) -> Result<()> {
     match args.command {
         CodexSubcmd::RefreshContext {

@@ -144,6 +144,19 @@ enum SidebarFixtureState {
     Provider,
 }
 
+impl SidebarArgs {
+    /// The low-cardinality command label for the Sentry command scope.
+    pub(crate) fn command_label(&self) -> &'static str {
+        match &self.command {
+            SidebarSubcmd::Snapshot { .. } => "sidebar snapshot",
+            SidebarSubcmd::Serve { .. } => "sidebar serve",
+            SidebarSubcmd::Render { .. } => "sidebar render",
+            SidebarSubcmd::Fixture { .. } => "sidebar fixture",
+            SidebarSubcmd::Wake { .. } => "sidebar wake",
+        }
+    }
+}
+
 pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         SidebarSubcmd::Snapshot {

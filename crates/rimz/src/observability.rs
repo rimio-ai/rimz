@@ -8,6 +8,13 @@
 //! the agent turn-error warning under the `rimz::agent::turn_error` target,
 //! becomes a Sentry event (warning / error level mirrors the tracing level).
 //!
+//! Events arrive with debug context: [`set_command_scope`] tags the scope with
+//! the running command, build id, and (when a process serves one) the agent and
+//! session, plus a structured `rimz` context grouping the same facts; callsites
+//! add a searchable `tags.operation` and pass the error as `&dyn Error` so a
+//! stacktrace and exception attach. `info!` lines become breadcrumbs, so a
+//! warning arrives with the trail that led to it.
+//!
 //! Reporting is best-effort enrichment, not a precondition: a malformed DSN
 //! logs the fix and stays off, and a network failure never blocks a Rimz path.
 //! The hostname is withheld and PII is off by default — the telemetry surface
@@ -85,6 +92,10 @@ pub fn init() -> Reporting {
         // External reporting withholds personal data by default; strip the
         // hostname the contexts integration would otherwise attach.
         send_default_pii: false,
+        // Attach a stacktrace to error/warning events that carry an exception
+        // (a callsite's `error = &err as &dyn Error`) so a report names where it
+        // came from, not just what failed. Free with the `backtrace` feature.
+        attach_stacktrace: true,
         before_send: Some(Arc::new(|mut event: sentry::protocol::Event<'static>| {
             event.server_name = None;
             Some(event)
@@ -103,23 +114,79 @@ fn tag_scope() {
     }
 }
 
-/// The Sentry bridge layer: `warn!`/`error!` become Sentry events, everything
-/// below is dropped. The `WARN` level filter keeps the global max-level hint at
-/// `WARN` so hot paths that disable the fmt layer never construct lower events.
+/// Low-cardinality facts the cli layer knows after parsing the command line.
+/// Values stay free of arguments and free-form text so they make stable Sentry
+/// facets.
+pub struct ScopeFacts<'a> {
+    /// The resolved command, e.g. `"sidebar serve"` or `"codex refresh-context"`.
+    pub command: &'a str,
+    /// The agent session the process acts on, when exactly one is known.
+    pub session: Option<&'a str>,
+    /// The agent kind the process serves, when the command implies one.
+    pub agent: Option<&'a str>,
+}
+
+/// Tag the active scope with the command and build id and attach a structured
+/// `rimz` context grouping the command, build, session, and agent, so every
+/// event this process reports inherits them. The hub is process-global, so one
+/// call near dispatch covers the long-lived `sidebar serve` and each short-lived
+/// hook subprocess alike.
+pub fn set_command_scope(facts: ScopeFacts<'_>) {
+    use sentry::protocol::{Context, Value};
+
+    let build = crate::build_id::current_if_ready();
+    sentry::configure_scope(|scope| {
+        scope.set_tag("command", facts.command);
+        if let Some(build) = build {
+            scope.set_tag("build", build);
+        }
+        let mut ctx = std::collections::BTreeMap::<String, Value>::new();
+        ctx.insert("command".into(), facts.command.into());
+        if let Some(build) = build {
+            ctx.insert("build".into(), build.into());
+        }
+        if let Some(session) = facts.session {
+            ctx.insert("session".into(), session.into());
+        }
+        if let Some(agent) = facts.agent {
+            ctx.insert("agent".into(), agent.into());
+        }
+        scope.set_context("rimz", Context::Other(ctx));
+    });
+}
+
+/// The target a deliberate breadcrumb seed emits under. Only an `info!` on this
+/// target becomes a Sentry breadcrumb, so the trail is the curated set of
+/// cold-path steps — never an arbitrary `info!` field (a socket path, a cwd)
+/// the privacy boundary keeps off-box.
+pub const BREADCRUMB_TARGET: &str = "rimz::trail";
+
+/// The Sentry bridge layer: `warn!`/`error!` become Sentry events and an `info!`
+/// on [`BREADCRUMB_TARGET`] becomes a breadcrumb attached to the next event, so
+/// a warning arrives with the trail that led to it. The `INFO` level filter
+/// keeps the global max-level hint at `INFO` — `debug!`/`trace!` are still never
+/// constructed — so the breadcrumb trail stays a cold-path concern (the
+/// `sidebar serve` hot loop emits no `info!`).
 pub fn sentry_tracing_layer<S>() -> impl Layer<S>
 where
     S: tracing::Subscriber + for<'a> LookupSpan<'a>,
 {
     sentry_tracing::layer()
         .event_filter(event_filter)
-        .with_filter(LevelFilter::WARN)
+        .with_filter(LevelFilter::INFO)
+}
+
+fn event_filter(metadata: &Metadata<'_>) -> EventFilter {
+    classify(*metadata.level(), metadata.target())
 }
 
 /// `warn!`/`error!` map to Sentry events (the event level mirrors the tracing
-/// level); the `WARN` layer filter means nothing lower reaches this.
-fn event_filter(metadata: &Metadata<'_>) -> EventFilter {
-    match *metadata.level() {
+/// level); an `info!` on [`BREADCRUMB_TARGET`] maps to a breadcrumb; everything
+/// else is ignored, so an unmarked `info!` never carries its fields off-box.
+fn classify(level: Level, target: &str) -> EventFilter {
+    match level {
         Level::ERROR | Level::WARN => EventFilter::Event,
+        Level::INFO if target == BREADCRUMB_TARGET => EventFilter::Breadcrumb,
         _ => EventFilter::Ignore,
     }
 }
@@ -196,32 +263,21 @@ mod tests {
     }
 
     #[test]
-    fn event_filter_lifts_warn_and_error_to_events() {
-        // A WARN/ERROR callsite becomes a Sentry event; INFO and below are
-        // ignored (and never reach the layer past the WARN level filter).
-        for (level, expect_event) in [
-            (Level::ERROR, true),
-            (Level::WARN, true),
-            (Level::INFO, false),
-            (Level::DEBUG, false),
-            (Level::TRACE, false),
-        ] {
-            let filter = level_filter(level);
-            assert_eq!(
-                filter.contains(EventFilter::Event),
-                expect_event,
-                "level {level} event mapping",
-            );
-        }
-    }
-
-    // `Metadata` cannot be constructed directly in a test; mirror `event_filter`
-    // over the level so the mapping table stays covered.
-    fn level_filter(level: Level) -> EventFilter {
-        match level {
-            Level::ERROR | Level::WARN => EventFilter::Event,
-            _ => EventFilter::Ignore,
-        }
+    fn classify_maps_levels_and_gates_breadcrumbs_to_the_trail_target() {
+        // WARN/ERROR are events regardless of target.
+        assert!(classify(Level::ERROR, "rimz::anything").contains(EventFilter::Event));
+        assert!(classify(Level::WARN, "rimz::anything").contains(EventFilter::Event));
+        // INFO is a breadcrumb only on the dedicated trail target.
+        let trail = classify(Level::INFO, BREADCRUMB_TARGET);
+        assert!(trail.contains(EventFilter::Breadcrumb));
+        assert!(!trail.contains(EventFilter::Event));
+        // An unmarked INFO (e.g. a broker socket-path log) is ignored — its
+        // fields never ride off-box as breadcrumb data. (`EventFilter::Ignore`
+        // is the empty flag set.)
+        assert!(classify(Level::INFO, "rimz::agents::codex::broker").is_empty());
+        // DEBUG/TRACE are always ignored, even on the trail target.
+        assert!(classify(Level::DEBUG, BREADCRUMB_TARGET).is_empty());
+        assert!(classify(Level::TRACE, "rimz::anything").is_empty());
     }
 
     use std::sync::{Arc, Mutex};
@@ -267,6 +323,9 @@ mod tests {
 
         let subscriber = tracing_subscriber::registry().with(sentry_tracing_layer());
         tracing::subscriber::with_default(subscriber, || {
+            // INFO on the trail target is a breadcrumb: it rides along on the
+            // next captured event rather than becoming an event of its own.
+            tracing::info!(target: BREADCRUMB_TARGET, "about to end the turn");
             // Stands in for the agent turn-error warning emitted by the hook
             // lifecycle — agent-generated, reported at warning level.
             tracing::warn!(
@@ -275,8 +334,6 @@ mod tests {
                 "agent turn ended on a provider error",
             );
             tracing::error!("a rimz failure");
-            // Below the layer's WARN filter: never reaches Sentry.
-            tracing::info!("ignored breadcrumb-level line");
         });
         sentry::Hub::current()
             .client()
@@ -288,7 +345,90 @@ mod tests {
         assert_eq!(
             levels,
             vec![sentry::Level::Warning, sentry::Level::Error],
-            "agent warning then rimz error, nothing from info",
+            "agent warning then rimz error, info is a breadcrumb not an event",
         );
+        let warning = &captured[0];
+        assert!(
+            warning
+                .breadcrumbs
+                .values
+                .iter()
+                .any(|crumb| crumb.message.as_deref() == Some("about to end the turn")),
+            "the info line rode along on the warning as a breadcrumb",
+        );
+    }
+
+    // Sentry's hub is process-global; nextest isolates each test in its own
+    // process, so the scope set here does not leak into sibling tests.
+    #[test]
+    fn enriched_scope_and_fields_reach_sentry() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorder: Arc<Recorder> = Arc::new(Recorder {
+            events: events.clone(),
+        });
+        let _guard = sentry::init(sentry::ClientOptions {
+            dsn: Some(
+                "https://public@example.com/1"
+                    .parse()
+                    .expect("test dsn parses"),
+            ),
+            transport: Some(Arc::new(recorder)),
+            attach_stacktrace: true,
+            ..Default::default()
+        });
+
+        set_command_scope(ScopeFacts {
+            command: "codex refresh-context",
+            session: Some("ses_x"),
+            agent: Some("codex"),
+        });
+
+        let subscriber = tracing_subscriber::registry().with(sentry_tracing_layer());
+        tracing::subscriber::with_default(subscriber, || {
+            let err = std::io::Error::other("boom");
+            tracing::warn!(
+                tags.operation = "codex.oauth_usage",
+                error = &err as &dyn std::error::Error,
+                "codex OAuth usage fetch failed",
+            );
+        });
+        sentry::Hub::current()
+            .client()
+            .expect("client installed")
+            .flush(Some(Duration::from_secs(1)));
+
+        let captured = events.lock().expect("recorder lock");
+        let event = captured
+            .iter()
+            .find(|event| event.level == sentry::Level::Warning)
+            .expect("warning captured");
+        // Scope tag for the command; `tags.`-prefixed field promoted to a tag.
+        assert_eq!(
+            event.tags.get("command").map(String::as_str),
+            Some("codex refresh-context")
+        );
+        assert_eq!(
+            event.tags.get("operation").map(String::as_str),
+            Some("codex.oauth_usage")
+        );
+        // `error = &dyn Error` attaches an exception (and, with attach_stacktrace, a stack).
+        assert!(
+            !event.exception.values.is_empty(),
+            "dyn Error attaches an exception"
+        );
+        // The structured `rimz` context carries session and agent.
+        match event.contexts.get("rimz") {
+            Some(sentry::protocol::Context::Other(map)) => {
+                assert_eq!(
+                    map.get("session").and_then(|value| value.as_str()),
+                    Some("ses_x")
+                );
+                assert_eq!(
+                    map.get("agent").and_then(|value| value.as_str()),
+                    Some("codex")
+                );
+            }
+            other => panic!("missing or unexpected rimz context: {other:?}"),
+        }
     }
 }

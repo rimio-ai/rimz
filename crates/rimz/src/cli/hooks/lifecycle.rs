@@ -520,6 +520,8 @@ fn merge_turn_error_marker(
                 warn!(
                     target: "rimz::agent::turn_error",
                     agent = kind,
+                    session = %context_agent_id,
+                    tags.operation = "agent.turn_error",
                     class = ?class,
                     label = label.as_deref().unwrap_or_default(),
                     "agent turn ended on a provider error",
@@ -530,8 +532,10 @@ fn merge_turn_error_marker(
         Err(err) => {
             warn!(
                 agent = kind,
+                session = %context_agent_id,
                 event = %event_name,
-                error = %err,
+                tags.operation = "agent.turn_error_merge",
+                error = &err as &dyn std::error::Error,
                 "lifecycle: failed to merge turn-error marker",
             );
             false

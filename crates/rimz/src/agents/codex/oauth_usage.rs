@@ -13,8 +13,8 @@ use jiff::Timestamp;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::agents::ExtraCredits;
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
+use crate::agents::{ExtraCredits, HttpErrKind, url_host};
 
 use super::app_server::codex_home;
 
@@ -32,8 +32,17 @@ pub(crate) enum CodexOauthUsageErr {
     Io(#[from] std::io::Error),
     #[error("parsing codex OAuth credentials, config, or usage response: {0}")]
     Parse(#[from] serde_json::Error),
-    #[error("codex OAuth usage http error: {0}")]
-    Http(String),
+    #[error("codex OAuth usage HTTP {kind} (host {host})")]
+    Http { kind: HttpErrKind, host: String },
+}
+
+impl CodexOauthUsageErr {
+    /// Whether this failure is worth reporting off-box. Absent or API-key-only
+    /// credentials are the normal state for an app-server or logged-out account,
+    /// not a fault; parse and HTTP failures are.
+    pub(crate) fn should_report(&self) -> bool {
+        !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
@@ -178,6 +187,11 @@ pub(crate) fn fetch_usage_with_url(
 }
 
 fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "codex: fetching OAuth account usage",
+    );
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
         .build()
@@ -192,21 +206,32 @@ fn http_get(url: &str, credentials: &CodexOauthCredentials) -> Result<String> {
     if let Some(account_id) = &credentials.account_id {
         request = request.header("ChatGPT-Account-Id", account_id);
     }
-    let mut response = request
-        .call()
-        .map_err(|err| CodexOauthUsageErr::Http(err.to_string()))?;
-    if response.status().as_u16() != 200 {
-        return Err(CodexOauthUsageErr::Http(format!(
-            "non-200 status {}",
-            response.status().as_u16()
-        )));
+    // ureq surfaces a non-2xx response as `Error::StatusCode` (its default), so a
+    // 401/429 must be read here — the `status != 200` branch below only sees the
+    // success codes that come back `Ok`.
+    let mut response = request.call().map_err(|err| CodexOauthUsageErr::Http {
+        kind: match err {
+            ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
+            _ => HttpErrKind::Transport,
+        },
+        host: url_host(url).to_owned(),
+    })?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Status(status),
+            host: url_host(url).to_owned(),
+        });
     }
     response
         .body_mut()
         .with_config()
         .limit(MAX_BYTES)
         .read_to_string()
-        .map_err(|err| CodexOauthUsageErr::Http(err.to_string()))
+        .map_err(|_| CodexOauthUsageErr::Http {
+            kind: HttpErrKind::Body,
+            host: url_host(url).to_owned(),
+        })
 }
 
 pub(crate) fn parse_usage_response(body: &str) -> Result<CodexOauthUsage> {

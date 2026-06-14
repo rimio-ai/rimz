@@ -71,6 +71,7 @@ pub fn dispatch() -> Result<()> {
     let cli = Cli::parse();
     let globals = cli.global;
     globals.color.write_global();
+    rimz::observability::set_command_scope(scope_facts(cli.subcommand.as_ref()));
     match cli.subcommand {
         Some(Subcmd::Workspace(args)) => workspace::run(args, &globals),
         Some(Subcmd::List(args)) => list::run(args, &globals),
@@ -112,6 +113,53 @@ pub fn dispatch() -> Result<()> {
                 &globals,
             )
         }
+    }
+}
+
+/// Low-cardinality Sentry scope facts for the resolved command: the command
+/// label every event in this process inherits, plus the agent kind and session
+/// when the command serves exactly one. The label is the command verb only,
+/// never argument values, so it stays a stable Sentry facet.
+fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
+    let (command, session, agent) = match sub {
+        None | Some(Subcmd::Start(_)) => ("start", None, None),
+        Some(Subcmd::Attach(_)) => ("attach", None, None),
+        Some(Subcmd::Remote(_)) => ("remote", None, None),
+        Some(Subcmd::Workspace(_)) => ("workspace", None, None),
+        Some(Subcmd::List(_)) => ("list", None, None),
+        Some(Subcmd::ListThemes(_)) => ("list-themes", None, None),
+        Some(Subcmd::Event(_)) => ("event", None, None),
+        Some(Subcmd::Feed(_)) => ("feed", None, None),
+        Some(Subcmd::Gc(_)) => ("gc", None, None),
+        Some(Subcmd::Worktree(_)) => ("worktree", None, None),
+        Some(Subcmd::Agents(_)) => ("agents", None, None),
+        Some(Subcmd::Reload(_)) => ("reload", None, None),
+        Some(Subcmd::Reset(_)) => ("reset", None, None),
+        Some(Subcmd::Pane(_)) => ("pane", None, None),
+        Some(Subcmd::Steer(_)) => ("steer", None, None),
+        Some(Subcmd::Queue(_)) => ("queue", None, None),
+        Some(Subcmd::Resolver(_)) => ("resolver", None, None),
+        Some(Subcmd::Sidebar(args)) => (args.command_label(), None, None),
+        Some(Subcmd::Statusline(_)) => ("statusline", None, None),
+        Some(Subcmd::Hooks(args)) => {
+            let (command, agent) = args.scope();
+            (command, None, agent)
+        }
+        Some(Subcmd::Claude(args)) => (args.command_label(), None, Some("claude")),
+        Some(Subcmd::Codex(args)) => {
+            let (command, session) = args.scope();
+            (command, session, Some("codex"))
+        }
+        Some(Subcmd::Config(_)) => ("config", None, None),
+        Some(Subcmd::Trust(_)) => ("trust", None, None),
+        Some(Subcmd::Doctor(_)) => ("doctor", None, None),
+        Some(Subcmd::Setup(_)) => ("setup", None, None),
+        Some(Subcmd::Ping) => ("ping", None, None),
+    };
+    rimz::observability::ScopeFacts {
+        command,
+        session,
+        agent,
     }
 }
 

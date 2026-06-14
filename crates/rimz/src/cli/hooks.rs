@@ -96,6 +96,19 @@ enum HooksSubcmd {
     },
 }
 
+impl HooksArgs {
+    /// The low-cardinality command label and the agent it acts on — the hook
+    /// `source` for `feed`, the named agent for install/uninstall — for the
+    /// Sentry command scope.
+    pub(crate) fn scope(&self) -> (&'static str, Option<&str>) {
+        match &self.command {
+            HooksSubcmd::Feed { source, .. } => ("hooks feed", Some(source.as_str())),
+            HooksSubcmd::Install { agent } => ("hooks install", agent.as_deref()),
+            HooksSubcmd::Uninstall { agent } => ("hooks uninstall", agent.as_deref()),
+        }
+    }
+}
+
 pub fn run(args: HooksArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         HooksSubcmd::Feed { source, event } => run_feed(source, event, globals),

@@ -84,8 +84,16 @@ pub fn fetch_oauth_usage(cli_version: Option<&str>) -> Option<AccountUsageSnapsh
             rate_limits: usage.rate_limits,
             extra_credits: usage.extra_credits,
         }),
+        Err(err) if !err.should_report() => {
+            tracing::debug!(error = %err, "claude OAuth usage unavailable");
+            None
+        }
         Err(err) => {
-            tracing::debug!(error = %err, "claude OAuth usage fetch failed");
+            tracing::warn!(
+                tags.operation = "claude.oauth_usage",
+                error = &err as &dyn std::error::Error,
+                "claude OAuth usage fetch failed",
+            );
             None
         }
     }

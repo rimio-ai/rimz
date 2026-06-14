@@ -80,7 +80,12 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
 /// and leaves the prior cache in place.
 pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
     if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
-        tracing::warn!(path = %path.display(), error = %err, "sidebar rate-limits cache write failed");
+        tracing::warn!(
+            path = %path.display(),
+            tags.operation = "cache.rate_limits_write",
+            error = &err as &dyn std::error::Error,
+            "sidebar rate-limits cache write failed",
+        );
     }
 }
 

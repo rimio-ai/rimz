@@ -38,6 +38,15 @@ enum ClaudeSubcmd {
     },
 }
 
+impl ClaudeArgs {
+    /// The low-cardinality command label for the Sentry command scope.
+    pub(crate) fn command_label(&self) -> &'static str {
+        match &self.command {
+            ClaudeSubcmd::RefreshUsage { .. } => "claude refresh-usage",
+        }
+    }
+}
+
 pub fn run(args: ClaudeArgs, _globals: &GlobalFlags) -> Result<()> {
     match args.command {
         ClaudeSubcmd::RefreshUsage {

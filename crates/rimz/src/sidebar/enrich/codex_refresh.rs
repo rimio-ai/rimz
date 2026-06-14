@@ -72,7 +72,12 @@ pub fn refresh_codex_transcript_context(
         refresh,
         Timestamp::now(),
     ) {
-        tracing::warn!(error = %err, "sidebar: failed to merge codex transcript context");
+        tracing::warn!(
+            session = %session_id,
+            tags.operation = "codex.transcript_merge",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to merge codex transcript context",
+        );
         return;
     }
     let _ = crate::ledger::wakeup::wake_sidebars(runtime);
@@ -170,7 +175,13 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
-            tracing::warn!(error = %err, "sidebar: cannot locate rimz to refresh codex context");
+            tracing::warn!(
+                session = %session_id,
+                workspace = %runtime.workspace_id,
+                tags.operation = "codex.context_refresh.locate_exe",
+                error = &err as &dyn std::error::Error,
+                "sidebar: cannot locate rimz to refresh codex context",
+            );
             return;
         }
     };
@@ -189,9 +200,20 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        session = %session_id,
+        "sidebar: spawning codex context refresh",
+    );
     if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-context")
     {
-        tracing::warn!(error = %err, "sidebar: failed to spawn codex context refresh");
+        tracing::warn!(
+            session = %session_id,
+            workspace = %runtime.workspace_id,
+            tags.operation = "codex.context_refresh.spawn",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn codex context refresh",
+        );
     }
 }
 
@@ -202,7 +224,12 @@ fn spawn_codex_account_window_fetch(runtime: &RuntimePaths) {
     let exe = match std::env::current_exe() {
         Ok(exe) => exe,
         Err(err) => {
-            tracing::warn!(error = %err, "sidebar: cannot locate rimz to refresh codex windows");
+            tracing::warn!(
+                workspace = %runtime.workspace_id,
+                tags.operation = "codex.rate_limits.locate_exe",
+                error = &err as &dyn std::error::Error,
+                "sidebar: cannot locate rimz to refresh codex windows",
+            );
             return;
         }
     };
@@ -216,9 +243,19 @@ fn spawn_codex_account_window_fetch(runtime: &RuntimePaths) {
     .stdin(std::process::Stdio::null())
     .stdout(std::process::Stdio::null())
     .stderr(std::process::Stdio::null());
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        workspace = %runtime.workspace_id,
+        "sidebar: spawning codex rate-limit refresh",
+    );
     if let Err(err) =
         crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-rate-limits")
     {
-        tracing::warn!(error = %err, "sidebar: failed to spawn codex rate-limit refresh");
+        tracing::warn!(
+            workspace = %runtime.workspace_id,
+            tags.operation = "codex.rate_limits.spawn",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn codex rate-limit refresh",
+        );
     }
 }

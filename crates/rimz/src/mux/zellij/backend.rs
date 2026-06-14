@@ -268,7 +268,8 @@ impl MuxBackend for ZellijBackend {
                 Err(err) => {
                     tracing::warn!(
                         session = %opts.session_name,
-                        error = %err,
+                        tags.operation = "zellij.room_inspect",
+                        error = &err as &dyn std::error::Error,
                         "live zellij room could not be inspected; leaving it untouched",
                     );
                     Err(err)
@@ -309,7 +310,8 @@ impl MuxBackend for ZellijBackend {
                 Err(err) => {
                     tracing::warn!(
                         session = %opts.session_name,
-                        error = %err,
+                        tags.operation = "zellij.room_inspect",
+                        error = &err as &dyn std::error::Error,
                         "live zellij room could not be inspected; reset confirmation is required",
                     );
                     return Ok(SessionHealth::Stuck);
@@ -336,7 +338,8 @@ impl MuxBackend for ZellijBackend {
             Err(err) => {
                 tracing::warn!(
                     session = %opts.session_name,
-                    error = %err,
+                    tags.operation = "zellij.session_rebirth",
+                    error = &err as &dyn std::error::Error,
                     "session rebirth failed; a destructive reset is required",
                 );
                 Ok(SessionHealth::Stuck)
@@ -462,7 +465,8 @@ impl MuxBackend for ZellijBackend {
         if let Err(err) = self.go_to_tab(session, 1) {
             tracing::warn!(
                 session = %session,
-                error = %err,
+                tags.operation = "zellij.focus_tab",
+                error = &err as &dyn std::error::Error,
                 "could not return focus off the freshly-added daemon tab",
             );
         }
@@ -490,7 +494,8 @@ impl MuxBackend for ZellijBackend {
         {
             tracing::warn!(
                 session = %opts.session_name,
-                error = %err,
+                tags.operation = "zellij.focus_tab",
+                error = &err as &dyn std::error::Error,
                 "could not return focus after opening an unfocused tab",
             );
         }
@@ -511,7 +516,8 @@ impl MuxBackend for ZellijBackend {
                 Err(err) => tracing::warn!(
                     session,
                     pane = %pane_id,
-                    error = %err,
+                    tags.operation = "zellij.close_floating_pane",
+                    error = &err as &dyn std::error::Error,
                     "could not close floating pane during sidebar self-close",
                 ),
             }
@@ -637,7 +643,8 @@ fn rebuild_misdocked_sidebar(
             session = %opts.session_name,
             tab = tab_id,
             pane = %pane.as_str(),
-            error = %err,
+            tags.operation = "zellij.reconcile.close",
+            error = &err as &dyn std::error::Error,
             "sidebar reconcile: closing a nested sidebar for rebuild failed; leaving it",
         );
         report.failed += 1;
@@ -656,7 +663,8 @@ fn rebuild_misdocked_sidebar(
             tracing::warn!(
                 session = %opts.session_name,
                 tab = tab_id,
-                error = %err,
+                tags.operation = "zellij.reconcile.rebuild",
+                error = &err as &dyn std::error::Error,
                 "sidebar reconcile: rebuilding a nested sidebar failed",
             );
             report.failed += 1;
@@ -689,7 +697,8 @@ fn close_planned_sidebars(
                 tracing::warn!(
                     session = %session_name,
                     pane = %pane.as_str(),
-                    error = %err,
+                    tags.operation = "zellij.reconcile.close_stray",
+                    error = &err as &dyn std::error::Error,
                     "sidebar reconcile: closing a stray sidebar pane failed; leaving it",
                 );
             }
@@ -751,7 +760,8 @@ fn existing_sidebar_tabs(
         Err(err) => {
             tracing::warn!(
                 session = %session_name,
-                error = %err,
+                tags.operation = "zellij.reconcile.verify",
+                error = &err as &dyn std::error::Error,
                 "sidebar reconcile: cannot verify sidebar absence before add; skipping adds",
             );
             None
@@ -785,7 +795,8 @@ fn add_sidebar_to_tab(
             tracing::warn!(
                 session = %opts.session_name,
                 tab = tab_id,
-                error = %err,
+                tags.operation = "zellij.reconcile.add",
+                error = &err as &dyn std::error::Error,
                 "sidebar reconcile: in-place add failed; leaving the tab without a sidebar",
             );
             report.failed += 1;
@@ -840,6 +851,7 @@ fn warn_sidebar_add_skipped(session_name: &str, tab_id: u64) {
     tracing::warn!(
         session = %session_name,
         tab = tab_id,
+        tags.operation = "zellij.reconcile.add_skipped",
         "sidebar reconcile: add skipped because the tab still has a sidebar",
     );
 }

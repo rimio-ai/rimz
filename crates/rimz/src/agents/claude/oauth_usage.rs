@@ -15,7 +15,7 @@ use jiff::Timestamp;
 use serde::Deserialize;
 
 use crate::agents::context::{AgentRateLimits, RateLimitWindow, WindowSource};
-use crate::agents::{ExtraCredits, transcript_fs::home_dir};
+use crate::agents::{ExtraCredits, HttpErrKind, transcript_fs::home_dir, url_host};
 
 use super::statusline::{CLAUDE_FIVE_HOUR_MINS, CLAUDE_SEVEN_DAY_MINS, clamp_rate_limit_used_pct};
 
@@ -37,8 +37,21 @@ pub(crate) enum ClaudeOauthUsageErr {
     Io(#[from] std::io::Error),
     #[error("parsing claude OAuth credentials or usage response: {0}")]
     Parse(#[from] serde_json::Error),
-    #[error("claude OAuth usage http error: {0}")]
-    Http(String),
+    #[error("claude OAuth usage HTTP {kind} (host {host})")]
+    Http { kind: HttpErrKind, host: String },
+}
+
+impl ClaudeOauthUsageErr {
+    /// Whether this failure is worth reporting off-box. Absent credentials, an
+    /// expired token, and a missing usage scope are the normal state for an
+    /// account that does not feed Rimz its usage, not a fault; parse and HTTP
+    /// failures are.
+    pub(crate) fn should_report(&self) -> bool {
+        !matches!(
+            self,
+            Self::NoCredentials | Self::TokenExpired | Self::MissingScope
+        )
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, ClaudeOauthUsageErr>;
@@ -173,6 +186,11 @@ fn usage_url() -> String {
 }
 
 fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String> {
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        host = %url_host(url),
+        "claude: fetching OAuth account usage",
+    );
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(Duration::from_secs(TIMEOUT_SECS)))
         .build()
@@ -184,19 +202,32 @@ fn http_get(url: &str, token: &str, cli_version: Option<&str>) -> Result<String>
         .header("anthropic-beta", "oauth-2025-04-20")
         .header("User-Agent", claude_code_user_agent(cli_version))
         .call()
-        .map_err(|err| ClaudeOauthUsageErr::Http(err.to_string()))?;
-    if response.status().as_u16() != 200 {
-        return Err(ClaudeOauthUsageErr::Http(format!(
-            "non-200 status {}",
-            response.status().as_u16()
-        )));
+        // ureq surfaces a non-2xx response as `Error::StatusCode` (its default),
+        // so a 401/429 must be read here — the `status != 200` branch below only
+        // sees the success codes that come back `Ok`.
+        .map_err(|err| ClaudeOauthUsageErr::Http {
+            kind: match err {
+                ureq::Error::StatusCode(code) => HttpErrKind::Status(code),
+                _ => HttpErrKind::Transport,
+            },
+            host: url_host(url).to_owned(),
+        })?;
+    let status = response.status().as_u16();
+    if status != 200 {
+        return Err(ClaudeOauthUsageErr::Http {
+            kind: HttpErrKind::Status(status),
+            host: url_host(url).to_owned(),
+        });
     }
     response
         .body_mut()
         .with_config()
         .limit(MAX_BYTES)
         .read_to_string()
-        .map_err(|err| ClaudeOauthUsageErr::Http(err.to_string()))
+        .map_err(|_| ClaudeOauthUsageErr::Http {
+            kind: HttpErrKind::Body,
+            host: url_host(url).to_owned(),
+        })
 }
 
 fn claude_code_user_agent(cli_version: Option<&str>) -> String {

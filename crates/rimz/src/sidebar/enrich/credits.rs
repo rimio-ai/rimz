@@ -34,7 +34,12 @@ pub(crate) fn read_credits_cache(path: &Path) -> CreditsCache {
 
 pub(crate) fn write_credits_cache(path: &Path, cache: &CreditsCache) {
     if let Err(err) = crate::ledger::atomic::write_temp_then_rename_cache(path, cache) {
-        tracing::warn!(path = %path.display(), error = %err, "sidebar credits cache write failed");
+        tracing::warn!(
+            path = %path.display(),
+            tags.operation = "cache.credits_write",
+            error = &err as &dyn std::error::Error,
+            "sidebar credits cache write failed",
+        );
     }
 }
 

@@ -108,7 +108,8 @@ impl TmuxBackend {
         {
             tracing::warn!(
                 session = %session,
-                error = %err,
+                tags.operation = "tmux.move_daemon_window",
+                error = &err as &dyn std::error::Error,
                 "could not move the daemon window to the front",
             );
         }
@@ -133,7 +134,8 @@ impl TmuxBackend {
             Err(err) => {
                 tracing::warn!(
                     session = %opts.session_name,
-                    error = %err,
+                    tags.operation = "tmux.resume.window_probe",
+                    error = &err as &dyn std::error::Error,
                     "resume: window probe failed; leaving the agents out",
                 );
                 return;
@@ -175,7 +177,8 @@ impl TmuxBackend {
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,
                     agent = %pane.label,
-                    error = %err,
+                    tags.operation = "tmux.resume.launch_window",
+                    error = &err as &dyn std::error::Error,
                     "resume: launching the agent window failed; leaving it out",
                 ),
             }
