@@ -1,0 +1,14 @@
+#!/bin/sh
+# Rimz pre-push gate: block a push that would fail the CI `lint` gate, so a
+# clippy break never reaches the remote — including the fast-forwarded `main` a
+# merge produces. `pre-merge-commit` can't cover this: the merge skill rebases
+# then fast-forwards, and that hook is skipped on fast-forwards. The check lives
+# in xtask (`cargo xtask lint` -> `cargo clippy --workspace --all-targets
+# --all-features --locked -- -D warnings`); this shim only routes git's hook
+# call there, keeping one source of truth. Install with `cargo xtask hooks`;
+# bypass a single push with `git push --no-verify`.
+if ! cargo xtask lint; then
+	echo >&2
+	echo "pre-push: clippy gate failed — fix the warnings above and push again." >&2
+	exit 1
+fi
