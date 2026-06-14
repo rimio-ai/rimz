@@ -230,6 +230,13 @@ impl RuntimePaths {
             .join(format!("sidebar.{}.json", instance_id.as_str()))
     }
 
+    /// The workspace-wide set of open unread episodes. The producer owns writes
+    /// for status-derived opens and row-gone pruning; renderers and CLI commands
+    /// write read receipts that derive this set back to read on the next fold.
+    pub fn unread_path(&self) -> PathBuf {
+        self.root.join("unread.json")
+    }
+
     /// The per-session Codex app-server broker socket. The broker
     /// ([`crate::agents::codex::broker`]) binds it; the enrichment client
     /// ([`crate::agents::codex::app_server`]) connects to it. Both derive it from

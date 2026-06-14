@@ -187,18 +187,19 @@ pub(super) fn sort_groups_for_presentation(groups: &mut [SidebarWorktreeGroup]) 
     groups.sort_by(compare_groups);
 }
 
-/// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping the
-/// agent rows whose current or next state needs renderer-side unread tracking
-/// plus the focused pane. Inactive success rows still stay visible so a
-/// renderer never drops an unread stamp before receipts converge; inactive idle
-/// rows rank behind process rows, so they are the first calm rows hidden behind
-/// `+K more`.
+/// Trim a group's idle/process tail to `WORKTREE_ROW_CAP`, always keeping unread
+/// rows, non-idle agent rows, and the focused pane. Inactive success rows still
+/// stay visible so a renderer never drops an unread stamp before receipts
+/// converge; sticky unread idle rows stay visible until the human reads them,
+/// while ordinary inactive idle rows are the first calm rows hidden behind `+K
+/// more`.
 pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
     let mut visible = Vec::new();
     for row in rows {
-        if row
-            .status()
-            .is_some_and(|status| status != AgentStatus::Idle)
+        if row.unread
+            || row
+                .status()
+                .is_some_and(|status| status != AgentStatus::Idle)
             || row.pane.as_ref().is_some_and(|pane| pane.is_focused)
             || visible.len() < WORKTREE_ROW_CAP
         {

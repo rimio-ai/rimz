@@ -19,9 +19,9 @@ pub struct SidebarRow {
     pub pane: Option<PaneRef>,
     pub worktree_path: Option<String>,
     pub worktree_branch: Option<String>,
-    /// Renderer-local presentation state: this row changed since this sidebar
-    /// view last focused its pane. Producer snapshots leave it false; the
-    /// native sidebar stamps it in memory before painting.
+    /// Shared pending-look state: the row has an open unread episode not reached
+    /// by any read receipt. The producer opens/prunes episodes in `unread.json`;
+    /// every snapshot fold derives this bit from that file plus read marks.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unread: bool,
     /// Producer-stamped staleness: this row's latest activity has aged past the

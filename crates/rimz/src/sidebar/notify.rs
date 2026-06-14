@@ -1,10 +1,10 @@
 //! Best-effort notification policy for the elected sidebar producer.
 //!
-//! The policy is pure over snapshot state and caller-owned memory: it observes
-//! status edges, applies user preferences, and returns notifications for the
-//! caller to deliver. Side effects stay at the edge (`spawn_notify_command` and
-//! sidebar event broadcast), so duplicate policy decisions stay tied to the
-//! producer election.
+//! The policy is pure over newly opened unread episodes and caller-owned
+//! memory: durable unread owns dedupe, while this layer applies user push
+//! preferences and returns notifications for the caller to deliver. Side effects
+//! stay at the edge (`spawn_notify_command` and sidebar event broadcast), so
+//! duplicate policy decisions stay tied to the producer election.
 
 use std::collections::BTreeMap;
 use std::io;
@@ -14,7 +14,8 @@ use crate::config::NotificationsPrefs;
 use crate::feed::AgentStatus;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::remote::link::LinkTier;
-use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarRow, SidebarSnapshot, child_process};
+use crate::sidebar::unread::OpenedUnread;
+use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot, child_process};
 
 const LINK_DEGRADED_HOLD_MS: u64 = 10_000;
 const LINK_RECOVERY_HOLD_MS: u64 = 30_000;
@@ -48,10 +49,8 @@ pub struct NotificationAgent {
     pub agent_id: AgentSessionId,
     pub label: String,
     pub pane_id: Option<PaneId>,
-    /// The status edge that caused this notification: the status before this
-    /// frame, and the status reached. Both populated for agent notifications,
-    /// left `None` for link/reminder notifications that name no agent.
-    pub prev_status: Option<AgentStatus>,
+    /// The status reached by an agent notification; `None` for link/reminder
+    /// notifications that name no agent.
     pub new_status: Option<AgentStatus>,
 }
 
@@ -112,7 +111,7 @@ pub struct LinkNotificationEvaluation {
 }
 
 impl LinkNotificationState {
-    pub fn evaluate(
+    pub(crate) fn evaluate(
         &mut self,
         snapshot: &SidebarSnapshot,
         prefs: &NotificationsPrefs,
@@ -325,39 +324,8 @@ impl AgentKey {
 }
 
 #[derive(Clone, Debug)]
-struct NotificationRow {
-    key: AgentKey,
-    status: AgentStatus,
-    agent: NotificationAgent,
-    label: String,
-    focused: bool,
-}
-
-impl NotificationRow {
-    fn from_row(row: &SidebarRow) -> Option<Self> {
-        let status = row.status()?;
-        let kind = AgentKind::new_unchecked(row.name.clone());
-        let agent_id = AgentSessionId::from(row.id.clone());
-        let label = row_label(row);
-        Some(Self {
-            key: AgentKey::new(kind.clone(), agent_id.clone()),
-            status,
-            agent: NotificationAgent {
-                kind,
-                agent_id,
-                label: label.clone(),
-                pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
-                prev_status: None,
-                new_status: Some(status),
-            },
-            label,
-            focused: row.pane.as_ref().is_some_and(|pane| pane.is_focused),
-        })
-    }
-}
-
-#[derive(Clone, Debug)]
 struct PendingNotification {
+    row_id: String,
     key: AgentKey,
     notification_kind: AgentNotificationKind,
     agent: NotificationAgent,
@@ -367,8 +335,6 @@ struct PendingNotification {
 
 #[derive(Clone, Debug, Default)]
 pub struct NotificationState {
-    seeded: bool,
-    statuses: BTreeMap<AgentKey, AgentStatus>,
     last_notified_at_ms: BTreeMap<AgentKey, u64>,
     pending_since_ms: Option<u64>,
     pending: Vec<PendingNotification>,
@@ -378,51 +344,34 @@ impl NotificationState {
     pub fn evaluate(
         &mut self,
         snapshot: &SidebarSnapshot,
+        opened: &[OpenedUnread],
         prefs: &NotificationsPrefs,
         now_ms: u64,
     ) -> Vec<Notification> {
-        let rows = notification_rows(snapshot);
-        let current_statuses = rows
-            .iter()
-            .map(|row| (row.key.clone(), row.status))
-            .collect::<BTreeMap<_, _>>();
+        let live_keys = notification_keys(snapshot);
 
         self.last_notified_at_ms
-            .retain(|key, _| current_statuses.contains_key(key));
+            .retain(|key, _| live_keys.contains_key(key));
 
-        if !self.seeded {
-            self.statuses = current_statuses;
-            self.seeded = true;
-            self.pending.clear();
-            self.pending_since_ms = None;
-            return Vec::new();
-        }
-
-        self.prune_pending(&current_statuses);
+        self.prune_pending(snapshot);
         if !prefs.enabled {
-            self.statuses = current_statuses;
             self.pending.clear();
             self.pending_since_ms = None;
             return Vec::new();
         }
 
         let pending_was_empty = self.pending.is_empty();
-        for row in &rows {
-            let key = row.key.clone();
-            let status = row.status;
-            let prev_status = self.statuses.get(&key).copied();
-            if prev_status == Some(status) {
+        for opened in opened {
+            if opened.silent || !prefs.triggers_status(opened.status) {
                 continue;
             }
-            if !prefs.triggers_status(status) {
-                continue;
-            }
-            let Some(notification_kind) = AgentNotificationKind::from_status(status) else {
+            let Some(notification_kind) = AgentNotificationKind::from_status(opened.status) else {
                 continue;
             };
-            if prefs.suppress_focused && row.focused {
+            if prefs.suppress_focused && opened.focused {
                 continue;
             }
+            let key = AgentKey::new(opened.agent_kind.clone(), opened.agent_id.clone());
             if self
                 .last_notified_at_ms
                 .get(&key)
@@ -434,13 +383,12 @@ impl NotificationState {
                 continue;
             }
             self.pending
-                .push(pending_notification(row, notification_kind, prev_status));
+                .push(pending_notification(opened, notification_kind));
         }
 
         if pending_was_empty && !self.pending.is_empty() {
             self.pending_since_ms = Some(now_ms);
         }
-        self.statuses = current_statuses;
 
         let ready = prefs.coalesce_ms == 0
             || self
@@ -453,13 +401,9 @@ impl NotificationState {
         }
     }
 
-    fn prune_pending(&mut self, current_statuses: &BTreeMap<AgentKey, AgentStatus>) {
-        self.pending.retain(|pending| {
-            current_statuses
-                .get(&pending.key)
-                .and_then(|status| AgentNotificationKind::from_status(*status))
-                .is_some_and(|kind| kind == pending.notification_kind)
-        });
+    fn prune_pending(&mut self, snapshot: &SidebarSnapshot) {
+        self.pending
+            .retain(|pending| row_is_unread(snapshot, &pending.row_id));
         if self.pending.is_empty() {
             self.pending_since_ms = None;
         }
@@ -507,21 +451,29 @@ pub fn spawn_notify_command(command: &str, notification: &Notification) -> io::R
     child_process::spawn_detached_reaped(&mut cmd, "notify-command")
 }
 
-fn notification_rows(snapshot: &SidebarSnapshot) -> Vec<NotificationRow> {
+fn notification_keys(snapshot: &SidebarSnapshot) -> BTreeMap<AgentKey, ()> {
     snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter_map(NotificationRow::from_row)
+        .filter(|row| row.status().is_some())
+        .map(|row| {
+            (
+                AgentKey::new(
+                    AgentKind::new_unchecked(row.name.clone()),
+                    AgentSessionId::from(row.id.clone()),
+                ),
+                (),
+            )
+        })
         .collect()
 }
 
 fn pending_notification(
-    row: &NotificationRow,
+    opened: &OpenedUnread,
     notification_kind: AgentNotificationKind,
-    prev_status: Option<AgentStatus>,
 ) -> PendingNotification {
-    let label = row.label.clone();
+    let label = opened.label.clone();
     let title = match notification_kind {
         AgentNotificationKind::Waiting => format!("Rimz: {label} needs you"),
         AgentNotificationKind::Failed => format!("Rimz: {label} failed"),
@@ -534,10 +486,16 @@ fn pending_notification(
         AgentNotificationKind::Paused => format!("{label} is parked on a provider limit."),
         AgentNotificationKind::Success => format!("{label} completed successfully."),
     };
-    let mut agent = row.agent.clone();
-    agent.prev_status = prev_status;
+    let agent = NotificationAgent {
+        kind: opened.agent_kind.clone(),
+        agent_id: opened.agent_id.clone(),
+        label,
+        pane_id: opened.pane_id.clone(),
+        new_status: Some(opened.status),
+    };
     PendingNotification {
-        key: row.key.clone(),
+        row_id: opened.row_id.clone(),
+        key: AgentKey::new(opened.agent_kind.clone(), opened.agent_id.clone()),
         notification_kind,
         agent,
         title,
@@ -593,30 +551,12 @@ fn link_notification_body(link: &SidebarLinkHealth) -> String {
     format!("{rtt}, {}% loss.", link.miss_pct)
 }
 
-fn row_label(row: &SidebarRow) -> String {
-    row.task()
-        .or_else(|| row.as_agent().and_then(|agent| agent.prompt.as_deref()))
-        .filter(|value| !value.trim().is_empty())
-        .map(trim_label)
-        .unwrap_or_else(|| format!("{} {}", row.name, short_id(&row.id)))
-}
-
-fn trim_label(value: &str) -> String {
-    const MAX: usize = 48;
-    let trimmed = value.trim();
-    if trimmed.chars().count() <= MAX {
-        return trimmed.to_owned();
-    }
-    let mut out = trimmed
-        .chars()
-        .take(MAX.saturating_sub(3))
-        .collect::<String>();
-    out.push_str("...");
-    out
-}
-
-fn short_id(raw: &str) -> &str {
-    raw.get(..8).unwrap_or(raw)
+fn row_is_unread(snapshot: &SidebarSnapshot, row_id: &str) -> bool {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .any(|row| row.id == row_id && row.unread)
 }
 
 #[cfg(test)]

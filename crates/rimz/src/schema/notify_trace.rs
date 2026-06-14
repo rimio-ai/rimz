@@ -86,22 +86,41 @@ pub enum NotifyTraceEvent {
         row_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
-        /// `waiting` | `failed` | `success`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_kind: Option<AgentKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<AgentSessionId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<PaneId>,
+        /// `waiting` | `failed` | `paused` | `success`.
         status: String,
+        episode_ms: i64,
     },
     /// A pending look was cleared. Under sticky semantics the only causes are a
-    /// human look (`focus` / `receipt`) or the row disappearing (`row_gone`).
+    /// human look (`focus` / `mark_read`) or the row disappearing (`row_gone`).
     UnreadCleared {
         row_id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         label: Option<String>,
-        /// `receipt` | `focus` | `row_gone`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_kind: Option<AgentKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        agent_id: Option<AgentSessionId>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        worktree: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        pane_id: Option<PaneId>,
+        /// `focus` | `mark_read` | `row_gone`.
         cause: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cleared_at_ms: Option<i64>,
     },
 }
 
-/// An agent named by an emitted notification, with the status edge that caused
-/// it where the notification is per-agent.
+/// An agent named by an emitted notification, with the reached status where the
+/// notification is per-agent.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TraceAgent {
     pub kind: AgentKind,
@@ -109,8 +128,6 @@ pub struct TraceAgent {
     pub label: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<PaneId>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prev_status: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_status: Option<String>,
 }
@@ -124,12 +141,17 @@ mod tests {
         let event = NotifyTraceEvent::UnreadCleared {
             row_id: "claude-1".to_owned(),
             label: Some("api".to_owned()),
+            agent_kind: Some(AgentKind::new_unchecked("claude")),
+            agent_id: Some(AgentSessionId::from("claude-1")),
+            worktree: Some("main".to_owned()),
+            pane_id: Some(PaneId::from_parts(crate::ids::MuxName::Tmux, "%1")),
             cause: "focus".to_owned(),
+            cleared_at_ms: Some(42),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert_eq!(
             json,
-            r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","cause":"focus"}"#
+            r#"{"kind":"unread_cleared","row_id":"claude-1","label":"api","agent_kind":"claude","agent_id":"claude-1","worktree":"main","pane_id":"tmux:%1","cause":"focus","cleared_at_ms":42}"#
         );
         let back: NotifyTraceEvent = serde_json::from_str(&json).unwrap();
         assert_eq!(back, event);

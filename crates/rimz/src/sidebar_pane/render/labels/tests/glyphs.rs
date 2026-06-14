@@ -28,6 +28,7 @@ fn card_emphasis_maps_attention_tiers() {
     for status in [
         AgentStatus::Waiting,
         AgentStatus::Failed,
+        AgentStatus::Paused,
         AgentStatus::Success,
     ] {
         assert_eq!(card_emphasis(status, true, false), CardEmphasis::Blink);
@@ -35,17 +36,12 @@ fn card_emphasis_maps_attention_tiers() {
     }
 
     assert_eq!(
-        card_emphasis(AgentStatus::Paused, true, false),
-        CardEmphasis::Normal,
-        "paused unread is worth a look but never joins the blink"
-    );
-    assert_eq!(
         card_emphasis(AgentStatus::Running, false, true),
         CardEmphasis::Normal,
         "selection lifts non-attention rows to the normal tier"
     );
     for status in [AgentStatus::Running, AgentStatus::Idle] {
-        assert_eq!(card_emphasis(status, true, false), CardEmphasis::Soft);
+        assert_eq!(card_emphasis(status, true, false), CardEmphasis::Blink);
         assert_eq!(card_emphasis(status, false, false), CardEmphasis::Soft);
     }
 }
@@ -525,8 +521,8 @@ fn bright_holds_one_constant_unread_span() {
 }
 
 #[test]
-fn unread_paused_is_normal_and_static() {
-    let theme = truecolor_theme();
+fn unread_paused_uses_the_attention_effect() {
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
     let first = agent_lead_style(
         &theme,
         AgentStatus::Paused,
@@ -541,17 +537,22 @@ fn unread_paused_is_normal_and_static() {
         AgentStatus::Paused,
         TurnPhase::Idle,
         5 * 60,
-        12,
+        18,
         true,
         false,
     );
 
-    assert_eq!(first, later);
+    assert_ne!(
+        first, later,
+        "paused unread rows carry the shared unread attention effect"
+    );
+    assert_eq!(first.add_modifier, Modifier::BOLD);
+    assert_eq!(later.add_modifier, Modifier::BOLD);
     assert_eq!(
-        first,
+        later,
         theme.style(
             theme.animations.status(AgentStatus::Paused).color(),
-            Modifier::empty()
+            Modifier::BOLD
         )
     );
 }
@@ -751,8 +752,8 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
             true,
             false
         ),
-        theme.body(),
-        "unread idle stays soft because idle is not an attention tier"
+        Style::default().add_modifier(Modifier::BOLD),
+        "unread idle keeps terminal foreground color but adds the durable-unread emphasis"
     );
     assert_eq!(
         agent_lead_style(
@@ -789,7 +790,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
             true,
             true
         ),
-        custom.good(Modifier::empty()),
-        "selected idle uses the configured idle color at full strength"
+        custom.good(Modifier::BOLD),
+        "selected unread idle uses the configured idle color with durable-unread weight"
     );
 }

@@ -6,6 +6,7 @@ use super::*;
 use crate::agents::lifecycle::TurnPhase;
 use crate::feed::{AgentState, FeedItem, FeedKind, PaneRef, Surface};
 use crate::ids::{MuxName, PaneId, WorkspaceId};
+use crate::sidebar::unread::{OpenedUnread, opened_unread};
 
 fn workspace() -> WorkspaceId {
     WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-notify"))
@@ -29,6 +30,69 @@ fn snapshot_with_items(items: Vec<FeedItem>, agents: Vec<AgentState>) -> Sidebar
         .collect::<Vec<_>>();
     SidebarSnapshot::build_with_agents(workspace(), items, agents, Timestamp::now())
         .with_live_panes(panes, None)
+}
+
+fn evaluate_opened(
+    state: &mut NotificationState,
+    snapshot: SidebarSnapshot,
+    opened_ids: &[&str],
+    prefs: &NotificationsPrefs,
+    now_ms: u64,
+) -> Vec<Notification> {
+    evaluate_with_unread(state, snapshot, opened_ids, &[], prefs, now_ms)
+}
+
+fn evaluate_with_unread(
+    state: &mut NotificationState,
+    mut snapshot: SidebarSnapshot,
+    opened_ids: &[&str],
+    unread_ids: &[&str],
+    prefs: &NotificationsPrefs,
+    now_ms: u64,
+) -> Vec<Notification> {
+    mark_unread_rows(&mut snapshot, unread_ids);
+    let opened = opened_rows(&mut snapshot, opened_ids);
+    state.evaluate(&snapshot, &opened, prefs, now_ms)
+}
+
+fn evaluate_no_open(
+    state: &mut NotificationState,
+    snapshot: SidebarSnapshot,
+    prefs: &NotificationsPrefs,
+    now_ms: u64,
+) -> Vec<Notification> {
+    state.evaluate(&snapshot, &[], prefs, now_ms)
+}
+
+fn mark_unread_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) {
+    for row in snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        if ids.iter().any(|id| *id == row.id) {
+            row.unread = true;
+        }
+    }
+}
+
+fn opened_rows(snapshot: &mut SidebarSnapshot, ids: &[&str]) -> Vec<OpenedUnread> {
+    let mut opened = Vec::new();
+    for row in snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+    {
+        if ids.iter().any(|id| *id == row.id) {
+            row.unread = true;
+            opened.push(opened_unread(
+                row,
+                row.last_activity.as_millisecond(),
+                false,
+            ));
+        }
+    }
+    opened
 }
 
 fn link_snapshot(tier: LinkTier, freshness: SidebarLinkFreshness) -> SidebarSnapshot {
@@ -137,31 +201,35 @@ fn script_ask_for_pane(pane: PaneRef) -> FeedItem {
 }
 
 #[test]
-fn configured_transition_edges_fire() {
+fn configured_unread_episode_triggers_fire() {
     let mut state = NotificationState::default();
     let prefs = NotificationsPrefs {
         triggers: vec![crate::config::NotificationTrigger::Failed],
         ..prefs()
     };
     assert!(
-        state
-            .evaluate(
-                &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-                &prefs,
-                1,
-            )
-            .is_empty()
+        evaluate_no_open(
+            &mut state,
+            snapshot(vec![agent("a1", AgentStatus::Running, false)]),
+            &prefs,
+            1,
+        )
+        .is_empty()
     );
 
-    let waiting = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+    let waiting = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+        &["a1"],
         &prefs,
         2,
     );
     assert!(waiting.is_empty(), "waiting is not configured");
 
-    let failed = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Failed, false)]),
+    let failed = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Failed, false)]),
+        &["a1"],
         &prefs,
         3,
     );
@@ -173,11 +241,6 @@ fn configured_transition_edges_fire() {
 fn projected_pending_agent_ask_notifies_as_waiting() {
     let mut state = NotificationState::default();
     let prefs = prefs();
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-        &prefs,
-        0,
-    );
 
     let agent = agent("a1", AgentStatus::Running, false);
     let mut ask = agent_ask("claude", "a1");
@@ -194,7 +257,7 @@ fn projected_pending_agent_ask_notifies_as_waiting() {
         "the row carries the displayed status the sidebar paints"
     );
 
-    let out = state.evaluate(&next, &prefs, 100);
+    let out = evaluate_opened(&mut state, next, &["a1"], &prefs, 100);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
     assert_eq!(out[0].agents[0].agent_id, AgentSessionId::from("a1"));
@@ -204,7 +267,6 @@ fn projected_pending_agent_ask_notifies_as_waiting() {
 fn projected_standalone_ask_row_notifies_after_seed() {
     let mut state = NotificationState::default();
     let prefs = prefs();
-    state.evaluate(&snapshot(Vec::new()), &prefs, 0);
 
     let pane = PaneRef {
         pane_id: PaneId::from_parts(MuxName::Tmux, "%deploy"),
@@ -233,7 +295,7 @@ fn projected_standalone_ask_row_notifies_after_seed() {
         next.worktree_groups[0].rows[0].status(),
         Some(AgentStatus::Waiting)
     );
-    let out = state.evaluate(&next, &prefs, 100);
+    let out = evaluate_opened(&mut state, next, &[&request_id], &prefs, 100);
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
     assert_eq!(out[0].agents[0].label, "approve deploy?");
@@ -246,29 +308,28 @@ fn same_agent_is_debounced_within_window() {
         debounce_ms: 1_000,
         ..prefs()
     };
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-        &prefs,
-        0,
-    );
     assert_eq!(
-        state
-            .evaluate(
-                &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
-                &prefs,
-                100,
-            )
-            .len(),
+        evaluate_opened(
+            &mut state,
+            snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+            &["a1"],
+            &prefs,
+            100,
+        )
+        .len(),
         1
     );
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
+    evaluate_no_open(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Running, false)]),
         &prefs,
         200,
     );
 
-    let debounced = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+    let debounced = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+        &["a1"],
         &prefs,
         500,
     );
@@ -278,14 +339,11 @@ fn same_agent_is_debounced_within_window() {
 #[test]
 fn focused_agent_is_suppressed() {
     let mut state = NotificationState::default();
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-        &prefs(),
-        0,
-    );
 
-    let out = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Waiting, true)]),
+    let out = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Waiting, true)]),
+        &["a1"],
         &prefs(),
         100,
     );
@@ -299,46 +357,44 @@ fn burst_coalesces_after_window() {
         coalesce_ms: 1_000,
         ..NotificationsPrefs::default()
     };
-    state.evaluate(
-        &snapshot(vec![
-            agent("a1", AgentStatus::Running, false),
-            agent("a2", AgentStatus::Running, false),
-        ]),
-        &prefs,
-        0,
-    );
     assert!(
-        state
-            .evaluate(
-                &snapshot(vec![
-                    agent("a1", AgentStatus::Waiting, false),
-                    agent("a2", AgentStatus::Running, false),
-                ]),
-                &prefs,
-                100,
-            )
-            .is_empty(),
+        evaluate_opened(
+            &mut state,
+            snapshot(vec![
+                agent("a1", AgentStatus::Waiting, false),
+                agent("a2", AgentStatus::Running, false),
+            ]),
+            &["a1"],
+            &prefs,
+            100,
+        )
+        .is_empty(),
         "the first edge waits for the coalesce window"
     );
     assert!(
-        state
-            .evaluate(
-                &snapshot(vec![
-                    agent("a1", AgentStatus::Waiting, false),
-                    agent("a2", AgentStatus::Failed, false),
-                ]),
-                &prefs,
-                500,
-            )
-            .is_empty(),
+        evaluate_with_unread(
+            &mut state,
+            snapshot(vec![
+                agent("a1", AgentStatus::Waiting, false),
+                agent("a2", AgentStatus::Failed, false),
+            ]),
+            &["a2"],
+            &["a1"],
+            &prefs,
+            500,
+        )
+        .is_empty(),
         "the second edge joins the same burst"
     );
 
-    let out = state.evaluate(
-        &snapshot(vec![
+    let out = evaluate_with_unread(
+        &mut state,
+        snapshot(vec![
             agent("a1", AgentStatus::Waiting, false),
             agent("a2", AgentStatus::Failed, false),
         ]),
+        &[],
+        &["a1", "a2"],
         &prefs,
         1_100,
     );
@@ -350,21 +406,18 @@ fn burst_coalesces_after_window() {
 #[test]
 fn notified_agents_are_pruned_when_they_disappear() {
     let mut state = NotificationState::default();
-    state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Running, false)]),
-        &prefs(),
-        0,
-    );
 
-    let out = state.evaluate(
-        &snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+    let out = evaluate_opened(
+        &mut state,
+        snapshot(vec![agent("a1", AgentStatus::Waiting, false)]),
+        &["a1"],
         &prefs(),
         100,
     );
     assert_eq!(out.len(), 1);
     assert_eq!(state.last_notified_at_ms.len(), 1);
 
-    state.evaluate(&snapshot(Vec::new()), &prefs(), 200);
+    evaluate_no_open(&mut state, snapshot(Vec::new()), &prefs(), 200);
     assert!(state.last_notified_at_ms.is_empty());
 }
 
@@ -665,7 +718,6 @@ fn command_spawn_receives_notification_env() {
             agent_id: AgentSessionId::from("sess-1"),
             label: "claude sess-1".to_owned(),
             pane_id: None,
-            prev_status: Some(AgentStatus::Running),
             new_status: Some(AgentStatus::Waiting),
         }],
         notification_kind: NotificationKind::Waiting,

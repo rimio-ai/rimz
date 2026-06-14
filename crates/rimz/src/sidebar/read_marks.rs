@@ -1,8 +1,10 @@
 //! Runtime read receipts for sidebar unread rows.
 //!
 //! Each renderer owns one disposable receipt file. A focus clear writes the row
-//! id and the clear time to that renderer's file; every renderer folds all files
-//! and treats the max clear time per row as the workspace-wide read mark.
+//! id and the clear time to that renderer's file. CLI/API clears write the
+//! room-runtime `manual.json` receipt, which is not tied to a renderer heartbeat.
+//! Every fold reads both forms and treats the max clear time per row as the
+//! workspace-wide read mark.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs;
@@ -14,6 +16,8 @@ use tracing::debug;
 use crate::ids::SidebarInstanceId;
 use crate::ledger::{RuntimePaths, atomic};
 
+const MANUAL_READ_MARKS_FILE: &str = "manual.json";
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ReadMarks {
     marks: HashMap<String, i64>,
@@ -22,6 +26,40 @@ pub(crate) struct ReadMarks {
 impl ReadMarks {
     pub(crate) fn empty() -> Self {
         Self::default()
+    }
+
+    pub(crate) fn load_merged(runtime: &RuntimePaths) -> Self {
+        let entries = match fs::read_dir(&runtime.read_marks_dir) {
+            Ok(entries) => entries,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Self::empty(),
+            Err(err) => {
+                debug!(
+                    path = %runtime.read_marks_dir.display(),
+                    error = %err,
+                    "sidebar read-mark dir unreadable",
+                );
+                return Self::empty();
+            }
+        };
+
+        let mut marks: HashMap<String, i64> = HashMap::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !is_read_mark_file(&path) && !is_manual_read_mark_file(&path) {
+                continue;
+            }
+            let file = match read_file(&path) {
+                Some(file) => file,
+                None => continue,
+            };
+            for (row_id, cleared_at_ms) in file.marks {
+                marks
+                    .entry(row_id)
+                    .and_modify(|seen| *seen = (*seen).max(cleared_at_ms))
+                    .or_insert(cleared_at_ms);
+            }
+        }
+        Self { marks }
     }
 
     pub(crate) fn cleared_at_ms(&self, row_id: &str) -> Option<i64> {
@@ -36,15 +74,38 @@ impl ReadMarks {
     }
 }
 
+pub fn write_manual_read_marks(
+    runtime: &RuntimePaths,
+    row_ids: impl IntoIterator<Item = String>,
+    cleared_at_ms: i64,
+) -> atomic::Result<()> {
+    let path = manual_read_marks_path(runtime);
+    let mut marks = read_file(&path).map(|file| file.marks).unwrap_or_default();
+    let mut changed = false;
+    for row_id in row_ids {
+        match marks.get(&row_id) {
+            Some(existing) if *existing >= cleared_at_ms => {}
+            _ => {
+                marks.insert(row_id, cleared_at_ms);
+                changed = true;
+            }
+        }
+    }
+    if changed {
+        atomic::write_temp_then_rename_cache(&path, &ReadMarksFile { marks })?;
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug)]
-pub(crate) struct ReadMarkStore {
+pub struct ReadMarkStore {
     runtime: RuntimePaths,
     instance_id: SidebarInstanceId,
     own: BTreeMap<String, i64>,
 }
 
 impl ReadMarkStore {
-    pub(crate) fn new(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> Self {
+    pub fn new(runtime: RuntimePaths, instance_id: SidebarInstanceId) -> Self {
         let own = read_file(&runtime.sidebar_read_marks_path(&instance_id))
             .map(|file| file.marks)
             .unwrap_or_default();
@@ -56,40 +117,10 @@ impl ReadMarkStore {
     }
 
     pub(crate) fn load_merged(&self) -> ReadMarks {
-        let entries = match fs::read_dir(&self.runtime.read_marks_dir) {
-            Ok(entries) => entries,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return ReadMarks::empty(),
-            Err(err) => {
-                debug!(
-                    path = %self.runtime.read_marks_dir.display(),
-                    error = %err,
-                    "sidebar read-mark dir unreadable",
-                );
-                return ReadMarks::empty();
-            }
-        };
-
-        let mut marks: HashMap<String, i64> = HashMap::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if !is_read_mark_file(&path) {
-                continue;
-            }
-            let file = match read_file(&path) {
-                Some(file) => file,
-                None => continue,
-            };
-            for (row_id, cleared_at_ms) in file.marks {
-                marks
-                    .entry(row_id)
-                    .and_modify(|seen| *seen = (*seen).max(cleared_at_ms))
-                    .or_insert(cleared_at_ms);
-            }
-        }
-        ReadMarks { marks }
+        ReadMarks::load_merged(&self.runtime)
     }
 
-    pub(crate) fn observe_fold(
+    pub fn observe_fold(
         &mut self,
         cleared: Vec<String>,
         cleared_at_ms: i64,
@@ -139,6 +170,16 @@ pub(crate) fn read_mark_file_instance_id(path: &Path) -> Option<SidebarInstanceI
 
 pub(crate) fn is_read_mark_file(path: &Path) -> bool {
     read_mark_file_instance_id(path).is_some()
+}
+
+fn manual_read_marks_path(runtime: &RuntimePaths) -> std::path::PathBuf {
+    runtime.read_marks_dir.join(MANUAL_READ_MARKS_FILE)
+}
+
+fn is_manual_read_mark_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == MANUAL_READ_MARKS_FILE)
 }
 
 fn read_file(path: &Path) -> Option<ReadMarksFile> {
@@ -215,6 +256,25 @@ mod tests {
         let merged = first.load_merged();
         assert_eq!(merged.cleared_at_ms("row-a"), Some(2_000));
         assert_eq!(merged.cleared_at_ms("row-b"), Some(2_000));
+    }
+
+    #[test]
+    fn manual_marks_merge_and_are_not_instance_files() {
+        let (_dir, runtime) = runtime();
+        runtime.ensure_dirs().expect("runtime dirs");
+        write_manual_read_marks(&runtime, ["row-a".to_owned()], 2_000).expect("manual mark");
+        let mut store = ReadMarkStore::new(runtime.clone(), instance("01"));
+        store.observe_fold(
+            vec!["row-a".to_owned(), "row-b".to_owned()],
+            1_000,
+            &live(&["row-a", "row-b"]),
+        );
+
+        let merged = store.load_merged();
+
+        assert_eq!(merged.cleared_at_ms("row-a"), Some(2_000));
+        assert_eq!(merged.cleared_at_ms("row-b"), Some(1_000));
+        assert!(!is_read_mark_file(&manual_read_marks_path(&runtime)));
     }
 
     #[test]

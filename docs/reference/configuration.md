@@ -66,7 +66,7 @@ remind_secs = 60
 command = "ntfy publish rimz"
 ```
 
-Notifications are best-effort attention delivery layered over the sidebar. `waiting`, `failed`, `paused`, and `success` transitions can notify; `running` and `idle` stay quiet. `debounce_ms` limits repeat notifications for the same agent, `coalesce_ms` groups bursts into one banner, and `remind_secs` re-rings local unread `waiting`/`failed` rows until read. Set `remind_secs = 0` to disable reminders.
+Notifications are best-effort attention delivery layered over the sidebar inbox. `waiting`, `failed`, `paused`, and `success` rows become unread until read; `notifications.triggers` filters only which newly unread kinds raise a banner/command. `running` and `idle` stay quiet. `debounce_ms` limits repeat pushes for the same agent, `coalesce_ms` groups bursts into one banner, and `remind_secs` re-rings local unread `waiting`/`failed` rows until read. Set `remind_secs = 0` to disable reminders.
 
 `desktop = "auto"` emits terminal OSC notifications under tmux and skips them under Zellij, which drops notification OSCs today. `desktop = "osc"` forces emission for testing or future terminal paths. `sound = "bell"` writes a separate BEL byte and your local terminal decides whether that is audible.
 

@@ -10,22 +10,23 @@
 use std::io::{self, Read};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Subcommand, ValueEnum};
 
-use super::GlobalFlags;
+use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
-use rimz::ids::{MuxName, PaneId, SidebarInstanceId, WorkspaceId};
+use rimz::ids::{AgentKind, AgentSessionId, MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::ledger::paths::env_path;
 use rimz::ledger::workspace_record;
 use rimz::schema::sidebar_event::SidebarEvent;
 use rimz::sidebar::consumer::read_published_snapshot;
+use rimz::sidebar::notify::{Notification, NotificationAgent, NotificationKind};
 use rimz::sidebar::produce::{
     ProduceOptions, pane_fixture_active, produce_rollup_snapshot, produce_snapshot,
 };
 use rimz::sidebar::{cache::write_presence_stamp, consumer::RollupCursor};
 use rimz::workspace::WorkspaceResolver;
-use rimz::{RuntimePaths, StatePaths};
+use rimz::{PaneAgent, RuntimePaths, SidebarRow, SidebarSnapshot, StatePaths};
 
 mod fixture;
 mod wake;
@@ -121,6 +122,37 @@ enum SidebarSubcmd {
         #[arg(long = "topology", hide = true)]
         topology: Option<String>,
     },
+    /// Write a read receipt for a sidebar row. Hidden — test/API machinery.
+    #[command(hide = true)]
+    MarkRead {
+        target: String,
+        #[arg(long)]
+        worktree: Option<String>,
+    },
+    /// Open an unread episode for a sidebar row. Hidden — test/API machinery.
+    #[command(hide = true)]
+    MarkUnread {
+        target: String,
+        #[arg(long)]
+        worktree: Option<String>,
+    },
+    /// Exercise sidebar notification delivery. Hidden — test/API machinery.
+    #[command(hide = true)]
+    NotifyTest {
+        target: String,
+        #[arg(long)]
+        worktree: Option<String>,
+        #[arg(long)]
+        title: Option<String>,
+        #[arg(long)]
+        body: Option<String>,
+        #[arg(long, default_value = "waiting")]
+        kind: String,
+        #[arg(long)]
+        force_bell: bool,
+        #[arg(long)]
+        no_command: bool,
+    },
 }
 
 /// Why a presence poke fired. Every reason refreshes the liveness stamp;
@@ -153,6 +185,9 @@ impl SidebarArgs {
             SidebarSubcmd::Render { .. } => "sidebar render",
             SidebarSubcmd::Fixture { .. } => "sidebar fixture",
             SidebarSubcmd::Wake { .. } => "sidebar wake",
+            SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
+            SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
+            SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
         }
     }
 }
@@ -221,6 +256,28 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
                 focused_pane_ids,
                 unfocused_pane_ids,
                 topology,
+            },
+        ),
+        SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
+        SidebarSubcmd::MarkUnread { target, worktree } => mark_unread(globals, target, worktree),
+        SidebarSubcmd::NotifyTest {
+            target,
+            worktree,
+            title,
+            body,
+            kind,
+            force_bell,
+            no_command,
+        } => notify_test(
+            globals,
+            NotifyTestCommand {
+                target,
+                worktree,
+                title,
+                body,
+                kind,
+                force_bell,
+                no_command,
             },
         ),
     }
@@ -542,6 +599,244 @@ fn broadcast_wake_event(runtime: &RuntimePaths, session_name: Option<&str>, even
     if let Err(err) = rimz::ledger::wakeup::broadcast_sidebar_event(runtime, session_name, event) {
         tracing::debug!(error = %err, "presence poke: event datagram failed");
     }
+}
+
+fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) -> Result<()> {
+    let resolved = resolve_sidebar_targets(globals, &target, worktree.as_deref())?;
+    let ids = resolved
+        .rows
+        .iter()
+        .map(|row| row.id.clone())
+        .collect::<Vec<_>>();
+    let now_ms = unix_now_ms_i64();
+    rimz::sidebar::read_marks::write_manual_read_marks(&resolved.runtime, ids, now_ms)
+        .context("writing manual read marks")?;
+    let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
+    let mut cleared = Vec::new();
+    for row in &resolved.rows {
+        if episodes.remove_reached_for_row(row, now_ms) {
+            cleared.push(row);
+        }
+    }
+    if !cleared.is_empty() {
+        episodes
+            .persist(&resolved.runtime)
+            .context("writing unread episodes")?;
+    }
+    if let Some(diag) = diag_for_workspace(&resolved.workspace) {
+        for row in cleared {
+            diag.trace_notify(
+                rimz::schema::notify_trace::NotifyTraceEvent::UnreadCleared {
+                    row_id: row.id.clone(),
+                    label: Some(rimz::sidebar::unread::row_label(row)),
+                    agent_kind: Some(AgentKind::new_unchecked(row.name.clone())),
+                    agent_id: Some(AgentSessionId::from(row.id.clone())),
+                    worktree: row
+                        .worktree_branch
+                        .clone()
+                        .or_else(|| row.worktree_path.clone()),
+                    pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+                    cause: rimz::sidebar::unread::UnreadClearCause::MarkRead
+                        .as_str()
+                        .to_owned(),
+                    cleared_at_ms: Some(now_ms),
+                },
+            );
+        }
+    }
+    wake_sidebars(&resolved.runtime);
+    emit_hidden_count("Marked read", resolved.rows.len())
+}
+
+fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) -> Result<()> {
+    let resolved = resolve_sidebar_targets(globals, &target, worktree.as_deref())?;
+    let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
+    let now_ms = unix_now_ms_i64();
+    let mut opened = Vec::new();
+    for row in &resolved.rows {
+        let episode_ms = row.last_activity.as_millisecond().max(now_ms);
+        opened.push(episodes.open_for_row(row, episode_ms));
+    }
+    episodes
+        .persist(&resolved.runtime)
+        .context("writing unread episodes")?;
+    if let Some(diag) = diag_for_workspace(&resolved.workspace) {
+        for item in &opened {
+            diag.trace_notify(rimz::schema::notify_trace::NotifyTraceEvent::UnreadMarked {
+                row_id: item.row_id.clone(),
+                label: Some(item.label.clone()),
+                agent_kind: Some(item.agent_kind.clone()),
+                agent_id: Some(item.agent_id.clone()),
+                worktree: item.worktree.clone(),
+                pane_id: item.pane_id.clone(),
+                status: item.status.as_str().to_owned(),
+                episode_ms: item.episode_ms,
+            });
+        }
+    }
+    wake_sidebars(&resolved.runtime);
+    emit_hidden_count("Marked unread", resolved.rows.len())
+}
+
+struct NotifyTestCommand {
+    target: String,
+    worktree: Option<String>,
+    title: Option<String>,
+    body: Option<String>,
+    kind: String,
+    force_bell: bool,
+    no_command: bool,
+}
+
+fn notify_test(globals: &GlobalFlags, command: NotifyTestCommand) -> Result<()> {
+    let resolved = resolve_sidebar_targets(globals, &command.target, command.worktree.as_deref())?;
+    let notification_kind = notification_kind_from_cli(&command.kind)?;
+    let labels = resolved
+        .rows
+        .iter()
+        .map(rimz::sidebar::unread::row_label)
+        .collect::<Vec<_>>();
+    let title = command
+        .title
+        .unwrap_or_else(|| "Rimz: notification test".to_owned());
+    let body = command
+        .body
+        .unwrap_or_else(|| format!("Testing notification delivery for {}.", labels.join(", ")));
+    let agents = resolved
+        .rows
+        .iter()
+        .map(|row| NotificationAgent {
+            kind: AgentKind::new_unchecked(row.name.clone()),
+            agent_id: AgentSessionId::from(row.id.clone()),
+            label: rimz::sidebar::unread::row_label(row),
+            pane_id: row.pane.as_ref().map(|pane| pane.pane_id.clone()),
+            new_status: row.status(),
+        })
+        .collect::<Vec<_>>();
+    let notification = Notification {
+        agents,
+        notification_kind,
+        title,
+        body,
+        unread_count: None,
+    };
+    if !command.no_command
+        && let Some(command) = rimz::config::MachineConfig::load()
+            .unwrap_or_default()
+            .notifications
+            .command()
+        && let Err(err) = rimz::sidebar::notify::spawn_notify_command(command, &notification)
+    {
+        tracing::debug!(error = %err, "notify-test command spawn failed");
+    }
+    let panes = resolved
+        .rows
+        .iter()
+        .filter_map(|row| row.pane.as_ref().map(|pane| pane.pane_id.clone()))
+        .collect::<Vec<_>>();
+    rimz::ledger::wakeup::broadcast_sidebar_event(
+        &resolved.runtime,
+        Some(&resolved.workspace.session_name),
+        SidebarEvent::Notify {
+            title: notification.title.clone(),
+            body: notification.body.clone(),
+            panes,
+            recheck_unread: !command.force_bell,
+            notification_kind: Some(notification.kind_env().to_owned()),
+        },
+    )
+    .context("broadcasting notify-test event")?;
+    emit_hidden_count("Notification test sent", resolved.rows.len())
+}
+
+struct ResolvedSidebarTargets {
+    workspace: rimz::ResolvedWorkspace,
+    runtime: RuntimePaths,
+    rows: Vec<SidebarRow>,
+}
+
+fn resolve_sidebar_targets(
+    globals: &GlobalFlags,
+    target: &str,
+    worktree: Option<&str>,
+) -> Result<ResolvedSidebarTargets> {
+    rimz::target::require_mention(target)?;
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    runtime.ensure_dirs().context("preparing runtime paths")?;
+    let channel = current_channel(&workspace);
+    let targets = super::resolve_pane_targets(&snapshot, target, worktree, channel.as_deref())?;
+    let rows = rows_for_targets(&snapshot, &targets)?;
+    Ok(ResolvedSidebarTargets {
+        workspace,
+        runtime,
+        rows,
+    })
+}
+
+fn rows_for_targets(snapshot: &SidebarSnapshot, targets: &[&PaneAgent]) -> Result<Vec<SidebarRow>> {
+    let mut rows = Vec::new();
+    for target in targets {
+        let Some(row) = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .find(|row| {
+                row.pane
+                    .as_ref()
+                    .is_some_and(|pane| pane.pane_id == target.pane_id)
+            })
+        else {
+            bail!("target {} has no rendered sidebar row", target.label());
+        };
+        rows.push(row.clone());
+    }
+    Ok(rows)
+}
+
+fn notification_kind_from_cli(value: &str) -> Result<NotificationKind> {
+    match value {
+        "waiting" => Ok(NotificationKind::Waiting),
+        "failed" => Ok(NotificationKind::Failed),
+        "paused" => Ok(NotificationKind::Paused),
+        "success" => Ok(NotificationKind::Success),
+        "coalesced" => Ok(NotificationKind::Coalesced),
+        "link_degraded" => Ok(NotificationKind::LinkDegraded),
+        "link_recovered" => Ok(NotificationKind::LinkRecovered),
+        "reminder" => Ok(NotificationKind::Reminder),
+        other => bail!("unknown notification kind `{other}`"),
+    }
+}
+
+fn diag_for_workspace(workspace: &rimz::ResolvedWorkspace) -> Option<rimz::diag::DiagSink> {
+    rimz::diag::DiagSink::for_workspace(
+        workspace.workspace_id.clone(),
+        workspace.session_name.clone(),
+        None,
+    )
+}
+
+fn wake_sidebars(runtime: &RuntimePaths) {
+    if let Err(err) = rimz::ledger::wakeup::wake_sidebars(runtime) {
+        tracing::debug!(error = %err, "sidebar unread wake failed");
+    }
+}
+
+fn unix_now_ms_i64() -> i64 {
+    i64::try_from(rimz::sidebar::cache::unix_now_ms()).unwrap_or(i64::MAX)
+}
+
+fn emit_hidden_count(label: &str, count: usize) -> Result<()> {
+    let mut kv = render::KeyVals::new();
+    kv.push(
+        label,
+        render::cell(count.to_string()).fg(render::palette::ACCENT),
+    );
+    kv.render(&mut render::out())?;
+    Ok(())
 }
 
 #[cfg(test)]

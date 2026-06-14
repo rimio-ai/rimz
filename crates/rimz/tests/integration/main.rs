@@ -35,6 +35,7 @@ mod resume;
 mod run;
 mod sidebar_launch;
 mod sidebar_snapshot;
+mod sidebar_unread;
 mod start;
 mod transcript_watch;
 mod trust;

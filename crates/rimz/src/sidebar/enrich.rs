@@ -390,6 +390,9 @@ pub fn enrich(
     // set it before folding panes, not after.
     snapshot.wired_lazy_kinds = wired_lazy_kinds();
     snapshot.lazy_agent_default_models = wired_lazy_default_models();
+    let episodes = super::unread::UnreadEpisodes::load(runtime);
+    let read_marks = super::read_marks::ReadMarks::load_merged(runtime);
+    let unread_row_ids = episodes.unread_row_ids(&read_marks);
 
     // Producer-only: reap daemon-mode Codex ghosts the app-server no longer
     // holds. A remote-control conversation records the shared daemon's pid,
@@ -439,8 +442,11 @@ pub fn enrich(
         // (`produce` stamps before the publish), so the cwd-fallback guard
         // fires identically on every path.
         snapshot.only_daemon_view_remains = SidebarSnapshot::only_daemon_view(&panes);
-        let (next_snapshot, diagnostics) =
-            snapshot.with_admitted_live_panes_and_diagnostics(admitted_panes, &lazy_pairings);
+        let (next_snapshot, diagnostics) = snapshot.with_admitted_live_panes_and_diagnostics(
+            admitted_panes,
+            &lazy_pairings,
+            Some(&unread_row_ids),
+        );
         snapshot = next_snapshot;
         for event in diagnostics {
             if let Some(diag) = diag {
@@ -505,6 +511,7 @@ pub fn enrich(
         spending_caches.workspace.refreshed_at_ms,
         &baselines.baselines,
     );
+    super::unread::derive(&mut snapshot, &episodes, &read_marks);
     snapshot
 }
 

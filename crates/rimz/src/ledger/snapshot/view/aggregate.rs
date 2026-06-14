@@ -116,9 +116,9 @@ pub(super) fn build_worktree_groups_from_rows(
 /// Stamp the inactive sink: a row with no activity past `inactive_after_secs`
 /// drops into the inactive partition, beneath every live row, whatever its
 /// status — a stale `waiting` ask sinks the same as a stale `idle`, then leads
-/// the inactive band by its attention rank. Renderer-local `unread` still
-/// outranks the sink. The boundary is strict (`>`), so the configured window is
-/// the last live second.
+/// the inactive band by its attention rank. Durable `unread` still outranks the
+/// sink. The boundary is strict (`>`), so the configured window is the last
+/// live second.
 fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp, inactive_after_secs: u32) {
     for row in rows {
         row.inactive =

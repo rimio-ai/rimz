@@ -529,6 +529,45 @@ fn make_up_buckets_pulse_only_while_unread() {
             .all(|style| style.fg == unread_success[0].fg),
         "the success tone holds steady — bright, not a moving beam"
     );
+
+    let mut running_snapshot = make_up_snapshot();
+    running_snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.status() == Some(AgentStatus::Running))
+        .expect("running row")
+        .unread = true;
+    let unread_running: Vec<_> = (0..32)
+        .map(|phase| bucket_style(&running_snapshot, "⢿ 1", phase))
+        .collect();
+    assert!(
+        unread_running
+            .iter()
+            .all(|style| style.add_modifier == Modifier::BOLD),
+        "recovered unread running rows hold a steady crest in the working bucket"
+    );
+
+    let mut idle = agent(
+        "idle",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("idle"),
+    );
+    idle.last_activity = fixed_now() - Duration::from_secs(5 * 60);
+    let mut idle_snapshot = snapshot_with(Vec::new(), vec![idle]);
+    idle_snapshot.worktree_groups[0].rows[0].unread = true;
+    let unread_idle: Vec<_> = (0..32)
+        .map(|phase| bucket_style(&idle_snapshot, "○ 1", phase))
+        .collect();
+    assert!(
+        unread_idle
+            .iter()
+            .all(|style| style.add_modifier == Modifier::BOLD),
+        "recovered unread idle rows hold a steady crest in the idle bucket"
+    );
 }
 
 #[test]

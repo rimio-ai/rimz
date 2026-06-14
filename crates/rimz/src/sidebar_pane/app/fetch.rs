@@ -13,6 +13,8 @@ use crate::ids::{PaneId, SidebarInstanceId};
 use crate::schema::sidebar_event::SidebarEvent;
 use crate::sidebar::consumer::RollupCursor;
 use crate::sidebar::notify::{LinkAlert, LinkNotificationState, Notification, NotificationState};
+use crate::sidebar::read_marks::ReadMarks;
+use crate::sidebar::unread::{ClearedUnread, OpenedUnread, UnreadEpisodes};
 use crate::{RuntimePaths, SidebarSnapshot, StatePaths};
 
 use super::input::SNAPSHOT_WAKEUP;
@@ -194,23 +196,25 @@ fn run_fetch_cycle(
                 }))
     });
     match fast {
-        Ok(snapshot) => {
-            if is_producer && !produce {
-                evaluate_and_deliver_notifications(
-                    config,
+        Ok(mut snapshot) => {
+            let deliveries = if is_producer && !produce {
+                evaluate_notifications(
                     runtime,
                     notification_prefs,
                     notifications,
                     link_notifications,
                     diag,
-                    &snapshot,
-                );
-            }
+                    &mut snapshot,
+                )
+            } else {
+                Vec::new()
+            };
             post(FetchOutcome {
                 snapshot: Ok(snapshot),
                 final_for_request: !produce,
                 fresh_pane_frame: fast_has_request_fresh_frame,
             });
+            deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
         }
         // The consumer lane only misses when the ledger rollup itself could
         // not be read — a missing pane frame is a successful frameless fold.
@@ -236,22 +240,35 @@ fn run_fetch_cycle(
         let produced = run_produce_guarded(cursor, |cursor| {
             crate::sidebar::produce::produce_snapshot(cursor, state, runtime, &opts)
         });
-        if is_producer && let Ok(snapshot) = &produced {
-            evaluate_and_deliver_notifications(
-                config,
-                runtime,
-                notification_prefs,
-                notifications,
-                link_notifications,
-                diag,
-                snapshot,
-            );
+        match produced {
+            Ok(mut snapshot) => {
+                let deliveries = if is_producer {
+                    evaluate_notifications(
+                        runtime,
+                        notification_prefs,
+                        notifications,
+                        link_notifications,
+                        diag,
+                        &mut snapshot,
+                    )
+                } else {
+                    Vec::new()
+                };
+                post(FetchOutcome {
+                    snapshot: Ok(snapshot),
+                    final_for_request: true,
+                    fresh_pane_frame: request.mode.produces_fresh_panes(),
+                });
+                deliver_notifications(config, runtime, notification_prefs, diag, deliveries);
+            }
+            Err(err) => {
+                post(FetchOutcome {
+                    snapshot: Err(err),
+                    final_for_request: true,
+                    fresh_pane_frame: request.mode.produces_fresh_panes(),
+                });
+            }
         }
-        post(FetchOutcome {
-            snapshot: produced,
-            final_for_request: true,
-            fresh_pane_frame: request.mode.produces_fresh_panes(),
-        });
     }
 }
 
@@ -277,17 +294,29 @@ fn emit_producer_transition(
     }
 }
 
-fn evaluate_and_deliver_notifications(
-    config: &ServeConfig,
+fn evaluate_notifications(
     runtime: &RuntimePaths,
     prefs: &NotificationsPrefs,
     state: &mut NotificationState,
     link_state: &mut LinkNotificationState,
     diag: Option<&crate::diag::DiagSink>,
-    snapshot: &SidebarSnapshot,
-) {
+    snapshot: &mut SidebarSnapshot,
+) -> Vec<NotificationDelivery> {
     let now_ms = crate::sidebar::cache::unix_now_ms();
-    let mut notifications = state.evaluate(snapshot, prefs, now_ms);
+    let mut episodes = UnreadEpisodes::load(runtime);
+    let silent_opens = episodes.was_absent_on_load();
+    let marks = ReadMarks::load_merged(runtime);
+    let unread = episodes.reconcile(snapshot, &marks, silent_opens);
+    if let Some(diag) = diag {
+        emit_unread_reconcile_trace(diag, &unread.opened, &unread.cleared);
+    }
+    if (episodes.was_absent_on_load() || unread.changed)
+        && let Err(err) = episodes.persist(runtime)
+    {
+        tracing::debug!(error = %err, "unread episodes persist failed");
+    }
+
+    let mut notifications = state.evaluate(snapshot, &unread.opened, prefs, now_ms);
     let link = link_state.evaluate(snapshot, prefs, now_ms);
     if let Some(alert) = link.alert {
         emit_link_alert(diag, alert);
@@ -295,23 +324,42 @@ fn evaluate_and_deliver_notifications(
     if let Some(notification) = link.notification {
         notifications.push(notification);
     }
-    for notification in notifications {
+    notifications
+        .into_iter()
+        .map(|notification| {
+            let panes = notification_panes(snapshot, &notification);
+            let notification_kind = notification.kind_env().to_owned();
+            let recheck_unread = !matches!(
+                notification.notification_kind,
+                crate::sidebar::notify::NotificationKind::LinkDegraded
+                    | crate::sidebar::notify::NotificationKind::LinkRecovered
+            );
+            NotificationDelivery {
+                notification,
+                panes,
+                notification_kind,
+                recheck_unread,
+            }
+        })
+        .collect()
+}
+
+fn deliver_notifications(
+    config: &ServeConfig,
+    runtime: &RuntimePaths,
+    prefs: &NotificationsPrefs,
+    diag: Option<&crate::diag::DiagSink>,
+    deliveries: Vec<NotificationDelivery>,
+) {
+    for delivery in deliveries {
+        let notification = delivery.notification;
         if let Some(command) = prefs.command()
             && let Err(err) = crate::sidebar::notify::spawn_notify_command(command, &notification)
         {
             tracing::debug!(error = %err, "notify-command spawn failed");
         }
-        let panes = notification_panes(snapshot, &notification);
-        let notification_kind = notification.kind_env().to_owned();
-        // Agent notifications ring the sticky tab bell only while the targeted
-        // row is still unread; link reachability alerts ring directly.
-        let recheck_unread = !matches!(
-            notification.notification_kind,
-            crate::sidebar::notify::NotificationKind::LinkDegraded
-                | crate::sidebar::notify::NotificationKind::LinkRecovered
-        );
         if let Some(diag) = diag {
-            diag.trace_notify(notification_emitted_trace(&notification, &panes));
+            diag.trace_notify(notification_emitted_trace(&notification, &delivery.panes));
         }
         if let Err(err) = crate::ledger::wakeup::broadcast_sidebar_event(
             runtime,
@@ -319,13 +367,53 @@ fn evaluate_and_deliver_notifications(
             SidebarEvent::Notify {
                 title: notification.title,
                 body: notification.body,
-                panes,
-                recheck_unread,
-                notification_kind: Some(notification_kind),
+                panes: delivery.panes,
+                recheck_unread: delivery.recheck_unread,
+                notification_kind: Some(delivery.notification_kind),
             },
         ) {
             tracing::debug!(error = %err, "notification event broadcast failed");
         }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct NotificationDelivery {
+    notification: Notification,
+    panes: Vec<PaneId>,
+    notification_kind: String,
+    recheck_unread: bool,
+}
+
+fn emit_unread_reconcile_trace(
+    diag: &crate::diag::DiagSink,
+    opened: &[OpenedUnread],
+    cleared: &[ClearedUnread],
+) {
+    use crate::schema::notify_trace::NotifyTraceEvent;
+    for item in opened {
+        diag.trace_notify(NotifyTraceEvent::UnreadMarked {
+            row_id: item.row_id.clone(),
+            label: Some(item.label.clone()),
+            agent_kind: Some(item.agent_kind.clone()),
+            agent_id: Some(item.agent_id.clone()),
+            worktree: item.worktree.clone(),
+            pane_id: item.pane_id.clone(),
+            status: item.status.as_str().to_owned(),
+            episode_ms: item.episode_ms,
+        });
+    }
+    for item in cleared {
+        diag.trace_notify(NotifyTraceEvent::UnreadCleared {
+            row_id: item.row_id.clone(),
+            label: item.label.clone(),
+            agent_kind: item.agent_kind.clone(),
+            agent_id: item.agent_id.clone(),
+            worktree: item.worktree.clone(),
+            pane_id: item.pane_id.clone(),
+            cause: item.cause.as_str().to_owned(),
+            cleared_at_ms: item.cleared_at_ms,
+        });
     }
 }
 
@@ -344,7 +432,6 @@ fn notification_emitted_trace(
                 agent_id: agent.agent_id.clone(),
                 label: agent.label.clone(),
                 pane_id: agent.pane_id.clone(),
-                prev_status: agent.prev_status.map(|status| status.as_str().to_owned()),
                 new_status: agent.new_status.map(|status| status.as_str().to_owned()),
             })
             .collect(),

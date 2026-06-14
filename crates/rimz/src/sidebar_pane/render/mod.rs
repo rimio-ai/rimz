@@ -27,7 +27,6 @@ mod scrollbar;
 mod sections;
 mod theme;
 mod ui_state;
-mod unread;
 
 use self::ansi::{infallible, write_buffer_line_ansi};
 use self::chrome::hairline_rule;
@@ -42,7 +41,6 @@ pub(crate) use self::ui_state::{BodyFilter, Browse, DashboardTab, GateNotice, Ma
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
-pub(crate) use unread::{UnreadChange, UnreadChangeKind, UnreadTracker};
 
 use std::io::{self, Write};
 

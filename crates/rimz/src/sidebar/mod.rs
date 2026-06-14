@@ -23,6 +23,7 @@ pub mod produce;
 pub mod read_marks;
 pub mod snapshot;
 pub mod timing;
+pub mod unread;
 
 use std::collections::HashSet;
 use std::fs;
@@ -636,16 +637,19 @@ mod tests {
         let live_marks = h.runtime.sidebar_read_marks_path(&live);
         let dead_marks = h.runtime.sidebar_read_marks_path(&dead);
         let fresh_marks = h.runtime.sidebar_read_marks_path(&fresh);
-        for path in [&live_marks, &dead_marks, &fresh_marks] {
+        let manual_marks = h.runtime.read_marks_dir.join("manual.json");
+        for path in [&live_marks, &dead_marks, &fresh_marks, &manual_marks] {
             std::fs::write(path, br#"{"marks":{"row-a":1000}}"#).expect("write read marks");
         }
         make_stale(&live_marks);
         make_stale(&dead_marks);
+        make_stale(&manual_marks);
 
         sweep_orphan_runtime(&h.runtime);
 
         assert!(live_marks.exists(), "live owner's read marks kept");
         assert!(fresh_marks.exists(), "fresh startup-window read marks kept");
+        assert!(manual_marks.exists(), "manual API read marks kept");
         assert!(!dead_marks.exists(), "dead owner's read marks swept");
     }
 }

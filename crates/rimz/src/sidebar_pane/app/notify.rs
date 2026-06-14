@@ -55,7 +55,7 @@ pub(super) fn emit_terminal_notification(
 /// genuine, current unread attention: a daemon-only view never rings (its
 /// siblings are infrastructure host panes, never agents that need you), and an
 /// agent notification rings only while a targeted, owned pane's row is still
-/// unread — the same `UnreadTracker` signal stamped onto `SidebarRow::unread`,
+/// unread — the durable unread episode bit folded onto `SidebarRow::unread`,
 /// which stays set until a human looks. Link reachability alerts and pre-vetted
 /// unread reminders clear `recheck_unread` to ring whenever they own a targeted,
 /// non-daemon pane.

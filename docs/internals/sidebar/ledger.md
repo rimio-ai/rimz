@@ -107,11 +107,12 @@ sock/sidebar.<short_instance_id>.sock
 heartbeat/sidebar.<instance_id>.json
 heartbeat/resolver.<resolver_id>.json
 read-marks/sidebar.<instance_id>.json
+read-marks/manual.json
 ```
 
-Sockets, heartbeats, and read-mark receipts are liveness/runtime hints, not durable state. They're split from the ledger directory because `AF_UNIX` socket paths are short: 108 bytes on Linux and 104 bytes on macOS, including the terminator.
+Sockets, heartbeats, and renderer read-mark receipts are liveness/runtime hints, not durable state. The manual read-mark file is a room-runtime API receipt, kept until the room runtime is reset or collected. They're split from the ledger directory because `AF_UNIX` socket paths are short: 108 bytes on Linux and 104 bytes on macOS, including the terminator.
 
-`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files, stale sidebar wakeup sockets named by those heartbeat files, and stale sidebar read-mark receipts whose owning sidebar heartbeat has expired. It does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
+`rimz gc --older-than <duration>` removes stale resolver/sidebar heartbeat files, stale sidebar wakeup sockets named by those heartbeat files, and stale renderer read-mark receipts whose owning sidebar heartbeat has expired. It keeps `read-marks/manual.json` with the room runtime and does not remove `feed.*.sock` files because a long-running `rimz feed ask` may still own one. It also abandons pending feed items whose recorded owner process has exited. As the global garbage collector it additionally prunes provably-dead durable workspaces — a recorded project root that no longer exists, or an abandoned `rimz start` scaffold with no history. A workspace whose `workspace.json` is unreadable but that still holds history is kept and reported, never deleted.
 
 ## Default path
 

@@ -42,10 +42,10 @@ pub(crate) struct MakeUpHit {
 /// ```
 ///
 /// The line splits the make-up by who might want you. The left cluster is the
-/// rows worth a glance — `waiting` `?` and `failed` `!` (each blinking only
-/// while a visible matching row is unread, otherwise wearing its oldest row's
-/// age heat at rest), parked `paused` `⏸` (held amber, never heating), then
-/// `success` `✓` (blinking only while a visible success row is unread). The
+/// rows worth a glance — `waiting` `?`, `failed` `!`, parked `paused` `⏸`, and
+/// `success` `✓` (each blinking only while a visible matching row is unread;
+/// read `?`/`!` wear oldest-row age heat, while read `⏸`/`✓` hold their status
+/// tone). The
 /// right cluster is the
 /// live-capacity tail — working `⢿` (every running agent; the thinking head
 /// is a per-row animation head, not a bucket), then a free `idle` `○`. Every
@@ -124,35 +124,64 @@ pub(in crate::sidebar_pane::render) fn fleet_header_lines(
         ),
     );
     // Paused stays with the attention-class cluster, after `?` / `!`: parked,
-    // but still a row worth spotting. It renders like every other bucket — the
-    // amber glyph with a faint `0` when empty — so the make-up stays a fixed
-    // dashboard, scannable by position. It takes the held-amber resting tone
-    // (`status_style`), never the heating `attention_bucket_style`, since there
-    // is nothing to do until the provider recovers or the window resets.
+    // but still a row worth spotting. It rests on held amber and takes the shared
+    // unread treatment when the inbox bit is set.
     left.push_count(
         AgentStatus::Paused,
         status_chip_color(theme, AgentStatus::Paused),
         paused,
-        status_rest_style(theme, AgentStatus::Paused),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Paused,
+            status_rest_style(theme, AgentStatus::Paused),
+            status_chip_color(theme, AgentStatus::Paused),
+            now,
+            animation_phase,
+        ),
     );
     left.push_count(
         AgentStatus::Success,
         status_chip_color(theme, AgentStatus::Success),
         success,
-        success_bucket_style(theme, groups, now, animation_phase),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Success,
+            status_rest_style(theme, AgentStatus::Success),
+            status_chip_color(theme, AgentStatus::Success),
+            now,
+            animation_phase,
+        ),
     );
     let mut right = Cluster::new(theme, status_filter);
     right.push_count(
         AgentStatus::Running,
         status_chip_color(theme, AgentStatus::Running),
         working,
-        status_rest_style(theme, AgentStatus::Running),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Running,
+            status_rest_style(theme, AgentStatus::Running),
+            status_chip_color(theme, AgentStatus::Running),
+            now,
+            animation_phase,
+        ),
     );
     right.push_count(
         AgentStatus::Idle,
         status_chip_color(theme, AgentStatus::Idle),
         idle,
-        theme.body(),
+        unread_bucket_style(
+            theme,
+            groups,
+            AgentStatus::Idle,
+            theme.body(),
+            status_chip_color(theme, AgentStatus::Idle),
+            now,
+            animation_phase,
+        ),
     );
 
     // Split left / right when both clusters fit; on a narrow sidebar (the right
@@ -341,28 +370,34 @@ fn attention_bucket_style(
     )
 }
 
-fn success_bucket_style(
+fn unread_bucket_style(
     theme: &Theme,
     groups: &[SidebarWorktreeGroup],
+    status: AgentStatus,
+    rest_style: Style,
+    color: Option<Color>,
     now: Timestamp,
     animation_phase: u64,
 ) -> Style {
     let oldest_unread = groups
         .iter()
         .flat_map(|group| &group.rows)
-        .filter(|row| row.status() == Some(AgentStatus::Success) && row.unread)
+        .filter(|row| row.status() == Some(status) && row.unread)
         .map(|row| age_secs(row.last_activity, now))
         .max();
-    let color = theme.animations.status(AgentStatus::Success).color();
     if let Some(age) = oldest_unread {
-        // A finished result is a look, never an act, so the success bucket is
-        // never the lead — it settles to the steady bright crest.
-        return match unread_anim(theme, AgentStatus::Success, age, animation_phase, false) {
-            Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
-            None => theme.style(color, Modifier::BOLD),
+        // Non-action buckets never lead the room; they settle to the steady
+        // bright crest while the oldest actionable ask owns any continuous
+        // motion.
+        return match unread_anim(theme, status, age, animation_phase, false) {
+            Some(anim) => attention_cell_style(theme, color, anim, 0, 1),
+            None => color.map_or_else(
+                || rest_style.add_modifier(Modifier::BOLD),
+                |color| theme.style(color, Modifier::BOLD),
+            ),
         };
     }
-    status_rest_style(theme, AgentStatus::Success)
+    rest_style
 }
 
 fn oldest_matching_age(

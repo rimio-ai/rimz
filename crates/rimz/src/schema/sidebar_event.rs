@@ -104,11 +104,11 @@ pub enum SidebarEvent {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         panes: Vec<PaneId>,
         /// Whether the renderer rings the sticky tab bell only when the targeted
-        /// agent row is unread — the same `UnreadTracker` signal stamped onto
-        /// `SidebarRow::unread`. Agent notifications set this so a row that has
-        /// returned to running (no longer unread) does not ring; link
-        /// reachability alerts clear it to ring directly. `#[serde(default)]`
-        /// keeps the agent default (`true`) for older producers.
+        /// agent row is unread — the durable unread episode bit folded onto
+        /// `SidebarRow::unread`. Agent notifications set this so a read row does
+        /// not ring; link reachability alerts clear it to ring directly.
+        /// `#[serde(default)]` keeps the agent default (`true`) for older
+        /// producers.
         #[serde(default = "default_recheck_unread")]
         recheck_unread: bool,
         /// The producer's notification kind (`waiting`/`success`/`reminder`/…),

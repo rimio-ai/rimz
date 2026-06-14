@@ -88,6 +88,38 @@ fn cap_keeps_active_and_finished_rows_for_unread_tracking() {
 }
 
 #[test]
+fn cap_keeps_sticky_unread_idle_rows() {
+    let mut agents = idle_agents(8);
+    let mut panes = Vec::new();
+    for (idx, agent) in agents.iter_mut().enumerate() {
+        let pane = pane(
+            &format!("%agent-{idx}"),
+            agent.kind.as_str(),
+            agent.worktree_path.as_deref().unwrap_or("/repo/main"),
+        );
+        agent.pane = Some(pane.clone());
+        panes.push(pane);
+    }
+    let unread = BTreeSet::from(["sess-7".to_owned()]);
+
+    let snapshot = room(Vec::new(), agents).with_live_panes_and_unread(panes, None, &unread);
+    let visible = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .map(|row| (row.id.clone(), row.unread))
+        .collect::<Vec<_>>();
+
+    assert!(
+        visible.contains(&("sess-7".to_owned(), true)),
+        "a sticky unread idle row stays visible past the calm-row cap: {visible:?}"
+    );
+    assert!(
+        snapshot.worktree_groups[0].hidden_count > 0,
+        "the ordinary idle tail still trims behind +K more"
+    );
+}
+
+#[test]
 fn calm_groups_hold_order_through_member_status_churn() {
     // Calm worktree groups never leapfrog just because a member's calm status
     // flipped: the group tier collapses success/running/idle to one rank, so

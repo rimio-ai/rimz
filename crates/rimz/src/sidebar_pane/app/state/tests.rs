@@ -351,32 +351,38 @@ fn compute_next_state_keeps_frame_and_tracks_refresh_health() {
 }
 
 #[test]
-fn read_receipts_cross_instances_and_stay_episode_scoped() {
+fn focus_writes_read_receipt_and_clears_current_unread_row() {
     let ws = workspace();
     let (_dir, runtime) = runtime_for(&ws);
     let instance_a = SidebarInstanceId::new();
     let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
-    let mut b = ApplyHarness::for_runtime(&ws, runtime.clone(), SidebarInstanceId::new());
-    let old_stamp = fixed_time(1_700_000_000);
-    let new_stamp = fixed_time(4_000_000_000);
+    let mut focused = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
+    focused.worktree_groups[0].rows[0].unread = true;
 
-    a.apply(row_snapshot_at(&ws, AgentStatus::Success, true, old_stamp));
+    a.apply(focused);
     assert!(
         runtime.sidebar_read_marks_path(&instance_a).exists(),
-        "a focused fresh renderer writes a read receipt"
+        "a focused unread row writes a read receipt"
     );
     assert!(!row_unread(&a.current));
+}
 
-    b.apply(row_snapshot_at(&ws, AgentStatus::Running, false, old_stamp));
-    b.apply(row_snapshot_at(&ws, AgentStatus::Success, false, old_stamp));
-    assert!(!row_unread(&b.current), "the peer consumes the receipt");
+#[test]
+fn focus_clears_sticky_unread_after_status_returns_to_running() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
+    let mut focused = row_snapshot_at(&ws, AgentStatus::Running, true, fixed_time(1_700_000_100));
+    focused.worktree_groups[0].rows[0].unread = true;
 
-    b.apply(row_snapshot_at(&ws, AgentStatus::Running, false, new_stamp));
-    b.apply(row_snapshot_at(&ws, AgentStatus::Success, false, new_stamp));
+    a.apply(focused);
+
     assert!(
-        row_unread(&b.current),
-        "a later episode must not be cleared by the old receipt"
+        runtime.sidebar_read_marks_path(&instance_a).exists(),
+        "viewing a sticky unread row writes a read receipt even after status recovery"
     );
+    assert!(!row_unread(&a.current));
 }
 
 #[test]

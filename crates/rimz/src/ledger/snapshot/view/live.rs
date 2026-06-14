@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use crate::agent_activity::AgentActivity;
 use crate::feed::{AgentState, PaneRef};
 use crate::ids::PaneId;
@@ -24,7 +26,19 @@ impl SidebarSnapshot {
     /// building stays independent of any backend command.
     pub fn with_live_panes(mut self, panes: Vec<PaneRef>, exclude: Option<&PaneId>) -> Self {
         let panes = Self::card_admitted_live_panes(panes, exclude);
-        self.fold_admitted_live_panes(&panes, None);
+        self.fold_admitted_live_panes(&panes, None, None);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_live_panes_and_unread(
+        mut self,
+        panes: Vec<PaneRef>,
+        exclude: Option<&PaneId>,
+        unread_row_ids: &BTreeSet<String>,
+    ) -> Self {
+        let panes = Self::card_admitted_live_panes(panes, exclude);
+        self.fold_admitted_live_panes(&panes, None, Some(unread_row_ids));
         self
     }
 
@@ -42,8 +56,10 @@ impl SidebarSnapshot {
         mut self,
         panes: Vec<PaneRef>,
         lazy_pairings: &LazyAgentPairingResult,
+        unread_row_ids: Option<&BTreeSet<String>>,
     ) -> (Self, Vec<DiagEvent>) {
-        let diagnostics = self.fold_admitted_live_panes(&panes, Some(lazy_pairings));
+        let diagnostics =
+            self.fold_admitted_live_panes(&panes, Some(lazy_pairings), unread_row_ids);
         (self, diagnostics)
     }
 
@@ -51,8 +67,9 @@ impl SidebarSnapshot {
         &mut self,
         panes: &[PaneRef],
         lazy_pairings: Option<&LazyAgentPairingResult>,
+        unread_row_ids: Option<&BTreeSet<String>>,
     ) -> Vec<DiagEvent> {
-        let projection = rows_from_panes(
+        let mut projection = rows_from_panes(
             &self.agents,
             &self.needs_attention,
             &self.resolver_working,
@@ -65,6 +82,9 @@ impl SidebarSnapshot {
             self.panes_observed_at_ms.or(self.panes_produced_at_ms),
             self.now,
         );
+        if let Some(unread_row_ids) = unread_row_ids {
+            stamp_unread_rows(&mut projection.rows, unread_row_ids);
+        }
         self.agent_panes = projection.agent_panes;
         self.worktree_groups = build_worktree_groups_from_rows(
             projection.rows,
@@ -231,5 +251,14 @@ impl SidebarSnapshot {
             }
         }
         self
+    }
+}
+
+fn stamp_unread_rows(
+    rows: &mut [crate::ledger::snapshot::row::SidebarRow],
+    unread_row_ids: &BTreeSet<String>,
+) {
+    for row in rows {
+        row.unread = unread_row_ids.contains(&row.id);
     }
 }
