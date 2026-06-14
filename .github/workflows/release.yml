@@ -25,6 +25,8 @@ env:
   RUST_BACKTRACE: 1
   ZIG_VERSION: 0.16.0
   ZIG_X86_64_LINUX_SHA256: 70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00
+  RCODESIGN_VERSION: 0.29.0
+  RCODESIGN_X86_64_LINUX_SHA256: dbe85cedd8ee4217b64e9a0e4c2aef92ab8bcaaa41f20bde99781ff02e600002
 
 jobs:
   release:
@@ -147,6 +149,21 @@ jobs:
           "$zig_dir/zig" version
           cargo zigbuild --help >/dev/null
 
+          # rcodesign ad-hoc signs the cross-built Apple Silicon binary so it
+          # will exec on arm64. apple-codesign ships no cargo-binstall metadata
+          # and tags releases as `apple-codesign/<ver>`, so a pinned checksummed
+          # release download is deterministic where binstall is not.
+          rcodesign_archive="apple-codesign-${RCODESIGN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+          rcodesign_archive_path="${RUNNER_TEMP:-/tmp}/${rcodesign_archive}"
+          curl -fsSL "https://github.com/indygreg/apple-platform-rs/releases/download/apple-codesign%2F${RCODESIGN_VERSION}/${rcodesign_archive}" -o "$rcodesign_archive_path"
+          printf '%s  %s\n' "$RCODESIGN_X86_64_LINUX_SHA256" "$rcodesign_archive_path" | sha256sum -c -
+          rcodesign_dir="${RUNNER_TEMP:-/tmp}/rcodesign-${RCODESIGN_VERSION}"
+          rm -rf "$rcodesign_dir"
+          mkdir -p "$rcodesign_dir"
+          tar -xzf "$rcodesign_archive_path" -C "$rcodesign_dir" --strip-components=1
+          echo "$rcodesign_dir" >> "$GITHUB_PATH"
+          "$rcodesign_dir/rcodesign" --version
+
       # Self-gate: tag and manual-dispatch releases re-run the full gate on the
       # release commit. The `workflow_run` path already passed CI, so it skips.
       - name: Gate on CI
@@ -162,6 +179,7 @@ jobs:
           WORKFLOW_RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
+          owner="${GITHUB_REPOSITORY%/*}"
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             # The push trigger is tags-only, so this is a `v*` version tag.
             release_tag="${GITHUB_REF_NAME}"
@@ -169,7 +187,12 @@ jobs:
             release_prerelease=false
             release_rolling=false
             release_commit="${GITHUB_SHA}"
-            release_body="Release ${GITHUB_REF_NAME} at ${release_commit}."
+            # The release body is the runtime-generated place the concrete tap
+            # host is allowed to appear; it is built from ${GITHUB_SERVER_URL},
+            # never hardcoded in tracked source. The 4-space indent renders the
+            # commands as a code block in the release notes.
+            release_body="$(printf 'Release %s at %s.\n\nInstall with Homebrew:\n\n    brew tap %s/rimz %s/%s/homebrew-rimz\n    brew install %s/rimz/rimz\n' \
+              "${GITHUB_REF_NAME}" "${release_commit}" "${owner}" "${GITHUB_SERVER_URL}" "${owner}" "${owner}")"
           else
             # workflow_run (CI green on the default branch) or manual dispatch:
             # the rolling build published under a moving `latest-main` tag.
@@ -288,3 +311,37 @@ jobs:
             upload_artifact "${dist_dir}/${asset_name}" "$asset_name"
           done < "${dist_dir}/SHA256SUMS"
           upload_artifact "${dist_dir}/SHA256SUMS" SHA256SUMS
+
+      # Tags only: the rolling `latest-main` prerelease never touches the tap.
+      # The push trigger is tags-only in this workflow, so `event_name == push`
+      # selects real `v*` releases.
+      - name: Publish Homebrew tap formula
+        if: ${{ github.event_name == 'push' }}
+        env:
+          TOKEN: ${{ secrets.TAP_PUSH_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner="${GITHUB_REPOSITORY%/*}"
+          repo="${GITHUB_REPOSITORY#*/}"
+          tap_url="${GITHUB_SERVER_URL}/${owner}/homebrew-rimz.git"
+          tap_dir="$(mktemp -d)"
+          auth_header="Authorization: token ${TOKEN}"
+
+          git -c "http.extraheader=${auth_header}" clone --depth 1 "$tap_url" "$tap_dir"
+
+          RIMZ_BREW_VERSION="${GITHUB_REF_NAME}" \
+          RIMZ_BREW_BASE_URL="${GITHUB_SERVER_URL}/${owner}/${repo}/releases/download/${GITHUB_REF_NAME}" \
+          RIMZ_BREW_HOMEPAGE="${GITHUB_SERVER_URL}/${owner}/${repo}" \
+          RIMZ_BREW_OUT="${tap_dir}/Formula/rimz.rb" \
+            cargo xtask brew-formula
+
+          git -C "$tap_dir" config user.name "gitea-actions"
+          git -C "$tap_dir" config user.email "gitea-actions@localhost"
+          git -C "$tap_dir" add Formula/rimz.rb
+          if git -C "$tap_dir" diff --cached --quiet; then
+            echo "formula already up to date"
+          else
+            git -C "$tap_dir" commit -m "rimz ${GITHUB_REF_NAME}"
+            git -C "$tap_dir" -c "http.extraheader=${auth_header}" push origin HEAD
+          fi
