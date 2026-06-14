@@ -525,10 +525,6 @@ impl MuxBackend for ZellijBackend {
         Ok(closed)
     }
 
-    fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
-        self.wake_sidebar_pipe(session_name, bytes)
-    }
-
     fn ensure_presence_plugin(&self, opts: &super::super::PresencePluginOptions) -> Result<()> {
         self.ensure_presence_plugin_for(opts)
     }

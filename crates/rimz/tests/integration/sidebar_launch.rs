@@ -282,10 +282,6 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> rimz::mux::Result<()> {
-        Ok(())
-    }
-
     fn version(&self) -> rimz::mux::Result<String> {
         Ok("fake 1.0.0".to_owned())
     }

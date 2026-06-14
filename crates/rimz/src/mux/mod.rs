@@ -544,8 +544,6 @@ pub trait MuxBackend: Send + Sync {
         let _ = (session, anchor);
         Ok(Vec::new())
     }
-    /// Best-effort wakeup; sockets are the channel of record per the docs.
-    fn wake_sidebar(&self, session_name: &str, bytes: &[u8]) -> Result<()>;
     /// Load the session's presence plugin — the push channel that nudges the
     /// sidebar producer off its pane poll. A latency hint layered over the
     /// poll truth, so failure costs freshness only and callers never block on

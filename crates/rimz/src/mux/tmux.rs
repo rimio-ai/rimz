@@ -6,8 +6,7 @@
 //! (`TmuxBackend::default()`) and inherits the system default socket.
 //!
 //! Caveats live in `docs/internals/sidebar/multiplexers.md` under "tmux backend
-//! caveats" — namely that `wake_sidebar` is a no-op (tmux has no pipe
-//! equivalent) and that the managed sidebar pane is the channel of record.
+//! caveats" — namely that the managed sidebar pane is the channel of record.
 
 mod backend;
 mod options;

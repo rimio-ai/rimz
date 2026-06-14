@@ -105,26 +105,6 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
 }
 
 impl ZellijBackend {
-    pub(super) fn wake_sidebar_pipe(&self, session_name: &str, bytes: &[u8]) -> Result<()> {
-        // Per-instance socket fanout is the channel of record. The broadcast
-        // `zellij pipe` here is a latency optimization on top. Program (and any
-        // `RIMZ_ZELLIJ_BIN` test-shim override) and runtime dir both come from
-        // `self.cmd()`, the single chokepoint.
-        let payload = String::from_utf8_lossy(bytes).to_string();
-        self.cmd()
-            .args([
-                "--session",
-                session_name,
-                "pipe",
-                "--name",
-                "rimz::feed",
-                "--",
-                &payload,
-            ])
-            .run()
-            .map(|_| ())
-    }
-
     pub(super) fn ensure_presence_plugin_for(
         &self,
         opts: &super::super::PresencePluginOptions,

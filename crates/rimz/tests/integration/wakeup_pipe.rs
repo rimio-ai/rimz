@@ -1,10 +1,10 @@
 //! Verifies the wakeup-walk contract: after a ledger write, the walk fans out a
 //! per-instance UDP datagram to every fresh sidebar — and does **not** shell out
 //! to `zellij`. The broadcast `zellij pipe` it used to issue alongside the
-//! datagram had no consumer (the plugin rail is not built; the native pane wakes
-//! over the socket), so spawning a `zellij` subprocess per write per session was
-//! pure cost and was removed. This locks in that the datagram still arrives and
-//! that no `zellij pipe` is spawned.
+//! datagram had no consumer — the native pane wakes over the socket — so
+//! spawning a `zellij` subprocess per write per session was pure cost and was
+//! removed. This locks in that the datagram still arrives and that no
+//! `zellij pipe` is spawned.
 //!
 //! No live Zellij needed — the `rimz` subprocess we spawn here gets
 //! `RIMZ_ZELLIJ_BIN` pointed at a `zellij-trace` shim built by Cargo from

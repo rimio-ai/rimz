@@ -533,13 +533,6 @@ impl MuxBackend for TmuxBackend {
         self.kill_pane(pane)
     }
 
-    fn wake_sidebar(&self, _session_name: &str, _bytes: &[u8]) -> Result<()> {
-        // tmux has no pipe equivalent; the sidebar wakeup socket is the
-        // only channel. Socket fanout lives above this trait in the ledger
-        // module.
-        Ok(())
-    }
-
     fn version(&self) -> Result<String> {
         if let Some(cached) = self.version.get() {
             return Ok(cached.clone());
