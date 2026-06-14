@@ -168,7 +168,9 @@ impl Table {
                 Body::Row(row) => self.write_row(w, row, &widths)?,
                 Body::Section(label) => {
                     writeln!(w)?;
-                    cell(label.clone()).fg(palette::ACCENT.bold()).write_styled(w)?;
+                    cell(label.clone())
+                        .fg(palette::ACCENT.bold())
+                        .write_styled(w)?;
                     writeln!(w)?;
                 }
             }

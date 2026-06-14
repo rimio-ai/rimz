@@ -399,11 +399,12 @@ pub fn group_live_agents_by_worktree<'a>(
     // Split a path that hosts more than one branch into per-branch pods, exactly
     // as the sidebar's row fold does, so two checkouts of one path never collapse
     // under a single mislabeled header.
-    let multi_branch = multi_branch_paths(
-        agents
-            .iter()
-            .map(|agent| (agent.worktree_path.as_deref(), agent.worktree_branch.as_deref())),
-    );
+    let multi_branch = multi_branch_paths(agents.iter().map(|agent| {
+        (
+            agent.worktree_path.as_deref(),
+            agent.worktree_branch.as_deref(),
+        )
+    }));
     let mut by_key: BTreeMap<String, AgentWorktreeGroup<'a>> = BTreeMap::new();
     for &agent in agents {
         let split_by_branch = agent

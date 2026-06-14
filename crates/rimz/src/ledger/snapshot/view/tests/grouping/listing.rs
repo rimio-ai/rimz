@@ -17,8 +17,13 @@ fn groups_by_worktree_attention_first_external_last_uncapped() {
     // Pad the main pod past the sidebar's 6-row cap to prove the roster is uncapped.
     for i in 0..8 {
         agents.push(
-            agent("claude", &format!("main-extra-{i}"), AgentStatus::Idle, 1 + i)
-                .worktree("/repo/main"),
+            agent(
+                "claude",
+                &format!("main-extra-{i}"),
+                AgentStatus::Idle,
+                1 + i,
+            )
+            .worktree("/repo/main"),
         );
     }
     let snapshot = room(Vec::new(), agents);
