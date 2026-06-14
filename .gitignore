@@ -40,3 +40,7 @@ plan.md
 status.md
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Code review artifacts (reviewer findings and their resolutions)
+review.md
+resolution.md
