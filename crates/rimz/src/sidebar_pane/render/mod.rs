@@ -220,10 +220,10 @@ pub fn draw_with_ui(
 }
 
 /// Ease the selected card's flat background band darker per column at truecolor
-/// depth — the "lit panel" finish. Composition lays the band as one flat tone
-/// (`Theme::selection_band`); here each banded cell takes its column's reading
-/// from `Theme::selection_band_at`, full at the bright spine (column 0) and a
-/// touch darker toward the rail, so the selection anchor reads as one lit panel
+/// depth — the recessed "lit panel" finish. Composition lays the band as one flat
+/// tone (`Theme::selection_band`); here each banded cell takes its column's reading
+/// from `Theme::selection_band_at`, the recessed spine tone at column 0 and a touch
+/// darker toward the rail, so the selection anchor reads as one recessed lit panel
 /// with depth. Only cells carrying the exact flat band tone are touched, so the
 /// provider and make-up chip fills and every other background are left alone. A
 /// no-op at indexed depth and under `NO_COLOR`, where the band is flat or gone —

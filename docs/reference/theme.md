@@ -77,7 +77,7 @@ The palette runs a loudness hierarchy — attention loudest, selection next, str
 | `faint` | faintest chrome: bar tracks, `·` separators, dotted dividers |
 | `rule` | the darkest chrome (the scrollbar track), a step below `faint` |
 | `selection` | the selection tone: the selected card's bright `▌` spine and the dim `▎` lane bracket around its worktree |
-| `selection_bg` | the selected card's faint background band, behind every line of the card; a subdued blend of the scheme's `colors.selection.background` toward the background, else a faint background tint. At truecolor depth a finish eases the band a touch darker from the bright `▌` spine to the rail, so the selected card reads as one lit panel |
+| `selection_bg` | the selected card's background band, behind every line of the card; a subdued blend of the scheme's `colors.selection.background` toward the background, else a faint background tint. At truecolor depth the band recesses below this tone and eases darker from the `▌` spine to the rail, so the selected card reads as one recessed lit panel |
 
 ```toml
 [sidebar.theme]
@@ -105,7 +105,7 @@ A subtle tone step — a small lightness dim or a breathing lift — renders as 
 
 The calm card name shows the rule: at truecolor it dims its brand lightness a step, and at 256-color it keeps the full brand while the selection bar and the description carry the calm cue. Tones that already differ by a full cube cell — the neutral ladder and the health ramp — stay color at every depth, since each step lands on its own index.
 
-The selected card's `selection_bg` band is a full dark fill, not a subtle step, so it lands on its own cube cell and renders at truecolor and 256-color alike; only `NO_COLOR` drops it, leaving the bright `▌` spine and bold weight to carry the selection. The lit-panel finish on top of that fill *is* a subtle step — a small per-column lightness falloff from the bright spine to the rail — so it paints only at truecolor; the 256-color cube is too coarse for the sub-cell ramp and keeps the flat fill, the same fallback the breathing lift takes.
+At 256-color the selected card's `selection_bg` band is a full dark fill, not a subtle step, so it lands on its own cube cell and renders flat; only `NO_COLOR` drops it, leaving the bright `▌` spine and bold weight to carry the selection. At truecolor the band recesses below `selection_bg` into a lit panel — the spine column starts at the midpoint of its former gradient and eases a small per-column lightness falloff darker to the rail — so the selected card sinks into a well, set off from the lighter unread wash that rises above the card surface. That recessed ramp is a sub-cell step, so the 256-color cube keeps the flat `selection_bg` fill, the same fallback the breathing lift takes.
 
 ## Custom Theme Files
 
@@ -189,7 +189,7 @@ Every role uses the same model: frames, color, effect, and speed. The unread att
 
 The continuous signal is reserved for the **one row that most needs you** — the oldest unread row that needs an answer (`waiting` or `failed`, the `␣` triage head). Only that lead row carries the chosen `shimmer` or `blink`, so a single pane is the only thing in motion; every other unread row, an unread `✓` result included, settles to the steady `bright` crest — unmistakable by contrast against the calm rows, but still. A transition flash already announced each row — an ask as it enters, a result as its turn lands — so the steady crest is the rest after the announcement, not a missed cue.
 
-An unread card also grounds on a faint full-card **wash** in its status hue — `good` behind a finished `✓`, `warn` behind a waiting `?`, `alarm` behind a failed `!` — the dark `selection_bg` panel the selection uses, cast toward the status tone. A whole-card surface reads at a scanning glance where the one-cell glyph cannot, and it holds still, so continuous motion stays reserved to the lead row. The wash stays flat — the per-column lit-panel falloff is the selected card's signature — the neutral selection band wins when a card is both selected and unread, and `NO_COLOR` drops it to the weight-carried unread look.
+An unread card also grounds on a soft, uniform **wash** — one panel marking the row as unseen the way a mail inbox shades an unread line, with the row's status carried by its `?`/`!`/`✓` glyph. The wash is a lighter tint of the selection blue: the `selection_bg` panel lifted in lightness with its cool hue held, so it lands on the same cool-blue family the scheme derives for the selection band, one clear step brighter. A whole-card surface reads at a scanning glance where the one-cell glyph cannot, and it holds still, so continuous motion stays reserved to the lead row. The selected card keeps the attention through its bright `▌` spine and the per-column lit-panel falloff, so the brighter unread fill is the "needs you" surface without ever reading as selection; the selection band stays the selected card's signature and wins when a card is both selected and unread, and off truecolor the wash drops to the weight-carried unread look, the surface being a truecolor refinement.
 
 | `unread` | the lead row reads as |
 | --- | --- |

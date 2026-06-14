@@ -233,7 +233,7 @@ fn render_omits_history_sections() {
 }
 
 #[test]
-fn unread_result_card_rests_on_a_status_hued_wash() {
+fn unread_result_card_rests_on_a_uniform_unread_wash() {
     let mut done = agent(
         "done-1",
         "claude",
@@ -245,14 +245,15 @@ fn unread_result_card_rests_on_a_status_hued_wash() {
     done.last_activity = fixed_now() - Duration::from_secs(60);
     let mut snapshot = snapshot_with(Vec::new(), vec![done]);
     snapshot.worktree_groups[0].rows[0].unread = true;
-    // Indexed depth so the wash lands on a single cube cell the assertion can pin.
-    let theme = Theme::fixed(false);
+    // Truecolor: the wash is a sub-cube panel, painted only where the depth can
+    // carry it.
+    let theme = super::super::truecolor_sidebar_theme();
     let wash = theme
-        .unread_wash(AgentStatus::Success)
-        .expect("a finished card washes at indexed depth");
+        .unread_wash()
+        .expect("a finished card washes at truecolor");
 
     // Nothing selected (index out of range), so this unread result is not the
-    // selection: the whole card grounds on its status-hued wash.
+    // selection: the whole card grounds on its uniform unread wash.
     let lines = group_lines(&snapshot, &theme, 99);
     let name = lines
         .iter()
@@ -262,12 +263,12 @@ fn unread_result_card_rests_on_a_status_hued_wash() {
     assert_eq!(
         name.style.bg,
         Some(wash),
-        "the unread result rests on the status-hued wash, not bare ground"
+        "the unread result rests on the uniform unread wash, not bare ground"
     );
     assert_ne!(
         Some(wash),
         theme.selection_band(),
-        "the wash is its own hued panel, never the neutral selection band"
+        "the wash is its own panel, a lighter tint of the selection blue"
     );
 
     // The look clears on read: a read result carries no wash.
@@ -281,5 +282,13 @@ fn unread_result_card_rests_on_a_status_hued_wash() {
     assert_eq!(
         read_name.style.bg, None,
         "a read result rests on no wash — the cue clears on the look"
+    );
+
+    // Off truecolor the faint panel folds onto the card surface in the 256-color
+    // cube, so it drops to the unread bold weight instead.
+    assert_eq!(
+        Theme::fixed(false).unread_wash(),
+        None,
+        "indexed depth drops the sub-cube wash; bold weight carries the unread cue"
     );
 }

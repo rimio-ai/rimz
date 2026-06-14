@@ -99,13 +99,14 @@ pub(super) fn row_lines(
         selected,
         is_lead,
     );
-    // An unread card that is not the selection grounds on a faint status-hued
-    // wash — a whole-card surface that reads at a scanning glance where the
-    // one-cell glyph is too small to. Gated on the same `Blink` emphasis the rest
-    // of the unread treatment reads from, so the wash and the glyph/name/buckets
-    // turn on together; selection's neutral band wins when both apply.
+    // An unread card that is not the selection grounds on a soft, uniform unread
+    // wash — a whole-card surface, a lighter tint of the selection blue, that reads
+    // at a scanning glance where the one-cell glyph is too small to, the status
+    // carried by the glyph. Gated on the same `Blink` emphasis the rest of the
+    // unread treatment reads from, so the wash and the glyph/name/buckets turn on
+    // together; the selection band wins when both apply.
     let wash = (!selected && attention.emphasis == CardEmphasis::Blink)
-        .then(|| theme.unread_wash(status))
+        .then(|| theme.unread_wash())
         .flatten();
     // Auto/expanded modes keep the stable card shape: selection only appends
     // subagents (expanded appends them on every card). Compact is deliberately

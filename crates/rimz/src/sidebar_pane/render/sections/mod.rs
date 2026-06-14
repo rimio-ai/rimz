@@ -122,10 +122,11 @@ pub(super) enum Gutter {
 /// cells keep their own tone untouched.
 ///
 /// `wash` is the resolved unread-card background ([`Theme::unread_wash`]) for an
-/// unread card that is not itself the selection; it grounds the card in a faint
-/// status-hued panel so the whole row reads as unseen at a glance. The neutral
-/// selection band always wins when both apply, so a selected card never doubles
-/// the cue, and chrome (header, `+K more`) passes `None`.
+/// unread card that is not itself the selection; it grounds the card in a soft,
+/// uniform panel — a lighter tint of the selection blue — so the whole row reads as
+/// unseen at a glance. The selection band always wins when both apply, so a
+/// selected card never doubles the cue, and chrome (header, `+K more`) passes
+/// `None`.
 fn with_gutter(
     theme: &Theme,
     line: Line<'static>,
@@ -138,8 +139,8 @@ fn with_gutter(
     // At truecolor depth a post-pass ([`super::lift_selection_band`]) eases that
     // fill a touch darker from the bright spine to the rail, giving the panel
     // depth without splitting the composed spans. An unread non-selected card
-    // grounds in its status-hued `wash` here instead — the same panel surface,
-    // tinted toward what the row needs. The lane bracket and chrome carry no
+    // grounds in its uniform `wash` here instead — the same panel surface, a
+    // lighter tint of the selection blue. The lane bracket and chrome carry no
     // band; `NO_COLOR` drops it and the bright spine plus bold weight carry the
     // selection alone.
     let band = match gutter {

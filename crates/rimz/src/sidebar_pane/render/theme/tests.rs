@@ -3,7 +3,6 @@
 
 use super::*;
 use crate::config::{Semantic, SidebarAnimationsConfig, ThemeMode};
-use crate::feed::AgentStatus;
 
 fn indices(palette: Palette) -> [Color; 13] {
     [
@@ -666,6 +665,15 @@ fn selection_band_eases_darker_from_spine_to_rail_at_truecolor() {
     let theme = truecolor_default();
     let span = 30usize;
     let flat = theme.selection_band().expect("a band at truecolor");
+    // The band recesses below the raw `selection_bg`: its spine starts at the
+    // midpoint of the former gradient, so the selected card sinks into a well rather
+    // than rising as a bright panel.
+    assert!(
+        luminance(flat) < luminance(theme.palette.selection_bg),
+        "the spine recesses below the raw selection_bg: {} !< {}",
+        luminance(flat),
+        luminance(theme.palette.selection_bg),
+    );
     // The spine column reads the full flat band; every column past it eases no
     // brighter and the rail lands strictly darker — the lit-panel falloff. The
     // per-column step is sub-cell, so adjacent columns may quantize equal, but
@@ -725,78 +733,54 @@ fn band_is_lit_only_at_truecolor_depth() {
     assert!(!Theme::fixed(true).band_is_lit());
 }
 
-/// Euclidean sRGB distance, so a wash can be shown to lean toward a hue without
-/// reaching into the private OKLab type.
-fn rgb_dist(left: Color, right: Color) -> f32 {
-    let left = color_to_rgb(left).expect("a concrete tone");
-    let right = color_to_rgb(right).expect("a concrete tone");
-    let square = |a: u8, b: u8| (f32::from(a) - f32::from(b)).powi(2);
-    (square(left.0, right.0) + square(left.1, right.1) + square(left.2, right.2)).sqrt()
-}
-
 #[test]
-fn unread_wash_grounds_a_card_panel_tinted_by_status_hue() {
+fn unread_wash_is_a_lighter_tint_of_the_selection_blue() {
     let theme = truecolor_default();
     let selection = theme
         .selection_band()
         .expect("a selection band at truecolor");
-    let done = theme
-        .unread_wash(AgentStatus::Success)
-        .expect("a finished card washes");
-    let waiting = theme
-        .unread_wash(AgentStatus::Waiting)
-        .expect("a waiting card washes");
-    let failed = theme
-        .unread_wash(AgentStatus::Failed)
-        .expect("a failed card washes");
+    let wash = theme
+        .unread_wash()
+        .expect("an unread card washes at truecolor");
 
-    // A hued panel, never the neutral selection band — a selected and an unread
-    // card never read alike — and each status wears its own hue.
-    for wash in [done, waiting, failed] {
-        assert_ne!(
-            wash, selection,
-            "the unread wash is not the selection panel"
-        );
-    }
-    assert_ne!(done, waiting);
-    assert_ne!(done, failed);
-    assert_ne!(waiting, failed);
-
-    // Each wash leans toward its status tone: it sits closer to that hue than the
-    // neutral selection panel does, so the tint reads as the row's status family.
-    assert!(
-        rgb_dist(done, theme.palette.good) < rgb_dist(selection, theme.palette.good),
-        "the done wash leans toward green, away from the neutral panel"
-    );
-    assert!(
-        rgb_dist(failed, theme.palette.alarm) < rgb_dist(selection, theme.palette.alarm),
-        "the failed wash leans toward the alarm hue"
-    );
-    assert!(
-        rgb_dist(waiting, theme.palette.warn) < rgb_dist(selection, theme.palette.warn),
-        "the waiting wash leans toward the warn hue"
+    // One uniform tone for every unread row — the status rides the glyph, not the
+    // panel — and it is its own surface, never the selection band itself.
+    assert_ne!(
+        wash, selection,
+        "the unread wash is not the selection panel"
     );
 
-    // And it stays a dark background — well below its own bright status tone — so
-    // the card's text holds over it.
+    // It is a *lighter* tint of the same blue: the unread marker takes the brighter
+    // fill — the "needs you" surface — while the selection stays marked by its
+    // bright spine rather than by the brightest fill.
     assert!(
-        luminance(done) < luminance(theme.palette.good),
-        "the wash stays a dark panel beneath its bright status tone"
+        luminance(wash) > luminance(selection),
+        "the unread wash is a lighter tint than the selection band"
+    );
+
+    // And it holds the selection's cool blue rather than drifting to a neutral gray
+    // or a green cast: blue leads, green sits between, red trails — the panel's own
+    // channel order, just lifted.
+    let (red, green, blue) = color_to_rgb(wash).expect("a concrete wash tone");
+    assert!(
+        blue > green && green > red,
+        "the wash stays in the scheme's cool-blue family: {wash:?}"
     );
 }
 
 #[test]
-fn unread_wash_is_absent_for_calm_states_and_under_no_color() {
-    let theme = truecolor_default();
-    for status in [AgentStatus::Idle, AgentStatus::Running, AgentStatus::Paused] {
-        assert_eq!(
-            theme.unread_wash(status),
-            None,
-            "{status:?} never originates an unread look, so it carries no wash"
-        );
-    }
+fn unread_wash_is_truecolor_only() {
+    // The unread surface is a truecolor refinement, like the selected card's lit
+    // panel: at indexed depth and under NO_COLOR it drops, and the unread bold
+    // weight on the glyph, name, and description carries the cue at every depth.
+    assert!(truecolor_default().unread_wash().is_some());
     assert_eq!(
-        Theme::fixed(true).unread_wash(AgentStatus::Success),
+        Theme::fixed(false).unread_wash(),
+        None,
+        "indexed depth drops the sub-cube wash; bold weight carries the unread look"
+    );
+    assert_eq!(
+        Theme::fixed(true).unread_wash(),
         None,
         "NO_COLOR drops the wash; weight carries the unread look"
     );

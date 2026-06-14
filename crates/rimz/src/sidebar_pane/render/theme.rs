@@ -19,7 +19,6 @@ use crate::config::{
     AnimationColor, ColorDepth, GlowMode, Semantic, SidebarConfig, SidebarThemeConfig, ThemeColor,
     nearest_xterm_index, xterm_rgb,
 };
-use crate::feed::AgentStatus;
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
 
@@ -42,23 +41,35 @@ pub(crate) use raw::RawPalette;
 /// recession visible for every brand, including one already at the body weight.
 const SOFT_BRAND_DIM: f32 = 0.05;
 
-/// How far the selected card's background band eases darker in OKLab lightness
-/// from its bright `▌` spine (column 0) to the right rail — the "lit panel"
-/// falloff. A subtle step: reads as depth on the selection anchor, never a
-/// stripe. Truecolor only; the indexed cube is too coarse for the sub-cell ramp
-/// and keeps the flat band.
-const SELECTION_BAND_FALLOFF: f32 = 0.08;
+/// The selected card's background band recesses below `selection_bg`: its bright
+/// `▌` spine column (column 0) starts `SELECTION_BAND_SPINE_DIM` darker in OKLab
+/// lightness — the midpoint of the band's former spine-to-rail gradient — so the
+/// selected card reads as a recessed well marked by its bright spine, sitting
+/// clearly apart from the lighter unread wash that rises above the card surface.
+/// From there it eases a further `SELECTION_BAND_FALLOFF` darker toward the right
+/// rail — the "lit panel" finish, a subtle sub-cell step that reads as depth, never
+/// a stripe. Both are truecolor only: the indexed cube is too coarse for the ramp
+/// and keeps the flat `selection_bg` band, where there is no truecolor-only unread
+/// wash to recess away from.
+const SELECTION_BAND_SPINE_DIM: f32 = 0.04;
+const SELECTION_BAND_FALLOFF: f32 = 0.04;
 
-/// How far the unread card wash pulls the dark selection panel toward the row's
-/// status hue, as an OKLab blend fraction. The wash grounds on the same
-/// `selection_bg` panel selection uses — so an unread card reads as a card panel,
-/// one depth language with selection — then tints it toward `good` (a finished
-/// `✓`), `warn` (a waiting `?`), or `alarm` (a failed `!`): far enough that the
-/// hue is unmistakable at a scanning glance, short enough that the panel stays
-/// dark behind the text. A whole-card surface carries the unread cue where a
-/// one-cell glyph is too small to catch the eye, while staying perfectly still —
-/// the fleet stays calm and the single lead row keeps the only motion.
-const UNREAD_WASH_TINT: f32 = 0.42;
+/// The unread card wash: a soft, uniform background marking an unread row at a
+/// scanning glance — the shade-marks-unread pattern of a mail inbox, with the row's
+/// status carried by its `?`/`!`/`✓` glyph. It is a lighter tint of the selection
+/// blue: the `selection_bg` panel lifted in OKLab lightness with its cool hue held,
+/// landing on the same cool-blue family the scheme derives for the selection band,
+/// one clear step brighter. The selected card keeps the attention through its
+/// bright `▌` spine and per-column lit falloff, so the unread wash can take the
+/// brighter fill — the "needs you" surface — while the selection band stays the
+/// selected card's signature and wins when a card is both selected and unread. One
+/// tone for every unread row, perfectly still: the fleet stays calm and the single
+/// lead row keeps the only motion. Truecolor only, like that lit falloff: the
+/// unread surface is a refinement over the bold weight that carries the unread cue
+/// at every depth, so indexed and `NO_COLOR` lean on that weight. Lever:
+/// `UNREAD_WASH_LIFT`, the lightness step above the selection band — a larger lift
+/// makes a brighter, more present marker.
+const UNREAD_WASH_LIFT: f32 = 0.03;
 
 /// The chip ink: a fixed near-black laid on a colored chip fill, crisp on every
 /// mid-brightness fill — the provider tab rail's brand fill and the make-up
@@ -590,16 +601,17 @@ impl Theme {
     }
 
     /// The selected card's background band tone for `column` of a `span`-cell
-    /// card, or `None` under `NO_COLOR`. At truecolor the band reads as lit from
-    /// its bright `▌` spine: column 0 holds the full `selection_bg` and each
-    /// column eases up to [`SELECTION_BAND_FALLOFF`] darker in OKLab lightness
-    /// toward the right rail, so the whole card reads as one lit panel — depth,
-    /// no motion. At indexed depth the 6×6×6 cube is too coarse for that
-    /// sub-cell ramp, so every column returns the flat dark fill (the
-    /// subtle-step-falls-back-to-flat rule the breathe lift already follows),
-    /// which lands on its own cube cell and paints at both indexed and
-    /// truecolor. `None` under `NO_COLOR`, where the bright spine and bold weight
-    /// carry the selection alone.
+    /// card, or `None` under `NO_COLOR`. At truecolor the band recesses below
+    /// `selection_bg`: column 0 holds the bright `▌` spine's tone at
+    /// [`SELECTION_BAND_SPINE_DIM`] below `selection_bg` (the midpoint of the band's
+    /// former gradient), and each column eases a further [`SELECTION_BAND_FALLOFF`]
+    /// darker in OKLab lightness toward the right rail, so the whole card reads as
+    /// one recessed lit panel — depth, no motion — set off from the lighter unread
+    /// wash. At indexed depth the 6×6×6 cube is too coarse for that sub-cell ramp,
+    /// so every column returns the flat `selection_bg` fill (the
+    /// subtle-step-falls-back-to-flat rule the breathe lift already follows), which
+    /// lands on its own cube cell. `None` under `NO_COLOR`, where the bright spine
+    /// and bold weight carry the selection alone.
     pub(super) fn selection_band_at(&self, column: usize, span: usize) -> Option<Color> {
         if self.no_color {
             return None;
@@ -616,7 +628,10 @@ impl Theme {
                 } else {
                     column.min(span - 1) as f32 / (span - 1) as f32
                 };
-                let dimmed = oklab::lift_lightness(rgb, -t * SELECTION_BAND_FALLOFF);
+                let dimmed = oklab::lift_lightness(
+                    rgb,
+                    -SELECTION_BAND_SPINE_DIM - t * SELECTION_BAND_FALLOFF,
+                );
                 Some(rgb_color(dimmed, self.depth))
             }
         }
@@ -640,33 +655,31 @@ impl Theme {
         !self.no_color && matches!(self.depth, ColorDepth::Truecolor)
     }
 
-    /// The faint full-card background an unread card rests on, hued by what the
-    /// row needs: the dark selection panel cast [`UNREAD_WASH_TINT`] toward the
-    /// status tone — `good` for a finished `✓`, `warn` for a waiting `?`, `alarm`
-    /// for a failed `!`. A whole-card surface reads at a scanning glance where a
-    /// one-cell glyph cannot, and it holds still, so motion stays reserved to the
-    /// single lead row. The tone is flat — the per-column lit falloff stays the
-    /// selected card's signature, so an unread card never reads as selected, and
-    /// [`super::lift_selection_band`] leaves it untouched. `None` under
-    /// `NO_COLOR`, where weight carries the unread look, and for the calm states
-    /// that never originate one ([`AgentStatus::marks_unread`]).
-    pub(super) fn unread_wash(&self, status: AgentStatus) -> Option<Color> {
-        if self.no_color {
+    /// The soft, uniform background an unread card rests on
+    /// ([`UNREAD_WASH_LIFT`]): a lighter tint of the selection blue — the
+    /// `selection_bg` panel lifted in lightness with its cool hue held, so the whole
+    /// card reads as the same cool-blue family as the selection band, one clear step
+    /// brighter, the prominent "needs you" surface. One tone for every unread status
+    /// — the row's meaning rides its `?`/`!`/`✓` glyph, the wash only says "unseen"
+    /// — and it holds still, so motion stays reserved to the single lead row. The
+    /// selected card keeps its identity through the bright `▌` spine and the
+    /// per-column lit falloff, so the brighter unread fill never reads as selection;
+    /// the flat wash is a distinct, lighter tone than the band, so
+    /// [`super::lift_selection_band`] leaves it untouched, and the band wins when a
+    /// card is both selected and unread. Truecolor only, like the lit falloff: at
+    /// indexed depth and under `NO_COLOR` the unread bold weight carries the cue. The
+    /// caller applies it only to the unread look-worthy rows (the `Blink` card
+    /// emphasis), so no status branch is needed here.
+    pub(super) fn unread_wash(&self) -> Option<Color> {
+        if !matches!(self.depth, ColorDepth::Truecolor) || self.no_color {
             return None;
         }
-        let hue = match status {
-            AgentStatus::Success => self.palette.good,
-            AgentStatus::Waiting => self.palette.warn,
-            AgentStatus::Failed => self.palette.alarm,
-            AgentStatus::Idle | AgentStatus::Running | AgentStatus::Paused => return None,
-        };
-        let (Some(ground), Some(tint)) =
-            (color_to_rgb(self.palette.selection_bg), color_to_rgb(hue))
-        else {
-            return None;
-        };
+        let panel = color_to_rgb(self.palette.selection_bg)?;
+        // A lighter tint of the selection blue: lift the panel's lightness while its
+        // cool hue holds, so the unread surface sits in the same family as the
+        // selection band, one clear step brighter.
         Some(rgb_color(
-            oklab::blend(ground, tint, UNREAD_WASH_TINT),
+            oklab::lift_lightness(panel, UNREAD_WASH_LIFT),
             self.depth,
         ))
     }
