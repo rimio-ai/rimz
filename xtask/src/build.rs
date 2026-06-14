@@ -36,6 +36,7 @@ pub(crate) fn dist(root: &Path) -> Result<()> {
         artifacts.insert(host_target, release_artifact(root, "rimz"));
     }
     build_darwin_artifacts(root)?;
+    codesign_arm64_artifact(root)?;
     for target in DARWIN_TARGETS {
         artifacts.insert(
             target.to_owned(),
@@ -290,6 +291,29 @@ fn build_darwin_artifacts(root: &Path) -> Result<()> {
         })?;
     }
     Ok(())
+}
+
+/// The macOS target whose binary must carry an explicit code signature.
+const DARWIN_SIGN_TARGET: &str = "aarch64-apple-darwin";
+
+/// Ad-hoc sign the Apple Silicon binary in place. arm64 macOS refuses to `exec`
+/// a mach-o that carries no code signature — the arm64 ABI, not Gatekeeper. zig
+/// linker-signs this target and reserves the signature load command, so
+/// `rcodesign sign` with no signing identity rewrites it to a proper ad-hoc
+/// signature: no Apple certificate, no notarization, and a loud failure here if
+/// the linker ever stops reserving that room. The x86_64 binary needs no
+/// signature (Intel execs unsigned) and zig leaves no room to add one, so it
+/// ships as built. Homebrew installs run the result without a Gatekeeper prompt
+/// because `brew` fetches over curl and never sets the `com.apple.quarantine`
+/// xattr.
+fn codesign_arm64_artifact(root: &Path) -> Result<()> {
+    let binary = target_release_artifact(root, DARWIN_SIGN_TARGET, "rimz");
+    run(root, "rcodesign", [OsStr::new("sign"), binary.as_os_str()]).with_context(|| {
+        format!(
+            "ad-hoc signing {}; install rcodesign (cargo install apple-codesign) if this fails",
+            binary.display()
+        )
+    })
 }
 
 fn darwin_zigbuild_env(root: &Path) -> Result<Vec<(&'static str, PathBuf)>> {
