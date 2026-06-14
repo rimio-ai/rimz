@@ -17,6 +17,12 @@ const SCREENSHOT_CONFIG: &str = "xtask/assets/ghostty-tokyonight.json";
 const SCREENSHOT_DIR: &str = "target/screenshots";
 const FREEZE_VERSION: &str = "0.2.2";
 const NERD_FONTS_VERSION: &str = "3.4.0";
+/// Output width for rendered PNGs. The sidebar reads at roughly 30% of a 1920px
+/// screen, so freeze's intrinsic raster (cell-sized, ~1x) is scaled to this target.
+/// rsvg rasterizes the SVG vectors straight at this width, so glyphs stay crisp
+/// without a supersample pass; `--keep-aspect-ratio` scales uniformly so cells never
+/// distort.
+const SCREENSHOT_TARGET_WIDTH_PX: &str = "576";
 
 #[derive(Debug, Default)]
 struct CaptureScreenshotOptions {
@@ -474,7 +480,35 @@ fn screenshot_output_path(root: &Path, output: Option<PathBuf>, label: &str) -> 
     Ok(path)
 }
 
+/// Glyphs Ghostty paints from its built-in sprite renderer — box-drawing and the
+/// Symbols for Legacy Computing block — that JetBrainsMono Nerd Font Mono carries no
+/// outline for. freeze rasterizes through librsvg, which can only draw glyphs the
+/// font file actually contains, so an unmapped sprite glyph falls back to a
+/// mismatched font at a different advance width and breaks column alignment. Each
+/// entry maps such a glyph to the nearest glyph the font has. Ordinary symbols the
+/// font also lacks (arrows, braille, geometric shapes) fall back cleanly on their
+/// own and stay untouched.
+const SPRITE_GLYPH_FALLBACKS: &[(char, &str)] = &[
+    ('\u{1FB87}', "\u{2595}"), // RIGHT ONE QUARTER BLOCK -> RIGHT ONE EIGHTH BLOCK
+];
+
+/// Substitute the sprite glyphs the screenshot font cannot draw (see
+/// [`SPRITE_GLYPH_FALLBACKS`]). The sidebar emits them because a live Ghostty
+/// terminal renders them itself; this keeps the captured frame aligned where it is
+/// rasterized through a plain font instead.
+fn remap_sprite_glyphs(ansi: &[u8]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(ansi) else {
+        return ansi.to_vec();
+    };
+    let mut text = text.to_owned();
+    for (from, to) in SPRITE_GLYPH_FALLBACKS {
+        text = text.replace(*from, to);
+    }
+    text.into_bytes()
+}
+
 fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
+    let ansi = remap_sprite_glyphs(ansi);
     let parent = output
         .parent()
         .with_context(|| format!("{} has no parent directory", output.display()))?;
@@ -505,7 +539,7 @@ fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
     {
         let stdin = child.stdin.as_mut().context("freeze stdin was not piped")?;
         stdin
-            .write_all(ansi)
+            .write_all(&ansi)
             .context("writing ANSI frame to freeze")?;
     }
     drop(child.stdin.take());
@@ -516,6 +550,9 @@ fn write_screenshot_png(root: &Path, ansi: &[u8], output: &Path) -> Result<()> {
     }
 
     let rsvg_args = vec![
+        OsString::from("--width"),
+        OsString::from(SCREENSHOT_TARGET_WIDTH_PX),
+        OsString::from("--keep-aspect-ratio"),
         OsString::from("-o"),
         staged_png.as_os_str().to_owned(),
         staged_svg.as_os_str().to_owned(),
