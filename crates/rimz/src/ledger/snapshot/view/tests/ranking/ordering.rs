@@ -59,40 +59,32 @@ fn bucket_order_puts_attention_first_and_idle_last() {
 }
 
 #[test]
-fn calm_bucket_holds_stable_spawn_order() {
-    // Idle agents with distinct spawn times (and one with no pane). The
-    // bucket holds spawn order — oldest first — regardless of activity.
-    let specs: [(&str, Option<i64>); 4] = [
-        ("late", Some(100)),
-        ("nopane", None),
-        ("early", Some(300)),
-        ("mid", Some(200)),
-    ];
-    let agents = specs
+fn calm_bucket_holds_pane_creation_order() {
+    // Idle agents in scrambled insertion order, each with an explicit pane id.
+    // The bucket reads ascending by pane creation ordinal — the mux's own pane
+    // order — so two equally-idle agents never hang on a per-agent clock.
+    let agents = [("third", "%30"), ("first", "%10"), ("second", "%20")]
         .into_iter()
-        .enumerate()
-        .map(|(i, (id, ago_secs))| {
-            let mut agent = agent_in(id, "/repo/main", AgentStatus::Idle, 1_000 + i as i64);
-            agent.pane =
-                ago_secs.map(|secs| pane_started(&format!("%{i}"), "/repo/main", ago(secs)));
-            agent
-        })
+        .map(|(id, raw)| agent_in(id, "/repo/main", AgentStatus::Idle, 1_000).in_pane(raw))
         .collect::<Vec<_>>();
+    let mut snapshot = room_with_agent_panes(Vec::new(), agents);
 
-    let snapshot = room_with_agent_panes(Vec::new(), agents);
+    // A paneless idle row has no ordinal and tails the bucket.
+    snapshot.worktree_groups[0]
+        .rows
+        .push(idle_agent_row("paneless", None));
+    snapshot.sort_groups_for_presentation();
 
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    // Oldest pane first; the paneless row keys on its `registered_at` — newer
-    // than every pane start here — and falls to the bucket tail.
-    assert_eq!(order, vec!["early", "mid", "late", "nopane"]);
+    assert_eq!(order, vec!["first", "second", "third", "paneless"]);
 }
 
 #[test]
-fn paneless_calm_order_uses_registration_not_label() {
+fn calm_order_uses_pane_ordinal_not_label() {
     let mut older = agent("codex", "older", AgentStatus::Idle, 1_000).worktree("/repo/main");
     older.pane = Some(pane("%0", "codex", "/repo/main"));
     let mut newer = agent("claude", "newer", AgentStatus::Idle, 9_000).worktree("/repo/main");
@@ -103,6 +95,8 @@ fn paneless_calm_order_uses_registration_not_label() {
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
+    // The `%0` pane was created before `%1`, so its row leads — activity rank and
+    // insertion order do not.
     assert_eq!(row_order, vec!["older", "newer"]);
 
     let mut older = agent_in("sess-b", "/repo/b", AgentStatus::Idle, 1_000);
@@ -120,7 +114,7 @@ fn paneless_calm_order_uses_registration_not_label() {
     assert_eq!(
         groups,
         vec!["b", "a"],
-        "row and group spawn order hold without pane starts; labels never decide calm order"
+        "groups order by their earliest pane ordinal (`b` holds `%0`); labels never decide calm order"
     );
 }
 
@@ -194,10 +188,13 @@ fn unread_rows_lead_read_attention() {
 }
 
 #[test]
-fn stale_attention_rows_do_not_enter_the_inactive_sink() {
+fn stale_attention_sinks_below_live_work_then_leads_inactive() {
     let snapshot = room_with_agent_panes(
         Vec::new(),
         vec![
+            // Fresh idle work: live, so it outranks any stale card.
+            agent_in("fresh-idle", "/repo/main", AgentStatus::Idle, 3_000),
+            // An 8h-stale ask and an 8h-stale result: both cross into inactive.
             agent_in("old-wait", "/repo/main", AgentStatus::Waiting, 1_000)
                 .active_ago(ATTENTION_AGE_CEILING_SECS + 1),
             agent_in("old-done", "/repo/main", AgentStatus::Success, 2_000)
@@ -205,19 +202,25 @@ fn stale_attention_rows_do_not_enter_the_inactive_sink() {
         ],
     );
 
-    let wait = row(&snapshot, "old-wait");
-    let done = row(&snapshot, "old-done");
     assert!(
-        !wait.inactive,
-        "read attention remains in the attention tier"
+        !row(&snapshot, "fresh-idle").inactive,
+        "fresh work stays live"
     );
-    assert!(done.inactive, "calm success crosses into the inactive sink");
+    assert!(
+        row(&snapshot, "old-wait").inactive,
+        "a stale ask sinks like any stale card — attention no longer pins it live"
+    );
+    assert!(row(&snapshot, "old-done").inactive);
     let order = snapshot.worktree_groups[0]
         .rows
         .iter()
         .map(|row| row.id.clone())
         .collect::<Vec<_>>();
-    assert_eq!(order, vec!["old-wait", "old-done"]);
+    assert_eq!(
+        order,
+        vec!["fresh-idle", "old-wait", "old-done"],
+        "live idle leads the stale ask; within the inactive band the ask leads the result"
+    );
 }
 
 #[test]
@@ -342,6 +345,23 @@ fn process_row(id: &str, worktree: &str) -> SidebarRow {
         inactive: false,
         last_activity: epoch(),
         card: crate::RowCard::Process(crate::ProcessCard::default()),
+    }
+}
+
+fn idle_agent_row(id: &str, pane_raw: Option<&str>) -> SidebarRow {
+    SidebarRow {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        pane: pane_raw.map(|raw| PaneRef::from_id(PaneId::from_parts(MuxName::Tmux, raw))),
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: None,
+        unread: false,
+        inactive: false,
+        last_activity: epoch(),
+        card: crate::RowCard::Agent(Box::new(crate::ledger::snapshot::row::AgentCard {
+            status: Some(AgentStatus::Idle),
+            ..Default::default()
+        })),
     }
 }
 

@@ -326,6 +326,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.budget.pace.amber",
         "sidebar.budget.pace.red",
         "sidebar.attention.stalled_after_secs",
+        "sidebar.attention.inactive_after_secs",
         "sidebar.animations.unread",
         "sidebar.trunk",
         "sidebar.theme.mode",

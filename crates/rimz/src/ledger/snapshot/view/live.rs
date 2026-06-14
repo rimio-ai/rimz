@@ -7,7 +7,7 @@ use crate::ledger::snapshot::panes::{
 use crate::schema::diag::DiagEvent;
 
 use super::SidebarSnapshot;
-use super::aggregate::build_worktree_groups_from_rows;
+use super::aggregate::{AttentionWindows, build_worktree_groups_from_rows};
 use super::layout::refresh_overlay_group;
 use projection::{LazyAgentPaneProjection, rows_from_panes};
 
@@ -73,7 +73,10 @@ impl SidebarSnapshot {
             &self.worktree_roots,
             self.root_class,
             self.now,
-            self.sidebar.attention.stalled_after_secs.get(),
+            AttentionWindows {
+                stalled_after_secs: self.sidebar.attention.stalled_after_secs.get(),
+                inactive_after_secs: self.sidebar.attention.inactive_after_secs.get(),
+            },
         );
         projection.diagnostics
     }

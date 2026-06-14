@@ -13,9 +13,13 @@ use serde_json::Value;
 use crate::agents::lifecycle::{LifecycleState, TurnPhase};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
-/// One hour: the shared ceiling for attention heat, breath tempo, and stale
-/// calm-row sinking.
+/// One hour: the shared ceiling for attention heat and breath tempo, and the
+/// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
+
+/// Default `[sidebar.attention] inactive_after_secs`: a row with no activity for
+/// this long sinks into the inactive partition, beneath every live row.
+pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
 
 /// Runtime owner class for records that should appear in live views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

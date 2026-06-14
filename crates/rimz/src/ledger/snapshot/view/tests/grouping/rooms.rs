@@ -36,22 +36,26 @@ fn directory_room_groups_panes_by_child_repo() {
             )
         })
         .collect();
+    // Groups order by their earliest pane's creation ordinal: query-engine
+    // (`%1`) before billing (`%3`) before the room root pod (`%4`), with external
+    // tailing. Membership and counts are what this test pins; the order tracks
+    // pane creation rather than the label.
     assert_eq!(
         summary,
         vec![
-            (SidebarWorktreeKind::Root, "/srv/agents", "agents", 1),
-            (
-                SidebarWorktreeKind::Worktree,
-                "/srv/agents/billing",
-                "billing",
-                1
-            ),
             (
                 SidebarWorktreeKind::Worktree,
                 "/srv/agents/query-engine",
                 "query-engine",
                 2
             ),
+            (
+                SidebarWorktreeKind::Worktree,
+                "/srv/agents/billing",
+                "billing",
+                1
+            ),
+            (SidebarWorktreeKind::Root, "/srv/agents", "agents", 1),
             (SidebarWorktreeKind::External, "external", "external", 1),
         ],
     );

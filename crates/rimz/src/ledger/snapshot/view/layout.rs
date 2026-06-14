@@ -2,9 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
-use jiff::Timestamp;
-
-use crate::feed::{AgentState, AgentStatus};
+use crate::feed::{AgentState, AgentStatus, PaneRef};
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -211,55 +209,65 @@ pub(super) fn capped_rows(rows: Vec<SidebarRow>) -> Vec<SidebarRow> {
 }
 
 pub(super) fn compare_rows(left: &SidebarRow, right: &SidebarRow) -> Ordering {
-    // Unread is the leading inbox band: an unread result deserves one human
-    // look before read attention resumes. The final tiebreak is the stable
+    // Three layers: the unread inbox first, live work over dormant, then the
+    // most attention-hungry within each band. The final tiebreak is the stable
     // `id` alone — never `name`, which mutates through the session-name → task
     // → prompt label ladder and would reshuffle a bucket on every rename.
-    row_tier(left)
-        .cmp(&row_tier(right))
+    row_band(left)
+        .cmp(&row_band(right))
         .then_with(|| row_rank(left).cmp(&row_rank(right)))
         .then_with(|| within_bucket(left, right))
         .then_with(|| left.id.cmp(&right.id))
 }
 
-/// Tiebreak two rows that share a status bucket (their ranks already tied).
-///
-/// Attention rows (`waiting`/`failed`/`paused`) sort longest-overdue-first:
+/// Tiebreak two rows that share a band and rank (their attention rank already
+/// tied). Attention rows (`waiting`/`failed`/`paused`) sort longest-overdue-first:
 /// a blocked or failed agent's `last_activity` is frozen, so this is both stable
 /// and the triage order the `␣` "next attention" key promises. Calm rows
-/// (`success`, `running`, `idle`) and bare process rows hold a stable spawn
-/// order keyed on [`spawn_key`] — set-once and untouched by the activity
-/// heartbeat — so a working agent never jumps just because it finished a tool,
-/// and new agents append at the bottom of their bucket.
+/// (`success`, `running`, `idle`) and bare process rows hold pane creation order
+/// ([`pane_creation_ordinal`]) — untouched by the activity heartbeat — so a
+/// working agent never jumps just because it finished a tool, and a fresh pane
+/// appends at the bottom of its bucket.
 fn within_bucket(left: &SidebarRow, right: &SidebarRow) -> Ordering {
     if is_attention(left.status()) {
         left.last_activity.cmp(&right.last_activity)
     } else {
-        cmp_start_asc(spawn_key(left), spawn_key(right))
+        cmp_start_asc(row_ordinal(left), row_ordinal(right))
     }
 }
 
-/// The row's durable spawn instant: the pane's process start when the backend
-/// reports it (tmux always, Zellij only via the `/proc` agent-pane derivation),
-/// else the session's `registered_at`. Both are set-once and immune to the
-/// activity heartbeat, so the calm order is stable across refreshes and a
-/// renamed session never reorders.
-fn spawn_key(row: &SidebarRow) -> Option<Timestamp> {
-    pane_start(row).or_else(|| row.as_agent().and_then(|agent| agent.registered_at))
+/// The pane's creation ordinal: the monotonic integer the mux assigns each pane
+/// (`zellij:terminal_176` → 176, `tmux:%3` → 3), ascending in birth order. It is
+/// the calm tiebreak — one signal both agents in a tab share, and the order the
+/// mux itself lays panes out, so the sidebar tracks the pane order until the
+/// panes are reordered. It replaces the former `pane_process_start`/`registered_at`
+/// spawn key, which read a different clock for each agent (a derived process
+/// start for one, hook registration for the other) and inverted co-launched
+/// panes whenever the two sources disagreed.
+fn pane_creation_ordinal(pane: Option<&PaneRef>) -> Option<u64> {
+    let raw = pane?.pane_id.raw();
+    let digits_start = raw
+        .as_bytes()
+        .iter()
+        .rposition(|byte| !byte.is_ascii_digit())
+        .map_or(0, |last_non_digit| last_non_digit + 1);
+    raw.get(digits_start..)
+        .filter(|tail| !tail.is_empty())
+        .and_then(|tail| tail.parse::<u64>().ok())
+}
+
+fn row_ordinal(row: &SidebarRow) -> Option<u64> {
+    pane_creation_ordinal(row.pane.as_ref())
 }
 
 fn is_attention(status: Option<AgentStatus>) -> bool {
     status.is_some_and(AgentStatus::is_attention)
 }
 
-fn pane_start(row: &SidebarRow) -> Option<Timestamp> {
-    row.pane.as_ref().and_then(|pane| pane.pane_process_start)
-}
-
-/// Ascending by start time, but a missing start sorts *last* — the opposite of
-/// `Option::cmp`, which would float paneless rows (script asks, detached
-/// sessions) to the top of their bucket.
-pub(super) fn cmp_start_asc(left: Option<Timestamp>, right: Option<Timestamp>) -> Ordering {
+/// Ascending by key, but a missing key sorts *last* — the opposite of
+/// `Option::cmp`, which would float keyless rows (paneless script asks, detached
+/// sessions, undated subagents) to the top of their bucket.
+pub(super) fn cmp_start_asc<T: Ord>(left: Option<T>, right: Option<T>) -> Ordering {
     match (left, right) {
         (Some(left), Some(right)) => left.cmp(&right),
         (Some(_), None) => Ordering::Less,
@@ -275,39 +283,42 @@ pub(super) fn compare_groups(
     // The `external` catch-all always tails: out-of-project residue never
     // displaces project work, so it sorts below every project group — below even
     // the inactive groups, and regardless of any `waiting`/`failed` member it
-    // holds. Among project worktrees the macro tiers then order by most-urgent
-    // member (a `waiting`-topped group above a `failed`-topped one, above the
-    // calm groups), then a stable order keyed on the earliest-spawned member,
-    // then label.
+    // holds. Among project groups the same three layers apply, read off the
+    // most-urgent member: the unread inbox first, then active over inactive, then
+    // the attention bucket (every calm status collapsed to one rank so a group
+    // never leapfrogs a sibling because its top row flipped success↔running↔idle),
+    // then the earliest member's pane-creation order, then label.
     group_is_external(left)
         .cmp(&group_is_external(right))
-        .then_with(|| group_tier(left).cmp(&group_tier(right)))
-        .then_with(|| cmp_start_asc(group_earliest_spawn(left), group_earliest_spawn(right)))
+        .then_with(|| group_band(left).cmp(&group_band(right)))
+        .then_with(|| group_rank(left).cmp(&group_rank(right)))
+        .then_with(|| cmp_start_asc(group_earliest_ordinal(left), group_earliest_ordinal(right)))
         .then_with(|| left.label.cmp(&right.label))
 }
 
-/// The most-urgent member's *group* tier. `rows` is already sorted by
-/// `compare_rows` and the cap never hides attention rows, so `rows.first()` is
-/// the true top; an empty group ranks last. Unlike `row_rank`, every fresh calm
-/// status collapses to one tier: a calm group's position must not leapfrog a
-/// sibling just because its top row flipped success↔running↔idle — calm groups
-/// hold the stable earliest-pane order, and only unread or attention reorders.
-fn group_tier(group: &SidebarWorktreeGroup) -> (u8, u8) {
+/// The group's band (layers 1 and 2), read off its most-urgent member. `rows` is
+/// already sorted by `compare_rows` and the cap never hides the top row, so
+/// `rows.first()` is the true top; an empty group sinks last.
+fn group_band(group: &SidebarWorktreeGroup) -> u8 {
+    match group.rows.first() {
+        Some(row) => row_band(row),
+        None => u8::MAX,
+    }
+}
+
+/// The group's rank within its band: an attention top row leads by its bucket
+/// (`waiting`/`failed`/`paused`); every calm status collapses to one rank so a
+/// calm group holds its place through its members' success↔running↔idle churn; a
+/// process-only group ranks just under calm agent groups; an empty group sinks
+/// last.
+fn group_rank(group: &SidebarWorktreeGroup) -> u8 {
     let Some(row) = group.rows.first() else {
-        return (u8::MAX, u8::MAX);
+        return u8::MAX;
     };
-    if row.unread {
-        return (0, row_rank(row));
-    }
-    if is_attention(row.status()) {
-        return (1, row_rank(row));
-    }
-    if row.inactive {
-        return (4, row_rank(row));
-    }
     match row.status() {
-        Some(_) => (2, 0),
-        None => (3, 0),
+        Some(status) if status.is_attention() => status_rank(status),
+        Some(_) => 3,
+        None => 4,
     }
 }
 
@@ -315,11 +326,12 @@ fn group_is_external(group: &SidebarWorktreeGroup) -> bool {
     group.kind == SidebarWorktreeKind::External
 }
 
-/// The group's earliest member [`spawn_key`] — the same durable key the
-/// within-bucket calm tiebreak uses, so group order survives a backend that
-/// reports no pane starts (Zellij) instead of degrading to the label.
-fn group_earliest_spawn(group: &SidebarWorktreeGroup) -> Option<Timestamp> {
-    group.rows.iter().filter_map(spawn_key).min()
+/// The group's earliest member pane ordinal — the same creation-order key the
+/// within-bucket calm tiebreak uses, so group order tracks the mux's pane layout
+/// even when no agent reports a process start (Zellij) instead of degrading to
+/// the label.
+fn group_earliest_ordinal(group: &SidebarWorktreeGroup) -> Option<u64> {
+    group.rows.iter().filter_map(row_ordinal).min()
 }
 
 fn row_rank(row: &SidebarRow) -> u8 {
@@ -329,32 +341,18 @@ fn row_rank(row: &SidebarRow) -> u8 {
     }
 }
 
-/// Primary row ladder: unread inbox rows first, then read attention
-/// (`waiting`/`failed`/`paused`), fresh `success`, `running`, fresh `idle`, bare
-/// process rows, and finally inactive calm rows. `row_rank` only orders within a
-/// tier.
-fn row_tier(row: &SidebarRow) -> u8 {
+/// The macro band folding layers 1 and 2: the unread inbox first, then live
+/// work, then dormant work past the inactive window. Status no longer sets the
+/// band — `row_rank` orders within one — so a fresh `idle` agent outranks a stale
+/// `waiting` one, and only `unread` or crossing the inactive window moves a row
+/// between bands. The `external` partition is group-only ([`compare_groups`]).
+fn row_band(row: &SidebarRow) -> u8 {
     if row.unread {
-        return 0;
-    }
-    match row.status() {
-        Some(AgentStatus::Waiting | AgentStatus::Failed | AgentStatus::Paused) => 1,
-        Some(AgentStatus::Success) => {
-            if row.inactive {
-                6
-            } else {
-                2
-            }
-        }
-        Some(AgentStatus::Running) => 3,
-        Some(AgentStatus::Idle) => {
-            if row.inactive {
-                6
-            } else {
-                4
-            }
-        }
-        None => 5,
+        0
+    } else if row.inactive {
+        2
+    } else {
+        1
     }
 }
 
@@ -437,20 +435,15 @@ pub fn group_live_agents_by_worktree<'a>(
     groups
 }
 
-/// The agent's durable spawn instant — its pane's process start when known,
-/// else `registered_at` — the key the calm within-bucket order uses (see
-/// [`spawn_key`] for the row-side equivalent).
-fn agent_spawn_key(agent: &AgentState) -> Option<Timestamp> {
-    agent
-        .pane
-        .as_ref()
-        .and_then(|pane| pane.pane_process_start)
-        .or(agent.registered_at)
+/// The agent's pane creation ordinal — the calm tiebreak the `rimz agents list`
+/// roster shares with the sidebar ([`pane_creation_ordinal`]).
+fn agent_ordinal(agent: &AgentState) -> Option<u64> {
+    pane_creation_ordinal(agent.pane.as_ref())
 }
 
 /// [`compare_rows`] for a bare roster with no unread/inactive state: the status
 /// ladder orders the bucket, attention agents tiebreak longest-overdue-first,
-/// calm agents by stable spawn order, then the durable `agent_id`.
+/// calm agents by pane creation order, then the durable `agent_id`.
 fn compare_listing_agents(a: &AgentState, b: &AgentState) -> Ordering {
     status_rank(a.status)
         .cmp(&status_rank(b.status))
@@ -458,14 +451,15 @@ fn compare_listing_agents(a: &AgentState, b: &AgentState) -> Ordering {
             if a.status.is_attention() {
                 a.last_activity.cmp(&b.last_activity)
             } else {
-                cmp_start_asc(agent_spawn_key(a), agent_spawn_key(b))
+                cmp_start_asc(agent_ordinal(a), agent_ordinal(b))
             }
         })
         .then_with(|| a.agent_id.as_str().cmp(b.agent_id.as_str()))
 }
 
 /// [`compare_groups`] for the roster: the `external` catch-all last, then the
-/// most-urgent member, then the earliest-spawned member, then the label.
+/// most-urgent member, then the earliest member's pane creation order, then the
+/// label.
 fn compare_listing_groups(a: &AgentWorktreeGroup, b: &AgentWorktreeGroup) -> Ordering {
     let tier = |group: &AgentWorktreeGroup| match group.agents.first() {
         Some(top) if top.status.is_attention() => (1_u8, status_rank(top.status)),
@@ -473,7 +467,7 @@ fn compare_listing_groups(a: &AgentWorktreeGroup, b: &AgentWorktreeGroup) -> Ord
         None => (u8::MAX, u8::MAX),
     };
     let earliest =
-        |group: &AgentWorktreeGroup| group.agents.iter().filter_map(|a| agent_spawn_key(a)).min();
+        |group: &AgentWorktreeGroup| group.agents.iter().filter_map(|a| agent_ordinal(a)).min();
 
     (a.kind == SidebarWorktreeKind::External)
         .cmp(&(b.kind == SidebarWorktreeKind::External))

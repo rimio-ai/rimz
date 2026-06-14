@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 
-use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentState, AgentStatus};
+use crate::feed::AgentState;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::workspace::RootClass;
 
@@ -21,6 +21,17 @@ use subagents::attach_sub_agents;
 #[cfg(test)]
 pub(in crate::ledger::snapshot) use subagents::{attach_sub_agents, sub_agent_from_state};
 
+/// The per-machine attention timing windows the row fold reads, bundled so the
+/// fold entry point stays under the argument cap and the two knobs travel
+/// together from the config that owns them.
+#[derive(Clone, Copy)]
+pub(super) struct AttentionWindows {
+    /// Silent-`running` → actionable `!` projection window (`stalled_after_secs`).
+    pub stalled_after_secs: u32,
+    /// No-activity → inactive-sink window (`inactive_after_secs`).
+    pub inactive_after_secs: u32,
+}
+
 pub(super) fn build_worktree_groups_from_rows(
     mut rows: Vec<SidebarRow>,
     agents: &[AgentState],
@@ -28,7 +39,7 @@ pub(super) fn build_worktree_groups_from_rows(
     worktree_roots: &[PathBuf],
     root_class: RootClass,
     now: Timestamp,
-    stalled_after_secs: u32,
+    windows: AttentionWindows,
 ) -> Vec<SidebarWorktreeGroup> {
     // Nest each subagent under its parent root row before grouping. This is the
     // one chokepoint every live (`rows_from_panes`) card flows through, so
@@ -39,8 +50,8 @@ pub(super) fn build_worktree_groups_from_rows(
     subagents::fold_child_activity_onto_parents(&mut rows);
     // Project the displayed status now that each row knows its subagents and
     // the full agent set is in hand.
-    status::project_display_status(&mut rows, agents, now, stalled_after_secs);
-    stamp_inactive(&mut rows, now);
+    status::project_display_status(&mut rows, agents, now, windows.stalled_after_secs);
+    stamp_inactive(&mut rows, now, windows.inactive_after_secs);
 
     let multi_branch = multi_branch_paths(
         rows.iter()
@@ -102,9 +113,65 @@ pub(super) fn build_worktree_groups_from_rows(
     groups
 }
 
-fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp) {
+/// Stamp the inactive sink: a row with no activity past `inactive_after_secs`
+/// drops into the inactive partition, beneath every live row, whatever its
+/// status — a stale `waiting` ask sinks the same as a stale `idle`, then leads
+/// the inactive band by its attention rank. Renderer-local `unread` still
+/// outranks the sink. The boundary is strict (`>`), so the configured window is
+/// the last live second.
+fn stamp_inactive(rows: &mut [SidebarRow], now: Timestamp, inactive_after_secs: u32) {
     for row in rows {
-        row.inactive = matches!(row.status(), Some(AgentStatus::Success | AgentStatus::Idle))
-            && now.duration_since(row.last_activity).as_secs() > ATTENTION_AGE_CEILING_SECS;
+        row.inactive =
+            now.duration_since(row.last_activity).as_secs() > i64::from(inactive_after_secs);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ledger::snapshot::row::{ProcessCard, RowCard};
+
+    fn now() -> Timestamp {
+        Timestamp::from_second(1_750_000_000).expect("fixed test instant is valid")
+    }
+
+    /// A status-less row whose only activity was `age_secs` before `now` — all
+    /// `stamp_inactive` reads is `last_activity`, so the card kind is irrelevant.
+    fn row_aged(age_secs: i64) -> SidebarRow {
+        SidebarRow {
+            id: "r".into(),
+            name: "r".into(),
+            pane: None,
+            worktree_path: None,
+            worktree_branch: None,
+            unread: false,
+            inactive: false,
+            last_activity: now() - std::time::Duration::from_secs(age_secs as u64),
+            card: RowCard::Process(ProcessCard::default()),
+        }
+    }
+
+    #[test]
+    fn inactive_window_is_threshold_driven_and_strict() {
+        // The same row sinks or stays live by the configured window alone.
+        let mut rows = vec![row_aged(1_800)];
+        stamp_inactive(&mut rows, now(), 3_600);
+        assert!(
+            !rows[0].inactive,
+            "30m of silence is live under a one-hour window"
+        );
+        stamp_inactive(&mut rows, now(), 1_200);
+        assert!(
+            rows[0].inactive,
+            "the same row sinks under a twenty-minute window"
+        );
+
+        // The boundary is strict: the configured window is the last live second.
+        let mut exact = vec![row_aged(3_600)];
+        stamp_inactive(&mut exact, now(), 3_600);
+        assert!(!exact[0].inactive, "exactly at the window is still live");
+        let mut past = vec![row_aged(3_601)];
+        stamp_inactive(&mut past, now(), 3_600);
+        assert!(past[0].inactive, "one second past the window sinks");
     }
 }
