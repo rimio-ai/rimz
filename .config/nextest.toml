@@ -19,10 +19,21 @@
 # (a different test each time — momentary contention, not a real failure); the
 # `query-tab-names` / command-metadata spawn waits in the tests keep them rare.
 # The deep journey zellij smoke joins the group so the cap bounds the total.
+#
+# Live tmux servers are far lighter (one `tmux` process per tempdir socket, no
+# wasm plugin host), so their cap is generous; the group exists to give tmux's
+# live tests the same retry tolerance for the occasional under-load startup race
+# the Zellij group already absorbs.
 [test-groups]
 live-zellij = { max-threads = 2 }
+live-tmux = { max-threads = 4 }
 
 [[profile.default.overrides]]
 filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
 test-group = 'live-zellij'
+retries = { backoff = "fixed", count = 2, delay = "3s" }
+
+[[profile.default.overrides]]
+filter = 'package(rimz) & test(/^backend::tmux::/)'
+test-group = 'live-tmux'
 retries = { backoff = "fixed", count = 2, delay = "3s" }

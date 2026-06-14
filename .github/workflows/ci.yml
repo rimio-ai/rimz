@@ -158,18 +158,18 @@ jobs:
           restore-keys: |
             ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
-      - name: Check tmux
+      - name: Install tmux
         run: |
           if ! command -v tmux >/dev/null 2>&1; then
-            echo "tmux is not installed on this Gitea runner; skipping live mux backend tests"
-            echo "RIMZ_SKIP_MUX_TESTS=1" >> "$GITHUB_ENV"
+            sudo apt-get update
+            sudo apt-get install -y tmux
           fi
+          # debian-13 ships tmux 3.5a (≥ MIN_TMUX_VERSION); fail loudly if a
+          # runner image is older so the live suite never silently degrades.
+          tmux -V
 
       - name: Install Zellij
         run: |
-          if [ "${RIMZ_SKIP_MUX_TESTS:-}" = 1 ]; then
-            exit 0
-          fi
           mkdir -p "$RUNNER_TEMP/bin"
           curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
             | tar -xz -C "$RUNNER_TEMP/bin"
@@ -179,9 +179,6 @@ jobs:
         env:
           INPUT_TOOL: cargo-nextest
         run: |
-          if [ "${RIMZ_SKIP_MUX_TESTS:-}" = 1 ]; then
-            exit 0
-          fi
           install_action_dir="$(mktemp -d)"
           trap 'rm -rf "$install_action_dir"' EXIT
           git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
@@ -198,9 +195,4 @@ jobs:
             bash --noprofile --norc "$install_action_dir/main.sh"
 
       - name: cargo xtask test
-        run: |
-          if [ "${RIMZ_SKIP_MUX_TESTS:-}" = 1 ]; then
-            echo "live mux backend tests skipped"
-            exit 0
-          fi
-          cargo xtask test
+        run: cargo xtask test
