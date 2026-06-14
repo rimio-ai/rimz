@@ -64,6 +64,11 @@ pub enum Cell {
         kind: AgentKind,
         args: Vec<String>,
         mode: Option<PermissionMode>,
+        /// The `[agents.aliases]` name this cell launched as, when it came from
+        /// a named role preset (`planner`, `codex-yolo`). Stamped onto the agent
+        /// as `RIMZ_AGENT_ALIAS` so it answers to `@<alias>`; `None` for a bare
+        /// kind or virtual variant.
+        alias: Option<String>,
     },
     Command {
         argv: Vec<String>,
@@ -76,6 +81,7 @@ impl Cell {
             kind,
             args: Vec::new(),
             mode: None,
+            alias: None,
         }
     }
 
@@ -116,9 +122,36 @@ pub enum LayoutErr {
     InvalidAliasName { name: String },
     #[error("alias name `{name}` is reserved for `rimz agents`")]
     ReservedAliasName { name: String },
+    #[error(
+        "alias name `{name}` clashes with the agent-address grammar ({reason}); rename it so `@{name}` is unambiguous"
+    )]
+    AliasShadowsAddress { name: String, reason: &'static str },
 }
 
 pub type Result<T> = std::result::Result<T, LayoutErr>;
+
+/// Resolve each agent role's `system-prompt-file` against `config_dir` so the
+/// path is correct wherever the role later launches: `~` expands to the home
+/// directory and a relative path roots at the config file's directory, not the
+/// agent's launch cwd. Pure — the file's existence is checked at the launch
+/// entry point, not here, so a moved prompt never breaks an unrelated config
+/// read.
+pub fn resolve_alias_prompt_paths(aliases: &mut AliasesConfig, config_dir: &Path) {
+    for alias in aliases.0.values_mut() {
+        if let Alias::Agent {
+            system_prompt_file: Some(path),
+            ..
+        } = alias
+        {
+            let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
+            *path = if expanded.is_absolute() {
+                expanded
+            } else {
+                config_dir.join(expanded)
+            };
+        }
+    }
+}
 
 pub fn validate_config(aliases: &AliasesConfig, layouts: &LayoutsConfig) -> Result<()> {
     validate_alias_names(aliases)?;
@@ -241,6 +274,7 @@ fn parse_cell(raw: &str, aliases: &AliasesConfig) -> Result<Cell> {
             kind: AgentKind::new_unchecked(kind),
             args,
             mode: Some(mode),
+            alias: None,
         });
     }
     if let Some(cell) = virtual_ping_cell(raw) {
@@ -261,6 +295,7 @@ fn expand_alias(name: &str, alias: &Alias) -> Result<Cell> {
             mode,
             model,
             effort,
+            system_prompt_file,
             args,
         } => {
             let adapter =
@@ -272,7 +307,7 @@ fn expand_alias(name: &str, alias: &Alias) -> Result<Cell> {
                 .render_preset(&crate::agents::LaunchPreset {
                     model: model.clone(),
                     effort: effort.clone(),
-                    system_prompt_file: None,
+                    system_prompt_file: system_prompt_file.clone(),
                 })
                 .map_err(|err| LayoutErr::InvalidAlias {
                     alias: name.to_owned(),
@@ -293,6 +328,7 @@ fn expand_alias(name: &str, alias: &Alias) -> Result<Cell> {
                 kind: AgentKind::new_unchecked(agent),
                 args: argv,
                 mode: *mode,
+                alias: Some(name.to_owned()),
             })
         }
     }
@@ -336,11 +372,12 @@ fn virtual_ping_cell(raw: &str) -> Option<Cell> {
         kind: AgentKind::new_unchecked(kind),
         args,
         mode: None,
+        alias: None,
     })
 }
 
 fn validate_alias_names(aliases: &AliasesConfig) -> Result<()> {
-    for name in aliases.0.keys() {
+    for (name, alias) in &aliases.0 {
         if name.is_empty()
             || name
                 .chars()
@@ -351,8 +388,48 @@ fn validate_alias_names(aliases: &AliasesConfig) -> Result<()> {
         if RESERVED_ALIAS_AND_LAYOUT_NAMES.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedAliasName { name: name.clone() });
         }
+        // Only an agent alias becomes an addressable role (`@<alias>`), so only it
+        // must not shadow the address grammar. A command alias never launches an
+        // agent, so it keeps its freedom to override a kind or virtual cell word.
+        if matches!(alias, Alias::Agent { .. })
+            && let Some(reason) = address_grammar_clash(name)
+        {
+            return Err(LayoutErr::AliasShadowsAddress {
+                name: name.clone(),
+                reason,
+            });
+        }
     }
     Ok(())
+}
+
+/// Why an agent alias name would collide with the agent-address grammar, so the
+/// rendered `@<alias>` handle could never name the role unambiguously: it shadows
+/// a kind (`@claude`), the broadcast handle (`@all`), a kind ordinal
+/// (`@claude-2`), or a pane/channel address (`zellij:%1`, `@x#chan`).
+fn address_grammar_clash(name: &str) -> Option<&'static str> {
+    if name == "all" {
+        return Some("`@all` is the broadcast handle");
+    }
+    if crate::agents::find_adapter(name).is_some() {
+        return Some("it is an agent kind");
+    }
+    if is_kind_ordinal_shape(name) {
+        return Some("it reads as a kind ordinal like `@claude-2`");
+    }
+    if name.contains(':') || name.contains('#') {
+        return Some("`:` and `#` are reserved for pane and channel addresses");
+    }
+    None
+}
+
+/// Whether `name` reads as a `<kind>-<n>` ordinal handle (a known kind, then a
+/// positive integer) — the shape `@claude-2` parses as.
+fn is_kind_ordinal_shape(name: &str) -> bool {
+    let Some((kind, ordinal)) = name.rsplit_once('-') else {
+        return false;
+    };
+    crate::agents::find_adapter(kind).is_some() && ordinal.parse::<u32>().is_ok_and(|n| n > 0)
 }
 
 fn validate_layout_names(layouts: &LayoutsConfig) -> Result<()> {

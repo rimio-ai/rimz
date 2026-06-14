@@ -170,6 +170,7 @@ impl AgentLifecyclePayload {
             observation: AgentLifecycleObservation {
                 agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
                 agent_name: optional_string(params, "agent_name"),
+                agent_alias: optional_string(params, "agent_alias"),
                 kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
                 agent_pid: optional_deserialize(params, "agent_pid"),
@@ -440,6 +441,7 @@ mod tests {
         AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from("sess-1")),
             agent_name: Some("amber-atlas".to_owned()),
+            agent_alias: None,
             kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
                 errored: false,

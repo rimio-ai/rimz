@@ -348,6 +348,7 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         kind: AgentKind::new_unchecked(kind),
         name: None,
         kind_ordinal: None,
+        alias: None,
         status,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,

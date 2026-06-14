@@ -89,17 +89,51 @@ The automatic path deletes a branch only after proving its work landed on the li
 
 **`rimz gc`.** `rimz gc` sweeps clean, marked worktrees whose work has landed on their base in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.
 
+## Agent addresses
+
+Every agent in a room has an address you type like an @-mention in a channel: `@<handle>#<channel>`. The handle names who; the channel names where. Both read from context — `@claude` uses the channel you are in, and `#auth` alone filters a listing to that channel.
+
+The channel is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself — the grouping the sidebar shows. It matches by branch, path basename, or full path, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel, so an address there reaches every channel rather than silently narrowing to one. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
+
+Handles come in two kinds. A **type handle** names a role to fill and carries enough to launch one:
+
+- `@<kind>` — `@codex`, the agent kind. Matches every agent of that kind in the channel, including those launched under a role.
+- `@<alias>` — `@planner`, an `[agents.aliases]` role ([configuration.md](../../reference/configuration.md#agent-aliases-and-layouts)). Matches every agent launched under that role.
+
+An **instance handle** names one running agent and only ever addresses what already exists:
+
+- `@<petname>` — `@swift-otter`, the stable per-agent name.
+- `@<kind>-<ordinal>` — `@claude-2`, the nth agent of a kind in the channel.
+- a session-id prefix.
+- `<mux>:<pane>` — `tmux:%1`, a precise, channel-agnostic pane address.
+
+`@all` is the broadcast handle: every agent in the channel.
+
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the alias when it is unique in scope, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows the handle you could type back. A handle appears only when typing it reaches that one agent, so two `planner`s in a channel each render as their kind ordinal — `@claude-1` / `@claude-2` — and every handle you see resolves to exactly one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing (`agents list`, `agents show`, `queue list`, the channel headers); [target.rs](../../../crates/rimz/src/target.rs) owns it.
+
+An address resolves to zero, one, or many agents, and arity decides the outcome:
+
+| Matches | Outcome |
+| --- | --- |
+| one | delivered |
+| many | an ambiguity error listing the handles to pick one, unless `--all` (or the explicit `@all`) opts into the fan-out |
+| zero | a miss that names where the agent runs in another channel, or — with `--create` — launches it |
+
+When a type handle matches several agents, the address resolves to an ambiguity that lists the handles to pick one — `rimz steer @codex` with two codexes stops there. `--all` (or `@all`) opts into the fan-out, which confirms before sending unless `-y` skips it; a blocked agent in a fan-out skips while the rest still send.
+
+`--create` launches a missing agent straight from its address. `rimz steer @planner#feat/x --create -- "draft the API"` opens a `planner` in `#feat/x` — creating the worktree when the channel is new — with the text as its first prompt. Only a type handle creates, because only a kind or a role carries what a launch needs; an instance handle (a petname, ordinal, or session id) names something that must already exist and refuses with the fix. Create-on-miss is the same launch as `rimz agents <kind|alias> --worktree=<channel> "<prompt>"`, reached from the address.
+
 ## Steering and queuing live agents
 
-Rimz delivers human-authored text to a live agent now (`rimz steer`) or at its next open delivery point (`rimz queue`). Both ride the same pane-send primitive humans and resolvers share, while state decisions come from the ledger snapshot and the hook lifecycle.
+Rimz delivers human-authored text to a live agent now (`rimz steer`) or at its next open delivery point (`rimz queue`). Both ride the same pane-send primitive humans and resolvers share, address agents through the [agent-address grammar](#agent-addresses) above, and take state decisions from the ledger snapshot and the hook lifecycle.
 
 ### Targets
 
-Message commands address agents like Slack: `@<agent>` names who, `#<worktree>` names the channel. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel defaults to the current worktree and is overridden by an inline `#<worktree>` or `--worktree`, both narrowing by branch, path basename, or full path. A pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, channel-agnostic address. `steer` and `queue` require the `@` sigil — a bare selector fails with a `did you mean @…?` hint — while a `None` current channel (a bare directory workspace) addresses every channel rather than narrowing. Misses report whether the agent runs in another channel; ambiguous single-agent lookups fail with candidate `(name, kind ordinal, worktree, pane)` labels.
+`steer` and `queue` require the `@` sigil — a bare selector fails with a `did you mean @…?` hint — so a stray word never broadcasts by accident; a pane id is the one sigil-free exception. They resolve the [agent address](#agent-addresses) against a freshly produced snapshot, so a just-started pane is present.
 
-A bare `@<kind>` or `@all` also reaches a live agent pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md](./agent.md#the-instance-lifecycle)) — because the address a paste needs is the pane, which the producer already detects for that pane's idle row. `steer` and `queue` resolve a fresh produced snapshot so a just-started pane is present. A pet name, kind ordinal, or session-id prefix names a bound session, so those still resolve the rollup alone. `steer` types into the unbound pane directly; `queue` keys a durable record on a session id the pane lacks, so it addresses bound sessions and points an unbound pane at `steer`.
+The two commands address different layers, because they deliver at different times. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md](./agent.md#the-instance-lifecycle)) — because the address a paste needs is the pane, which the producer already detects for that pane's idle row. `queue` keys a durable record on a session id, so it addresses **bound sessions**; an address that matches only an unbound pane has no key, so `queue` points it at `steer` to start the session first. A petname, kind ordinal, or session-id prefix names a bound session under either command.
 
-A fan-out to more than one agent confirms before sending (`--yes`/`-y` skips the prompt; off a TTY it refuses without the flag). One blocked or paneless agent skips rather than aborting the broadcast.
+Fan-out and `--create` follow the [address rules](#agent-addresses) above: more than one match needs `--all` (or `@all`) and confirms unless `-y`, and one blocked or paneless agent skips while the rest still send.
 
 ### Steer
 

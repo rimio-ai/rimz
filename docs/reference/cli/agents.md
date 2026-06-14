@@ -67,7 +67,7 @@ rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <
 
 ### Listing and inspecting
 
-Bare `rimz agents` lists live root-agent cards, grouped by worktree channel. The lead `AGENT` column is the agent's canonical handle — `@<kind>` within its channel, growing an ordinal (`@claude-2`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+Bare `rimz agents` lists live root-agent cards, grouped by worktree channel. The lead `AGENT` column is the agent's canonical handle — its role alias (`@planner`) when it has one, else `@<kind>` within its channel, growing an ordinal (`@claude-2`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
 
 ### The launch spec
 
@@ -99,27 +99,28 @@ Supervised `-p` runs require installed and trusted hooks, because hooks provide 
 
 `focus` jumps to an agent's pane. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate; `--stream` tails the transcript (`--from-start` replays from the top). `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.
 
-`<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`) or an `@`-mention: `@swift-otter` (pet name), `@claude-2` (kind ordinal), `@claude` (a kind), or `@<session-prefix>`. Append `#<worktree>` to scope the lookup; it narrows by branch, generated worktree name, or directory basename, and defaults to the current worktree. These management commands resolve to one agent, so a fan-out mention (`@claude` matching several, or `@all`) is an ambiguity here — name one. They also accept a bare selector (`swift-otter`), and `wait`/`stop`/`show` accept a run id: the `@` sigil is optional here because a run id carries none. `steer` and `queue` require the `@` sigil and fan out instead — see below.
+`<REF>` accepts a pane id (`tmux:%1`, `zellij:terminal_3`) or an `@`-mention: `@swift-otter` (pet name), `@claude-2` (kind ordinal), `@claude` (a kind), `@planner` (a role alias), or `@<session-prefix>`. Append `#<worktree>` to scope the lookup; it narrows by branch, generated worktree name, or directory basename, and defaults to the current worktree. These management commands resolve to one agent, so a fan-out mention (`@claude` matching several, or `@all`) is an ambiguity here — name one. They also accept a bare selector (`swift-otter`), and `wait`/`stop`/`show` accept a run id: the `@` sigil is optional here because a run id carries none. `steer` and `queue` require the `@` sigil and fan out instead — see below.
 
 ## Steer Live Agents
 
-`rimz steer` sends human-authored text to live agent panes immediately, addressed like Slack: `@<agent>` names who, `#<worktree>` names the channel.
+`rimz steer` sends human-authored text to live agent panes immediately, addressed through the [agent-address grammar](../../internals/agents/harness.md#agent-addresses): `@<handle>` names who, `#<channel>` names the worktree.
 
 ```sh
 rimz steer @swift-otter -- "Please inspect the failing test and propose the smallest fix."
 rimz steer @claude-2#cli-docs --no-enter -- "Use the docs branch only."   # paste, don't submit yet
-rimz steer @codex -- "Rebase on main when the run lands."
-rimz steer @all --yes -- "Pause and report status."                       # broadcast, skip the prompt
+rimz steer @planner -- "Rebase on main when the run lands."                # address a role alias
+rimz steer @codex --all -y -- "Pause and report status."                  # fan out to every codex
+rimz steer @planner#feat/x --create -- "Draft the new endpoint."          # launch it if not running
 rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."  # override a pending ask
 ```
 
 ```sh
-rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--yes] -- <TEXT...>
+rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--all] [--create] [--yes] -- <TEXT...>
 ```
 
-`<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint. A bare `@<kind>` or `@all` also reaches a codex you started in a fresh pane before its first turn: `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session.
+`<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@planner` (a role) name a type, and `@all` is the broadcast handle. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint. A bare `@<kind>`, `@<alias>`, or `@all` also reaches a codex you started in a fresh pane before its first turn: `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session.
 
-A fan-out to more than one agent asks for confirmation; `--yes` (`-y`) skips the prompt, and off a TTY the broadcast refuses without it. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. One blocked or paneless agent never aborts the rest — `steer` prints which agents it reached and which it skipped. The audit event records metadata and text length, not message content.
+A selector that matches several agents is an ambiguity that lists the handles to pick one; `--all` (or the explicit `@all`) opts into the fan-out, which confirms past the first match unless `--yes` (`-y`) skips it, and off a TTY refuses without it. `--create` launches a missing agent from a kind or role address — opening the worktree when the channel is new — with the text as its first prompt; an instance handle (pet name, ordinal, session id) cannot create. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. `steer` delivers to every reachable agent and prints which it reached and which it skipped, so a blocked or paneless agent skips while the rest still send. The audit event records metadata and text length, not message content.
 
 Target resolution, the bracketed-paste mechanism, and pane-answering resolver behavior are covered in [harness.md → Steering and queuing live agents](../../internals/agents/harness.md#steering-and-queuing-live-agents) and [resolver internals](../../internals/agents/resolvers.md).
 
@@ -137,14 +138,14 @@ rimz queue clear @claude-2#cli-docs
 ```
 
 ```sh
-rimz queue [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--yes] -- <TEXT...>
-rimz queue add [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--yes] -- <TEXT...>
+rimz queue [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--all] [--create] [--yes] -- <TEXT...>
+rimz queue add [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--all] [--create] [--yes] -- <TEXT...>
 rimz queue list [--json] [REF]
 rimz queue remove <MESSAGE_ID>
 rimz queue clear [--worktree <WORKTREE>] <REF>
 ```
 
-The bare form and `queue add` do the same work and take an `@`-mention. A mention that fans out (`@codex`, `@all`) queues one message per matched agent and asks for confirmation past the first; `--yes` (`-y`) skips the prompt. `--on done` is the default gate and delivers after the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivered text rides as a bracketed paste with a discrete submit Enter, the same path as `steer`; `--no-enter` stores the text without it. The whole `queue` family takes the `@`-mention grammar — `list <ref>` and `clear <ref>` require the sigil and resolve a single agent.
+The bare form and `queue add` do the same work and take an `@`-mention. A selector matching several agents is an ambiguity until `--all` (or `@all`) opts into queuing one message per matched agent, confirming past the first unless `--yes` (`-y`) skips it. `--create` launches a missing kind or role with the text as its first prompt instead of queuing. `--on done` is the default gate and delivers after the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivered text rides as a bracketed paste with a discrete submit Enter, the same path as `steer`; `--no-enter` stores the text without it. The whole `queue` family takes the `@`-mention grammar — `list <ref>` and `clear <ref>` require the sigil and resolve a single agent.
 
 Delivery is FIFO per agent, and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap.
 

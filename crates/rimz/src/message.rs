@@ -274,6 +274,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             name: name.map(ToOwned::to_owned),
             kind_ordinal: Some(1),
+            alias: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

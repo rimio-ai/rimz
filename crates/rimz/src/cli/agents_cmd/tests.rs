@@ -355,6 +355,7 @@ fn explicit_interactive_mode_applies_even_when_alias_added_args() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "gpt-5-codex".to_owned()],
         mode: None,
+        alias: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -388,6 +389,7 @@ fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
         kind: AgentKind::new_unchecked("codex"),
         args: yolo_args.clone(),
         mode: Some(PermissionMode::Yolo),
+        alias: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -419,6 +421,7 @@ fn explicit_mode_skips_cells_with_virtual_or_alias_mode() {
         kind: AgentKind::new_unchecked("claude"),
         args: auto_args.clone(),
         mode: Some(PermissionMode::Auto),
+        alias: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -572,4 +575,59 @@ async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
     .await
     .expect("run wait");
     assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
+}
+
+fn agent_role(prompt_file: Option<&std::path::Path>) -> rimz::config::AliasesConfig {
+    let mut aliases = rimz::config::AliasesConfig::default();
+    aliases.0.insert(
+        "planner".to_owned(),
+        rimz::config::Alias::Agent {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: prompt_file.map(std::path::Path::to_path_buf),
+            args: None,
+        },
+    );
+    aliases
+}
+
+#[test]
+fn create_on_miss_launches_kinds_and_agent_roles_but_not_command_aliases() {
+    // A kind and an agent role carry a kind to staff a channel; a command alias
+    // and a pet name do not, so `--create` refuses them.
+    let mut aliases = agent_role(None);
+    aliases.0.insert(
+        "vim".to_owned(),
+        rimz::config::Alias::Command("nvim -p".to_owned()),
+    );
+
+    assert!(is_launchable_type("codex", &aliases));
+    assert!(is_launchable_type("planner", &aliases));
+    assert!(!is_launchable_type("vim", &aliases));
+    assert!(!is_launchable_type("swift-otter", &aliases));
+}
+
+#[test]
+fn alias_launch_requires_its_system_prompt_file() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let present = dir.path().join("planner.md");
+    std::fs::write(&present, "be terse").expect("write prompt");
+
+    let layout = rimz::agents_spec::resolve_layout(
+        Some("planner"),
+        &agent_role(Some(&present)),
+        &rimz::config::LayoutsConfig::default(),
+    )
+    .expect("resolve planner role");
+
+    // The cell names the role; a present prompt file passes the launch gate.
+    ensure_alias_prompt_files(&layout, &agent_role(Some(&present))).expect("present prompt passes");
+
+    // A missing prompt file fails the launch with the path to fix.
+    let missing = dir.path().join("absent.md");
+    let err = ensure_alias_prompt_files(&layout, &agent_role(Some(&missing)))
+        .expect_err("missing prompt fails the launch");
+    assert!(err.to_string().contains("system-prompt-file"));
 }

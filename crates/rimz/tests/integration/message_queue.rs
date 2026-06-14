@@ -274,7 +274,7 @@ fn queue_delivery_presses_enter_as_discrete_key() {
     assert_text_then_enter(&trace_log, "go");
 }
 
-/// `queue @claude --yes` fans out to every claude in the room: one queued
+/// `queue @claude --all -y` fans out to every claude in the room: one queued
 /// message per agent, all carrying the same text.
 #[test]
 fn queue_fanout_two_agents() {
@@ -287,7 +287,7 @@ fn queue_fanout_two_agents() {
 
     let out = env
         .rimz()
-        .args(["queue", "@claude", "--yes", "--", "shared task"])
+        .args(["queue", "@claude", "--all", "--yes", "--", "shared task"])
         .output()
         .expect("queue fanout");
     assert!(
@@ -308,8 +308,42 @@ fn queue_fanout_two_agents() {
     );
 }
 
-/// `steer @claude --yes` broadcasts to every claude with a bound pane and prints
-/// a summary naming the count.
+/// Without `--all`, a selector that matches several agents is an ambiguity that
+/// names the `--all` opt-in rather than a silent broadcast.
+#[test]
+fn steer_multi_match_without_all_is_ambiguous() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-amb-a",
+        "feature-aa",
+        &[("ZELLIJ_PANE_ID", "11")],
+    );
+    register_running_agent(
+        &env,
+        "sess-amb-b",
+        "feature-ab",
+        &[("ZELLIJ_PANE_ID", "12")],
+    );
+
+    let out = env
+        .rimz()
+        .args(["steer", "@claude", "--", "hello"])
+        .output()
+        .expect("steer ambiguous");
+    assert!(
+        !out.status.success(),
+        "a multi-match must not broadcast without --all"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--all"),
+        "the ambiguity names the --all opt-in: {stderr}"
+    );
+}
+
+/// `steer @claude --all -y` broadcasts to every claude with a bound pane and
+/// prints a summary naming the count.
 #[test]
 fn steer_fanout_summary() {
     let env = Env::new();
@@ -321,7 +355,7 @@ fn steer_fanout_summary() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["steer", "@claude", "--yes", "--", "hello"])
+        .args(["steer", "@claude", "--all", "--yes", "--", "hello"])
         .output()
         .expect("steer fanout");
     assert!(
@@ -363,7 +397,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args(["steer", "@claude", "--yes", "--", "go"])
+        .args(["steer", "@claude", "--all", "--yes", "--", "go"])
         .output()
         .expect("steer partial skip");
     assert!(

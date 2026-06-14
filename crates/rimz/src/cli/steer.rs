@@ -23,7 +23,16 @@ pub struct SteerArgs {
     /// Send even when a pending ask is attached to the agent.
     #[arg(long)]
     force: bool,
-    /// Broadcast to more than one agent without the confirmation prompt.
+    /// Fan out to every agent the address matches. Without it, a selector that
+    /// matches more than one agent is an error that lists the handles to pick one.
+    #[arg(long)]
+    all: bool,
+    /// Launch the agent if the address matches none: a kind (`@codex`) or a role
+    /// (`@planner`) opens a fresh agent in the channel with this text as its first
+    /// prompt. An instance handle (pet name, ordinal) cannot create.
+    #[arg(long)]
+    create: bool,
+    /// Skip the fan-out confirmation prompt when broadcasting (`@all` or --all).
     #[arg(long, short = 'y')]
     yes: bool,
     /// Text to type into the agent pane.
@@ -49,16 +58,35 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
     let ledger = open_ledger(&workspace)?;
     let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
     let channel = current_channel(&workspace);
-    let targets = super::resolve_pane_targets(
+    let targets = match super::resolve_pane_targets(
         &snapshot,
         &args.target,
         args.worktree.as_deref(),
         channel.as_deref(),
-    )?;
+    ) {
+        Ok(targets) => targets,
+        // Create-on-miss: a kind/role address with --create launches a fresh
+        // agent with this text as its first prompt, so no separate steer follows.
+        Err(_) if args.create => {
+            return super::agents_cmd::create_on_miss(
+                &args.target,
+                args.worktree.as_deref(),
+                channel.as_deref(),
+                &text,
+                globals,
+            );
+        }
+        Err(err) => return Err(err),
+    };
 
-    if targets.len() > 1 && !args.yes {
+    if targets.len() > 1 {
         let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
-        super::confirm_fanout("Steer", &args.target, &labels)?;
+        if !args.all && !rimz::target::is_broadcast(&args.target) {
+            return Err(super::ambiguous_fanout("steer", &args.target, &labels));
+        }
+        if !args.yes {
+            super::confirm_fanout("Steer", &args.target, &labels)?;
+        }
     }
 
     let mut outcomes = Vec::with_capacity(targets.len());

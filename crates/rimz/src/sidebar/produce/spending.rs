@@ -618,6 +618,7 @@ mod tests {
             kind: AgentKind::new_unchecked("codex"),
             name: None,
             kind_ordinal: None,
+            alias: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             pane: None,

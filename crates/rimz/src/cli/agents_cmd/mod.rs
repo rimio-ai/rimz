@@ -188,6 +188,10 @@ struct ExecArgs {
     run_id: Option<rimz::RunId>,
     #[arg(long)]
     agent_name: Option<String>,
+    /// The `[agents.aliases]` role this agent launched as, stamped into
+    /// `RIMZ_AGENT_ALIAS` so it answers to `@<alias>`.
+    #[arg(long)]
+    agent_alias: Option<String>,
     #[arg(long)]
     launch_id: Option<String>,
     #[arg(long, hide = true)]
@@ -245,6 +249,86 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
 fn exit_print_usage_error(err: anyhow::Error) -> ! {
     let _ = writeln!(std::io::stderr().lock(), "rimz: {err:#}");
     std::process::exit(2);
+}
+
+impl AgentsArgs {
+    /// A minimal single-agent launch for create-on-miss: the resolved kind or
+    /// role `spec`, the message as the first `prompt`, and the channel
+    /// `worktree`. Everything else defaults so the launch lands where the
+    /// address pointed, under the per-machine tab policy.
+    fn for_create(spec: String, prompt: Option<String>, worktree: Option<String>) -> Self {
+        Self {
+            command: None,
+            spec: Some(spec),
+            prompt,
+            worktree,
+            name: None,
+            bg: false,
+            same_tab: false,
+            new_tab: false,
+            ask: false,
+            yolo: false,
+            system_prompt_file: None,
+            effort: None,
+            print: false,
+            timeout: None,
+            keep: false,
+            detach: false,
+            json: false,
+            output_format: None,
+            input_format: None,
+            passthrough: Vec::new(),
+        }
+    }
+}
+
+/// Launch a missing agent for `steer`/`queue --create`. A *type* handle — a kind
+/// (`@codex`) or an `[agents.aliases]` role (`@planner`) — opens a fresh agent in
+/// the addressed channel with the message as its first prompt; the channel names
+/// (or creates) a worktree when it differs from the current one. An instance
+/// handle (pet name, ordinal, session id) or a pane/`@all` address refuses,
+/// because it names something that must already exist.
+pub(crate) fn create_on_miss(
+    target: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+    text: &str,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let Some(create) = rimz::target::create_mention(target, worktree_flag, current_channel)? else {
+        bail!(
+            "`{target}` cannot create an agent; address a kind or role like `@codex` or `@planner`"
+        );
+    };
+    let machine_config = crate::cli::machine_config()?;
+    if !is_launchable_type(&create.selector, &machine_config.agents.aliases) {
+        bail!(
+            "`{target}` names a specific agent that is not running; create one with `@<kind>` or a role from [agents.aliases]"
+        );
+    }
+    // A channel other than the current one names (or creates) its worktree; the
+    // current channel launches in place.
+    let worktree = create
+        .channel
+        .filter(|channel| Some(channel.as_str()) != current_channel);
+    let prompt = (!text.trim().is_empty()).then(|| text.to_owned());
+    launch_layout(
+        AgentsArgs::for_create(create.selector, prompt, worktree),
+        globals,
+    )
+}
+
+/// Whether `selector` names a launchable *type* handle: a known agent kind
+/// (`@codex`) or an `[agents.aliases]` *agent* role (`@planner`). A command
+/// alias names a raw pane, not an addressable agent, and carries no kind to
+/// staff a channel — so `--create` refuses it, the same as a pet name or
+/// ordinal that must already exist.
+fn is_launchable_type(selector: &str, aliases: &rimz::config::AliasesConfig) -> bool {
+    rimz::agents::find_adapter(selector).is_some()
+        || matches!(
+            aliases.0.get(selector),
+            Some(rimz::config::Alias::Agent { .. })
+        )
 }
 
 #[cfg(test)]

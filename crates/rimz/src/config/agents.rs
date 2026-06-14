@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -54,6 +55,15 @@ pub enum Alias {
         model: Option<String>,
         #[serde(default)]
         effort: Option<String>,
+        /// A file whose contents replace the agent's base system prompt, giving
+        /// the role its own voice. Resolved relative to the config file and
+        /// existence-checked when the alias launches.
+        #[serde(
+            default,
+            rename = "system-prompt-file",
+            skip_serializing_if = "Option::is_none"
+        )]
+        system_prompt_file: Option<PathBuf>,
         #[serde(default)]
         args: Option<String>,
     },
@@ -74,6 +84,7 @@ impl<'de> Deserialize<'de> for Alias {
                 mode: agent.mode,
                 model: agent.model,
                 effort: agent.effort,
+                system_prompt_file: agent.system_prompt_file,
                 args: agent.args,
             }),
         }
@@ -104,6 +115,8 @@ struct AgentKeyword {
     model: Option<String>,
     #[serde(default)]
     effort: Option<String>,
+    #[serde(default, rename = "system-prompt-file")]
+    system_prompt_file: Option<PathBuf>,
     #[serde(default)]
     args: Option<String>,
 }

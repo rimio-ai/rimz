@@ -29,7 +29,16 @@ pub struct QueueArgs {
     /// Restrict matches to one worktree branch, name, or path (the channel).
     #[arg(long)]
     worktree: Option<String>,
-    /// Queue for more than one agent without the confirmation prompt.
+    /// Queue for every agent the address matches. Without it, a selector that
+    /// matches more than one agent is an error that lists the handles to pick one.
+    #[arg(long)]
+    all: bool,
+    /// Launch the agent if the address matches none: a kind (`@codex`) or a role
+    /// (`@planner`) opens a fresh agent in the channel with this text as its first
+    /// prompt. An instance handle (pet name, ordinal) cannot create.
+    #[arg(long)]
+    create: bool,
+    /// Skip the fan-out confirmation prompt when broadcasting (`@all` or --all).
     #[arg(long, short = 'y')]
     yes: bool,
     /// Text to deliver.
@@ -74,6 +83,10 @@ struct AddArgs {
     no_enter: bool,
     #[arg(long)]
     worktree: Option<String>,
+    #[arg(long)]
+    all: bool,
+    #[arg(long)]
+    create: bool,
     #[arg(long, short = 'y')]
     yes: bool,
     #[arg(last = true)]
@@ -88,7 +101,11 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
             join_text(add.text)?,
             !add.no_enter,
             add.on,
-            add.yes,
+            FanoutFlags {
+                all: add.all,
+                create: add.create,
+                yes: add.yes,
+            },
             globals,
         ),
         Some(QueueSubcmd::List { json, target }) => list_messages(json, target, globals),
@@ -106,7 +123,11 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
                 text,
                 !args.no_enter,
                 args.on,
-                args.yes,
+                FanoutFlags {
+                    all: args.all,
+                    create: args.create,
+                    yes: args.yes,
+                },
                 globals,
             )
         }
@@ -120,13 +141,20 @@ fn join_text(text: Vec<String>) -> Result<String> {
     Ok(text.join(" "))
 }
 
+/// The fan-out / create / confirm flags shared by both queue-add forms.
+struct FanoutFlags {
+    all: bool,
+    create: bool,
+    yes: bool,
+}
+
 fn add_message(
     target: String,
     worktree: Option<String>,
     text: String,
     enter: bool,
     gate: DeliveryGate,
-    yes: bool,
+    flags: FanoutFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
     if text.is_empty() {
@@ -158,15 +186,31 @@ fn add_message(
                     "`{target}` matched an agent pane with no session yet; `rimz steer {target}` to start it, then queue"
                 );
             }
+            // Create-on-miss launches a fresh agent with this text as its first
+            // prompt, so the launch carries the work and no queue entry is made.
+            if flags.create {
+                return super::agents_cmd::create_on_miss(
+                    &target,
+                    worktree.as_deref(),
+                    channel.as_deref(),
+                    &text,
+                    globals,
+                );
+            }
             return Err(err);
         }
     };
-    if agents.len() > 1 && !yes {
+    if agents.len() > 1 {
         let labels: Vec<String> = agents
             .iter()
             .map(|agent| super::agent_label(agent))
             .collect();
-        super::confirm_fanout("Queue for", &target, &labels)?;
+        if !flags.all && !rimz::target::is_broadcast(&target) {
+            return Err(super::ambiguous_fanout("queue for", &target, &labels));
+        }
+        if !flags.yes {
+            super::confirm_fanout("Queue for", &target, &labels)?;
+        }
     }
     // Preflight hooks once per distinct kind, before queuing anything — the hard
     // hooks precondition is all-or-nothing across the fan-out.

@@ -532,6 +532,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: None,
             kind_ordinal: Some(1),
+            alias: None,
             status: AgentStatus::Running,
             phase: rimz::agents::TurnPhase::Reasoning,
             pane: Some(PaneRef::from_id(PaneId::from_parts(

@@ -87,6 +87,9 @@ fn record_lifecycle_observation(
         if observation.agent_name.is_none() {
             observation.agent_name = env_agent_name().or_else(|| proc_agent_name(&observation));
         }
+        if observation.agent_alias.is_none() {
+            observation.agent_alias = env_agent_alias().or_else(|| proc_agent_alias(&observation));
+        }
         if observation.worktree_path.is_none() {
             observation.worktree_path = Some(workspace.worktree_root.display().to_string());
         }
@@ -336,6 +339,36 @@ fn env_agent_name() -> Option<String> {
 fn proc_agent_name(observation: &AgentLifecycleObservation) -> Option<String> {
     let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_NAME)?;
     validate_agent_name_env(raw, "process")
+}
+
+fn env_agent_alias() -> Option<String> {
+    let raw = std::env::var(rimz::run::ENV_AGENT_ALIAS).ok()?;
+    validate_agent_alias_env(raw, "env")
+}
+
+fn proc_agent_alias(observation: &AgentLifecycleObservation) -> Option<String> {
+    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_ALIAS)?;
+    validate_agent_alias_env(raw, "process")
+}
+
+/// Accept a stamped role alias only if it reads as a layout cell word — the
+/// same shape `[agents.aliases]` validates at config load, so a garbled env
+/// value never becomes an addressable handle.
+fn validate_agent_alias_env(raw: String, source: &str) -> Option<String> {
+    let valid = !raw.is_empty()
+        && !raw
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == ':' || ch == '#');
+    if valid {
+        Some(raw)
+    } else {
+        warn!(
+            agent_alias = %raw,
+            source,
+            "lifecycle: ignoring invalid Rimz agent alias",
+        );
+        None
+    }
 }
 
 fn validate_agent_name_env(raw: String, source: &str) -> Option<String> {
@@ -666,6 +699,7 @@ mod tests {
         let observation = AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from(agent_id)),
             agent_name: agent_name.map(ToOwned::to_owned),
+            agent_alias: None,
             kind_ordinal: None,
             signal: LifecycleSignal::TurnEnded {
                 errored: false,

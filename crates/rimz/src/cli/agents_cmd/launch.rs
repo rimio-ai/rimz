@@ -19,6 +19,7 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
         &machine_config.agents.aliases,
         &machine_config.agents.layouts,
     )?;
+    ensure_alias_prompt_files(&layout, &machine_config.agents.aliases)?;
     if args.name.is_some() && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
     }
@@ -244,6 +245,7 @@ pub(super) fn full_agent_launch_env(
     adapter: &dyn AgentAdapter,
     run_id: Option<&rimz::RunId>,
     agent_name: Option<&str>,
+    agent_alias: Option<&str>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
     let mut env = agent_launch_env(project_root, kind)?;
@@ -255,6 +257,12 @@ pub(super) fn full_agent_launch_env(
     }
     if let Some(agent_name) = agent_name {
         env.insert(rimz::run::ENV_AGENT_NAME.to_owned(), agent_name.to_owned());
+    }
+    if let Some(agent_alias) = agent_alias {
+        env.insert(
+            rimz::run::ENV_AGENT_ALIAS.to_owned(),
+            agent_alias.to_owned(),
+        );
     }
     validate_agent_launch_env(kind, &env)?;
     Ok(env)
@@ -326,6 +334,40 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
     Ok(())
 }
 
+/// Confirm every role alias the resolved layout launches has its
+/// `system-prompt-file` present, so a missing prompt fails here — at the launch
+/// entry point, with the absolute path to fix — rather than reaching the agent.
+/// This mirrors the explicit `--system-prompt-file` check; the alias paths are
+/// already resolved against the config file at load, so unrelated config reads
+/// stay IO-free.
+pub(super) fn ensure_alias_prompt_files(
+    layout: &LayoutSpec,
+    aliases: &rimz::config::AliasesConfig,
+) -> Result<()> {
+    for cell in layout.columns.iter().flat_map(|column| &column.rows) {
+        let Cell::Agent {
+            alias: Some(name), ..
+        } = cell
+        else {
+            continue;
+        };
+        let Some(rimz::config::Alias::Agent {
+            system_prompt_file: Some(path),
+            ..
+        }) = aliases.0.get(name)
+        else {
+            continue;
+        };
+        if !path.is_file() {
+            bail!(
+                "role `{name}` system-prompt-file `{}` not found; create it or fix [agents.aliases.{name}].system-prompt-file",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Build the launch-override preset from the shared `--effort` /
 /// `--system-prompt-file` flags. The prompt file is resolved to an absolute
 /// path and required to exist — a missing file fails here, at the entry point,
@@ -390,6 +432,7 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 kind,
                 args,
                 mode: cell_mode,
+                alias: _,
             } = cell
             else {
                 continue;
@@ -591,13 +634,18 @@ pub(super) fn pane_cmd_with_name(
             vec![rimz::launch::user_shell_program()]
         }
         Cell::Command { argv } => argv.clone(),
-        Cell::Agent { kind, args, .. } => {
+        Cell::Agent {
+            kind, args, alias, ..
+        } => {
             let mut argv = vec![
                 rimz_bin.to_string_lossy().into_owned(),
                 "agents".to_owned(),
                 "exec".to_owned(),
                 kind.as_str().to_owned(),
             ];
+            if let Some(alias) = alias {
+                argv.extend(["--agent-alias".to_owned(), alias.clone()]);
+            }
             if let Some(launch) = launch {
                 validate_agent_name(&launch.name)?;
                 argv.extend(["--agent-name".to_owned(), launch.name.clone()]);

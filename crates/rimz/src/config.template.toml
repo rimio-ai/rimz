@@ -18,16 +18,21 @@
 
 [agents.aliases]
 # Bare strings are shell-split raw commands. Agent alias tables use `agent`
-# plus optional `mode` ("auto", "ask", "plan", "yolo"), `model`, `effort`, and
-# extra shell-split `args`. Built-in virtual cells include `claude-plan`,
-# `claude-ping`, `codex-plan`, and `codex-ping` — define an alias here to
-# shadow one or add custom variants.
+# plus optional `mode` ("auto", "ask", "plan", "yolo"), `model`, `effort`,
+# `system-prompt-file`, and extra shell-split `args`. An agent alias is a named
+# role the agent answers to as `@<alias>`, so its name must not be a kind,
+# `all`, or an ordinal like `claude-2`. Built-in virtual cells include
+# `claude-plan`, `claude-ping`, `codex-plan`, and `codex-ping`.
 ## vim = "nvim -p"
 ## htop = "htop"
 ## [agents.aliases.codex-yolo]
 ## agent = "codex"
 ## mode = "yolo"
 ## model = "gpt-5-codex"
+## effort = "high"
+## [agents.aliases.planner]                # a role with its own system prompt; address it as @planner
+## agent = "claude"
+## system-prompt-file = "~/.config/rimz/prompts/planner.md"
 ## effort = "high"
 
 [agents.layouts]

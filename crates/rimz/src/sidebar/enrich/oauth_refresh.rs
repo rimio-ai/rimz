@@ -245,6 +245,7 @@ mod tests {
                 kind: AgentKind::new_unchecked("claude"),
                 name: None,
                 kind_ordinal: None,
+                alias: None,
                 status: AgentStatus::Running,
                 phase: TurnPhase::Reasoning,
                 pane: Some(pane()),

@@ -103,6 +103,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         kind: AgentKind::new_unchecked(kind),
         name: None,
         kind_ordinal: None,
+        alias: None,
         status,
         phase: TurnPhase::Idle,
         pane: None,

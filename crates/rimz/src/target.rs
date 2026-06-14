@@ -1,16 +1,21 @@
-//! Agent target parsing and snapshot resolution.
+//! The agent-address grammar: `@<handle>#<channel>`, parsed, resolved, and
+//! rendered here (the canonical handle is the inverse of the parser).
 //!
-//! Targets read like Slack: `@<agent>` mentions who, `#<worktree>` names the
-//! channel. `@all` and a bare `@<kind>` fan out to every match; `@<kind>-<n>`,
-//! `@<petname>`, and a session-id prefix name one agent. A pane id
-//! (`tmux:%1`, `zellij:terminal_3`) is a precise, sigil-free, channel-agnostic
-//! address.
+//! Handles read like Slack. A *type handle* names a role to fill — `@<kind>`
+//! (`@codex`) or `@<alias>` (`@planner`) — and matches every such agent in the
+//! channel; the same handles can also create one (see [`create_mention`]). An
+//! *instance handle* names exactly one running agent — `@<kind>-<n>`,
+//! `@<petname>`, or a session-id prefix. `@all` is the broadcast handle, and a
+//! pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, sigil-free,
+//! channel-agnostic address. The renderer prefers the role, then the kind, then
+//! an ordinal, then the petname, so a handle always round-trips to its agent.
 //!
-//! The channel narrows to one worktree. Callers pass the *current* channel
-//! (the worktree the command runs in); an explicit `#name` or `--worktree name`
-//! overrides it. A `None` current channel means **all channels** — it never
-//! silently narrows to "only worktree-less agents", so addressing the room
-//! from a bare directory workspace still reaches every agent.
+//! The channel is the workspace segment the room groups by — a worktree branch,
+//! else a directory basename. Callers pass the *current* channel; an explicit
+//! `#name` or `--worktree name` overrides it. A `None` current channel means
+//! **all channels** — it never silently narrows to "only worktree-less agents",
+//! so addressing the room from a bare directory workspace still reaches every
+//! agent.
 
 use crate::feed::AgentState;
 use crate::ids::PaneId;
@@ -77,6 +82,10 @@ trait Candidate<'a>: Copy {
     fn kind(self) -> &'a str;
     fn kind_ordinal(self) -> Option<u32>;
     fn name(self) -> Option<&'a str>;
+    /// The `[agents.aliases]` role this agent launched as, when it has one. An
+    /// alias is a *type* handle — `@planner` may name several agents — so the
+    /// name/alias matcher returns every alias match and lets arity decide.
+    fn alias(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
@@ -113,6 +122,9 @@ impl<'a> Candidate<'a> for &'a AgentState {
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
     }
+    fn alias(self) -> Option<&'a str> {
+        self.alias.as_deref()
+    }
     fn session_id(self) -> Option<&'a str> {
         Some(self.agent_id.as_str())
     }
@@ -136,6 +148,9 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
+    }
+    fn alias(self) -> Option<&'a str> {
+        self.alias.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -265,6 +280,51 @@ pub fn require_mention(raw: &str) -> Result<(), TargetErr> {
     })
 }
 
+/// Whether `raw` is the broadcast handle `@all` — the explicit "everyone in the
+/// channel" address. A broadcast opts into fan-out on its own, so it needs no
+/// `--all`; a pane id is never a broadcast.
+pub fn is_broadcast(raw: &str) -> bool {
+    !raw.contains(':') && selector_of(raw) == "all"
+}
+
+/// The selector and resolved channel a `--create` launch needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateMention {
+    /// The bare handle (`codex`, `planner`, `swift-otter`, `claude-2`). The
+    /// caller decides whether it names a launchable *type* (a kind or an alias)
+    /// or a specific instance that must already exist.
+    pub selector: String,
+    /// The channel to launch into: an inline `#name`, the `--worktree` flag, or
+    /// the current channel. `None` only outside any channel.
+    pub channel: Option<String>,
+}
+
+/// Resolve `raw` into the selector and channel a `--create` launch would use, or
+/// `None` when the target cannot create a fresh agent: a precise pane address or
+/// the `@all` broadcast. An inline `#channel`/`--worktree` mismatch still errors,
+/// so create-on-miss reuses the same channel reconciliation as delivery.
+pub fn create_mention(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> Result<Option<CreateMention>, TargetErr> {
+    match parse_target(raw)? {
+        Target::Pane(_)
+        | Target::Mention {
+            selector: AgentSelector::All,
+            ..
+        } => Ok(None),
+        Target::Mention { channel, .. } => {
+            let channel =
+                effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
+            Ok(Some(CreateMention {
+                selector: selector_of(raw).to_owned(),
+                channel,
+            }))
+        }
+    }
+}
+
 fn parse_target(raw: &str) -> Result<Target, TargetErr> {
     if raw.contains(':') {
         let pane = PaneId::parse(raw).map_err(|err| TargetErr::InvalidPaneId(err.to_string()))?;
@@ -320,6 +380,18 @@ fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> V
             })
             .collect(),
         AgentSelector::NameOrSession(selector) => {
+            // A role alias is a type handle: it can name several agents, and
+            // arity (one vs many) is decided downstream. It comes first so
+            // `@planner` reads as the role, then the globally-unique pet name,
+            // then a session-id prefix.
+            let by_alias: Vec<C> = candidates
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.alias() == Some(selector.as_str()))
+                .collect();
+            if !by_alias.is_empty() {
+                return by_alias;
+            }
             let by_name: Vec<C> = candidates
                 .iter()
                 .copied()
@@ -482,6 +554,19 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent_channel(agent);
+    // The role alias is the most informative handle, so prefer it whenever it
+    // still names exactly this agent in scope. A shared role (two `planner`s in
+    // one channel) is not unique, so it falls through to the kind/ordinal ladder.
+    if let Some(alias) = agent.alias.as_deref() {
+        let alias_rivals = peers
+            .iter()
+            .filter(|peer| peer.alias.as_deref() == Some(alias))
+            .filter(|peer| !scoped || agent_channel(peer) == channel)
+            .count();
+        if alias_rivals <= 1 {
+            return format!("@{alias}");
+        }
+    }
     // The same-kind agents this handle must out-name. With channel context only
     // those sharing the channel compete; without it (an ungrouped channel-less
     // handle), every same-kind agent does.
@@ -608,588 +693,4 @@ fn shares_token(a: &str, b: &str) -> bool {
 }
 
 #[cfg(test)]
-mod tests {
-    use jiff::Timestamp;
-
-    use super::*;
-    use crate::feed::{AgentStatus, PaneRef};
-    use crate::ids::{AgentKind, AgentSessionId, MuxName, WorkspaceId};
-
-    #[test]
-    fn resolve_prefers_name_ordinal_kind_then_session_prefix() {
-        let mut snapshot = empty_snapshot();
-        let mut alpha = agent("claude", "session-alpha", Some("main"), "terminal_1");
-        alpha.name = Some("lucid-atlas".to_owned());
-        alpha.kind_ordinal = Some(1);
-        let mut beta = agent("claude", "session-beta", Some("feature/x.y"), "terminal_2");
-        beta.name = Some("bright-beacon".to_owned());
-        beta.kind_ordinal = Some(2);
-        snapshot.agents = vec![alpha, beta];
-
-        assert_eq!(
-            resolve_one(&snapshot, "@lucid-atlas", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-alpha"
-        );
-        assert_eq!(
-            resolve_one(&snapshot, "@claude-2", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-beta"
-        );
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude", None, None),
-            Err(TargetErr::Ambiguous { .. })
-        ));
-        // Compact channel form picks the branch.
-        assert_eq!(
-            resolve_one(&snapshot, "@claude#feature/x.y", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-beta"
-        );
-        assert_eq!(
-            resolve_one(&snapshot, "@session-a", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-alpha"
-        );
-    }
-
-    #[test]
-    fn require_mention_demands_the_sigil() {
-        // steer/queue enforce `@`; pane ids are exempt.
-        assert!(require_mention("claude").is_err());
-        assert!(require_mention("@claude").is_ok());
-        assert!(require_mention("@all").is_ok());
-        assert!(require_mention("tmux:%1").is_ok());
-        // The removed `selector@worktree` infix is not a mention.
-        assert!(require_mention("claude@main").is_err());
-    }
-
-    #[test]
-    fn old_infix_no_longer_scopes_by_worktree() {
-        let mut snapshot = empty_snapshot();
-        let agent = agent("claude", "session-alpha", Some("main"), "terminal_1");
-        snapshot.agents = vec![agent];
-        // `claude@main` is just an unknown name now, not "claude in main".
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude@main", None, None),
-            Err(TargetErr::NoMatch { .. })
-        ));
-    }
-
-    #[test]
-    fn pane_id_bypasses_sigils() {
-        let mut snapshot = empty_snapshot();
-        let agent = agent("claude", "session-pane", Some("main"), "terminal_7");
-        snapshot.agents = vec![agent];
-        assert_eq!(
-            resolve_one(&snapshot, "zellij:terminal_7", None, Some("other"))
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-pane"
-        );
-    }
-
-    #[test]
-    fn at_kind_ordinal_never_falls_through_to_session_prefix() {
-        let mut snapshot = empty_snapshot();
-        let mut agent = agent("codex", "claude-1-session", Some("main"), "terminal_1");
-        agent.name = Some("solid-lumen".to_owned());
-        snapshot.agents = vec![agent];
-
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude-1", None, None),
-            Err(TargetErr::NoMatch { .. })
-        ));
-    }
-
-    #[test]
-    fn at_kind_fans_out_but_resolve_one_is_ambiguous() {
-        let mut snapshot = empty_snapshot();
-        let mut one = agent("claude", "session-1", Some("main"), "terminal_1");
-        one.kind_ordinal = Some(1);
-        let mut two = agent("claude", "session-2", Some("main"), "terminal_2");
-        two.kind_ordinal = Some(2);
-        let codex = agent("codex", "session-3", Some("main"), "terminal_3");
-        snapshot.agents = vec![one, two, codex];
-
-        let many = resolve_many(&snapshot, "@claude", None, None).unwrap();
-        assert_eq!(many.len(), 2);
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude", None, None),
-            Err(TargetErr::Ambiguous { .. })
-        ));
-        // A specific ordinal stays single.
-        assert_eq!(
-            resolve_one(&snapshot, "@claude-2", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-2"
-        );
-    }
-
-    #[test]
-    fn at_all_fans_to_the_channel_only() {
-        let mut snapshot = empty_snapshot();
-        let feat_claude = agent("claude", "session-a", Some("feat"), "terminal_1");
-        let feat_codex = agent("codex", "session-b", Some("feat"), "terminal_2");
-        let main_claude = agent("claude", "session-c", Some("main"), "terminal_3");
-        snapshot.agents = vec![feat_claude, feat_codex, main_claude];
-
-        let ids: Vec<&str> = resolve_many(&snapshot, "@all", None, Some("feat"))
-            .unwrap()
-            .iter()
-            .map(|agent| agent.agent_id.as_str())
-            .collect();
-        assert_eq!(ids, vec!["session-a", "session-b"]);
-    }
-
-    #[test]
-    fn current_channel_default_applies() {
-        let mut snapshot = empty_snapshot();
-        let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
-        let main = agent("claude", "session-main", Some("main"), "terminal_2");
-        snapshot.agents = vec![feat, main];
-
-        assert_eq!(
-            resolve_one(&snapshot, "@claude", None, Some("feat"))
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-feat"
-        );
-    }
-
-    #[test]
-    fn none_current_channel_means_all_channels() {
-        let mut snapshot = empty_snapshot();
-        let feat = agent("claude", "session-feat", Some("feat"), "terminal_1");
-        let main = agent("claude", "session-main", Some("main"), "terminal_2");
-        snapshot.agents = vec![feat, main];
-
-        // No current channel must not silently narrow — both are visible.
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude", None, None),
-            Err(TargetErr::Ambiguous { .. })
-        ));
-    }
-
-    #[test]
-    fn zero_in_channel_but_matches_elsewhere() {
-        let mut snapshot = empty_snapshot();
-        let main_codex = agent("codex", "session-codex", Some("main"), "terminal_1");
-        snapshot.agents = vec![main_codex];
-
-        let err = resolve_one(&snapshot, "@codex#cli-docs", None, None).unwrap_err();
-        let message = err.to_string();
-        assert!(
-            matches!(err, TargetErr::NoMatchInChannel { .. }),
-            "expected a channel-scoped miss: {message}"
-        );
-        assert!(
-            message.contains("`main`"),
-            "names the real channel: {message}"
-        );
-    }
-
-    #[test]
-    fn rejects_conflicting_channels() {
-        let snapshot = empty_snapshot();
-        assert!(matches!(
-            resolve_one(&snapshot, "@claude#main", Some("docs"), None),
-            Err(TargetErr::WorktreeMismatch { .. })
-        ));
-    }
-
-    #[test]
-    fn splits_channel_at_first_hash() {
-        let mut snapshot = empty_snapshot();
-        let mut agent = agent("claude", "session-alpha", Some("feature/x.y"), "terminal_1");
-        agent.name = Some("lucid-atlas".to_owned());
-        snapshot.agents = vec![agent];
-
-        assert_eq!(
-            resolve_one(&snapshot, "@lucid-atlas#feature/x.y", None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-alpha"
-        );
-    }
-
-    #[test]
-    fn no_match_points_to_the_list_without_dumping_the_roster() {
-        let mut snapshot = empty_snapshot();
-        let names = ["calm-fox", "bold-pine", "warm-dune"];
-        snapshot.agents = names
-            .iter()
-            .enumerate()
-            .map(|(i, name)| {
-                let mut agent = agent(
-                    "claude",
-                    &format!("session-{i}"),
-                    Some("main"),
-                    "terminal_1",
-                );
-                agent.name = Some((*name).to_owned());
-                agent
-            })
-            .collect();
-
-        let err = resolve_one(&snapshot, "@missing-name", None, None).unwrap_err();
-        let message = err.to_string();
-        assert!(
-            message.contains("run `rimz agents list`"),
-            "points at the list: {message}"
-        );
-        assert!(
-            names.iter().all(|name| !message.contains(name)),
-            "no roster names leak in: {message}"
-        );
-    }
-
-    #[test]
-    fn no_match_suggests_close_pet_names() {
-        let mut snapshot = empty_snapshot();
-        let mut close = agent("claude", "session-1", Some("main"), "terminal_1");
-        close.name = Some("otter-swift".to_owned());
-        let mut far = agent("claude", "session-2", Some("main"), "terminal_2");
-        far.name = Some("calm-fox".to_owned());
-        snapshot.agents = vec![close, far];
-
-        let message = resolve_one(&snapshot, "@swift-otter", None, None)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            message.contains("did you mean") && message.contains("otter-swift"),
-            "suggests the token-sharing name: {message}"
-        );
-        assert!(
-            !message.contains("calm-fox"),
-            "skips unrelated names: {message}"
-        );
-    }
-
-    #[test]
-    fn handle_is_shortest_unambiguous_and_round_trips() {
-        let mut snapshot = empty_snapshot();
-        let mut solo = agent("claude", "session-solo", Some("docs"), "terminal_1");
-        solo.kind_ordinal = Some(1);
-        let mut a = agent("claude", "session-a", Some("main"), "terminal_2");
-        a.kind_ordinal = Some(1);
-        let mut b = agent("claude", "session-b", Some("main"), "terminal_3");
-        b.kind_ordinal = Some(2);
-        snapshot.agents = vec![solo, a, b];
-        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-
-        // The only claude in `docs` reads as the bare kind; two claudes sharing
-        // `main` each grow the disambiguating ordinal.
-        assert_eq!(agent_handle(peers[0], &peers, true), "@claude#docs");
-        assert_eq!(agent_handle(peers[1], &peers, true), "@claude-1#main");
-        assert_eq!(agent_handle(peers[2], &peers, true), "@claude-2#main");
-        // The grouped form drops the channel — it is the section header.
-        assert_eq!(agent_handle(peers[1], &peers, false), "@claude-1");
-
-        // Every rendered handle resolves back to exactly its own agent.
-        for &agent in &peers {
-            let handle = agent_handle(agent, &peers, true);
-            assert_eq!(
-                resolve_one(&snapshot, &handle, None, None)
-                    .unwrap()
-                    .agent_id
-                    .as_str(),
-                agent.agent_id.as_str(),
-                "{handle} round-trips to its agent"
-            );
-        }
-    }
-
-    #[test]
-    fn handle_falls_back_to_petname_without_an_ordinal() {
-        let mut snapshot = empty_snapshot();
-        // Two codex sessions share a channel but carry no ordinal — the stable
-        // petname is the only thing that still names one.
-        let mut a = agent("codex", "session-a", Some("main"), "terminal_1");
-        a.name = Some("swift-otter".to_owned());
-        let mut b = agent("codex", "session-b", Some("main"), "terminal_2");
-        b.name = Some("brave-lark".to_owned());
-        snapshot.agents = vec![a, b];
-        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-
-        assert_eq!(agent_handle(peers[0], &peers, false), "@swift-otter");
-        assert_eq!(agent_handle(peers[1], &peers, false), "@brave-lark");
-    }
-
-    #[test]
-    fn channelless_handle_disambiguates_against_same_kind_elsewhere() {
-        let mut snapshot = empty_snapshot();
-        // A claude running outside any worktree, beside a claude in `main`. The
-        // loose one has no `#channel` suffix to scope a bare `@claude`, so its
-        // handle must fall to the globally-unique petname — and round-trip.
-        let mut loose = agent("claude", "session-loose", None, "terminal_1");
-        loose.name = Some("lucid-atlas".to_owned());
-        loose.kind_ordinal = Some(1);
-        let mut in_main = agent("claude", "session-main", Some("main"), "terminal_2");
-        in_main.kind_ordinal = Some(2);
-        snapshot.agents = vec![loose, in_main];
-        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-
-        assert_eq!(agent_handle(peers[0], &peers, true), "@lucid-atlas");
-        // The in-main claude is the only one of its kind there — bare kind + channel.
-        assert_eq!(agent_handle(peers[1], &peers, true), "@claude#main");
-        for &one in &peers {
-            let handle = agent_handle(one, &peers, true);
-            assert_eq!(
-                resolve_one(&snapshot, &handle, None, None)
-                    .unwrap()
-                    .agent_id
-                    .as_str(),
-                one.agent_id.as_str(),
-                "{handle} round-trips to its agent"
-            );
-        }
-    }
-
-    #[test]
-    fn channelless_handle_falls_back_to_session_without_a_petname() {
-        let mut snapshot = empty_snapshot();
-        // No petname and a same-kind agent elsewhere: the session id is the only
-        // address left that still names exactly the loose agent.
-        let loose = agent("claude", "session-loose", None, "terminal_1");
-        let in_main = agent("claude", "session-main", Some("main"), "terminal_2");
-        snapshot.agents = vec![loose, in_main];
-        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
-
-        let handle = agent_handle(peers[0], &peers, true);
-        assert_eq!(handle, "@session-loose");
-        assert_eq!(
-            resolve_one(&snapshot, &handle, None, None)
-                .unwrap()
-                .agent_id
-                .as_str(),
-            "session-loose"
-        );
-    }
-
-    fn empty_snapshot() -> SidebarSnapshot {
-        SidebarSnapshot::build_with_agents(
-            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-target-test")),
-            Vec::new(),
-            Vec::new(),
-            Timestamp::now(),
-        )
-    }
-
-    fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentState {
-        let now = Timestamp::now();
-        AgentState {
-            agent_id: AgentSessionId::from(id),
-            kind: AgentKind::new_unchecked(kind),
-            name: None,
-            kind_ordinal: None,
-            status: AgentStatus::Idle,
-            phase: crate::agents::TurnPhase::Idle,
-            pane: Some(PaneRef::from_id(PaneId::from_parts(
-                MuxName::Zellij,
-                raw_pane,
-            ))),
-            agent_pid: None,
-            agent_process_start: None,
-            runtime_owner: None,
-            parent_agent_id: None,
-            worktree_path: branch.map(|branch| format!("/repo/{branch}")),
-            worktree_branch: branch.map(ToOwned::to_owned),
-            task: None,
-            prompt: None,
-            transcript_path: None,
-            recent_prompts: Vec::new(),
-            model: None,
-            effort: None,
-            context_pct: None,
-            context_window: None,
-            total_tokens: None,
-            cache_read_input_tokens: None,
-            fresh_input_tokens: None,
-            output_tokens: None,
-            todo_done: None,
-            todo_total: None,
-            context: None,
-            subagent_description: None,
-            subagent_started_at: None,
-            turn_started_at: None,
-            compacting_since: None,
-            compaction_count: 0,
-            last_seen: now,
-            last_activity: now,
-            registered_at: Some(now),
-        }
-    }
-
-    /// A lazy (sessionless) agent pane as the producer would emit it into
-    /// `agent_panes` — kind and pane only.
-    fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
-        PaneAgent {
-            kind: AgentKind::new_unchecked(kind),
-            kind_ordinal: None,
-            name: None,
-            agent_id: None,
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
-            worktree_path: Some(worktree_path.to_owned()),
-            worktree_branch: None,
-        }
-    }
-
-    /// A bound agent pane: a session with its pet name, ordinal, and the pane the
-    /// producer bound it to (which may differ from the session's own record).
-    fn bound_pane(
-        kind: &str,
-        ordinal: u32,
-        name: &str,
-        session: &str,
-        branch: &str,
-        raw_pane: &str,
-    ) -> PaneAgent {
-        PaneAgent {
-            kind: AgentKind::new_unchecked(kind),
-            kind_ordinal: Some(ordinal),
-            name: Some(name.to_owned()),
-            agent_id: Some(AgentSessionId::from(session)),
-            pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
-            worktree_path: Some(format!("/repo/{branch}")),
-            worktree_branch: Some(branch.to_owned()),
-        }
-    }
-
-    #[test]
-    fn at_kind_matches_a_lazy_agent_pane() {
-        // A bare codex pane (no session yet) is a steer target by kind.
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
-
-        let targets = resolve_targets(&snapshot, "@codex", None, Some("shimmer-effect")).unwrap();
-        assert_eq!(targets.len(), 1);
-        assert_eq!(targets[0].kind.as_str(), "codex");
-        assert_eq!(targets[0].agent_id, None);
-        assert_eq!(targets[0].pane_id.to_string(), "zellij:terminal_170");
-    }
-
-    #[test]
-    fn lazy_panes_skip_ordinal_pet_name_and_session_selectors() {
-        // A lazy pane carries no ordinal, pet name, or session id — only
-        // `@kind`/`@all` reach it.
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
-
-        assert!(matches!(
-            resolve_targets(&snapshot, "@codex-1", None, Some("shimmer-effect")),
-            Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
-        ));
-        assert!(matches!(
-            resolve_targets(&snapshot, "@swift-otter", None, Some("shimmer-effect")),
-            Err(TargetErr::NoMatch { .. })
-        ));
-    }
-
-    #[test]
-    fn bound_pane_reaches_its_producer_bound_pane_by_petname_and_ordinal() {
-        // A cwd-bound session is steerable by pet name, ordinal, and session
-        // prefix, each landing on the pane the producer bound — even when the
-        // rollup session itself carries no stamped pane.
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![bound_pane(
-            "codex",
-            1,
-            "swift-otter",
-            "session-x",
-            "shimmer-effect",
-            "terminal_5",
-        )];
-
-        for raw in ["@swift-otter", "@codex-1", "@session-x"] {
-            let targets = resolve_targets(&snapshot, raw, None, Some("shimmer-effect")).unwrap();
-            assert_eq!(targets.len(), 1, "{raw}");
-            assert_eq!(targets[0].pane_id.to_string(), "zellij:terminal_5", "{raw}");
-            assert_eq!(
-                targets[0].agent_id.as_ref().map(AgentSessionId::as_str),
-                Some("session-x"),
-                "{raw}"
-            );
-        }
-    }
-
-    #[test]
-    fn management_resolution_never_sees_agent_panes() {
-        // resolve_many resolves the rollup; agent_panes never leaks into it.
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
-
-        assert!(matches!(
-            resolve_many(&snapshot, "@codex", None, Some("shimmer-effect")),
-            Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
-        ));
-    }
-
-    #[test]
-    fn unbound_pane_in_channel_flags_only_lazy_matches() {
-        // The signal queue reads: true for a lazy match, false for a bound one.
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
-        assert!(unbound_pane_in_channel(
-            &snapshot,
-            "@codex",
-            None,
-            Some("shimmer-effect")
-        ));
-
-        snapshot.agent_panes = vec![bound_pane(
-            "codex",
-            1,
-            "swift-otter",
-            "s1",
-            "shimmer-effect",
-            "terminal_5",
-        )];
-        assert!(!unbound_pane_in_channel(
-            &snapshot,
-            "@codex",
-            None,
-            Some("shimmer-effect")
-        ));
-    }
-
-    #[test]
-    fn at_all_fans_to_in_channel_panes_only() {
-        let mut snapshot = empty_snapshot();
-        snapshot.agent_panes = vec![
-            bound_pane(
-                "claude",
-                1,
-                "calm-fox",
-                "session-c",
-                "shimmer-effect",
-                "terminal_1",
-            ),
-            lazy_pane("codex", "/repo/shimmer-effect", "terminal_170"),
-            lazy_pane("codex", "/repo/other", "terminal_9"),
-        ];
-
-        let kinds: Vec<String> = resolve_targets(&snapshot, "@all", None, Some("shimmer-effect"))
-            .unwrap()
-            .iter()
-            .map(|target| target.kind.to_string())
-            .collect();
-        // bound claude + the in-channel lazy codex; the other channel's pane is out.
-        assert_eq!(kinds.len(), 2);
-        assert!(kinds.contains(&"claude".to_owned()));
-        assert!(kinds.contains(&"codex".to_owned()));
-    }
-}
+mod tests;

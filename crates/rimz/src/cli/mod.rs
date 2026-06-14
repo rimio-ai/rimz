@@ -228,6 +228,23 @@ pub(crate) fn confirm_fanout(verb: &str, target: &str, labels: &[String]) -> Res
     Ok(())
 }
 
+/// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<alias>`
+/// names a role, not "everyone", so several matches is a "pick one" error: it
+/// lists the disambiguating handles to retype and names `--all` as the opt-in to
+/// reach every match. The explicit broadcast `@all` (and the `--all` flag) skip
+/// this and go through [`confirm_fanout`] instead.
+pub(crate) fn ambiguous_fanout(verb: &str, target: &str, labels: &[String]) -> anyhow::Error {
+    let list = labels
+        .iter()
+        .map(|label| format!("@{label}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    anyhow::anyhow!(
+        "`{target}` matches {} agents ({list}); name one above, or pass --all to {verb} them all",
+        labels.len()
+    )
+}
+
 /// Resolve a ref to exactly one agent (`show`/`focus`/`wait`/`stop`,
 /// `queue clear`/`list`). `@all` or a fan-out kind is an explicit ambiguity.
 pub(crate) fn resolve_agent_one<'a>(
@@ -329,6 +346,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),
+                alias: agent.alias.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
                 worktree_path: agent.worktree_path.clone(),

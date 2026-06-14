@@ -148,10 +148,12 @@ impl MachineConfig {
                 path: path.to_path_buf(),
             });
         }
-        let config: Self = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+        let mut config: Self = toml::from_str(text).map_err(|source| ConfigErr::Parse {
             path: path.to_path_buf(),
             source,
         })?;
+        let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
+        crate::agents_spec::resolve_alias_prompt_paths(&mut config.agents.aliases, config_dir);
         crate::agents_spec::validate_config(&config.agents.aliases, &config.agents.layouts)
             .map_err(|source| ConfigErr::Agents {
                 path: path.to_path_buf(),

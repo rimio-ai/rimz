@@ -136,6 +136,7 @@ fn agent_keyword_mode_precedes_extra_args() {
             mode: Some(PermissionMode::Auto),
             model: None,
             effort: None,
+            system_prompt_file: None,
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned()),
         },
     )]);
@@ -169,6 +170,7 @@ fn agent_alias_model_and_effort_render_before_extra_args() {
             mode: None,
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
+            system_prompt_file: None,
             args: Some("--profile reviewer".to_owned()),
         },
     )]);
@@ -195,6 +197,69 @@ fn agent_alias_model_and_effort_render_before_extra_args() {
 }
 
 #[test]
+fn agent_alias_system_prompt_file_renders_and_stamps_role() {
+    let aliases = aliases([(
+        "planner",
+        Alias::Agent {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: Some("/prompts/planner.md".into()),
+            args: None,
+        },
+    )]);
+    let Cell::Agent { args, alias, .. } = parse_layout_spec("planner", &aliases)
+        .expect("parse planner role")
+        .columns[0]
+        .rows[0]
+        .clone()
+    else {
+        panic!("agent cell");
+    };
+    // The role is stamped onto the cell, and the system prompt renders the
+    // adapter's native flag.
+    assert_eq!(alias.as_deref(), Some("planner"));
+    assert_eq!(
+        args,
+        vec![
+            "--system-prompt-file".to_owned(),
+            "/prompts/planner.md".to_owned(),
+        ]
+    );
+}
+
+#[test]
+fn agent_alias_name_must_not_shadow_the_address_grammar() {
+    fn agent_alias(agent: &str) -> Alias {
+        Alias::Agent {
+            agent: agent.to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: None,
+            args: None,
+        }
+    }
+    // A kind-named agent alias is rejected so `@claude` stays the kind.
+    let shadow = aliases([("claude", agent_alias("claude"))]);
+    assert!(matches!(
+        parse_layout_spec("term", &shadow),
+        Err(LayoutErr::AliasShadowsAddress { name, .. }) if name == "claude"
+    ));
+    // An ordinal-shaped agent alias is rejected so `@codex-2` stays an ordinal.
+    let ordinal = aliases([("codex-2", agent_alias("codex"))]);
+    assert!(matches!(
+        parse_layout_spec("term", &ordinal),
+        Err(LayoutErr::AliasShadowsAddress { .. })
+    ));
+    // A command alias keeps its freedom to override a cell word — it never
+    // launches an addressable agent.
+    let command = aliases([("claude", Alias::Command("nvim".to_owned()))]);
+    assert!(parse_layout_spec("term", &command).is_ok());
+}
+
+#[test]
 fn unsupported_agent_alias_preset_field_errors() {
     let aliases = aliases([(
         "pi-deep",
@@ -203,6 +268,7 @@ fn unsupported_agent_alias_preset_field_errors() {
             mode: None,
             model: Some("large".to_owned()),
             effort: None,
+            system_prompt_file: None,
             args: None,
         },
     )]);
@@ -262,6 +328,7 @@ fn virtual_agent_modes_work_without_config() {
                 .expect("claude")
                 .permission_args(PermissionMode::Auto),
             mode: Some(PermissionMode::Auto),
+            alias: None,
         }
     );
     assert_eq!(
@@ -272,6 +339,7 @@ fn virtual_agent_modes_work_without_config() {
                 .expect("codex")
                 .permission_args(PermissionMode::Yolo),
             mode: Some(PermissionMode::Yolo),
+            alias: None,
         }
     );
     assert_eq!(
@@ -280,6 +348,7 @@ fn virtual_agent_modes_work_without_config() {
             kind: AgentKind::new_unchecked("pi"),
             args: Vec::new(),
             mode: Some(PermissionMode::Ask),
+            alias: None,
         }
     );
 }
@@ -309,6 +378,7 @@ fn plan_mode_works_without_config() {
             kind: AgentKind::new_unchecked("claude"),
             args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
             mode: Some(PermissionMode::Plan),
+            alias: None,
         }
     );
 
@@ -322,6 +392,7 @@ fn plan_mode_works_without_config() {
             kind: AgentKind::new_unchecked("codex"),
             args: Vec::new(),
             mode: Some(PermissionMode::Plan),
+            alias: None,
         }
     );
 
@@ -335,6 +406,7 @@ fn plan_mode_works_without_config() {
             kind: AgentKind::new_unchecked("pi"),
             args: Vec::new(),
             mode: Some(PermissionMode::Plan),
+            alias: None,
         }
     );
 }
@@ -352,6 +424,7 @@ fn ping_aliases_work_without_config() {
             kind: AgentKind::new_unchecked("claude"),
             args: vec!["--effort".to_owned(), "low".to_owned(), "ping".to_owned()],
             mode: None,
+            alias: None,
         }
     );
 
@@ -368,6 +441,7 @@ fn ping_aliases_work_without_config() {
                 "ping".to_owned(),
             ],
             mode: None,
+            alias: None,
         }
     );
 
@@ -388,6 +462,7 @@ fn keyword_errors_are_specific() {
             mode: None,
             model: None,
             effort: None,
+            system_prompt_file: None,
             args: None,
         },
     );
@@ -462,6 +537,7 @@ fn named_layouts_compose_keywords() {
                 mode: None,
                 model: None,
                 effort: None,
+                system_prompt_file: None,
                 args: Some("--permission-mode plan".to_owned()),
             },
         ),
@@ -480,6 +556,7 @@ fn named_layouts_compose_keywords() {
             kind: AgentKind::new_unchecked("claude"),
             args: vec!["--permission-mode".to_owned(), "plan".to_owned()],
             mode: None,
+            alias: Some("claude-plan".to_owned()),
         }
     );
     assert_eq!(

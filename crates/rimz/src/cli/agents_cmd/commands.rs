@@ -208,6 +208,9 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         "kind",
         render::cell(agent.kind.to_string()).fg(render::palette::META),
     );
+    if let Some(role) = agent.alias.as_deref() {
+        kv.push("role", render::cell(role).fg(render::palette::META));
+    }
     if let Some(name) = agent.name.as_deref() {
         kv.push("name", render::cell(name));
     }
@@ -436,10 +439,11 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     if layout_cell_count(&layout) != 1 {
         bail!("--print requires a single-cell agent layout");
     }
-    let (kind, agent_args, cell_mode) = agent_cells[0];
+    let (kind, agent_args, cell_mode, cell_alias) = agent_cells[0];
     let adapter = rimz::agents::find_adapter(kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    let launch_env = full_agent_launch_env(&workspace.project_root, adapter, None, None)?;
+    let launch_env =
+        full_agent_launch_env(&workspace.project_root, adapter, None, None, cell_alias)?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(adapter, agent_args, &prompt, &launch_env)?;
 
@@ -521,6 +525,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         adapter,
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
+        agent_alias: cell_alias,
         launch_id: Some(&launch_identity.agent_id),
         cwd: &launch.cwd,
         prompt: &prompt,
@@ -756,13 +761,27 @@ fn lifecycle_cell(
     }
 }
 
-fn agent_cells(layout: &LayoutSpec) -> Vec<(&str, &[String], Option<PermissionMode>)> {
+/// A launchable agent cell from a resolved layout: its kind, the alias-preset
+/// plus passthrough args, the permission posture, and the role alias (if any).
+type AgentCell<'a> = (
+    &'a str,
+    &'a [String],
+    Option<PermissionMode>,
+    Option<&'a str>,
+);
+
+fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
     layout
         .columns
         .iter()
         .flat_map(|column| {
             column.rows.iter().filter_map(|cell| match cell {
-                Cell::Agent { kind, args, mode } => Some((kind.as_str(), args.as_slice(), *mode)),
+                Cell::Agent {
+                    kind,
+                    args,
+                    mode,
+                    alias,
+                } => Some((kind.as_str(), args.as_slice(), *mode, alias.as_deref())),
                 Cell::Command { .. } => None,
             })
         })

@@ -61,6 +61,9 @@ fn agent_aliases_and_layouts_parse() {
              model = \"gpt-5-codex\"\n\
              effort = \"high\"\n\
              args = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n\
+             [agents.aliases.planner]\n\
+             agent = \"claude\"\n\
+             system-prompt-file = \"/prompts/planner.md\"\n\
              [agents.layouts]\n\
              stacked = \"claude,codex+vim\"\n",
     ))
@@ -83,13 +86,64 @@ fn agent_aliases_and_layouts_parse() {
             mode: Some(PermissionMode::Yolo),
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
+            system_prompt_file: None,
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
+        })
+    );
+    // A role preset carries its own system prompt under the kebab-case key.
+    assert_eq!(
+        aliases.get("planner"),
+        Some(&Alias::Agent {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: Some("/prompts/planner.md".into()),
+            args: None,
         })
     );
     assert_eq!(
         config.agents.layouts.0.get("stacked").map(String::as_str),
         Some("claude,codex+vim")
     );
+}
+
+#[test]
+fn alias_system_prompt_file_resolves_against_the_config_dir() {
+    // A relative role prompt roots at the config file's directory, so it points
+    // at the same file wherever the role later launches — not at the agent cwd.
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[agents.aliases.planner]\n\
+             agent = \"claude\"\n\
+             system-prompt-file = \"prompts/planner.md\"\n",
+    ))
+    .expect("load");
+    let Some(Alias::Agent {
+        system_prompt_file: Some(path),
+        ..
+    }) = config.agents.aliases.0.get("planner")
+    else {
+        panic!("planner role with a system prompt");
+    };
+    assert_eq!(path, &dir.path().join("prompts/planner.md"));
+    // An absolute path is left untouched.
+    let absolute = MachineConfig::load_from(&write(
+        &dir,
+        "[agents.aliases.planner]\n\
+             agent = \"claude\"\n\
+             system-prompt-file = \"/etc/rimz/planner.md\"\n",
+    ))
+    .expect("load");
+    let Some(Alias::Agent {
+        system_prompt_file: Some(path),
+        ..
+    }) = absolute.agents.aliases.0.get("planner")
+    else {
+        panic!("planner role with a system prompt");
+    };
+    assert_eq!(path, std::path::Path::new("/etc/rimz/planner.md"));
 }
 
 #[test]

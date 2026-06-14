@@ -15,6 +15,9 @@ use crate::ledger::{SidebarSnapshot, StatePaths};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
+/// The `[agents.aliases]` role name an agent launched as, so it answers to
+/// `@<alias>`. Set by the launch wrapper; read into the lifecycle observation.
+pub const ENV_AGENT_ALIAS: &str = "RIMZ_AGENT_ALIAS";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -746,6 +749,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: None,
             kind_ordinal: None,
+            alias: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,
