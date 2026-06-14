@@ -16,7 +16,7 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
         &[("TMUX_PANE", "%1")],
     );
     let pane = tmux_pane("%1", "claude", &env.project_root);
-    let pane_fixture = env.write_pane_fixture(&[pane.clone()]);
+    let pane_fixture = env.write_pane_fixture(std::slice::from_ref(&pane));
 
     let out = env
         .rimz()
@@ -37,7 +37,7 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
         "mark-unread writes unread.json: {unread_file}"
     );
     assert!(row_unread(
-        &env.snapshot_json_with_panes(&[pane.clone()]),
+        &env.snapshot_json_with_panes(std::slice::from_ref(&pane)),
         "sess-unread"
     ));
 

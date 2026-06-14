@@ -182,40 +182,6 @@ impl AgentHookDoctorStatus {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn descriptor(kind: &str) -> &'static rimz::agents::AgentDescriptor {
-        rimz::agents::descriptor_by_kind(kind).expect("registered descriptor")
-    }
-
-    #[test]
-    fn coverage_summary_pins_agent_matrix() {
-        assert_eq!(
-            coverage_summary(descriptor("claude")),
-            "claude +turn +perm +plan +ask +compact +sub +bg +end +idle +usage +rich +install +spend +remote"
-        );
-        assert_eq!(
-            coverage_summary(descriptor("codex")),
-            "codex +turn +perm -plan(no plan-approval gate; update_pl...) +ask +compact +sub -bg(no background-task parking) -end(no SessionEnd hook; liveness rea...) -idle(no idle Notification hook) +usage +rich +install +spend +remote"
-        );
-        assert_eq!(
-            coverage_summary(descriptor("pi")),
-            "pi +turn +perm -plan(no plan-approval gate) -ask(no native question tool) +compact -sub(no subagent hook surface) -bg(no background-task parking) +end -idle(no idle notification event) +usage -rich(no rich-context transport) +install +spend -remote(no remote-control surface)"
-        );
-    }
-
-    #[test]
-    fn coverage_reason_text_truncates_without_inspecting_words() {
-        assert_eq!(coverage_reason_text("short reason"), "short reason");
-        assert_eq!(
-            coverage_reason_text("abcdefghijklmnopqrstuvwxyz0123456789"),
-            "abcdefghijklmnopqrstuvwxyz012345..."
-        );
-    }
-}
-
 /// Surface the project-trust state. Stale is the case worth seeing in
 /// `doctor`: the executable surface drifted since the last grant and
 /// command-running fields are inert until `rimz trust grant` runs again.
@@ -306,5 +272,39 @@ pub(super) fn report_unauthorized_resolver_heartbeats(ws: &rimz::ResolvedWorkspa
     unauthorized.sort();
     for id in unauthorized {
         println!("  resolver hb   : unauthorized resolver heartbeat seen ({id})");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(kind: &str) -> &'static rimz::agents::AgentDescriptor {
+        rimz::agents::descriptor_by_kind(kind).expect("registered descriptor")
+    }
+
+    #[test]
+    fn coverage_summary_pins_agent_matrix() {
+        assert_eq!(
+            coverage_summary(descriptor("claude")),
+            "claude +turn +perm +plan +ask +compact +sub +bg +end +idle +usage +rich +install +spend +remote"
+        );
+        assert_eq!(
+            coverage_summary(descriptor("codex")),
+            "codex +turn +perm -plan(no plan-approval gate; update_pl...) +ask +compact +sub -bg(no background-task parking) -end(no SessionEnd hook; liveness rea...) -idle(no idle Notification hook) +usage +rich +install +spend +remote"
+        );
+        assert_eq!(
+            coverage_summary(descriptor("pi")),
+            "pi +turn +perm -plan(no plan-approval gate) -ask(no native question tool) +compact -sub(no subagent hook surface) -bg(no background-task parking) +end -idle(no idle notification event) +usage -rich(no rich-context transport) +install +spend -remote(no remote-control surface)"
+        );
+    }
+
+    #[test]
+    fn coverage_reason_text_truncates_without_inspecting_words() {
+        assert_eq!(coverage_reason_text("short reason"), "short reason");
+        assert_eq!(
+            coverage_reason_text("abcdefghijklmnopqrstuvwxyz0123456789"),
+            "abcdefghijklmnopqrstuvwxyz012345..."
+        );
     }
 }
