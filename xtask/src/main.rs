@@ -3,6 +3,7 @@
 #![deny(clippy::print_stdout)]
 #![deny(clippy::print_stderr)]
 
+mod brew;
 mod build;
 mod docs_links;
 mod files;
@@ -54,6 +55,11 @@ const TASKS: &[TaskInfo] = &[
         name: "dist",
         summary: "Build packaged release archives into target/dist.",
         runs: "build-plugin, host release binary when non-Darwin, cargo zigbuild for both apple-darwin targets, tar.gz + SHA256SUMS",
+    },
+    TaskInfo {
+        name: "brew-formula",
+        summary: "Render the Homebrew tap formula from the dist checksums.",
+        runs: "read target/dist/SHA256SUMS plus the RIMZ_BREW_* env, write rimz.rb atomically",
     },
     TaskInfo {
         name: "hooks",
@@ -219,6 +225,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "install" => build::install(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),
+        "brew-formula" => brew::brew_formula(root),
         "hooks" => hooks::install(root),
         "fmt" => gates::fmt(root),
         "lint" => gates::lint(root),
