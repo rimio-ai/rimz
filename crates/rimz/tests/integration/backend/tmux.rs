@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    MuxBackend, NamedKey, PaneListOptions, SessionOptions, SidebarPaneOptions, SidebarWidth,
-    SplitPaneOptions, TmuxBackend,
+    LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions, SessionOptions,
+    SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
 use tempfile::TempDir;
 
@@ -53,6 +53,17 @@ macro_rules! require_tmux {
             return;
         }
     };
+}
+
+/// One pane's live placement: its raw id, left/top edge in cells, and current
+/// working directory — read from `list-panes -F` to assert layout geometry.
+#[derive(Clone, Debug)]
+struct PaneGeom {
+    #[allow(dead_code)]
+    id: String,
+    left: u64,
+    top: u64,
+    path: String,
 }
 
 /// Owns an isolated tmux server for the duration of one test. The server
@@ -174,6 +185,44 @@ impl TmuxServer {
             .lines()
             .map(|line| line.trim().to_owned())
             .collect()
+    }
+
+    /// Live geometry for every pane in `target` (a `session:window` address),
+    /// polling until at least `want` panes are present or the budget elapses.
+    /// Reads the left edge, top edge, and current path per pane — enough to
+    /// assert the imperative `open_tab` builder's column/row placement.
+    fn wait_for_panes(&self, target: &str, want: usize) -> Vec<PaneGeom> {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        loop {
+            let out = Command::new("tmux")
+                .args([
+                    "-S",
+                    self.socket.to_str().expect("utf8 socket"),
+                    "list-panes",
+                    "-t",
+                    target,
+                    "-F",
+                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_current_path}",
+                ])
+                .output()
+                .expect("spawn tmux list-panes");
+            let panes: Vec<PaneGeom> = String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .filter_map(|line| {
+                    let mut cols = line.split('\t');
+                    Some(PaneGeom {
+                        id: cols.next()?.to_owned(),
+                        left: cols.next()?.parse().ok()?,
+                        top: cols.next()?.parse().ok()?,
+                        path: cols.next().unwrap_or_default().to_owned(),
+                    })
+                })
+                .collect();
+            if panes.len() >= want || Instant::now() >= deadline {
+                return panes;
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
     }
 
     /// `show-options <scope-args…> -v <option>`, asserting success — reads one
@@ -656,6 +705,223 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     assert_eq!(
         resumed, 1,
         "resume seeding is idempotent on the window name"
+    );
+}
+
+/// `open_tab` builds a caller-specified multi-column layout imperatively: the
+/// first pane is the `new-window`, the remaining rows of a column split `-v`
+/// below it, and each later column splits `-h` to the right of the previous
+/// one. The session's `after-new-window` hook docks the global sidebar on the
+/// left, so the tab is born `sidebar | work…`. Mirrors the Zellij `open_tab`
+/// layout test (`backend::zellij::tab_layout_reopens_work_panes_evenly...`),
+/// but tmux splits fine on a detached session, so no attached client is needed.
+#[test]
+fn open_tab_builds_multi_column_layout() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-tab".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            // Wide enough that the sidebar plus two work columns — one split in
+            // two — all fit without tmux refusing a split for want of space.
+            detected_size: Some((300, 50)),
+        })
+        .expect("ensure_session");
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-tab".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(300)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
+        refresh_ms: None,
+    };
+    // Installs the `after-new-window` hook so the new tab is born with a sidebar.
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+
+    let work_pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+    };
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-tab".to_owned(),
+            title: "work".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![
+                    // Column 0: two stacked rows — the `new-window` pane plus a
+                    // `-v` split, exercising the in-column anchor tracking.
+                    vec![work_pane(), work_pane()],
+                    // Column 1: one pane to the right — the `-h` split path.
+                    vec![work_pane()],
+                ],
+            },
+            focus: true,
+            sidebar,
+        })
+        .expect("open_tab");
+
+    // The hook-docked sidebar plus three work panes.
+    let panes = server.wait_for_panes("rimz-tab:work", 4);
+    assert_eq!(
+        panes.len(),
+        4,
+        "tab should be born with a sidebar and three work panes: {panes:?}",
+    );
+
+    // The hook-docked sidebar is the sole pane at the left edge.
+    assert_eq!(
+        panes.iter().filter(|p| p.left == 0).count(),
+        1,
+        "exactly one pane (the hook-docked sidebar) sits at the left edge: {panes:?}",
+    );
+
+    // The three work panes form two columns: column 0 stacked into two rows
+    // (same left edge, different top edge), column 1 a single pane to the right.
+    let work: Vec<_> = panes.iter().filter(|p| p.left > 0).collect();
+    assert_eq!(
+        work.len(),
+        3,
+        "three work panes sit right of the sidebar: {work:?}"
+    );
+    let column_left = work.iter().map(|p| p.left).min().expect("a work pane");
+    let column0: Vec<_> = work.iter().filter(|p| p.left == column_left).collect();
+    let column1: Vec<_> = work.iter().filter(|p| p.left > column_left).collect();
+    assert_eq!(
+        column0.len(),
+        2,
+        "column 0 splits into two stacked rows: {work:?}"
+    );
+    assert_ne!(
+        column0[0].top, column0[1].top,
+        "column 0's rows stack vertically — same left, different top: {work:?}",
+    );
+    assert_eq!(
+        column1.len(),
+        1,
+        "column 1 is a single pane to the right of column 0: {work:?}",
+    );
+
+    // Every work pane runs in the requested cwd.
+    let want_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+    for pane in &work {
+        assert_eq!(
+            Path::new(&pane.path).canonicalize().ok().as_deref(),
+            Some(want_cwd.as_path()),
+            "each work pane runs in the tab cwd: {pane:?}",
+        );
+    }
+
+    // `focus: true` made the new tab the session's current window.
+    assert_eq!(
+        server.display("rimz-tab", "#{window_name}"),
+        "work",
+        "focus: true should select the new window",
+    );
+}
+
+/// A single-column, single-pane layout births exactly the bare working tab: the
+/// `new-window` pane beside the hook-docked sidebar, no extra splits. Locks the
+/// `new-window`-only path and confirms `focus: false` leaves the user's current
+/// window untouched.
+#[test]
+fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-solo".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((200, 50)),
+        })
+        .expect("ensure_session");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-solo".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(200)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_panes: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-solo".to_owned(),
+            title: "solo".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                }]],
+            },
+            focus: false,
+            sidebar,
+        })
+        .expect("open_tab");
+
+    let panes = server.wait_for_panes("rimz-solo:solo", 2);
+    assert_eq!(
+        panes.len(),
+        2,
+        "a single-pane layout is born `sidebar | work`: {panes:?}",
+    );
+    assert_eq!(
+        panes.iter().filter(|p| p.left == 0).count(),
+        1,
+        "the sidebar docks at the left edge: {panes:?}",
+    );
+    let work = panes
+        .iter()
+        .find(|p| p.left > 0)
+        .expect("a work pane to the right of the sidebar");
+    let want_cwd = cwd.path().canonicalize().expect("canonicalize cwd");
+    assert_eq!(
+        Path::new(&work.path).canonicalize().ok().as_deref(),
+        Some(want_cwd.as_path()),
+        "the work pane runs in the tab cwd: {work:?}",
+    );
+
+    // `focus: false` leaves the session on its original window, not the new tab.
+    assert_ne!(
+        server.display("rimz-solo", "#{window_name}"),
+        "solo",
+        "focus: false should not switch the session's current window",
     );
 }
 
