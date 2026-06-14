@@ -29,6 +29,30 @@ pub(crate) fn paint(style: anstyle::Style, text: &str) -> String {
     format!("{}{text}{}", style.render(), style.render_reset())
 }
 
+/// Render an absolute path relative to `$HOME` as `~`/`~/rest`, so cwd columns
+/// read at a glance. Leaves any path outside `$HOME` (or when `$HOME` is unset)
+/// untouched.
+pub(crate) fn home_relative(path: &str) -> String {
+    let home = std::env::var_os("HOME");
+    home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
+}
+
+fn home_relative_to(home: Option<&str>, path: &str) -> String {
+    let Some(home) = home.filter(|home| !home.is_empty()) else {
+        return path.to_owned();
+    };
+    if path == home {
+        return "~".to_owned();
+    }
+    match path
+        .strip_prefix(home)
+        .and_then(|rest| rest.strip_prefix('/'))
+    {
+        Some(rest) => format!("~/{rest}"),
+        None => path.to_owned(),
+    }
+}
+
 /// One column's horizontal alignment within an auto-fit [`Table`].
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Align {
@@ -283,6 +307,24 @@ mod tests {
             strip(|w| kv.render(w)),
             "  name:    right-yard\n  session: 0d52\n"
         );
+    }
+
+    #[test]
+    fn home_relative_collapses_only_the_home_prefix() {
+        let home = Some("/home/dev");
+        assert_eq!(home_relative_to(home, "/home/dev"), "~");
+        assert_eq!(
+            home_relative_to(home, "/home/dev/code/query-engine"),
+            "~/code/query-engine"
+        );
+        // A sibling that merely shares the prefix string is left untouched.
+        assert_eq!(
+            home_relative_to(home, "/home/developer/x"),
+            "/home/developer/x"
+        );
+        assert_eq!(home_relative_to(home, "/srv/work"), "/srv/work");
+        // No home → identity.
+        assert_eq!(home_relative_to(None, "/home/dev/x"), "/home/dev/x");
     }
 
     #[test]

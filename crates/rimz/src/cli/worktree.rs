@@ -9,7 +9,9 @@ use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
 use super::GlobalFlags;
+use crate::cli::render;
 use rimz::config::WorktreeBase;
+use rimz::feed::AgentState;
 use rimz::mux::own_pane_id;
 use rimz::workspace::{RootClass, WorkspaceResolver};
 
@@ -111,22 +113,62 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                     println!("{rendered}");
                 }
             } else {
+                // Best-effort overlay: which agent-colleagues live in each channel.
+                let snapshot = crate::cli::open_ledger(&workspace)
+                    .ok()
+                    .and_then(|ledger| ledger.snapshot_cached().ok());
+                let agents: Vec<&AgentState> = snapshot
+                    .as_ref()
+                    .map(|snapshot| {
+                        snapshot
+                            .agents
+                            .iter()
+                            .filter(|agent| agent.parent_agent_id.is_none())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let mut table = render::Table::new([
+                    "WORKTREE", "BRANCH", "AGENTS", "DIRTY", "UNMERGED", "PATH",
+                ])
+                .right(&[4]);
                 for entry in entries {
-                    let commits_unmerged = entry
+                    let path_str = entry.path.to_string_lossy().into_owned();
+                    let here: Vec<&AgentState> = agents
+                        .iter()
+                        .copied()
+                        .filter(|agent| {
+                            agent.worktree_path.as_deref() == Some(path_str.as_str())
+                                || (entry.branch.is_some() && agent.worktree_branch == entry.branch)
+                        })
+                        .collect();
+                    let chips = if here.is_empty() {
+                        "-".to_owned()
+                    } else {
+                        here.iter()
+                            .map(|agent| rimz::target::agent_handle(agent, &here, false))
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    };
+                    let unmerged = entry
                         .commits_unmerged
                         .map_or_else(|| "?".to_owned(), |count| count.to_string());
-                    #[expect(clippy::print_stdout, reason = "human listing")]
-                    {
-                        println!(
-                            "{}\t{}\t{}\t{} unmerged{}",
-                            entry.name,
-                            entry.path.display(),
-                            entry.branch.as_deref().unwrap_or("-"),
-                            commits_unmerged,
-                            if entry.dirty { " dirty" } else { "" }
-                        );
-                    }
+                    let branch = entry.branch.clone().unwrap_or_else(|| "-".to_owned());
+                    let dirty_cell = if entry.dirty {
+                        render::cell("dirty").fg(render::palette::WARN)
+                    } else {
+                        render::cell("-").dash()
+                    };
+                    let path_display = render::home_relative(&path_str);
+                    table.row([
+                        render::cell(entry.name).fg(render::palette::ACCENT),
+                        render::cell(branch).dash(),
+                        render::cell(chips).fg(render::palette::ACCENT).dash(),
+                        dirty_cell,
+                        render::cell(unmerged),
+                        render::cell(path_display).dash(),
+                    ]);
                 }
+                table.render(&mut render::out())?;
             }
             Ok(())
         }

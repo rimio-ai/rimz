@@ -67,7 +67,7 @@ rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <
 
 ### Listing and inspecting
 
-Bare `rimz agents` lists live root-agent cards. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+Bare `rimz agents` lists live root-agent cards, grouped by worktree channel. The lead `AGENT` column is the agent's canonical handle — `@<kind>` within its channel, growing an ordinal (`@claude-2`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
 
 ### The launch spec
 
@@ -152,7 +152,7 @@ Queued delivery requires installed and trusted hooks, because turn-end hooks tri
 
 ## Drive Panes
 
-`rimz pane` exposes the public pane primitives that humans, resolvers, and scripts share — list panes, read what is on screen, type into one, and move focus.
+`rimz pane` exposes the public pane primitives that humans, resolvers, and scripts share — see the room as panes, read what is on screen, type into one, and move focus.
 
 ```sh
 rimz pane list
@@ -172,7 +172,20 @@ rimz pane split
 rimz pane detach [--session-name <NAME>]
 ```
 
-`list` shows panes in the selected session; the default session is the cwd's workspace session. `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention to a pane. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
+`list` is the room seen as panes: every pane grouped under its native tab, each row carrying the agent-colleague that lives in it (`@kind#worktree`), its status, the foreground command, and the working directory. A `●` marks the active pane in each tab.
+
+```text
+⑂ auth-refresh
+ ●  @claude#auth-refresh   running   claude   ~/code/qe-wt/auth-refresh   zellij:terminal_3
+    @codex#auth-refresh    idle      codex    ~/code/qe-wt/auth-refresh   zellij:terminal_4
+    -                      -         zsh      ~/code/qe-wt/auth-refresh   zellij:terminal_5
+
+claude:query-engine
+ ●  @claude#main           waiting   claude   ~/code/query-engine         zellij:terminal_8
+    -                      -         vim      ~/code/query-engine         zellij:terminal_9
+```
+
+The agent annotations are a best-effort overlay, folded from the workspace snapshot the same way the sidebar reads it: a pane binds to an agent by the same stamped-id-plus-process-start rule the sidebar's cards use, so a pane the multiplexer has since handed back to a shell wears no handle. The tab grouping always works, and when no snapshot is reachable (no ledger, or a foreign `--session-name`) the panes still list, just without the `@handle`. The default session is the cwd's workspace session; `--json` emits the tab tree with a per-pane `agent` object (`kind`, `handle`, `status`, `worktree`). `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention to a pane. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
 
 Pane capture is untrusted terminal text. Scripts and resolvers match bounded patterns before sending text back, and `pane send` is the same explicit input path as `steer` and queued delivery. Resolver patterns and pane-send discipline live in [resolver internals](../../internals/agents/resolvers.md).
 
@@ -196,6 +209,6 @@ rimz worktree remove <NAME> [--force]
 
 `new` creates a marked worktree under the configured worktree directory. `--base head` branches from the current `HEAD`, `--base fresh` branches from the configured fresh base, and any other value is used as a git ref. `--branch <NAME>` creates that branch instead of using the worktree name.
 
-`list` shows Rimz-owned worktrees for the current repo, including path, branch, unmerged-count signal, and dirty marker; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees with commits not proven merged into their base; `--force` removes anyway and keeps an unmerged branch when needed.
+`list` shows Rimz-owned worktrees for the current repo as the channels they are: each row carries the worktree name, branch, the `@kind` handles of the agent-colleagues working there, a dirty marker, the unmerged-count signal, and the path; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees with commits not proven merged into their base; `--force` removes anyway and keeps an unmerged branch when needed.
 
 `rimz worktree` requires a git repository. Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary user checkouts. The marker, `.worktreeinclude` seeding, the supervised cleanup decision, and the `rimz gc` sweep are in [harness.md → Rimz-owned worktrees](../../internals/agents/harness.md#rimz-owned-worktrees) and [Cleanup](../../internals/agents/harness.md#cleanup).

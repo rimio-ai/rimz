@@ -406,6 +406,13 @@ fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>
     if exact.is_empty() { candidates } else { exact }
 }
 
+/// Whether `agent` lives in the channel `filter` names — branch, worktree path,
+/// or that path's basename. A display-side wrapper over the resolver's
+/// [`Candidate::in_worktree`], so channel membership keeps one definition.
+pub fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
+    agent.in_worktree(filter)
+}
+
 /// Build the right miss for a mention that matched nothing. When a channel was
 /// in play and the selector matches *elsewhere*, name those channels so the
 /// fix is obvious; otherwise fall back to the generic did-you-mean miss.
@@ -428,6 +435,73 @@ fn no_match_error<'a, C: Candidate<'a>>(
     TargetErr::NoMatch {
         target: raw.to_owned(),
         suggestion: suggest_names(raw, everywhere),
+    }
+}
+
+/// The agent's channel — the worktree it cooperates in: its branch, else its
+/// worktree directory basename. `None` when the agent runs outside any worktree.
+/// The display-side `Option` peer of the resolver's [`Candidate::channel_label`].
+pub fn agent_channel(agent: &AgentState) -> Option<String> {
+    agent.worktree_branch.clone().or_else(|| {
+        agent
+            .worktree_path
+            .as_deref()
+            .and_then(|path| path.rsplit('/').next())
+            .map(ToOwned::to_owned)
+    })
+}
+
+/// The canonical rendered address of an agent — the inverse of [`parse_target`].
+///
+/// Returns the shortest mention that names exactly this agent among `peers`:
+/// `@<kind>` when it is the only one of its kind in scope, else a disambiguator.
+/// With `include_channel`, a channelled agent appends `#<channel>` for ungrouped
+/// output and disambiguates within that channel (an `@<kind>-<ordinal>`, with the
+/// petname as the fallback when no ordinal is set). A grouped handle
+/// (`include_channel = false`) reads under its channel's section header, so it
+/// scopes the same way.
+///
+/// A channel-less agent in ungrouped output has no `#<channel>` suffix to scope
+/// it, so it must distinguish itself from *every* same-kind agent: the channel
+/// ordinal cannot (it repeats across channels), so the handle falls to the
+/// globally-unique petname, then a session-id selector. This keeps the handle a
+/// round-tripping address even for an agent running outside any worktree.
+pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: bool) -> String {
+    let channel = agent_channel(agent);
+    let suffix = include_channel && channel.is_some();
+    // Channel context — the scope a bare `@<kind>` resolves within — comes from
+    // the `#<channel>` suffix or, in grouped output, the section header. Only an
+    // ungrouped channel-less handle has neither, so it must scope globally.
+    let scoped = suffix || !include_channel;
+    let base = handle_base(agent, peers, scoped);
+    match channel {
+        Some(channel) if suffix => format!("{base}#{channel}"),
+        _ => base,
+    }
+}
+
+fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
+    let channel = agent_channel(agent);
+    // The same-kind agents this handle must out-name. With channel context only
+    // those sharing the channel compete; without it (an ungrouped channel-less
+    // handle), every same-kind agent does.
+    let rivals = peers
+        .iter()
+        .filter(|peer| peer.kind == agent.kind)
+        .filter(|peer| !scoped || agent_channel(peer) == channel)
+        .count();
+    if rivals <= 1 {
+        return format!("@{}", agent.kind);
+    }
+    // An ordinal is unique only within a channel, so it disambiguates only when
+    // the handle carries channel context.
+    if scoped && let Some(ordinal) = agent.kind_ordinal {
+        return format!("@{}-{ordinal}", agent.kind);
+    }
+    // Globally-unique fallbacks: the stable petname, else the session id.
+    match agent.name.as_deref() {
+        Some(name) => format!("@{name}"),
+        None => format!("@{}", agent.agent_id),
     }
 }
 
@@ -802,6 +876,107 @@ mod tests {
         assert!(
             !message.contains("calm-fox"),
             "skips unrelated names: {message}"
+        );
+    }
+
+    #[test]
+    fn handle_is_shortest_unambiguous_and_round_trips() {
+        let mut snapshot = empty_snapshot();
+        let mut solo = agent("claude", "session-solo", Some("docs"), "terminal_1");
+        solo.kind_ordinal = Some(1);
+        let mut a = agent("claude", "session-a", Some("main"), "terminal_2");
+        a.kind_ordinal = Some(1);
+        let mut b = agent("claude", "session-b", Some("main"), "terminal_3");
+        b.kind_ordinal = Some(2);
+        snapshot.agents = vec![solo, a, b];
+        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+        // The only claude in `docs` reads as the bare kind; two claudes sharing
+        // `main` each grow the disambiguating ordinal.
+        assert_eq!(agent_handle(peers[0], &peers, true), "@claude#docs");
+        assert_eq!(agent_handle(peers[1], &peers, true), "@claude-1#main");
+        assert_eq!(agent_handle(peers[2], &peers, true), "@claude-2#main");
+        // The grouped form drops the channel — it is the section header.
+        assert_eq!(agent_handle(peers[1], &peers, false), "@claude-1");
+
+        // Every rendered handle resolves back to exactly its own agent.
+        for &agent in &peers {
+            let handle = agent_handle(agent, &peers, true);
+            assert_eq!(
+                resolve_one(&snapshot, &handle, None, None)
+                    .unwrap()
+                    .agent_id
+                    .as_str(),
+                agent.agent_id.as_str(),
+                "{handle} round-trips to its agent"
+            );
+        }
+    }
+
+    #[test]
+    fn handle_falls_back_to_petname_without_an_ordinal() {
+        let mut snapshot = empty_snapshot();
+        // Two codex sessions share a channel but carry no ordinal — the stable
+        // petname is the only thing that still names one.
+        let mut a = agent("codex", "session-a", Some("main"), "terminal_1");
+        a.name = Some("swift-otter".to_owned());
+        let mut b = agent("codex", "session-b", Some("main"), "terminal_2");
+        b.name = Some("brave-lark".to_owned());
+        snapshot.agents = vec![a, b];
+        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+        assert_eq!(agent_handle(peers[0], &peers, false), "@swift-otter");
+        assert_eq!(agent_handle(peers[1], &peers, false), "@brave-lark");
+    }
+
+    #[test]
+    fn channelless_handle_disambiguates_against_same_kind_elsewhere() {
+        let mut snapshot = empty_snapshot();
+        // A claude running outside any worktree, beside a claude in `main`. The
+        // loose one has no `#channel` suffix to scope a bare `@claude`, so its
+        // handle must fall to the globally-unique petname — and round-trip.
+        let mut loose = agent("claude", "session-loose", None, "terminal_1");
+        loose.name = Some("lucid-atlas".to_owned());
+        loose.kind_ordinal = Some(1);
+        let mut in_main = agent("claude", "session-main", Some("main"), "terminal_2");
+        in_main.kind_ordinal = Some(2);
+        snapshot.agents = vec![loose, in_main];
+        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+        assert_eq!(agent_handle(peers[0], &peers, true), "@lucid-atlas");
+        // The in-main claude is the only one of its kind there — bare kind + channel.
+        assert_eq!(agent_handle(peers[1], &peers, true), "@claude#main");
+        for &one in &peers {
+            let handle = agent_handle(one, &peers, true);
+            assert_eq!(
+                resolve_one(&snapshot, &handle, None, None)
+                    .unwrap()
+                    .agent_id
+                    .as_str(),
+                one.agent_id.as_str(),
+                "{handle} round-trips to its agent"
+            );
+        }
+    }
+
+    #[test]
+    fn channelless_handle_falls_back_to_session_without_a_petname() {
+        let mut snapshot = empty_snapshot();
+        // No petname and a same-kind agent elsewhere: the session id is the only
+        // address left that still names exactly the loose agent.
+        let loose = agent("claude", "session-loose", None, "terminal_1");
+        let in_main = agent("claude", "session-main", Some("main"), "terminal_2");
+        snapshot.agents = vec![loose, in_main];
+        let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+        let handle = agent_handle(peers[0], &peers, true);
+        assert_eq!(handle, "@session-loose");
+        assert_eq!(
+            resolve_one(&snapshot, &handle, None, None)
+                .unwrap()
+                .agent_id
+                .as_str(),
+            "session-loose"
         );
     }
 

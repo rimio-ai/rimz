@@ -97,11 +97,12 @@ rimz remote add dev dev-box:~/code/query-engine
 rimz remote connect dev        # the room rebuilds, every agent where you left it
 ```
 
-**Two agents, one feature.** Built-in and inline layouts compose any grid, the sidebar groups cards by worktree with per-tree diff churn, and a worktree is removed only after its work proves landed on the base branch.
+**Two agents, one feature.** Each worktree is a channel — one copy of the code where your agents cooperate — and you address a colleague by kind within it (`@claude#feat-great`). Built-in and inline layouts compose any grid, the sidebar groups cards by worktree with per-tree diff churn, and a worktree is removed only after its work proves landed on the base branch.
 
 ```sh
 rimz agents peer --worktree=feat/great    # customizable layout alias, peer for claude,codex
 rimz agents 'vim,codex+term'              # or layout dynamically
+rimz pane list                            # the room as panes: who is in which tab, on which channel
 ```
 
 **Pipelines, steering, and queues.** A run that stops to ask survives the stop: the question takes the normal path to your sidebar and your phone, you answer from anywhere, and the run finishes while the script is still blocking.

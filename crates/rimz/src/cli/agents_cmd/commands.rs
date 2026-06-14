@@ -72,7 +72,7 @@ pub(super) fn list_agents(
         .filter(|agent| {
             worktree
                 .as_deref()
-                .is_none_or(|filter| agent_in_worktree(agent, filter))
+                .is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter))
         })
         .collect();
     if json {
@@ -85,8 +85,7 @@ pub(super) fn list_agents(
     let mut out = render::out();
     let mut table = if live_keys.is_some() {
         render::Table::new([
-            "NAME",
-            "KIND",
+            "AGENT",
             "STATUS",
             "LIFECYCLE",
             "MODEL",
@@ -97,19 +96,19 @@ pub(super) fn list_agents(
             "WORKTREE",
             "PANE",
         ])
-        .right(&[5, 6, 7, 8])
+        .right(&[4, 5, 6, 7])
     } else {
         render::Table::new([
-            "NAME", "KIND", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE", "PANE",
+            "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE", "PANE",
         ])
-        .right(&[4, 5, 6, 7])
+        .right(&[3, 4, 5, 6])
     };
     for group in &groups {
         table.section(format!("{} ({})", group.label, group.agents.len()));
-        for agent in &group.agents {
-            let mut cells = agent_row(agent, now);
+        for &agent in &group.agents {
+            let mut cells = agent_row(agent, &group.agents, now);
             if let Some(live_keys) = live_keys.as_ref() {
-                cells.insert(3, lifecycle_cell(agent, live_keys));
+                cells.insert(2, lifecycle_cell(agent, live_keys));
             }
             table.row(cells);
         }
@@ -196,14 +195,22 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         };
     };
     let mut kv = render::KeyVals::new();
+    let peers: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|candidate| candidate.parent_agent_id.is_none())
+        .collect();
     kv.push(
-        "name",
-        render::cell(agent_name(agent)).fg(render::palette::ACCENT),
+        "agent",
+        render::cell(rimz::target::agent_handle(agent, &peers, true)).fg(render::palette::ACCENT),
     );
     kv.push(
         "kind",
-        render::cell(agent_kind_label(agent)).fg(render::palette::META),
+        render::cell(agent.kind.to_string()).fg(render::palette::META),
     );
+    if let Some(name) = agent.name.as_deref() {
+        kv.push("name", render::cell(name));
+    }
     kv.push("session", render::cell(agent.agent_id.to_string()));
     kv.push(
         "status",
@@ -702,12 +709,13 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
     )
 }
 
-/// The ten columns shared by `agents list` in both its default and `--all`
-/// shapes, in display order; the `--all` view inserts `LIFECYCLE` at index 3.
-fn agent_row(agent: &AgentState, now: jiff::Timestamp) -> Vec<render::Cell> {
+/// The columns shared by `agents list` in both its default and `--all` shapes,
+/// in display order; the `--all` view inserts `LIFECYCLE` at index 2. The lead
+/// `AGENT` cell is the canonical `@kind` handle, disambiguated within the group
+/// (whose worktree heads the section, so the row omits the `#channel`).
+fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
-        render::cell(agent_name(agent)).fg(render::palette::ACCENT),
-        render::cell(agent_kind_label(agent)).fg(render::palette::META),
+        render::cell(rimz::target::agent_handle(agent, peers, false)).fg(render::palette::ACCENT),
         render::cell(agent_status_label(agent))
             .fg(render::status::agent(agent.status, agent.phase)),
         render::cell(model_label(agent)).dash(),
@@ -767,13 +775,6 @@ fn layout_cell_count(layout: &LayoutSpec) -> usize {
 
 fn agent_name(agent: &AgentState) -> &str {
     agent.name.as_deref().unwrap_or(agent.agent_id.as_str())
-}
-
-fn agent_kind_label(agent: &AgentState) -> String {
-    match agent.kind_ordinal {
-        Some(ordinal) => format!("{}-{}", agent.kind, ordinal),
-        None => agent.kind.to_string(),
-    }
 }
 
 fn agent_status_label(agent: &AgentState) -> String {
@@ -887,18 +888,12 @@ fn compact_count(value: u64) -> String {
     }
 }
 
+/// The agent's channel for the `WORKTREE` column, dashed when it runs outside
+/// any worktree. The channel itself comes from [`rimz::target::agent_channel`],
+/// the single source of truth; this only chooses the table's `-` placeholder
+/// over the resolver's prose label.
 fn worktree_label(agent: &AgentState) -> String {
-    agent
-        .worktree_branch
-        .clone()
-        .or_else(|| {
-            agent
-                .worktree_path
-                .as_deref()
-                .and_then(|path| path.rsplit('/').next())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "-".to_owned())
+    rimz::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
 }
 
 fn pane_label(agent: &AgentState) -> String {
@@ -907,12 +902,4 @@ fn pane_label(agent: &AgentState) -> String {
         .as_ref()
         .map(|pane| pane.pane_id.to_string())
         .unwrap_or_else(|| "-".to_owned())
-}
-
-fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
-    agent.worktree_branch.as_deref() == Some(filter)
-        || agent
-            .worktree_path
-            .as_deref()
-            .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
 }

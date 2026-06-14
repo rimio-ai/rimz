@@ -383,8 +383,8 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         "missing lifecycle column: {stdout}"
     );
     assert!(
-        stdout.contains("lucid-atlas"),
-        "missing stale card: {stdout}"
+        stdout.contains("@claude"),
+        "stale card shows its canonical handle: {stdout}"
     );
     assert!(
         stdout.contains("stale"),

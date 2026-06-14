@@ -215,14 +215,26 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
             println!("{rendered}");
         }
     } else {
+        // Address each message by the live agent's canonical handle; a message
+        // whose agent has since left falls back to the durable `kind:id`.
+        let agents: Vec<&AgentState> = snapshot
+            .agents
+            .iter()
+            .filter(|agent| agent.parent_agent_id.is_none())
+            .collect();
         let mut table =
             render::Table::new(["ID", "STATUS", "TARGET", "ATTEMPTS", "TEXT"]).right(&[3]);
         for message in messages {
+            let target = agents
+                .iter()
+                .copied()
+                .find(|agent| message.same_agent_card(agent))
+                .map(|agent| rimz::target::agent_handle(agent, &agents, true))
+                .unwrap_or_else(|| format!("{}:{}", message.kind, message.agent_id));
             table.row([
                 render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
                 render::cell(message.status.as_str()).fg(render::status::message(message.status)),
-                render::cell(format!("{}:{}", message.kind, message.agent_id))
-                    .fg(render::palette::META),
+                render::cell(target).fg(render::palette::META),
                 render::cell(message.attempts.to_string()),
                 render::cell(preview(&message.text)),
             ]);

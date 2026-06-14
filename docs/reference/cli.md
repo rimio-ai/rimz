@@ -126,7 +126,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | `remote` | Connect to rooms over SSH and manage remote aliases. | [Getting started](./cli/getting-started.md#remote-rooms) |
 | `steer` | Type into live agent panes immediately. | [Agent control](./cli/agents.md#steer-live-agents) |
 | `queue` | Deliver the next instruction when an agent finishes a turn. | [Agent control](./cli/agents.md#queue-the-next-message) |
-| `pane` | List, capture, send to, focus, split, or detach mux panes. | [Agent control](./cli/agents.md#drive-panes) |
+| `pane` | See the room as panes (grouped by tab, agent-aware), capture, send to, focus, split, or detach. | [Agent control](./cli/agents.md#drive-panes) |
 | `feed` | Post feed items, ask script questions, and resolve decisions. | [Feed](./cli/feed.md#feed-items-and-decisions) |
 | `agents` | List, launch, focus, wait for, and stop agent cards. | [Agent control](./cli/agents.md#agents) |
 | `worktree` | Create, list, and remove Rimz-owned git worktrees. | [Agent control](./cli/agents.md#manage-rimz-owned-worktrees) |
