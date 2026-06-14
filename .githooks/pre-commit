@@ -1,0 +1,11 @@
+#!/bin/sh
+# Rimz pre-commit gate: block a commit that would fail the CI `fmt` gate, so
+# unformatted code never reaches the branch. The check itself lives in xtask
+# (`cargo xtask fmt` -> `cargo fmt --all -- --check`); this shim only routes
+# git's hook call there, keeping one source of truth. Install with
+# `cargo xtask hooks`; bypass a single commit with `git commit --no-verify`.
+if ! cargo xtask fmt; then
+	echo >&2
+	echo "pre-commit: formatting check failed — run \`cargo fmt --all\`, re-stage, and commit again." >&2
+	exit 1
+fi

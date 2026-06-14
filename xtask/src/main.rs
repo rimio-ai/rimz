@@ -7,6 +7,7 @@ mod build;
 mod docs_links;
 mod files;
 mod gates;
+mod hooks;
 mod invariants;
 mod pricing;
 mod runner;
@@ -53,6 +54,11 @@ const TASKS: &[TaskInfo] = &[
         name: "dist",
         summary: "Build packaged release archives into target/dist.",
         runs: "build-plugin, host release binary when non-Darwin, cargo zigbuild for both apple-darwin targets, tar.gz + SHA256SUMS",
+    },
+    TaskInfo {
+        name: "hooks",
+        summary: "Install the tracked git hooks (pre-commit fmt gate).",
+        runs: "git config core.hooksPath .githooks",
     },
     TaskInfo {
         name: "fmt",
@@ -213,6 +219,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "install" => build::install(root),
         "stage-install" => build::stage_install(root).map(|_| ()),
         "dist" => build::dist(root),
+        "hooks" => hooks::install(root),
         "fmt" => gates::fmt(root),
         "lint" => gates::lint(root),
         "test" => gates::test(root),
