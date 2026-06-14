@@ -42,9 +42,11 @@ fn selected_default_idle_agent_card_lead_stays_colorless() {
         .expect("idle card lead glyph renders as its own span");
 
     // The selected idle lead keeps no foreground tint — it stays colorless — while
-    // the selection band lays its dark fill behind every cell of the card.
+    // the selection band lays its dark fill behind every cell of the card: at
+    // indexed depth the band recesses one xterm cell below the panel (gray 235 →
+    // 234), the cube's carry of the truecolor sub-cell recess.
     assert_eq!(lead.style.fg, None);
-    assert_eq!(lead.style.bg, Some(Color::Indexed(235)));
+    assert_eq!(lead.style.bg, Some(Color::Indexed(234)));
 }
 
 #[test]
@@ -245,8 +247,7 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
     done.last_activity = fixed_now() - Duration::from_secs(60);
     let mut snapshot = snapshot_with(Vec::new(), vec![done]);
     snapshot.worktree_groups[0].rows[0].unread = true;
-    // Truecolor: the wash is a sub-cube panel, painted only where the depth can
-    // carry it.
+    // Truecolor: the wash is a fine sub-cell tint above the panel.
     let theme = super::super::truecolor_sidebar_theme();
     let wash = theme
         .unread_wash()
@@ -284,11 +285,17 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
         "a read result rests on no wash — the cue clears on the look"
     );
 
-    // Off truecolor the faint panel folds onto the card surface in the 256-color
-    // cube, so it drops to the unread bold weight instead.
-    assert_eq!(
-        Theme::fixed(false).unread_wash(),
-        None,
-        "indexed depth drops the sub-cube wash; bold weight carries the unread cue"
+    // Off truecolor the sub-cube step would fold onto the panel, so indexed depth
+    // steps a whole xterm cell instead: the unread surface still reads, on its own
+    // cell distinct from the recessed selection band (the panel-relative ordering is
+    // pinned in the theme unit tests).
+    let indexed = Theme::fixed(false);
+    let indexed_wash = indexed
+        .unread_wash()
+        .expect("indexed depth carries the wash");
+    assert_ne!(
+        Some(indexed_wash),
+        indexed.selection_band(),
+        "the indexed wash and the recessed band land on distinct cells"
     );
 }

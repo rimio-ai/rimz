@@ -675,16 +675,43 @@ fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
 }
 
 #[test]
-fn selection_band_holds_flat_selection_bg_at_indexed_depth() {
+fn indexed_band_and_wash_step_one_cell_either_side_of_the_panel() {
     let theme = Theme::fixed(false);
-    // The indexed cube is too coarse for the sub-cell recess, so the band keeps the
-    // raw `selection_bg` fill, which lands on its own cube cell.
-    assert_eq!(theme.selection_band(), Some(theme.palette.selection_bg));
+    let panel = theme.palette.selection_bg;
+    let band = theme.selection_band().expect("a band at indexed depth");
+    let wash = theme.unread_wash().expect("a wash at indexed depth");
+
+    // The cube is too coarse for the truecolor sub-cell steps, so indexed depth
+    // steps a whole xterm cell instead of collapsing onto the panel: the band one
+    // cell darker, the wash one cell lighter, the panel's own cell between them.
+    // Three distinct, ordered cells carry the truecolor ordering at the cube's
+    // resolution. Pinned to the default scheme's gray-ramp neighbours so a retune of
+    // `INDEXED_SELECTION_STEP` that re-collapses or overshoots fails here.
+    assert_eq!(
+        panel,
+        Color::Indexed(235),
+        "default panel lands on gray 235"
+    );
+    assert_eq!(band, Color::Indexed(234), "band steps one gray cell darker");
+    assert_eq!(
+        wash,
+        Color::Indexed(236),
+        "wash steps one gray cell lighter"
+    );
+    assert!(
+        luminance(band) < luminance(panel) && luminance(panel) < luminance(wash),
+        "band < panel < wash: {} < {} < {}",
+        luminance(band),
+        luminance(panel),
+        luminance(wash),
+    );
 }
 
 #[test]
-fn selection_band_drops_under_no_color() {
-    assert_eq!(Theme::fixed(true).selection_band(), None);
+fn selection_band_and_unread_wash_drop_under_no_color() {
+    let plain = Theme::fixed(true);
+    assert_eq!(plain.selection_band(), None);
+    assert_eq!(plain.unread_wash(), None);
 }
 
 #[test]
@@ -723,15 +750,21 @@ fn unread_wash_is_a_lighter_tint_of_the_selection_blue() {
 }
 
 #[test]
-fn unread_wash_is_truecolor_only() {
-    // The unread surface is a truecolor refinement, like the selected card's lit
-    // panel: at indexed depth and under NO_COLOR it drops, and the unread bold
-    // weight on the glyph, name, and description carries the cue at every depth.
-    assert!(truecolor_default().unread_wash().is_some());
-    assert_eq!(
-        Theme::fixed(false).unread_wash(),
-        None,
-        "indexed depth drops the sub-cube wash; bold weight carries the unread look"
+fn unread_wash_lifts_at_every_lit_depth_and_drops_under_no_color() {
+    // The unread surface holds across depths: a lighter tint of the panel at
+    // truecolor, one xterm cell lighter at indexed depth — both lifting above the
+    // panel. NO_COLOR drops it and the unread bold weight carries the cue.
+    let truecolor = truecolor_default();
+    assert!(
+        luminance(truecolor.unread_wash().expect("a truecolor wash"))
+            > luminance(truecolor.palette.selection_bg),
+        "truecolor wash lifts above the panel"
+    );
+    let indexed = Theme::fixed(false);
+    assert!(
+        luminance(indexed.unread_wash().expect("an indexed wash"))
+            > luminance(indexed.palette.selection_bg),
+        "indexed wash lifts above the panel"
     );
     assert_eq!(
         Theme::fixed(true).unread_wash(),
