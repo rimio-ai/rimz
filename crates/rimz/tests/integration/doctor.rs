@@ -1,16 +1,18 @@
-//! `rimz doctor` agent rollup integration tests. Inject an `agent.lifecycle`
-//! event directly into the ledger, then run the binary and assert the rendered
-//! per-agent rows.
+//! `rimz doctor` integration tests. Inject ledger and heartbeat state directly,
+//! then run the binary and assert the report. The JSON report is the stable
+//! contract checked here; a smoke test pins the human report's shape.
 
 use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::LifecycleSignal;
 use rimz::ids::{MuxName, ResolverId, SidebarInstanceId};
 use rimz::schema::event::EventEnvelope;
 use rimz::schema::heartbeat::{ResolverHeartbeat, SidebarHeartbeat};
+use serde_json::Value;
 
 use crate::common::Env;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::Output;
 
 fn inject_lifecycle(
     env: &Env,
@@ -57,8 +59,19 @@ fn inject_lifecycle(
     env.ledger().append_event(&envelope).expect("append");
 }
 
+/// Run `rimz doctor --json …` and parse the report, failing loudly on a non-zero
+/// exit or non-JSON stdout.
+fn doctor_json(output: &Output) -> Value {
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    serde_json::from_slice(&output.stdout).expect("doctor --json emits valid json")
+}
+
 #[test]
-fn doctor_renders_status_row_per_agent() {
+fn doctor_json_folds_one_row_per_agent() {
     let env = Env::new();
     inject_lifecycle(
         &env,
@@ -87,7 +100,140 @@ fn doctor_renders_status_row_per_agent() {
 
     let output = env
         .rimz()
-        .args(["doctor", "--audit"])
+        .args(["doctor", "--audit", "--json"])
+        .output()
+        .expect("spawn doctor");
+    let report = doctor_json(&output);
+
+    let agents = &report["agents"];
+    assert_eq!(agents["state"], "observed");
+    let groups = agents["groups"].as_array().expect("groups array");
+
+    let claude = groups
+        .iter()
+        .find(|group| group["kind"] == "claude")
+        .expect("claude group");
+    let claude_rows = claude["agents"].as_array().expect("claude rows");
+    assert_eq!(
+        claude_rows.len(),
+        1,
+        "the rollup folds both claude events into one row: {claude_rows:?}"
+    );
+    assert_eq!(claude_rows[0]["agent_id"], "claude-session-abc");
+    assert_eq!(claude_rows[0]["branch"], "main");
+    assert_eq!(claude_rows[0]["status"], "failed");
+
+    let codex = groups
+        .iter()
+        .find(|group| group["kind"] == "codex")
+        .expect("codex group");
+    let codex_row = &codex["agents"].as_array().expect("codex rows")[0];
+    assert_eq!(codex_row["agent_id"], "codex-session-xyz");
+    assert_eq!(codex_row["branch"], "feature-migration");
+    assert_eq!(codex_row["status"], "running");
+}
+
+#[test]
+fn doctor_json_reports_agent_hook_install_and_trust_states() {
+    let env = Env::new();
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let hooks = report["hooks"].as_array().expect("hooks array");
+    let codex = hook(hooks, "codex");
+    assert_eq!(codex["status"]["state"], "not_installed");
+    assert!(
+        fix(codex).contains("rimz hooks install codex"),
+        "names the codex wiring command: {codex}"
+    );
+    assert!(
+        fix(hook(hooks, "claude")).contains("rimz hooks install claude"),
+        "names the claude wiring command"
+    );
+
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let hooks = report["hooks"].as_array().expect("hooks array");
+    let codex = hook(hooks, "codex");
+    assert_eq!(
+        codex["status"]["state"], "installed_untrusted",
+        "freshly installed hooks are untrusted until /hooks"
+    );
+    assert!(
+        fix(codex).contains("run /hooks inside codex and trust the Rimz hooks"),
+        "doctor names the trust fix: {codex}"
+    );
+    assert_eq!(
+        hook(hooks, "claude")["status"]["state"],
+        "not_installed",
+        "claude is still unwired"
+    );
+
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    trust_codex_hooks(&env);
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let hooks = report["hooks"].as_array().expect("hooks array");
+    assert_eq!(
+        hook(hooks, "codex")["status"]["state"],
+        "installed",
+        "trusted hooks read plain installed"
+    );
+}
+
+fn hook<'a>(hooks: &'a [Value], kind: &str) -> &'a Value {
+    hooks
+        .iter()
+        .find(|hook| hook["kind"] == kind)
+        .unwrap_or_else(|| panic!("hook row for {kind}"))
+}
+
+fn fix(hook: &Value) -> &str {
+    hook["status"]["fix"].as_str().expect("fix string")
+}
+
+#[test]
+fn doctor_human_report_renders_titled_sections() {
+    let env = Env::new();
+    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
+    assert!(
+        output.status.success(),
+        "doctor failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+
+    for title in ["WORKSPACE", "HOOKS", "AGENT COVERAGE", "PROTOCOLS"] {
+        assert!(stdout.contains(title), "missing section {title}:\n{stdout}");
+    }
+    assert!(
+        stdout.contains("rimz hooks install claude"),
+        "the hooks table carries the wiring command:\n{stdout}"
+    );
+}
+
+#[test]
+fn doctor_writes_json_report_to_file() {
+    let env = Env::new();
+    let path = env.home_root.join("doctor-report.json");
+    let output = env
+        .rimz()
+        .args(["doctor", "--json", "--output"])
+        .arg(&path)
         .output()
         .expect("spawn doctor");
     assert!(
@@ -95,92 +241,14 @@ fn doctor_renders_status_row_per_agent() {
         "doctor failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    // Group headers — one per kind, sorted lexically.
     assert!(
-        stdout.contains("agent (claude)"),
-        "missing claude group header in:\n{stdout}"
+        output.stdout.is_empty(),
+        "a file dump writes nothing to stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
     );
-    assert!(
-        stdout.contains("agent (codex)"),
-        "missing codex group header in:\n{stdout}"
-    );
-
-    // Per-agent row: agent id + worktree + status.
-    assert_eq!(
-        stdout.matches("claude-session-abc").count(),
-        1,
-        "the rollup folds both claude events into one row, got:\n{stdout}"
-    );
-    assert!(stdout.contains("claude-session-abc"));
-    assert!(stdout.contains("main"));
-    assert!(stdout.contains("failed"));
-
-    assert!(stdout.contains("codex-session-xyz"));
-    assert!(stdout.contains("feature-migration"));
-    assert!(stdout.contains("running"));
-}
-
-#[test]
-fn doctor_reports_agent_hook_install_and_trust_states() {
-    let env = Env::new();
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(
-        output.status.success(),
-        "doctor failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert!(
-        stdout.contains("agent hooks"),
-        "doctor must report agent hook install status:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("not installed"),
-        "an un-onboarded machine must read 'not installed':\n{stdout}"
-    );
-    assert!(
-        stdout.contains("rimz hooks install claude") && stdout.contains("rimz hooks install codex"),
-        "doctor must name the wiring command for each missing agent:\n{stdout}"
-    );
-
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert!(
-        stdout.contains("rimz hooks install claude"),
-        "claude is still unwired, so its install hint stays:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("codex installed, untrusted"),
-        "freshly installed hooks are untrusted until /hooks:\n{stdout}"
-    );
-    assert!(
-        stdout.contains("run /hooks inside codex and trust the Rimz hooks"),
-        "doctor names the fix:\n{stdout}"
-    );
-
-    let env = Env::new();
-    env.install_agent_hooks("codex");
-    trust_codex_hooks(&env);
-
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
-
-    assert!(
-        stdout.contains("codex installed") && !stdout.contains("untrusted"),
-        "trusted hooks read plain installed:\n{stdout}"
-    );
-    assert!(
-        !stdout.contains("hooks trust"),
-        "no trust-fix line once trusted:\n{stdout}"
-    );
+    let bytes = std::fs::read(&path).expect("report file on disk");
+    let report: Value = serde_json::from_slice(&bytes).expect("valid json on disk");
+    assert!(report["hooks"].is_array(), "report is the full document");
 }
 
 /// Append `[hooks.state]` trust entries for every Rimz-installed codex event,
@@ -245,7 +313,7 @@ fn path_with_stub_first(stub_dir: &Path) -> String {
 }
 
 #[test]
-fn doctor_reports_remote_control_preflight_refusals() {
+fn doctor_json_reports_remote_control_preflight_refusals() {
     let env = Env::new();
     write_machine_config(&env, "[remote_control]\nclaude = true\ncodex = true\n");
     let settings = write_claude_settings(&env, r#"{ "disableRemoteControl": true }"#);
@@ -254,25 +322,55 @@ fn doctor_reports_remote_control_preflight_refusals() {
 
     let output = env
         .rimz()
-        .arg("doctor")
+        .args(["doctor", "--json"])
         .env("PATH", path_with_stub_first(&stub_dir))
         .env("CODEX_HOME", &codex_home)
         .env("RIMZ_CLAUDE_SETTINGS", &settings)
         .output()
         .expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    let report = doctor_json(&output);
 
-    assert!(stdout.contains("remote control: claude enabled, blocked"));
-    assert!(stdout.contains("codex enabled, standalone install missing"));
-    assert!(stdout.contains("`disableRemoteControl: true`"));
-    assert!(stdout.contains("managed standalone Codex install is missing"));
-    assert!(stdout.contains("[remote_control] claude = false"));
-    assert!(stdout.contains("[remote_control] codex = false"));
+    let remote = &report["remote_control"];
+    assert_eq!(remote["state"], "on");
+    let labels: Vec<&str> = remote["agents"]
+        .as_array()
+        .expect("agents")
+        .iter()
+        .map(|agent| agent["label"].as_str().expect("label"))
+        .collect();
+    assert!(labels.contains(&"claude enabled, blocked"), "{labels:?}");
+    assert!(
+        labels.contains(&"codex enabled, standalone install missing"),
+        "{labels:?}"
+    );
+
+    let refusals = remote["refusals"]
+        .as_array()
+        .expect("refusals")
+        .iter()
+        .map(|refusal| refusal.as_str().expect("refusal string"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        refusals.contains("`disableRemoteControl: true`"),
+        "{refusals}"
+    );
+    assert!(
+        refusals.contains("managed standalone Codex install is missing"),
+        "{refusals}"
+    );
+    assert!(
+        refusals.contains("[remote_control] claude = false"),
+        "{refusals}"
+    );
+    assert!(
+        refusals.contains("[remote_control] codex = false"),
+        "{refusals}"
+    );
 }
 
 #[test]
-fn doctor_reports_protocol_version_mismatches() {
+fn doctor_json_reports_protocol_version_mismatches() {
     let env = Env::new();
 
     let mut event = EventEnvelope::new(
@@ -313,20 +411,38 @@ fn doctor_reports_protocol_version_mismatches() {
     )
     .expect("write old resolver heartbeat");
 
-    let output = env.rimz().arg("doctor").output().expect("spawn doctor");
-    assert!(output.status.success());
-    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    let report = doctor_json(
+        &env.rimz()
+            .args(["doctor", "--json"])
+            .output()
+            .expect("spawn"),
+    );
+    let protocols = &report["protocols"];
+    assert_eq!(protocols["event"], "rimz.event.v2");
+    assert_eq!(protocols["sidebar"], "rimz.plugin.v4");
+    assert_eq!(protocols["resolver"], "rimz.resolver.v1");
 
-    assert!(stdout.contains(
-        "protocols     : event rimz.event.v2; sidebar rimz.plugin.v4; resolver rimz.resolver.v1",
-    ));
-    assert!(stdout.contains(
-        "protocol warn : event log schema rimz.event.v0 seen 1 record (expected rimz.event.v2)",
-    ));
-    assert!(stdout.contains(
-        "protocol warn : sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v4)",
-    ));
-    assert!(stdout.contains(
-        "protocol warn : resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)",
-    ));
+    let warnings = protocols["warnings"]
+        .as_array()
+        .expect("warnings")
+        .iter()
+        .map(|warning| warning.as_str().expect("warning string"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        warnings.contains("event log schema rimz.event.v0 seen 1 record (expected rimz.event.v2)"),
+        "{warnings}"
+    );
+    assert!(
+        warnings.contains(
+            "sidebar heartbeat sidebar.old.json uses rimz.plugin.v0 (expected rimz.plugin.v4)"
+        ),
+        "{warnings}"
+    );
+    assert!(
+        warnings.contains(
+            "resolver heartbeat resolver.opus-policy.json uses rimz.resolver.v0 (expected rimz.resolver.v1)"
+        ),
+        "{warnings}"
+    );
 }

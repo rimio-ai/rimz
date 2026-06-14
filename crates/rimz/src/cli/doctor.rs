@@ -1,116 +1,109 @@
-//! `rimz doctor` — workspace health report: trust state, protocol versions, resolver freshness, socket-path budget, and the agent rollup.
+//! `rimz doctor` — workspace health report: trust state, protocol versions,
+//! resolver freshness, socket-path budget, hook wiring, and the agent rollup.
+//!
+//! The report is collected once into a [`model::DoctorReport`], then either
+//! rendered as the human report ([`render`]) or serialized as JSON — to stdout
+//! or atomically to a file. Collection lives in the sibling modules; presentation
+//! lives in [`render`]; this file only assembles and emits.
 
-use anyhow::Result;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result};
 use clap::Args;
-use jiff::Timestamp;
 
 use super::GlobalFlags;
-use rimz::ids::MuxName;
+use crate::cli::render as ui;
 use rimz::workspace::WorkspaceResolver;
 
 mod agents;
+mod model;
 mod protocol;
+mod render;
 mod runtime;
 
-use agents::{
-    report_agent_hooks, report_agent_rollup, report_trust, report_unauthorized_resolver_heartbeats,
-};
-use protocol::report_protocol_versions;
-use runtime::{
-    report_duplicate_sidebar_sessions, report_presence_channel, report_recent_diagnostics,
-    report_remote_control, report_room_tree, report_session_health, report_sidebar_pane,
-    report_socket_headroom, report_tmux_capabilities, report_zellij_capabilities,
-    report_zellij_socket_headroom,
-};
+use model::DoctorReport;
+
 #[derive(Debug, Args)]
 pub struct DoctorArgs {
+    /// Widen the agent rollup to every observed session, not just the live ones.
     #[arg(long)]
     audit: bool,
+    /// Emit machine-readable JSON instead of the human report.
+    #[arg(long)]
+    json: bool,
+    /// Write the report to a file (atomically) instead of stdout.
+    #[arg(long, value_name = "PATH")]
+    output: Option<PathBuf>,
 }
 
 pub fn run(args: DoctorArgs, globals: &GlobalFlags) -> Result<()> {
-    let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
-
-    // Deliberate exception to the `cli/render` path (see rust-conventions.md →
-    // Stdout and tracing): doctor is a multi-section diagnostic with a bespoke
-    // layout spread across `doctor/{agents,protocol,runtime}.rs`. It stays on
-    // annotated `println!` until it gets its own render pass.
-    #[expect(clippy::print_stdout, reason = "doctor is the user-facing report")]
-    {
-        println!("Rimz doctor");
-        match &workspace {
-            Ok(ws) => {
-                println!("  workspace id  : {}", ws.workspace_id);
-                println!("  project root  : {}", ws.project_root.display());
-                println!("  root class    : {}", ws.root_class.label());
-                println!("  worktree root : {}", ws.worktree_root.display());
-                println!(
-                    "  worktree branch: {}",
-                    ws.worktree_branch.as_deref().unwrap_or("<detached>")
-                );
-                println!("  session name  : {}", ws.session_name);
-                report_socket_headroom(ws);
-            }
-            Err(err) => println!("  workspace     : could not resolve ({err})"),
-        }
-
-        match rimz::mux::auto_detect_backend(globals.mux) {
-            Ok(mux) => {
-                println!("  multiplexer   : {mux}");
-                let backend = rimz::mux::backend_for(mux);
-                match backend.version() {
-                    Ok(v) if !v.is_empty() => println!("  version       : {v}"),
-                    Ok(_) => println!("  version       : unknown"),
-                    Err(err) => println!("  version       : unavailable ({err})"),
-                }
-                match mux {
-                    MuxName::Zellij => report_zellij_capabilities(),
-                    MuxName::Tmux => report_tmux_capabilities(),
-                }
-                if let Ok(ws) = &workspace {
-                    if mux == MuxName::Zellij {
-                        report_zellij_socket_headroom(ws);
-                    }
-                    report_session_health(backend.as_ref(), &ws.session_name);
-                    report_duplicate_sidebar_sessions(ws);
-                    if mux == MuxName::Zellij {
-                        report_presence_channel(ws);
-                    }
-                }
-            }
-            Err(err) => println!("  multiplexer   : unavailable ({err})"),
-        }
-        report_sidebar_pane();
-        report_agent_hooks();
-        report_remote_control();
-        report_room_tree(workspace.as_ref().ok());
-
-        if let Ok(ws) = &workspace {
-            report_protocol_versions(ws);
-            report_trust(ws);
-            report_unauthorized_resolver_heartbeats(ws);
-            report_agent_rollup(ws, args.audit);
-            report_recent_diagnostics(ws);
-        }
-    }
-    Ok(())
+    let report = collect_report(globals, args.audit);
+    emit(&report, args.json, args.output.as_deref())
 }
 
-pub(super) fn age_short(now: Timestamp, then: Timestamp) -> String {
-    let span = now.duration_since(then);
-    if span.is_negative() {
-        return "now".to_owned();
+fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
+    let workspace = WorkspaceResolver::resolve(".", globals.root.clone());
+    let ws = workspace.as_ref().ok();
+    DoctorReport {
+        workspace: match &workspace {
+            Ok(ws) => model::Probe::Ready(workspace_view(ws)),
+            Err(err) => model::Probe::Unavailable {
+                error: err.to_string(),
+            },
+        },
+        mux: runtime::collect_mux(globals.mux, ws),
+        sidebar_renderer: "built into rimz",
+        hooks: agents::collect_hooks(),
+        coverage: agents::collect_coverage(),
+        remote_control: runtime::collect_remote_control(),
+        rooms: runtime::collect_rooms(ws),
+        protocols: ws.map(protocol::collect_protocols),
+        trust: ws.map(agents::collect_trust),
+        resolver_heartbeats: ws.map(agents::collect_unauthorized_resolvers),
+        agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
+        diagnostics: ws.map(runtime::collect_diagnostics),
     }
-    let secs = span.as_secs().max(0) as u64;
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86400 {
-        format!("{}h ago", secs / 3600)
+}
+
+fn workspace_view(ws: &rimz::ResolvedWorkspace) -> model::Workspace {
+    model::Workspace {
+        workspace_id: ws.workspace_id.as_str().to_owned(),
+        project_root: ws.project_root.display().to_string(),
+        root_class: ws.root_class,
+        worktree_root: ws.worktree_root.display().to_string(),
+        worktree_branch: ws.worktree_branch.clone(),
+        session_name: ws.session_name.clone(),
+        sock_headroom: runtime::collect_socket_headroom(ws),
+    }
+}
+
+/// Render or serialize the report to its destination. A file destination writes
+/// plain text (ANSI stripped) atomically; stdout flows through the shared styled
+/// stream, which keeps color only on a terminal.
+fn emit(report: &DoctorReport, json: bool, output: Option<&Path>) -> Result<()> {
+    if let Some(path) = output {
+        let bytes = if json {
+            let mut json = serde_json::to_string_pretty(report).expect("DoctorReport serializes");
+            json.push('\n');
+            json.into_bytes()
+        } else {
+            let mut stream = anstream::StripStream::new(Vec::new());
+            render::render_human(report, &mut stream)?;
+            stream.into_inner()
+        };
+        return rimz::ledger::atomic::write_bytes_atomically(path, &bytes)
+            .with_context(|| format!("writing doctor report to {}", path.display()));
+    }
+
+    let mut out = ui::out();
+    if json {
+        let rendered = serde_json::to_string_pretty(report).expect("DoctorReport serializes");
+        writeln!(out, "{rendered}")?;
     } else {
-        format!("{}d ago", secs / 86400)
+        render::render_human(report, &mut out)?;
     }
+    Ok(())
 }
 
 pub fn ping() -> Result<()> {

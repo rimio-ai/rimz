@@ -88,7 +88,7 @@ fn doctor_reports_zellij_socket_headroom_and_fix() {
 
     let output = env
         .rimz()
-        .args(["--mux", "zellij", "doctor"])
+        .args(["--mux", "zellij", "doctor", "--json"])
         .env("RIMZ_ZELLIJ_BIN", &shim.bin)
         .env("RIMZ_TEST_ZELLIJ_LOG", &shim.log)
         .env("RIMZ_TEST_ZELLIJ_MODE", shim.mode.env_value())
@@ -101,14 +101,18 @@ fn doctor_reports_zellij_socket_headroom_and_fix() {
         "doctor should report instead of failing: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("zellij socket : TOO LONG"),
-        "doctor should render socket verdict, got: {stdout}"
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor --json emits valid json");
+    let socket = &report["mux"]["ready"]["zellij_socket"];
+    assert_eq!(
+        socket["fits"], false,
+        "doctor should report the socket overflow: {report}"
     );
     assert!(
-        stdout.contains("export ZELLIJ_SOCKET_DIR=/tmp/zellij"),
-        "doctor should render socket fix, got: {stdout}"
+        socket["fix"]
+            .as_str()
+            .is_some_and(|fix| fix.contains("export ZELLIJ_SOCKET_DIR=/tmp/zellij")),
+        "doctor should render the socket fix: {socket}"
     );
 }
 

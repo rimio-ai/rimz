@@ -479,22 +479,35 @@ fn doctor_reports_the_room_tree_with_root_classes() {
     env.record(&env.project_root.clone());
     env.record(&nested);
 
-    let output = env.rimz().arg("doctor").output().expect("run doctor");
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let output = env
+        .rimz()
+        .args(["doctor", "--json"])
+        .output()
+        .expect("run doctor");
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("doctor --json emits valid json");
+
+    let rooms = &report["rooms"]["ready"];
+    assert_eq!(rooms["recorded"], 2, "doctor counts both rooms: {report}");
+    let entries = rooms["rooms"].as_array().expect("rooms array");
     assert!(
-        stdout.contains("rooms         : 2 recorded"),
-        "doctor counts both rooms:\n{stdout}",
+        entries.iter().all(|room| room["root_class"] == "directory"),
+        "both bare dirs are directory rooms: {rooms}",
+    );
+    let roots: Vec<&str> = entries
+        .iter()
+        .map(|room| room["project_root"].as_str().expect("project_root"))
+        .collect();
+    assert!(
+        roots.contains(&env.project_root.display().to_string().as_str()),
+        "the harness root is a recorded room: {roots:?}",
     );
     assert!(
-        stdout.contains(&format!("{} (directory)", env.project_root.display())),
-        "the bare harness root is a directory room:\n{stdout}",
+        roots.contains(&nested.display().to_string().as_str()),
+        "the nested dir is a recorded room: {roots:?}",
     );
-    assert!(
-        stdout.contains(&format!("{} (directory)", nested.display())),
-        "the bare nested dir is a directory room:\n{stdout}",
-    );
-    assert!(
-        stdout.contains("root class    :"),
-        "the workspace block names its root class:\n{stdout}",
+    assert_eq!(
+        report["workspace"]["ready"]["root_class"], "directory",
+        "the workspace block names its root class: {report}",
     );
 }

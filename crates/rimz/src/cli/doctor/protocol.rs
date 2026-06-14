@@ -6,27 +6,27 @@ use rimz::ledger::event_log;
 use rimz::schema::{EVENT_SCHEMA_VERSION, RESOLVER_PROTOCOL_VERSION, SIDEBAR_PROTOCOL_VERSION};
 use rimz::{RuntimePaths, StatePaths};
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_protocol_versions(ws: &rimz::ResolvedWorkspace) {
-    println!(
-        "  protocols     : event {EVENT_SCHEMA_VERSION}; sidebar {SIDEBAR_PROTOCOL_VERSION}; resolver {RESOLVER_PROTOCOL_VERSION}",
-    );
-    report_event_schema_versions(ws);
-    report_heartbeat_protocol_versions(ws);
+use super::model::Protocols;
+
+/// The protocol versions this build speaks, plus any drift found in the
+/// workspace's event log and live heartbeats.
+pub(super) fn collect_protocols(ws: &rimz::ResolvedWorkspace) -> Protocols {
+    let mut warnings = Vec::new();
+    collect_event_schema_warnings(ws, &mut warnings);
+    collect_heartbeat_warnings(ws, &mut warnings);
+    Protocols {
+        event: EVENT_SCHEMA_VERSION,
+        sidebar: SIDEBAR_PROTOCOL_VERSION,
+        resolver: RESOLVER_PROTOCOL_VERSION,
+        warnings,
+    }
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-fn report_event_schema_versions(ws: &rimz::ResolvedWorkspace) {
+fn collect_event_schema_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
     let paths = match StatePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(paths) => paths,
         Err(err) => {
-            println!("  protocol warn : event log unavailable ({err})");
+            warnings.push(format!("event log unavailable ({err})"));
             return;
         }
     };
@@ -35,11 +35,11 @@ fn report_event_schema_versions(ws: &rimz::ResolvedWorkspace) {
         // Mid-file corruption — the post-power-cut corpse. Doctor stays
         // read-only; the truncating repair is gc's job.
         Err(err) if err.is_corruption() => {
-            println!("  protocol warn : event log needs repair ({err}); run `rimz gc`");
+            warnings.push(format!("event log needs repair ({err}); run `rimz gc`"));
             return;
         }
         Err(err) => {
-            println!("  protocol warn : event log unavailable ({err})");
+            warnings.push(format!("event log unavailable ({err})"));
             return;
         }
     };
@@ -51,21 +51,17 @@ fn report_event_schema_versions(ws: &rimz::ResolvedWorkspace) {
     }
     for (version, count) in mismatches {
         let noun = if count == 1 { "record" } else { "records" };
-        println!(
-            "  protocol warn : event log schema {version} seen {count} {noun} (expected {EVENT_SCHEMA_VERSION})",
-        );
+        warnings.push(format!(
+            "event log schema {version} seen {count} {noun} (expected {EVENT_SCHEMA_VERSION})",
+        ));
     }
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-fn report_heartbeat_protocol_versions(ws: &rimz::ResolvedWorkspace) {
+fn collect_heartbeat_warnings(ws: &rimz::ResolvedWorkspace, warnings: &mut Vec<String>) {
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
-            println!("  protocol warn : heartbeat dir unavailable ({err})");
+            warnings.push(format!("heartbeat dir unavailable ({err})"));
             return;
         }
     };
@@ -73,7 +69,7 @@ fn report_heartbeat_protocol_versions(ws: &rimz::ResolvedWorkspace) {
         Ok(entries) => entries,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => return,
         Err(err) => {
-            println!("  protocol warn : heartbeat dir unavailable ({err})");
+            warnings.push(format!("heartbeat dir unavailable ({err})"));
             return;
         }
     };
@@ -92,12 +88,10 @@ fn report_heartbeat_protocol_versions(ws: &rimz::ResolvedWorkspace) {
     for (name, kind, expected, path) in checks {
         match heartbeat_protocol_version(&path) {
             Ok(found) if found == expected => {}
-            Ok(found) => println!(
-                "  protocol warn : {kind} heartbeat {name} uses {found} (expected {expected})",
-            ),
-            Err(err) => {
-                println!("  protocol warn : {kind} heartbeat {name} unreadable ({err})");
-            }
+            Ok(found) => warnings.push(format!(
+                "{kind} heartbeat {name} uses {found} (expected {expected})",
+            )),
+            Err(err) => warnings.push(format!("{kind} heartbeat {name} unreadable ({err})")),
         }
     }
 }

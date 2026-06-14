@@ -5,120 +5,155 @@ use std::time::SystemTime;
 
 use rimz::RuntimePaths;
 use rimz::config::MachineConfig;
+use rimz::ids::MuxName;
 use rimz::mux::{
     MuxBackend, SessionHealth,
     tmux::{self as tmux_mod, MIN_TMUX_VERSION},
     zellij::{self as zellij_mod, MIN_ZELLIJ_VERSION},
 };
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_session_health(backend: &dyn MuxBackend, session_name: &str) {
+use super::model;
+
+/// The multiplexer section: which backend Rimz detected, its version and floor,
+/// and — once a workspace resolves — its session, socket, duplicate-session, and
+/// presence health.
+pub(super) fn collect_mux(
+    mux_hint: Option<MuxName>,
+    ws: Option<&rimz::ResolvedWorkspace>,
+) -> model::Probe<model::Mux> {
+    let mux = match rimz::mux::auto_detect_backend(mux_hint) {
+        Ok(mux) => mux,
+        Err(err) => {
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
+        }
+    };
+    let backend = rimz::mux::backend_for(mux);
+    let version = match backend.version() {
+        Ok(version) if !version.is_empty() => model::Version::Reported { version },
+        Ok(_) => model::Version::Unknown,
+        Err(err) => model::Version::Unavailable {
+            error: err.to_string(),
+        },
+    };
+    let capabilities = match mux {
+        MuxName::Zellij => model::Capabilities::Zellij(collect_zellij_capabilities()),
+        MuxName::Tmux => model::Capabilities::Tmux(collect_tmux_capabilities()),
+    };
+    let mut report = model::Mux {
+        name: mux,
+        version,
+        capabilities,
+        zellij_socket: None,
+        session_health: None,
+        duplicate_sessions: None,
+        presence: None,
+    };
+    if let Some(ws) = ws {
+        if mux == MuxName::Zellij {
+            report.zellij_socket = Some(collect_zellij_socket_headroom(ws));
+        }
+        report.session_health = Some(collect_session_health(backend.as_ref(), &ws.session_name));
+        report.duplicate_sessions = Some(collect_duplicate_sessions(ws));
+        if mux == MuxName::Zellij {
+            report.presence = Some(collect_presence(ws));
+        }
+    }
+    model::Probe::Ready(report)
+}
+
+fn collect_session_health(
+    backend: &dyn MuxBackend,
+    session_name: &str,
+) -> model::Probe<model::SessionHealth> {
     match backend.probe_session_health(session_name) {
         // `probe_session_health` never returns `Reborn` (it does not mutate), so
         // the live verdict is just clean-or-stuck.
-        Ok(SessionHealth::Healthy | SessionHealth::Reborn) => println!("  session health: ok"),
-        Ok(SessionHealth::Stuck) => println!(
-            "  session health: stuck (resurrected/suspended panes) — run `rimz reset` to rebuild",
-        ),
-        Err(err) => println!("  session health: unavailable ({err})"),
-    }
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_zellij_capabilities() {
-    match zellij_mod::capabilities() {
-        Ok(caps) => {
-            let floor_status = if caps.meets_min_version {
-                "OK"
-            } else {
-                "TOO OLD"
-            };
-            let (maj, min, patch) = MIN_ZELLIJ_VERSION;
-            println!("  zellij floor  : {floor_status} (>= {maj}.{min}.{patch} required)");
+        Ok(SessionHealth::Healthy | SessionHealth::Reborn) => {
+            model::Probe::Ready(model::SessionHealth::Ok)
         }
-        Err(err) => println!("  zellij floor  : unavailable ({err})"),
+        Ok(SessionHealth::Stuck) => model::Probe::Ready(model::SessionHealth::Stuck {
+            fix: "run `rimz reset` to rebuild".to_owned(),
+        }),
+        Err(err) => model::Probe::Unavailable {
+            error: err.to_string(),
+        },
     }
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) {
+fn collect_zellij_capabilities() -> model::Probe<model::ZellijCaps> {
+    match zellij_mod::capabilities() {
+        Ok(caps) => model::Probe::Ready(model::ZellijCaps {
+            meets_min_version: caps.meets_min_version,
+            min_version: MIN_ZELLIJ_VERSION,
+        }),
+        Err(err) => model::Probe::Unavailable {
+            error: err.to_string(),
+        },
+    }
+}
+
+fn collect_tmux_capabilities() -> model::Probe<model::TmuxCaps> {
+    match tmux_mod::capabilities() {
+        Ok(caps) => model::Probe::Ready(model::TmuxCaps {
+            meets_min_version: caps.meets_min_version,
+            min_version: MIN_TMUX_VERSION,
+            // Popup landed in 3.2; the floor gate covers it.
+            popup_supported: caps.popup_supported,
+        }),
+        Err(err) => model::Probe::Unavailable {
+            error: err.to_string(),
+        },
+    }
+}
+
+fn collect_zellij_socket_headroom(ws: &rimz::ResolvedWorkspace) -> model::ZellijSocket {
     let headroom = zellij_mod::socket_headroom(&ws.session_name);
-    let status = if headroom.len < headroom.limit {
-        "OK"
-    } else {
-        "TOO LONG"
-    };
-    println!(
-        "  zellij socket : {status} ({}/{} bytes for {})",
-        headroom.len,
-        headroom.limit,
-        headroom.path.display(),
-    );
-    if headroom.len >= headroom.limit {
-        println!("  zellij socket : export ZELLIJ_SOCKET_DIR=/tmp/zellij and rerun rimz");
+    let fits = headroom.len < headroom.limit;
+    model::ZellijSocket {
+        fits,
+        len: headroom.len,
+        limit: headroom.limit,
+        path: headroom.path.display().to_string(),
+        fix: (!fits).then(|| "export ZELLIJ_SOCKET_DIR=/tmp/zellij and rerun rimz".to_owned()),
     }
 }
 
-/// Report live sidebar sessions that share this workspace. Producer election
-/// is workspace-wide, so an old room for the same workspace can keep producing
-/// the shared pane cache for its session and make the current room's renderer
-/// hold frameless updates.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_duplicate_sidebar_sessions(ws: &rimz::ResolvedWorkspace) {
+/// Live sidebar sessions that share this workspace. Producer election is
+/// workspace-wide, so an old room for the same workspace can keep producing the
+/// shared pane cache and make the current room's renderer hold updates.
+fn collect_duplicate_sessions(
+    ws: &rimz::ResolvedWorkspace,
+) -> model::Probe<model::DuplicateSessions> {
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
-            println!("  duplicate sessions: unavailable ({err})");
-            return;
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     let heartbeats = match fresh_sidebar_heartbeats_for_doctor(&runtime) {
         Ok(heartbeats) => heartbeats,
         Err(err) => {
-            println!("  duplicate sessions: unavailable ({err})");
-            return;
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
-    let groups = duplicate_sidebar_session_groups(&heartbeats);
-    if groups.is_empty() {
-        println!("  duplicate sessions: none");
-        return;
-    }
-
-    println!(
-        "  duplicate sessions: WARN ({} live sessions share this workspace; pane updates can be held)",
-        groups.len(),
-    );
-    for group in groups {
-        let here = if group.session_name == ws.session_name {
-            "* "
-        } else {
-            "  "
-        };
-        let panes = if group.pane_ids.is_empty() {
-            "unlocated".to_owned()
-        } else {
-            group.pane_ids.join(", ")
-        };
-        println!(
-            "    {here}{session}: {count} sidebars ({panes})",
-            session = group.session_name,
-            count = group.sidebar_count,
-        );
-    }
-    println!("  duplicate sessions: close stale sidebars or retire stale sessions when safe");
+    let groups: Vec<model::SidebarGroup> = duplicate_sidebar_session_groups(&heartbeats)
+        .into_iter()
+        .map(|group| model::SidebarGroup {
+            is_current: group.session_name == ws.session_name,
+            session_name: group.session_name,
+            sidebar_count: group.sidebar_count,
+            pane_ids: group.pane_ids,
+        })
+        .collect();
+    let advice = (!groups.is_empty())
+        .then(|| "close stale sidebars or retire stale sessions when safe".to_owned());
+    model::Probe::Ready(model::DuplicateSessions { groups, advice })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,37 +239,31 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
     }
 }
 
-/// One presence row for the workspace: the pane-discovery mode its producer
-/// is actually in — the verdict comes from the same stamp helpers the
-/// producer reads, so doctor and producer always agree — and, when degraded
-/// to the poll, the first failing precondition with its fix.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
+/// The producer's pane-discovery mode for this workspace — event when the plugin
+/// pokes, otherwise poll with the first failing precondition and its fix.
+fn collect_presence(ws: &rimz::ResolvedWorkspace) -> model::Presence {
     use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
 
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
         Ok(runtime) => runtime,
         Err(err) => {
-            println!("  presence      : unavailable ({err})");
-            return;
+            return model::Presence::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     let age = presence_stamp_age_ms(&runtime);
     if presence_event_mode(age) {
-        let secs = age.unwrap_or(0) / 1000;
-        println!("  presence      : event mode (plugin poked {secs}s ago)");
-        return;
+        return model::Presence::Event {
+            poked_secs: age.unwrap_or(0) / 1000,
+        };
     }
     // Poll mode: name the first failing precondition in fix order.
     if zellij_mod::presence_plugin_path().is_none() {
-        println!(
-            "  presence      : poll mode — embedded plugin unavailable or could not \
-             materialize (reinstall rimz)",
-        );
-        return;
+        return model::Presence::Poll {
+            reason: "embedded plugin unavailable or could not materialize (reinstall rimz)"
+                .to_owned(),
+        };
     }
     let meets_floor = zellij_mod::capabilities().is_ok_and(|caps| {
         caps.parsed_version
@@ -242,43 +271,36 @@ pub(super) fn report_presence_channel(ws: &rimz::ResolvedWorkspace) {
     });
     if !meets_floor {
         let (maj, min, patch) = zellij_mod::PRESENCE_PLUGIN_MIN_ZELLIJ;
-        println!(
-            "  presence      : poll mode — zellij below the plugin floor \
-             (>= {maj}.{min}.{patch} required)",
-        );
-        return;
+        return model::Presence::Poll {
+            reason: format!("zellij below the plugin floor (>= {maj}.{min}.{patch} required)"),
+        };
     }
-    match age {
-        Some(age) => println!(
-            "  presence      : poll mode — last plugin poke {}s ago (plugin gone or \
-             `rimz` not runnable from Zellij; reattach or run `rimz reload`)",
+    let reason = match age {
+        Some(age) => format!(
+            "last plugin poke {}s ago (plugin gone or `rimz` not runnable from Zellij; \
+             reattach or run `rimz reload`)",
             age / 1000,
         ),
-        None => println!(
-            "  presence      : poll mode — no plugin poke yet (approve the one-time \
-             permission prompt in the Zellij session)",
-        ),
-    }
+        None => "no plugin poke yet (approve the one-time permission prompt in the Zellij session)"
+            .to_owned(),
+    };
+    model::Presence::Poll { reason }
 }
 
-/// Report the per-machine remote-control auto-launch posture. Configured hosts
-/// have hard preconditions that `rimz start` enforces fail-fast, so doctor
-/// surfaces the same gaps and fixes ahead of time.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_remote_control() {
+/// Per-machine remote-control auto-launch posture. Configured agents have hard
+/// preconditions `rimz start` enforces fail-fast, so doctor surfaces the same
+/// gaps and fixes ahead of time.
+pub(super) fn collect_remote_control() -> model::RemoteControl {
     let config = match MachineConfig::load() {
         Ok(config) => config.remote_control,
         Err(err) => {
-            println!("  remote control: config unavailable ({err})");
-            return;
+            return model::RemoteControl::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     if !config.claude && !config.codex {
-        println!("  remote control: off");
-        return;
+        return model::RemoteControl::Off;
     }
 
     let claude_preflight = config
@@ -287,148 +309,135 @@ pub(super) fn report_remote_control() {
     let codex_preflight = config
         .codex
         .then(|| rimz::remote_control::preflight_codex(&config));
-    let mut parts = Vec::new();
+    let mut agents = Vec::new();
     if config.claude {
         let claude_present = which::which("claude").is_ok();
-        parts.push(if !claude_present {
-            "claude enabled, not on PATH".to_owned()
+        let (label, ready) = if !claude_present {
+            ("claude enabled, not on PATH".to_owned(), false)
         } else if claude_preflight.as_ref().is_some_and(Result::is_ok) {
-            "claude ready".to_owned()
+            ("claude ready".to_owned(), true)
         } else {
-            "claude enabled, blocked".to_owned()
-        });
+            ("claude enabled, blocked".to_owned(), false)
+        };
+        agents.push(model::RemoteAgent { label, ready });
     }
     if config.codex {
-        parts.push(if codex_preflight.as_ref().is_some_and(Result::is_err) {
-            "codex enabled, standalone install missing".to_owned()
+        let (label, ready) = if codex_preflight.as_ref().is_some_and(Result::is_err) {
+            (
+                "codex enabled, standalone install missing".to_owned(),
+                false,
+            )
         } else {
-            "codex ready".to_owned()
-        });
+            ("codex ready".to_owned(), true)
+        };
+        agents.push(model::RemoteAgent { label, ready });
     }
-    println!("  remote control: {}", parts.join("; "));
 
-    for err in [codex_preflight.as_ref(), claude_preflight.as_ref()]
+    let refusals = [codex_preflight.as_ref(), claude_preflight.as_ref()]
         .into_iter()
         .flatten()
         .filter_map(|result| result.as_ref().err())
-    {
-        println!("  remote control: `rimz start` refuses:\n{err}");
-    }
+        .map(ToString::to_string)
+        .collect();
+    model::RemoteControl::On { agents, refusals }
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_sidebar_pane() {
-    println!("  sidebar renderer: built into rimz");
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_tmux_capabilities() {
-    match tmux_mod::capabilities() {
-        Ok(caps) => {
-            let floor_status = if caps.meets_min_version {
-                "OK"
-            } else {
-                "TOO OLD"
-            };
-            let (maj, min, patch) = MIN_TMUX_VERSION;
-            println!("  tmux floor    : {floor_status} (>= {maj}.{min}.{patch} required)");
-            // Popup landed in 3.2; the floor gate covers it.
-            let popup_status = if caps.popup_supported {
-                "supported".to_owned()
-            } else {
-                format!("unavailable (requires tmux >= {maj}.{min}.{patch})")
-            };
-            println!("  tmux popup    : {popup_status}");
-        }
-        Err(err) => println!("  tmux floor    : unavailable ({err})"),
-    }
-}
-
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_socket_headroom(ws: &rimz::ResolvedWorkspace) {
+pub(super) fn collect_socket_headroom(
+    ws: &rimz::ResolvedWorkspace,
+) -> model::Probe<model::SockBudget> {
     let runtime = match RuntimePaths::under(
         ws.workspace_id.clone(),
         &rimz::ledger::paths::runtime_home(),
     ) {
-        Ok(r) => r,
+        Ok(runtime) => runtime,
         Err(err) => {
-            println!("  sock headroom : unavailable ({err})");
-            return;
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     let budget = rimz::sock::SockBudget::for_sock_dir(&runtime.sock_dir);
-    let status = if budget.fits() { "OK" } else { "TOO LONG" };
-    println!(
-        "  sock headroom : {status} ({}/{} bytes for {})",
-        budget.used,
-        budget.limit,
-        budget.sock_dir.display(),
-    );
-    if !budget.fits() {
-        println!(
-            "  sock headroom : {} and rerun rimz",
-            rimz::sock::XDG_REMEDY
-        );
-    }
+    let fits = budget.fits();
+    model::Probe::Ready(model::SockBudget {
+        fits,
+        used: budget.used,
+        limit: budget.limit,
+        dir: budget.sock_dir.display().to_string(),
+        remedy: (!fits).then(|| format!("{} and rerun rimz", rimz::sock::XDG_REMEDY)),
+    })
 }
 
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_recent_diagnostics(ws: &rimz::ResolvedWorkspace) {
-    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), 12) else {
-        println!("  diagnostics   : unavailable");
-        return;
+/// The machine's room tree: every recorded workspace with its root, class, and
+/// liveness. Live rooms whose roots nest earn an overlap entry — legal by design
+/// (an agent belongs to the room its pane lives in), surfaced so it stays seen.
+pub(super) fn collect_rooms(
+    current: Option<&rimz::ResolvedWorkspace>,
+) -> model::Probe<model::Rooms> {
+    let known = match rimz::workspace::known_workspaces() {
+        Ok(known) => known,
+        Err(err) => {
+            return model::Probe::Unavailable {
+                error: err.to_string(),
+            };
+        }
     };
-    if records.is_empty() {
-        println!("  diagnostics   : no recent records ({})", path.display());
-        return;
+    let live = super::super::live_session_names();
+    let live_count = known
+        .iter()
+        .filter(|ws| live.contains(&ws.session_name))
+        .count();
+    let mut sorted: Vec<_> = known.iter().collect();
+    sorted.sort_by(|a, b| a.project_root.cmp(&b.project_root));
+    let rooms = sorted
+        .iter()
+        .map(|ws| model::Room {
+            session_name: ws.session_name.clone(),
+            project_root: ws.project_root.display().to_string(),
+            root_class: ws.root_class,
+            live: live.contains(&ws.session_name),
+            is_current: current.is_some_and(|cur| cur.workspace_id == ws.workspace_id),
+        })
+        .collect();
+    let mut overlaps = Vec::new();
+    for (i, a) in sorted.iter().enumerate() {
+        for b in sorted.iter().skip(i + 1) {
+            if !(live.contains(&a.session_name) && live.contains(&b.session_name)) {
+                continue;
+            }
+            if rimz::workspace::root_contains(&a.project_root, &b.project_root)
+                || rimz::workspace::root_contains(&b.project_root, &a.project_root)
+            {
+                overlaps.push(model::RoomOverlap {
+                    a: a.session_name.clone(),
+                    b: b.session_name.clone(),
+                });
+            }
+        }
     }
-    println!(
-        "  diagnostics   : {} recent records ({})",
-        records.len(),
-        path.display()
-    );
-    let now_ms = rimz::sidebar::cache::unix_now_ms();
-    for record in records {
-        println!(
-            "    {:<5} {:<24} {:>8}  {}",
-            severity_label(record.severity),
-            record.event.kind_name(),
-            age_ms_short(now_ms, record.at_ms),
-            diagnostic_summary(&record.event),
-        );
-    }
+    model::Probe::Ready(model::Rooms {
+        recorded: known.len(),
+        live: live_count,
+        rooms,
+        overlaps,
+    })
 }
 
-fn severity_label(severity: rimz::schema::diag::DiagSeverity) -> &'static str {
-    match severity {
-        rimz::schema::diag::DiagSeverity::Info => "info",
-        rimz::schema::diag::DiagSeverity::Warn => "warn",
-        rimz::schema::diag::DiagSeverity::Error => "error",
-    }
-}
-
-fn age_ms_short(now_ms: u64, then_ms: u64) -> String {
-    let secs = now_ms.saturating_sub(then_ms) / 1_000;
-    if secs < 60 {
-        format!("{secs}s ago")
-    } else if secs < 3_600 {
-        format!("{}m ago", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h ago", secs / 3_600)
-    } else {
-        format!("{}d ago", secs / 86_400)
+pub(super) fn collect_diagnostics(ws: &rimz::ResolvedWorkspace) -> model::Diagnostics {
+    let Some((path, records)) = rimz::diag::recent_records(ws.workspace_id.clone(), 12) else {
+        return model::Diagnostics::Unavailable;
+    };
+    let records = records
+        .into_iter()
+        .map(|record| model::DiagRow {
+            severity: record.severity,
+            kind: record.event.kind_name().to_owned(),
+            at_ms: record.at_ms,
+            summary: diagnostic_summary(&record.event),
+        })
+        .collect();
+    model::Diagnostics::Ready {
+        path: path.display().to_string(),
+        records,
     }
 }
 
@@ -592,72 +601,6 @@ fn diagnostic_summary(event: &rimz::schema::diag::DiagEvent) -> String {
                 String::new()
             };
             format!("observed {}{subject}{suppressed}", anomaly.key())
-        }
-    }
-}
-
-/// The machine's room tree: every recorded workspace with its root, root
-/// class, and liveness, the current directory's room starred. Live rooms
-/// whose roots nest earn an overlap line — legal by design (an agent belongs
-/// to the room its pane lives in), surfaced so the human always sees it.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_room_tree(current: Option<&rimz::ResolvedWorkspace>) {
-    let known = match rimz::workspace::known_workspaces() {
-        Ok(known) => known,
-        Err(err) => {
-            println!("  rooms         : unavailable ({err})");
-            return;
-        }
-    };
-    if known.is_empty() {
-        println!("  rooms         : none recorded");
-        return;
-    }
-    let live = super::super::live_session_names();
-    let live_count = known
-        .iter()
-        .filter(|ws| live.contains(&ws.session_name))
-        .count();
-    println!(
-        "  rooms         : {} recorded, {live_count} live",
-        known.len()
-    );
-    let mut rooms: Vec<_> = known.iter().collect();
-    rooms.sort_by(|a, b| a.project_root.cmp(&b.project_root));
-    for ws in &rooms {
-        let liveness = if live.contains(&ws.session_name) {
-            "live"
-        } else {
-            "idle"
-        };
-        let here = if current.is_some_and(|cur| cur.workspace_id == ws.workspace_id) {
-            "* "
-        } else {
-            "  "
-        };
-        println!(
-            "    {here}{session}  {root} ({class}) · {liveness}",
-            session = ws.session_name,
-            root = ws.project_root.display(),
-            class = ws.root_class.label(),
-        );
-    }
-    for (i, a) in rooms.iter().enumerate() {
-        for b in rooms.iter().skip(i + 1) {
-            if !(live.contains(&a.session_name) && live.contains(&b.session_name)) {
-                continue;
-            }
-            if rimz::workspace::root_contains(&a.project_root, &b.project_root)
-                || rimz::workspace::root_contains(&b.project_root, &a.project_root)
-            {
-                println!(
-                    "  rooms overlap : `{}` and `{}` nest; an agent belongs to the room its pane lives in",
-                    a.session_name, b.session_name,
-                );
-            }
         }
     }
 }

@@ -1,27 +1,26 @@
 use std::fs;
 
-use jiff::Timestamp;
 use rimz::RuntimePaths;
-use rimz::feed::AgentState;
+use rimz::agents::{ConcernCoverage, IntegrationConcern};
 use rimz::ids::ResolverId;
 use rimz::resolver::Allowlist;
-use rimz::trust::{self, TrustState};
+use rimz::trust::{self};
 
 use super::super::open_ledger;
-use super::age_short;
+use super::model::{
+    AgentCoverage, AgentKindGroup, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust,
+    UnsupportedConcern,
+};
 
-/// Walk the snapshot's agent rollup and print one row per `(kind, agent_id)`
-/// observed by `agent.lifecycle` events.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) {
+/// Walk the snapshot's agent rollup into one row per `(kind, agent_id)` observed
+/// by `agent.lifecycle` events, grouped by kind.
+pub(super) fn collect_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) -> AgentRollup {
     let ledger = match open_ledger(ws) {
-        Ok(l) => l,
+        Ok(ledger) => ledger,
         Err(err) => {
-            println!("  agents        : unavailable ({err})");
-            return;
+            return AgentRollup::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     let scope = if audit {
@@ -30,222 +29,156 @@ pub(super) fn report_agent_rollup(ws: &rimz::ResolvedWorkspace, audit: bool) {
         rimz::RuntimeScope::Runtime
     };
     let projection = match ledger.runtime_projection(scope) {
-        Ok(s) => s,
+        Ok(projection) => projection,
         Err(err) => {
-            println!("  agents        : unavailable ({err})");
-            return;
+            return AgentRollup::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     if projection.agents.is_empty() {
-        println!("  agents        : none observed");
-        return;
+        return AgentRollup::None;
     }
-    let now = Timestamp::now();
-    let mut by_kind: std::collections::BTreeMap<&str, Vec<&AgentState>> =
+    let mut by_kind: std::collections::BTreeMap<&str, Vec<&rimz::feed::AgentState>> =
         std::collections::BTreeMap::new();
     for agent in &projection.agents {
         by_kind.entry(agent.kind.as_str()).or_default().push(agent);
     }
-    for (kind, mut agents) in by_kind {
-        agents.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
-        println!("  agent ({kind})  : {} observed", agents.len());
-        for agent in agents {
-            let status = format!("{:?}", agent.status).to_lowercase();
-            let branch = agent.worktree_branch.as_deref().unwrap_or("-");
-            let age = age_short(now, agent.last_seen);
-            println!(
-                "    {id:<24} {branch:<20} {status:<8} · {age}",
-                id = agent.agent_id,
-            );
-        }
-    }
+    let groups = by_kind
+        .into_iter()
+        .map(|(kind, mut agents)| {
+            agents.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+            AgentKindGroup {
+                kind: kind.to_owned(),
+                agents: agents
+                    .into_iter()
+                    .map(|agent| AgentRow {
+                        agent_id: agent.agent_id.as_str().to_owned(),
+                        branch: agent.worktree_branch.clone(),
+                        status: agent.status,
+                        phase: agent.phase,
+                        last_seen: agent.last_seen,
+                    })
+                    .collect(),
+            }
+        })
+        .collect();
+    AgentRollup::Observed { groups }
 }
 
-/// Report which agents have their Rimz hooks wired. A run in a Rimz room
-/// registers nothing until the agent's real hook system invokes
-/// `rimz hooks feed`, so this section distinguishes installed, installable,
-/// and known-but-not-yet-installable adapters.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_agent_hooks() {
-    let statuses: Vec<(&str, AgentHookDoctorStatus)> = rimz::agents::ADAPTERS
+/// Each adapter's Rimz-hook wiring state. A run in a Rimz room registers nothing
+/// until the agent's own hook system invokes `rimz hooks feed`, so this
+/// distinguishes installed, installable, and known-but-not-installable adapters.
+pub(super) fn collect_hooks() -> Vec<HookRow> {
+    rimz::agents::ADAPTERS
         .iter()
         .map(|agent| {
             let descriptor = agent.descriptor();
+            let name = descriptor.kind;
             let status = if !descriptor.capabilities.hook_install {
-                AgentHookDoctorStatus::Unsupported(
-                    descriptor
+                HookStatus::Unsupported {
+                    reason: descriptor
                         .hook_install_unavailable
                         .unwrap_or("hook install is not supported for this adapter")
                         .to_owned(),
-                )
+                }
             } else if agent.hooks_installed() {
                 let untrusted = agent.untrusted_installed_hooks();
                 if untrusted.is_empty() {
-                    AgentHookDoctorStatus::Installed
+                    HookStatus::Installed
                 } else {
-                    AgentHookDoctorStatus::InstalledUntrusted(untrusted)
+                    HookStatus::InstalledUntrusted {
+                        events: untrusted,
+                        fix: rimz::agents::hook_trust_fix(name),
+                    }
                 }
             } else {
-                AgentHookDoctorStatus::NotInstalled
+                HookStatus::NotInstalled {
+                    fix: format!("run `rimz hooks install {name}` to wire {name} agents"),
+                }
             };
-            (descriptor.kind, status)
+            HookRow {
+                kind: name.to_owned(),
+                status,
+            }
         })
-        .collect();
+        .collect()
+}
 
-    let summary = statuses
+/// Each adapter's integration-concern coverage: the wired concerns and, for each
+/// gap, its full reason.
+pub(super) fn collect_coverage() -> Vec<AgentCoverage> {
+    rimz::agents::ADAPTERS
         .iter()
-        .map(|(name, status)| format!("{name} {}", status.label()))
-        .collect::<Vec<_>>()
-        .join("; ");
-    println!("  agent hooks   : {summary}");
-    for agent in rimz::agents::ADAPTERS {
-        println!("  agent cover   : {}", coverage_summary(agent.descriptor()));
-    }
+        .map(|agent| coverage_for(agent.descriptor()))
+        .collect()
+}
 
-    for (name, status) in &statuses {
-        match status {
-            AgentHookDoctorStatus::NotInstalled => {
-                println!("  hooks install : run `rimz hooks install {name}` to wire {name} agents");
-            }
-            AgentHookDoctorStatus::InstalledUntrusted(events) => {
-                println!(
-                    "  hooks trust   : {name} silently skips untrusted hooks ({}) — {}",
-                    events.join(", "),
-                    rimz::agents::hook_trust_fix(name),
-                );
-            }
-            AgentHookDoctorStatus::Unsupported(reason) => {
-                println!("  hooks install : {name} unsupported ({reason})");
-            }
-            AgentHookDoctorStatus::Installed => {}
+fn coverage_for(descriptor: &rimz::agents::AgentDescriptor) -> AgentCoverage {
+    let mut supported = Vec::new();
+    let mut unsupported = Vec::new();
+    for concern in IntegrationConcern::ALL {
+        let Some((_, coverage)) = descriptor
+            .coverage
+            .iter()
+            .find(|(declared, _)| *declared == concern)
+        else {
+            continue;
         };
+        match coverage {
+            ConcernCoverage::Wired { .. } => supported.push(concern.short_label().to_owned()),
+            ConcernCoverage::Unsupported { reason } => unsupported.push(UnsupportedConcern {
+                concern: concern.short_label().to_owned(),
+                reason: (*reason).to_owned(),
+            }),
+        }
+    }
+    AgentCoverage {
+        kind: descriptor.kind.to_owned(),
+        wired: supported.len(),
+        total: supported.len() + unsupported.len(),
+        supported,
+        unsupported,
     }
 }
 
-fn coverage_summary(descriptor: &rimz::agents::AgentDescriptor) -> String {
-    let parts = rimz::agents::IntegrationConcern::ALL
-        .iter()
-        .filter_map(|concern| {
-            descriptor.coverage.iter().find_map(|(declared, coverage)| {
-                (declared == concern).then_some((*concern, *coverage))
-            })
-        })
-        .map(|(concern, coverage)| match coverage {
-            rimz::agents::ConcernCoverage::Wired { .. } => {
-                format!("+{}", concern.short_label())
-            }
-            rimz::agents::ConcernCoverage::Unsupported { reason } => {
-                format!(
-                    "-{}({})",
-                    concern.short_label(),
-                    coverage_reason_text(reason)
-                )
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    format!("{} {parts}", descriptor.kind)
-}
-
-fn coverage_reason_text(reason: &str) -> String {
-    const MAX_CHARS: usize = 32;
-
-    let reason = reason.trim();
-    let mut chars = reason.chars();
-    let summary: String = chars.by_ref().take(MAX_CHARS).collect();
-    if chars.next().is_some() {
-        format!("{summary}...")
-    } else {
-        summary
+/// Project-trust state. `Stale` is the case worth seeing: the executable surface
+/// drifted since the last grant, so command-running fields are inert until
+/// `rimz trust grant` runs again.
+pub(super) fn collect_trust(ws: &rimz::ResolvedWorkspace) -> Probe<Trust> {
+    match trust::status(&ws.project_root) {
+        Ok(report) => Probe::Ready(Trust {
+            state: report.state,
+            granted_at: report.granted_at.map(|at| at.to_string()),
+        }),
+        Err(err) => Probe::Unavailable {
+            error: err.to_string(),
+        },
     }
 }
 
-enum AgentHookDoctorStatus {
-    Installed,
-    /// Installed, but the agent's own trust gate still skips these events.
-    InstalledUntrusted(Vec<String>),
-    NotInstalled,
-    Unsupported(String),
-}
-
-impl AgentHookDoctorStatus {
-    fn label(&self) -> &'static str {
-        match self {
-            Self::Installed => "installed",
-            Self::InstalledUntrusted(_) => "installed, untrusted",
-            Self::NotInstalled => "not installed",
-            Self::Unsupported(_) => "unsupported",
-        }
-    }
-}
-
-/// Surface the project-trust state. Stale is the case worth seeing in
-/// `doctor`: the executable surface drifted since the last grant and
-/// command-running fields are inert until `rimz trust grant` runs again.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_trust(ws: &rimz::ResolvedWorkspace) {
-    let report = match trust::status(&ws.project_root) {
-        Ok(report) => report,
-        Err(err) => {
-            println!("  trust         : unavailable ({err})");
-            return;
-        }
-    };
-    match report.state {
-        TrustState::NoConfig => println!("  trust         : no project config"),
-        TrustState::Untrusted => {
-            println!(
-                "  trust         : untrusted (run `rimz trust grant` to enable command paths)"
-            );
-        }
-        TrustState::Trusted => {
-            let at = report
-                .granted_at
-                .map(|t| t.to_string())
-                .unwrap_or_else(|| "<unknown>".to_owned());
-            println!("  trust         : trusted (granted {at})");
-        }
-        TrustState::Stale => {
-            println!(
-                "  trust         : stale (executable surface drifted; run `rimz trust grant` to refresh)",
-            );
-        }
-    }
-}
-
-/// Walk the workspace's heartbeat dir and warn for any resolver-shaped
-/// heartbeat whose id is not on the per-machine allowlist. These are
-/// dropped by the bridge per `docs/internals/agents/resolvers.md:35` but kept for
-/// diagnostics so a user installing a resolver wrong sees why it's not
-/// engaging.
-#[expect(
-    clippy::print_stdout,
-    reason = "doctor is the user-facing report; called from a print_stdout-allowed parent"
-)]
-pub(super) fn report_unauthorized_resolver_heartbeats(ws: &rimz::ResolvedWorkspace) {
+/// Resolver-shaped heartbeats whose id is not on the per-machine allowlist. The
+/// bridge drops these, so a user installing a resolver wrong sees why it never
+/// engages.
+pub(super) fn collect_unauthorized_resolvers(ws: &rimz::ResolvedWorkspace) -> Probe<Vec<String>> {
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
-        Ok(r) => r,
+        Ok(runtime) => runtime,
         Err(err) => {
-            println!("  resolver hb   : unavailable ({err})");
-            return;
+            return Probe::Unavailable {
+                error: err.to_string(),
+            };
         }
     };
     let allowlist = match Allowlist::load() {
-        Ok(a) => a,
+        Ok(allowlist) => allowlist,
         Err(err) => {
-            println!("  resolver hb   : allowlist unavailable ({err})");
-            return;
+            return Probe::Unavailable {
+                error: format!("allowlist unavailable ({err})"),
+            };
         }
     };
-    let entries = match fs::read_dir(&runtime.heartbeat_dir) {
-        Ok(e) => e,
-        Err(_) => return,
+    let Ok(entries) = fs::read_dir(&runtime.heartbeat_dir) else {
+        return Probe::Ready(Vec::new());
     };
     let mut unauthorized: Vec<String> = Vec::new();
     for entry in entries.flatten() {
@@ -266,45 +199,69 @@ pub(super) fn report_unauthorized_resolver_heartbeats(ws: &rimz::ResolvedWorkspa
             unauthorized.push(id.as_str().to_owned());
         }
     }
-    if unauthorized.is_empty() {
-        return;
-    }
     unauthorized.sort();
-    for id in unauthorized {
-        println!("  resolver hb   : unauthorized resolver heartbeat seen ({id})");
-    }
+    Probe::Ready(unauthorized)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn descriptor(kind: &str) -> &'static rimz::agents::AgentDescriptor {
-        rimz::agents::descriptor_by_kind(kind).expect("registered descriptor")
+    fn coverage(kind: &str) -> AgentCoverage {
+        coverage_for(rimz::agents::descriptor_by_kind(kind).expect("registered descriptor"))
     }
 
     #[test]
-    fn coverage_summary_pins_agent_matrix() {
+    fn coverage_pins_agent_matrix() {
+        let claude = coverage("claude");
+        assert_eq!(claude.wired, claude.total);
         assert_eq!(
-            coverage_summary(descriptor("claude")),
-            "claude +turn +perm +plan +ask +compact +sub +bg +end +idle +usage +rich +install +spend +remote"
+            claude.supported,
+            [
+                "turn", "perm", "plan", "ask", "compact", "sub", "bg", "end", "idle", "usage",
+                "rich", "install", "spend", "remote",
+            ]
         );
+        assert!(claude.unsupported.is_empty());
+
+        let codex = coverage("codex");
         assert_eq!(
-            coverage_summary(descriptor("codex")),
-            "codex +turn +perm -plan(no plan-approval gate; update_pl...) +ask +compact +sub -bg(no background-task parking) -end(no SessionEnd hook; liveness rea...) -idle(no idle Notification hook) +usage +rich +install +spend +remote"
+            codex.supported,
+            [
+                "turn", "perm", "ask", "compact", "sub", "usage", "rich", "install", "spend",
+                "remote"
+            ]
         );
+        let codex_gaps: Vec<&str> = codex
+            .unsupported
+            .iter()
+            .map(|gap| gap.concern.as_str())
+            .collect();
+        assert_eq!(codex_gaps, ["plan", "bg", "end", "idle"]);
+        assert!(codex.unsupported.iter().all(|gap| !gap.reason.is_empty()));
+
+        let pi = coverage("pi");
         assert_eq!(
-            coverage_summary(descriptor("pi")),
-            "pi +turn +perm -plan(no plan-approval gate) -ask(no native question tool) +compact -sub(no subagent hook surface) -bg(no background-task parking) +end -idle(no idle notification event) +usage -rich(no rich-context transport) +install +spend -remote(no remote-control surface)"
+            pi.supported,
+            [
+                "turn", "perm", "compact", "end", "usage", "install", "spend"
+            ]
+        );
+        let pi_gaps: Vec<&str> = pi
+            .unsupported
+            .iter()
+            .map(|gap| gap.concern.as_str())
+            .collect();
+        assert_eq!(
+            pi_gaps,
+            ["plan", "ask", "sub", "bg", "idle", "rich", "remote"]
         );
     }
 
     #[test]
-    fn coverage_reason_text_truncates_without_inspecting_words() {
-        assert_eq!(coverage_reason_text("short reason"), "short reason");
-        assert_eq!(
-            coverage_reason_text("abcdefghijklmnopqrstuvwxyz0123456789"),
-            "abcdefghijklmnopqrstuvwxyz012345..."
-        );
+    fn full_coverage_reports_no_gaps() {
+        let claude = coverage("claude");
+        assert_eq!(claude.wired, 14);
+        assert!(claude.unsupported.is_empty());
     }
 }
