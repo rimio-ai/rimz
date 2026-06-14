@@ -201,8 +201,7 @@ pub struct CodexPermissionBehavior {
     pub message: Option<String>,
 }
 
-/// Codex `PreToolUse` decision output for `ExitPlanMode` and
-/// `AskUserQuestion` feed items.
+/// Codex `PreToolUse` decision output for blocking `request_user_input` feed items.
 ///
 /// Wire: `{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow"}}`
 ///

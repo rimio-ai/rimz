@@ -52,8 +52,8 @@ pub use context::{
 };
 pub use credits::{AccountUsageSnapshot, ExtraCredits};
 pub use descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
@@ -169,14 +169,6 @@ pub(crate) fn classify_agent_hook(
         class,
         feed_kind,
         event_name: event_name.to_owned(),
-    }
-}
-
-pub(crate) fn classify_pre_tool_use(tool_name: Option<&str>) -> Option<FeedKind> {
-    match tool_name {
-        Some("ExitPlanMode") => Some(FeedKind::PlanApproval),
-        Some("AskUserQuestion") => Some(FeedKind::Question),
-        _ => None,
     }
 }
 
@@ -998,20 +990,6 @@ mod tests {
         );
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
-    }
-
-    #[test]
-    fn pre_tool_use_classifier_maps_shared_blocking_tools() {
-        assert_eq!(
-            classify_pre_tool_use(Some("ExitPlanMode")),
-            Some(FeedKind::PlanApproval)
-        );
-        assert_eq!(
-            classify_pre_tool_use(Some("AskUserQuestion")),
-            Some(FeedKind::Question)
-        );
-        assert_eq!(classify_pre_tool_use(Some("Bash")), None);
-        assert_eq!(classify_pre_tool_use(None), None);
     }
 
     #[test]

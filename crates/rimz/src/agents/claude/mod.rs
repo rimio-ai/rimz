@@ -52,8 +52,8 @@ use super::RemoteControlStatus;
 #[cfg(test)]
 use super::StatusLineChange;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::{BackgroundTask, SessionSource};
 use super::lifecycle::LifecycleSignal;
@@ -63,9 +63,8 @@ use super::{
     AccountUsageSnapshot, AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation,
     AgentTurnError, ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport,
     Result, RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow,
-    classify_agent_hook, classify_pre_tool_use, non_empty_trimmed, optional_payload_string,
-    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
-    stop_payload_errored,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -119,11 +118,18 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     tools: ToolClassification {
         mutating: &["Edit", "Write", "MultiEdit", "NotebookEdit", "Bash"],
         editing: &["Edit", "Write", "MultiEdit", "NotebookEdit"],
+        blocking: &[
+            ("ExitPlanMode", FeedKind::PlanApproval),
+            ("AskUserQuestion", FeedKind::Question),
+        ],
     },
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
         rate_limit_windows: true,
+        rich_context: true,
+        context_usage: true,
+        account_spend: true,
         subagents: true,
         background_tasks: true,
         // Claude stamps a live pane on every session, so a pane with no
@@ -136,6 +142,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
             background_sessions: true,
         },
     },
+    coverage: CLAUDE_COVERAGE,
     default_context_window: Some(200_000),
     default_model: None,
     hook_cap: CLAUDE_HOOK_CAP,
@@ -155,6 +162,89 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // `<session_id>/subagents/*.jsonl`; the session directory is the thread.
     thread_key: ThreadKey::SessionDir,
 };
+
+const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
+    (
+        IntegrationConcern::TurnLifecycle,
+        ConcernCoverage::Wired {
+            via: "SessionStart/UserPromptSubmit/Stop",
+        },
+    ),
+    (
+        IntegrationConcern::Permission,
+        ConcernCoverage::Wired {
+            via: "PermissionRequest",
+        },
+    ),
+    (
+        IntegrationConcern::PlanApproval,
+        ConcernCoverage::Wired {
+            via: "PreToolUse:ExitPlanMode",
+        },
+    ),
+    (
+        IntegrationConcern::UserQuestion,
+        ConcernCoverage::Wired {
+            via: "PreToolUse:AskUserQuestion",
+        },
+    ),
+    (
+        IntegrationConcern::Compaction,
+        ConcernCoverage::Wired {
+            via: "PreCompact/PostCompact/SessionStart:compact",
+        },
+    ),
+    (
+        IntegrationConcern::Subagents,
+        ConcernCoverage::Wired {
+            via: "SubagentStart/SubagentStop/statusline",
+        },
+    ),
+    (
+        IntegrationConcern::BackgroundParking,
+        ConcernCoverage::Wired {
+            via: "Stop.background_tasks",
+        },
+    ),
+    (
+        IntegrationConcern::SessionEnd,
+        ConcernCoverage::Wired { via: "SessionEnd" },
+    ),
+    (
+        IntegrationConcern::IdleNotification,
+        ConcernCoverage::Wired {
+            via: "Notification audit hook",
+        },
+    ),
+    (
+        IntegrationConcern::ContextUsage,
+        ConcernCoverage::Wired {
+            via: "transcript tail",
+        },
+    ),
+    (
+        IntegrationConcern::RichContext,
+        ConcernCoverage::Wired { via: "statusline" },
+    ),
+    (
+        IntegrationConcern::HookInstall,
+        ConcernCoverage::Wired {
+            via: "~/.claude/settings.json",
+        },
+    ),
+    (
+        IntegrationConcern::AccountSpend,
+        ConcernCoverage::Wired {
+            via: "OAuth usage/transcripts",
+        },
+    ),
+    (
+        IntegrationConcern::RemoteControl,
+        ConcernCoverage::Wired {
+            via: "pane/background",
+        },
+    ),
+];
 
 /// Per-hook timeout written into the Claude config (seconds). Matches
 /// [`CLAUDE_HOOK_CAP`] so the agent and bridge agree on the ceiling.
@@ -348,7 +438,9 @@ impl AgentAdapter for ClaudeAdapter {
             "PermissionRequest" => Some(FeedKind::Permission),
             // ExitPlanMode / AskUserQuestion self-classify off the tool name on
             // the broad PreToolUse hook; every other tool call is plain lifecycle.
-            "PreToolUse" => classify_pre_tool_use(parse_pre_tool_use(payload).tool_name.as_deref()),
+            "PreToolUse" => self
+                .descriptor()
+                .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
 

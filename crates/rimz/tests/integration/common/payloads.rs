@@ -100,6 +100,19 @@ pub fn claude_pre_tool_use_payload(tool_name: &str) -> String {
     .expect("payload")
 }
 
+/// Codex `PreToolUse` blocking question payload (`request_user_input`).
+pub fn codex_pre_tool_use_payload() -> String {
+    serde_json::to_string(&json!({
+        "hook_event_name": "PreToolUse",
+        "tool_name": "request_user_input",
+        "tool_input": {
+            "questions": [{ "question": "which fix shape?" }]
+        },
+        "session_id": "sess-codex-pretool",
+    }))
+    .expect("payload")
+}
+
 /// Pi-shaped blocking `tool_call` payload. Rimz authors pi's wire (the
 /// extension is Rimz code), so this mirrors `extension.ts`'s envelope —
 /// lowercase pi tool names (`bash`, `read`, `edit`, …).

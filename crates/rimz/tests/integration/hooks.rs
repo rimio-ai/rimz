@@ -11,8 +11,8 @@ use jiff::Timestamp;
 use serde_json::{Value, json};
 
 use crate::common::{
-    Env, claude_pre_tool_use_payload, codex_permission_payload, permission_payload,
-    pi_tool_call_payload, tmux_pane,
+    Env, claude_pre_tool_use_payload, codex_permission_payload, codex_pre_tool_use_payload,
+    permission_payload, pi_tool_call_payload, tmux_pane,
 };
 
 const BRIDGE_ITEM_WAIT: Duration = Duration::from_secs(5);
@@ -805,6 +805,77 @@ fn claude_pre_tool_bridge_path_renders_updated_input() {
         );
         assert_eq!(decision["hookSpecificOutput"]["updatedInput"][field], value);
     }
+}
+
+// --- Codex PreToolUse blocking events ---
+
+#[test]
+fn codex_request_user_input_uses_native_ui_without_resolver() {
+    let env = Env::new();
+    let output = env.run_hook("codex", &codex_pre_tool_use_payload());
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        output.stdout.is_empty(),
+        "neutral Codex blocking hook must keep stdout empty"
+    );
+
+    let items = env.feed_list_json();
+    let items = items.as_array().expect("array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["surface"], "native_ui");
+    assert_eq!(items[0]["status"], "pending");
+    assert_eq!(items[0]["kind"], "question");
+}
+
+#[test]
+fn codex_request_user_input_bridge_path_renders_pre_tool_decision() {
+    let env = Env::new();
+    if env.skip_if_sandboxed() {
+        return;
+    }
+    env.enrol("opus-policy", 10, "30s");
+    env.write_heartbeat("opus-policy", Timestamp::now());
+
+    let child = env.spawn_hook("codex", &codex_pre_tool_use_payload());
+    let request_id = env
+        .poll_pending_request_id(Instant::now() + BRIDGE_ITEM_WAIT)
+        .expect("bridge item should appear in feed");
+    let resolve = env.resolve(
+        &request_id,
+        r#"{"choice":"allow","updatedInput":{"answer":"clarified"}}"#,
+        "opus-policy",
+        "hook-bridge",
+    );
+    assert!(
+        resolve.status.success(),
+        "resolve failed: {}",
+        String::from_utf8_lossy(&resolve.stderr)
+    );
+
+    let output = child.wait_with_output().expect("wait child");
+    assert!(
+        output.status.success(),
+        "hook stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("utf8");
+    let decision: Value = serde_json::from_str(stdout.trim()).expect("agent json");
+    assert_eq!(
+        decision["hookSpecificOutput"]["hookEventName"],
+        "PreToolUse"
+    );
+    assert_eq!(
+        decision["hookSpecificOutput"]["permissionDecision"],
+        "allow"
+    );
+    assert_eq!(
+        decision["hookSpecificOutput"]["updatedInput"]["answer"],
+        "clarified"
+    );
 }
 
 // --- Claude lifecycle and install/uninstall ---

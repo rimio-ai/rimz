@@ -39,8 +39,8 @@ use std::time::Duration;
 use serde_json::{Value, json};
 
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::lifecycle::LifecycleSignal;
 use super::observation::payload_context_pct;
@@ -78,6 +78,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     tools: ToolClassification {
         mutating: &["bash", "edit", "write"],
         editing: &["edit", "write"],
+        blocking: &[],
     },
     capabilities: Capabilities {
         // `tool_call` is pi's awaited pre-tool gate: the extension handler
@@ -91,6 +92,9 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // posing a question pi would not have asked.
         native_ask_ui: false,
         rate_limit_windows: false,
+        rich_context: false,
+        context_usage: true,
+        account_spend: true,
         subagents: false,
         background_tasks: false,
         registers_lazily: false,
@@ -100,6 +104,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
             background_sessions: false,
         },
     },
+    coverage: PI_COVERAGE,
     default_context_window: None,
     default_model: None,
     // Pi awaits the `tool_call` handler with no kill window of its own, so
@@ -120,6 +125,91 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     hook_install_unavailable: None,
     thread_key: ThreadKey::PerFile,
 };
+
+const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
+    (
+        IntegrationConcern::TurnLifecycle,
+        ConcernCoverage::Wired {
+            via: "session_start/before_agent_start/agent_end",
+        },
+    ),
+    (
+        IntegrationConcern::Permission,
+        ConcernCoverage::Wired { via: "tool_call" },
+    ),
+    (
+        IntegrationConcern::PlanApproval,
+        ConcernCoverage::Unsupported {
+            reason: "no plan-approval gate",
+        },
+    ),
+    (
+        IntegrationConcern::UserQuestion,
+        ConcernCoverage::Unsupported {
+            reason: "no native question tool",
+        },
+    ),
+    (
+        IntegrationConcern::Compaction,
+        ConcernCoverage::Wired {
+            via: "session_before_compact/session_compact",
+        },
+    ),
+    (
+        IntegrationConcern::Subagents,
+        ConcernCoverage::Unsupported {
+            reason: "no subagent hook surface",
+        },
+    ),
+    (
+        IntegrationConcern::BackgroundParking,
+        ConcernCoverage::Unsupported {
+            reason: "no background-task parking",
+        },
+    ),
+    (
+        IntegrationConcern::SessionEnd,
+        ConcernCoverage::Wired {
+            via: "session_shutdown",
+        },
+    ),
+    (
+        IntegrationConcern::IdleNotification,
+        ConcernCoverage::Unsupported {
+            reason: "no idle notification event",
+        },
+    ),
+    (
+        IntegrationConcern::ContextUsage,
+        ConcernCoverage::Wired {
+            via: "extension context usage",
+        },
+    ),
+    (
+        IntegrationConcern::RichContext,
+        ConcernCoverage::Unsupported {
+            reason: "no rich-context transport",
+        },
+    ),
+    (
+        IntegrationConcern::HookInstall,
+        ConcernCoverage::Wired {
+            via: "~/.pi/agent/extensions/rimz.ts",
+        },
+    ),
+    (
+        IntegrationConcern::AccountSpend,
+        ConcernCoverage::Wired {
+            via: "auth.json/session spend",
+        },
+    ),
+    (
+        IntegrationConcern::RemoteControl,
+        ConcernCoverage::Unsupported {
+            reason: "no remote-control surface",
+        },
+    ),
+];
 
 /// The non-blocking events the embedded extension forwards — the lifecycle
 /// channel, the single source of truth for classification. Mirrors the

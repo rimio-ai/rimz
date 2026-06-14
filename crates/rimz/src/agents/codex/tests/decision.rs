@@ -39,19 +39,6 @@ fn codex_decision_stdout_shapes_are_pinned() {
         }
         "###);
 
-    let plan = fixture(FeedKind::PlanApproval);
-    let plan_allow = Resolution::new(json!({ "choice": "allow" }), ResolutionMethod::HookBridge);
-    let rendered = CodexAdapter.render_decision(&plan, &plan_allow).unwrap();
-
-    insta::assert_json_snapshot!(rendered, @r###"
-        {
-          "hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow"
-          }
-        }
-        "###);
-
     let question = fixture(FeedKind::Question);
     let answer = Resolution::new(
         json!({ "choice": "allow", "updatedInput": { "question": "ready?" } }),
@@ -71,16 +58,19 @@ fn codex_decision_stdout_shapes_are_pinned() {
         }
         "###);
 
-    let mut plan_deny = Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
-    plan_deny.reason = Some("plan needs narrower scope".to_owned());
-    let rendered = CodexAdapter.render_decision(&plan, &plan_deny).unwrap();
+    let mut deny_question =
+        Resolution::new(json!({ "choice": "deny" }), ResolutionMethod::HookBridge);
+    deny_question.reason = Some("question declined".to_owned());
+    let rendered = CodexAdapter
+        .render_decision(&question, &deny_question)
+        .unwrap();
 
     insta::assert_json_snapshot!(rendered, @r###"
         {
           "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "deny",
-            "permissionDecisionReason": "plan needs narrower scope"
+            "permissionDecisionReason": "question declined"
           }
         }
         "###);

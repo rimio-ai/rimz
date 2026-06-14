@@ -86,7 +86,7 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 | `SessionStart` | session starts / resumes / clears / compacts | `source` (`startup`\|`resume`\|`clear`\|`compact`; `compact` is triggerless close evidence in Rimz) | ✓ |
 | `UserPromptSubmit` | user submits a prompt | `turn_id`, `prompt` | ✓ |
 | `SubagentStart` | a subagent launches | `turn_id`, `agent_id`, `agent_type`, `permission_mode` | ✓ |
-| `PreToolUse` | before Bash / `apply_patch` / MCP tools and approval/question pseudo-tools | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`; `tool_name = "ExitPlanMode"` is plan approval, `tool_name = "AskUserQuestion"` is a user question | ✓ |
+| `PreToolUse` | before `exec_command` / `apply_patch` / MCP tools and the question pseudo-tool | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`; `tool_name = "request_user_input"` is a user question; `update_plan` is non-blocking and is not a plan-approval gate | ✓ |
 | `PermissionRequest` | approval needed (shell escalation, network) | `turn_id`, `tool_name`, `tool_input`, `tool_input.description?` | ✓ |
 | `PostToolUse` | after tool output is produced | `turn_id`, `tool_name`, `tool_use_id`, `tool_input`, `tool_response` | ✓ |
 | `SubagentStop` | a subagent stops | `turn_id`, `agent_id`, `agent_type`, `agent_transcript_path`, `stop_hook_active`, `last_assistant_message` | ✓ |
@@ -94,7 +94,9 @@ Rimz parses around `permission_mode` without consuming it — the upstream still
 | `PreCompact` | before conversation compaction | `turn_id`, `trigger` (`manual`\|`auto`) | ✓ |
 | `PostCompact` | after compaction | `turn_id`, `trigger` | ✓ |
 
-Codex has **no `SessionEnd` or `Notification` hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
+Codex has **no `SessionEnd`, `Notification`, or plan-approval hook**. Compaction uses `PreCompact` as the opener; `PostCompact` closes with a known trigger, and a `SessionStart` with `source = "compact"` can still arrive as triggerless close evidence when `PostCompact` is missed.
+
+Observed Codex tool names in current rollouts include `exec_command`, `apply_patch`, `update_plan`, and `request_user_input`; older or compatibility traces can still mention `shell` / `local_shell`. Rimz treats `request_user_input` as the only blocking `PreToolUse` question tool and treats `update_plan` as ordinary non-blocking progress state.
 
 **Observed registration quirks** (upstream, pinned for refresh): `SessionStart` does not fire on a plain CLI launch — it rides the first `UserPromptSubmit` — and does not fire on `/clear` despite the documented `source = "clear"`. Rimz's handling is in the [adapter/codex.md → Session registration](../../internals/agents/adapter/codex.md#session-registration-and-launch-quirks); re-verify against the hooks reference URL above on each refresh.
 

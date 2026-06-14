@@ -11,6 +11,8 @@ use std::time::Duration;
 
 use serde_json::Value;
 
+use crate::feed::FeedKind;
+
 /// Static identity, branding, capabilities, and classification tables for one
 /// agent. See the module doc for the descriptor-vs-trait split.
 #[derive(Debug)]
@@ -31,12 +33,16 @@ pub struct AgentDescriptor {
     /// account's budget, so the dashboard borrows the sibling kind's windows
     /// — resolved through [`kind_for_sub_provider`](super::kind_for_sub_provider).
     pub sub_providers: &'static [&'static str],
-    /// Tool-name classification tables for the lifecycle `ToolUsed` bits.
+    /// Tool-name classification tables for lifecycle and blocking feed use.
     pub tools: ToolClassification,
     /// What this agent can and cannot do — consumed by the sidebar and doctor
     /// so a missing surface renders as a declared absence, never an
     /// accidental gap.
     pub capabilities: Capabilities,
+    /// Declared integration checklist. Every [`IntegrationConcern`] appears
+    /// exactly once as wired or unsupported, and conformance tests cross-check
+    /// the declaration against the descriptor and classification corpus.
+    pub coverage: &'static [(IntegrationConcern, ConcernCoverage)],
     /// Provider-owned fallback for the model context window shown in an agent
     /// card before a richer runtime source reports the exact value.
     pub default_context_window: Option<u64>,
@@ -105,7 +111,7 @@ pub enum PlanLabel {
     TitleCaseOnly,
 }
 
-/// The agent's tool vocabulary, classified for the lifecycle `ToolUsed` bits.
+/// The agent's tool vocabulary, classified for lifecycle and blocking feed use.
 #[derive(Debug)]
 pub struct ToolClassification {
     /// Tools that mutate the workspace — write files or run commands. A
@@ -116,16 +122,86 @@ pub struct ToolClassification {
     /// from reasoning to acting. A shell tool mutates but does not edit, so a
     /// research turn that only runs commands keeps the thinking head.
     pub editing: &'static [&'static str],
+    /// Tools whose pre-use hook is a blocking ask, paired with the feed kind
+    /// they raise. Empty when the agent's blocking gate is an event, not a tool.
+    pub blocking: &'static [(&'static str, FeedKind)],
+}
+
+macro_rules! integration_concerns {
+    ($($variant:ident => $label:literal),+ $(,)?) => {
+        /// Product-level integration concerns every adapter declares explicitly.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+        pub enum IntegrationConcern {
+            $($variant),+
+        }
+
+        impl IntegrationConcern {
+            pub const ALL: [Self; integration_concerns!(@count $($variant),+)] = [
+                $(Self::$variant),+
+            ];
+
+            pub const fn short_label(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $label),+
+                }
+            }
+        }
+    };
+    (@count $($variant:ident),+ $(,)?) => {
+        <[()]>::len(&[$(integration_concerns!(@unit $variant)),+])
+    };
+    (@unit $variant:ident) => {
+        ()
+    };
+}
+
+integration_concerns! {
+    TurnLifecycle => "turn",
+    Permission => "perm",
+    PlanApproval => "plan",
+    UserQuestion => "ask",
+    Compaction => "compact",
+    Subagents => "sub",
+    BackgroundParking => "bg",
+    SessionEnd => "end",
+    IdleNotification => "idle",
+    ContextUsage => "usage",
+    RichContext => "rich",
+    HookInstall => "install",
+    AccountSpend => "spend",
+    RemoteControl => "remote",
+}
+
+/// Whether an adapter wires a concern, or declares the absence intentionally.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConcernCoverage {
+    Wired { via: &'static str },
+    Unsupported { reason: &'static str },
+}
+
+impl ConcernCoverage {
+    pub const fn is_wired(self) -> bool {
+        matches!(self, Self::Wired { .. })
+    }
+
+    pub const fn detail(self) -> &'static str {
+        match self {
+            Self::Wired { via } => via,
+            Self::Unsupported { reason } => reason,
+        }
+    }
 }
 
 /// Explicit capability declaration. A provider that *cannot* do something
 /// declares it here instead of leaving an inferable absence. Three flags
 /// gate behavior today: `rate_limit_windows` (the provider dashboard's
-/// budget bars), `registers_lazily` (cwd pane binding and synthesized idle
-/// rows), `hook_install` (the install and doctor surfaces), and
-/// `native_ask_ui` (whether an unresolved blocking ask becomes a `native_ui`
-/// feed item). The rest state the adapter contract up front — pinned by each
-/// adapter's tests, consumed as shared sites grow capability-aware.
+/// budget bars), `rich_context` (the provider-owned live context transport),
+/// `context_usage` and `account_spend` (the token/cost read paths),
+/// `registers_lazily` (cwd pane binding and synthesized idle rows),
+/// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
+/// (whether an unresolved blocking ask becomes a `native_ui` feed item). The
+/// rest state the adapter contract up front — pinned by each adapter's tests,
+/// consumed as shared sites grow capability-aware.
 #[derive(Clone, Copy, Debug)]
 pub struct Capabilities {
     /// Can natively hold a turn open for a permission/plan/question decision
@@ -140,6 +216,15 @@ pub struct Capabilities {
     pub native_ask_ui: bool,
     /// Surfaces rate-limit windows / plan budgets the dashboard can meter.
     pub rate_limit_windows: bool,
+    /// Surfaces provider-owned rich context beyond the local lifecycle and
+    /// transcript tail, such as account windows, official model labels, PR
+    /// metadata, or agent version.
+    pub rich_context: bool,
+    /// Surfaces per-session token/context usage into the agent row.
+    pub context_usage: bool,
+    /// Surfaces provider spend from transcripts, account usage, or session
+    /// events.
+    pub account_spend: bool,
     /// Routes child tasks through `Subagent{Start,Stop}` lifecycle signals.
     pub subagents: bool,
     /// Has a notion of parking a turn on still-in-flight background work.
@@ -190,6 +275,15 @@ impl AgentDescriptor {
         self.tool_in(payload, self.tools.editing)
     }
 
+    /// Whether a pre-tool-use payload names a blocking ask tool.
+    pub fn blocking_tool_kind(&self, tool_name: Option<&str>) -> Option<FeedKind> {
+        let name = tool_name?;
+        self.tools
+            .blocking
+            .iter()
+            .find_map(|(tool, kind)| (*tool == name).then_some(*kind))
+    }
+
     fn tool_in(&self, payload: &Value, set: &[&str]) -> bool {
         payload
             .get("tool_name")
@@ -203,6 +297,7 @@ mod tests {
     use serde_json::json;
 
     use crate::agents::registry::ADAPTERS;
+    use crate::feed::FeedKind;
 
     #[test]
     fn every_descriptor_keeps_editing_a_subset_of_mutating() {
@@ -236,6 +331,29 @@ mod tests {
     }
 
     #[test]
+    fn blocking_tool_classification_is_per_descriptor() {
+        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
+        assert_eq!(
+            claude.blocking_tool_kind(Some("ExitPlanMode")),
+            Some(FeedKind::PlanApproval)
+        );
+        assert_eq!(
+            claude.blocking_tool_kind(Some("AskUserQuestion")),
+            Some(FeedKind::Question)
+        );
+        assert_eq!(claude.blocking_tool_kind(Some("request_user_input")), None);
+
+        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert_eq!(
+            codex.blocking_tool_kind(Some("request_user_input")),
+            Some(FeedKind::Question)
+        );
+        assert_eq!(codex.blocking_tool_kind(Some("ExitPlanMode")), None);
+        assert_eq!(codex.blocking_tool_kind(Some("update_plan")), None);
+        assert_eq!(codex.blocking_tool_kind(None), None);
+    }
+
+    #[test]
     fn remote_control_capabilities_are_pinned_per_adapter() {
         let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
         assert!(claude.capabilities.remote_control.pane_sessions);
@@ -248,5 +366,20 @@ mod tests {
         let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
         assert!(!pi.capabilities.remote_control.pane_sessions);
         assert!(!pi.capabilities.remote_control.background_sessions);
+    }
+
+    #[test]
+    fn rich_context_capability_is_independent_of_rate_limit_windows() {
+        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
+        assert!(claude.capabilities.rich_context);
+        assert!(claude.capabilities.rate_limit_windows);
+
+        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert!(codex.capabilities.rich_context);
+        assert!(codex.capabilities.rate_limit_windows);
+
+        let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
+        assert!(!pi.capabilities.rich_context);
+        assert!(!pi.capabilities.rate_limit_windows);
     }
 }

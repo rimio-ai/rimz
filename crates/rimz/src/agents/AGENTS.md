@@ -13,7 +13,7 @@ Topic detail lives in the internals leaves the root map describes — [agent.md]
 
 ## The boundary
 
-An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs), and one line in [`registry::ADAPTERS`](./registry.rs) — nothing else.
+An adapter is the *single* place a native agent protocol is normalized. It owns `classify_hook`, `observe_lifecycle`, `render_decision`, `render_neutral`, and install / uninstall / preview for one agent. Adding an agent is implementing [`AgentAdapter`](./mod.rs), declaring its [`AgentDescriptor`](./descriptor.rs) — including tool vocabularies and the full `IntegrationConcern` coverage table — and one line in [`registry::ADAPTERS`](./registry.rs) — nothing else.
 
 - **Adapters never touch the ledger.** They are pure mappers; [`cli/hooks.rs`](../cli/hooks.rs) owns every ledger write and all bridge I/O, calling the adapter for classification, rendering, and normalized run output.
 - **Emit only the normalized outputs downstream consumes** — an `AgentLifecycleObservation`, a decision `Value`, and a supervised-run final assistant message. A native event name or payload field reached for outside this module is a mapping that belongs *in* an adapter.
@@ -29,3 +29,4 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 ## Tests
 
 Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution.
+Declare every integration concern as wired or unsupported in the descriptor; `conformance.rs` enforces completeness and cross-checks the claim against capabilities, installed events, and the classification corpus. `rimz doctor` surfaces the same matrix, so a missing surface is visible product behavior.

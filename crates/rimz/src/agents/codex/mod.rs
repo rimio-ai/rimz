@@ -1,7 +1,7 @@
 //! Codex hook adapter.
 //!
 //! Classifies `PermissionRequest` and blocking `PreToolUse` questions
-//! (`ExitPlanMode`, `AskUserQuestion`) onto the feed, plus the lifecycle events
+//! (`request_user_input`) onto the feed, plus the lifecycle events
 //! (`SessionStart` registers idle, `SubagentStart` / `UserPromptSubmit` move
 //! to running, `SubagentStop` returns the child to idle, `Stop` completes the
 //! root turn — success, or failed on an error signal); renders Codex-shaped
@@ -63,8 +63,8 @@ use self::transcript::{
 };
 use super::context::AgentContext;
 use super::descriptor::{
-    AgentDescriptor, Brand, Capabilities, PlanLabel, RemoteControlCapability, ThreadKey,
-    ToolClassification,
+    AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
+    RemoteControlCapability, ThreadKey, ToolClassification,
 };
 use super::hook_types::SessionSource;
 use super::lifecycle::LifecycleSignal;
@@ -74,8 +74,8 @@ use super::{
     AccountUsageSnapshot, AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
     LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result,
-    RootIdentity, SubagentIdentity, choice_is_allow, classify_agent_hook, classify_pre_tool_use,
-    non_empty_trimmed, optional_payload_string, read_transcript_tail, resolve_root_identity,
+    RootIdentity, SubagentIdentity, choice_is_allow, classify_agent_hook, non_empty_trimmed,
+    optional_payload_string, read_transcript_tail, resolve_root_identity,
     resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -143,11 +143,20 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     tools: ToolClassification {
         mutating: &["shell", "apply_patch", "exec_command", "local_shell"],
         editing: &["apply_patch"],
+        // Codex's native blocking question tool is `request_user_input`.
+        // Local rollout corpus on 2026-06-14 (Codex 0.139.0) contained 37
+        // real function calls with this name and no `AskUserQuestion` or
+        // `ExitPlanMode` calls. Re-verify against a teed `PreToolUse` stdin
+        // before renaming this hook vocabulary.
+        blocking: &[("request_user_input", FeedKind::Question)],
     },
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
         rate_limit_windows: true,
+        rich_context: true,
+        context_usage: true,
+        account_spend: true,
         subagents: true,
         // Codex has no background-task parking.
         background_tasks: false,
@@ -164,6 +173,7 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
             background_sessions: true,
         },
     },
+    coverage: CODEX_COVERAGE,
     default_context_window: Some(DEFAULT_CONTEXT_WINDOW),
     default_model: Some(DEFAULT_MODEL),
     hook_cap: CODEX_HOOK_CAP,
@@ -184,6 +194,91 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // Codex logs one rollout file per session.
     thread_key: ThreadKey::PerFile,
 };
+
+const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
+    (
+        IntegrationConcern::TurnLifecycle,
+        ConcernCoverage::Wired {
+            via: "SessionStart/UserPromptSubmit/Stop",
+        },
+    ),
+    (
+        IntegrationConcern::Permission,
+        ConcernCoverage::Wired {
+            via: "PermissionRequest",
+        },
+    ),
+    (
+        IntegrationConcern::PlanApproval,
+        ConcernCoverage::Unsupported {
+            reason: "no plan-approval gate; update_plan is non-blocking",
+        },
+    ),
+    (
+        IntegrationConcern::UserQuestion,
+        ConcernCoverage::Wired {
+            via: "PreToolUse:request_user_input",
+        },
+    ),
+    (
+        IntegrationConcern::Compaction,
+        ConcernCoverage::Wired {
+            via: "PreCompact/PostCompact/SessionStart:compact",
+        },
+    ),
+    (
+        IntegrationConcern::Subagents,
+        ConcernCoverage::Wired {
+            via: "SubagentStart/SubagentStop",
+        },
+    ),
+    (
+        IntegrationConcern::BackgroundParking,
+        ConcernCoverage::Unsupported {
+            reason: "no background-task parking",
+        },
+    ),
+    (
+        IntegrationConcern::SessionEnd,
+        ConcernCoverage::Unsupported {
+            reason: "no SessionEnd hook; liveness reaps sessions",
+        },
+    ),
+    (
+        IntegrationConcern::IdleNotification,
+        ConcernCoverage::Unsupported {
+            reason: "no idle Notification hook",
+        },
+    ),
+    (
+        IntegrationConcern::ContextUsage,
+        ConcernCoverage::Wired {
+            via: "rollout tail",
+        },
+    ),
+    (
+        IntegrationConcern::RichContext,
+        ConcernCoverage::Wired { via: "app-server" },
+    ),
+    (
+        IntegrationConcern::HookInstall,
+        ConcernCoverage::Wired {
+            via: "~/.codex/config.toml",
+        },
+    ),
+    (
+        IntegrationConcern::AccountSpend,
+        ConcernCoverage::Wired {
+            via: "app-server/OAuth usage/rollouts",
+        },
+    ),
+    (
+        IntegrationConcern::RemoteControl,
+        ConcernCoverage::Wired {
+            via: "pane/background",
+        },
+    ),
+];
 
 /// Installed events. Tuple is `(event_name, optional_matcher)` — the single
 /// source of truth for which Codex events Rimz wires and with which matcher,
@@ -314,7 +409,9 @@ impl AgentAdapter for CodexAdapter {
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook {
         let feed_kind = match event_name {
             "PermissionRequest" => Some(FeedKind::Permission),
-            "PreToolUse" => classify_pre_tool_use(parse_pre_tool_use(payload).tool_name.as_deref()),
+            "PreToolUse" => self
+                .descriptor()
+                .blocking_tool_kind(parse_pre_tool_use(payload).tool_name.as_deref()),
             _ => None,
         };
         classify_agent_hook(event_name, feed_kind, LIFECYCLE_EVENTS)
@@ -338,13 +435,7 @@ impl AgentAdapter for CodexAdapter {
             ),
             ClassificationSample::new(
                 "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "ExitPlanMode" }),
-                AgentHookClass::BlockingFeed,
-                Some(FeedKind::PlanApproval),
-            ),
-            ClassificationSample::new(
-                "PreToolUse",
-                serde_json::json!({ "session_id": "sess-1", "tool_name": "AskUserQuestion" }),
+                serde_json::json!({ "session_id": "sess-1", "tool_name": "request_user_input" }),
                 AgentHookClass::BlockingFeed,
                 Some(FeedKind::Question),
             ),

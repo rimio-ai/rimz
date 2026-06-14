@@ -11,6 +11,9 @@ fn pi_descriptor_declares_capabilities_and_activity_events() {
     assert!(capabilities.blocking_feed);
     assert!(!capabilities.native_ask_ui);
     assert!(!capabilities.rate_limit_windows);
+    assert!(!capabilities.rich_context);
+    assert!(capabilities.context_usage);
+    assert!(capabilities.account_spend);
     assert!(!capabilities.subagents);
     assert!(!capabilities.background_tasks);
     assert!(capabilities.hook_install);

@@ -101,6 +101,9 @@ pub(super) fn report_agent_hooks() {
         .collect::<Vec<_>>()
         .join("; ");
     println!("  agent hooks   : {summary}");
+    for agent in rimz::agents::ADAPTERS {
+        println!("  agent cover   : {}", coverage_summary(agent.descriptor()));
+    }
 
     for (name, status) in &statuses {
         match status {
@@ -122,6 +125,44 @@ pub(super) fn report_agent_hooks() {
     }
 }
 
+fn coverage_summary(descriptor: &rimz::agents::AgentDescriptor) -> String {
+    let parts = rimz::agents::IntegrationConcern::ALL
+        .iter()
+        .filter_map(|concern| {
+            descriptor.coverage.iter().find_map(|(declared, coverage)| {
+                (declared == concern).then_some((*concern, *coverage))
+            })
+        })
+        .map(|(concern, coverage)| match coverage {
+            rimz::agents::ConcernCoverage::Wired { .. } => {
+                format!("+{}", concern.short_label())
+            }
+            rimz::agents::ConcernCoverage::Unsupported { reason } => {
+                format!(
+                    "-{}({})",
+                    concern.short_label(),
+                    coverage_reason_text(reason)
+                )
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!("{} {parts}", descriptor.kind)
+}
+
+fn coverage_reason_text(reason: &str) -> String {
+    const MAX_CHARS: usize = 32;
+
+    let reason = reason.trim();
+    let mut chars = reason.chars();
+    let summary: String = chars.by_ref().take(MAX_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{summary}...")
+    } else {
+        summary
+    }
+}
+
 enum AgentHookDoctorStatus {
     Installed,
     /// Installed, but the agent's own trust gate still skips these events.
@@ -138,6 +179,40 @@ impl AgentHookDoctorStatus {
             Self::NotInstalled => "not installed",
             Self::Unsupported(_) => "unsupported",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn descriptor(kind: &str) -> &'static rimz::agents::AgentDescriptor {
+        rimz::agents::descriptor_by_kind(kind).expect("registered descriptor")
+    }
+
+    #[test]
+    fn coverage_summary_pins_agent_matrix() {
+        assert_eq!(
+            coverage_summary(descriptor("claude")),
+            "claude +turn +perm +plan +ask +compact +sub +bg +end +idle +usage +rich +install +spend +remote"
+        );
+        assert_eq!(
+            coverage_summary(descriptor("codex")),
+            "codex +turn +perm -plan(no plan-approval gate; update_pl...) +ask +compact +sub -bg(no background-task parking) -end(no SessionEnd hook; liveness rea...) -idle(no idle Notification hook) +usage +rich +install +spend +remote"
+        );
+        assert_eq!(
+            coverage_summary(descriptor("pi")),
+            "pi +turn +perm -plan(no plan-approval gate) -ask(no native question tool) +compact -sub(no subagent hook surface) -bg(no background-task parking) +end -idle(no idle notification event) +usage -rich(no rich-context transport) +install +spend -remote(no remote-control surface)"
+        );
+    }
+
+    #[test]
+    fn coverage_reason_text_truncates_without_inspecting_words() {
+        assert_eq!(coverage_reason_text("short reason"), "short reason");
+        assert_eq!(
+            coverage_reason_text("abcdefghijklmnopqrstuvwxyz0123456789"),
+            "abcdefghijklmnopqrstuvwxyz012345..."
+        );
     }
 }
 
