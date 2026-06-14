@@ -90,27 +90,29 @@ Hooks install at first time running `rimz`, with your consent and a diff preview
 
 ## Everyday moves
 
-**The room, from anywhere.** Saved aliases carry the target and reconnect defaults, and after a reboot the room comes back populated, with every prior agent re-seeded idle in its own pane via `claude --resume`, `codex resume`, or `pi --session`.
+**Connect from anywhere.** Easily connect and resume your work with auto reconnect ssh to your dev box, it's simply tmux/zellij underlying.
 
 ```sh
 rimz remote add dev dev-box:~/code/query-engine
 rimz remote connect dev        # the room rebuilds, every agent where you left it
 ```
 
-**Two agents, one feature.** Each worktree is a channel — one copy of the code where your agents cooperate — and you address a colleague by kind within it (`@claude#feat-great`). Built-in and inline layouts compose any grid, the sidebar groups cards by worktree with per-tree diff churn, and a worktree is removed only after its work proves landed on the base branch.
+**Multi agents in same worktree** Open multiple agents to work side by side on same worktree, you can have claude planning and codex writing the code, peer programming between the agents.
 
 ```sh
-rimz agents peer --worktree=feat/great    # customizable layout alias, peer for claude,codex
-rimz agents 'vim,codex+term'              # or layout dynamically
-rimz pane list                            # the room as panes: who is in which tab, on which channel
+rimz agents peer --worktree=feat/x                # save you layout as alias
+rimz agents 'vim,codex+term' --worktree=feat/y    # or gen dynamically
 ```
 
-**Pipelines, steering, and queues.** A run that stops to ask survives the stop: the question takes the normal path to your sidebar and your phone, you answer from anywhere, and the run finishes while the script is still blocking.
+**Steering agents by handle** Every agent automatically get a handle, like `@codex#feat-a`, namespaced by worktree, steer the agents like talking to your colleages on Slack.
 
 ```sh
-rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the suite, open a PR"
-rimz steer @claude -- "focus on the failing parser test"
-rimz queue @codex --on done -- "open a PR summary"
+# steer agent inside workspace
+rimz steer @claude#feat-a -- "focus on the failing parser test"        # talk to it now
+rimz queue @codex#feat-b --on done -- "open a PR summary"              # leave a task for its next free turn
+
+# or when you inside same worktree (every worktree is a channel)
+rimz steer @claude -- "have you checked the code at xxx"        # talk to it now
 ```
 
 → [the four scenarios, in full](./docs/guide/product.md)

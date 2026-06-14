@@ -34,6 +34,16 @@ Routing attention is half the read; the other half is *how the work is going*. R
 - Each agent rolls up to one of five states: `running`, `waiting`, `idle`, `success`, `failed`. Rimz observes that state and derives one of its own: `paused`, a display park for an agent that stopped mid-turn on a provider limit, lifted by provider recovery, window reset, or the next hook event. Short-lived heads ride the running state (thinking, compaction, delegation) so the moment-to-moment phase shows inside one state ([docs/internals/agents/agent.md](./docs/internals/agents/agent.md)).
 - A context meter, token totals, live dollar cost, diff stats, todo progress, and a last-activity age ride the rows, so how far along and how healthy read at a glance: which agent is burning toward a rate limit, which is one approval from done. The provider dashboard carries the pace: spend for today, the week, and the month per provider, with 5h/7d budget bars draining in real time, so one look tells you where the week is going. These enrich display; the ledger and explicit events decide state and correctness.
 
+### Run the fleet like a team
+
+A fleet is a team, and Rimz gives it what a team needs: a channel per line of work, a member you can name, and a way to reach that member in either tense. Spawning separates three independent choices — agents (which tools run), layout (the shape on screen), worktree (which channel) — so a planner-and-reviewer pair in any channel is one command.
+
+- A worktree is a channel and an agent is a member, addressed as `@handle#channel`: `@claude` the kind, `@planner` the role, `@swift-otter` the one instance, `@all` the whole channel. The address resolves against live presence — one match delivers, many ask you to pick (or `--all` fans out), zero misses or, with `--create`, launches the member straight from its address.
+- You reach a member in two tenses, because work happens in two tenses. `steer` types into a live pane now; `queue` leaves a task that delivers at the member's next open turn, gated by `--on done` or `--on any`. Both route human-authored text through the one pane-send primitive, and both record an audit event that omits the message text.
+- Automation is a teammate. A supervised `rimz agents … -p` run drives one member headless — a cron job, a CI gate, a PR hook, or a script launches the turn, reads the final answer or a stream, and exits on a script-friendly status code — through the same hooks, ledger, and pane path an interactive member uses.
+
+The launcher, the address grammar, and the steer/queue and supervised-run machinery live in [docs/internals/agents/harness.md](./docs/internals/agents/harness.md).
+
 ### Stay light
 
 Rimz adds a sidebar and a feed to the terminal you already run, and keeps its own footprint small.

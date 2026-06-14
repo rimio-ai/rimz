@@ -53,7 +53,7 @@ Running a fleet locally, you might have four Claude Code or Codex sessions in fl
 
 Between questions, you steer. `rimz steer @claude -- "focus on the failing parser test"` types into the agent's pane immediately, and holds off when a pending ask owns the next keystroke. `rimz queue @codex --on done -- "open a PR summary"` parks the next instruction durably and delivers it the moment the agent finishes its turn, so you hand off follow-up work without watching for the turn boundary.
 
-Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a role you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar lives in [the harness reference](../internals/agents/harness.md#agent-addresses); the delivery gates are in [the agent-control reference](../reference/cli/agents.md#steer-live-agents).
+Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a role you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar lives in [the harness reference](../internals/agents/harness.md#the-address); the delivery gates are in [the agent-control reference](../reference/cli/agents.md#steer-live-agents).
 
 ## Run it on a server
 
@@ -104,7 +104,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
-Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([harness.md](../internals/agents/harness.md#cleanup)).
+Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktree.md](../internals/agents/worktree.md#cleanup)).
 
 ## Many repos, one room
 

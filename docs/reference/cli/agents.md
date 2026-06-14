@@ -103,7 +103,7 @@ Supervised `-p` runs require installed and trusted hooks, because hooks provide 
 
 ## Steer Live Agents
 
-`rimz steer` sends human-authored text to live agent panes immediately, addressed through the [agent-address grammar](../../internals/agents/harness.md#agent-addresses): `@<handle>` names who, `#<channel>` names the worktree.
+`rimz steer` sends human-authored text to live agent panes immediately, addressed through the [agent-address grammar](../../internals/agents/harness.md#the-address): `@<handle>` names who, `#<channel>` names the worktree.
 
 ```sh
 rimz steer @swift-otter -- "Please inspect the failing test and propose the smallest fix."
@@ -122,7 +122,7 @@ rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--
 
 A selector that matches several agents is an ambiguity that lists the handles to pick one; `--all` (or the explicit `@all`) opts into the fan-out, which confirms past the first match unless `--yes` (`-y`) skips it, and off a TTY refuses without it. `--create` launches a missing agent from a kind or role address — opening the worktree when the channel is new — with the text as its first prompt; an instance handle (pet name, ordinal, session id) cannot create. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. `steer` delivers to every reachable agent and prints which it reached and which it skipped, so a blocked or paneless agent skips while the rest still send. The audit event records metadata and text length, not message content.
 
-Target resolution, the bracketed-paste mechanism, and pane-answering resolver behavior are covered in [harness.md → Steering and queuing live agents](../../internals/agents/harness.md#steering-and-queuing-live-agents) and [resolver internals](../../internals/agents/resolvers.md).
+Target resolution, the bracketed-paste mechanism, and pane-answering resolver behavior are covered in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue) and [resolver internals](../../internals/agents/resolvers.md).
 
 ## Queue The Next Message
 
@@ -149,7 +149,7 @@ The bare form and `queue add` do the same work and take an `@`-mention. A select
 
 Delivery is FIFO per agent, and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap.
 
-Queued delivery requires installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, delivery walk, and hazards are in [harness.md → Steering and queuing live agents](../../internals/agents/harness.md#steering-and-queuing-live-agents).
+Queued delivery requires installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, delivery walk, and hazards are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 
 ## Drive Panes
 
@@ -212,4 +212,4 @@ rimz worktree remove <NAME> [--force]
 
 `list` shows Rimz-owned worktrees for the current repo as the channels they are: each row carries the worktree name, branch, the `@kind` handles of the agent-colleagues working there, a dirty marker, the unmerged-count signal, and the path; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees with commits not proven merged into their base; `--force` removes anyway and keeps an unmerged branch when needed.
 
-`rimz worktree` requires a git repository. Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary user checkouts. The marker, `.worktreeinclude` seeding, the supervised cleanup decision, and the `rimz gc` sweep are in [harness.md → Rimz-owned worktrees](../../internals/agents/harness.md#rimz-owned-worktrees) and [Cleanup](../../internals/agents/harness.md#cleanup).
+`rimz worktree` requires a git repository. Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary user checkouts. The marker, `.worktreeinclude` seeding, the cleanup decision, and the `rimz gc` sweep are in [worktree.md](../../internals/agents/worktree.md).
