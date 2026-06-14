@@ -661,76 +661,30 @@ fn luminance(color: Color) -> f32 {
 }
 
 #[test]
-fn selection_band_eases_darker_from_spine_to_rail_at_truecolor() {
+fn selection_band_recesses_flat_below_selection_bg_at_truecolor() {
     let theme = truecolor_default();
-    let span = 30usize;
-    let flat = theme.selection_band().expect("a band at truecolor");
-    // The band recesses below the raw `selection_bg`: its spine starts at the
-    // midpoint of the former gradient, so the selected card sinks into a well rather
-    // than rising as a bright panel.
+    let band = theme.selection_band().expect("a band at truecolor");
+    // One flat tone, no gradient: the band recesses below the raw `selection_bg`, so
+    // the selected card sinks into a well rather than rising as a bright panel.
     assert!(
-        luminance(flat) < luminance(theme.palette.selection_bg),
-        "the spine recesses below the raw selection_bg: {} !< {}",
-        luminance(flat),
+        luminance(band) < luminance(theme.palette.selection_bg),
+        "the band recesses below the raw selection_bg: {} !< {}",
+        luminance(band),
         luminance(theme.palette.selection_bg),
-    );
-    // The spine column reads the full flat band; every column past it eases no
-    // brighter and the rail lands strictly darker — the lit-panel falloff. The
-    // per-column step is sub-cell, so adjacent columns may quantize equal, but
-    // the run never brightens and the ends differ clearly.
-    assert_eq!(theme.selection_band_at(0, span), Some(flat));
-    let mut prev = luminance(flat);
-    for col in 1..span {
-        let tone = theme.selection_band_at(col, span).expect("a band tone");
-        let lum = luminance(tone);
-        assert!(lum <= prev + 1e-3, "column {col} never eases brighter");
-        prev = lum;
-    }
-    let rail = theme
-        .selection_band_at(span - 1, span)
-        .expect("a rail tone");
-    assert!(
-        luminance(rail) < luminance(flat),
-        "the rail reads darker than the spine: {} !< {}",
-        luminance(rail),
-        luminance(flat),
     );
 }
 
 #[test]
-fn selection_band_holds_flat_at_indexed_depth() {
+fn selection_band_holds_flat_selection_bg_at_indexed_depth() {
     let theme = Theme::fixed(false);
-    let flat = theme
-        .selection_band()
-        .expect("a flat band at indexed depth");
-    for col in 0..30 {
-        assert_eq!(
-            theme.selection_band_at(col, 30),
-            Some(flat),
-            "the indexed cube keeps the band flat — the falloff is a sub-cell step",
-        );
-    }
-    assert!(
-        !theme.band_is_lit(),
-        "no lit post-pass runs at indexed depth"
-    );
+    // The indexed cube is too coarse for the sub-cell recess, so the band keeps the
+    // raw `selection_bg` fill, which lands on its own cube cell.
+    assert_eq!(theme.selection_band(), Some(theme.palette.selection_bg));
 }
 
 #[test]
 fn selection_band_drops_under_no_color() {
-    let theme = Theme::fixed(true);
-    assert_eq!(theme.selection_band(), None);
-    for col in 0..30 {
-        assert_eq!(theme.selection_band_at(col, 30), None);
-    }
-    assert!(!theme.band_is_lit());
-}
-
-#[test]
-fn band_is_lit_only_at_truecolor_depth() {
-    assert!(truecolor_default().band_is_lit());
-    assert!(!Theme::fixed(false).band_is_lit());
-    assert!(!Theme::fixed(true).band_is_lit());
+    assert_eq!(Theme::fixed(true).selection_band(), None);
 }
 
 #[test]

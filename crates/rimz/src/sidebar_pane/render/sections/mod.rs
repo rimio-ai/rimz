@@ -135,11 +135,10 @@ fn with_gutter(
     width: usize,
 ) -> Line<'static> {
     // The selected card rests on a background band: a dark fill behind every one
-    // of its lines, padding included, so the whole card reads as one lit block.
-    // At truecolor depth a post-pass ([`super::lift_selection_band`]) eases that
-    // fill a touch darker from the bright spine to the rail, giving the panel
-    // depth without splitting the composed spans. An unread non-selected card
-    // grounds in its uniform `wash` here instead — the same panel surface, a
+    // of its lines, padding included, so the whole card reads as one recessed
+    // block. At truecolor depth the band recesses a flat step below `selection_bg`
+    // ([`Theme::selection_band`]), giving the panel depth. An unread non-selected
+    // card grounds in its uniform `wash` here instead — the same panel surface, a
     // lighter tint of the selection blue. The lane bracket and chrome carry no
     // band; `NO_COLOR` drops it and the bright spine plus bold weight carry the
     // selection alone.

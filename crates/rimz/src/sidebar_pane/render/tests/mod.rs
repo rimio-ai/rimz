@@ -737,48 +737,6 @@ fn truecolor_sidebar_theme() -> Theme {
     )
 }
 
-/// A perceptual-luminance proxy for the band post-pass assertions.
-fn band_luminance(color: Color) -> f32 {
-    match color {
-        Color::Rgb(red, green, blue) => {
-            0.2126 * f32::from(red) + 0.7152 * f32::from(green) + 0.0722 * f32::from(blue)
-        }
-        other => panic!("expected an rgb band tone, got {other:?}"),
-    }
-}
-
-#[test]
-fn lift_selection_band_eases_the_band_darker_by_column_at_truecolor() {
-    let theme = truecolor_sidebar_theme();
-    let flat = theme.selection_band().expect("a truecolor band tone");
-    let width: u16 = 20;
-    let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, width, 1));
-    for cell in buf.content.iter_mut() {
-        cell.bg = flat;
-    }
-    // A non-band background (a chip-like fill) must survive untouched.
-    let chip = Color::Rgb(0xd9, 0x77, 0x57);
-    buf.content[5].bg = chip;
-
-    lift_selection_band(&mut buf, &theme);
-
-    assert_eq!(
-        buf.content[0].bg, flat,
-        "the spine column holds the full band"
-    );
-    assert_eq!(buf.content[5].bg, chip, "a non-band cell is left alone");
-    let lum = |x: usize| band_luminance(buf.content[x].bg);
-    let mut prev = lum(0);
-    for x in (1..width as usize).filter(|&x| x != 5) {
-        assert!(lum(x) <= prev + 1e-3, "column {x} never eases brighter");
-        prev = lum(x);
-    }
-    assert!(
-        lum(width as usize - 1) < lum(0),
-        "the rail reads darker than the spine",
-    );
-}
-
 #[test]
 fn lead_unread_picks_the_oldest_actionable_row() {
     let now = fixed_now();
@@ -841,20 +799,5 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
         lead_unread(&snapshot.worktree_groups),
         None,
         "an unread result alone reserves nothing — it settles bright, never leads",
-    );
-}
-
-#[test]
-fn lift_selection_band_is_a_noop_off_truecolor() {
-    let theme = Theme::fixed(false);
-    let flat = theme.selection_band().expect("a flat indexed band");
-    let mut buf = Buffer::empty(ratatui::layout::Rect::new(0, 0, 8, 1));
-    for cell in buf.content.iter_mut() {
-        cell.bg = flat;
-    }
-    lift_selection_band(&mut buf, &theme);
-    assert!(
-        buf.content.iter().all(|cell| cell.bg == flat),
-        "the indexed band stays flat — the lit post-pass is truecolor-only",
     );
 }

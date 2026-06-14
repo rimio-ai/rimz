@@ -48,7 +48,6 @@ use crate::config::{AnimationSpec, ProviderTabsMode};
 use crate::feed::AgentStatus;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
-use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::text::Text;
 use ratatui::widgets::{Paragraph, Wrap};
@@ -192,12 +191,6 @@ pub fn draw_with_ui(
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
     let theme = Theme::for_sidebar(&snapshot.sidebar);
-    // The lit-panel finish: at truecolor depth, ease the selected card's flat
-    // background band a touch darker from its bright spine to the rail, so the
-    // selection anchor reads as one lit panel with depth. A steady (non-animated)
-    // background recolor over the cells composition already banded — so the
-    // composed spans stay whole and every span-content test reads unchanged.
-    lift_selection_band(frame.buffer_mut(), &theme);
     // The transition garnish tier: a color-only effects pass over the buffer
     // the paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
@@ -214,36 +207,6 @@ pub fn draw_with_ui(
             frame.buffer_mut(),
             area,
         );
-    }
-}
-
-/// Ease the selected card's flat background band darker per column at truecolor
-/// depth — the recessed "lit panel" finish. Composition lays the band as one flat
-/// tone (`Theme::selection_band`); here each banded cell takes its column's reading
-/// from `Theme::selection_band_at`, the recessed spine tone at column 0 and a touch
-/// darker toward the rail, so the selection anchor reads as one recessed lit panel
-/// with depth. Only cells carrying the exact flat band tone are touched, so the
-/// provider and make-up chip fills and every other background are left alone. A
-/// no-op at indexed depth and under `NO_COLOR`, where the band is flat or gone —
-/// the same subtle-step-falls-back-to-flat rule the breathe lift follows — so
-/// the composed spans the golden frames and span tests read stay untouched.
-fn lift_selection_band(buffer: &mut Buffer, theme: &Theme) {
-    if !theme.band_is_lit() {
-        return;
-    }
-    let Some(flat) = theme.selection_band() else {
-        return;
-    };
-    let width = buffer.area.width as usize;
-    if width == 0 {
-        return;
-    }
-    for (index, cell) in buffer.content.iter_mut().enumerate() {
-        if cell.bg == flat
-            && let Some(tone) = theme.selection_band_at(index % width, width)
-        {
-            cell.bg = tone;
-        }
     }
 }
 
