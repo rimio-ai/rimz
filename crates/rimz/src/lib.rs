@@ -57,7 +57,7 @@ pub use crate::ids::{
     WorkspaceId,
 };
 pub use crate::ledger::{
-    AgentCard, Ledger, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,
+    AgentCard, Ledger, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, RuntimePaths,
     RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
     SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount,
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, TruthNotice,

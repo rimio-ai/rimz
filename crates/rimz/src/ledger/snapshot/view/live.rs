@@ -65,6 +65,7 @@ impl SidebarSnapshot {
             self.panes_observed_at_ms.or(self.panes_produced_at_ms),
             self.now,
         );
+        self.agent_panes = projection.agent_panes;
         self.worktree_groups = build_worktree_groups_from_rows(
             projection.rows,
             &self.agents,

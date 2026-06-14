@@ -56,7 +56,11 @@ pub struct AgentLaunchPayload {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AgentSteeredPayload {
     pub kind: AgentKind,
-    pub agent_id: AgentSessionId,
+    /// The steered session, when one is bound. A bare agent pane addressed by
+    /// `@kind` before its first turn has no session id yet, so the audit record
+    /// names only the kind and pane rather than minting a placeholder.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentSessionId>,
     pub pane_id: PaneId,
     pub forced: bool,
     pub text_len: usize,
@@ -65,7 +69,7 @@ pub struct AgentSteeredPayload {
 impl AgentSteeredPayload {
     pub fn new(
         kind: AgentKind,
-        agent_id: AgentSessionId,
+        agent_id: Option<AgentSessionId>,
         pane_id: PaneId,
         forced: bool,
         text_len: usize,
@@ -613,7 +617,7 @@ mod tests {
         let workspace = workspace();
         let payload = AgentSteeredPayload::new(
             AgentKind::new_unchecked("claude"),
-            AgentSessionId::from("sess-1"),
+            Some(AgentSessionId::from("sess-1")),
             PaneId::from_parts(MuxName::Tmux, "%1"),
             true,
             8,
@@ -644,6 +648,26 @@ mod tests {
             panic!("agent.steered decodes to its typed kind");
         };
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn agent_steered_without_session_omits_the_agent_id() {
+        // Steering a bare agent pane before its first turn has no session id; the
+        // audit record drops the field rather than carrying an empty placeholder.
+        let payload = AgentSteeredPayload::new(
+            AgentKind::new_unchecked("codex"),
+            None,
+            PaneId::from_parts(MuxName::Zellij, "terminal_7"),
+            false,
+            4,
+        );
+        let value = serde_json::to_value(&payload).unwrap();
+        assert!(
+            value.get("agent_id").is_none(),
+            "no session means no agent_id on the wire: {value}"
+        );
+        let decoded: AgentSteeredPayload = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded.agent_id, None);
     }
 
     #[test]

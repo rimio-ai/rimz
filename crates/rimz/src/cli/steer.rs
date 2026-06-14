@@ -1,12 +1,13 @@
 //! `rimz steer` — send state-gated text to live agent panes.
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use clap::Args;
 
 use super::{GlobalFlags, current_channel, open_ledger};
 use rimz::feed::{AgentState, pending_ask_for};
 use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
+use rimz::{PaneAgent, SidebarSnapshot};
 
 #[derive(Debug, Args)]
 pub struct SteerArgs {
@@ -30,11 +31,12 @@ pub struct SteerArgs {
     text: Vec<String>,
 }
 
-/// What happened to one agent in a fan-out.
+/// What happened to one agent in a fan-out. Every resolved target carries a live
+/// pane (it came from the producer's pane fold), so the only skip is a pending
+/// ask reserving the next input.
 enum Outcome {
     Sent(String),
     SkippedPending { label: String, request_id: String },
-    SkippedNoPane { label: String },
 }
 
 pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
@@ -45,33 +47,34 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
     let text = args.text.join(" ");
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
     let channel = current_channel(&workspace);
-    let agents = super::resolve_agent_many(
+    let targets = super::resolve_pane_targets(
         &snapshot,
         &args.target,
         args.worktree.as_deref(),
         channel.as_deref(),
     )?;
 
-    if agents.len() > 1 && !args.yes {
-        super::confirm_fanout("Steer", &args.target, &agents)?;
+    if targets.len() > 1 && !args.yes {
+        let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
+        super::confirm_fanout("Steer", &args.target, &labels)?;
     }
 
-    let mut outcomes = Vec::with_capacity(agents.len());
-    for agent in &agents {
+    let mut outcomes = Vec::with_capacity(targets.len());
+    for target in &targets {
         outcomes.push(steer_one(
             &workspace,
             &ledger,
             &snapshot,
-            agent,
+            target,
             &text,
             args.force,
             !args.no_enter,
         )?);
     }
 
-    report(&args.target, agents.len(), &outcomes)
+    report(&args.target, targets.len(), &outcomes)
 }
 
 /// Type into one agent's pane, recording the steer between the paste and the
@@ -80,14 +83,17 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
 fn steer_one(
     workspace: &ResolvedWorkspace,
     ledger: &rimz::Ledger,
-    snapshot: &rimz::SidebarSnapshot,
-    agent: &AgentState,
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
     text: &str,
     force: bool,
     enter: bool,
 ) -> Result<Outcome> {
-    let label = super::agent_label(agent);
+    let label = target.label();
+    // A pending ask reserves the next input — but only a bound session can hold
+    // one; a lazy pane has no feed item, so it always sends.
     if !force
+        && let Some(agent) = bound_agent(snapshot, target)
         && let Some(ask) = pending_ask_for(
             agent,
             snapshot
@@ -101,30 +107,39 @@ fn steer_one(
             request_id: ask.request_id.to_string(),
         });
     }
-    let Some(pane) = agent.pane.as_ref() else {
-        return Ok(Outcome::SkippedNoPane { label });
-    };
-    let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    super::pane::paste_text(backend.as_ref(), &pane.pane_id, text)?;
+    let pane_id = &target.pane_id;
+    let backend = rimz::mux::backend_for(pane_id.mux());
+    super::pane::paste_text(backend.as_ref(), pane_id, text)?;
     // Record the steer once the text lands and before the submit keystroke, so a
     // submitted steer is always preceded by its audit event. A failed Enter then
     // returns an error over text that is already accounted for, never untracked.
+    // A lazy pane has no session id yet, so the record names only kind and pane.
     let event = EventEnvelope::agent_steered(
         workspace.workspace_id.clone(),
         workspace.session_name.clone(),
         AgentSteeredPayload::new(
-            agent.kind.clone(),
-            agent.agent_id.clone(),
-            pane.pane_id.clone(),
+            target.kind.clone(),
+            target.agent_id.clone(),
+            pane_id.clone(),
             force,
             text.len(),
         ),
     );
     ledger.append_event(&event)?;
     if enter {
-        super::pane::send_enter(backend.as_ref(), &pane.pane_id)?;
+        super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
     Ok(Outcome::Sent(label))
+}
+
+/// The rollup session behind a bound pane target, for the pending-ask gate.
+/// A lazy pane carries no session, so it never gates.
+fn bound_agent<'a>(snapshot: &'a SidebarSnapshot, target: &PaneAgent) -> Option<&'a AgentState> {
+    let agent_id = target.agent_id.as_ref()?;
+    snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.kind == target.kind && &agent.agent_id == agent_id)
 }
 
 /// Report a fan-out. A lone agent that was skipped fails with the same message
@@ -146,9 +161,6 @@ fn report(target: &str, total: usize, outcomes: &[Outcome]) -> Result<()> {
             Some(Outcome::SkippedPending { label, request_id }) => {
                 bail!("{label} has pending ask {request_id}; resolve it or pass --force")
             }
-            Some(Outcome::SkippedNoPane { label }) => {
-                bail!("{label} has no bound pane; run `rimz pane list`")
-            }
             _ => bail!("no agent matches `{target}`"),
         }
     }
@@ -156,23 +168,12 @@ fn report(target: &str, total: usize, outcomes: &[Outcome]) -> Result<()> {
         Outcome::SkippedPending { label, .. } => Some(label.as_str()),
         _ => None,
     });
-    let no_pane = labels(|outcome| match outcome {
-        Outcome::SkippedNoPane { label } => Some(label.as_str()),
-        _ => None,
-    });
     let mut line = format!("steered {} agent(s)", sent.len());
     if !sent.is_empty() {
         line.push_str(&format!(": {}", sent.join(", ")));
     }
-    let mut skips = Vec::new();
     if !pending.is_empty() {
-        skips.push(format!("pending ask: {}", pending.join(", ")));
-    }
-    if !no_pane.is_empty() {
-        skips.push(format!("no pane: {}", no_pane.join(", ")));
-    }
-    if !skips.is_empty() {
-        line.push_str(&format!("; skipped {}", skips.join("; ")));
+        line.push_str(&format!("; skipped pending ask: {}", pending.join(", ")));
     }
     #[expect(clippy::print_stdout, reason = "steer fan-out summary")]
     {

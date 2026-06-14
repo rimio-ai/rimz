@@ -10,6 +10,7 @@ use tracing::debug;
 
 use super::fold::agent_rollup_with_carryover;
 use super::panes::SidebarOwnView;
+use super::row::PaneAgent;
 use crate::agents::SpendTally;
 use crate::feed::{AgentState, FeedItem, FeedStatus, Surface};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, WorkspaceId};
@@ -123,6 +124,15 @@ pub struct SidebarSnapshot {
     /// back to descriptor defaults.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub lazy_agent_default_models: BTreeMap<String, String>,
+    /// Every live agent pane the producer bound during the pane fold, uncapped
+    /// and built at the binding site — the authoritative source for command
+    /// resolution (`steer`), so a target reaches exactly the agent panes the
+    /// producer saw rather than the capped, display-shaped `worktree_groups`
+    /// rows. Holds bound sessions (with their pane, even when the session's own
+    /// `agent_id` carries no stamped pane) and lazy panes with no session yet.
+    /// Frame-derived: the pure rollup leaves it empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub agent_panes: Vec<PaneAgent>,
     /// The calling sidebar's own-view summary: how many sibling panes share its
     /// tab/window, whether its own pane holds focus, and which sibling is
     /// focused. The renderer's self-close and selection-sync read it instead of
@@ -311,6 +321,7 @@ impl SidebarSnapshot {
             agents,
             wired_lazy_kinds: Vec::new(),
             lazy_agent_default_models: BTreeMap::new(),
+            agent_panes: Vec::new(),
             own_view: None,
             only_daemon_view_remains: false,
             project_root: None,

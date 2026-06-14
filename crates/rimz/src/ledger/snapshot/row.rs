@@ -4,10 +4,10 @@
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{AgentContext, AgentTokenUsage};
 use crate::agents::lifecycle::TurnPhase;
+use crate::agents::{AgentContext, AgentTokenUsage};
 use crate::feed::{AgentStatus, ContextSeverity, PaneRef, Surface};
-use crate::ids::{RequestId, ResolverId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId};
 
 /// One frame-admitted sidebar row. The base names the row and pane; [`RowCard`]
 /// carries the fields that make sense for the row kind. Serde flattens the card
@@ -144,6 +144,42 @@ impl SidebarRow {
     /// The latest call's composition when the rich token blob is absent.
     pub fn call_split(&self) -> Option<RowCallSplit> {
         self.as_agent().and_then(AgentCard::call_split)
+    }
+}
+
+/// A live agent pane the producer bound during the pane fold: a running agent
+/// CLI and the pane it occupies. Built uncapped at the binding site, so command
+/// resolution (`steer`) addresses exactly the live agent panes the producer saw
+/// — not the capped, display-shaped [`SidebarRow`]s. A bound session carries its
+/// `agent_id`, pet name, and ordinal; a lazy-registering agent before its first
+/// turn carries only its kind and pane.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PaneAgent {
+    pub kind: AgentKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind_ordinal: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// The bound session, or `None` for a lazy pane with no session yet.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<AgentSessionId>,
+    pub pane_id: PaneId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_branch: Option<String>,
+}
+
+impl PaneAgent {
+    /// A human handle: pet name, else `kind-ordinal`, else kind.
+    pub fn label(&self) -> String {
+        match &self.name {
+            Some(name) => name.clone(),
+            None => match self.kind_ordinal {
+                Some(ordinal) => format!("{}-{}", self.kind, ordinal),
+                None => self.kind.to_string(),
+            },
+        }
     }
 }
 

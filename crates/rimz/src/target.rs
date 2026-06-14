@@ -14,7 +14,7 @@
 
 use crate::feed::AgentState;
 use crate::ids::PaneId;
-use crate::ledger::snapshot::SidebarSnapshot;
+use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
@@ -69,19 +69,102 @@ enum Target {
     },
 }
 
-/// Resolve a target to exactly one agent. `@all` or a kind that fans out to
-/// several agents is [`TargetErr::Ambiguous`] here — pick a more specific
-/// mention. Used by the single-agent commands (`show`/`focus`/`wait`/`stop`,
-/// `queue clear`/`list`).
+/// The shared accessor surface over the two resolution sources: rollup sessions
+/// (`&AgentState`, used by the management and queue commands) and the live agent
+/// panes the producer bound (`&PaneAgent`, used by `steer`). One matcher set
+/// serves both; each command chooses the source it resolves over.
+trait Candidate<'a>: Copy {
+    fn kind(self) -> &'a str;
+    fn kind_ordinal(self) -> Option<u32>;
+    fn name(self) -> Option<&'a str>;
+    fn session_id(self) -> Option<&'a str>;
+    fn worktree_branch(self) -> Option<&'a str>;
+    fn worktree_path(self) -> Option<&'a str>;
+    fn pane_id(self) -> Option<&'a PaneId>;
+
+    /// The channel label: branch, else worktree-directory basename, else a
+    /// placeholder.
+    fn channel_label(self) -> String {
+        self.worktree_branch()
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                self.worktree_path()
+                    .and_then(|path| path.rsplit('/').next())
+                    .map(ToOwned::to_owned)
+            })
+            .unwrap_or_else(|| "no-worktree".to_owned())
+    }
+
+    fn in_worktree(self, filter: &str) -> bool {
+        self.worktree_branch() == Some(filter)
+            || self
+                .worktree_path()
+                .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
+    }
+}
+
+impl<'a> Candidate<'a> for &'a AgentState {
+    fn kind(self) -> &'a str {
+        self.kind.as_str()
+    }
+    fn kind_ordinal(self) -> Option<u32> {
+        self.kind_ordinal
+    }
+    fn name(self) -> Option<&'a str> {
+        self.name.as_deref()
+    }
+    fn session_id(self) -> Option<&'a str> {
+        Some(self.agent_id.as_str())
+    }
+    fn worktree_branch(self) -> Option<&'a str> {
+        self.worktree_branch.as_deref()
+    }
+    fn worktree_path(self) -> Option<&'a str> {
+        self.worktree_path.as_deref()
+    }
+    fn pane_id(self) -> Option<&'a PaneId> {
+        self.pane.as_ref().map(|pane| &pane.pane_id)
+    }
+}
+
+impl<'a> Candidate<'a> for &'a PaneAgent {
+    fn kind(self) -> &'a str {
+        self.kind.as_str()
+    }
+    fn kind_ordinal(self) -> Option<u32> {
+        self.kind_ordinal
+    }
+    fn name(self) -> Option<&'a str> {
+        self.name.as_deref()
+    }
+    fn session_id(self) -> Option<&'a str> {
+        self.agent_id.as_ref().map(|id| id.as_str())
+    }
+    fn worktree_branch(self) -> Option<&'a str> {
+        self.worktree_branch.as_deref()
+    }
+    fn worktree_path(self) -> Option<&'a str> {
+        self.worktree_path.as_deref()
+    }
+    fn pane_id(self) -> Option<&'a PaneId> {
+        Some(&self.pane_id)
+    }
+}
+
+/// Resolve a target to exactly one rollup agent. `@all` or a kind that fans out
+/// to several agents is [`TargetErr::Ambiguous`] here — pick a more specific
+/// mention. Used by the single-agent management commands (`show`/`focus`/`wait`/
+/// `stop`, `queue clear`/`list`).
 pub fn resolve_one<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<&'a AgentState, TargetErr> {
-    let matches = resolve_many(snapshot, raw, worktree_flag, current_channel)?;
+    let candidates = root_agents(snapshot);
+    let matches = resolve_mentions(raw, worktree_flag, current_channel, &candidates)?;
     match matches.as_slice() {
-        [agent] => Ok(agent),
+        [one] => Ok(one),
         many => Err(TargetErr::Ambiguous {
             target: raw.to_owned(),
             candidates: render_candidates(many),
@@ -89,25 +172,82 @@ pub fn resolve_one<'a>(
     }
 }
 
-/// Resolve a target to every matching agent (fan-out). Empty is an error.
-/// Used by the broadcast commands (`steer`, `queue add`).
+/// Resolve a target to every matching rollup agent (fan-out). Empty is an error.
+/// Used by `queue add` and management fan-out reads; `steer` uses
+/// [`resolve_targets`].
 pub fn resolve_many<'a>(
     snapshot: &'a SidebarSnapshot,
     raw: &str,
     worktree_flag: Option<&str>,
     current_channel: Option<&str>,
 ) -> Result<Vec<&'a AgentState>, TargetErr> {
+    let candidates = root_agents(snapshot);
+    resolve_mentions(raw, worktree_flag, current_channel, &candidates)
+}
+
+/// Resolve a `steer` target to every matching live agent pane: bound sessions
+/// and lazy (sessionless) panes alike, each addressed by the pane the producer
+/// bound this fold — so a daemon-routed session reaches its pane and a just
+/// started agent is reachable before its first turn. Empty is an error.
+pub fn resolve_targets<'a>(
+    snapshot: &'a SidebarSnapshot,
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> Result<Vec<&'a PaneAgent>, TargetErr> {
+    let candidates: Vec<&PaneAgent> = snapshot.agent_panes.iter().collect();
+    resolve_mentions(raw, worktree_flag, current_channel, &candidates)
+}
+
+/// Whether `raw` matches at least one lazy (sessionless) agent pane in its
+/// channel — the signal `queue` reads to point an unbound match at `steer`
+/// rather than report a generic miss.
+pub fn unbound_pane_in_channel(
+    snapshot: &SidebarSnapshot,
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> bool {
+    resolve_targets(snapshot, raw, worktree_flag, current_channel)
+        .is_ok_and(|targets| targets.iter().any(|target| target.agent_id.is_none()))
+}
+
+fn root_agents(snapshot: &SidebarSnapshot) -> Vec<&AgentState> {
+    snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .collect()
+}
+
+/// The shared mention/pane resolution over any candidate source. `candidates`
+/// are the roots in every channel; the channel narrows them for the match while
+/// the unfiltered set seeds the channel-aware miss.
+fn resolve_mentions<'a, C: Candidate<'a>>(
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+    candidates: &[C],
+) -> Result<Vec<C>, TargetErr> {
     match parse_target(raw)? {
-        Target::Pane(pane) => Ok(vec![resolve_by_pane(snapshot, raw, &pane)?]),
+        Target::Pane(pane) => resolve_by_pane(raw, &pane, candidates).map(|one| vec![one]),
         Target::Mention { selector, channel } => {
             let channel =
                 effective_channel(raw, channel.as_deref(), worktree_flag, current_channel)?;
-            let agents = live_root_agents(snapshot, channel.as_deref());
-            let matches = select(&selector, &agents);
+            let in_channel: Vec<C> = candidates
+                .iter()
+                .copied()
+                .filter(|candidate| {
+                    channel
+                        .as_deref()
+                        .is_none_or(|filter| candidate.in_worktree(filter))
+                })
+                .collect();
+            let matches = select(&selector, &in_channel);
             if !matches.is_empty() {
                 return Ok(matches);
             }
-            Err(no_match_error(snapshot, raw, &selector, channel))
+            Err(no_match_error(candidates, raw, &selector, channel))
         }
     }
 }
@@ -162,56 +302,58 @@ fn classify_selector(selector: &str) -> AgentSelector {
     AgentSelector::NameOrSession(selector.to_owned())
 }
 
-fn select<'a>(selector: &AgentSelector, agents: &[&'a AgentState]) -> Vec<&'a AgentState> {
+fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> Vec<C> {
     match selector {
-        AgentSelector::All => agents.to_vec(),
-        AgentSelector::Kind(kind) => agents
+        AgentSelector::All => candidates.to_vec(),
+        AgentSelector::Kind(kind) => candidates
             .iter()
             .copied()
-            .filter(|agent| agent.kind.as_str() == kind)
+            .filter(|candidate| candidate.kind() == kind)
             .collect(),
-        AgentSelector::KindOrdinal(kind, ordinal) => agents
+        // An ordinal, pet name, or session prefix names a bound session; a lazy
+        // pane carries none, so the `None` accessors drop it from those arms.
+        AgentSelector::KindOrdinal(kind, ordinal) => candidates
             .iter()
             .copied()
-            .filter(|agent| agent.kind.as_str() == kind && agent.kind_ordinal == Some(*ordinal))
+            .filter(|candidate| {
+                candidate.kind() == kind && candidate.kind_ordinal() == Some(*ordinal)
+            })
             .collect(),
         AgentSelector::NameOrSession(selector) => {
-            let by_name: Vec<&AgentState> = agents
+            let by_name: Vec<C> = candidates
                 .iter()
                 .copied()
-                .filter(|agent| agent.name.as_deref() == Some(selector.as_str()))
+                .filter(|candidate| candidate.name() == Some(selector.as_str()))
                 .collect();
             if !by_name.is_empty() {
                 return by_name;
             }
-            let by_prefix: Vec<&AgentState> = agents
+            let by_prefix: Vec<C> = candidates
                 .iter()
                 .copied()
-                .filter(|agent| agent.agent_id.as_str().starts_with(selector.as_str()))
+                .filter(|candidate| {
+                    candidate
+                        .session_id()
+                        .is_some_and(|id| id.starts_with(selector.as_str()))
+                })
                 .collect();
-            prefer_exact_session_raw(selector, by_prefix)
+            prefer_exact_session(selector, by_prefix)
         }
     }
 }
 
-fn resolve_by_pane<'a>(
-    snapshot: &'a SidebarSnapshot,
+fn resolve_by_pane<'a, C: Candidate<'a>>(
     raw: &str,
     pane_id: &PaneId,
-) -> Result<&'a AgentState, TargetErr> {
-    let live_agents = live_root_agents(snapshot, None);
-    let matches: Vec<&AgentState> = live_agents
+    candidates: &[C],
+) -> Result<C, TargetErr> {
+    let matches: Vec<C> = candidates
         .iter()
         .copied()
-        .filter(|agent| {
-            agent
-                .pane
-                .as_ref()
-                .is_some_and(|pane| pane.pane_id == *pane_id)
-        })
+        .filter(|candidate| candidate.pane_id() == Some(pane_id))
         .collect();
     match matches.as_slice() {
-        [agent] => Ok(agent),
+        [one] => Ok(*one),
         [] => Err(TargetErr::PaneUnbound {
             pane_id: pane_id.clone(),
         }),
@@ -220,18 +362,6 @@ fn resolve_by_pane<'a>(
             candidates: render_candidates(many),
         }),
     }
-}
-
-fn live_root_agents<'a>(
-    snapshot: &'a SidebarSnapshot,
-    channel_filter: Option<&str>,
-) -> Vec<&'a AgentState> {
-    snapshot
-        .agents
-        .iter()
-        .filter(|agent| agent.parent_agent_id.is_none())
-        .filter(|agent| channel_filter.is_none_or(|filter| agent_in_worktree(agent, filter)))
-        .collect()
 }
 
 /// Reconcile the inline `#channel` with the `--worktree` flag (mismatch is an
@@ -267,38 +397,26 @@ fn parse_ordinal_selector(selector: &str) -> Option<(&str, u32)> {
     (ordinal > 0).then_some((kind, ordinal))
 }
 
-fn prefer_exact_session_raw<'a>(
-    selector: &str,
-    candidates: Vec<&'a AgentState>,
-) -> Vec<&'a AgentState> {
-    let exact: Vec<&AgentState> = candidates
+fn prefer_exact_session<'a, C: Candidate<'a>>(selector: &str, candidates: Vec<C>) -> Vec<C> {
+    let exact: Vec<C> = candidates
         .iter()
         .copied()
-        .filter(|agent| agent.agent_id.as_str() == selector)
+        .filter(|candidate| candidate.session_id() == Some(selector))
         .collect();
     if exact.is_empty() { candidates } else { exact }
-}
-
-fn agent_in_worktree(agent: &AgentState, filter: &str) -> bool {
-    agent.worktree_branch.as_deref() == Some(filter)
-        || agent
-            .worktree_path
-            .as_deref()
-            .is_some_and(|path| path == filter || path.rsplit('/').next() == Some(filter))
 }
 
 /// Build the right miss for a mention that matched nothing. When a channel was
 /// in play and the selector matches *elsewhere*, name those channels so the
 /// fix is obvious; otherwise fall back to the generic did-you-mean miss.
-fn no_match_error(
-    snapshot: &SidebarSnapshot,
+fn no_match_error<'a, C: Candidate<'a>>(
+    everywhere: &[C],
     raw: &str,
     selector: &AgentSelector,
     channel: Option<String>,
 ) -> TargetErr {
-    let everywhere = live_root_agents(snapshot, None);
     if let Some(channel) = channel {
-        let elsewhere = select(selector, &everywhere);
+        let elsewhere = select(selector, everywhere);
         if !elsewhere.is_empty() {
             return TargetErr::NoMatchInChannel {
                 target: raw.to_owned(),
@@ -309,31 +427,15 @@ fn no_match_error(
     }
     TargetErr::NoMatch {
         target: raw.to_owned(),
-        suggestion: suggest_names(raw, &everywhere),
+        suggestion: suggest_names(raw, everywhere),
     }
 }
 
-/// The channel label for an agent: its branch, else its worktree directory
-/// basename, else a placeholder.
-fn agent_channel_label(agent: &AgentState) -> String {
-    agent
-        .worktree_branch
-        .clone()
-        .or_else(|| {
-            agent
-                .worktree_path
-                .as_deref()
-                .and_then(|path| path.rsplit('/').next())
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| "no-worktree".to_owned())
-}
-
 /// A deduplicated, quoted list of the channels a selector matches.
-fn channel_list(agents: &[&AgentState]) -> String {
-    let mut names: Vec<String> = agents
+fn channel_list<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
+    let mut names: Vec<String> = candidates
         .iter()
-        .map(|agent| agent_channel_label(agent))
+        .map(|candidate| candidate.channel_label())
         .collect();
     names.sort_unstable();
     names.dedup();
@@ -348,21 +450,28 @@ fn channel_list(agents: &[&AgentState]) -> String {
 /// a `(+K more)` count — enough to disambiguate a real clash, never a fleet dump.
 const CANDIDATE_CAP: usize = 8;
 
-fn render_candidates(candidates: &[&AgentState]) -> String {
+fn render_candidates<'a, C: Candidate<'a>>(candidates: &[C]) -> String {
     let mut rendered = candidates
         .iter()
         .take(CANDIDATE_CAP)
-        .map(|agent| {
-            let name = agent.name.as_deref().unwrap_or("unnamed");
-            let kind = match agent.kind_ordinal {
-                Some(ordinal) => format!("{}-{}", agent.kind, ordinal),
-                None => agent.kind.to_string(),
+        .map(|candidate| {
+            let name = candidate.name().unwrap_or_else(|| {
+                // A bound session with no pet name reads `unnamed`; a lazy pane
+                // with no session reads `unbound` so the miss shows it has none.
+                if candidate.session_id().is_some() {
+                    "unnamed"
+                } else {
+                    "unbound"
+                }
+            });
+            let kind = match candidate.kind_ordinal() {
+                Some(ordinal) => format!("{}-{}", candidate.kind(), ordinal),
+                None => candidate.kind().to_owned(),
             };
-            let worktree = agent_channel_label(agent);
-            let pane = agent
-                .pane
-                .as_ref()
-                .map(|pane| pane.pane_id.to_string())
+            let worktree = candidate.channel_label();
+            let pane = candidate
+                .pane_id()
+                .map(ToString::to_string)
                 .unwrap_or_else(|| "no-pane".to_owned());
             format!("{name} {kind} {worktree} {pane}")
         })
@@ -386,14 +495,14 @@ fn selector_of(raw: &str) -> &str {
 /// the selector by prefix, substring, or a shared name token (case-insensitive),
 /// capped at three. Empty when nothing is close, so the error stays a bare
 /// pointer to `rimz agents list`.
-fn suggest_names(raw: &str, live_agents: &[&AgentState]) -> String {
+fn suggest_names<'a, C: Candidate<'a>>(raw: &str, candidates: &[C]) -> String {
     let selector = selector_of(raw).to_lowercase();
     if selector.is_empty() {
         return String::new();
     }
-    let mut names: Vec<&str> = live_agents
+    let mut names: Vec<&str> = candidates
         .iter()
-        .filter_map(|agent| agent.name.as_deref())
+        .filter_map(|candidate| candidate.name())
         .filter(|name| {
             let lower = name.to_lowercase();
             lower.contains(&selector)
@@ -748,5 +857,164 @@ mod tests {
             last_activity: now,
             registered_at: Some(now),
         }
+    }
+
+    /// A lazy (sessionless) agent pane as the producer would emit it into
+    /// `agent_panes` — kind and pane only.
+    fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
+        PaneAgent {
+            kind: AgentKind::new_unchecked(kind),
+            kind_ordinal: None,
+            name: None,
+            agent_id: None,
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+            worktree_path: Some(worktree_path.to_owned()),
+            worktree_branch: None,
+        }
+    }
+
+    /// A bound agent pane: a session with its pet name, ordinal, and the pane the
+    /// producer bound it to (which may differ from the session's own record).
+    fn bound_pane(
+        kind: &str,
+        ordinal: u32,
+        name: &str,
+        session: &str,
+        branch: &str,
+        raw_pane: &str,
+    ) -> PaneAgent {
+        PaneAgent {
+            kind: AgentKind::new_unchecked(kind),
+            kind_ordinal: Some(ordinal),
+            name: Some(name.to_owned()),
+            agent_id: Some(AgentSessionId::from(session)),
+            pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
+            worktree_path: Some(format!("/repo/{branch}")),
+            worktree_branch: Some(branch.to_owned()),
+        }
+    }
+
+    #[test]
+    fn at_kind_matches_a_lazy_agent_pane() {
+        // A bare codex pane (no session yet) is a steer target by kind.
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+
+        let targets = resolve_targets(&snapshot, "@codex", None, Some("shimmer-effect")).unwrap();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].kind.as_str(), "codex");
+        assert_eq!(targets[0].agent_id, None);
+        assert_eq!(targets[0].pane_id.to_string(), "zellij:terminal_170");
+    }
+
+    #[test]
+    fn lazy_panes_skip_ordinal_pet_name_and_session_selectors() {
+        // A lazy pane carries no ordinal, pet name, or session id — only
+        // `@kind`/`@all` reach it.
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+
+        assert!(matches!(
+            resolve_targets(&snapshot, "@codex-1", None, Some("shimmer-effect")),
+            Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
+        ));
+        assert!(matches!(
+            resolve_targets(&snapshot, "@swift-otter", None, Some("shimmer-effect")),
+            Err(TargetErr::NoMatch { .. })
+        ));
+    }
+
+    #[test]
+    fn bound_pane_reaches_its_producer_bound_pane_by_petname_and_ordinal() {
+        // A cwd-bound session is steerable by pet name, ordinal, and session
+        // prefix, each landing on the pane the producer bound — even when the
+        // rollup session itself carries no stamped pane.
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![bound_pane(
+            "codex",
+            1,
+            "swift-otter",
+            "session-x",
+            "shimmer-effect",
+            "terminal_5",
+        )];
+
+        for raw in ["@swift-otter", "@codex-1", "@session-x"] {
+            let targets = resolve_targets(&snapshot, raw, None, Some("shimmer-effect")).unwrap();
+            assert_eq!(targets.len(), 1, "{raw}");
+            assert_eq!(targets[0].pane_id.to_string(), "zellij:terminal_5", "{raw}");
+            assert_eq!(
+                targets[0].agent_id.as_ref().map(AgentSessionId::as_str),
+                Some("session-x"),
+                "{raw}"
+            );
+        }
+    }
+
+    #[test]
+    fn management_resolution_never_sees_agent_panes() {
+        // resolve_many resolves the rollup; agent_panes never leaks into it.
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+
+        assert!(matches!(
+            resolve_many(&snapshot, "@codex", None, Some("shimmer-effect")),
+            Err(TargetErr::NoMatch { .. }) | Err(TargetErr::NoMatchInChannel { .. })
+        ));
+    }
+
+    #[test]
+    fn unbound_pane_in_channel_flags_only_lazy_matches() {
+        // The signal queue reads: true for a lazy match, false for a bound one.
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![lazy_pane("codex", "/repo/shimmer-effect", "terminal_170")];
+        assert!(unbound_pane_in_channel(
+            &snapshot,
+            "@codex",
+            None,
+            Some("shimmer-effect")
+        ));
+
+        snapshot.agent_panes = vec![bound_pane(
+            "codex",
+            1,
+            "swift-otter",
+            "s1",
+            "shimmer-effect",
+            "terminal_5",
+        )];
+        assert!(!unbound_pane_in_channel(
+            &snapshot,
+            "@codex",
+            None,
+            Some("shimmer-effect")
+        ));
+    }
+
+    #[test]
+    fn at_all_fans_to_in_channel_panes_only() {
+        let mut snapshot = empty_snapshot();
+        snapshot.agent_panes = vec![
+            bound_pane(
+                "claude",
+                1,
+                "calm-fox",
+                "session-c",
+                "shimmer-effect",
+                "terminal_1",
+            ),
+            lazy_pane("codex", "/repo/shimmer-effect", "terminal_170"),
+            lazy_pane("codex", "/repo/other", "terminal_9"),
+        ];
+
+        let kinds: Vec<String> = resolve_targets(&snapshot, "@all", None, Some("shimmer-effect"))
+            .unwrap()
+            .iter()
+            .map(|target| target.kind.to_string())
+            .collect();
+        // bound claude + the in-channel lazy codex; the other channel's pane is out.
+        assert_eq!(kinds.len(), 2);
+        assert!(kinds.contains(&"claude".to_owned()));
+        assert!(kinds.contains(&"codex".to_owned()));
     }
 }

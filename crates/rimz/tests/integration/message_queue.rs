@@ -336,9 +336,10 @@ fn steer_fanout_summary() {
     );
 }
 
-/// A skipped agent never aborts a broadcast: one targeted agent has no bound
-/// pane, so it is skipped while the other still receives the steer, and the
-/// command summarizes and succeeds rather than failing on the first skip.
+/// A skipped agent never aborts a broadcast: both targeted agents have a pane,
+/// but one holds a pending ask, so it is skipped while the other still receives
+/// the steer, and the command summarizes and succeeds rather than failing on the
+/// first skip.
 #[test]
 fn steer_fanout_skips_blocked_and_steers_the_rest() {
     let env = Env::new();
@@ -348,8 +349,14 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
         "feature-ska",
         &[("ZELLIJ_PANE_ID", "7")],
     );
-    // A distinct second card with no bound pane — it can only be skipped.
-    register_running_agent(&env, "sess-skip-b", "feature-skb", &[]);
+    // A second pane-bound card, blocked by a pending ask — it can only be skipped.
+    register_running_agent(
+        &env,
+        "sess-skip-b",
+        "feature-skb",
+        &[("ZELLIJ_PANE_ID", "9")],
+    );
+    push_pending_agent_ask(&env, "sess-skip-b");
 
     let trace_log = env.project_root.join("zellij-skip-trace.log");
     let out = env
@@ -366,7 +373,7 @@ fn steer_fanout_skips_blocked_and_steers_the_rest() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("steered 1 agent(s)") && stdout.contains("no pane"),
+        stdout.contains("steered 1 agent(s)") && stdout.contains("pending ask"),
         "summary names the sent and skipped agents: {stdout}"
     );
 }
@@ -491,4 +498,79 @@ fn push_pending_agent_ask(env: &Env, session_id: &str) {
     env.ledger()
         .push_feed_item(&item, "rimz-test")
         .expect("push pending ask");
+}
+
+/// A live `codex` pane at the workspace root with no bound session — the
+/// producer synthesizes its idle `○ codex` row, but it never enters the rollup.
+/// Its raw id is `TRACE_PANE` so the steer shim assertion matches.
+fn unbound_codex_pane(env: &Env) -> rimz::feed::PaneRef {
+    rimz::feed::PaneRef {
+        pane_id: rimz::ids::PaneId::from_parts(rimz::ids::MuxName::Zellij, TRACE_PANE),
+        session_name: "rimz-test".to_owned(),
+        view_id: Some("tab_1".to_owned()),
+        view_kind: Some(rimz::ids::ViewKind::Tab),
+        view_name: Some("project".to_owned()),
+        is_focused: false,
+        command: Some("codex".to_owned()),
+        spawn_command: None,
+        cwd: Some(env.project_root.display().to_string()),
+        pane_pid: None,
+        pane_process_start: None,
+        resumed_session_id: None,
+        elevated_agent: None,
+        first_seen_at_ms: None,
+    }
+}
+
+/// `steer @codex` reaches a bare codex started in a pane before its first turn:
+/// the resolver folds the live pane frame, finds the synthesized idle row, and
+/// pastes into its pane — reproducing and fixing the `no agent matches @codex`
+/// failure. The pane fixture stands in for the mux, and codex must be wired
+/// (hooks installed) for the idle row to synthesize.
+#[test]
+fn steer_reaches_unbound_codex_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+
+    let trace_log = env.project_root.join("zellij-unbound-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["steer", "@codex", "--", "continue"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer to an unbound codex pane failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "continue");
+}
+
+/// `queue @codex` for the same unbound pane refuses with the steer hint: a
+/// durable queue record keys on a session id the pane does not have yet.
+#[test]
+fn queue_refuses_unbound_codex_pane() {
+    let env = Env::new();
+    env.install_agent_hooks("codex");
+    let pane_fixture = env.write_pane_fixture(&[unbound_codex_pane(&env)]);
+
+    let out = env
+        .rimz()
+        .env("RIMZ_TEST_PANE_LIST", &pane_fixture)
+        .args(["queue", "@codex", "--", "later"])
+        .output()
+        .expect("queue add");
+    assert!(
+        !out.status.success(),
+        "queue to an unbound pane should refuse"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("no session yet") && stderr.contains("rimz steer"),
+        "unexpected stderr: {stderr}"
+    );
 }

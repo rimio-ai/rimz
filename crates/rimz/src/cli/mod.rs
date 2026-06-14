@@ -205,20 +205,20 @@ pub(crate) fn agent_label(agent: &AgentState) -> String {
         })
 }
 
-/// Gate a fan-out (more than one agent) behind explicit confirmation. On a TTY,
+/// Gate a fan-out (more than one target) behind explicit confirmation. On a TTY,
 /// prompt `<verb> N agents (…)? [y/N]`; off a TTY, refuse and point at `--yes`
-/// so a script never broadcasts by surprise.
-pub(crate) fn confirm_fanout(verb: &str, target: &str, agents: &[&AgentState]) -> Result<()> {
-    let labels: Vec<String> = agents.iter().map(|agent| agent_label(agent)).collect();
+/// so a script never broadcasts by surprise. Callers pass the per-target labels
+/// so steer (panes) and queue (sessions) share one prompt.
+pub(crate) fn confirm_fanout(verb: &str, target: &str, labels: &[String]) -> Result<()> {
     let list = labels.join(", ");
     if !std::io::stdin().is_terminal() {
         anyhow::bail!(
             "`{target}` fans out to {} agents ({list}); re-run with --yes to broadcast",
-            agents.len()
+            labels.len()
         );
     }
     let mut stderr = std::io::stderr();
-    write!(stderr, "{verb} {} agents ({list})? [y/N] ", agents.len())?;
+    write!(stderr, "{verb} {} agents ({list})? [y/N] ", labels.len())?;
     stderr.flush().ok();
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
@@ -242,7 +242,7 @@ pub(crate) fn resolve_agent_one<'a>(
     )
 }
 
-/// Resolve a ref to every matching agent for a broadcast (`steer`, `queue add`).
+/// Resolve a ref to every matching rollup agent for a broadcast (`queue add`).
 pub(crate) fn resolve_agent_many<'a>(
     snapshot: &'a rimz::SidebarSnapshot,
     raw: &str,
@@ -253,6 +253,90 @@ pub(crate) fn resolve_agent_many<'a>(
         raw,
         rimz::target::resolve_many(snapshot, raw, worktree_flag, current_channel),
     )
+}
+
+/// Resolve a ref to every matching live agent pane for `steer`: the producer's
+/// bound panes, so a target reaches exactly the agent panes the producer saw —
+/// bound sessions (at their live pane) and lazy panes with no session yet.
+pub(crate) fn resolve_pane_targets<'a>(
+    snapshot: &'a rimz::SidebarSnapshot,
+    raw: &str,
+    worktree_flag: Option<&str>,
+    current_channel: Option<&str>,
+) -> Result<Vec<&'a rimz::PaneAgent>> {
+    map_resolve(
+        raw,
+        rimz::target::resolve_targets(snapshot, raw, worktree_flag, current_channel),
+    )
+}
+
+/// The snapshot the talk commands (`steer`, `queue`) resolve against. Unlike the
+/// rollup-only `snapshot_cached`, this folds a *fresh* live pane frame so a
+/// just-started agent pane with no session yet is present and addressable —
+/// `min_pane_cache_ms` floors the pull at now, bypassing the producer's pane
+/// cache (up to 10s old in Zellij event mode) that would otherwise miss it. One
+/// `list-panes` fork; falls back to the rollup when there is no mux to enumerate.
+pub(crate) fn resolution_snapshot(
+    workspace: &rimz::ResolvedWorkspace,
+    ledger: &Ledger,
+    globals: &GlobalFlags,
+) -> Result<rimz::SidebarSnapshot> {
+    use rimz::sidebar::cache::unix_now_ms;
+    use rimz::sidebar::consumer::RollupCursor;
+    use rimz::sidebar::produce::{ProduceOptions, pane_fixture_active, produce_snapshot};
+
+    let mux = globals
+        .mux
+        .or_else(|| rimz::mux::auto_detect_backend(None).ok())
+        // A deterministic pane fixture stands in for the mux in tests; produce
+        // reads it without touching the real backend, so any mux value serves.
+        .or_else(|| pane_fixture_active().then_some(MuxName::Zellij));
+    let Some(mux) = mux else {
+        return rollup_resolution_snapshot(ledger);
+    };
+    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
+    let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing runtime paths")?;
+    let opts = ProduceOptions {
+        mux,
+        session_name: workspace.session_name.clone(),
+        exclude: None,
+        min_pane_cache_ms: Some(unix_now_ms()),
+        diag: None,
+    };
+    match produce_snapshot(&mut RollupCursor::new(), &state, &runtime, &opts) {
+        Ok(snapshot) => Ok(snapshot),
+        // No live session / pane discovery failed: fall back to the rollup's own
+        // stamped panes so a bound agent still resolves, exactly as before.
+        Err(_) => rollup_resolution_snapshot(ledger),
+    }
+}
+
+/// The no-frame fallback: the rollup, with `agent_panes` synthesized from each
+/// stamped session's pane. Without a live frame there is nothing to cwd-bind, so
+/// only sessions that already carry a pane are reachable — the pre-fold steer
+/// behaviour.
+fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> {
+    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
+    snapshot.agent_panes = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .filter_map(|agent| {
+            let pane = agent.pane.as_ref()?;
+            Some(rimz::PaneAgent {
+                kind: agent.kind.clone(),
+                kind_ordinal: agent.kind_ordinal,
+                name: agent.name.clone(),
+                agent_id: Some(agent.agent_id.clone()),
+                pane_id: pane.pane_id.clone(),
+                worktree_path: agent.worktree_path.clone(),
+                worktree_branch: agent.worktree_branch.clone(),
+            })
+        })
+        .collect();
+    Ok(snapshot)
 }
 
 /// Turn a clean target miss into the launch-alias/layout hint when the ref

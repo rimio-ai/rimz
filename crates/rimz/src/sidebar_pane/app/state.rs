@@ -72,6 +72,7 @@ pub(super) fn placeholder_snapshot(workspace_id: WorkspaceId) -> SidebarSnapshot
         agents: Vec::new(),
         wired_lazy_kinds: Vec::new(),
         lazy_agent_default_models: std::collections::BTreeMap::new(),
+        agent_panes: Vec::new(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: None,

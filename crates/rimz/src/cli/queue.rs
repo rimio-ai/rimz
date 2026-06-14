@@ -133,12 +133,40 @@ fn add_message(
         bail!("expected non-empty text");
     }
     rimz::target::require_mention(&target)?;
-    let (workspace, ledger, snapshot) = workspace_ledger_snapshot(globals)?;
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
+    let ledger = open_ledger(&workspace)?;
+    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
     let channel = current_channel(&workspace);
-    let agents =
-        super::resolve_agent_many(&snapshot, &target, worktree.as_deref(), channel.as_deref())?;
+    // queue records are durable and keyed on a session id, so they address bound
+    // agents. A match that is only a live, sessionless pane has no key — point it
+    // at steer, which reaches the pane directly.
+    let agents = match super::resolve_agent_many(
+        &snapshot,
+        &target,
+        worktree.as_deref(),
+        channel.as_deref(),
+    ) {
+        Ok(agents) => agents,
+        Err(err) => {
+            if rimz::target::unbound_pane_in_channel(
+                &snapshot,
+                &target,
+                worktree.as_deref(),
+                channel.as_deref(),
+            ) {
+                bail!(
+                    "`{target}` matched an agent pane with no session yet; `rimz steer {target}` to start it, then queue"
+                );
+            }
+            return Err(err);
+        }
+    };
     if agents.len() > 1 && !yes {
-        super::confirm_fanout("Queue for", &target, &agents)?;
+        let labels: Vec<String> = agents
+            .iter()
+            .map(|agent| super::agent_label(agent))
+            .collect();
+        super::confirm_fanout("Queue for", &target, &labels)?;
     }
     // Preflight hooks once per distinct kind, before queuing anything — the hard
     // hooks precondition is all-or-nothing across the fan-out.

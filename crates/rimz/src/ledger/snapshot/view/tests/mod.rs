@@ -7,6 +7,7 @@
 //! instant, so window verdicts (stall, compaction expiry, ghost TTLs,
 //! rate-limit resets) are exact — the suite never reads the wall clock.
 
+mod agent_panes;
 mod feed;
 mod grouping;
 mod lazy_bind;

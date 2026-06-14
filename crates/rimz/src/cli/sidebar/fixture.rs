@@ -20,6 +20,7 @@ pub(super) fn sidebar_fixture_snapshot(
         agents: Vec::new(),
         wired_lazy_kinds: vec!["codex".to_owned()],
         lazy_agent_default_models: std::collections::BTreeMap::new(),
+        agent_panes: Vec::new(),
         own_view: None,
         only_daemon_view_remains: false,
         project_root: Some(PathBuf::from("/srv/code/query-engine")),

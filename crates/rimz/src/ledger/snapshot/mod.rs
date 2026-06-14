@@ -43,16 +43,16 @@ pub(crate) use process::{
     command_agent_kind_with_comm, command_is_sidebar_chrome, process_is_active, program_label,
 };
 pub use row::{
-    AgentCard, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState, SidebarRow,
-    SidebarSubAgent,
+    AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarResolverState,
+    SidebarRow, SidebarSubAgent,
 };
 #[cfg(test)]
 pub(crate) use view::fold_ask_onto_row;
+pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 pub use view::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarSnapshot,
     SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind, TruthNotice,
 };
-pub use view::{AgentWorktreeGroup, group_live_agents_by_worktree};
 
 #[derive(Debug, thiserror::Error)]
 pub enum SnapshotErr {

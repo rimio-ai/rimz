@@ -117,7 +117,7 @@ rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."  # ove
 rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--yes] -- <TEXT...>
 ```
 
-`<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint.
+`<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint. A bare `@<kind>` or `@all` also reaches a codex you started in a fresh pane before its first turn: `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session.
 
 A fan-out to more than one agent asks for confirmation; `--yes` (`-y`) skips the prompt, and off a TTY the broadcast refuses without it. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. One blocked or paneless agent never aborts the rest — `steer` prints which agents it reached and which it skipped. The audit event records metadata and text length, not message content.
 
@@ -125,7 +125,7 @@ Target resolution, the bracketed-paste mechanism, and pane-answering resolver be
 
 ## Queue The Next Message
 
-`rimz queue` stores text for agents and delivers it after each reaches a safe turn boundary. It uses the same `@<agent>#<worktree>` grammar as `steer`.
+`rimz queue` stores text for agents and delivers it after each reaches a safe turn boundary. It uses the same `@<agent>#<worktree>` grammar as `steer`. Because a queued message is durable and keyed on a session, `queue` addresses bound agents; a freshly started pane with no session yet is refused with a pointer to `steer`, which reaches the pane directly.
 
 ```sh
 rimz queue @swift-otter -- "After this turn, add focused tests for the parser."

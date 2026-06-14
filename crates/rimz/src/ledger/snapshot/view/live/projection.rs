@@ -12,7 +12,7 @@ use crate::ledger::snapshot::panes::{
 use crate::ledger::snapshot::process::{
     pane_command_is_known, pane_worktree_path, row_from_process,
 };
-use crate::ledger::snapshot::row::SidebarRow;
+use crate::ledger::snapshot::row::{PaneAgent, SidebarRow};
 use crate::schema::diag::DiagEvent;
 
 use super::super::rows::{active_resolver_state, row_from_agent, row_from_standalone_item};
@@ -25,6 +25,10 @@ pub(super) struct LazyAgentPaneProjection<'a> {
 
 pub(super) struct RowProjection {
     pub(super) rows: Vec<SidebarRow>,
+    /// Every live agent pane bound this fold, uncapped — the resolution source.
+    /// Built here at the binding site so it never inherits row capping, ordering,
+    /// or the standalone-ask rows that share the agent-card shape.
+    pub(super) agent_panes: Vec<PaneAgent>,
     pub(super) diagnostics: Vec<DiagEvent>,
 }
 
@@ -58,6 +62,7 @@ pub(super) fn rows_from_panes(
     now: Timestamp,
 ) -> RowProjection {
     let mut rows = Vec::new();
+    let mut agent_panes = Vec::new();
     let mut diagnostics = Vec::new();
     let mut seen_panes = HashSet::new();
     let mut bound_agents: BTreeSet<(AgentKind, AgentSessionId)> = BTreeSet::new();
@@ -92,7 +97,7 @@ pub(super) fn rows_from_panes(
             }
         }
         if let Some(agent) = agent_for_pane(pane, agents, &bound_agents) {
-            push_agent_row(
+            agent_panes.push(push_agent_row(
                 &mut rows,
                 &mut bound_agents,
                 &mut bound_agent_panes,
@@ -100,7 +105,7 @@ pub(super) fn rows_from_panes(
                 pane,
                 pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                 now,
-            );
+            ));
         } else if let Some(bind) = agent_pane_for_pane(
             pane,
             agents,
@@ -111,7 +116,7 @@ pub(super) fn rows_from_panes(
             now,
         ) {
             match bind {
-                AgentPaneRow::Agent(agent) => push_agent_row(
+                AgentPaneRow::Agent(agent) => agent_panes.push(push_agent_row(
                     &mut rows,
                     &mut bound_agents,
                     &mut bound_agent_panes,
@@ -119,12 +124,23 @@ pub(super) fn rows_from_panes(
                     pane,
                     pane_ask(agent, standalone_ask, needs_attention, resolver_working),
                     now,
-                ),
+                )),
                 AgentPaneRow::Idle(row) => {
                     let mut row = *row;
                     if let Some(ask) = standalone_ask {
                         fold_ask_onto_row(&mut row, ask);
                     }
+                    // A lazy pane carries only its kind and pane — no session,
+                    // pet name, or ordinal until its first turn binds one.
+                    agent_panes.push(PaneAgent {
+                        kind: AgentKind::new_unchecked(row.name.clone()),
+                        kind_ordinal: None,
+                        name: None,
+                        agent_id: None,
+                        pane_id: pane.pane_id.clone(),
+                        worktree_path: row.worktree_path.clone(),
+                        worktree_branch: row.worktree_branch.clone(),
+                    });
                     rows.push(row);
                 }
                 AgentPaneRow::SuppressedDuplicate { kind, agent_id } => {
@@ -151,7 +167,11 @@ pub(super) fn rows_from_panes(
         }
     }
 
-    RowProjection { rows, diagnostics }
+    RowProjection {
+        rows,
+        agent_panes,
+        diagnostics,
+    }
 }
 
 /// The newest pending standalone (non-agent-hook) ask per frame-admitted pane.
@@ -196,6 +216,9 @@ fn pane_ask<'a>(
     standalone_ask.or_else(|| most_relevant_ask(agent, needs_attention, resolver_working))
 }
 
+/// Push a bound agent's row and return the [`PaneAgent`] for `agent_panes`. The
+/// pane comes from the live frame, not the session's own (often unstamped for a
+/// daemon-routed agent) record — so resolution reaches the bound pane.
 fn push_agent_row(
     rows: &mut Vec<SidebarRow>,
     bound: &mut BTreeSet<(AgentKind, AgentSessionId)>,
@@ -204,17 +227,27 @@ fn push_agent_row(
     pane: &PaneRef,
     ask: Option<&FeedItem>,
     now: Timestamp,
-) {
+) -> PaneAgent {
     let key = (agent.kind.clone(), agent.agent_id.clone());
     bound.insert(key.clone());
     bound_panes.insert(key, pane.pane_id.clone());
+    let worktree_path = agent.worktree_path.clone().or_else(|| pane.cwd.clone());
     let mut row = row_from_agent(agent, now);
-    row.worktree_path = row.worktree_path.or_else(|| pane.cwd.clone());
+    row.worktree_path = row.worktree_path.or_else(|| worktree_path.clone());
     row.pane = Some(pane.clone());
     if let Some(ask) = ask {
         fold_ask_onto_row(&mut row, ask);
     }
     rows.push(row);
+    PaneAgent {
+        kind: agent.kind.clone(),
+        kind_ordinal: agent.kind_ordinal,
+        name: agent.name.clone(),
+        agent_id: Some(agent.agent_id.clone()),
+        pane_id: pane.pane_id.clone(),
+        worktree_path,
+        worktree_branch: agent.worktree_branch.clone(),
+    }
 }
 
 fn newborn_unknown_cwd(pane: &PaneRef, panes_produced_at_ms: Option<u64>) -> bool {
