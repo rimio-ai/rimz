@@ -181,15 +181,25 @@ impl HookStatus {
     }
 }
 
-/// One adapter's integration-concern coverage: the wired concerns and, for each
-/// gap, its reason.
+/// One adapter's integration-concern coverage: the wired concerns, the partial
+/// ones Rimz reconstructs by derivation, and the unsupported gaps with reasons.
 #[derive(Debug, Serialize)]
 pub(super) struct AgentCoverage {
     pub(super) kind: String,
     pub(super) wired: usize,
     pub(super) total: usize,
     pub(super) supported: Vec<String>,
+    pub(super) partial: Vec<PartialConcern>,
     pub(super) unsupported: Vec<UnsupportedConcern>,
+}
+
+/// A concern with no native signal that Rimz reconstructs by derivation: `via`
+/// is how, `gap` is what the reconstruction still lacks.
+#[derive(Debug, Serialize)]
+pub(super) struct PartialConcern {
+    pub(super) concern: String,
+    pub(super) via: String,
+    pub(super) gap: String,
 }
 
 #[derive(Debug, Serialize)]

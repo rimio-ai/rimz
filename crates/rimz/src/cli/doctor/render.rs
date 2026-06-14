@@ -14,8 +14,8 @@ use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Mux, Presence, Probe,
-    RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
+    AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Mux, Presence,
+    Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -361,12 +361,19 @@ fn render_coverage(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> 
             w,
             "  {}   {}",
             paint(palette::ACCENT.bold(), &coverage.kind),
-            paint(
-                palette::MUTED,
-                &format!("{}/{} wired", coverage.wired, coverage.total)
-            )
+            paint(palette::MUTED, &coverage_tally(coverage))
         )?;
         render_concern_list(w, &coverage.supported)?;
+        for derived in &coverage.partial {
+            writeln!(
+                w,
+                "    {}",
+                paint(
+                    palette::WARN,
+                    &format!("◐ {:<8} {} — {}", derived.concern, derived.via, derived.gap)
+                )
+            )?;
+        }
         for gap in &coverage.unsupported {
             writeln!(
                 w,
@@ -379,6 +386,19 @@ fn render_coverage(w: &mut impl Write, report: &DoctorReport) -> io::Result<()> 
         }
     }
     Ok(())
+}
+
+/// The header tally: wired count out of total, then the partial and unsupported
+/// counts when either is non-empty (`10/14 wired · 2 partial · 2 unsupported`).
+fn coverage_tally(coverage: &AgentCoverage) -> String {
+    let mut tally = format!("{}/{} wired", coverage.wired, coverage.total);
+    if !coverage.partial.is_empty() {
+        tally.push_str(&format!(" · {} partial", coverage.partial.len()));
+    }
+    if !coverage.unsupported.is_empty() {
+        tally.push_str(&format!(" · {} unsupported", coverage.unsupported.len()));
+    }
+    tally
 }
 
 /// The wired concerns as a green check list, wrapped near reading width with
@@ -694,7 +714,9 @@ fn age_label(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::doctor::model::{AgentCoverage, HookRow, RemoteAgent, UnsupportedConcern};
+    use crate::cli::doctor::model::{
+        AgentCoverage, HookRow, PartialConcern, RemoteAgent, UnsupportedConcern,
+    };
 
     fn strip(
         render_one: impl FnOnce(&mut anstream::StripStream<Vec<u8>>) -> io::Result<()>,
@@ -753,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn coverage_block_groups_wired_and_gaps() {
+    fn coverage_block_groups_wired_partial_and_gaps() {
         let report = DoctorReport {
             workspace: Probe::Unavailable {
                 error: "x".to_owned(),
@@ -766,8 +788,13 @@ mod tests {
             coverage: vec![AgentCoverage {
                 kind: "codex".to_owned(),
                 wired: 1,
-                total: 2,
+                total: 3,
                 supported: vec!["turn".to_owned()],
+                partial: vec![PartialConcern {
+                    concern: "end".to_owned(),
+                    via: "pane liveness + reaper".to_owned(),
+                    gap: "no SessionEnd hook".to_owned(),
+                }],
                 unsupported: vec![UnsupportedConcern {
                     concern: "plan".to_owned(),
                     reason: "no plan-approval gate".to_owned(),
@@ -788,8 +815,17 @@ mod tests {
         };
         let out = strip(|w| render_coverage(w, &report));
         assert!(out.contains("codex"), "{out}");
-        assert!(out.contains("1/2 wired"), "wired count:\n{out}");
+        assert!(
+            out.contains("1/3 wired · 1 partial · 1 unsupported"),
+            "tally counts each bucket:\n{out}"
+        );
         assert!(out.contains("✓ turn"), "wired list:\n{out}");
+        assert!(
+            out.contains("◐ end")
+                && out.contains("pane liveness + reaper")
+                && out.contains("no SessionEnd hook"),
+            "partial row carries derivation and gap:\n{out}"
+        );
         assert!(
             out.contains("✗ plan") && out.contains("no plan-approval gate"),
             "gap with full reason:\n{out}"

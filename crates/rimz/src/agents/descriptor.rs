@@ -40,8 +40,9 @@ pub struct AgentDescriptor {
     /// accidental gap.
     pub capabilities: Capabilities,
     /// Declared integration checklist. Every [`IntegrationConcern`] appears
-    /// exactly once as wired or unsupported, and conformance tests cross-check
-    /// the declaration against the descriptor and classification corpus.
+    /// exactly once as wired, partial, or unsupported, and conformance tests
+    /// cross-check the declaration against the descriptor and classification
+    /// corpus.
     pub coverage: &'static [(IntegrationConcern, ConcernCoverage)],
     /// Provider-owned fallback for the model context window shown in an agent
     /// card before a richer runtime source reports the exact value.
@@ -172,10 +173,21 @@ integration_concerns! {
     RemoteControl => "remote",
 }
 
-/// Whether an adapter wires a concern, or declares the absence intentionally.
+/// How an adapter covers a concern: a native signal carries it directly,
+/// derivation reconstructs it where the native signal is absent, or it is
+/// unreachable from the current protocol surface.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConcernCoverage {
+    /// A native signal carries the concern directly; `via` names it.
     Wired { via: &'static str },
+    /// No native signal, but Rimz reconstructs the behaviour from other state:
+    /// `via` is the derivation, `gap` what the reconstruction still lacks.
+    Partial {
+        via: &'static str,
+        gap: &'static str,
+    },
+    /// Unreachable from the current protocol surface, by any inference; `reason`
+    /// says why.
     Unsupported { reason: &'static str },
 }
 
@@ -184,9 +196,12 @@ impl ConcernCoverage {
         matches!(self, Self::Wired { .. })
     }
 
+    /// The reason-like text: the via for wired, the gap for partial, the
+    /// unsupported reason — what the matrix prints after the concern label.
     pub const fn detail(self) -> &'static str {
         match self {
             Self::Wired { via } => via,
+            Self::Partial { gap, .. } => gap,
             Self::Unsupported { reason } => reason,
         }
     }

@@ -29,4 +29,4 @@ An adapter is the *single* place a native agent protocol is normalized. It owns 
 ## Tests
 
 Golden every stdout shape in the adapter's `tests` module with inline `insta::assert_*_snapshot!(... @"...")`: neutral no-op, allow, deny, modified-input (where supported), malformed payload, and version-drift fallback. Cover install/uninstall, lifecycle mapping, feed classification, and PID attribution.
-Declare every integration concern as wired or unsupported in the descriptor; `conformance.rs` enforces completeness and cross-checks the claim against capabilities, installed events, and the classification corpus. `rimz doctor` surfaces the same matrix, so a missing surface is visible product behavior.
+Declare every integration concern as wired, partial (no native signal, reconstructed by derivation, with the gap named), or unsupported in the descriptor; `conformance.rs` enforces completeness and cross-checks the claim against capabilities, installed events, and the classification corpus. `rimz doctor` surfaces the same matrix — wired, partial, unsupported — so a missing surface is visible product behavior.

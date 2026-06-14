@@ -166,8 +166,14 @@ fn coverage_is_complete_and_honest() {
             let &(_, coverage) = matching[0];
             assert!(
                 !coverage.detail().trim().is_empty(),
-                "{kind} {concern:?} coverage must explain its wire or unsupported reason"
+                "{kind} {concern:?} coverage must explain its wire, derivation gap, or unsupported reason"
             );
+            if let ConcernCoverage::Partial { via, .. } = coverage {
+                assert!(
+                    !via.trim().is_empty(),
+                    "{kind} {concern:?} partial coverage must name the derivation that reconstructs it"
+                );
+            }
             assert_coverage_honest(*adapter, &samples, &installed_events, concern, coverage);
         }
     }
@@ -234,6 +240,11 @@ fn assert_coverage_honest(
 ) {
     let descriptor = adapter.descriptor();
     let kind = descriptor.kind;
+    // `Partial` and `Unsupported` both assert no native signal carries the
+    // concern, so both read as `!wired` here: the equality below forbids
+    // declaring either when a native backing actually exists (that must be
+    // `Wired`). Whether a partial's derivation truly reconstructs the behaviour
+    // is editorial, like the via/reason text, and is not checked mechanically.
     let wired = coverage.is_wired();
     match concern {
         IntegrationConcern::TurnLifecycle => assert_eq!(

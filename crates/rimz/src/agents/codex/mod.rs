@@ -240,14 +240,16 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     ),
     (
         IntegrationConcern::SessionEnd,
-        ConcernCoverage::Unsupported {
-            reason: "no SessionEnd hook; liveness reaps sessions",
+        ConcernCoverage::Partial {
+            via: "pane liveness + rollup reaper",
+            gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
         },
     ),
     (
         IntegrationConcern::IdleNotification,
-        ConcernCoverage::Unsupported {
-            reason: "no idle Notification hook",
+        ConcernCoverage::Partial {
+            via: "turn-end + request_user_input + stall window",
+            gap: "no idle Notification hook; no idle-timeout nudge",
         },
     ),
     (

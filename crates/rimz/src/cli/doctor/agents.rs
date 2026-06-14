@@ -8,8 +8,8 @@ use rimz::trust::{self};
 
 use super::super::open_ledger;
 use super::model::{
-    AgentCoverage, AgentKindGroup, AgentRollup, AgentRow, HookRow, HookStatus, Probe, Trust,
-    UnsupportedConcern,
+    AgentCoverage, AgentKindGroup, AgentRollup, AgentRow, HookRow, HookStatus, PartialConcern,
+    Probe, Trust, UnsupportedConcern,
 };
 
 /// Walk the snapshot's agent rollup into one row per `(kind, agent_id)` observed
@@ -116,6 +116,7 @@ pub(super) fn collect_coverage() -> Vec<AgentCoverage> {
 
 fn coverage_for(descriptor: &rimz::agents::AgentDescriptor) -> AgentCoverage {
     let mut supported = Vec::new();
+    let mut partial = Vec::new();
     let mut unsupported = Vec::new();
     for concern in IntegrationConcern::ALL {
         let Some((_, coverage)) = descriptor
@@ -127,6 +128,11 @@ fn coverage_for(descriptor: &rimz::agents::AgentDescriptor) -> AgentCoverage {
         };
         match coverage {
             ConcernCoverage::Wired { .. } => supported.push(concern.short_label().to_owned()),
+            ConcernCoverage::Partial { via, gap } => partial.push(PartialConcern {
+                concern: concern.short_label().to_owned(),
+                via: (*via).to_owned(),
+                gap: (*gap).to_owned(),
+            }),
             ConcernCoverage::Unsupported { reason } => unsupported.push(UnsupportedConcern {
                 concern: concern.short_label().to_owned(),
                 reason: (*reason).to_owned(),
@@ -136,8 +142,9 @@ fn coverage_for(descriptor: &rimz::agents::AgentDescriptor) -> AgentCoverage {
     AgentCoverage {
         kind: descriptor.kind.to_owned(),
         wired: supported.len(),
-        total: supported.len() + unsupported.len(),
+        total: supported.len() + partial.len() + unsupported.len(),
         supported,
+        partial,
         unsupported,
     }
 }
@@ -225,6 +232,8 @@ mod tests {
         assert!(claude.unsupported.is_empty());
 
         let codex = coverage("codex");
+        assert_eq!(codex.wired, 10);
+        assert_eq!(codex.total, 14);
         assert_eq!(
             codex.supported,
             [
@@ -232,12 +241,22 @@ mod tests {
                 "remote"
             ]
         );
+        // `end` and `idle` have no native hook, but pane liveness/the reaper and
+        // the turn-boundary/stall path reconstruct them — partial, not absent.
+        let codex_partial: Vec<&str> = codex.partial.iter().map(|p| p.concern.as_str()).collect();
+        assert_eq!(codex_partial, ["end", "idle"]);
+        assert!(
+            codex
+                .partial
+                .iter()
+                .all(|p| !p.via.is_empty() && !p.gap.is_empty())
+        );
         let codex_gaps: Vec<&str> = codex
             .unsupported
             .iter()
             .map(|gap| gap.concern.as_str())
             .collect();
-        assert_eq!(codex_gaps, ["plan", "bg", "end", "idle"]);
+        assert_eq!(codex_gaps, ["plan", "bg"]);
         assert!(codex.unsupported.iter().all(|gap| !gap.reason.is_empty()));
 
         let pi = coverage("pi");
