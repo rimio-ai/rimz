@@ -118,10 +118,15 @@
 # Colors are palette slots ("good", "warn", "caution", "alarm", "accent", "cool",
 # "meta", "body", "muted", "faint"), "clay", a "#rrggbb" hex color, or a 0-255 color index.
 # effect is "static" or "breathe"; speed is "slow", "normal", or "fast" for both frame advance and effect cadence.
-# Every role follows the same frames/color/effect/speed model. For waiting,
-# failed, and unread success rows, omitted effect keeps the shipped row blink
-# (a 2-pole brightness toggle, age-paced); set effect to "static" to quiet it.
+# Every role follows the same frames/color/effect/speed model. Set a role's
+# effect to "static" to quiet the unread attention signal for that role; it
+# then holds a constant bold tone instead.
 # A literal blink is a frame sequence such as [" ", "!"].
+# unread picks how an unread attention row reads, shared by the lead glyph, the
+# card name, the description, and the make-up buckets: "shimmer" (default) flows
+# a light beam across each one, "bright" holds a constant brighter bold, and
+# "blink" is the hard 2-pole brightness toggle, age-paced.
+## unread = "shimmer"
 ## [sidebar.animations.thinking]
 ## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 ## color = "clay"

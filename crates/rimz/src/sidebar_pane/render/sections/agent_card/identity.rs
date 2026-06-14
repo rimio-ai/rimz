@@ -1,26 +1,32 @@
 use super::*;
 
-use crate::sidebar_pane::render::animation::BreathSample;
-
-/// The agent name's style under the row's card emphasis, sharing [`emphasize`]
-/// with the lead glyph and description so the three move as one group: the
-/// normal tier wears the matching provider brand color, tying the card to the
-/// provider dashboard; the soft tier keeps that brand hue muted to the body
-/// tier, so a calm unselected card still reads as its provider; the blink tier
-/// pulses on the shared sample. Unknown providers fall back to mid-gray chrome.
-pub(super) fn agent_name_style(
+/// The agent name's spans under the row's card emphasis, sharing the unread
+/// treatment with the lead glyph and description so the three move as one group:
+/// the normal tier wears the matching provider brand color, tying the card to
+/// the provider dashboard; the soft tier keeps that brand hue muted to the body
+/// tier, so a calm unselected card still reads as its provider; an unread row
+/// carries the chosen unread effect — a single styled span for blink/bright, one
+/// span per character for the flowing shimmer. Unknown providers fall back to
+/// mid-gray chrome.
+pub(super) fn attention_name_spans(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
     kind: &str,
-    emphasis: CardEmphasis,
-    pulse: Option<BreathSample>,
-) -> Style {
+    attention: CardAttention,
+) -> Vec<Span<'static>> {
     let brand = providers
         .iter()
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
         .unwrap_or_else(|| theme.component(Component::UnknownBrand));
-    emphasize(theme, Some(brand), emphasis, pulse)
+    let text = clip(kind, NAME_MAX);
+    match attention.emphasis {
+        CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),
+        _ => vec![Span::styled(
+            text,
+            emphasize(theme, Some(brand), attention.emphasis, attention.anim),
+        )],
+    }
 }
 
 pub(super) struct IdentityLineContext<'a> {
@@ -193,17 +199,8 @@ pub(super) fn agent_identity_line(
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, now, attention, animation_phase),
         Span::raw(" "),
-        Span::styled(
-            clip(&row.name, NAME_MAX),
-            agent_name_style(
-                theme,
-                providers,
-                &row.name,
-                attention.emphasis,
-                attention.pulse,
-            ),
-        ),
     ];
+    left.extend(attention_name_spans(theme, providers, &row.name, attention));
     if tier != Tier::L0 {
         if let Some(model) = display_model(row) {
             left.push(Span::styled(" · ", theme.muted()));

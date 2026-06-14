@@ -231,7 +231,11 @@ pub(in crate::sidebar_pane::render) enum CardEmphasis {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::sidebar_pane::render) struct CardAttention {
     pub(in crate::sidebar_pane::render) emphasis: CardEmphasis,
-    pub(in crate::sidebar_pane::render) pulse: Option<BreathSample>,
+    /// The shared unread treatment (shimmer / bright / blink), `Some` only on an
+    /// unread (`Blink`-emphasis) row and `None` when a per-role `effect =
+    /// "static"` quiets it — the lead glyph, the name, the description, and the
+    /// make-up buckets all read from this one value.
+    pub(in crate::sidebar_pane::render) anim: Option<UnreadAnim>,
 }
 
 impl CardAttention {
@@ -244,12 +248,12 @@ impl CardAttention {
         selected: bool,
     ) -> Self {
         let emphasis = card_emphasis(status, unread, selected);
-        let pulse = if emphasis == CardEmphasis::Blink {
-            attention_blink_sample(theme, status, age_secs, animation_phase)
+        let anim = if emphasis == CardEmphasis::Blink {
+            unread_anim(theme, status, age_secs, animation_phase)
         } else {
             None
         };
-        Self { emphasis, pulse }
+        Self { emphasis, anim }
     }
 }
 
@@ -267,39 +271,115 @@ pub(in crate::sidebar_pane::render) fn card_emphasis(
     }
 }
 
-pub(in crate::sidebar_pane::render) fn attention_blink_sample(
+/// The shared unread treatment for a row of `status` at `age_secs`, under the
+/// configured [`unread_effect`](crate::sidebar_pane::render::animation::ResolvedAnimations::unread_effect):
+/// the shimmer beam, the steady bright crest, or the 2-pole blink — or `None`
+/// when a per-role `effect = "static"` quiets it.
+pub(in crate::sidebar_pane::render) fn unread_anim(
     theme: &Theme,
     status: AgentStatus,
     age_secs: i64,
     animation_phase: u64,
-) -> Option<BreathSample> {
-    theme.animations.status(status).attention_pulse(
+) -> Option<UnreadAnim> {
+    theme.animations.status(status).unread_anim(
+        theme.animations.unread_effect(),
         animation_phase,
         age_secs,
-        BREATH_DEEP_AMPLITUDE,
+    )
+}
+
+/// One cell under a concrete unread treatment, on its resolved base `color`. The
+/// glyph and each make-up bucket are single cells (`len` 1); a multi-cell run
+/// (the name, the description) calls this per cell with its own `index` so the
+/// shimmer beam flows. Blink pulses on the 2-pole sample, bright holds the
+/// crest, shimmer lifts by the beam — each falling back to a weight modifier
+/// when `color` is absent or the depth cannot carry the lift.
+pub(in crate::sidebar_pane::render) fn attention_cell_style(
+    theme: &Theme,
+    color: Option<Color>,
+    anim: UnreadAnim,
+    index: usize,
+    len: usize,
+) -> Style {
+    match anim {
+        UnreadAnim::Blink(sample) => pulse_or_weight(theme, color, sample),
+        UnreadAnim::Bright => pulse_or_weight(
+            theme,
+            color,
+            BreathSample::steady_peak(BREATH_DEEP_AMPLITUDE),
+        ),
+        UnreadAnim::Shimmer(wave) => theme.shimmer_cell(color, shimmer_lift(wave, index, len)),
+    }
+}
+
+/// The spans for a text run on an **unread** (`Blink`-emphasis) row, on its
+/// resolved base `color`: shimmer flows the beam across one span per character,
+/// while blink and bright keep a single uniform span, and a quieted row (`None`)
+/// holds a constant bold tone. Callers own the non-unread `Normal`/`Soft` tiers.
+pub(in crate::sidebar_pane::render) fn unread_run_spans(
+    theme: &Theme,
+    color: Option<Color>,
+    anim: Option<UnreadAnim>,
+    text: &str,
+) -> Vec<Span<'static>> {
+    match anim {
+        Some(UnreadAnim::Shimmer(wave)) => {
+            let len = text.chars().count();
+            text.chars()
+                .enumerate()
+                .map(|(index, ch)| {
+                    Span::styled(
+                        ch.to_string(),
+                        theme.shimmer_cell(color, shimmer_lift(wave, index, len)),
+                    )
+                })
+                .collect()
+        }
+        Some(anim) => vec![Span::styled(
+            text.to_owned(),
+            attention_cell_style(theme, color, anim, 0, 1),
+        )],
+        None => vec![Span::styled(text.to_owned(), bold_tone(theme, color))],
+    }
+}
+
+/// A blink/bright sample as a cell style: pulse the resolved `color`, or fall
+/// back to the bold-by-pole weight when the element is colorless.
+fn pulse_or_weight(theme: &Theme, color: Option<Color>, sample: BreathSample) -> Style {
+    color.map_or_else(
+        || Style::default().add_modifier(sample.grow_modifier()),
+        |color| theme.pulse(color, sample),
+    )
+}
+
+/// The quiet (statically-quieted) unread fallback: the resting tone held bold,
+/// dropping to plain bold weight when colorless.
+fn bold_tone(theme: &Theme, color: Option<Color>) -> Style {
+    color.map_or_else(
+        || Style::default().add_modifier(Modifier::BOLD),
+        |color| theme.style(color, Modifier::BOLD),
     )
 }
 
 /// Paint an element's natural tone under the row's card emphasis, so the lead
-/// glyph and name move together: blink pulses the tone on the shared sample,
-/// normal wears it at full strength, and soft dims its lightness a step
-/// (`body_brand`, keeping the hue) so a calm unselected card keeps its color,
-/// just quietly. A colorless element (an idle lead) rests at the plain soft body
-/// tone. The description mirrors the same blink/normal/soft split through its
+/// glyph and name move together: blink/bright/shimmer carry the shared unread
+/// treatment (a single cell — the glyph, or a name read uniformly when not
+/// shimmering), normal wears the tone at full strength, and soft dims its
+/// lightness a step (`body_brand`, keeping the hue) so a calm unselected card
+/// keeps its color, just quietly. A colorless element (an idle lead) rests at
+/// the plain soft body tone. The description mirrors the same split through its
 /// own body-style path — it is body text, never brand-colored, so its soft tone
 /// is the plain body gray.
 pub(in crate::sidebar_pane::render) fn emphasize(
     theme: &Theme,
     natural_color: Option<Color>,
     emphasis: CardEmphasis,
-    pulse: Option<BreathSample>,
+    anim: Option<UnreadAnim>,
 ) -> Style {
     match emphasis {
-        CardEmphasis::Blink => match (natural_color, pulse) {
-            (Some(color), Some(sample)) => theme.pulse(color, sample),
-            (Some(color), None) => theme.style(color, Modifier::BOLD),
-            (None, Some(sample)) => Style::default().add_modifier(sample.grow_modifier()),
-            (None, None) => Style::default().add_modifier(Modifier::BOLD),
+        CardEmphasis::Blink => match anim {
+            Some(anim) => attention_cell_style(theme, natural_color, anim, 0, 1),
+            None => bold_tone(theme, natural_color),
         },
         CardEmphasis::Normal => natural_color.map_or_else(Style::default, |color| {
             theme.style(color, Modifier::empty())
@@ -353,7 +433,7 @@ pub(in crate::sidebar_pane::render) fn agent_lead_style_with_attention(
     attention: CardAttention,
 ) -> Style {
     let natural_color = agent_natural_color(theme, status, phase, age_secs);
-    emphasize(theme, natural_color, attention.emphasis, attention.pulse)
+    emphasize(theme, natural_color, attention.emphasis, attention.anim)
 }
 
 fn agent_natural_color(

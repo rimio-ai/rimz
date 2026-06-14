@@ -22,33 +22,47 @@ pub(super) fn description_line(
     attention: CardAttention,
     animation_phase: u64,
 ) -> Line<'static> {
-    let emphasis = attention.emphasis;
-    // The shared unread blink, on a concrete body tone so the description lifts
-    // in unison with the lead glyph and the name — and joins the glow pass,
-    // which the terminal-default fg would skip.
-    let body_style = || match emphasis {
-        CardEmphasis::Blink => match attention.pulse {
-            Some(sample) => theme.pulse(theme.body_tone(), sample),
-            None => theme.style(theme.body_tone(), Modifier::BOLD),
-        },
-        CardEmphasis::Normal => Style::default(),
-        CardEmphasis::Soft => theme.body(),
+    // The shared unread treatment, on a concrete body tone so the description
+    // lifts in unison with the lead glyph and the name — and joins the glow
+    // pass, which the terminal-default fg would skip. Shimmer flows one span per
+    // character; blink and bright stay a single span; calm rows read at the
+    // terminal-default (normal) or muted body (soft) tone.
+    let body_spans = |text: &str, italic: bool| -> Vec<Span<'static>> {
+        let spans = match attention.emphasis {
+            CardEmphasis::Blink => {
+                unread_run_spans(theme, Some(theme.body_tone()), attention.anim, text)
+            }
+            CardEmphasis::Normal => vec![Span::styled(text.to_owned(), Style::default())],
+            CardEmphasis::Soft => vec![Span::styled(text.to_owned(), theme.body())],
+        };
+        if italic {
+            spans
+                .into_iter()
+                .map(|mut span| {
+                    span.style = span.style.add_modifier(Modifier::ITALIC);
+                    span
+                })
+                .collect()
+        } else {
+            spans
+        }
     };
-    let body = if let Some(label) = agent(row)
+    let mut left = vec![Span::raw("  ")];
+    if let Some(label) = agent(row)
         .and_then(|agent| agent.turn_error_label.as_deref())
         .and_then(single_line_description)
     {
-        Span::styled(label, body_style().add_modifier(Modifier::ITALIC))
+        left.extend(body_spans(&label, true));
     } else {
         match descriptor(row).and_then(single_line_description) {
-            Some(text) => Span::styled(text, body_style()),
-            None if shows_loading_dots(row) => {
-                Span::styled(loading_dots(animation_phase).to_owned(), theme.muted())
-            }
-            None => Span::raw("—".to_owned()),
+            Some(text) => left.extend(body_spans(&text, false)),
+            None if shows_loading_dots(row) => left.push(Span::styled(
+                loading_dots(animation_phase).to_owned(),
+                theme.muted(),
+            )),
+            None => left.push(Span::raw("—".to_owned())),
         }
-    };
-    let mut left = vec![Span::raw("  "), body];
+    }
     // The agent parked its turn on still-in-flight background work: keep the
     // real activity above and add a distinct, faint secondary marker rather than
     // overwriting the description with a synthetic "N background tasks" count.

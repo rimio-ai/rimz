@@ -15,6 +15,14 @@ fn truecolor_theme_with(sidebar: &crate::config::SidebarConfig) -> Theme {
     Theme::fixed_for_sidebar(false, &sidebar)
 }
 
+/// A sidebar config that pins the unread attention effect, so a test can drive
+/// one specific mode rather than the shipped default (`shimmer`).
+fn unread_sidebar(effect: crate::config::UnreadEffect) -> crate::config::SidebarConfig {
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.unread = Some(effect);
+    sidebar
+}
+
 #[test]
 fn card_emphasis_maps_attention_tiers() {
     for status in [
@@ -179,7 +187,7 @@ fn attention_glyph_heats_with_the_age_clock_over_a_yellow_floor() {
 
 #[test]
 fn attention_effect_and_speed_reach_the_rendered_pulse() {
-    let theme = truecolor_theme();
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
     assert_ne!(
         agent_lead_style(
             &theme,
@@ -204,7 +212,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         "the default unread actionable head blinks between its bright and normal poles"
     );
 
-    let mut quiet = crate::config::SidebarConfig::default();
+    let mut quiet = unread_sidebar(crate::config::UnreadEffect::Blink);
     quiet.animations.waiting = Some(
         toml::from_str::<crate::config::AnimationSpec>("effect = \"static\"\n")
             .expect("waiting animation spec"),
@@ -233,7 +241,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         "an explicit static waiting effect quiets the unread blink"
     );
 
-    let mut fast = crate::config::SidebarConfig::default();
+    let mut fast = unread_sidebar(crate::config::UnreadEffect::Blink);
     fast.animations.waiting = Some(
         toml::from_str::<crate::config::AnimationSpec>("speed = \"fast\"\n")
             .expect("waiting animation spec"),
@@ -298,7 +306,7 @@ fn unread_success_can_be_configured_static() {
 
 #[test]
 fn unread_glyph_pulses_without_losing_status_color_or_heat() {
-    let theme = truecolor_theme();
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
     let read = agent_lead_style(
         &theme,
         AgentStatus::Success,
@@ -373,7 +381,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     );
     assert_eq!(red_read.add_modifier, Modifier::empty());
 
-    let plain = Theme::fixed(true);
+    let plain = Theme::fixed_for_sidebar(true, &unread_sidebar(crate::config::UnreadEffect::Blink));
     let read_waiting_plain = agent_lead_style(
         &plain,
         AgentStatus::Waiting,
@@ -434,6 +442,47 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
         )
         .add_modifier,
         Modifier::BOLD
+    );
+}
+
+#[test]
+fn shimmer_flows_the_unread_name_across_cells() {
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
+    let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false);
+    let color = Some(theme.component(Component::UnknownBrand));
+    let spans = unread_run_spans(&theme, color, attention.anim, "claude");
+    assert!(
+        spans.len() > 1,
+        "shimmer splits the run into one span per character"
+    );
+    let kept: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    assert_eq!(kept, "claude".chars().count(), "every character is kept");
+    let tones: std::collections::HashSet<_> = spans.iter().map(|span| span.style.fg).collect();
+    assert!(
+        tones.len() > 1,
+        "the beam lifts cells unevenly across the run, so the light reads as flowing"
+    );
+}
+
+#[test]
+fn bright_holds_one_constant_unread_span() {
+    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Bright));
+    let color = Some(theme.component(Component::UnknownBrand));
+    let run = |phase| {
+        let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, phase, true, false);
+        unread_run_spans(&theme, color, attention.anim, "claude")
+    };
+    let early = run(0);
+    let late = run(99);
+    assert_eq!(early.len(), 1, "bright keeps the run a single span");
+    assert_eq!(
+        early[0].style.add_modifier,
+        Modifier::BOLD,
+        "bright holds bold"
+    );
+    assert_eq!(
+        early[0].style, late[0].style,
+        "bright holds a constant crest across phases — no motion"
     );
 }
 

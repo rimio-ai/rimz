@@ -101,8 +101,24 @@ fn rendered_group_lines_with(
     lines
 }
 
-fn rendered_group_lines_at(snapshot: &SidebarSnapshot, phase: u64) -> Vec<Line<'static>> {
-    rendered_group_lines_with(snapshot, &Theme::fixed(true), phase)
+/// A sidebar config pinning the unread effect to `blink`, so a test reads one
+/// whole-word descriptor span and the 2-pole weight toggle rather than the
+/// default per-character shimmer.
+fn blink_sidebar() -> crate::config::SidebarConfig {
+    let mut sidebar = crate::config::SidebarConfig::default();
+    sidebar.animations.unread = Some(crate::config::UnreadEffect::Blink);
+    sidebar
+}
+
+fn rendered_group_lines_blink_no_color(
+    snapshot: &SidebarSnapshot,
+    phase: u64,
+) -> Vec<Line<'static>> {
+    rendered_group_lines_with(
+        snapshot,
+        &Theme::fixed_for_sidebar(true, &blink_sidebar()),
+        phase,
+    )
 }
 
 fn span_for<'a>(lines: &'a [Line<'static>], text: &str) -> &'a Span<'static> {
@@ -125,12 +141,12 @@ fn unread_descriptor_grows_bold_without_dimming() {
     );
     let mut unread = snapshot_with(Vec::new(), vec![agent.clone()]);
     unread.worktree_groups[0].rows[0].unread = true;
-    // Under NO_COLOR the unread descriptor shares the lead glyph/name blink
-    // through a grow-only weight toggle: plain at the trough, bold near the
-    // crest, never dim.
+    // Under NO_COLOR the blink unread descriptor shares the lead glyph/name
+    // 2-pole toggle through a grow-only weight: plain on the off-pole, bold on
+    // the on-pole, never dim.
     let unread_mods: Vec<_> = (0..32)
         .map(|phase| {
-            span_for(&rendered_group_lines_at(&unread, phase), "done")
+            span_for(&rendered_group_lines_blink_no_color(&unread, phase), "done")
                 .style
                 .add_modifier
         })
@@ -142,7 +158,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
     // A read descriptor never blinks — its weight is the same at every phase.
     let read = snapshot_with(Vec::new(), vec![agent]);
     for phase in 0..32 {
-        let modifier = span_for(&rendered_group_lines_at(&read, phase), "done")
+        let modifier = span_for(&rendered_group_lines_blink_no_color(&read, phase), "done")
             .style
             .add_modifier;
         assert!(!modifier.contains(Modifier::BOLD));
@@ -151,7 +167,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
 
 #[test]
 fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
-    let mut sidebar = crate::config::SidebarConfig::default();
+    let mut sidebar = blink_sidebar();
     sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
     let theme = Theme::fixed_for_sidebar(false, &sidebar);
     let agent = agent(
@@ -203,9 +219,12 @@ fn unread_turn_error_label_pulses_and_stays_italic() {
 
     let mods: Vec<_> = (0..32)
         .map(|phase| {
-            span_for(&rendered_group_lines_at(&snapshot, phase), "api error")
-                .style
-                .add_modifier
+            span_for(
+                &rendered_group_lines_blink_no_color(&snapshot, phase),
+                "api error",
+            )
+            .style
+            .add_modifier
         })
         .collect();
     assert!(

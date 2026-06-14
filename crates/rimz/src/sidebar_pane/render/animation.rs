@@ -1,6 +1,6 @@
 use crate::config::{
     AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
-    SidebarAnimationsConfig,
+    SidebarAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
 };
 use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
@@ -60,6 +60,125 @@ impl From<ConfigEffect> for Effect {
     }
 }
 
+/// How an unread attention row reads — the resolved twin of the config
+/// [`ConfigUnreadEffect`], shared by the lead glyph, the card name, the
+/// description, and the make-up buckets.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum UnreadEffect {
+    #[default]
+    Shimmer,
+    Bright,
+    Blink,
+}
+
+impl From<ConfigUnreadEffect> for UnreadEffect {
+    fn from(value: ConfigUnreadEffect) -> Self {
+        match value {
+            ConfigUnreadEffect::Shimmer => Self::Shimmer,
+            ConfigUnreadEffect::Bright => Self::Bright,
+            ConfigUnreadEffect::Blink => Self::Blink,
+        }
+    }
+}
+
+/// The resolved unread treatment for one row, built once and shared by every
+/// grouped element so they animate from the same clock. `Blink` carries the
+/// 2-pole sample, `Bright` is the held crest, and `Shimmer` carries the flowing
+/// beam's phase and age.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum UnreadAnim {
+    Blink(BreathSample),
+    Bright,
+    Shimmer(ShimmerWave),
+}
+
+/// The flowing shimmer beam for one element: a speed-scaled `phase` and the
+/// row's `age_secs`, from which [`shimmer_lift`] derives a per-cell lift. The
+/// beam runs over each element's own length, so the glyph, name, and description
+/// each sweep independently.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ShimmerWave {
+    phase: u64,
+    age_secs: i64,
+}
+
+/// OKLab-L crest of the shimmer beam — the lift its center cell reaches. It
+/// rides well above the blink crest ([`BLINK_PEAK_LIFT`]) on purpose: the blink
+/// lifts every cell at once, while the beam lights only the cells around its
+/// center with a soft falloff, so a matching ceiling would read far fainter. A
+/// brighter crest makes the moving highlight read as light flowing across the
+/// run.
+const SHIMMER_PEAK_LIFT: f32 = 0.26;
+
+/// Beam half-width as a fraction of the run's length: the lit band scales with
+/// the element, so a long description carries the same proportional glint as a
+/// short name instead of a fixed dot lost on a long line.
+const SHIMMER_BEAM_FRACTION: f32 = 0.13;
+/// Floor on the beam half-width, in cells, so the glyph and short names still
+/// get a real beam rather than a single lit cell.
+const SHIMMER_BEAM_HALF_MIN: f32 = 2.0;
+/// Ceiling on the beam half-width, in cells, so a very long line never glows
+/// end to end — the beam stays a travelling highlight, not a wash.
+const SHIMMER_BEAM_HALF_MAX: f32 = 7.0;
+
+/// Fraction of the full sweep the beam advances per render frame for a fresh
+/// ask. Measured in proportion, so a longer run sweeps faster in cells/frame to
+/// keep pace — up to [`SHIMMER_MAX_VELOCITY`], past which it would step at the
+/// refresh rate instead of flowing.
+const SHIMMER_FRESH_SWEEP: f32 = 0.03;
+/// Sweep fraction per frame at the age ceiling — a longer-ignored ask flows
+/// faster, the same "quickens with age" pacing the blink rides.
+const SHIMMER_HOT_SWEEP: f32 = 0.06;
+/// Speed ceiling, in cells per render frame. Left uncapped the proportional
+/// sweep pushes a long description to several cells per frame, which strobes at
+/// the ~10 Hz refresh; the cap holds it to a steady glide. At this value a
+/// full-width (~50-cell) description crosses in about four seconds while shorter
+/// runs still sweep in proportion.
+const SHIMMER_MAX_VELOCITY: f32 = 1.17;
+
+/// The beam half-width for a run of `len` cells: proportional to the length,
+/// clamped to a floor and ceiling.
+fn shimmer_half(len: usize) -> f32 {
+    (len as f32 * SHIMMER_BEAM_FRACTION).clamp(SHIMMER_BEAM_HALF_MIN, SHIMMER_BEAM_HALF_MAX)
+}
+
+/// Sweep fraction per frame for the given age, easing from fresh to hot.
+fn shimmer_sweep(age_secs: i64) -> f32 {
+    let heat = (age_secs.max(0) as f32 / ATTENTION_AGE_CEILING_SECS as f32).clamp(0.0, 1.0);
+    SHIMMER_FRESH_SWEEP + (SHIMMER_HOT_SWEEP - SHIMMER_FRESH_SWEEP) * heat
+}
+
+/// The beam's speed for a run of `len` cells, in cells per frame: the
+/// proportional sweep over the run's span, capped at [`SHIMMER_MAX_VELOCITY`] so
+/// a long line stays smooth at the refresh rate.
+fn shimmer_velocity(len: usize, age_secs: i64) -> f32 {
+    let span = len as f32 + 2.0 * shimmer_half(len);
+    (span * shimmer_sweep(age_secs)).min(SHIMMER_MAX_VELOCITY)
+}
+
+/// The OKLab-L lift for one cell under the shimmer beam. The beam center cycles
+/// around a ring at a length-scaled, capped speed ([`shimmer_velocity`]); a cell's
+/// lift eases from the crest ([`SHIMMER_PEAK_LIFT`]) at the beam center to zero at
+/// its edge on a raised-cosine curve — a soft bell that reads like cast light
+/// rather than a hard wedge — measured by circular distance so the beam bridges
+/// the seam. A run long enough to hold the beam rides a ring of its own length, so
+/// leaving the last cell re-enters the first with no gap and the light loops
+/// seamlessly, start to end. A short element (the glyph, a make-up bucket) rides a
+/// ring just wider than the beam, so it pulses bright then rests rather than
+/// holding a constant glow.
+pub(crate) fn shimmer_lift(wave: ShimmerWave, index: usize, len: usize) -> f32 {
+    let half = shimmer_half(len);
+    let ring = (len as f32).max(2.0 * half + 1.0);
+    let center = (wave.phase as f32 * shimmer_velocity(len, wave.age_secs)) % ring;
+    let offset = (index as f32 - center).abs();
+    let distance = offset.min(ring - offset);
+    if distance >= half {
+        return 0.0;
+    }
+    let falloff = 0.5 * (1.0 + (std::f32::consts::PI * distance / half).cos());
+    SHIMMER_PEAK_LIFT * falloff
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Speed {
     Slow,
@@ -102,6 +221,16 @@ impl BreathSample {
     pub(crate) fn blink_for_age(phase: u64, age_secs: i64, amplitude: f32) -> Self {
         Self {
             level: blink_level(phase, breath_tempo(age_secs)),
+            amplitude,
+        }
+    }
+
+    /// A sample pinned to the on-pole: a constant crest, no swing. Drives the
+    /// `bright` unread effect — through [`Theme::pulse`](super::theme::Theme::pulse)
+    /// it reads as a steady lift plus bold, the blink's bright pole held still.
+    pub(crate) fn steady_peak(amplitude: f32) -> Self {
+        Self {
+            level: 1.0,
             amplitude,
         }
     }
@@ -221,18 +350,27 @@ impl Animation {
         }
     }
 
-    /// The unread/attention blink sample for this role at `age_secs` of waiting,
-    /// or `None` when a configured `effect = "static"` quiets the blink. The one
-    /// source every grouped element shares — the lead glyph, the agent name, the
-    /// description, and the cockpit make-up bucket — so they swing in unison.
-    pub(crate) fn attention_pulse(
+    /// The unread treatment for this role at `age_secs` under the chosen
+    /// [`UnreadEffect`], or `None` when a configured `effect = "static"` quiets
+    /// it (the caller then falls back to a constant bold tone). One source every
+    /// grouped element shares — the lead glyph, the agent name, the description,
+    /// and the cockpit make-up bucket — so they animate from the same clock.
+    pub(crate) fn unread_anim(
         &self,
+        unread: UnreadEffect,
         phase: u64,
         age_secs: i64,
-        amplitude: f32,
-    ) -> Option<BreathSample> {
-        self.attention_breath_phase(phase)
-            .map(|phase| BreathSample::blink_for_age(phase, age_secs, amplitude))
+    ) -> Option<UnreadAnim> {
+        let phase = self.attention_breath_phase(phase)?;
+        Some(match unread {
+            UnreadEffect::Blink => UnreadAnim::Blink(BreathSample::blink_for_age(
+                phase,
+                age_secs,
+                BREATH_DEEP_AMPLITUDE,
+            )),
+            UnreadEffect::Bright => UnreadAnim::Bright,
+            UnreadEffect::Shimmer => UnreadAnim::Shimmer(ShimmerWave { phase, age_secs }),
+        })
     }
 
     #[cfg(test)]
@@ -243,6 +381,7 @@ impl Animation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ResolvedAnimations {
+    unread: UnreadEffect,
     thinking: Animation,
     working: Animation,
     compacting: Animation,
@@ -268,6 +407,7 @@ impl Default for ResolvedAnimations {
 impl ResolvedAnimations {
     pub(crate) fn resolve(config: &SidebarAnimationsConfig, palette: &Palette) -> Self {
         Self {
+            unread: config.unread.map(UnreadEffect::from).unwrap_or_default(),
             thinking: resolve_role(AnimationRole::Thinking, config.thinking.as_ref(), palette),
             working: resolve_role(AnimationRole::Working, config.working.as_ref(), palette),
             compacting: resolve_role(
@@ -317,6 +457,11 @@ impl ResolvedAnimations {
 
     pub(crate) fn status(&self, status: AgentStatus) -> &Animation {
         self.role(Self::status_role(status))
+    }
+
+    /// The configured unread attention effect (default [`UnreadEffect::Shimmer`]).
+    pub(crate) fn unread_effect(&self) -> UnreadEffect {
+        self.unread
     }
 
     #[cfg(test)]
@@ -672,6 +817,160 @@ mod tests {
         assert!(
             first_off(2 * ATTENTION_AGE_CEILING_SECS) < first_off(0),
             "a hot ask reaches its off-pole sooner — the blink keeps pacing with age"
+        );
+    }
+
+    #[test]
+    fn steady_peak_is_a_constant_bright_crest() {
+        let bright = BreathSample::steady_peak(BREATH_DEEP_AMPLITUDE);
+        assert_eq!(
+            bright.grow_delta(),
+            BLINK_PEAK_LIFT,
+            "bright holds the blink's bright pole",
+        );
+        assert_eq!(bright.grow_modifier(), Modifier::BOLD);
+    }
+
+    #[test]
+    fn shimmer_lift_peaks_under_the_beam_and_is_flat_beyond_it() {
+        let wave = ShimmerWave {
+            phase: 12,
+            age_secs: 0,
+        };
+        let len = 12;
+        let lifts: Vec<f32> = (0..len).map(|i| shimmer_lift(wave, i, len)).collect();
+        // The beam is local: not every cell lights at one phase, and the lit
+        // cells peak at the shimmer crest, never above it.
+        assert!(
+            lifts.iter().any(|&l| l > 0.0),
+            "some cell is under the beam: {lifts:?}"
+        );
+        assert!(
+            lifts.contains(&0.0),
+            "the beam is narrower than the element: {lifts:?}"
+        );
+        for &l in &lifts {
+            assert!(
+                (0.0..=SHIMMER_PEAK_LIFT + 1e-6).contains(&l),
+                "lift in range: {l}"
+            );
+        }
+    }
+
+    #[test]
+    fn shimmer_beam_travels_with_phase() {
+        let len = 12;
+        let center = |phase| {
+            (0..len)
+                .map(|i| (i, shimmer_lift(ShimmerWave { phase, age_secs: 0 }, i, len)))
+                .max_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i)
+                .expect("a brightest cell")
+        };
+        assert!(
+            center(80) >= center(2),
+            "the brightest cell moves to the right as the beam travels",
+        );
+    }
+
+    #[test]
+    fn single_cell_shimmer_pulses_over_a_cycle() {
+        // The glyph and the make-up buckets are one cell: their ring is just wider
+        // than the beam, so the beam passing produces a periodic lift — bright
+        // then rest — rather than a flowing run or a constant glow.
+        let lifts: Vec<f32> = (0..40)
+            .map(|phase| shimmer_lift(ShimmerWave { phase, age_secs: 0 }, 0, 1))
+            .collect();
+        assert!(lifts.iter().any(|&l| l > 0.0), "the beam reaches the cell");
+        assert!(lifts.contains(&0.0), "and leaves it again");
+    }
+
+    #[test]
+    fn shimmer_beam_widens_with_the_run_then_clamps() {
+        // The lit band tracks the run's length so a long line is not a dot,
+        // floored for short runs and capped so a very long line never washes.
+        assert_eq!(
+            shimmer_half(4),
+            SHIMMER_BEAM_HALF_MIN,
+            "short runs hit the floor"
+        );
+        assert!(
+            shimmer_half(40) > shimmer_half(12),
+            "a longer run carries a wider beam"
+        );
+        assert_eq!(
+            shimmer_half(400),
+            SHIMMER_BEAM_HALF_MAX,
+            "very long runs cap"
+        );
+    }
+
+    #[test]
+    fn shimmer_speed_scales_with_length_then_caps_for_smoothness() {
+        // A longer run sweeps faster in cells/frame to keep pace, but the speed
+        // is capped so a long line glides at the refresh rate instead of stepping
+        // several cells per frame.
+        assert!(
+            shimmer_velocity(50, 0) > shimmer_velocity(10, 0),
+            "a longer run flows faster to keep pace"
+        );
+        for len in [8_usize, 24, 50, 80, 200] {
+            for age in [0_i64, ATTENTION_AGE_CEILING_SECS] {
+                assert!(
+                    shimmer_velocity(len, age) <= SHIMMER_MAX_VELOCITY + 1e-6,
+                    "velocity stays within the smooth cap (len={len}, age={age})"
+                );
+            }
+        }
+        assert!(
+            shimmer_velocity(10, 0) < SHIMMER_MAX_VELOCITY,
+            "a short name sweeps proportionally, below the cap"
+        );
+    }
+
+    #[test]
+    fn unread_anim_picks_the_variant_and_honors_the_static_quiet() {
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette);
+        let waiting = animations.role(AnimationRole::Waiting);
+        assert!(matches!(
+            waiting.unread_anim(UnreadEffect::Blink, 0, 0),
+            Some(UnreadAnim::Blink(_))
+        ));
+        assert!(matches!(
+            waiting.unread_anim(UnreadEffect::Bright, 0, 0),
+            Some(UnreadAnim::Bright)
+        ));
+        assert!(matches!(
+            waiting.unread_anim(UnreadEffect::Shimmer, 0, 0),
+            Some(UnreadAnim::Shimmer(_))
+        ));
+
+        let quiet: SidebarAnimationsConfig =
+            toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
+        let quieted = ResolvedAnimations::resolve(&quiet, &palette);
+        assert_eq!(
+            quieted
+                .role(AnimationRole::Waiting)
+                .unread_anim(UnreadEffect::Shimmer, 0, 0),
+            None,
+            "a static-quieted role suppresses every unread effect",
+        );
+    }
+
+    #[test]
+    fn unread_effect_resolves_from_config_and_defaults_to_shimmer() {
+        let palette = test_palette();
+        assert_eq!(
+            ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette)
+                .unread_effect(),
+            UnreadEffect::Shimmer,
+        );
+        let config: SidebarAnimationsConfig =
+            toml::from_str("unread = \"bright\"\n").expect("config");
+        assert_eq!(
+            ResolvedAnimations::resolve(&config, &palette).unread_effect(),
+            UnreadEffect::Bright,
         );
     }
 

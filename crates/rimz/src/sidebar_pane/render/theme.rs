@@ -46,6 +46,13 @@ const SOFT_BRAND_DIM: f32 = 0.05;
 /// bucket fills alike. Held fixed, not a palette slot.
 const CHIP_INK: Color = Color::Indexed(16);
 
+/// OKLab-L lift at which the shimmer beam reads as "lit" for the discrete
+/// fallback: at 256-color and `NO_COLOR` depth the cell under the beam (within
+/// roughly its inner half) turns bold while the rest stay plain, so the beam
+/// still reads as motion where the cube cannot carry the sub-cell lift. Half the
+/// beam crest.
+const SHIMMER_BOLD_THRESHOLD: f32 = 0.04;
+
 /// The money settle flash: a brighter sage than the resting dollar green, held
 /// for a couple of frames as a value lands — the quiet "ka-chunk" of a count-up.
 /// Shared by the cockpit headline and the agent cards' `$cost`. A fixed
@@ -418,6 +425,39 @@ impl Theme {
             ColorDepth::Indexed => Style::default()
                 .fg(rgb_color(rgb, self.depth))
                 .add_modifier(sample.grow_modifier()),
+        }
+    }
+
+    /// One cell of the unread **shimmer** beam: a per-cell OKLab-L `lift` from
+    /// [`shimmer_lift`](super::animation::shimmer_lift), so a beam flowing across
+    /// an element brightens each cell in turn. At truecolor the lift rides the
+    /// gamut-safe lightness raise (held bold under the crest); the 256-color cube
+    /// can't carry the sub-cell step, so indexed depth — like `no_color` and a
+    /// colorless `fg` — bolds the cells under the beam center over the base tone,
+    /// a *moving* bold cell that reads as motion the cube carries honestly (see
+    /// theme.md, "Subtle steps and color depth").
+    pub(super) fn shimmer_cell(&self, fg: Option<Color>, lift: f32) -> Style {
+        let bold = if lift >= SHIMMER_BOLD_THRESHOLD {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
+        if self.no_color {
+            return Style::default().add_modifier(bold);
+        }
+        let Some(rgb) = fg.and_then(color_to_rgb) else {
+            return Style::default().add_modifier(bold);
+        };
+        match self.depth {
+            ColorDepth::Truecolor => {
+                let lifted = oklab::lift_lightness(rgb, lift);
+                Style::default()
+                    .fg(rgb_color(lifted, self.depth))
+                    .add_modifier(Modifier::BOLD)
+            }
+            ColorDepth::Indexed => Style::default()
+                .fg(rgb_color(rgb, self.depth))
+                .add_modifier(bold),
         }
     }
 

@@ -6,9 +6,17 @@ use super::parse_hex;
 
 /// `[sidebar.animations]`: per-machine status-head animation overrides. Each
 /// role is optional and each field inside a role is optional, so a user can
-/// change one glyph run without copying the shipped color or cadence.
+/// change one glyph run without copying the shipped color or cadence. `unread`
+/// is the one cross-cutting knob: it picks how unread attention rows read,
+/// shared across the lead glyph, the card name, the description, and the
+/// make-up buckets.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 pub struct SidebarAnimationsConfig {
+    /// How an unread attention row carries its signal — a flowing `shimmer`
+    /// (default), a constant `bright`, or the hard 2-pole `blink`. Unset keeps
+    /// the default shimmer.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unread: Option<UnreadEffect>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thinking: Option<AnimationSpec>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -53,6 +61,7 @@ impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
         #[derive(Default, Deserialize)]
         #[serde(default)]
         struct RawSidebarAnimationsConfig {
+            unread: Option<UnreadEffect>,
             thinking: Option<AnimationSpec>,
             working: Option<AnimationSpec>,
             compacting: Option<AnimationSpec>,
@@ -67,6 +76,7 @@ impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
 
         let raw = RawSidebarAnimationsConfig::deserialize(deserializer)?;
         let config = Self {
+            unread: raw.unread,
             thinking: raw.thinking,
             working: raw.working,
             compacting: raw.compacting,
@@ -300,6 +310,22 @@ pub enum AnimationEffect {
     Breathe,
 }
 
+/// How an unread attention row carries its signal, shared by the lead glyph, the
+/// card name, the description, and the cockpit make-up buckets. A per-role
+/// `effect = "static"` quiet still wins over any of these, falling back to a
+/// constant bold tone.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum UnreadEffect {
+    /// A light beam flows left-to-right across each element on its own.
+    #[default]
+    Shimmer,
+    /// The bright crest held constant — brighter and bold, no motion.
+    Bright,
+    /// The hard 2-pole brightness toggle between the resting tone and the crest.
+    Blink,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum AnimationSpeed {
@@ -384,6 +410,45 @@ mod tests {
         );
         assert_eq!(thinking.color, None);
         assert!(SidebarAnimationsConfig::default().is_unset());
+    }
+
+    #[test]
+    fn unread_effect_parses_each_mode_and_defaults_to_shimmer() {
+        for (value, expected) in [
+            ("shimmer", UnreadEffect::Shimmer),
+            ("bright", UnreadEffect::Bright),
+            ("blink", UnreadEffect::Blink),
+        ] {
+            let config: SidebarAnimationsConfig =
+                toml::from_str(&format!("unread = \"{value}\"\n")).expect("config");
+            assert_eq!(config.unread, Some(expected));
+            assert!(!config.is_unset());
+        }
+        assert_eq!(UnreadEffect::default(), UnreadEffect::Shimmer);
+        assert_eq!(SidebarAnimationsConfig::default().unread, None);
+    }
+
+    #[test]
+    fn unread_effect_rejects_unknown_value() {
+        assert!(toml::from_str::<SidebarAnimationsConfig>("unread = \"glow\"\n").is_err());
+    }
+
+    #[test]
+    fn unset_unread_omits_the_key_on_serialize() {
+        let toml = toml::to_string(&SidebarAnimationsConfig::default()).expect("serialize");
+        assert!(
+            !toml.contains("unread"),
+            "unset unread is not written: {toml}"
+        );
+        let set = SidebarAnimationsConfig {
+            unread: Some(UnreadEffect::Blink),
+            ..SidebarAnimationsConfig::default()
+        };
+        assert!(
+            toml::to_string(&set)
+                .expect("serialize")
+                .contains("unread = \"blink\"")
+        );
     }
 
     #[test]

@@ -9,8 +9,8 @@ use ratatui::text::{Line, Span};
 use crate::sidebar_pane::render::BodyFilter;
 use crate::sidebar_pane::render::fmt::age_secs;
 use crate::sidebar_pane::render::labels::{
-    age_heat_color, attention_blink_sample, attention_floor_color, status_chip_color, status_glyph,
-    status_rest_style,
+    age_heat_color, attention_cell_style, attention_floor_color, status_chip_color, status_glyph,
+    status_rest_style, unread_anim,
 };
 use crate::sidebar_pane::render::theme::Theme;
 
@@ -311,8 +311,8 @@ fn attention_bucket_style(
         .max();
     if let Some(age) = oldest_unread {
         let color = attention_heat_color(theme, status, age);
-        return match attention_blink_sample(theme, status, age, animation_phase) {
-            Some(sample) => theme.pulse(color, sample),
+        return match unread_anim(theme, status, age, animation_phase) {
+            Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
             None => theme.style(color, Modifier::BOLD),
         };
     }
@@ -337,8 +337,8 @@ fn success_bucket_style(
         .max();
     let color = theme.animations.status(AgentStatus::Success).color();
     if let Some(age) = oldest_unread {
-        return match attention_blink_sample(theme, AgentStatus::Success, age, animation_phase) {
-            Some(sample) => theme.pulse(color, sample),
+        return match unread_anim(theme, AgentStatus::Success, age, animation_phase) {
+            Some(anim) => attention_cell_style(theme, Some(color), anim, 0, 1),
             None => theme.style(color, Modifier::BOLD),
         };
     }

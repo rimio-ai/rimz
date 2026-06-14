@@ -145,7 +145,7 @@ blue = '#7aa2f7'
 
 Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
 
-Brightening runs in the same space and holds hue: a lift raises OKLab lightness and eases chroma toward the gamut boundary rather than letting the RGB channels hard-clamp, so the unread blink pulses brighter without drifting toward white or a neighboring hue.
+Brightening runs in the same space and holds hue: a lift raises OKLab lightness and eases chroma toward the gamut boundary rather than letting the RGB channels hard-clamp, so an unread row brightens toward its crest — whether the blink toggles to it, `bright` holds it, or the shimmer beam sweeps across it — without drifting toward white or a neighboring hue.
 
 ## Animations
 
@@ -179,9 +179,26 @@ The built-in heads:
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the shipped blink, `effect = "static"` quiets it, and `speed` tunes it when the blink is active. A literal blink is a frame sequence such as `frames = [" ", "!"]`.
+`color` accepts the semantic palette slots `good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the [unread attention effect](#unread-attention) below, `effect = "static"` quiets it to a constant bold tone, and `speed` paces it. A literal frame blink is a frame sequence such as `frames = [" ", "!"]`.
 
-Every role uses the same model: frames, color, effect, and speed. The built-in attention blink — a 2-pole square wave whose rate quickens with age — still applies age heat across the lead glyph, the card name, the description, and the make-up `?`/`!` buckets unless an explicit static effect quiets it; the cockpit count and per-bucket counts use still representative frames.
+Every role uses the same model: frames, color, effect, and speed. The unread attention signal carries across the lead glyph, the card name, the description, and the make-up `?`/`!`/`✓` buckets as one group — age heat sliding their base tone toward alarm — until the pane is focused; the cockpit count and per-bucket counts use still representative frames.
+
+### Unread attention
+
+`[sidebar.animations] unread` picks how an unread attention row reads. The lead glyph, the card name, the description, and the cockpit `?`/`!`/`✓` make-up buckets all carry the choice as one group, so a row that needs you reads with one voice.
+
+| `unread` | the row reads as |
+| --- | --- |
+| `shimmer` (default) | a light beam flows left-to-right across the glyph, the name, and the description, each on its own sweep, the flow quickening with age |
+| `bright` | the bright crest held constant — brighter and bold, no motion |
+| `blink` | a hard 2-pole brightness toggle between the resting tone and the crest, the rate quickening with age |
+
+`blink` and `bright` rise to the same gentle crest; the shimmer beam rides a brighter one, because it lights only the few cells under its moving center rather than the whole row at once, so a matching crest would read far fainter. All ride the same gamut-safe lift, holding hue as they brighten. A per-role `effect = "static"` on `waiting`, `failed`, or `success` wins over the `unread` choice, holding that role's row at a constant bold tone. At truecolor the effect rides an OKLab lightness lift; the 256-color cube and `NO_COLOR` carry it on weight — a held bold for `bright` and `blink`, a moving bold cell for `shimmer` — so the signal reads at every depth ([subtle steps and color depth](#subtle-steps-and-color-depth)).
+
+```toml
+[sidebar.animations]
+unread = "shimmer"   # or "bright", "blink"
+```
 
 ## Provider Styling
 
@@ -198,7 +215,7 @@ ascii_art = "CLAUDE"
 
 ## Glow
 
-`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The attention/result blink is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base blink.
+`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
 
 ```toml
 [sidebar]
@@ -213,6 +230,7 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 rimz config set sidebar.theme "TokyoNight Night"
 rimz config set sidebar.theme.good '#a0d0a0'
 rimz config set sidebar.glow always
+rimz config set sidebar.animations.unread shimmer
 rimz config set sidebar.animations.idle.effect breathe
 rimz config set sidebar.providers.codex.color 33
 ```

@@ -13,8 +13,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Span;
 
 use super::animation::{
-    AnimationRole, BREATH_DEEP_AMPLITUDE, BreathSample, effect_style, effect_weight, frame_at,
-    still_frame,
+    AnimationRole, BREATH_DEEP_AMPLITUDE, BreathSample, UnreadAnim, effect_style, effect_weight,
+    frame_at, shimmer_lift, still_frame,
 };
 use super::theme::Theme;
 

@@ -326,6 +326,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.budget.pace.amber",
         "sidebar.budget.pace.red",
         "sidebar.attention.stalled_after_secs",
+        "sidebar.animations.unread",
         "sidebar.trunk",
         "sidebar.theme.mode",
         "sidebar.theme.scheme",
@@ -491,6 +492,7 @@ mod tests {
             "sidebar.animations.working.color",
             "sidebar.animations.idle.effect",
             "sidebar.animations.success.speed",
+            "sidebar.animations.unread",
         ] {
             validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
         }
@@ -515,6 +517,7 @@ mod tests {
             ("sidebar.animations", true),
             ("sidebar.animations.thinking", true),
             ("sidebar.animations.thinking.frames", true),
+            ("sidebar.animations.unread", true),
             ("sidebar.animations.nope", false),
             ("accounts", true),
             ("accounts.usage_limit_usd", true),

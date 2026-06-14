@@ -426,17 +426,18 @@ fn make_up_buckets_pulse_only_while_unread() {
     let unread: Vec<_> = (0..32)
         .map(|phase| bucket_style(&snapshot, "! 1", phase))
         .collect();
-    // At indexed depth the blink rides weight, not color: it bolds on the
-    // on-pole, rests plain on the off-pole, never dims, and holds its tone.
+    // At indexed depth the unread effect (the default shimmer here) rides weight,
+    // not color: the moving beam bolds the cell as it passes, leaves it plain
+    // otherwise, never dims, and holds the bucket's tone throughout.
     assert!(
         unread
             .iter()
             .any(|style| style.add_modifier == Modifier::BOLD),
-        "an unread bucket bolds on the blink's on-pole"
+        "an unread bucket bolds as the beam passes"
     );
     assert!(
         unread.iter().any(|style| style.add_modifier.is_empty()),
-        "and rests plain on the off-pole — a weight blink, not constant bold"
+        "and rests plain between passes — a weight cue, not constant bold"
     );
     assert!(
         unread
@@ -445,7 +446,7 @@ fn make_up_buckets_pulse_only_while_unread() {
     );
     assert!(
         unread.iter().all(|style| style.fg == unread[0].fg),
-        "the indexed blink keeps the bucket's tone — the cue is weight"
+        "the indexed fallback keeps the bucket's tone — the cue is weight"
     );
 
     let mut success = agent(
@@ -471,25 +472,25 @@ fn make_up_buckets_pulse_only_while_unread() {
     let unread_success: Vec<_> = (0..32)
         .map(|phase| bucket_style(&success_snapshot, "✓ 1", phase))
         .collect();
-    // Unread success joins the blink; at indexed depth that blink is weight, so
-    // it bolds on the on-pole, rests plain on the off-pole, and holds its tone.
+    // Unread success joins the unread effect; at indexed depth it rides weight,
+    // bolding as the beam passes, plain between, holding the success tone.
     assert!(
         unread_success
             .iter()
             .any(|style| style.add_modifier == Modifier::BOLD),
-        "unread success bolds on the blink's on-pole"
+        "unread success bolds as the beam passes"
     );
     assert!(
         unread_success
             .iter()
             .any(|style| style.add_modifier.is_empty()),
-        "and rests plain on the off-pole"
+        "and rests plain between passes"
     );
     assert!(
         unread_success
             .iter()
             .all(|style| style.fg == unread_success[0].fg),
-        "the indexed blink keeps the success tone — the cue is weight"
+        "the indexed fallback keeps the success tone — the cue is weight"
     );
 }
 
