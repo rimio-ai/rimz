@@ -226,6 +226,13 @@ cargo zigbuild --help
 zig version
 ```
 
+`cargo xtask dist` then ad-hoc signs the Apple Silicon binary with `rcodesign` (the `apple-codesign` crate's CLI), so release maintainers also keep `rcodesign` on `PATH`. arm64 macOS refuses to `exec` a Mach-O that carries no code signature; zig linker-signs the arm64 build and reserves the signature room, so the explicit step rewrites it to a proper ad-hoc signature with no Apple certificate or notarization — and fails loudly if that room ever disappears. The x86_64 build needs no signature (Intel execs unsigned) and ships as built. Install `rcodesign` with Cargo or a prebuilt release binary:
+
+```sh
+cargo install --locked apple-codesign
+rcodesign --version
+```
+
 `rust-toolchain.toml` provisions the Apple Rust standard libraries for rustup-managed toolchains. On Linux, the dist task supplies the SDKROOT shape current `rustc` expects while Zig supplies the Darwin linker stubs for Rimz's release binary.
 
 ### Quality gates
@@ -253,7 +260,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `docs-links`, `pricing-refresh`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked scripts are the `.githooks/` shims, and they just route git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked scripts are the `.githooks/` shims, and they just route git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

@@ -68,7 +68,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 
 ```sh
 # 1 — Install
-cargo install rimz                          # or: brew install rimz
+cargo install rimz                          # or a Homebrew tap (see Install)
 
 # 2 — Open the room
 cd ~/code/query-engine
@@ -130,7 +130,11 @@ Adapters are thin layers over the same hook and transcript primitives ([agents i
 ## Install
 
 ```sh
-cargo install rimz          # or: brew install rimz
+cargo install rimz
+
+# or via a Homebrew tap — tap once, then install (swap <host> for the tap host):
+brew tap rimz/rimz https://<host>/rimz/homebrew-rimz
+brew install rimz/rimz/rimz
 ```
 
 zellij or tmux runs the room. Building from source is `git clone … && cargo xtask install`; prerequisites, the pinned toolchain, and the wasm target live in [the installation guide](./docs/guide/installation.md). Rimz is pre-release: the Claude Code, Codex, and Pi adapters, both multiplexer backends, and the sidebar are implemented in-tree.
