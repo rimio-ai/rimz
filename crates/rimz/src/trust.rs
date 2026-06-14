@@ -330,7 +330,6 @@ pub struct ProjectConfig {
 pub struct LayoutConfig {
     pub initial_panes: Vec<PaneConfig>,
     pub tmux: TmuxLayoutConfig,
-    pub zellij: ZellijLayoutConfig,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -348,12 +347,6 @@ pub struct TmuxLayoutConfig {
     pub status_left: Option<String>,
     pub status_right: Option<String>,
     pub popup_command: Option<String>,
-}
-
-#[derive(Clone, Debug, Default, Deserialize)]
-#[serde(default)]
-pub struct ZellijLayoutConfig {
-    pub plugin_command: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -379,7 +372,6 @@ pub struct HookConfig {
 struct ExecutableSurface<'a> {
     layout_initial_panes: Vec<ExecutablePane<'a>>,
     layout_tmux: ExecutableTmux<'a>,
-    layout_zellij: ExecutableZellij<'a>,
     agents: Vec<ExecutableAgent<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
@@ -398,11 +390,6 @@ struct ExecutableTmux<'a> {
     status_left: Option<&'a str>,
     status_right: Option<&'a str>,
     popup_command: Option<&'a str>,
-}
-
-#[derive(Serialize)]
-struct ExecutableZellij<'a> {
-    plugin_command: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -436,9 +423,6 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 status_left: config.layout.tmux.status_left.as_deref(),
                 status_right: config.layout.tmux.status_right.as_deref(),
                 popup_command: config.layout.tmux.popup_command.as_deref(),
-            },
-            layout_zellij: ExecutableZellij {
-                plugin_command: config.layout.zellij.plugin_command.as_deref(),
             },
             agents: config
                 .agents
@@ -641,7 +625,6 @@ mod tests {
             "[layout.tmux]\nstatus_left = 'left'\n",
             "[layout.tmux]\nstatus_right = 'right'\n",
             "[layout.tmux]\npopup_command = 'fzf-projects'\n",
-            "[layout.zellij]\nplugin_command = '/opt/plugin.wasm'\n",
             "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
             "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
