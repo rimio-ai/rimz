@@ -22,8 +22,8 @@ use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::feed::PaneRef;
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth, SidebarPaneOptions,
-    SidebarWidth, SplitPaneOptions, TabOptions, ZellijBackend, zellij,
+    ClientFocusOptions, LayoutPanes, MuxBackend, PaneCmd, PaneListOptions, SessionHealth,
+    SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, ZellijBackend, zellij,
 };
 use tempfile::TempDir;
 
@@ -2116,5 +2116,107 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         bar.y + bar.rows,
         u64::from(client_rows),
         "compact bar should stay docked at the bottom: {bar:?}",
+    );
+}
+
+/// `paste_text` writes one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
+/// the payload as a raw decimal byte list — the steer/queue delivery path. A
+/// bare shell renders the markers literally, so the inner text still lands in
+/// the pane; assert it arrives byte-for-byte. A leading dash is the regression
+/// guard: the byte-write path must never re-read the payload as a flag or key.
+#[test]
+fn paste_text_delivers_the_literal_payload() {
+    require_zellij!();
+
+    let session = ZellijSession::spawn(unique_session_name("paste"));
+    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    let panes = wait_for_pane_count(session.xdg.path(), &session.name, 1);
+    let pane_id = panes[0].pane_id.clone();
+
+    let payload = "-rf rimz-paste-marker";
+    backend.paste_text(&pane_id, payload).expect("paste_text");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let captured = loop {
+        let text = backend
+            .capture_pane(&pane_id, None, false)
+            .map(|capture| capture.raw_text)
+            .unwrap_or_default();
+        if text.contains(payload) || Instant::now() >= deadline {
+            break text;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    };
+    assert!(
+        captured.contains(payload),
+        "the pasted payload should arrive contiguous and byte-safe, got: {captured:?}",
+    );
+}
+
+/// `focused_client_panes` reads each client's focused pane from `list-clients`.
+/// A background session with no client focuses nothing; an attached client
+/// focuses its terminal pane. Drives the hook-ingestion pane-recovery probe.
+#[test]
+fn focused_client_panes_tracks_the_attached_client() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("focus");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+
+    // Birth a background session: it exists and answers actions, but has no
+    // attached client yet.
+    let created = scoped_zellij(xdg.path())
+        .args(["attach", "--create-background", &name])
+        .bounded_output()
+        .expect("attach --create-background");
+    assert!(
+        created.status.success(),
+        "create-background failed: {}",
+        String::from_utf8_lossy(&created.stderr),
+    );
+    wait_until_session_ready(xdg.path(), &name);
+
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    let detached = backend
+        .focused_client_panes(ClientFocusOptions {
+            session_name: Some(name.clone()),
+            ..Default::default()
+        })
+        .expect("focused_client_panes detached");
+    assert!(
+        detached.is_empty(),
+        "a background session with no client focuses nothing: {detached:?}",
+    );
+
+    // Attach a client; its focused terminal pane is now reported.
+    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    wait_for_attached_client(xdg.path(), &name);
+    let pane_id = wait_for_pane_count(xdg.path(), &name, 1)[0].pane_id.clone();
+
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let focused = loop {
+        let panes = backend
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some(name.clone()),
+                ..Default::default()
+            })
+            .expect("focused_client_panes attached");
+        if !panes.is_empty() || Instant::now() >= deadline {
+            break panes;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert_eq!(
+        focused.len(),
+        1,
+        "one attached client focuses one pane: {focused:?}",
+    );
+    assert_eq!(
+        focused[0], pane_id,
+        "the attached client focuses the session's lone terminal pane: {focused:?}",
     );
 }

@@ -8,17 +8,21 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use portable_pty::{CommandBuilder, PtySize, native_pty_system};
 use rimz::ids::{MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
-    LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions, SessionOptions,
-    SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
+    ClientFocusOptions, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
+    SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
 use tempfile::TempDir;
+
+use crate::common::ScrubSessionEnvExt;
 
 /// Poll `capture_pane` on `pane_id` until its text contains `needle` or the
 /// budget elapses; returns the last capture seen either way. Faster than a flat
@@ -251,6 +255,65 @@ impl Drop for TmuxServer {
         let _ = Command::new("tmux")
             .args(["-S", self.socket.to_str().unwrap_or(""), "kill-server"])
             .output();
+    }
+}
+
+/// A live tmux client attached to a session on the test's private socket, held
+/// open on a PTY of the given size so `list-clients` reports it. Drop kills the
+/// client; server teardown stays with [`TmuxServer`]. Mirrors the Zellij
+/// backend suite's `AttachedClient`.
+struct AttachedTmuxClient {
+    _master: Box<dyn portable_pty::MasterPty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+impl AttachedTmuxClient {
+    fn attach(socket: &Path, session: &str, cols: u16, rows: u16) -> Self {
+        let pair = native_pty_system()
+            .openpty(PtySize {
+                rows,
+                cols,
+                pixel_width: 0,
+                pixel_height: 0,
+            })
+            .expect("openpty");
+        let mut cmd = CommandBuilder::new("tmux");
+        // The test process may itself run inside a mux pane, and a control
+        // command captures the spawning env; scrub the session vars so the
+        // attach lands on the test's private socket alone.
+        cmd.scrub_session_env();
+        cmd.args([
+            "-S",
+            socket.to_str().expect("utf8 socket"),
+            "attach",
+            "-t",
+            session,
+        ]);
+        let child = pair.slave.spawn_command(cmd).expect("spawn tmux attach");
+        drop(pair.slave);
+        // Drain the PTY in the background so the kernel buffer never fills and
+        // stalls the client; the thread exits with the PTY on drop.
+        let mut reader = pair.master.try_clone_reader().expect("clone reader");
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => continue,
+                }
+            }
+        });
+        Self {
+            _master: pair.master,
+            child,
+        }
+    }
+}
+
+impl Drop for AttachedTmuxClient {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
     }
 }
 
@@ -1033,6 +1096,102 @@ fn capture_send_keys_and_named_key_round_trip() {
     assert!(
         capture.contains("rimz-marker-key"),
         "expected marker in capture, got: {capture:?}",
+    );
+}
+
+/// `paste_text` injects one bracketed paste (`ESC[200~` … `ESC[201~`) wrapping
+/// the literal payload — the steer/queue delivery path. A bare shell renders
+/// the markers literally, so the inner text still lands in the pane; assert the
+/// payload arrives byte-for-byte. A leading dash is the regression guard: the
+/// `send-keys -l --` spelling must never re-read the bytes as flags or key names.
+#[test]
+fn paste_text_delivers_the_literal_payload() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("paste");
+    let pane_id = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("paste".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes[0]
+        .pane_id
+        .clone();
+
+    let payload = "-rf rimz-paste-marker";
+    server
+        .backend
+        .paste_text(&pane_id, payload)
+        .expect("paste_text");
+
+    let capture = capture_pane_until(
+        &server.backend,
+        &pane_id,
+        "rimz-paste-marker",
+        Duration::from_secs(2),
+    );
+    assert!(
+        capture.contains(payload),
+        "the pasted payload should arrive contiguous and byte-safe, got: {capture:?}",
+    );
+}
+
+/// `focused_client_panes` reads each client's focused pane from `list-clients`.
+/// A detached session has no client, so it reports nothing; an attached client
+/// focuses the session's pane. Drives the hook-ingestion pane-recovery probe.
+#[test]
+fn focused_client_panes_tracks_the_attached_client() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("focus");
+    let pane_id = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("focus".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes[0]
+        .pane_id
+        .clone();
+
+    // No client attached: list-clients is empty, so the focus set is too.
+    let detached = server
+        .backend
+        .focused_client_panes(ClientFocusOptions {
+            session_name: Some("focus".to_owned()),
+            ..Default::default()
+        })
+        .expect("focused_client_panes detached");
+    assert!(
+        detached.is_empty(),
+        "a detached session focuses no client panes: {detached:?}",
+    );
+
+    // Attach a client; its focused pane is the session's lone pane.
+    let _client = AttachedTmuxClient::attach(&server.socket, "focus", 200, 50);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let focused = loop {
+        let panes = server
+            .backend
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some("focus".to_owned()),
+                ..Default::default()
+            })
+            .expect("focused_client_panes attached");
+        if !panes.is_empty() || Instant::now() >= deadline {
+            break panes;
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    assert_eq!(
+        focused,
+        vec![pane_id],
+        "an attached client focuses the session's lone pane: {focused:?}",
     );
 }
 
