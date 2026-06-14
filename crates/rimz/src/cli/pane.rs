@@ -107,15 +107,16 @@ pub fn run(args: PaneArgs, globals: &GlobalFlags) -> Result<()> {
     }
 }
 
-/// List the room as panes: every pane grouped by its native tab, each annotated
-/// with the agent-colleague that lives in it (`@kind#worktree`), its status, the
-/// foreground command, and the working directory.
+/// List the room as panes: every pane grouped by its native tab, each labelled
+/// with the agent-colleague that lives in it (`@kind#worktree`) or `process` for
+/// a plain pane, alongside its status and working directory. Rimz's own sidebar
+/// chrome is dropped — it is never a routing target.
 ///
 /// The pane enumeration is the spine and always works. The agent annotations are
 /// a best-effort overlay folded from the workspace snapshot the same way the
 /// sidebar reads it — when no snapshot is available (no ledger, foreign session),
-/// panes still list, just without the `@handle` column. Enrichment, never a
-/// precondition.
+/// panes still list, just labelled `process` rather than carrying a `@handle`.
+/// Enrichment, never a precondition.
 fn list(
     backend: &dyn MuxBackend,
     globals: &GlobalFlags,
@@ -130,12 +131,17 @@ fn list(
             .map(|workspace| workspace.session_name.clone())
             .context("resolving the cwd's workspace session; pass --session-name")?,
     };
-    let panes = backend
+    // Drop Rimz's own sidebar chrome: it is never a routing target, so it has no
+    // place in either the table or the `--json` tree.
+    let panes: Vec<PaneRef> = backend
         .list_panes(PaneListOptions {
             session_name: Some(session.clone()),
             ..Default::default()
         })?
-        .panes;
+        .panes
+        .into_iter()
+        .filter(|pane| !pane.is_rimz_sidebar())
+        .collect();
     // Only overlay agents when listing this workspace's own session — a foreign
     // session's pane ids carry no meaning in our rollup.
     let overlay = workspace
@@ -187,7 +193,7 @@ fn list(
         return Ok(());
     }
 
-    let mut table = render::Table::new(["", "AGENT", "STATUS", "CMD", "CWD", "PANE"]);
+    let mut table = render::Table::new(["", "AGENT", "STATUS", "CWD", "PANE"]);
     for tab in group_by_tab(&panes) {
         table.section(tab.label());
         for pane in &tab.panes {
@@ -248,28 +254,25 @@ fn group_by_tab(panes: &[PaneRef]) -> Vec<TabGroup<'_>> {
     tabs
 }
 
-/// The styled cells for one pane row: focus dot, agent handle, status, command,
-/// cwd, and the pane id.
+/// The styled cells for one pane row: focus dot, occupant (agent handle or the
+/// literal `process`), status, cwd, and the pane id.
 fn pane_row(
     pane: &PaneRef,
     agent: Option<&AgentState>,
     peers: &[&AgentState],
 ) -> Vec<render::Cell> {
     let focus = if pane.is_focused { "●" } else { "" };
-    let handle = match agent {
-        Some(agent) => rimz::target::agent_handle(agent, peers, true),
-        None => "-".to_owned(),
+    let occupant_cell = match agent {
+        Some(agent) => {
+            render::cell(rimz::target::agent_handle(agent, peers, true)).fg(render::palette::ACCENT)
+        }
+        None => render::cell("process").fg(render::palette::MUTED),
     };
-    let status = agent.map_or_else(|| "-".to_owned(), |agent| agent.status.as_str().to_owned());
     let status_cell = match agent {
-        Some(agent) => render::cell(status).fg(render::status::agent(agent.status, agent.phase)),
-        None => render::cell(status).dash(),
-    };
-    let command = pane.command.clone().unwrap_or_else(|| "-".to_owned());
-    let command_cell = if pane.is_rimz_sidebar() {
-        render::cell(command).fg(render::palette::FAINT)
-    } else {
-        render::cell(command).dash()
+        Some(agent) => {
+            render::cell(agent.status.as_str()).fg(render::status::agent(agent.status, agent.phase))
+        }
+        None => render::cell("-").dash(),
     };
     let cwd = pane
         .cwd
@@ -277,9 +280,8 @@ fn pane_row(
         .map_or_else(|| "-".to_owned(), render::home_relative);
     vec![
         render::cell(focus).fg(render::palette::ACCENT),
-        render::cell(handle).fg(render::palette::ACCENT).dash(),
+        occupant_cell,
         status_cell,
-        command_cell,
         render::cell(cwd).dash(),
         render::cell(pane.pane_id.to_string()).fg(render::palette::META),
     ]
@@ -305,6 +307,8 @@ struct TabJson<'a> {
 struct PaneJson<'a> {
     pane_id: String,
     focused: bool,
+    /// `agent` when an agent overlay binds to the pane, `process` otherwise.
+    kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<AgentJson>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -332,6 +336,7 @@ fn pane_json<'a>(
     PaneJson {
         pane_id: pane.pane_id.to_string(),
         focused: pane.is_focused,
+        kind: if agent.is_some() { "agent" } else { "process" },
         agent: agent.map(|agent| AgentJson {
             kind: agent.kind.to_string(),
             handle: rimz::target::agent_handle(agent, peers, true),
@@ -600,6 +605,7 @@ mod tests {
         let agent = agent_on("terminal_1", "claude", "main");
         let peers: Vec<&AgentState> = vec![&agent];
         let json = pane_json(&pane, Some(&agent), &peers);
+        assert_eq!(json.kind, "agent");
         let bound = json.agent.expect("agent bound");
         assert_eq!(bound.handle, "@claude#main");
         assert_eq!(bound.kind, "claude");
@@ -613,7 +619,8 @@ mod tests {
         let pane = pane("terminal_2", "tab_1", "shell", "zsh", "/home/x", false);
         let json = pane_json(&pane, None, &[]);
         assert!(json.agent.is_none(), "a bare shell carries no agent");
-        assert_eq!(json.command, Some("zsh"));
+        assert_eq!(json.kind, "process");
+        assert_eq!(json.command, Some("zsh"), "command is retained in json");
         assert_eq!(json.pane_id, "zellij:terminal_2");
     }
 

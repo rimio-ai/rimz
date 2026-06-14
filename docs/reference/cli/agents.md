@@ -172,20 +172,20 @@ rimz pane split
 rimz pane detach [--session-name <NAME>]
 ```
 
-`list` is the room seen as panes: every pane grouped under its native tab, each row carrying the agent-colleague that lives in it (`@kind#worktree`), its status, the foreground command, and the working directory. A `●` marks the active pane in each tab.
+`list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent-colleague that lives in it (`@kind#worktree`) or `process` for a plain pane, alongside its status and working directory. Rimz's own sidebar pane is omitted. A `●` marks the active pane in each tab.
 
 ```text
 ⑂ auth-refresh
- ●  @claude#auth-refresh   running   claude   ~/code/qe-wt/auth-refresh   zellij:terminal_3
-    @codex#auth-refresh    idle      codex    ~/code/qe-wt/auth-refresh   zellij:terminal_4
-    -                      -         zsh      ~/code/qe-wt/auth-refresh   zellij:terminal_5
+ ●  @claude#auth-refresh   running   ~/code/qe-wt/auth-refresh   zellij:terminal_3
+    @codex#auth-refresh    idle      ~/code/qe-wt/auth-refresh   zellij:terminal_4
+    process                -         ~/code/qe-wt/auth-refresh   zellij:terminal_5
 
 claude:query-engine
- ●  @claude#main           waiting   claude   ~/code/query-engine         zellij:terminal_8
-    -                      -         vim      ~/code/query-engine         zellij:terminal_9
+ ●  @claude#main           waiting   ~/code/query-engine         zellij:terminal_8
+    process                -         ~/code/query-engine         zellij:terminal_9
 ```
 
-The agent annotations are a best-effort overlay, folded from the workspace snapshot the same way the sidebar reads it: a pane binds to an agent by the same stamped-id-plus-process-start rule the sidebar's cards use, so a pane the multiplexer has since handed back to a shell wears no handle. The tab grouping always works, and when no snapshot is reachable (no ledger, or a foreign `--session-name`) the panes still list, just without the `@handle`. The default session is the cwd's workspace session; `--json` emits the tab tree with a per-pane `agent` object (`kind`, `handle`, `status`, `worktree`). `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention to a pane. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
+The agent annotations are a best-effort overlay, folded from the workspace snapshot the same way the sidebar reads it: a pane binds to an agent by the same stamped-id-plus-process-start rule the sidebar's cards use, so a pane the multiplexer has since handed back to a shell reads `process`. The tab grouping always works, and when no snapshot is reachable (no ledger, or a foreign `--session-name`) the panes still list, just labelled `process` rather than carrying a `@handle`. The default session is the cwd's workspace session; `--json` emits the tab tree with a per-pane `kind` (`agent` or `process`), the pane's `command`, `cwd`, and `pid`, and — for agent panes — an `agent` object (`kind`, `handle`, `status`, `worktree`). `capture` prints visible pane text, `send` types literal text and named keys in order, and `focus` moves attention to a pane. Named keys are `enter`, `escape`, `tab`, `backspace`, `up`, `down`, `left`, `right`, `ctrl-c`, `ctrl-d`, and `ctrl-u`; aliases include `return`, `esc`, `bs`, `control-c`, `control-d`, and `control-u`.
 
 Pane capture is untrusted terminal text. Scripts and resolvers match bounded patterns before sending text back, and `pane send` is the same explicit input path as `steer` and queued delivery. Resolver patterns and pane-send discipline live in [resolver internals](../../internals/agents/resolvers.md).
 
