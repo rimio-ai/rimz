@@ -70,6 +70,15 @@ pub(crate) fn warm_toward(base: Rgb, target: Rgb, rotate: f32, chroma_scale: f32
     .to_rgb()
 }
 
+/// Test-only: the OKLab hue angle (radians) of an sRGB color, so a derived tone
+/// can be asserted to land on the intended arc between two hues rather than only
+/// passing per-channel inequalities a darker off-hue tone might also satisfy.
+#[cfg(test)]
+pub(crate) fn hue_angle(rgb: Rgb) -> f32 {
+    let color = Oklab::from_rgb(rgb);
+    color.b.atan2(color.a)
+}
+
 /// Iterations of the chroma-fit bisection: 16 resolves the scale to 1/65536,
 /// far finer than 8-bit sRGB can show.
 const GAMUT_FIT_ITERS: usize = 16;

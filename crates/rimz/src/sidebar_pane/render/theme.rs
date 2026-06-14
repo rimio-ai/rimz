@@ -75,6 +75,22 @@ const HEAT_RAMP_STOPS: usize = 4;
 /// sweep.
 const HEAT_RAMP_WARM_START: f32 = 1.0 / (HEAT_RAMP_STOPS as f32 - 1.0);
 
+/// The fresh-input "expense" tone derives from `caution` the same way `caution`
+/// itself derives from `warn` — [`oklab::warm_toward`], one step further toward
+/// the alarm, then deepened a touch. `caution` is the gold `warn` rotated `0.22`
+/// toward the red; rotating the resulting amber a further fraction toward the
+/// alarm hue, enriching its chroma, and dropping its lightness a step lands a
+/// deep, hot vermilion: costlier-looking than the bright amber tier, yet warmer
+/// and quieter than the rose `alarm` so danger keeps its exclusive slot. The
+/// deepen step also carries the separation at indexed depth — without it the
+/// light amber and the light rose collapse into adjacent xterm cells. Levers:
+/// raise `ROTATE` toward the alarm hue, `CHROMA` enriches where a scheme leaves
+/// gamut room, `DEEPEN` makes it read hotter and lands its own indexed cell.
+/// Tuned against a rendered frame.
+const INPUT_EXPENSE_ROTATE: f32 = 0.40;
+const INPUT_EXPENSE_CHROMA: f32 = 1.15;
+const INPUT_EXPENSE_DEEPEN: f32 = -0.05;
+
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
 /// catalog. `[sidebar.theme] scheme` left unset resolves to this. The baked-in
 /// tones live in [`Semantic::DEFAULT`].
@@ -89,6 +105,10 @@ pub(crate) struct Palette {
     warn: Color,
     caution: Color,
     alarm: Color,
+    /// The fresh-input cost tone — `caution` warmed further toward `alarm` into a
+    /// vermilion, costlier-looking than the amber tier yet short of the danger
+    /// alarm. Derived like `heat_ramp`, not a tunable slot.
+    expense: Color,
     accent: Color,
     cool: Color,
     meta: Color,
@@ -123,18 +143,35 @@ impl Palette {
                 .map(|color| theme_color(color, depth))
                 .unwrap_or_else(|| rgb_color(builtin, depth))
         };
+        let heat_ramp = [
+            derived_rgb_slot(theme.good, tones.good),
+            derived_rgb_slot(theme.warn, tones.warn),
+            derived_rgb_slot(theme.caution, tones.caution),
+            derived_rgb_slot(theme.alarm, tones.alarm),
+        ];
+        // Reuse the ramp's already-derived caution (stop 2) and alarm (stop 3)
+        // RGB to warm the fresh-input vermilion one step past the amber tier,
+        // then deepen it so it reads hotter and lands its own cell at any depth.
+        let expense = rgb_color(
+            oklab::lift_lightness(
+                oklab::warm_toward(
+                    heat_ramp[2],
+                    heat_ramp[3],
+                    INPUT_EXPENSE_ROTATE,
+                    INPUT_EXPENSE_CHROMA,
+                ),
+                INPUT_EXPENSE_DEEPEN,
+            ),
+            depth,
+        );
         Palette {
             depth,
-            heat_ramp: [
-                derived_rgb_slot(theme.good, tones.good),
-                derived_rgb_slot(theme.warn, tones.warn),
-                derived_rgb_slot(theme.caution, tones.caution),
-                derived_rgb_slot(theme.alarm, tones.alarm),
-            ],
+            heat_ramp,
             good: slot(theme.good, tones.good),
             warn: slot(theme.warn, tones.warn),
             caution: slot(theme.caution, tones.caution),
             alarm: slot(theme.alarm, tones.alarm),
+            expense,
             accent: slot(theme.accent, tones.accent),
             cool: slot(theme.cool, tones.cool),
             meta: slot(theme.meta, tones.meta),

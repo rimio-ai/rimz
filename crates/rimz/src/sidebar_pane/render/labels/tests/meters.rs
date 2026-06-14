@@ -22,22 +22,30 @@ fn indexed_from_truecolor(color: Color) -> Color {
 fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
     let write = theme.component(Component::CacheWrite);
     let input = theme.component(Component::Input);
-    assert_eq!(
+    let read = theme.component(Component::CacheRead);
+    assert_ne!(
         input,
         theme.heat_tone(2.0 / 3.0),
-        "fresh input wears the caution amber — the ramp's third stop — hot/costly"
+        "fresh input warms past the caution amber — costlier than the hot/costly tier"
     );
     assert_ne!(
         input,
         theme.heat_tone(1.0),
-        "fresh input no longer borrows the 100% alarm red, so red stays exclusive to danger"
+        "fresh input stays under the 100% alarm red, so red stays exclusive to danger"
+    );
+    assert_ne!(
+        read, input,
+        "cache-read teal stays distinct from the input vermilion"
     );
     assert_eq!(
         write,
         theme.component(Component::SubagentHeader),
         "cache-write shares the compaction/delegation violet (meta) slot"
     );
-    assert_ne!(write, input, "cache-write stays distinct from input amber");
+    assert_ne!(
+        write, input,
+        "cache-write stays distinct from the input vermilion"
+    );
 }
 
 #[test]
@@ -225,7 +233,7 @@ fn gauge_bars_map_severity_and_apportion_segments() {
     assert_eq!(
         indexed.component(Component::Input),
         indexed_from_truecolor(truecolor.component(Component::Input)),
-        "indexed input is the truecolor alarm red quantized to xterm"
+        "indexed input is the truecolor vermilion quantized to xterm"
     );
     assert_eq!(
         indexed.component(Component::CacheWrite),
@@ -549,7 +557,7 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     };
     // The `▤` head wears the bar's severity tip; each composition marker legends
     // the bar in its own segment tone — cache-read cyan, cache-write compaction
-    // violet, fresh input context-alarm red, output green.
+    // violet, fresh input the expense vermilion, output green.
     assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
     assert_eq!(
         tone(TOKENS_CACHED),

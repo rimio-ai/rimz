@@ -52,7 +52,8 @@ pub(crate) enum Component {
     /// The `↗` output token marker — generated output, conventionally green.
     Output,
     /// The `↘` fresh-input token marker — the expensive freshly-read tokens wear
-    /// the warm caution amber ("hot/costly"), keeping alarm red for danger alone.
+    /// the `expense` vermilion: `caution` warmed further toward `alarm`, costlier
+    /// than the amber tier while staying under the alarm so danger keeps red.
     Input,
     /// The `◍` cache-write token marker — the compaction/delegation violet.
     CacheWrite,
@@ -141,7 +142,7 @@ impl Component {
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
             ProcMem | Output | FlashResolved | FlashLifted => palette.good,
             Compaction | AttentionFloor | FlashWaiting => palette.warn,
-            Input => palette.caution,
+            Input => palette.expense,
             FlashFailed => palette.alarm,
             WindowMedium | UnknownBrand | FlashMaterialized => palette.muted,
             WindowSmall => palette.faint,

@@ -173,8 +173,8 @@ pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 
 /// The context bar's color segments, when the per-message breakdown is known,
 /// left to right: cache reads (row health tone, seeded with teal), cache writes
-/// (compaction/delegation violet), fresh `input` (the caution amber) — the same
-/// tones the context line's markers wear, so the line legends the bar by
+/// (compaction/delegation violet), fresh `input` (the expense vermilion) — the
+/// same tones the context line's markers wear, so the line legends the bar by
 /// construction. The rich statusline blob is preferred; the row-level
 /// [`SidebarRow::call_split`]
 /// (Codex's rollout `last_token_usage`, which reports no cache-write) stands in
