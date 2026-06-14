@@ -20,9 +20,14 @@
 //! The hostname is withheld and PII is off by default — the telemetry surface
 //! is documented in [`docs/guide/security.md`](../../docs/guide/security.md).
 
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use sentry::ClientInitGuard;
+use sentry::protocol::Event;
+use sentry::types::Dsn;
 use sentry_tracing::EventFilter;
 use tracing::{Level, Metadata};
 use tracing_subscriber::Layer;
@@ -34,7 +39,23 @@ use crate::workspace::ENV_WORKSPACE_ID;
 
 const ENV_DSN: &str = "RIMZ_SENTRY_DSN";
 const ENV_ENVIRONMENT: &str = "RIMZ_SENTRY_ENVIRONMENT";
-const DEFAULT_ENVIRONMENT: &str = "production";
+
+/// The tracing target the hook lifecycle emits agent-observed turn errors on —
+/// provider rate-limit/overload conditions Rimz watches, not Rimz faults.
+/// Events on this target carry `fault=agent`; every other bridge event carries
+/// `fault=rimz`, so triage filters our bugs from upstream hiccups.
+const AGENT_CONDITION_TARGET: &str = "rimz::agent::turn_error";
+
+/// Per-fingerprint off-box budget: at most [`RATE_LIMIT_BURST`] events sharing a
+/// fingerprint per [`RATE_LIMIT_WINDOW_MS`]. A `warn!` on a per-frame sidebar
+/// path would otherwise flood Sentry with tens of thousands of identical events,
+/// burying real signal and the quota; this caps the bleed without silencing it.
+const RATE_LIMIT_WINDOW_MS: u64 = 60_000;
+const RATE_LIMIT_BURST: u32 = 5;
+/// Bound the limiter's live key set so an unexpectedly high-cardinality
+/// fingerprint cannot grow the window map without limit; expired windows are
+/// pruned once the map passes this many keys.
+const RATE_LIMIT_MAX_KEYS: usize = 1024;
 
 /// Outcome of [`init`], held by the binary for the process lifetime.
 #[must_use = "drop flushes pending events; hold the guard for the process lifetime"]
@@ -85,9 +106,19 @@ pub fn init() -> Reporting {
         Ok(dsn) => dsn,
         Err(err) => return Reporting::InvalidDsn(err.to_string()),
     };
-    let guard = sentry::init(sentry::ClientOptions {
+    let guard = sentry::init(client_options(dsn, environment));
+    tag_scope();
+    Reporting::On(guard)
+}
+
+/// Build the [`sentry::ClientOptions`] for a resolved DSN and environment. Split
+/// from [`init`] so the before-send enrichment — hostname stripping, the fault
+/// tag, stable fingerprinting, and the per-fingerprint rate limit — is covered
+/// by tests driving a recording transport.
+fn client_options(dsn: Dsn, environment: String) -> sentry::ClientOptions {
+    sentry::ClientOptions {
         dsn: Some(dsn),
-        release: sentry::release_name!(),
+        release: release(),
         environment: Some(environment.into()),
         // External reporting withholds personal data by default; strip the
         // hostname the contexts integration would otherwise attach.
@@ -96,14 +127,137 @@ pub fn init() -> Reporting {
         // (a callsite's `error = &err as &dyn Error`) so a report names where it
         // came from, not just what failed. Free with the `backtrace` feature.
         attach_stacktrace: true,
-        before_send: Some(Arc::new(|mut event: sentry::protocol::Event<'static>| {
-            event.server_name = None;
-            Some(event)
-        })),
+        // Mark Rimz frames in-app and the bridge crates out-of-app so Sentry
+        // picks the Rimz callsite as the culprit instead of a `tracing`/`sentry`
+        // internal. The payoff lands once debug files are uploaded per release.
+        in_app_include: vec!["rimz"],
+        in_app_exclude: vec!["sentry", "tracing"],
+        before_send: Some(before_send()),
         ..Default::default()
-    });
-    tag_scope();
-    Reporting::On(guard)
+    }
+}
+
+/// The Sentry release for this process: `rimz@<build id>`, the digest of the
+/// running executable the diagnostics log and the `build` tag already stamp, so
+/// one identity tracks regressions, makes `resolve --in-next-release` reopen on
+/// a real new build, and keys uploaded debug files. Falls back to the crate
+/// version when the binary cannot be digested.
+fn release() -> Option<Cow<'static, str>> {
+    match crate::build_id::current() {
+        Some(build) => Some(Cow::Owned(format!("rimz@{build}"))),
+        None => sentry::release_name!(),
+    }
+}
+
+/// The before-send hook: strip the hostname, then on bridge events (those
+/// carrying a tracing target) add the `fault` tag, pin a stable fingerprint, and
+/// rate-limit per fingerprint. Non-bridge events — a panic, a manual capture —
+/// keep Sentry's default grouping and are never throttled.
+fn before_send() -> Arc<dyn Fn(Event<'static>) -> Option<Event<'static>> + Send + Sync> {
+    let limiter = Arc::new(Mutex::new(RateLimiter::new()));
+    let base = Instant::now();
+    Arc::new(move |mut event: Event<'static>| {
+        event.server_name = None;
+        let Some(logger) = event.logger.clone() else {
+            return Some(event);
+        };
+        event
+            .tags
+            .insert("fault".to_owned(), fault_for(&logger).to_owned());
+        let operation = event.tags.get("operation").map(String::as_str);
+        let parts = fingerprint_components(&logger, operation, event.message.as_deref());
+        let key = hash_parts(&parts);
+        event.fingerprint = parts.into_iter().map(Cow::Owned).collect::<Vec<_>>().into();
+        let now_ms = u64::try_from(base.elapsed().as_millis()).unwrap_or(u64::MAX);
+        if limiter
+            .lock()
+            .expect("sentry rate-limiter lock")
+            .over_budget(key, now_ms)
+        {
+            return None;
+        }
+        Some(event)
+    })
+}
+
+/// Classify a bridge event by its tracing target: an agent-observed condition
+/// (provider rate-limit/overload) versus a Rimz fault.
+fn fault_for(logger: &str) -> &'static str {
+    if logger == AGENT_CONDITION_TARGET {
+        "agent"
+    } else {
+        "rimz"
+    }
+}
+
+/// Stable Sentry grouping key for a bridge event: a namespace, the tracing
+/// target, the `operation` tag, and the static message. The unsymbolicated
+/// release stack varies frame-to-frame and splits one callsite across groups;
+/// pinning the fingerprint to these stable facts collapses it back to one issue.
+/// Error-carrying callsites move their text into the exception, leaving no
+/// message — `target` plus the low-cardinality `operation` keeps them grouped.
+fn fingerprint_components(
+    logger: &str,
+    operation: Option<&str>,
+    message: Option<&str>,
+) -> Vec<String> {
+    let mut parts = Vec::with_capacity(4);
+    parts.push("rimz".to_owned());
+    parts.push(logger.to_owned());
+    if let Some(operation) = operation {
+        parts.push(format!("op:{operation}"));
+    }
+    if let Some(message) = message {
+        parts.push(format!("msg:{message}"));
+    }
+    parts
+}
+
+fn hash_parts(parts: &[String]) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for part in parts {
+        part.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Fixed-window per-fingerprint rate limiter for the off-box channel.
+struct RateLimiter {
+    windows: HashMap<u64, Window>,
+}
+
+struct Window {
+    start_ms: u64,
+    count: u32,
+}
+
+impl RateLimiter {
+    fn new() -> Self {
+        Self {
+            windows: HashMap::new(),
+        }
+    }
+
+    /// Record one event for `key` at `now_ms` and report whether it exceeds the
+    /// window budget (and so should be dropped).
+    fn over_budget(&mut self, key: u64, now_ms: u64) -> bool {
+        if self.windows.len() > RATE_LIMIT_MAX_KEYS {
+            self.windows
+                .retain(|_, window| now_ms.saturating_sub(window.start_ms) < RATE_LIMIT_WINDOW_MS);
+        }
+        let window = self.windows.entry(key).or_insert(Window {
+            start_ms: now_ms,
+            count: 0,
+        });
+        if now_ms.saturating_sub(window.start_ms) >= RATE_LIMIT_WINDOW_MS {
+            window.start_ms = now_ms;
+            window.count = 0;
+        }
+        window.count += 1;
+        window.count > RATE_LIMIT_BURST
+    }
 }
 
 /// Tag the active scope with the pinned workspace so a machine-global DSN still
@@ -196,7 +350,8 @@ fn env_nonempty(key: &str) -> Option<String> {
 }
 
 /// Resolve `(dsn, environment)` with env overriding the per-machine config.
-/// Empty strings count as unset; environment defaults to `production`.
+/// Empty strings count as unset; environment defaults by build profile via
+/// [`default_environment`].
 fn resolve_from(
     env_dsn: Option<String>,
     env_environment: Option<String>,
@@ -208,8 +363,19 @@ fn resolve_from(
     let environment = env_environment
         .or_else(|| config.sentry.environment.clone())
         .filter(|value| !value.is_empty())
-        .unwrap_or_else(|| DEFAULT_ENVIRONMENT.to_owned());
+        .unwrap_or_else(|| default_environment().to_owned());
     Some((dsn, environment))
+}
+
+/// The default deployment environment when neither env nor config sets one: an
+/// installed release reports as `production`; a dev or CI build reports as
+/// `development`, so the production dashboard stays clear of contributor noise.
+fn default_environment() -> &'static str {
+    if cfg!(debug_assertions) {
+        "development"
+    } else {
+        "production"
+    }
 }
 
 #[cfg(test)]
@@ -231,7 +397,7 @@ mod tests {
     }
 
     #[test]
-    fn config_dsn_defaults_environment_to_production() {
+    fn config_dsn_defaults_environment_by_build_profile() {
         let (dsn, environment) = resolve_from(
             None,
             None,
@@ -239,7 +405,9 @@ mod tests {
         )
         .expect("dsn resolves");
         assert_eq!(dsn, "https://k@o1.ingest.sentry.io/2");
-        assert_eq!(environment, DEFAULT_ENVIRONMENT);
+        assert_eq!(environment, default_environment());
+        // The suite builds under the dev profile, so the default is development.
+        assert_eq!(environment, "development");
     }
 
     #[test]
@@ -280,7 +448,80 @@ mod tests {
         assert!(classify(Level::TRACE, "rimz::anything").is_empty());
     }
 
-    use std::sync::{Arc, Mutex};
+    #[test]
+    fn release_is_build_id_qualified() {
+        let release = release().expect("the test binary is digestible");
+        assert!(release.starts_with("rimz@"), "release was {release:?}");
+        assert_eq!(release.strip_prefix("rimz@"), crate::build_id::current());
+    }
+
+    #[test]
+    fn fault_for_splits_agent_conditions_from_rimz() {
+        assert_eq!(fault_for(AGENT_CONDITION_TARGET), "agent");
+        assert_eq!(fault_for("rimz::agent::lifecycle"), "rimz");
+        assert_eq!(fault_for("rimz::observability"), "rimz");
+    }
+
+    #[test]
+    fn fingerprint_collapses_a_callsite_across_stacks() {
+        let with_op =
+            fingerprint_components("rimz::agent::lifecycle", Some("codex.spawn"), Some("boom"));
+        assert_eq!(
+            with_op,
+            vec![
+                "rimz".to_owned(),
+                "rimz::agent::lifecycle".to_owned(),
+                "op:codex.spawn".to_owned(),
+                "msg:boom".to_owned(),
+            ],
+        );
+        // Same facts → same group, regardless of which stack produced them.
+        assert_eq!(
+            with_op,
+            fingerprint_components("rimz::agent::lifecycle", Some("codex.spawn"), Some("boom")),
+        );
+        // A different message is a different group; operation is optional.
+        assert_ne!(
+            with_op,
+            fingerprint_components("rimz::agent::lifecycle", Some("codex.spawn"), Some("other")),
+        );
+        assert_eq!(
+            fingerprint_components("rimz::x", None, Some("m")),
+            vec!["rimz".to_owned(), "rimz::x".to_owned(), "msg:m".to_owned()],
+        );
+    }
+
+    #[test]
+    fn rate_limiter_caps_a_hot_key_then_reopens_next_window() {
+        let mut limiter = RateLimiter::new();
+        let key = 7;
+        // The first burst of events in the window pass.
+        for i in 0..RATE_LIMIT_BURST {
+            assert!(
+                !limiter.over_budget(key, 0),
+                "event {i} within the burst passes"
+            );
+        }
+        // The rest of the window is dropped.
+        assert!(
+            limiter.over_budget(key, 10),
+            "burst+1 in the same window drops"
+        );
+        assert!(
+            limiter.over_budget(key, RATE_LIMIT_WINDOW_MS - 1),
+            "still dropping until the window closes",
+        );
+        // A new window reopens the budget; an independent key has its own.
+        assert!(
+            !limiter.over_budget(key, RATE_LIMIT_WINDOW_MS),
+            "the next window passes again",
+        );
+        assert!(
+            !limiter.over_budget(99, RATE_LIMIT_WINDOW_MS),
+            "an independent key has an independent budget",
+        );
+    }
+
     use std::time::Duration;
 
     use tracing_subscriber::layer::SubscriberExt;
@@ -430,5 +671,76 @@ mod tests {
             }
             other => panic!("missing or unexpected rimz context: {other:?}"),
         }
+    }
+
+    // Sentry's hub is process-global; nextest isolates each test in its own
+    // process, so installing a client here does not leak into sibling tests.
+    #[test]
+    fn before_send_tags_fault_fingerprints_and_rate_limits() {
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let recorder: Arc<Recorder> = Arc::new(Recorder {
+            events: events.clone(),
+        });
+        // Drive the real before_send (fault tag, fingerprint, rate limit)
+        // through a recording transport.
+        let mut options = client_options(
+            "https://public@example.com/1"
+                .parse()
+                .expect("test dsn parses"),
+            "test".to_owned(),
+        );
+        options.transport = Some(Arc::new(recorder));
+        let _guard = sentry::init(options);
+
+        let subscriber = tracing_subscriber::registry().with(sentry_tracing_layer());
+        tracing::subscriber::with_default(subscriber, || {
+            // An agent-observed condition is tagged fault=agent.
+            tracing::warn!(
+                target: AGENT_CONDITION_TARGET,
+                class = "PausedRateLimit",
+                "agent paused on a provider error",
+            );
+            // A hot Rimz callsite fired past the burst: fault=rimz, one
+            // fingerprint, and only the first burst reaches the transport.
+            for _ in 0..(RATE_LIMIT_BURST + 3) {
+                tracing::warn!(
+                    target: "rimz::agent::lifecycle",
+                    "subagent names a parent with no row",
+                );
+            }
+        });
+        sentry::Hub::current()
+            .client()
+            .expect("client installed")
+            .flush(Some(Duration::from_secs(1)));
+
+        let captured = events.lock().expect("recorder lock");
+        let agent = captured
+            .iter()
+            .find(|event| event.logger.as_deref() == Some(AGENT_CONDITION_TARGET))
+            .expect("agent condition captured");
+        assert_eq!(agent.tags.get("fault").map(String::as_str), Some("agent"));
+
+        let rimz: Vec<_> = captured
+            .iter()
+            .filter(|event| event.logger.as_deref() == Some("rimz::agent::lifecycle"))
+            .collect();
+        assert_eq!(
+            rimz.len(),
+            RATE_LIMIT_BURST as usize,
+            "the over-budget repeats were dropped before send",
+        );
+        assert!(
+            rimz.iter()
+                .all(|event| event.tags.get("fault").map(String::as_str) == Some("rimz")),
+            "Rimz faults are tagged fault=rimz",
+        );
+        assert!(
+            rimz.iter().all(|event| event
+                .fingerprint
+                .iter()
+                .any(|part| part.as_ref() == "rimz::agent::lifecycle")),
+            "the callsite is pinned to a stable fingerprint",
+        );
     }
 }
