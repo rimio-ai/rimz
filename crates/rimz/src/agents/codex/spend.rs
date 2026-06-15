@@ -96,9 +96,10 @@ pub fn codex_session_files() -> Vec<PathBuf> {
 /// the price book: uncached input at the input rate, the cached slice at the
 /// cache-read rate, and output (which already includes reasoning tokens) at the
 /// output rate. Codex records `cache_write: 0`, so its aggregate `◇` total stays
-/// input + output. Events whose model has no known price, or that price to
-/// zero, are dropped. Codex entries carry no message/request IDs, so they bypass
-/// the Claude dedup and bucket directly under the `codex` provider.
+/// input + output. Events whose model has no known price still contribute
+/// tokens and sessions with zero dollars while recording an unknown-model chase.
+/// Codex entries carry no message/request IDs, so they bypass the Claude dedup
+/// and bucket directly under the `codex` provider.
 pub(crate) fn parse_codex_spend(
     path: &Path,
     resume: Option<&SpendCursor>,
@@ -119,21 +120,20 @@ pub(crate) fn parse_codex_spend(
         let Some(model) = event.model.as_deref() else {
             continue;
         };
-        let Some(price) = prices.price(model) else {
-            if let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) {
-                record_unknown_model(&mut unknown_models, model, ts_secs);
-            }
-            continue;
-        };
         let uncached_input = event.input_tokens.saturating_sub(event.cached_input_tokens);
-        let cost = uncached_input as f64 * price.input
-            + event.cached_input_tokens as f64 * price.cache_read
-            + event.output_tokens as f64 * price.output;
-        if cost <= 0.0 {
-            continue;
-        }
         let Some(ts_secs) = iso_to_unix_secs(&event.timestamp) else {
             continue;
+        };
+        let cost = match prices.price(model) {
+            Some(price) => {
+                uncached_input as f64 * price.input
+                    + event.cached_input_tokens as f64 * price.cache_read
+                    + event.output_tokens as f64 * price.output
+            }
+            None => {
+                record_unknown_model(&mut unknown_models, model, ts_secs);
+                0.0
+            }
         };
         // Codex has no cache-creation concept: its cached slice is a read. The `◇`
         // total is fresh input + output, so `input` is the uncached slice and the
@@ -147,6 +147,7 @@ pub(crate) fn parse_codex_spend(
             cache_read: event.cached_input_tokens,
             message_id: None,
             request_id: None,
+            thread_id: None,
             is_sidechain: false,
             model: Some(model.to_owned()),
             // The session's durable origin, parsed from the rollout's

@@ -147,13 +147,20 @@ pub(crate) fn parse_opencode_spend(
     let Some(conn) = open_readonly(path) else {
         return empty_parse(from_offset);
     };
-    let sql = if resume.is_some() {
-        "SELECT rowid, data FROM message WHERE rowid > ?1 ORDER BY rowid"
+    let (sql, fallback_sql) = if resume.is_some() {
+        (
+            "SELECT rowid, session_id, data FROM message WHERE rowid > ?1 ORDER BY rowid",
+            "SELECT rowid, NULL, data FROM message WHERE rowid > ?1 ORDER BY rowid",
+        )
     } else {
-        "SELECT rowid, data FROM message ORDER BY rowid"
+        (
+            "SELECT rowid, session_id, data FROM message ORDER BY rowid",
+            "SELECT rowid, NULL, data FROM message ORDER BY rowid",
+        )
     };
-    let Ok(mut stmt) = conn.prepare(sql) else {
-        return empty_parse(from_offset);
+    let mut stmt = match conn.prepare(sql).or_else(|_| conn.prepare(fallback_sql)) {
+        Ok(stmt) => stmt,
+        Err(_) => return empty_parse(from_offset),
     };
     let rows_result = match resume {
         Some(_) => stmt.query([from_offset as i64]),
@@ -176,10 +183,16 @@ pub(crate) fn parse_opencode_spend(
         if rowid > 0 {
             max_rowid = max_rowid.max(rowid as u64);
         }
-        let Ok(data) = row.get::<_, String>(1) else {
+        let thread_id = row
+            .get::<_, Option<String>>(1)
+            .ok()
+            .flatten()
+            .map(|value| value.trim().to_owned())
+            .filter(|value| !value.is_empty());
+        let Ok(data) = row.get::<_, String>(2) else {
             continue;
         };
-        if let Some(entry) = parse_message_entry(&data, prices, &mut unknown_models) {
+        if let Some(entry) = parse_message_entry(&data, thread_id, prices, &mut unknown_models) {
             entries.push(entry);
         }
     }
@@ -207,6 +220,7 @@ fn empty_parse(offset: u64) -> SpendParse {
 
 fn parse_message_entry(
     data: &str,
+    thread_id: Option<String>,
     prices: &PriceBook,
     unknown_models: &mut BTreeMap<String, u64>,
 ) -> Option<CachedEntry> {
@@ -243,7 +257,7 @@ fn parse_message_entry(
         .unwrap_or(0);
     let mut cost = message.cost.unwrap_or(0.0);
     if cost <= 0.0 {
-        cost = price_tokens(
+        cost = match price_tokens(
             prices,
             model,
             provider,
@@ -251,14 +265,13 @@ fn parse_message_entry(
             output,
             cache_read,
             cache_write,
-        )
-        .unwrap_or_else(|| {
-            record_unknown_model(unknown_models, model, ts_secs);
-            0.0
-        });
-    }
-    if cost <= 0.0 {
-        return None;
+        ) {
+            Some(cost) => cost,
+            None => {
+                record_unknown_model(unknown_models, model, ts_secs);
+                0.0
+            }
+        };
     }
 
     let origin = message
@@ -275,6 +288,7 @@ fn parse_message_entry(
         cache_read,
         message_id: None,
         request_id: None,
+        thread_id,
         is_sidechain: false,
         model: Some(model.to_owned()),
         origin_path: origin,
@@ -302,9 +316,7 @@ fn price_tokens(
             + cache_read as f64 * price.cache_read
             + cache_write as f64 * price.cache_create
             + output as f64 * price.output;
-        if cost > 0.0 {
-            return Some(cost);
-        }
+        return Some(cost);
     }
     None
 }
@@ -407,10 +419,14 @@ mod tests {
     }
 
     fn insert_message(path: &Path, data: &str) {
+        insert_message_for_session(path, "ses", data);
+    }
+
+    fn insert_message_for_session(path: &Path, session_id: &str, data: &str) {
         let conn = Connection::open(path).unwrap();
         conn.execute(
-            "INSERT INTO message (id, session_id, data) VALUES ('msg', 'ses', ?1)",
-            [data],
+            "INSERT INTO message (id, session_id, data) VALUES ('msg', ?1, ?2)",
+            (session_id, data),
         )
         .unwrap();
     }
@@ -487,6 +503,7 @@ mod tests {
         assert_eq!(entry.cache_read, 30);
         assert_eq!(entry.cache_write, 40);
         assert_eq!(entry.ts_secs, 1_780_590_149);
+        assert_eq!(entry.thread_id.as_deref(), Some("ses"));
         assert_eq!(entry.origin_path.as_deref(), Some(cwd.as_path()));
         assert_eq!(parsed.cursor.offset, 1);
     }
@@ -521,9 +538,12 @@ mod tests {
         );
 
         let parsed = parse_opencode_spend(&path, None, &prices());
-        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries.len(), 2);
         let expected = 10.0 * 0.000001 + 30.0 * 0.0000001 + 40.0 * 0.0000005 + 20.0 * 0.000002;
         assert!((parsed.entries[0].cost_usd - expected).abs() < 1e-12);
+        assert_eq!(parsed.entries[1].cost_usd, 0.0);
+        assert_eq!(parsed.entries[1].input, 10);
+        assert_eq!(parsed.entries[1].output, 20);
         assert_eq!(parsed.unknown_models.get("unknown-future"), Some(&3));
     }
 

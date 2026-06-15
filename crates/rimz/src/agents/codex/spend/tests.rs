@@ -146,7 +146,10 @@ fn unpriced_model_is_recorded_as_unknown() {
 
     let parsed = parse_codex_spend(&path, None, &PriceBook::from_litellm_json("{}"));
 
-    assert!(parsed.entries.is_empty());
+    assert_eq!(parsed.entries.len(), 1);
+    assert_eq!(parsed.entries[0].cost_usd, 0.0);
+    assert_eq!(parsed.entries[0].input, 200);
+    assert_eq!(parsed.entries[0].output, 80);
     assert_eq!(
         parsed.unknown_models,
         BTreeMap::from([(

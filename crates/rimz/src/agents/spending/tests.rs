@@ -15,6 +15,10 @@ fn codex_adapter() -> &'static dyn AgentAdapter {
     &crate::agents::CodexAdapter
 }
 
+fn opencode_adapter() -> &'static dyn AgentAdapter {
+    &crate::agents::OpencodeAdapter
+}
+
 fn compute_total(files: &[PathBuf], cache: &mut SpendingDiskCache) -> SpendTally {
     let tagged: Vec<(&'static dyn AgentAdapter, PathBuf)> = files
         .iter()
@@ -144,6 +148,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     cache_read: 0,
                     message_id: Some("msg-old".to_string()),
                     request_id: Some("req-old".to_string()),
+                    thread_id: None,
                     is_sidechain: false,
                     model: None,
                     origin_path: None,
@@ -185,6 +190,52 @@ fn token_split_and_session_counts_populate_windows() {
     assert_eq!(total.today.cache_read, 70_000);
     assert_eq!(total.today.sessions, 1);
     assert_eq!(total.year.sessions, 1);
+}
+
+#[test]
+fn native_thread_ids_count_many_sessions_in_one_store() {
+    let file = PathBuf::from("/x/opencode.db");
+    let entry = |thread_id: &str, ts_secs: u64| CachedEntry {
+        ts_secs,
+        cost_usd: 0.01,
+        input: 10,
+        output: 5,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: None,
+        request_id: None,
+        thread_id: Some(thread_id.to_owned()),
+        is_sidechain: false,
+        model: Some("gpt-5".to_owned()),
+        origin_path: None,
+    };
+    let cache = SpendingDiskCache {
+        files: HashMap::from([(
+            file.to_string_lossy().into_owned(),
+            FileCacheEntry {
+                mtime_secs: 1,
+                len: 1,
+                cursor: SpendCursor::default(),
+                origin_path: None,
+                entries: vec![
+                    entry("session-a", NOW_SECS),
+                    entry("session-b", NOW_SECS - 2 * 86_400),
+                    entry("session-b", NOW_SECS - 3 * 86_400),
+                ],
+                unknown_models: BTreeMap::new(),
+            },
+        )]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![(opencode_adapter(), file)];
+
+    let deduped = dedup_cached_entries(&files, &cache);
+    let spending = aggregate_spending(&files, &cache, &deduped, NOW_SECS);
+
+    assert_eq!(spending.total.today.sessions, 1);
+    assert_eq!(spending.total.week.sessions, 2);
+    assert_eq!(spending.total.year.sessions, 2);
+    assert_eq!(spending.by_provider["opencode"].week.sessions, 2);
 }
 
 #[test]
@@ -619,7 +670,12 @@ fn codex_file_origin_survives_unknown_model_cold_reparse() {
         NOW_SECS,
         &HashMap::from([(codex_file.clone(), project.clone())]),
     );
-    assert!(first.total.is_zero());
+    assert_eq!(first.total.today.usd, 0.0);
+    assert_eq!(first.total.today.input, 600);
+    assert_eq!(first.total.today.output, 500);
+    assert_eq!(first.total.today.cache_read, 400);
+    assert_eq!(first.total.today.tokens, 1_100);
+    assert_eq!(first.total.today.sessions, 1);
     let cache_key = codex_file.to_string_lossy().into_owned();
     assert_eq!(
         cache.files[&cache_key].origin_path.as_deref(),
@@ -657,6 +713,7 @@ fn cache_prune_keeps_existing_transcripts_missing_from_discovery() {
         cache_read: 0,
         message_id: None,
         request_id: None,
+        thread_id: None,
         is_sidechain: false,
         model: None,
         origin_path: Some(origin.clone()),
@@ -726,7 +783,9 @@ fn unknown_model_chase_records_and_heals_active_files() {
         &PriceBook::from_litellm_json("{}"),
         NOW_SECS,
     );
-    assert!(first.total.is_zero());
+    assert_eq!(first.total.today.usd, 0.0);
+    assert_eq!(first.total.today.tokens, 150);
+    assert_eq!(first.total.today.sessions, 1);
     assert_eq!(
         recorded_unknown_models(&[(claude_adapter(), file.clone())], &cache, NOW_SECS),
         BTreeSet::from([model.to_owned()])
@@ -950,6 +1009,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         cache_read: 0,
         message_id: Some("msg-1".to_owned()),
         request_id: Some("req-1".to_owned()),
+        thread_id: None,
         is_sidechain: false,
         model: Some("claude-opus-4-8".to_owned()),
         origin_path: None,
@@ -970,6 +1030,7 @@ fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
         cache_read: 0,
         message_id: None,
         request_id: None,
+        thread_id: None,
         is_sidechain: false,
         model: Some("gpt-5-codex".to_owned()),
         origin_path: None,

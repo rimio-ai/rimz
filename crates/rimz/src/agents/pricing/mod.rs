@@ -165,6 +165,14 @@ pub fn load_for_spending(cache_path: &Path, unknown_models: &BTreeSet<String>) -
     book
 }
 
+/// Load the spending price book from the embedded snapshot plus the shared
+/// runtime pricing cache, without refreshing or writing. Used by local fallback
+/// spending reads that could not win the shared spending election but still need
+/// the same cached prices the producer normally uses.
+pub fn load_cached_for_spending(cache_path: &Path) -> PriceBook {
+    PriceBook::assembled(&read_cache(cache_path))
+}
+
 // ── Disk cache ──────────────────────────────────────────────────────────────
 
 /// Refetch once a day; on failure, back off an hour before retrying so a
@@ -357,6 +365,7 @@ mod tests {
         assert!(book().price("gpt-5-9").is_none());
         assert!(book().price("totally-unknown-model").is_none());
         assert!(PriceBook::embedded().price("gpt-5").is_some());
+        assert!(PriceBook::embedded().price("gpt-5.5-codex").is_some());
     }
 
     #[test]
@@ -479,5 +488,30 @@ mod tests {
 
         assert!(unpriced_subset(&b, &set(&["new-model"])).is_empty());
         assert!(unpriced_subset(&b, &set(&["new-model-via-provider"])).is_empty());
+    }
+
+    #[test]
+    fn cached_spending_loader_reads_shared_cache_without_refresh() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("pricing-cache.json");
+        let cache = PricingCache {
+            models_dev: BTreeMap::from([(
+                "claude-opus-4-8".to_owned(),
+                Pricing {
+                    input: 3e-6,
+                    output: 15e-6,
+                    cache_read: 3e-7,
+                    cache_create: 3.75e-6,
+                },
+            )]),
+            ..Default::default()
+        };
+        write_cache(&path, &cache);
+
+        let book = load_cached_for_spending(&path);
+        let price = book.price("claude-opus-4-8").expect("cached price");
+
+        assert!((price.input - 3e-6).abs() < f64::EPSILON);
+        assert!((price.output - 15e-6).abs() < f64::EPSILON);
     }
 }

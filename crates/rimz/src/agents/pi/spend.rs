@@ -203,6 +203,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             cache_read: usage.and_then(|u| u.cache_read).unwrap_or(0),
             message_id: None,
             request_id: None,
+            thread_id: None,
             is_sidechain: false,
             model: msg.model.clone(),
             origin_path: state.cwd.clone(),

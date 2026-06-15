@@ -36,9 +36,9 @@ pub use crate::sidebar::timing::SPENDING_TTL;
 /// is the `◇` total: input with cache-write folded in, plus output. The split
 /// fields stay available (`input` / `output` / `cache_write` / `cache_read`);
 /// the fleet lines read `◇ ↘ ↗ ◌`, while `cache_write` remains separate for
-/// debug/cache compatibility. `sessions` counts the distinct threads
-/// (transcript files, with a Claude session's subagent files folded under it)
-/// that ran in the window.
+/// debug/cache compatibility. `sessions` counts distinct billing threads,
+/// preferring provider-native thread ids and falling back to transcript-file
+/// grouping.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SpendWindow {
     pub usd: f64,
@@ -114,6 +114,13 @@ impl SpendTally {
 pub struct Spending {
     pub total: SpendTally,
     pub by_provider: BTreeMap<String, SpendTally>,
+}
+
+/// Progress from the transcript-history spending pass.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct SpendProgress {
+    pub finished_files: usize,
+    pub total_files: usize,
 }
 
 /// Spending data published for one sidebar enrichment fold: account-global
@@ -228,19 +235,25 @@ fn for_each_counted_entry(deduped: &DedupedCachedEntries, mut visit: impl FnMut(
 /// old finalized Codex files would otherwise sit at EOF with no origin and
 /// remain invisible to workspace-scoped cockpit tallies. v9 records the per-entry
 /// model id for the `rimz stats` per-model breakdown; old finalized files would
-/// otherwise sit at EOF with no model and never attribute their tokens. A cache
+/// otherwise sit at EOF with no model and never attribute their tokens. v10
+/// records provider-native thread ids and keeps unpriced token usage rows, so
+/// multi-session stores count sessions correctly and unknown prices hide only
+/// dollars. A cache
 /// stamped with an older version is discarded on read, forcing a clean re-parse
 /// under the current shape. `0` is the implicit pre-versioning shape (no
 /// `version` field).
-const SPENDING_CACHE_VERSION: u32 = 9;
+const SPENDING_CACHE_VERSION: u32 = 10;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
 /// the producer recomputes once from the still-current entry cache. `0` is the
 /// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`. v2:
 /// live-session baselines moved to a per-workspace sidecar. v3: the published
-/// aggregate carries per-day and per-model rollups for `rimz stats`.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 3;
+/// aggregate carries per-day and per-model rollups for `rimz stats`. v4:
+/// unpriced token usage contributes tokens/sessions with zero dollars, and
+/// provider-native thread ids count multi-session stores correctly. v5: GPT-5.5
+/// built-in prices heal previously zero-dollar token rows.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 5;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -281,14 +294,15 @@ pub struct FileCacheEntry {
     /// snapshot metadata and reuses that origin across cold re-parses.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub origin_path: Option<PathBuf>,
-    /// One entry per JSONL line with a positive cost. Duplicates within a file
-    /// (retry writes) are kept raw here; the aggregation pass owns all dedup.
+    /// One nonzero token-usage entry per parsed transcript record. Duplicates
+    /// within a file (retry writes) are kept raw here; the aggregation pass owns
+    /// all dedup.
     pub entries: Vec<CachedEntry>,
     /// Price lookup misses observed while parsing this file, keyed by model and
     /// carrying the youngest timestamp seen for that model. The pricing refresh
     /// chase unions active unknowns across currently discovered files. When one
     /// later resolves while still inside the widest spend window, this file cold
-    /// re-parses so entries dropped before the cursor are recovered.
+    /// re-parses so zero-dollar token entries recover their spend.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub unknown_models: BTreeMap<String, u64>,
 }
@@ -317,8 +331,9 @@ pub struct SpendParse {
 /// A single cost entry with dedup keys for cross-file deduplication.
 ///
 /// `message_id` and `request_id` are present for Claude entries and absent for
-/// Codex and Pi entries.  `is_sidechain` drives the sidechain-replay suppression
-/// logic in `compute_spending`.
+/// Codex and Pi entries. `thread_id` is present when the provider's durable
+/// transcript store exposes a native session id. `is_sidechain` drives the
+/// sidechain-replay suppression logic in `compute_spending`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CachedEntry {
     /// Unix timestamp (seconds) the entry was recorded, parsed from the JSONL
@@ -350,6 +365,10 @@ pub struct CachedEntry {
     /// `requestId` from Claude entries; `None` for Codex and Pi entries.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub request_id: Option<String>,
+    /// Provider-native billing thread/session id, used for stores where many
+    /// sessions live in one transcript file or database.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
     /// `isSidechain` flag from Claude entries.
     #[serde(default)]
     pub is_sidechain: bool,
@@ -449,6 +468,27 @@ pub fn compute_spending(
     compute_spending_with_origins(files, cache, prices, now_secs, &HashMap::new())
 }
 
+/// Compute fleet spending while reporting file-level progress for user-facing
+/// cold walks such as `rimz stats`.
+pub fn compute_spending_with_progress(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    progress: &mut dyn FnMut(SpendProgress),
+) -> Spending {
+    compute_spending_with_origins_and_scope_progress(
+        files,
+        cache,
+        prices,
+        now_secs,
+        &HashMap::new(),
+        None,
+        Some(progress),
+    )
+    .0
+}
+
 /// Compute fleet spending, applying trusted transcript-path → origin overrides
 /// before aggregation. The overrides are currently used for Codex rollout files,
 /// whose path does not encode the workspace; Claude and Pi parsers stamp their
@@ -474,9 +514,30 @@ pub fn compute_spending_with_origins_and_scope(
     origin_overrides: &HashMap<PathBuf, PathBuf>,
     scope: Option<&SpendScope>,
 ) -> (Spending, SpendTally) {
+    compute_spending_with_origins_and_scope_progress(
+        files,
+        cache,
+        prices,
+        now_secs,
+        origin_overrides,
+        scope,
+        None,
+    )
+}
+
+fn compute_spending_with_origins_and_scope_progress(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &mut SpendingDiskCache,
+    prices: &PriceBook,
+    now_secs: u64,
+    origin_overrides: &HashMap<PathBuf, PathBuf>,
+    scope: Option<&SpendScope>,
+    mut progress: Option<&mut dyn FnMut(SpendProgress)>,
+) -> (Spending, SpendTally) {
     // First pass: refresh stale cache entries — pure hit, suffix parse, or
     // cold parse, decided from one stat per file.
-    for (adapter, file) in files {
+    let total_files = files.len();
+    for (index, (adapter, file)) in files.iter().enumerate() {
         let (mtime, len) = file_stat(file);
         let key = file.to_string_lossy().into_owned();
         let override_origin = origin_overrides
@@ -536,6 +597,12 @@ pub fn compute_spending_with_origins_and_scope(
                 cache.dirty = true;
             }
         }
+        if let Some(progress) = progress.as_deref_mut() {
+            progress(SpendProgress {
+                finished_files: index + 1,
+                total_files,
+            });
+        }
     }
     if prune_spending_cache(files, cache, now_secs) {
         cache.dirty = true;
@@ -589,10 +656,11 @@ fn aggregate_spending(
         add(provider, entry);
     }
 
-    // Session counts, keyed by thread rather than file: a Claude session's
-    // subagent files fold under its `session_id` directory so one thread counts
-    // once. Each thread is single-provider; we track its youngest entry and bump
-    // every window that youngest reading still falls within. Counted from the raw
+    // Session counts, keyed by provider-native thread id when one is available
+    // and by transcript file grouping otherwise. A Claude session's subagent
+    // files fold under its `session_id` directory so one thread counts once.
+    // Each thread is single-provider; we track its youngest entry and bump every
+    // window that youngest reading still falls within. Counted from the raw
     // cached entries (not the deduped set) since a thread that ran is a thread,
     // regardless of which file a duplicated turn was kept in.
     let mut threads: HashMap<String, (&'static str, u64)> = HashMap::new();
@@ -601,13 +669,12 @@ fn aggregate_spending(
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
         };
-        let Some(youngest) = cached_file.entries.iter().map(|entry| entry.ts_secs).max() else {
-            continue;
-        };
-        threads
-            .entry(session_key(*adapter, file))
-            .and_modify(|(_, ts)| *ts = (*ts).max(youngest))
-            .or_insert((adapter.descriptor().kind, youngest));
+        for entry in &cached_file.entries {
+            threads
+                .entry(session_key(*adapter, file, entry))
+                .and_modify(|(_, ts)| *ts = (*ts).max(entry.ts_secs))
+                .or_insert((adapter.descriptor().kind, entry.ts_secs));
+        }
     }
     for (provider, youngest) in threads.values() {
         bump_sessions(&mut spending.total, *youngest, now_secs);
@@ -732,19 +799,16 @@ fn aggregate_scoped_tally(
         let Some(cached_file) = cache.files.get(&cache_key) else {
             continue;
         };
-        let Some(youngest) = cached_file
+        for entry in cached_file
             .entries
             .iter()
             .filter(|entry| entry_in_scope(entry, scope))
-            .map(|entry| entry.ts_secs)
-            .max()
-        else {
-            continue;
-        };
-        threads
-            .entry(session_key(*adapter, file))
-            .and_modify(|ts| *ts = (*ts).max(youngest))
-            .or_insert(youngest);
+        {
+            threads
+                .entry(session_key(*adapter, file, entry))
+                .and_modify(|ts| *ts = (*ts).max(entry.ts_secs))
+                .or_insert(entry.ts_secs);
+        }
     }
     for youngest in threads.values() {
         bump_sessions(&mut tally, *youngest, now_secs);
@@ -1006,13 +1070,20 @@ fn within_widest_window(ts_secs: u64, now_secs: u64) -> bool {
     now_secs.saturating_sub(ts_secs) < WIDEST_SPEND_WINDOW_SECS
 }
 
-/// The thread a transcript file belongs to, per the adapter's declared
-/// [`ThreadKey`]: a session-dir provider (Claude) spreads one session across a
-/// main `…/<session_id>/chat.jsonl` plus subagent
+/// The thread a priced entry belongs to. Providers with native thread ids use
+/// those ids; otherwise the adapter's declared [`ThreadKey`] maps transcript
+/// paths to threads. A session-dir provider (Claude) spreads one session across
+/// a main `…/<session_id>/chat.jsonl` plus subagent
 /// `…/<session_id>/subagents/*.jsonl` files, so both fold under the
 /// `<session_id>` directory and one thread counts once; a per-file provider
 /// (Codex, Pi) keys on the file path.
-fn session_key(adapter: &dyn AgentAdapter, path: &Path) -> String {
+fn session_key(adapter: &dyn AgentAdapter, path: &Path, entry: &CachedEntry) -> String {
+    if let Some(thread_id) = entry.thread_id.as_deref().map(str::trim)
+        && !thread_id.is_empty()
+    {
+        return format!("{}:{thread_id}", adapter.descriptor().kind);
+    }
+
     let dir = match adapter.descriptor().thread_key {
         ThreadKey::SessionDir => {
             let parent = path.parent();

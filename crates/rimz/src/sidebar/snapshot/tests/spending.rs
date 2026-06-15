@@ -325,6 +325,33 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
 }
 
 #[test]
+fn cached_enrich_ignores_old_provider_spending_version() {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    let snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now());
+
+    let mut global = crate::agents::spending::Spending::default();
+    global.total.month.usd = 99.0;
+    global.total.year.usd = 99.0;
+    let old = crate::agents::spending::ProviderSpendingCache {
+        version: crate::agents::spending::PROVIDER_SPENDING_VERSION - 1,
+        refreshed_at_ms: unix_now_ms(),
+        spending: global,
+        ..Default::default()
+    };
+    atomic::write_temp_then_rename_cache(&runtime.shared_provider_spending_path(), &old).unwrap();
+
+    let snapshot = enrich(snapshot, None, &runtime, None, EnrichMode::Cached, None);
+
+    assert_eq!(
+        snapshot.value_tally, None,
+        "consumer folds ignore stale aggregate shapes instead of displaying old sidebar history"
+    );
+}
+
+#[test]
 fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -355,6 +382,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
                 cache_read: 0,
                 message_id: Some("msg-miss".to_owned()),
                 request_id: Some("req-miss".to_owned()),
+                thread_id: None,
                 is_sidechain: false,
                 model: None,
                 origin_path: Some(project.join("src")),

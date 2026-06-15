@@ -11,9 +11,9 @@ use std::sync::{Mutex, OnceLock};
 use std::time::UNIX_EPOCH;
 
 use crate::agents::spending::{
-    SpendScope, SpendingCaches, WorkspaceSpendingCache, compute_scoped_tally,
-    discover_spending_files, read_provider_spending_cache, read_spending_cache,
-    read_workspace_spending_cache, unix_secs_now,
+    ProviderSpendingCache, SpendScope, SpendingCaches, WorkspaceSpendingCache,
+    compute_scoped_tally, discover_spending_files, read_provider_spending_cache,
+    read_spending_cache, read_workspace_spending_cache, unix_secs_now,
 };
 use crate::feed::AgentStatus;
 use crate::ids::{PaneId, WorkspaceId};
@@ -634,7 +634,7 @@ fn fold_machine_config_cached(
     );
     // Consumers read the producer's published spending cache rather than
     // re-walking the JSONL transcript history themselves.
-    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    let cache = current_provider_spending_cache(runtime);
     let scope = SpendScope::for_workspace(
         snapshot.project_root.as_deref(),
         &snapshot.worktree_roots,
@@ -654,6 +654,15 @@ fn fold_machine_config_cached(
             workspace,
         },
     )
+}
+
+fn current_provider_spending_cache(runtime: &RuntimePaths) -> ProviderSpendingCache {
+    let cache = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+    if cache.is_current_version() {
+        cache
+    } else {
+        ProviderSpendingCache::default()
+    }
 }
 
 fn cached_workspace_spending(

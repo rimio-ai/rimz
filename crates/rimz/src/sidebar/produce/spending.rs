@@ -519,6 +519,7 @@ mod tests {
                     cache_read: 0,
                     message_id: Some("msg-1".to_owned()),
                     request_id: Some("req-1".to_owned()),
+                    thread_id: None,
                     is_sidechain: false,
                     model: None,
                     origin_path: Some(project.clone()),

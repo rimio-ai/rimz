@@ -32,7 +32,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 
 use crate::agents::pricing::PriceBook;
-use crate::agents::spending::{CachedEntry, SpendParse, origin_path, record_unknown_model};
+use crate::agents::spending::{
+    CachedEntry, SpendParse, is_priceable_model_name, origin_path, record_unknown_model,
+};
 
 use crate::agents::transcript_fs::{
     bytes_contains, collect_jsonl, expand_tilde, home_dir, read_spend_lines,
@@ -265,11 +267,15 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
         let output = usage.output_tokens.unwrap_or(0);
         let cache_creation = usage.cache_creation_input_tokens.unwrap_or(0);
         let cache_read = usage.cache_read_input_tokens.unwrap_or(0);
+        if input == 0 && output == 0 && cache_creation == 0 && cache_read == 0 {
+            continue;
+        }
         // Cost source: a positive logged `costUSD` is authoritative (older
         // transcripts carried it); otherwise reconstruct spend from the token
         // usage through the model table, since current transcripts omit it. An
-        // entry that still resolves to zero — no positive cost and no priced
-        // model — is dropped rather than counted as a free turn.
+        // entry that has usage but no known model price still contributes tokens
+        // and sessions with zero dollars while the unknown-model chase refreshes
+        // pricing for the next producer pass.
         let cost = match entry.cost_usd {
             Some(cost) if cost > 0.0 => cost,
             _ => match price_usage(
@@ -282,16 +288,17 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             ) {
                 Some(cost) => cost,
                 None => {
-                    if let Some(model) = entry.message.model.as_deref() {
-                        record_unknown_model(&mut unknown_models, model, ts_secs);
+                    let Some(model) = entry.message.model.as_deref() else {
+                        continue;
+                    };
+                    if !is_priceable_model_name(model) {
+                        continue;
                     }
+                    record_unknown_model(&mut unknown_models, model, ts_secs);
                     0.0
                 }
             },
         };
-        if cost <= 0.0 {
-            continue;
-        }
         // Claude reports the four token components separately; `input_tokens` is
         // already the fresh (uncached) slice. Window aggregation folds cache
         // creation into input/total, while cache reads ride their own field.
@@ -304,6 +311,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             cache_read,
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
+            thread_id: None,
             is_sidechain: entry.is_sidechain == Some(true),
             model: entry.message.model.clone(),
             origin_path: origin_path(entry.cwd.as_deref()),
@@ -325,8 +333,8 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
 /// Each token class bills at its own rate — uncached input, output,
 /// cache-creation (prompt-cache write), and cache-read (prompt-cache hit) — the
 /// same decomposition Codex spend uses. Returns `None` when the model is absent
-/// or unpriced; the caller records a priceable unknown model before dropping the
-/// entry instead of recording a zero-cost line.
+/// or unpriced; the caller records a priceable unknown model and keeps the token
+/// usage with zero dollars.
 fn price_usage(
     prices: &PriceBook,
     model: Option<&str>,
@@ -470,7 +478,10 @@ mod tests {
 
         let parsed = parse_claude_spend(&unknown, 0, &no_prices());
 
-        assert!(parsed.entries.is_empty());
+        assert_eq!(parsed.entries.len(), 1);
+        assert_eq!(parsed.entries[0].cost_usd, 0.0);
+        assert_eq!(parsed.entries[0].input, 100);
+        assert_eq!(parsed.entries[0].output, 50);
         assert_eq!(
             parsed.unknown_models,
             BTreeMap::from([(

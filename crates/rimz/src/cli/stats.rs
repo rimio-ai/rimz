@@ -3,9 +3,10 @@
 //! here it stands alone so the figures read from inside a room, where the lobby
 //! never appears.
 //!
-//! Account-global and read-only: it reads the producer's published provider
-//! aggregate when available. A standalone first launch walks transcripts once in
-//! memory and never writes back, so the command adds no producer race.
+//! Account-global: it reads the producer's published provider aggregate when
+//! available. A standalone first launch takes the same shared spending election
+//! as the sidebar producer, publishes the same provider-spending rollups, and
+//! then subsequent runs return from the cache.
 //!
 //! Windows: the heatmap and the model breakdown read the full available history
 //! (the cache spans the trailing year); "Active days" reports the trailing four
@@ -16,7 +17,7 @@ use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Result, anyhow};
 use clap::Args;
@@ -26,13 +27,16 @@ use super::GlobalFlags;
 use crate::cli::render;
 use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
-use rimz::agents::pricing::PriceBook;
+use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, ModelSpend, ProviderSpendingCache, SpendTally, compute_daily_spend,
-    compute_model_breakdown, compute_spending, discover_spending_files,
-    read_provider_spending_cache, read_spending_cache, unix_secs_now, utc_date,
+    DaySpend, ModelSpend, ProviderSpendingCache, SpendProgress, SpendTally, compute_daily_spend,
+    compute_model_breakdown, compute_spending, compute_spending_with_progress,
+    discover_spending_files, read_provider_spending_cache, read_spending_cache,
+    recorded_unknown_models, unix_secs_now, utc_date, write_provider_spending_cache_with_rollups,
+    write_spending_cache,
 };
 use rimz::config::Semantic;
+use rimz::ledger::single_flight::{Coalesced, coalesce};
 
 const DAY_SECS: i64 = 86_400;
 /// The five-step density ramp: a calm day through your heaviest.
@@ -53,7 +57,10 @@ const TWO_COL_MIN: usize = 56;
 const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
 const SPINNER_TICK: Duration = Duration::from_millis(80);
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
-const SPINNER_CLEAR_COLS: usize = 96;
+const PROGRESS_BAR_WIDTH: usize = 20;
+const SPINNER_CLEAR_COLS: usize = 120;
+const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
+const SPENDING_WAIT_STEPS: u32 = 15;
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -124,6 +131,7 @@ fn load_stats(human: bool) -> Result<LoadedStats> {
 }
 
 fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStats> {
+    ensure_shared_runtime(paths)?;
     if let Some(stats) = load_published_stats(paths) {
         return Ok(LoadedStats {
             stats,
@@ -139,10 +147,7 @@ fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStat
         return load_cold_stats_with_spinner(paths);
     }
 
-    let stats = compute_cold_stats(paths);
-    if human {
-        write_cold_note()?;
-    }
+    let stats = load_or_refresh_stats(paths, None)?;
     Ok(LoadedStats {
         stats,
         header_printed: false,
@@ -156,34 +161,113 @@ fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
         .then(|| Stats::from_provider(cache))
 }
 
-fn compute_cold_stats(paths: &RuntimePaths) -> Stats {
-    compute_cold_stats_from_files(paths, discover_spending_files())
+fn load_or_refresh_stats(
+    paths: &RuntimePaths,
+    progress: Option<&mut dyn FnMut(SpendProgress)>,
+) -> Result<Stats> {
+    if let Some(stats) = load_published_stats(paths) {
+        return Ok(stats);
+    }
+    let fresh = || load_published_stats(paths);
+    match coalesce(
+        &paths.shared_spending_lock(),
+        SPENDING_WAIT_STEP,
+        SPENDING_WAIT_STEPS,
+        fresh,
+    ) {
+        Coalesced::Shared(stats) => Ok(stats),
+        Coalesced::Produce(_guard) => Ok(compute_stats_from_files(
+            paths,
+            discover_spending_files(),
+            true,
+            progress,
+        )),
+        Coalesced::ProduceLocal => Ok(compute_stats_from_files(
+            paths,
+            discover_spending_files(),
+            false,
+            progress,
+        )),
+    }
 }
 
-fn compute_cold_stats_from_files(
+fn compute_stats_from_files(
     paths: &RuntimePaths,
     files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
+    publish: bool,
+    progress: Option<&mut dyn FnMut(SpendProgress)>,
 ) -> Stats {
-    let mut cache = read_spending_cache(&paths.shared_spending_cursor_path());
-    let total = compute_spending(&files, &mut cache, &PriceBook::embedded(), unix_secs_now()).total;
-    Stats {
-        by_day: compute_daily_spend(&files, &cache),
-        by_model: compute_model_breakdown(&files, &cache),
-        total,
+    let cursor_path = paths.shared_spending_cursor_path();
+    let mut cache = read_spending_cache(&cursor_path);
+    let now_secs = unix_secs_now();
+    let prices = if publish {
+        let unknowns = recorded_unknown_models(&files, &cache, now_secs);
+        pricing::load_for_spending(&paths.shared_pricing_cache_path(), &unknowns)
+    } else {
+        pricing::load_cached_for_spending(&paths.shared_pricing_cache_path())
+    };
+    let spending = match progress {
+        Some(progress) => {
+            compute_spending_with_progress(&files, &mut cache, &prices, now_secs, progress)
+        }
+        None => compute_spending(&files, &mut cache, &prices, now_secs),
+    };
+    let by_day = compute_daily_spend(&files, &cache);
+    let by_model = compute_model_breakdown(&files, &cache);
+    if publish && cache.dirty {
+        write_spending_cache(&cursor_path, &cache);
     }
+    if publish {
+        write_provider_spending_cache_with_rollups(
+            &paths.shared_provider_spending_path(),
+            unix_millis_now(),
+            &spending,
+            &by_day,
+            &by_model,
+        );
+    }
+    Stats {
+        by_day,
+        by_model,
+        total: spending.total,
+    }
+}
+
+fn ensure_shared_runtime(paths: &RuntimePaths) -> Result<()> {
+    let rimz_root = paths
+        .shared_root
+        .parent()
+        .ok_or_else(|| anyhow!("invalid Rimz shared runtime path"))?;
+    let runtime_root = rimz_root
+        .parent()
+        .ok_or_else(|| anyhow!("invalid Rimz runtime path"))?;
+    rimz::ledger::paths::ensure_private_runtime_dir(runtime_root)?;
+    rimz::ledger::paths::ensure_private_runtime_dir(rimz_root)?;
+    rimz::ledger::paths::ensure_private_runtime_dir(&paths.shared_root)?;
+    Ok(())
+}
+
+fn unix_millis_now() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
     let geometry = PanelGeometry::current();
     emit(&header_lines(geometry.panel_width), geometry.outer)?;
 
-    let files = discover_spending_files();
-    let file_count = files.len();
+    let file_count = discover_spending_files().len();
     let paths = paths.clone();
     let (tx, rx) = mpsc::channel();
     let worker = thread::spawn(move || {
-        let stats = compute_cold_stats_from_files(&paths, files);
-        let _ = tx.send(stats);
+        let progress_tx = tx.clone();
+        let mut progress = |progress| {
+            let _ = progress_tx.send(ColdStatsEvent::Progress(progress));
+        };
+        let stats = load_or_refresh_stats(&paths, Some(&mut progress));
+        let _ = tx.send(ColdStatsEvent::Done(stats));
     });
 
     let stats = wait_for_cold_stats(rx, file_count);
@@ -191,31 +275,48 @@ fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
         return Err(anyhow!("stats worker panicked"));
     }
     let stats = stats?;
-    write_cold_note()?;
     Ok(LoadedStats {
         stats,
         header_printed: true,
     })
 }
 
-fn wait_for_cold_stats(rx: mpsc::Receiver<Stats>, file_count: usize) -> Result<Stats> {
+enum ColdStatsEvent {
+    Progress(SpendProgress),
+    Done(Result<Stats>),
+}
+
+fn wait_for_cold_stats(rx: mpsc::Receiver<ColdStatsEvent>, file_count: usize) -> Result<Stats> {
     let start = Instant::now();
     let mut frame = 0;
     let mut shown = false;
+    let mut last_draw: Option<Instant> = None;
+    let mut progress = SpendProgress {
+        finished_files: 0,
+        total_files: file_count,
+    };
     loop {
         match rx.recv_timeout(SPINNER_TICK) {
-            Ok(stats) => {
+            Ok(ColdStatsEvent::Done(stats)) => {
                 if shown {
                     clear_spinner_line()?;
                 }
-                return Ok(stats);
+                return stats;
+            }
+            Ok(ColdStatsEvent::Progress(next)) => {
+                progress = next;
+                if start.elapsed() >= SPINNER_MIN_AGE
+                    && last_draw.is_none_or(|draw| draw.elapsed() >= SPINNER_TICK)
+                {
+                    draw_progress(&mut frame, progress, &mut last_draw)?;
+                    shown = true;
+                }
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
                 if start.elapsed() < SPINNER_MIN_AGE {
                     continue;
                 }
-                write_spinner_line(SPINNER_FRAMES[frame % SPINNER_FRAMES.len()], file_count)?;
-                frame += 1;
+                draw_progress(&mut frame, progress, &mut last_draw)?;
                 shown = true;
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -228,34 +329,52 @@ fn wait_for_cold_stats(rx: mpsc::Receiver<Stats>, file_count: usize) -> Result<S
     }
 }
 
+fn draw_progress(
+    frame: &mut usize,
+    progress: SpendProgress,
+    last_draw: &mut Option<Instant>,
+) -> Result<()> {
+    write_progress_line(SPINNER_FRAMES[*frame % SPINNER_FRAMES.len()], progress)?;
+    *frame += 1;
+    *last_draw = Some(Instant::now());
+    Ok(())
+}
+
 fn should_animate_cold_stats(human: bool, stdout_tty: bool, stderr_tty: bool) -> bool {
     human && stdout_tty && stderr_tty
 }
 
-fn write_spinner_line(frame: char, file_count: usize) -> Result<()> {
-    let plural = if file_count == 1 { "" } else { "s" };
+fn write_progress_line(frame: char, progress: SpendProgress) -> Result<()> {
+    let total = progress.total_files;
+    let done = progress.finished_files.min(total);
+    let plural = if total == 1 { "" } else { "s" };
+    let count_width = total.max(1).to_string().len();
+    let bar = progress_bar(done, total);
     let mut stderr = std::io::stderr().lock();
     write!(
         stderr,
-        "\r{frame} Reading your history... {file_count} transcript file{plural}"
+        "\r{frame} Reading session file{plural} [{bar}] {done:>count_width$}/{total}"
     )?;
     stderr.flush()?;
     Ok(())
+}
+
+fn progress_bar(done: usize, total: usize) -> String {
+    let filled = if total == 0 {
+        0
+    } else {
+        (done.saturating_mul(PROGRESS_BAR_WIDTH) / total).min(PROGRESS_BAR_WIDTH)
+    };
+    let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH);
+    bar.extend(std::iter::repeat_n('█', filled));
+    bar.extend(std::iter::repeat_n('░', PROGRESS_BAR_WIDTH - filled));
+    bar
 }
 
 fn clear_spinner_line() -> Result<()> {
     let mut stderr = std::io::stderr().lock();
     write!(stderr, "\r{:<width$}\r", "", width = SPINNER_CLEAR_COLS)?;
     stderr.flush()?;
-    Ok(())
-}
-
-fn write_cold_note() -> Result<()> {
-    let mut stderr = std::io::stderr().lock();
-    writeln!(
-        stderr,
-        "rimz stats: computed from transcripts; start a Rimz sidebar to make this instant."
-    )?;
     Ok(())
 }
 
@@ -371,14 +490,7 @@ fn render_panel(stats: &Stats, today_day: i64, dollars: bool, include_header: bo
         return emit(&lines, geometry.outer);
     }
 
-    heatmap_lines(
-        &mut lines,
-        stats,
-        today_day,
-        geometry.weeks,
-        geometry.panel_width,
-        dollars,
-    );
+    heatmap_lines(&mut lines, stats, today_day, geometry.weeks, dollars);
     lines.push(String::new());
     windows_lines(&mut lines, stats);
     if !stats.by_model.is_empty() {
@@ -434,7 +546,6 @@ fn heatmap_lines(
     stats: &Stats,
     today_day: i64,
     weeks: usize,
-    panel_width: usize,
     dollars: bool,
 ) {
     let grid = Grid::build(&stats.by_day, today_day, weeks, dollars);
@@ -467,17 +578,12 @@ fn heatmap_lines(
         }
         lines.push(line.trim_end().to_string());
     }
-    lines.push(justify(
-        &render::paint(muted(), "Less"),
-        &ramp_key(&styles),
-        panel_width,
-    ));
+    lines.push(format!("  {}", ramp_key(&styles)));
 }
 
-/// The `░ ▒ ▓ █ More` key tail, in the cool ramp (the leading `Less` is the
-/// justify line's left edge).
+/// The compact `Less · ░ ▒ ▓ █ More` key in the cool ramp.
 fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
-    let mut s = String::new();
+    let mut s = format!("{} ", render::paint(muted(), "Less"));
     for (lvl, glyph) in RAMP.iter().enumerate() {
         s.push_str(&render::paint(styles[lvl], &glyph.to_string()));
         s.push(' ');
@@ -663,14 +769,6 @@ fn month_row(grid: &Grid) -> String {
 fn center(text: &str, visible: usize, width: usize) -> String {
     let pad = width.saturating_sub(visible) / 2;
     format!("{}{text}", " ".repeat(pad))
-}
-
-/// Left text, then right text pushed to `width`. ANSI-aware: padding counts
-/// printable columns, not escape bytes.
-fn justify(left: &str, right: &str, width: usize) -> String {
-    let used = visible_len(left) + visible_len(right);
-    let pad = width.saturating_sub(used).max(2);
-    format!("{left}{}{right}", " ".repeat(pad))
 }
 
 /// `s` right-padded to `width` printable columns (ANSI-aware), for column layout.
@@ -1039,9 +1137,23 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     fn day(tokens: u64, usd: f64) -> DaySpend {
         DaySpend { tokens, usd }
+    }
+
+    fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
+        let path = dir.join(filename);
+        std::fs::write(&path, format!("{}\n", lines.join("\n"))).unwrap();
+        path
+    }
+
+    fn claude_line_today(cost: f64, msg_id: &str, req_id: &str) -> String {
+        let today = utc_date(unix_secs_now());
+        format!(
+            r#"{{"timestamp":"{today}T10:00:00.000Z","costUSD":{cost},"requestId":"{req_id}","message":{{"id":"{msg_id}","usage":{{"input_tokens":10,"output_tokens":5}}}}}}"#
+        )
     }
 
     #[test]
@@ -1114,13 +1226,51 @@ mod tests {
             &by_model,
         );
 
-        let stats = load_published_stats(&runtime).expect("v3 aggregate is readable");
+        let stats = load_published_stats(&runtime).expect("current aggregate is readable");
 
         assert_eq!(stats.by_day, by_day);
         assert_eq!(stats.by_model, by_model);
         assert_eq!(stats.total.week.tokens, 7);
         assert_eq!(stats.total.month.usd, 3.0);
         assert_eq!(stats.total.year.sessions, 9);
+    }
+
+    #[test]
+    fn cold_refresh_publishes_sidebar_provider_rollups() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
+                .unwrap();
+        ensure_shared_runtime(&runtime).unwrap();
+        let transcript = write_jsonl(
+            dir.path(),
+            "claude.jsonl",
+            &[&claude_line_today(1.25, "msg-1", "req-1")],
+        );
+        let files = vec![(
+            &rimz::agents::ClaudeAdapter as &'static dyn rimz::agents::AgentAdapter,
+            transcript.clone(),
+        )];
+
+        let stats = compute_stats_from_files(&runtime, files, true, None);
+        let published = read_provider_spending_cache(&runtime.shared_provider_spending_path());
+        let fresh = load_published_stats(&runtime)
+            .expect("published stats are current after a stats-owned refresh");
+        let cursor = read_spending_cache(&runtime.shared_spending_cursor_path());
+
+        assert!(published.is_fresh(unix_millis_now()));
+        assert!((published.spending.total.month.usd - stats.total.month.usd).abs() < 1e-9);
+        assert!((fresh.total.month.usd - stats.total.month.usd).abs() < 1e-9);
+        assert_eq!(
+            published.spending.total.month.tokens,
+            stats.total.month.tokens
+        );
+        assert!(
+            cursor
+                .files
+                .contains_key(&transcript.to_string_lossy().into_owned()),
+            "stats publishes the cursor cache that makes the next run history-independent"
+        );
     }
 
     #[test]
@@ -1164,6 +1314,22 @@ mod tests {
     }
 
     #[test]
+    fn progress_bar_tracks_file_count() {
+        assert_eq!(progress_bar(0, 10), "░".repeat(PROGRESS_BAR_WIDTH));
+        assert_eq!(
+            progress_bar(5, 10),
+            format!("{}{}", "█".repeat(10), "░".repeat(10))
+        );
+        assert_eq!(progress_bar(10, 10), "█".repeat(PROGRESS_BAR_WIDTH));
+    }
+
+    #[test]
+    fn ramp_key_keeps_less_and_more_together() {
+        let key = ramp_key(&ramp_styles());
+        assert_eq!(visible_len(&key), "Less · ░ ▒ ▓ █ More".chars().count());
+    }
+
+    #[test]
     fn friendly_model_names() {
         assert_eq!(friendly_model("claude-opus-4-8"), "Opus 4.8");
         assert_eq!(friendly_model("claude-haiku-4-5"), "Haiku 4.5");
@@ -1192,14 +1358,5 @@ mod tests {
         assert_eq!(utc_date(0), "1970-01-01");
         assert_eq!(fmt_day(0), "Jan 1");
         assert_eq!(fmt_day(31), "Feb 1");
-    }
-
-    #[test]
-    fn justify_ignores_ansi_when_padding() {
-        let left = render::paint(meta(), "left");
-        let right = render::paint(meta(), "right");
-        let line = justify(&left, &right, 20);
-        // 20 columns of printable content, escapes excluded.
-        assert_eq!(visible_len(&line), 20);
     }
 }

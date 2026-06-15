@@ -47,6 +47,17 @@ pub(super) fn put_builtins(entries: &mut HashMap<String, Pricing>) {
         entries.insert(key.to_owned(), codex_5_2);
     }
 
+    // GPT-5.5 tier: $5 / $30 per 1M, cache-read $0.50 per 1M.
+    let gpt_5_5 = Pricing {
+        input: 5.0e-6,
+        output: 3.0e-5,
+        cache_read: 5.0e-7,
+        cache_create: 0.0,
+    };
+    for key in ["gpt-5.5", "gpt-5.5-codex"] {
+        entries.insert(key.to_owned(), gpt_5_5);
+    }
+
     // mini tier: $0.25 / $2 per 1M, cache-read $0.025 per 1M.
     let mini = Pricing {
         input: 2.5e-7,
@@ -118,5 +129,8 @@ mod tests {
         // gpt-5 is the Codex parser's mandatory fallback; builtins win over any
         // stale prior entry. Indexing also asserts the fallback is present.
         assert!((entries["gpt-5"].input - 1.25e-6).abs() < 1e-18);
+        assert!((entries["gpt-5.5"].input - 5.0e-6).abs() < 1e-18);
+        assert!((entries["gpt-5.5"].cache_read - 5.0e-7).abs() < 1e-18);
+        assert!((entries["gpt-5.5"].output - 3.0e-5).abs() < 1e-18);
     }
 }
