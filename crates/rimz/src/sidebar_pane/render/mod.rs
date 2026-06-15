@@ -44,10 +44,11 @@ pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 
+use crate::agents::TurnPhase;
 use crate::config::AnimationSpec;
 use crate::feed::AgentStatus;
-use crate::sidebar_pane::pets::FleetPetStatus;
-use crate::{SidebarRow, SidebarSnapshot};
+use crate::sidebar_pane::pets::PetAction;
+use crate::{ProcessState, SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
 use ratatui::text::Text;
@@ -225,6 +226,15 @@ pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) ->
     }
 }
 
+fn selected_row<'a>(snapshot: &'a SidebarSnapshot, ui: &UiState) -> Option<&'a SidebarRow> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row_passes_filter(row, ui.make_up_filter))
+        .nth(ui.selected_index)
+}
+
 /// The provider kind the dashboard's tab focus derives from the selection: the
 /// selected row's agent kind (agent rows carry the kind in `SidebarRow::name`),
 /// or `None` for a process row or an empty room — the caller falls back to the
@@ -232,14 +242,62 @@ pub(crate) fn row_passes_filter(row: &SidebarRow, filter: Option<BodyFilter>) ->
 /// of, so the dashboard's follow-the-selection stays honest under a make-up
 /// filter.
 pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+    selected_row(snapshot, ui)
+        .filter(|row| row.is_agent())
+        .map(|row| row.name.clone())
+}
+
+pub(crate) fn selected_pet_action(snapshot: &SidebarSnapshot, ui: &UiState) -> PetAction {
+    selected_row(snapshot, ui).map_or(PetAction::Idle, row_pet_action)
+}
+
+fn row_pet_action(row: &SidebarRow) -> PetAction {
+    if let Some(agent) = row.as_agent() {
+        let status = agent.status.unwrap_or(AgentStatus::Idle);
+        if agent.compacting {
+            return PetAction::Review;
+        }
+        if status == AgentStatus::Waiting {
+            return PetAction::Ask;
+        }
+        if status == AgentStatus::Failed {
+            return PetAction::Failed;
+        }
+        if status == AgentStatus::Paused {
+            return PetAction::Waiting;
+        }
+        if status == AgentStatus::Running
+            && (agent.phase == TurnPhase::Parked
+                || agent
+                    .sub_agents
+                    .iter()
+                    .any(|child| child.status == AgentStatus::Running))
+        {
+            return PetAction::Waiting;
+        }
+        return match (status, agent.phase) {
+            (AgentStatus::Running, TurnPhase::Reasoning) => PetAction::Thinking,
+            (AgentStatus::Running, _) => PetAction::Running,
+            (AgentStatus::Idle | AgentStatus::Success, _) => PetAction::Idle,
+            (AgentStatus::Waiting, _) => PetAction::Ask,
+            (AgentStatus::Failed, _) => PetAction::Failed,
+            (AgentStatus::Paused, _) => PetAction::Waiting,
+        };
+    }
+    match row.process_state().unwrap_or(ProcessState::Idle) {
+        ProcessState::Busy => PetAction::Running,
+        ProcessState::Stuck => PetAction::Failed,
+        ProcessState::Idle => PetAction::Idle,
+    }
+}
+
+pub(crate) fn unread_pet_row_ids(snapshot: &SidebarSnapshot) -> impl Iterator<Item = String> + '_ {
     snapshot
         .worktree_groups
         .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row_passes_filter(row, ui.make_up_filter))
-        .nth(ui.selected_index)
-        .filter(|row| row.is_agent())
-        .map(|row| row.name.clone())
+        .flat_map(|group| group.rows.iter())
+        .filter(|row| row.unread)
+        .map(|row| row.id.clone())
 }
 
 /// The provider kind whose block the dashboard shows: the manual tab pick while
@@ -306,42 +364,20 @@ pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) 
     !alert_active && (!snapshot.providers.is_empty() || snapshot.sidebar.pets.enabled)
 }
 
-pub(crate) fn fleet_pet_status(snapshot: &SidebarSnapshot) -> FleetPetStatus {
-    let mut blocked = false;
-    let mut running = false;
-    for status in snapshot
-        .worktree_groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter_map(SidebarRow::status)
-    {
-        match status {
-            AgentStatus::Waiting => return FleetPetStatus::NeedsInput,
-            AgentStatus::Failed | AgentStatus::Paused => blocked = true,
-            AgentStatus::Running => running = true,
-            AgentStatus::Idle | AgentStatus::Success => {}
-        }
-    }
-    if blocked {
-        FleetPetStatus::Blocked
-    } else if running {
-        FleetPetStatus::Running
-    } else {
-        FleetPetStatus::Idle
-    }
-}
-
 pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
     Theme::for_sidebar(&snapshot.sidebar).pet_body_enabled()
 }
 
-pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, status: FleetPetStatus) -> bool {
+pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {
     let animations = &snapshot.sidebar.animations;
-    let spec = match status {
-        FleetPetStatus::Idle => animations.idle.as_ref(),
-        FleetPetStatus::Running => animations.working.as_ref(),
-        FleetPetStatus::Blocked => animations.failed.as_ref(),
-        FleetPetStatus::NeedsInput => animations.waiting.as_ref(),
+    let spec = match action {
+        PetAction::Idle => animations.idle.as_ref(),
+        PetAction::Thinking => animations.thinking.as_ref(),
+        PetAction::Running => animations.working.as_ref(),
+        PetAction::Waiting => animations.delegating.as_ref(),
+        PetAction::Review => animations.compacting.as_ref(),
+        PetAction::Ask => animations.waiting.as_ref(),
+        PetAction::Failed => animations.failed.as_ref(),
     };
     spec_needs_motion(spec)
 }

@@ -1,24 +1,32 @@
-use super::model::FleetPetStatus;
+use super::model::PetAction;
 
-/// A canned line for the pet to "say" when the fused fleet status changes,
+/// A canned line for the pet to "say" when the selected-card action changes,
 /// drawn from the matching pool by `seed` so repeated transitions vary. Returns
-/// `None` while the status holds, so a line shows once per change and the prior
+/// `None` while the action holds, so a line shows once per change and the prior
 /// line keeps standing. `pool[0]` is the plain line; later entries add variety.
 pub(crate) fn caption(
-    previous: Option<FleetPetStatus>,
-    current: FleetPetStatus,
+    previous: Option<PetAction>,
+    current: PetAction,
     seed: u64,
 ) -> Option<&'static str> {
     if previous == Some(current) {
         return None;
     }
     let pool = match current {
-        FleetPetStatus::NeedsInput => NEEDS_INPUT,
-        FleetPetStatus::Blocked => BLOCKED,
-        FleetPetStatus::Running => RUNNING,
-        FleetPetStatus::Idle => match previous {
+        PetAction::Ask => ASK,
+        PetAction::Failed => FAILED,
+        PetAction::Thinking => THINKING,
+        PetAction::Running => RUNNING,
+        PetAction::Waiting => WAITING,
+        PetAction::Review => REVIEW,
+        PetAction::Idle => match previous {
             Some(
-                FleetPetStatus::NeedsInput | FleetPetStatus::Blocked | FleetPetStatus::Running,
+                PetAction::Ask
+                | PetAction::Failed
+                | PetAction::Thinking
+                | PetAction::Running
+                | PetAction::Waiting
+                | PetAction::Review,
             ) => CAUGHT_UP,
             _ => RESTING,
         },
@@ -26,7 +34,7 @@ pub(crate) fn caption(
     Some(pool[(seed as usize) % pool.len()])
 }
 
-const NEEDS_INPUT: &[&str] = &[
+const ASK: &[&str] = &[
     "someone needs you",
     "your turn",
     "tap in - you're up",
@@ -34,7 +42,7 @@ const NEEDS_INPUT: &[&str] = &[
     "psst, over here",
 ];
 
-const BLOCKED: &[&str] = &[
+const FAILED: &[&str] = &[
     "rough patch - take a look",
     "something's stuck",
     "hit a snag",
@@ -42,12 +50,36 @@ const BLOCKED: &[&str] = &[
     "this one needs a nudge",
 ];
 
+const THINKING: &[&str] = &[
+    "thinking it through",
+    "reading the room",
+    "working it out",
+    "still reasoning",
+    "mapping the path",
+];
+
 const RUNNING: &[&str] = &[
     "room is moving",
-    "all paws on deck",
     "things are humming",
     "work in flight",
     "cooking with gas",
+    "hands are busy",
+];
+
+const WAITING: &[&str] = &[
+    "waiting on work",
+    "background work",
+    "standing by",
+    "holding the line",
+    "watching the lane",
+];
+
+const REVIEW: &[&str] = &[
+    "reviewing context",
+    "condensing context",
+    "tidying memory",
+    "making room",
+    "compressing notes",
 ];
 
 const CAUGHT_UP: &[&str] = &[
@@ -71,31 +103,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn captions_fire_on_status_transitions() {
+    fn captions_fire_on_action_transitions() {
         assert_eq!(
-            caption(Some(FleetPetStatus::Running), FleetPetStatus::NeedsInput, 0),
+            caption(Some(PetAction::Running), PetAction::Ask, 0),
             Some("someone needs you")
         );
         assert_eq!(
-            caption(Some(FleetPetStatus::NeedsInput), FleetPetStatus::Idle, 0),
+            caption(Some(PetAction::Ask), PetAction::Idle, 0),
             Some("all caught up")
         );
-        assert_eq!(
-            caption(Some(FleetPetStatus::Idle), FleetPetStatus::Idle, 7),
-            None
-        );
+        assert_eq!(caption(Some(PetAction::Idle), PetAction::Idle, 7), None);
     }
 
     #[test]
     fn seed_varies_the_line_within_a_pool() {
-        let first = caption(None, FleetPetStatus::Running, 0);
-        let second = caption(None, FleetPetStatus::Running, 1);
+        let first = caption(None, PetAction::Running, 0);
+        let second = caption(None, PetAction::Running, 1);
         assert!(first.is_some() && second.is_some());
         assert_ne!(first, second, "different seeds pick different lines");
     }
 
     #[test]
     fn resting_is_the_cold_idle_line() {
-        assert_eq!(caption(None, FleetPetStatus::Idle, 0), Some("resting"));
+        assert_eq!(caption(None, PetAction::Idle, 0), Some("resting"));
     }
 }

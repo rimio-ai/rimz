@@ -308,42 +308,149 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
 }
 
 #[test]
-fn fleet_pet_status_uses_attention_precedence() {
-    let statuses = |statuses: &[AgentStatus]| {
+fn selected_pet_action_follows_the_focused_card() {
+    let statuses = |statuses: &[(AgentStatus, crate::agents::TurnPhase)]| {
         snapshot_with(
             Vec::new(),
             statuses
                 .iter()
                 .enumerate()
-                .map(|(index, status)| {
-                    agent(
+                .map(|(index, (status, phase))| {
+                    let mut agent = agent(
                         &format!("agent-{index}"),
                         "claude",
                         *status,
                         Some("/repo/main"),
                         Some("main"),
                         None,
-                    )
+                    );
+                    agent.phase = *phase;
+                    agent
                 })
                 .collect(),
         )
     };
 
+    let snapshot = statuses(&[
+        (AgentStatus::Waiting, crate::agents::TurnPhase::Idle),
+        (AgentStatus::Running, crate::agents::TurnPhase::Reasoning),
+        (AgentStatus::Running, crate::agents::TurnPhase::Acting),
+    ]);
+    let ui = UiState {
+        selected_index: 0,
+        ..UiState::default()
+    };
     assert_eq!(
-        fleet_pet_status(&statuses(&[AgentStatus::Running, AgentStatus::Waiting])),
-        crate::sidebar_pane::pets::FleetPetStatus::NeedsInput
+        selected_pet_action(&snapshot, &ui),
+        crate::sidebar_pane::pets::PetAction::Ask
     );
+    let ui = UiState {
+        selected_index: 1,
+        ..UiState::default()
+    };
     assert_eq!(
-        fleet_pet_status(&statuses(&[AgentStatus::Running, AgentStatus::Failed])),
-        crate::sidebar_pane::pets::FleetPetStatus::Blocked
+        selected_pet_action(&snapshot, &ui),
+        crate::sidebar_pane::pets::PetAction::Thinking
     );
+    let ui = UiState {
+        selected_index: 2,
+        ..UiState::default()
+    };
     assert_eq!(
-        fleet_pet_status(&statuses(&[AgentStatus::Idle, AgentStatus::Running])),
-        crate::sidebar_pane::pets::FleetPetStatus::Running
+        selected_pet_action(&snapshot, &ui),
+        crate::sidebar_pane::pets::PetAction::Running
     );
+
+    let mut compacting = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Acting)]);
+    compacting.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .compacting = true;
     assert_eq!(
-        fleet_pet_status(&statuses(&[AgentStatus::Idle, AgentStatus::Success])),
-        crate::sidebar_pane::pets::FleetPetStatus::Idle
+        selected_pet_action(&compacting, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Review
+    );
+    let mut compacting_waiting =
+        statuses(&[(AgentStatus::Waiting, crate::agents::TurnPhase::Idle)]);
+    compacting_waiting.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .compacting = true;
+    assert_eq!(
+        selected_pet_action(&compacting_waiting, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Review
+    );
+
+    let mut subagent = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Acting)]);
+    subagent.worktree_groups[0].rows[0]
+        .as_agent_mut()
+        .expect("agent row")
+        .sub_agents
+        .push(crate::SidebarSubAgent {
+            id: "child-1".to_owned(),
+            name: "Explore".to_owned(),
+            status: AgentStatus::Running,
+            phase: crate::agents::TurnPhase::Reasoning,
+            task: None,
+            model: None,
+            effort: None,
+            description: None,
+            total_tokens: None,
+            elapsed_secs: None,
+            started_at: None,
+            last_activity: fixed_now(),
+        });
+    assert_eq!(
+        selected_pet_action(&subagent, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Waiting
+    );
+
+    let parked = statuses(&[(AgentStatus::Running, crate::agents::TurnPhase::Parked)]);
+    assert_eq!(
+        selected_pet_action(&parked, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Waiting
+    );
+}
+
+#[test]
+fn selected_pet_action_follows_process_cards() {
+    let mut snapshot = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "agent-1",
+            "claude",
+            AgentStatus::Idle,
+            Some("/repo/main"),
+            Some("main"),
+            None,
+        )],
+    );
+    snapshot.worktree_groups[0].rows = vec![crate::SidebarRow {
+        id: "process-1".to_owned(),
+        name: "cargo".to_owned(),
+        pane: None,
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        unread: false,
+        inactive: false,
+        last_activity: fixed_now(),
+        card: crate::RowCard::Process(crate::ProcessCard {
+            state: crate::ProcessState::Busy,
+            ..crate::ProcessCard::default()
+        }),
+    }];
+
+    assert_eq!(
+        selected_pet_action(&snapshot, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Running
+    );
+    snapshot.worktree_groups[0].rows[0]
+        .as_process_mut()
+        .expect("process row")
+        .state = crate::ProcessState::Stuck;
+    assert_eq!(
+        selected_pet_action(&snapshot, &UiState::default()),
+        crate::sidebar_pane::pets::PetAction::Failed
     );
 }
 /// Honesty test: a running agent silent past the stall window is projected

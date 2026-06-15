@@ -11,16 +11,24 @@ const REVIEW_FPS: f64 = 3.5;
 
 pub(crate) const TRACK_IDLE: &str = "idle";
 pub(crate) const TRACK_MOVING: &str = "moving";
+pub(crate) const TRACK_THINKING: &str = "thinking";
+pub(crate) const TRACK_RUNNING: &str = "running";
+pub(crate) const TRACK_WAITING: &str = "waiting";
+pub(crate) const TRACK_REVIEW: &str = "review";
+pub(crate) const TRACK_ASK: &str = "ask";
 pub(crate) const TRACK_WAVING: &str = "waving";
 pub(crate) const TRACK_JUMPING: &str = "jumping";
 pub(crate) const TRACK_FAILED: &str = "failed";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum FleetPetStatus {
+pub(crate) enum PetAction {
     Idle,
+    Thinking,
     Running,
-    Blocked,
-    NeedsInput,
+    Waiting,
+    Review,
+    Ask,
+    Failed,
 }
 
 #[derive(Clone, Debug)]
@@ -61,52 +69,61 @@ pub(crate) fn default_animations() -> AnimationSet {
     let run_left = row(2, 8);
     let mut moving = run_right.clone();
     moving.extend(run_left.iter().copied());
+    let mut thinking = Vec::with_capacity((run_left.len() + run_right.len()) * 3);
+    for _ in 0..3 {
+        thinking.extend(run_left.iter().copied());
+    }
+    for _ in 0..3 {
+        thinking.extend(run_right.iter().copied());
+    }
+    let waiting = row(6, 6);
+    let mut ask = Vec::with_capacity(4 * 2 + waiting.len());
+    ask.extend(row(3, 4));
+    ask.extend(row(3, 4));
+    ask.extend(waiting.iter().copied());
 
     BTreeMap::from([
         (TRACK_IDLE, Animation::new(row(0, 6), IDLE_FPS)),
         ("run-right", Animation::new(run_right, MOVING_FPS)),
         ("run-left", Animation::new(run_left, MOVING_FPS)),
+        (TRACK_THINKING, Animation::new(thinking, MOVING_FPS)),
         (TRACK_WAVING, Animation::new(row(3, 4), WAVING_FPS)),
         (TRACK_JUMPING, Animation::new(row(4, 5), JUMPING_FPS)),
         (TRACK_FAILED, Animation::new(row(5, 8), FAILED_FPS)),
-        ("waiting", Animation::new(row(6, 6), WAITING_FPS)),
-        ("running", Animation::new(row(7, 6), MOVING_FPS)),
-        ("review", Animation::new(row(8, 6), REVIEW_FPS)),
+        (TRACK_WAITING, Animation::new(waiting, WAITING_FPS)),
+        (TRACK_RUNNING, Animation::new(row(7, 6), MOVING_FPS)),
+        (TRACK_REVIEW, Animation::new(row(8, 6), REVIEW_FPS)),
+        (TRACK_ASK, Animation::new(ask, WAVING_FPS)),
         (TRACK_MOVING, Animation::new(moving, MOVING_FPS)),
     ])
 }
 
-pub(crate) fn fleet_track(status: FleetPetStatus) -> &'static str {
-    match status {
-        FleetPetStatus::Idle => TRACK_IDLE,
-        FleetPetStatus::Running => TRACK_MOVING,
-        FleetPetStatus::Blocked => TRACK_FAILED,
-        FleetPetStatus::NeedsInput => TRACK_WAVING,
+pub(crate) fn action_track(action: PetAction) -> &'static str {
+    match action {
+        PetAction::Idle => TRACK_IDLE,
+        PetAction::Thinking => TRACK_THINKING,
+        PetAction::Running => TRACK_RUNNING,
+        PetAction::Waiting => TRACK_WAITING,
+        PetAction::Review => TRACK_REVIEW,
+        PetAction::Ask => TRACK_ASK,
+        PetAction::Failed => TRACK_FAILED,
     }
 }
 
-pub(crate) fn one_shot_track(
-    previous: Option<FleetPetStatus>,
-    current: FleetPetStatus,
-) -> Option<&'static str> {
-    match (previous, current) {
-        (
-            Some(FleetPetStatus::NeedsInput | FleetPetStatus::Blocked | FleetPetStatus::Running),
-            FleetPetStatus::Idle,
-        ) => Some(TRACK_JUMPING),
-        _ => None,
-    }
+pub(crate) fn action_changed(previous: Option<PetAction>, current: PetAction) -> bool {
+    previous.is_some_and(|previous| previous != current)
 }
 
 pub(crate) fn track_frame_duration(track: &str, refresh_ms: u16) -> Duration {
     let fps = match track {
         TRACK_IDLE => IDLE_FPS,
-        "run-right" | "run-left" | TRACK_MOVING | "running" => MOVING_FPS,
+        "run-right" | "run-left" | TRACK_MOVING | TRACK_THINKING | TRACK_RUNNING => MOVING_FPS,
         TRACK_WAVING => WAVING_FPS,
         TRACK_JUMPING => JUMPING_FPS,
         TRACK_FAILED => FAILED_FPS,
-        "waiting" => WAITING_FPS,
-        "review" => REVIEW_FPS,
+        TRACK_WAITING => WAITING_FPS,
+        TRACK_REVIEW => REVIEW_FPS,
+        TRACK_ASK => WAVING_FPS,
         _ => IDLE_FPS,
     };
     frame_duration_for_fps(fps, refresh_ms)
@@ -122,11 +139,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fleet_tracks_follow_attention_precedence_names() {
-        assert_eq!(fleet_track(FleetPetStatus::NeedsInput), TRACK_WAVING);
-        assert_eq!(fleet_track(FleetPetStatus::Blocked), TRACK_FAILED);
-        assert_eq!(fleet_track(FleetPetStatus::Running), TRACK_MOVING);
-        assert_eq!(fleet_track(FleetPetStatus::Idle), TRACK_IDLE);
+    fn action_tracks_follow_focused_card_names() {
+        assert_eq!(action_track(PetAction::Thinking), TRACK_THINKING);
+        assert_eq!(action_track(PetAction::Running), TRACK_RUNNING);
+        assert_eq!(action_track(PetAction::Waiting), TRACK_WAITING);
+        assert_eq!(action_track(PetAction::Review), TRACK_REVIEW);
+        assert_eq!(action_track(PetAction::Ask), TRACK_ASK);
+        assert_eq!(action_track(PetAction::Failed), TRACK_FAILED);
+        assert_eq!(action_track(PetAction::Idle), TRACK_IDLE);
     }
 
     #[test]
@@ -142,34 +162,37 @@ mod tests {
             animations[TRACK_FAILED].sprites,
             (40..48).collect::<Vec<_>>()
         );
-        assert_eq!(animations["waiting"].sprites, (48..54).collect::<Vec<_>>());
-        assert_eq!(animations["running"].sprites, (56..62).collect::<Vec<_>>());
-        assert_eq!(animations["review"].sprites, (64..70).collect::<Vec<_>>());
+        assert_eq!(
+            animations[TRACK_WAITING].sprites,
+            (48..54).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            animations[TRACK_RUNNING].sprites,
+            (56..62).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            animations[TRACK_REVIEW].sprites,
+            (64..70).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            animations[TRACK_THINKING].sprites,
+            (16..24)
+                .cycle()
+                .take(24)
+                .chain((8..16).cycle().take(24))
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            animations[TRACK_ASK].sprites,
+            (24..28).chain(24..28).chain(48..54).collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn completion_jump_only_fires_on_work_to_idle_edges() {
-        assert_eq!(
-            one_shot_track(Some(FleetPetStatus::Running), FleetPetStatus::Idle),
-            Some(TRACK_JUMPING)
-        );
-        assert_eq!(
-            one_shot_track(Some(FleetPetStatus::NeedsInput), FleetPetStatus::Idle),
-            Some(TRACK_JUMPING)
-        );
-        assert_eq!(
-            one_shot_track(Some(FleetPetStatus::Blocked), FleetPetStatus::Idle),
-            Some(TRACK_JUMPING)
-        );
-        assert_eq!(one_shot_track(None, FleetPetStatus::Idle), None);
-        assert_eq!(
-            one_shot_track(Some(FleetPetStatus::Idle), FleetPetStatus::Idle),
-            None
-        );
-        assert_eq!(
-            one_shot_track(Some(FleetPetStatus::Running), FleetPetStatus::Blocked),
-            None
-        );
+    fn action_change_ignores_cold_start_and_same_action() {
+        assert!(!action_changed(None, PetAction::Idle));
+        assert!(!action_changed(Some(PetAction::Idle), PetAction::Idle));
+        assert!(action_changed(Some(PetAction::Running), PetAction::Ask));
     }
 
     #[test]

@@ -443,7 +443,7 @@ fn refresh_pet_view(
     terminal_size: Option<(u16, u16)>,
 ) {
     let (width, height) = terminal_size.unwrap_or(PET_FALLBACK_TERMINAL_SIZE);
-    let status = render::fleet_pet_status(snapshot);
+    let action = render::selected_pet_action(snapshot, ui);
     let size = if snapshot.sidebar.pets.enabled
         && render::dashboard_present(snapshot, alert_active)
         && render::pet_body_enabled(snapshot)
@@ -459,13 +459,19 @@ fn refresh_pet_view(
     } else {
         None
     };
+    let unread_triggered = if snapshot.sidebar.pets.enabled {
+        pet_assets.observe_unread_rows(render::unread_pet_row_ids(snapshot))
+    } else {
+        false
+    };
     ui.pet = pet_assets.view(
         &snapshot.sidebar.pets,
-        status,
+        action,
         ui.animation_phase,
         snapshot.sidebar.resolved_refresh_ms(),
         size,
-        render::pet_motion_enabled(snapshot, status),
+        render::pet_motion_enabled(snapshot, action),
+        unread_triggered,
     );
 }
 

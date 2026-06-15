@@ -127,7 +127,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
         }]]),
         caption: Some("all caught up".to_owned()),
         loading: false,
-        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        action: crate::sidebar_pane::pets::PetAction::Idle,
         active_track: "idle",
     };
 
@@ -162,8 +162,8 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         }]]),
         caption: Some("someone needs you".to_owned()),
         loading: false,
-        status: crate::sidebar_pane::pets::FleetPetStatus::NeedsInput,
-        active_track: "waving",
+        action: crate::sidebar_pane::pets::PetAction::Ask,
+        active_track: "ask",
     };
 
     let (lines, _) = dashboard_panel_lines(
@@ -197,7 +197,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         grid: Some((0..8).map(|_| vec![cell.clone(), cell.clone()]).collect()),
         caption: Some("all caught up".to_owned()),
         loading: false,
-        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        action: crate::sidebar_pane::pets::PetAction::Idle,
         active_track: "idle",
     };
     let fleet = crate::SpendTally {
@@ -350,7 +350,7 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
         grid: Some((0..3).map(|_| vec![cell.clone(); 12]).collect()),
         caption: Some("ready".to_owned()),
         loading: false,
-        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        action: crate::sidebar_pane::pets::PetAction::Idle,
         active_track: "idle",
     };
     let active = "claude".to_owned();

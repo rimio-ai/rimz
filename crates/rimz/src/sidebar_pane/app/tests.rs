@@ -103,7 +103,7 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
             }]]),
             caption: Some("resting".to_owned()),
             loading: false,
-            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            action: crate::sidebar_pane::pets::PetAction::Idle,
             active_track: "idle",
         }),
         ..Default::default()
@@ -157,7 +157,7 @@ fn active_alert_suppresses_hidden_pet_animation_cadence() {
             }]]),
             caption: Some("resting".to_owned()),
             loading: false,
-            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            action: crate::sidebar_pane::pets::PetAction::Idle,
             active_track: "idle",
         }),
         ..Default::default()

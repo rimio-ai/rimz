@@ -2,7 +2,7 @@
 
 > Status: implemented. `[sidebar.pets] enabled = true` adds a pet overlay to the provider dashboard.
 
-Pets are renderer-local attention art. The dashboard shows one animated companion for the whole room, driven by the same fleet state the sidebar already derives from the agent rows: waiting beats blocked, blocked beats running, running beats idle. The pet lives in the dashboard rather than the cards, so row layout stays stable while the bottom panel carries a glanceable room mood.
+Pets are renderer-local attention art. The dashboard shows one animated companion for the selected agent or process card. The pet lives in the dashboard rather than the cards, so row layout stays stable while the bottom panel mirrors the card under the highlight.
 
 ## Dashboard Placement
 
@@ -10,30 +10,33 @@ The provider dashboard owns the tab rail. Provider tabs pack from the left; when
 
 The pet overlay is best-effort enrichment. When a sprite grid is available, the active provider block narrows and the pet column zips onto its right edge. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite body to the active provider block height, while the zipper owns the one blank row below the sprite and the folded footer when present. The provider side still chooses from the same auto layout tiers: wide is the full-width block, normal is the taller block used beside the pet column, and narrow keeps the same rows while dropping input/output token splits and then version trivia when width requires it. Today's sessions, token stats, and USD stay on one row. `Total:` marks the scope change; normal/narrow totals add a blank provider row above it, put `W:`/`M:` session clusters left with token stats right, and put `W: $...` left with `M: $...` right on the third total row. The pet caption rides in the tab rail's spacer above the sprite, and the folded remote/help footer sits on the bottom row below the sprite. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block uses the available full width.
 
-## Fleet Status
+## Focused-Card Action
 
-The renderer fuses visible fleet state into one pet status before choosing an animation track.
+The renderer projects the selected visible row into one pet action before choosing an animation track.
 
-| fleet state | animation track | default caption |
+| selected card state | animation track | default caption |
 | --- | --- | --- |
-| an agent is waiting | `waving` | `someone needs you` |
-| an agent failed or paused | `failed` | `rough patch - take a look` |
-| an agent is running | `moving` (`run-right` plus `run-left`) | `room is moving` |
-| the room is idle, successful, or empty | `idle` | `all caught up` after work, then `resting` |
+| agent ask / waiting for input | `ask` (`waving` twice, then `waiting` once) | `someone needs you` |
+| agent reasoning | `thinking` (`run-left` three loops, then `run-right` three loops) | `thinking it through` |
+| agent acting, or a busy process row | `running` | `room is moving` |
+| agent parked on background work, rate-limit/overload paused, or waiting on running subagents | `waiting` | `waiting on work` |
+| agent compacting context | `review` | `reviewing context` |
+| agent failed, or a stuck process row | `failed` | `rough patch - take a look` |
+| selected row idle, successful, empty, or an idle process row | `idle` | `all caught up` after work, then `resting` |
 
-The work-to-idle edge plays `jumping` once before returning to `idle`, matching the same transition that chooses an `all caught up` caption. Static role animation overrides skip that one-shot and freeze the steady status track on its first frame.
+Any pet-action change plays `jumping` once before switching to the new steady track. A newly unread row also plays `jumping` once, even when the selected card's action did not change. Static role animation overrides skip one-shots and freeze the steady action track on its first frame.
 
-The built-in catalog follows the petdex/Codex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The default room mapping uses `moving`, `waving`, `jumping`, `failed`, and `idle`; `waiting`, `running`, and `review` remain defined catalog tracks for spec parity. Movement, waving, jumping, and failed tracks run at a calmer cadence, roughly half the Codex default speed.
+The built-in catalog follows the petdex/Codex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The default mapping uses `idle`, `thinking`, `running`, `waiting`, `review`, `ask`, `jumping`, and `failed`; `moving`, `run-right`, `run-left`, and `waving` remain defined catalog tracks for compatibility and composed tracks. Movement, waving, jumping, failed, waiting, running, and review tracks run at a calmer cadence, roughly half the Codex default speed.
 
-Captions are canned strings in the renderer. They read status transitions only; they do not read transcripts, prompts, terminal scrollback, or provider conversations. `[sidebar.pets] voice = false` disables those captions.
+Captions are canned strings in the renderer. They read action transitions only; they do not read transcripts, prompts, terminal scrollback, or provider conversations. `[sidebar.pets] voice = false` disables those captions.
 
 ## Cell Art
 
-The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals. Explicit static role animation settings freeze the matching pet track (`idle`, `moving`, `waving`, or `failed`) on a stable frame; the default pet tracks keep their own lightweight cadence.
+The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals. Explicit static role animation settings freeze the matching pet track (`idle`, `thinking`, `running`, `waiting`, `review`, `ask`, or `failed`) on a stable frame; the default pet tracks keep their own lightweight cadence.
 
 `[sidebar.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
 
-The render module receives only `PetView` data: a cell grid, an optional caption, loading state, fused status, and active animation track. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
+The render module receives only `PetView` data: a cell grid, an optional caption, loading state, current action, and active animation track. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
 
 ## Assets
 

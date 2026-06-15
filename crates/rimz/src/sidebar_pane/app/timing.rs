@@ -21,7 +21,7 @@ fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState, alert_active: bool) -
             view.loading
                 || (view.grid.is_some()
                     && render::pet_body_enabled(snapshot)
-                    && render::pet_motion_enabled(snapshot, view.status))
+                    && render::pet_motion_enabled(snapshot, view.action))
         })
 }
 
@@ -40,7 +40,7 @@ fn pet_frame_interval(
     }
     if view.grid.is_some()
         && render::pet_body_enabled(snapshot)
-        && render::pet_motion_enabled(snapshot, view.status)
+        && render::pet_motion_enabled(snapshot, view.action)
     {
         return Some(crate::sidebar_pane::pets::animation_frame(
             view.active_track,

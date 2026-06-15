@@ -275,7 +275,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
             grid: Some((0..6).map(|_| vec![cell.clone(); 12]).collect()),
             caption: Some("ready".to_owned()),
             loading: false,
-            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            action: crate::sidebar_pane::pets::PetAction::Idle,
             active_track: "idle",
         }),
         ..Default::default()
