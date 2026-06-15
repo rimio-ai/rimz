@@ -2,7 +2,7 @@
 //! budget bars — and the W/M fleet ledger rows.
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
-use crate::config::BudgetZonesConfig;
+use crate::config::{BudgetZonesConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
@@ -13,12 +13,12 @@ use crate::sidebar_pane::render::fmt::{
     dollars2, reset_countdown, tokens_int, tokens_short, window_label,
 };
 use crate::sidebar_pane::render::labels::{
-    TOKENS_CACHED, TOKENS_IN, TOKENS_OUT, TOKENS_TOTAL, mana_bar_spans, mana_style, pace_ratio,
-    pace_style, token_breakdown_spans, unknown_mana_bar_spans,
+    mana_bar_spans, mana_style, pace_ratio, pace_style, token_breakdown_spans,
+    unknown_mana_bar_spans,
 };
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{SESSIONS_GLYPH, TAB_CAP_LEFT, TAB_CAP_RIGHT, pin_right, trim_spans_to_width};
+use super::{pin_right, trim_spans_to_width};
 
 /// The provider dashboard's fixed art column width: the brand emblem is padded
 /// to this many cells so the bar column to its right starts at one shared cell
@@ -238,17 +238,18 @@ impl WmColumns {
 }
 
 fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
-    let label = "── Total: ";
+    let hairline = theme.glyph(GlyphRole::ChromeHairline);
+    let label = format!("{hairline}{hairline} Total: ");
     let used = 1 + label.chars().count();
     let fill = width.saturating_sub(used);
     trim_spans_to_width(
         vec![
             Span::raw(" "),
             Span::styled(
-                label.to_owned(),
+                label,
                 theme.styled(Component::LedgerLabel, Modifier::empty()),
             ),
-            Span::styled(RAIL_FILL.to_string().repeat(fill), theme.faint()),
+            Span::styled(hairline.repeat(fill), theme.faint()),
         ],
         width,
     )
@@ -349,7 +350,10 @@ fn spend_session_spans(
             format!("{label}: "),
             marker(theme.component(Component::LedgerLabel)),
         ),
-        Span::styled(SESSIONS_GLYPH, marker(theme.component(Component::Sessions))),
+        Span::styled(
+            theme.glyph(GlyphRole::MarkerSessions).to_owned(),
+            marker(theme.component(Component::Sessions)),
+        ),
         Span::styled(
             format!(" {:>w$}", window.sessions, w = cols.sessions),
             value,
@@ -367,7 +371,10 @@ fn spend_token_metric_spans(
     let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
     let mut spans = vec![
-        Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
+        Span::styled(
+            theme.glyph(GlyphRole::MarkerTokenTotal).to_owned(),
+            marker(theme.component(Component::TokenTotal)),
+        ),
         Span::styled(
             format!(" {:>w$}", token_format(window.tokens), w = cols.total),
             value,
@@ -376,7 +383,7 @@ fn spend_token_metric_spans(
     if token_detail == TokenDetail::Full {
         spans.extend([
             Span::styled(
-                format!(" {TOKENS_IN} "),
+                format!(" {} ", theme.glyph(GlyphRole::MarkerTokenIn)),
                 marker(theme.component(Component::Input)),
             ),
             Span::styled(
@@ -384,7 +391,7 @@ fn spend_token_metric_spans(
                 value,
             ),
             Span::styled(
-                format!(" {TOKENS_OUT} "),
+                format!(" {} ", theme.glyph(GlyphRole::MarkerTokenOut)),
                 marker(theme.component(Component::Output)),
             ),
             Span::styled(
@@ -395,7 +402,7 @@ fn spend_token_metric_spans(
     }
     spans.extend([
         Span::styled(
-            format!(" {TOKENS_CACHED} "),
+            format!(" {} ", theme.glyph(GlyphRole::MarkerCacheRead)),
             marker(theme.component(Component::CacheRead)),
         ),
         Span::styled(
@@ -867,7 +874,8 @@ fn provider_tab_rail(
     width: usize,
 ) -> (Line<'static>, Vec<ProviderTabHit>) {
     let rail = theme.body();
-    let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rail);
+    let hairline = theme.glyph(GlyphRole::ChromeHairline).to_owned();
+    let fill = |cells: usize| Span::styled(hairline.repeat(cells), rail);
     let mut spans: Vec<Span<'static>> = Vec::new();
     let mut hits = Vec::new();
     let mut col: usize = 0;
@@ -897,8 +905,11 @@ fn provider_tab_rail(
             let chip = theme.chip(brand, Modifier::BOLD);
             let (left, right) = if chip.bg.is_none() {
                 (
-                    Span::styled(TAB_CAP_LEFT.to_string(), rail),
-                    Span::styled(TAB_CAP_RIGHT.to_string(), rail),
+                    Span::styled(theme.glyph(GlyphRole::StructureTabCapLeft).to_owned(), rail),
+                    Span::styled(
+                        theme.glyph(GlyphRole::StructureTabCapRight).to_owned(),
+                        rail,
+                    ),
                 )
             } else {
                 (fill(1), fill(1))
@@ -928,9 +939,7 @@ fn provider_tab_rail(
     (Line::from(spans), hits)
 }
 
-/// The rail's fill glyph — the same `─` the plain hairline draws — and the
-/// width of its leading stub and inter-tab gaps.
-const RAIL_FILL: char = '─';
+/// Width of the tab rail's leading stub and inter-tab gaps.
 const RAIL_STUB: usize = 2;
 
 /// A tab's display label: the registry kind slug with its first ASCII char
@@ -964,7 +973,7 @@ fn provider_header_line(
 ) -> Line<'static> {
     let right = if panel.remote_control {
         vec![Span::styled(
-            "⇅ rc",
+            format!("{} rc", theme.glyph(GlyphRole::MarkerRemoteControl)),
             theme.styled(Component::RemoteControl, Modifier::BOLD),
         )]
     } else {
@@ -1108,7 +1117,7 @@ fn provider_stats_left_spans(
 ) -> Vec<Span<'static>> {
     let mut left = vec![
         Span::styled(
-            SESSIONS_GLYPH,
+            theme.glyph(GlyphRole::MarkerSessions).to_owned(),
             theme.styled(Component::Sessions, Modifier::empty()),
         ),
         Span::styled(format!(" {}", today.sessions), theme.body()),
@@ -1165,10 +1174,13 @@ fn provider_token_breakdown_spans(
     let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
     vec![
-        Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
+        Span::styled(
+            theme.glyph(GlyphRole::MarkerTokenTotal).to_owned(),
+            marker(theme.component(Component::TokenTotal)),
+        ),
         Span::styled(format!(" {}", format(total)), value),
         Span::styled(
-            format!(" {TOKENS_CACHED} "),
+            format!(" {} ", theme.glyph(GlyphRole::MarkerCacheRead)),
             marker(theme.component(Component::CacheRead)),
         ),
         Span::styled(format(cache_read), value),
@@ -1395,7 +1407,10 @@ fn reset_value_spans(
     };
     let countdown = pad_countdown(countdown);
     vec![
-        Span::styled("↻", marker_style),
+        Span::styled(
+            theme.glyph(GlyphRole::MarkerCompaction).to_owned(),
+            marker_style,
+        ),
         Span::styled(format!(" {countdown}"), theme.body()),
     ]
 }
@@ -1438,10 +1453,10 @@ fn extra_credits_bar_row(
 fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<'static>> {
     let value = match credits {
         Some(ExtraCredits::Disabled) => "off".to_owned(),
-        Some(credits) => extra_value_label(credits),
-        None => "∞".to_owned(),
+        Some(credits) => extra_value_label(theme, credits),
+        None => theme.glyph(GlyphRole::MarkerInfinity).to_owned(),
     };
-    if value == "∞" {
+    if value == theme.glyph(GlyphRole::MarkerInfinity) {
         return vec![
             Span::raw(" ".repeat(PROVIDER_RESET_MARKER_PAD)),
             Span::styled(value, theme.money_style(Modifier::BOLD)),
@@ -1460,7 +1475,8 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
     ]
 }
 
-fn extra_value_label(credits: &ExtraCredits) -> String {
+fn extra_value_label(theme: &Theme, credits: &ExtraCredits) -> String {
+    let infinity = theme.glyph(GlyphRole::MarkerInfinity);
     match (
         credits.used_usd(),
         credits.remaining_usd(),
@@ -1470,9 +1486,9 @@ fn extra_value_label(credits: &ExtraCredits) -> String {
             format!("{}/{}", dollars_compact(used), dollars_compact(limit))
         }
         (_, Some(remaining), _) => dollars_compact(remaining),
-        (Some(used), _, None) => format!("{}∞", dollars_compact(used)),
+        (Some(used), _, None) => format!("{}{infinity}", dollars_compact(used)),
         (None, None, Some(limit)) => format!("?/{}", dollars_compact(limit)),
-        (None, None, None) => "∞".to_owned(),
+        (None, None, None) => infinity.to_owned(),
     }
 }
 

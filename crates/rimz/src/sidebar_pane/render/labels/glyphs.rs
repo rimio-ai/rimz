@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 
 /// Paused: a media `pause` mark carrying the text-presentation selector
@@ -37,14 +38,15 @@ pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'
 /// quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●` to the hour — and
 /// past the hour reads the ringed `◉`, so any time readout on a card carries
 /// its magnitude iconographically. One cell, so it never disturbs alignment.
-pub(in crate::sidebar_pane::render) fn elapsed_glyph(secs: i64) -> &'static str {
-    match secs {
-        i64::MIN..=900 => "◔",
-        901..=1800 => "◑",
-        1801..=2700 => "◕",
-        2701..=3600 => "●",
-        _ => "◉",
-    }
+pub(in crate::sidebar_pane::render) fn elapsed_glyph(theme: &Theme, secs: i64) -> String {
+    let role = match secs {
+        i64::MIN..=900 => GlyphRole::ClockQ1,
+        901..=1800 => GlyphRole::ClockQ2,
+        1801..=2700 => GlyphRole::ClockQ3,
+        2701..=3600 => GlyphRole::ClockQ4,
+        _ => GlyphRole::ClockOver,
+    };
+    theme.glyph(role).to_owned()
 }
 
 pub(in crate::sidebar_pane::render) fn working_glyph(

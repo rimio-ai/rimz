@@ -5,11 +5,26 @@ use crate::config::{
 use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
 
-use super::theme::{Palette, Theme};
+use super::theme::{GlyphSetKind, Palette, Theme};
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
     "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
+];
+const NERD_SLICE_FRAMES: &[&str] = &["\u{f0a9f}", "\u{f0aa1}", "\u{f0aa3}", "\u{f0aa5}"];
+const NERD_CLOCK_FRAMES: &[&str] = &[
+    "\u{f143f}",
+    "\u{f1440}",
+    "\u{f1441}",
+    "\u{f1442}",
+    "\u{f1443}",
+    "\u{f1444}",
+    "\u{f1445}",
+    "\u{f1446}",
+    "\u{f1447}",
+    "\u{f1448}",
+    "\u{f1449}",
+    "\u{f144a}",
 ];
 
 pub(crate) const DEFAULT_BREATH_PERIOD: f32 = 24.0;
@@ -400,32 +415,67 @@ impl Default for ResolvedAnimations {
             &crate::config::SidebarThemeConfig::default(),
             crate::config::ColorDepth::Indexed,
         );
-        Self::resolve(&SidebarAnimationsConfig::default(), &palette)
+        Self::resolve(
+            &SidebarAnimationsConfig::default(),
+            GlyphSetKind::Unicode,
+            &palette,
+        )
     }
 }
 
 impl ResolvedAnimations {
-    pub(crate) fn resolve(config: &SidebarAnimationsConfig, palette: &Palette) -> Self {
+    pub(crate) fn resolve(
+        config: &SidebarAnimationsConfig,
+        set: GlyphSetKind,
+        palette: &Palette,
+    ) -> Self {
         Self {
             unread: config.unread.map(UnreadEffect::from).unwrap_or_default(),
-            thinking: resolve_role(AnimationRole::Thinking, config.thinking.as_ref(), palette),
-            working: resolve_role(AnimationRole::Working, config.working.as_ref(), palette),
+            thinking: resolve_role(
+                AnimationRole::Thinking,
+                config.thinking.as_ref(),
+                set,
+                palette,
+            ),
+            working: resolve_role(
+                AnimationRole::Working,
+                config.working.as_ref(),
+                set,
+                palette,
+            ),
             compacting: resolve_role(
                 AnimationRole::Compacting,
                 config.compacting.as_ref(),
+                set,
                 palette,
             ),
             delegating: resolve_role(
                 AnimationRole::Delegating,
                 config.delegating.as_ref(),
+                set,
                 palette,
             ),
-            resolving: resolve_role(AnimationRole::Resolving, config.resolving.as_ref(), palette),
-            idle: resolve_role(AnimationRole::Idle, config.idle.as_ref(), palette),
-            success: resolve_role(AnimationRole::Success, config.success.as_ref(), palette),
-            paused: resolve_role(AnimationRole::Paused, config.paused.as_ref(), palette),
-            waiting: resolve_role(AnimationRole::Waiting, config.waiting.as_ref(), palette),
-            failed: resolve_role(AnimationRole::Failed, config.failed.as_ref(), palette),
+            resolving: resolve_role(
+                AnimationRole::Resolving,
+                config.resolving.as_ref(),
+                set,
+                palette,
+            ),
+            idle: resolve_role(AnimationRole::Idle, config.idle.as_ref(), set, palette),
+            success: resolve_role(
+                AnimationRole::Success,
+                config.success.as_ref(),
+                set,
+                palette,
+            ),
+            paused: resolve_role(AnimationRole::Paused, config.paused.as_ref(), set, palette),
+            waiting: resolve_role(
+                AnimationRole::Waiting,
+                config.waiting.as_ref(),
+                set,
+                palette,
+            ),
+            failed: resolve_role(AnimationRole::Failed, config.failed.as_ref(), set, palette),
         }
     }
 
@@ -506,8 +556,13 @@ pub(crate) fn effect_weight(animation: &Animation, phase: u64) -> Modifier {
     }
 }
 
-fn resolve_role(role: AnimationRole, spec: Option<&AnimationSpec>, palette: &Palette) -> Animation {
-    let mut animation = builtin(role, palette);
+fn resolve_role(
+    role: AnimationRole,
+    spec: Option<&AnimationSpec>,
+    set: GlyphSetKind,
+    palette: &Palette,
+) -> Animation {
+    let mut animation = builtin(role, set, palette);
     if let Some(spec) = spec {
         if let Some(frames) = spec.frames.as_ref() {
             animation.frames = frames.as_slice().to_vec();
@@ -527,16 +582,22 @@ fn resolve_role(role: AnimationRole, spec: Option<&AnimationSpec>, palette: &Pal
     animation
 }
 
-fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
+fn builtin(role: AnimationRole, set: GlyphSetKind, palette: &Palette) -> Animation {
     let (frames, color, effect, speed) = match role {
         AnimationRole::Thinking => (
-            THINKING_FRAMES.to_vec(),
+            match set {
+                GlyphSetKind::Unicode => THINKING_FRAMES.to_vec(),
+                GlyphSetKind::NerdFont => NERD_CLOCK_FRAMES.to_vec(),
+            },
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Working => (
-            vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
+            match set {
+                GlyphSetKind::Unicode => vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
+                GlyphSetKind::NerdFont => NERD_SLICE_FRAMES.to_vec(),
+            },
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
@@ -548,43 +609,66 @@ fn builtin(role: AnimationRole, palette: &Palette) -> Animation {
             Speed::Fast,
         ),
         AnimationRole::Delegating => (
-            vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
+            match set {
+                GlyphSetKind::Unicode => vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
+                GlyphSetKind::NerdFont => NERD_SLICE_FRAMES.to_vec(),
+            },
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Resolving => (
-            vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"],
+            match set {
+                GlyphSetKind::Unicode => {
+                    vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+                }
+                GlyphSetKind::NerdFont => NERD_CLOCK_FRAMES.to_vec(),
+            },
             palette.animation_color(AnimationColor::Meta),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Idle => (
-            vec!["○"],
+            match set {
+                GlyphSetKind::Unicode => vec!["○"],
+                GlyphSetKind::NerdFont => vec!["\u{f0130}"],
+            },
             palette.animation_color(AnimationColor::Good),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Success => (
-            vec!["✓"],
+            match set {
+                GlyphSetKind::Unicode => vec!["✓"],
+                GlyphSetKind::NerdFont => vec!["\u{f012c}"],
+            },
             palette.animation_color(AnimationColor::Good),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Paused => (
-            vec!["⏸\u{FE0E}"],
+            match set {
+                GlyphSetKind::Unicode => vec!["⏸\u{FE0E}"],
+                GlyphSetKind::NerdFont => vec!["\u{f03e4}"],
+            },
             palette.animation_color(AnimationColor::Cool),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Waiting => (
-            vec!["?"],
+            match set {
+                GlyphSetKind::Unicode => vec!["?"],
+                GlyphSetKind::NerdFont => vec!["\u{f0625}"],
+            },
             palette.animation_color(AnimationColor::Warn),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Failed => (
-            vec!["!"],
+            match set {
+                GlyphSetKind::Unicode => vec!["!"],
+                GlyphSetKind::NerdFont => vec!["\u{f0026}"],
+            },
             palette.animation_color(AnimationColor::Alarm),
             Effect::Static,
             Speed::Normal,
@@ -611,6 +695,10 @@ mod tests {
         )
     }
 
+    fn resolve_for_test(config: &SidebarAnimationsConfig, palette: &Palette) -> ResolvedAnimations {
+        ResolvedAnimations::resolve(config, GlyphSetKind::Unicode, palette)
+    }
+
     #[test]
     fn unset_config_resolves_to_builtins() {
         let animations = ResolvedAnimations::default();
@@ -630,11 +718,42 @@ mod tests {
     }
 
     #[test]
+    fn nerd_font_set_swaps_builtin_status_heads() {
+        let palette = test_palette();
+        let animations = ResolvedAnimations::resolve(
+            &SidebarAnimationsConfig::default(),
+            GlyphSetKind::NerdFont,
+            &palette,
+        );
+        assert_eq!(
+            animations.role(AnimationRole::Thinking).frames(),
+            NERD_CLOCK_FRAMES
+        );
+        assert_eq!(
+            animations.role(AnimationRole::Working).frames(),
+            NERD_SLICE_FRAMES
+        );
+        assert_eq!(
+            animations.role(AnimationRole::Delegating).frames(),
+            NERD_SLICE_FRAMES
+        );
+        assert_eq!(animations.role(AnimationRole::Idle).frames(), ["\u{f0130}"]);
+        assert_eq!(
+            animations.role(AnimationRole::Success).frames(),
+            ["\u{f012c}"]
+        );
+        assert_eq!(
+            animations.role(AnimationRole::Failed).frames(),
+            ["\u{f0026}"]
+        );
+    }
+
+    #[test]
     fn partial_override_changes_only_the_named_field() {
         let config: SidebarAnimationsConfig =
             toml::from_str("[thinking]\nframes = \"ab\"\n").expect("config");
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&config, &palette);
+        let animations = resolve_for_test(&config, &palette);
         let thinking = animations.role(AnimationRole::Thinking);
         assert_eq!(thinking.frames(), ["a", "b"]);
         assert_eq!(thinking.color(), Color::Indexed(173));
@@ -656,7 +775,7 @@ mod tests {
             },
             crate::config::ColorDepth::Indexed,
         );
-        let animations = ResolvedAnimations::resolve(&config, &palette);
+        let animations = resolve_for_test(&config, &palette);
         assert_eq!(
             animations.role(AnimationRole::Working).color(),
             Color::Indexed(173)
@@ -682,7 +801,7 @@ mod tests {
             &crate::config::SidebarThemeConfig::default(),
             crate::config::ColorDepth::Truecolor,
         );
-        let animations = ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette);
+        let animations = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
         let clay = palette.animation_color(AnimationColor::Clay);
         assert_eq!(animations.role(AnimationRole::Thinking).color(), clay);
         assert_eq!(animations.role(AnimationRole::Working).color(), clay);
@@ -694,7 +813,7 @@ mod tests {
         let config: SidebarAnimationsConfig =
             toml::from_str("[idle]\neffect = \"breathe\"\n").expect("config");
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&config, &palette);
+        let animations = resolve_for_test(&config, &palette);
         assert!(animations.has_resting_motion());
         assert_eq!(
             effect_weight(animations.role(AnimationRole::Idle), 0),
@@ -709,7 +828,7 @@ mod tests {
         )
         .expect("config");
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&config, &palette);
+        let animations = resolve_for_test(&config, &palette);
         assert_ne!(
             effect_weight(animations.role(AnimationRole::Idle), 5),
             effect_weight(animations.role(AnimationRole::Success), 5),
@@ -724,7 +843,7 @@ mod tests {
         )
         .expect("config");
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&config, &palette);
+        let animations = resolve_for_test(&config, &palette);
         assert_eq!(
             animations
                 .role(AnimationRole::Waiting)
@@ -739,7 +858,7 @@ mod tests {
 
         let quiet: SidebarAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
-        let animations = ResolvedAnimations::resolve(&quiet, &palette);
+        let animations = resolve_for_test(&quiet, &palette);
         assert_eq!(
             animations
                 .role(AnimationRole::Waiting)
@@ -931,7 +1050,7 @@ mod tests {
     #[test]
     fn unread_anim_picks_the_variant_and_honors_the_static_quiet() {
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette);
+        let animations = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
         let waiting = animations.role(AnimationRole::Waiting);
         assert!(matches!(
             waiting.unread_anim(UnreadEffect::Blink, 0, 0),
@@ -948,7 +1067,7 @@ mod tests {
 
         let quiet: SidebarAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
-        let quieted = ResolvedAnimations::resolve(&quiet, &palette);
+        let quieted = resolve_for_test(&quiet, &palette);
         assert_eq!(
             quieted
                 .role(AnimationRole::Waiting)
@@ -962,14 +1081,13 @@ mod tests {
     fn unread_effect_resolves_from_config_and_defaults_to_shimmer() {
         let palette = test_palette();
         assert_eq!(
-            ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette)
-                .unread_effect(),
+            resolve_for_test(&SidebarAnimationsConfig::default(), &palette).unread_effect(),
             UnreadEffect::Shimmer,
         );
         let config: SidebarAnimationsConfig =
             toml::from_str("unread = \"bright\"\n").expect("config");
         assert_eq!(
-            ResolvedAnimations::resolve(&config, &palette).unread_effect(),
+            resolve_for_test(&config, &palette).unread_effect(),
             UnreadEffect::Bright,
         );
     }

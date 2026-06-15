@@ -1,6 +1,7 @@
 //! Bare process rows: the shell/build line, its right-pinned resource stats,
 //! the full-command detail line, and the resolver's composed row.
 
+use crate::config::GlyphRole;
 use crate::feed::AgentStatus;
 use crate::{ProcessState, SidebarRow};
 use jiff::Timestamp;
@@ -101,18 +102,33 @@ pub(in crate::sidebar_pane::render) fn proc_stats_spans(
     else {
         return Vec::new();
     };
-    let slots: [(&str, Component, usize, String); 3] = [
-        ("C", Component::ProcCpu, CPU_SLOT, fmt_cpu(cpu_pct)),
-        ("M", Component::ProcMem, RSS_SLOT, fmt_rss(rss_kb)),
-        ("⇅", Component::ProcIo, IO_SLOT, fmt_io(io_bps)),
+    let slots: [(GlyphRole, Component, usize, String); 3] = [
+        (
+            GlyphRole::MarkerProcCpu,
+            Component::ProcCpu,
+            CPU_SLOT,
+            fmt_cpu(cpu_pct),
+        ),
+        (
+            GlyphRole::MarkerProcMem,
+            Component::ProcMem,
+            RSS_SLOT,
+            fmt_rss(rss_kb),
+        ),
+        (
+            GlyphRole::MarkerProcIo,
+            Component::ProcIo,
+            IO_SLOT,
+            fmt_io(io_bps),
+        ),
     ];
     let mut spans = Vec::with_capacity(3 * slots.len());
-    for (i, (marker, tone, width, figure)) in slots.into_iter().enumerate() {
+    for (i, (role, tone, width, figure)) in slots.into_iter().enumerate() {
         if i > 0 {
             spans.push(Span::styled("  ", theme.muted()));
         }
         spans.push(Span::styled(
-            format!("{marker} "),
+            format!("{} ", theme.glyph(role)),
             theme.styled(tone, Modifier::DIM),
         ));
         spans.push(Span::styled(format!("{figure:>width$}"), theme.muted()));

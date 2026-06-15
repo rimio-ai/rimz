@@ -1,6 +1,6 @@
 ---
-source: crates/rimz/src/sidebar_pane/render/mod.rs
-assertion_line: 749
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 103
 expression: screen
 ---
  ⌘ query-engine
@@ -20,4 +20,4 @@ expression: screen
 
 
 
- ! Sidebar degraded for <elapsed>: snapshot failed: ledger not found
+ ⚠ Sidebar degraded for <elapsed>: snapshot failed: ledger not found

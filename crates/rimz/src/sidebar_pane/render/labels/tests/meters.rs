@@ -1,4 +1,5 @@
 use super::*;
+use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 use jiff::SignedDuration;
 
@@ -499,16 +500,19 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
             .style
     };
     assert_eq!(
-        marker(TOKENS_TOTAL).fg,
+        marker(lit.glyph(GlyphRole::MarkerTokenTotal)).fg,
         Some(lit.component(Component::TokenTotal))
     );
-    assert_eq!(marker(TOKENS_IN).fg, Some(lit.component(Component::Input)));
     assert_eq!(
-        marker(TOKENS_OUT).fg,
+        marker(lit.glyph(GlyphRole::MarkerTokenIn)).fg,
+        Some(lit.component(Component::Input))
+    );
+    assert_eq!(
+        marker(lit.glyph(GlyphRole::MarkerTokenOut)).fg,
         Some(lit.component(Component::Output))
     );
     assert_eq!(
-        marker(TOKENS_CACHED).fg,
+        marker(lit.glyph(GlyphRole::MarkerCacheRead)).fg,
         Some(lit.component(Component::CacheRead))
     );
     for span in spans.iter().filter(|span| {
@@ -518,6 +522,44 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
     }) {
         assert_eq!(span.style, lit.body(), "figure {:?}", span.content);
     }
+}
+
+#[test]
+fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
+    let theme = Theme::fixed_for_sidebar(
+        true,
+        &crate::config::SidebarConfig {
+            glyphs: crate::config::SidebarGlyphsConfig {
+                set: Some("nerd-font".to_owned()),
+                ..crate::config::SidebarGlyphsConfig::default()
+            },
+            ..crate::config::SidebarConfig::default()
+        },
+    );
+
+    let spans = token_breakdown_spans(&theme, 76_000, 12_000, 64_000, 68_000, fmt::tokens_int);
+    assert_eq!(
+        text(&spans),
+        "\u{f04a0} 76k \u{f0120} 12k \u{f011d} 64k \u{f163b} 68k"
+    );
+
+    let spans = context_gauge_spans(&theme, 0.5, &[], 50, 4);
+    assert_eq!(text(&spans), "━━──", "drawn meter bars stay Unicode");
+
+    let spans = context_breakdown_spans(
+        &theme,
+        Color::Blue,
+        76_500,
+        68_200,
+        6_600,
+        1_700,
+        2_300,
+        fmt::tokens_int,
+    );
+    assert_eq!(
+        text(&spans),
+        "▤ 76k · \u{f163b} 68k \u{f163e} 6k \u{f0120} 1k \u{f011d} 2k"
+    );
 }
 
 #[test]
@@ -557,25 +599,29 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     };
     // The `▤` head wears the bar's severity tip; each composition marker legends
     // the bar in its own segment tone — cache-read green, cache-write
-    // compaction violet, fresh input the expense vermilion, output blue.
-    assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
+    // compaction violet, fresh input the expense vermilion, output accent.
     assert_eq!(
-        tone(TOKENS_CACHED),
+        tone(theme.glyph(GlyphRole::MeterContextFilled)),
+        Some(theme.heat_tone(0.5)),
+        "severity"
+    );
+    assert_eq!(
+        tone(theme.glyph(GlyphRole::MarkerCacheRead)),
         Some(theme.component(Component::CacheRead)),
         "cache read"
     );
     assert_eq!(
-        tone(TOKENS_CACHE_WRITE),
+        tone(theme.glyph(GlyphRole::MarkerCacheWrite)),
         Some(theme.component(Component::CacheWrite)),
         "cache write"
     );
     assert_eq!(
-        tone(TOKENS_IN),
+        tone(theme.glyph(GlyphRole::MarkerTokenIn)),
         Some(theme.component(Component::Input)),
         "fresh input"
     );
     assert_eq!(
-        tone(TOKENS_OUT),
+        tone(theme.glyph(GlyphRole::MarkerTokenOut)),
         Some(theme.component(Component::Output)),
         "output"
     );

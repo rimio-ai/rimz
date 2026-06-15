@@ -22,6 +22,7 @@ mod agents;
 mod animation;
 mod autoping;
 mod color;
+mod glyphs;
 mod mux;
 mod notifications;
 mod remote_control;
@@ -34,11 +35,12 @@ pub use accounts::{AccountsConfig, UsageLimitUsd};
 pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig, TabPlacement};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
-    SidebarAnimationsConfig, UnreadEffect,
+    SidebarAnimationsConfig, UnreadEffect, validate_single_cell,
 };
 pub use autoping::{AutoPingConfig, ScheduleEntry, Schedules};
 pub(crate) use color::xterm_rgb;
 pub use color::{ColorDepth, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex};
+pub use glyphs::{GlyphGroup, GlyphRole, SidebarGlyphsConfig};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,

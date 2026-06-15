@@ -201,6 +201,23 @@
 ## frames = "!"
 ## color = "alarm"
 
+[sidebar.glyphs]
+# Glyph sets are display-only. set is optional: "unicode" is the default,
+# "nerd-font" selects Nerd Font icons, and a path loads sparse overrides from a
+# TOML file. A custom file may set its own "unicode" or "nerd-font" base before
+# its overrides apply; explicit keys here win last. Every glyph must occupy
+# exactly one terminal cell.
+# Fractional bars, sub-cell spines, and the compacting wave keep their drawn
+# Unicode shapes in the Nerd Font preset because those glyphs are layout, not
+# icon tiles.
+## set = "unicode"
+## set = "nerd-font"
+## set = "~/.config/rimz/glyphs.toml"
+## [sidebar.glyphs.marker]
+## token_total = "◇"
+## [sidebar.glyphs.chrome]
+## workspace = "⌘"
+
 [sidebar.providers]
 # Provider styles are keyed by agent kind and every field is optional.
 ## [sidebar.providers.claude]

@@ -2,7 +2,7 @@
 
 > See [interface/sidebar.md](../interface/sidebar.md) for what every tone and glyph means on screen; this doc is the knobs that restyle them.
 
-The sidebar's palette, status-head animations, and provider brand styling are per-machine display settings under `[sidebar]` in `~/.config/rimz/config.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
+The sidebar's palette, glyph set, status-head animations, and provider brand styling are per-machine display settings under `[sidebar]` in `~/.config/rimz/config.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
 
 ```sh
 rimz config set sidebar.theme "TokyoNight Night"
@@ -149,7 +149,7 @@ Brightening runs in the same space and holds hue: a lift raises OKLab lightness 
 
 ## Animations
 
-`[sidebar.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone.
+`[sidebar.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone. Built-in frames follow `[sidebar.glyphs] set`: the table below shows Unicode defaults, while `nerd-font` swaps status heads that have a single-cell Nerd Font equivalent. Any explicit `frames` override wins.
 
 ```toml
 [sidebar.animations.thinking]
@@ -204,6 +204,53 @@ An unread card also grounds on a soft, uniform **wash** — one panel marking th
 unread = "shimmer"   # or "bright", "blink"
 ```
 
+## Glyphs
+
+`[sidebar.glyphs] set` picks the glyph source for the sidebar vocabulary. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) remains the canonical meaning table; this section changes the shapes that carry those meanings.
+
+| `set` | source |
+| --- | --- |
+| unset or `unicode` | the shipped Unicode set shown in the interface legend |
+| `nerd-font` | a Nerd Font preset for markers, clocks, status heads, and chrome |
+| `/path/to/glyphs.toml` | a sparse custom TOML file layered over Unicode, or over the file-local `set` when present |
+
+Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. Layout-drawn roles stay Unicode in that preset — bars, spines, caps, scrollbars, dotted rules, and hairlines keep their box-drawing shapes because the terminal grid carries those shapes more precisely than icon substitutions.
+
+```toml
+[sidebar.glyphs]
+set = "nerd-font"
+```
+
+Sparse overrides live under grouped tables. Each value must occupy exactly one terminal cell, and an omitted role keeps the selected set's value.
+
+```toml
+[sidebar.glyphs]
+set = "nerd-font"
+
+[sidebar.glyphs.marker]
+token_total = "◇"
+active_agents = "¤"
+
+[sidebar.glyphs.chrome]
+workspace = "⌘"
+```
+
+The groups are `marker`, `meter`, `clock`, `structure`, and `chrome`. Marker roles cover token, session, subagent, todo, process, remote-control, and infinity markers. Meter roles cover context, budget, and scrollbar shapes. Clock roles cover the quarter-age faces. Structure roles cover spines, tab caps, branch/ahead/behind/trunk markers, and dotted separators. Chrome roles cover the workspace, alert, remote-link, and hairline shapes.
+
+Custom glyph files use the same sparse shape without the outer `sidebar.glyphs` prefix:
+
+```toml
+set = "nerd-font"
+
+[marker]
+token_total = "Σ"
+
+[structure]
+branch = "⑂"
+```
+
+The custom file's own `set` chooses its base before its sparse overrides are applied; the machine config can still layer final overrides on top. `rimz config set` validates named sets, custom-file readability, known role names, and one-cell glyph width before it writes.
+
 ## Provider Styling
 
 `[sidebar.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults (claude clay, codex blue, pi forest green).
@@ -234,6 +281,8 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 rimz config set sidebar.theme "TokyoNight Night"
 rimz config set sidebar.theme.good '#a0d0a0'
 rimz config set sidebar.glow always
+rimz config set sidebar.glyphs.set nerd-font
+rimz config set sidebar.glyphs.marker.token_total '◇'
 rimz config set sidebar.animations.unread shimmer
 rimz config set sidebar.animations.idle.effect breathe
 rimz config set sidebar.providers.codex.color 33

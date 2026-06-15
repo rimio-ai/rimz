@@ -99,9 +99,9 @@ pub(super) fn gauge_line(
     let color = theme.heat_tone(amount);
     let segments = gauge_segments(theme, row);
     let glyph = if percent == 0 {
-        CONTEXT_EMPTY_GLYPH
+        theme.glyph(GlyphRole::MeterContextEmpty)
     } else {
-        CONTEXT_GLYPH
+        theme.glyph(GlyphRole::MeterContextFull)
     };
     Some(bar_row(
         theme,
@@ -239,7 +239,7 @@ pub(super) fn context_tokens_line(
         .map(|label| {
             let secs = age_secs(row.last_activity, now);
             vec![Span::styled(
-                format!("{} {label}", elapsed_glyph(secs)),
+                format!("{} {label}", elapsed_glyph(theme, secs)),
                 activity_age_style(theme, secs),
             )]
         })

@@ -16,8 +16,8 @@
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, Semantic, SidebarConfig, SidebarThemeConfig, ThemeColor,
-    nearest_xterm_index, xterm_rgb,
+    AnimationColor, ColorDepth, GlowMode, GlyphRole, Semantic, SidebarConfig, SidebarThemeConfig,
+    ThemeColor, nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -27,10 +27,12 @@ use super::oklab;
 use super::scheme;
 
 mod component;
+mod glyphs;
 mod identity;
 mod raw;
 
 pub(crate) use component::Component;
+pub(crate) use glyphs::{GlyphSet, GlyphSetKind};
 pub(crate) use identity::Identity;
 pub(crate) use raw::RawPalette;
 
@@ -345,6 +347,7 @@ pub(crate) struct Theme {
     depth: ColorDepth,
     glow: GlowMode,
     palette: Palette,
+    glyphs: GlyphSet,
     pub(crate) animations: ResolvedAnimations,
 }
 
@@ -356,8 +359,10 @@ impl Default for Theme {
             truecolor: false,
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
+            glyphs: GlyphSet::default(),
             animations: ResolvedAnimations::resolve(
                 &crate::config::SidebarAnimationsConfig::default(),
+                GlyphSetKind::Unicode,
                 &palette,
             ),
             palette,
@@ -373,12 +378,14 @@ impl Theme {
         let truecolor = truecolor_env();
         let depth = sidebar.theme.mode.depth(truecolor);
         let palette = Palette::resolve(&sidebar.theme, depth);
+        let glyphs = GlyphSet::resolve(&sidebar.glyphs);
         Self {
             no_color: crate::tui::no_color(),
             truecolor,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
+            animations: ResolvedAnimations::resolve(&sidebar.animations, glyphs.kind(), &palette),
+            glyphs,
             palette,
         }
     }
@@ -393,8 +400,10 @@ impl Theme {
             truecolor: false,
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
+            glyphs: GlyphSet::default(),
             animations: ResolvedAnimations::resolve(
                 &crate::config::SidebarAnimationsConfig::default(),
+                GlyphSetKind::Unicode,
                 &palette,
             ),
             palette,
@@ -405,12 +414,14 @@ impl Theme {
     pub(crate) fn fixed_for_sidebar(no_color: bool, sidebar: &SidebarConfig) -> Self {
         let depth = sidebar.theme.mode.depth(false);
         let palette = Palette::resolve_fixed(&sidebar.theme, depth);
+        let glyphs = GlyphSet::resolve(&sidebar.glyphs);
         Self {
             no_color,
             truecolor: false,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, &palette),
+            animations: ResolvedAnimations::resolve(&sidebar.animations, glyphs.kind(), &palette),
+            glyphs,
             palette,
         }
     }
@@ -437,6 +448,10 @@ impl Theme {
     /// The resolved tone for a component token, at the active depth.
     pub(crate) fn component(&self, component: Component) -> Color {
         component.resolve(&self.palette)
+    }
+
+    pub(crate) fn glyph(&self, role: GlyphRole) -> &str {
+        self.glyphs.glyph(role)
     }
 
     /// A component token's tone as a `Style` with `modifier`, honoring

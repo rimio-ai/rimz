@@ -5,16 +5,13 @@ use crate::SpendWindow;
 use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
+use crate::config::GlyphRole;
 use crate::sidebar_pane::render::TallyAnim;
 use crate::sidebar_pane::render::fmt::{dollars2, tokens_int};
 use crate::sidebar_pane::render::labels::token_breakdown_spans;
 use crate::sidebar_pane::render::theme::{Component, Theme};
 
-use super::{SESSIONS_GLYPH, metric_spans, pin_right};
-
-/// The cockpit's live-agent count glyph: `¤` for the agents in the room right
-/// now (the sessions-today `◎` lives in the shared [`SESSIONS_GLYPH`]).
-const ACTIVE_AGENTS_GLYPH: &str = "¤";
+use super::{metric_spans, pin_right};
 
 /// The cockpit's first summary line, directly beneath the repo identity:
 /// `◎ {sessions}` — the threads that have run today, the glyph in the teal it
@@ -33,7 +30,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 ) -> Line<'static> {
     let left = metric_spans(
         theme,
-        SESSIONS_GLYPH,
+        theme.glyph(GlyphRole::MarkerSessions),
         theme.component(Component::Sessions),
         &sessions.to_string(),
     );
@@ -72,7 +69,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
 ) -> Line<'static> {
     let mut left = metric_spans(
         theme,
-        ACTIVE_AGENTS_GLYPH,
+        theme.glyph(GlyphRole::MarkerActiveAgents),
         theme.clay(),
         &live_agents.to_string(),
     );

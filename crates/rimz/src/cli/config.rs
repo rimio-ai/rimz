@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::config::MachineConfig;
+use rimz::config::{GlyphRole, MachineConfig, validate_single_cell};
 use rimz::ledger::atomic::write_bytes_atomically;
 use toml_edit::{DocumentMut, Item, Table, Value};
 
@@ -216,6 +216,7 @@ fn is_known_get_key(path: &[String]) -> bool {
         || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "aliases" | "layouts"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
+        || is_sidebar_glyph_get_key(path)
         || matches!(path, [root, child] if root == "sidebar" && child == "providers")
         || matches!(path, [root, child, _] if root == "sidebar" && child == "providers")
 }
@@ -227,6 +228,7 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
         || is_account_usage_limit_key(path)
         || is_provider_style_key(path)
         || is_sidebar_animation_set_key(path)
+        || is_sidebar_glyph_set_key(path)
 }
 
 fn is_agents_key(path: &[String]) -> bool {
@@ -292,6 +294,36 @@ fn is_sidebar_animation_role(role: &str) -> bool {
     )
 }
 
+fn is_sidebar_glyph_get_key(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "sidebar" && child == "glyphs")
+        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set")
+        || matches!(path, [root, child, namespace] if root == "sidebar" && child == "glyphs" && is_sidebar_glyph_namespace(namespace))
+        || matches!(
+            path,
+            [root, child, namespace, role]
+                if root == "sidebar"
+                    && child == "glyphs"
+                    && GlyphRole::from_namespaced(namespace, role).is_some()
+        )
+}
+
+fn is_sidebar_glyph_set_key(path: &[String]) -> bool {
+    matches!(
+        path,
+        [root, child, namespace, role]
+            if root == "sidebar"
+                && child == "glyphs"
+                && GlyphRole::from_namespaced(namespace, role).is_some()
+    )
+}
+
+fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
+    matches!(
+        namespace,
+        "marker" | "meter" | "clock" | "structure" | "chrome"
+    )
+}
+
 fn exact_set_keys() -> BTreeSet<String> {
     [
         "worktree.dir",
@@ -323,6 +355,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.max_cols",
         "sidebar.focus_key",
         "sidebar.card_density",
+        "sidebar.focus_key",
         "sidebar.context.green",
         "sidebar.context.yellow",
         "sidebar.context.amber",
@@ -341,6 +374,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.pets.glyphs",
         "sidebar.pets.voice",
         "sidebar.animations.unread",
+        "sidebar.glyphs.set",
         "sidebar.trunk",
         "sidebar.theme.mode",
         "sidebar.theme.scheme",
@@ -399,7 +433,7 @@ fn parse_edit_value(raw: &str) -> Value {
 }
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
-    if is_sidebar_theme_scheme_edit(path) {
+    if is_sidebar_theme_scheme_edit(path) || is_sidebar_glyph_string_edit(path) {
         return parse_string_edit_value(raw);
     }
     parse_edit_value(raw)
@@ -424,6 +458,29 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
             bail!("{err}");
         }
     }
+    if matches!(
+        path,
+        [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set"
+    ) {
+        let Some(source) = value.as_str() else {
+            bail!("sidebar.glyphs.set must be a string");
+        };
+        if let Err(err) = rimz::sidebar_pane::render::glyph_set::validate_glyph_source(source) {
+            bail!("{err}");
+        }
+    }
+    if let [root, child, namespace, role] = path
+        && root == "sidebar"
+        && child == "glyphs"
+        && GlyphRole::from_namespaced(namespace, role).is_some()
+    {
+        let Some(glyph) = value.as_str() else {
+            bail!("sidebar.glyphs.{namespace}.{role} must be a string");
+        };
+        if let Err(err) = validate_single_cell(glyph) {
+            bail!("sidebar glyph `{namespace}.{role}` {err}");
+        }
+    }
     Ok(())
 }
 
@@ -432,12 +489,27 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
         || matches!(path, [root, child, leaf] if root == "sidebar" && child == "theme" && leaf == "scheme")
 }
 
+fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "sidebar" && child == "glyphs")
+        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set")
+        || is_sidebar_glyph_set_key(path)
+}
+
 fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
     if matches!(path, [root, child] if root == "sidebar" && child == "theme") {
         if !value.is_str() {
             bail!("sidebar.theme shorthand sets a scheme string");
         }
         return Ok(["sidebar", "theme", "scheme"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect());
+    }
+    if matches!(path, [root, child] if root == "sidebar" && child == "glyphs") {
+        if !value.is_str() {
+            bail!("sidebar.glyphs shorthand sets a glyph set string");
+        }
+        return Ok(["sidebar", "glyphs", "set"]
             .into_iter()
             .map(str::to_owned)
             .collect());
@@ -505,11 +577,15 @@ mod tests {
             "sidebar.theme.mode",
             "sidebar.theme.scheme",
             "sidebar.theme.caution",
+            "sidebar.focus_key",
             "sidebar.animations.thinking.frames",
             "sidebar.animations.working.color",
             "sidebar.animations.idle.effect",
             "sidebar.animations.success.speed",
             "sidebar.animations.unread",
+            "sidebar.glyphs.set",
+            "sidebar.glyphs.marker.token_total",
+            "sidebar.glyphs.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
         ] {
@@ -528,6 +604,10 @@ mod tests {
             "sidebar.animations.nope.frames",
             "sidebar.animations.thinking.nope",
             "sidebar.animations.thinking.frames.extra",
+            "sidebar.glyphs",
+            "sidebar.glyphs.nope",
+            "sidebar.glyphs.marker.nope",
+            "sidebar.glyphs.marker.token_total.extra",
         ] {
             assert!(validate_set_key(&parse_key(key).unwrap()).is_err(), "{key}");
         }
@@ -538,6 +618,10 @@ mod tests {
             ("sidebar.animations.thinking.frames", true),
             ("sidebar.animations.unread", true),
             ("sidebar.animations.nope", false),
+            ("sidebar.glyphs", true),
+            ("sidebar.glyphs.marker", true),
+            ("sidebar.glyphs.marker.token_total", true),
+            ("sidebar.glyphs.marker.nope", false),
             ("accounts", true),
             ("accounts.usage_limit_usd", true),
             ("accounts.usage_limit_usd.codex", true),
@@ -585,6 +669,24 @@ mod tests {
     }
 
     #[test]
+    fn glyph_values_are_parsed_as_strings() {
+        let set = parse_key("sidebar.glyphs.set").expect("key");
+        assert_eq!(
+            parse_set_value(&set, "nerd-font").as_str(),
+            Some("nerd-font")
+        );
+
+        let shorthand = parse_key("sidebar.glyphs").expect("key");
+        assert_eq!(
+            parse_set_value(&shorthand, "nerd-font").as_str(),
+            Some("nerd-font")
+        );
+
+        let leaf = parse_key("sidebar.glyphs.marker.proc_cpu").expect("key");
+        assert_eq!(parse_set_value(&leaf, "1").as_str(), Some("1"));
+    }
+
+    #[test]
     fn theme_scheme_validation_accepts_bundled_names_and_rejects_auto() {
         let key = parse_key("sidebar.theme.scheme").expect("key");
 
@@ -596,6 +698,31 @@ mod tests {
             .to_string();
         assert!(
             err.contains("unknown sidebar theme scheme `auto`"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn glyph_validation_accepts_sets_and_rejects_bad_values() {
+        let set = parse_key("sidebar.glyphs.set").expect("key");
+        validate_set_value(&set, &Value::from("unicode")).expect("unicode");
+        validate_set_value(&set, &Value::from("nerd-font")).expect("nerd-font");
+
+        let err = validate_set_value(&set, &Value::from("auto"))
+            .expect_err("unknown glyph set")
+            .to_string();
+        assert!(
+            err.contains("unknown sidebar glyph set `auto`"),
+            "unexpected error: {err}"
+        );
+
+        let leaf = parse_key("sidebar.glyphs.marker.token_total").expect("key");
+        validate_set_value(&leaf, &Value::from("◇")).expect("single-cell glyph");
+        let err = validate_set_value(&leaf, &Value::from("ab"))
+            .expect_err("wide glyph")
+            .to_string();
+        assert!(
+            err.contains("must occupy exactly one terminal cell"),
             "unexpected error: {err}"
         );
     }
@@ -613,6 +740,23 @@ mod tests {
             .to_string();
         assert!(
             err.contains("sidebar.theme shorthand sets a scheme string"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn sidebar_glyphs_set_key_is_set_shorthand() {
+        let key = parse_key("sidebar.glyphs").expect("key");
+        assert_eq!(
+            normalize_set_key(&key, &Value::from("nerd-font")).expect("normalize"),
+            parse_key("sidebar.glyphs.set").expect("glyph set key")
+        );
+
+        let err = normalize_set_key(&key, &Value::from(256))
+            .expect_err("shorthand only accepts a set string")
+            .to_string();
+        assert!(
+            err.contains("sidebar.glyphs shorthand sets a glyph set string"),
             "unexpected error: {err}"
         );
     }

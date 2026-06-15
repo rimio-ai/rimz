@@ -2,7 +2,7 @@
 //! story, the dim `external` divider, and the row roster with its parallel
 //! hit-test map entries.
 
-use crate::config::{CardDensityMode, ContextSeverityConfig};
+use crate::config::{CardDensityMode, ContextSeverityConfig, GlyphRole};
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
@@ -153,7 +153,11 @@ fn group_header(
     let label_width = cw.saturating_sub(right_width + 1).max(1);
     let label_with_prefix = match group.kind {
         SidebarWorktreeKind::Root => group.label.clone(),
-        _ => format!("⑂ {}", group.label),
+        _ => format!(
+            "{} {}",
+            theme.glyph(GlyphRole::StructureBranch),
+            group.label
+        ),
     };
     let left = clip(&label_with_prefix, label_width);
     // The dotted `┄` seal caps only the *selected* worktree's header, so the lane
@@ -164,8 +168,15 @@ fn group_header(
     let middle = cw.saturating_sub(left.chars().count() + right_width);
     let fill = if sealed {
         match (right.is_empty(), middle) {
-            (false, m) if m >= 2 => format!(" {} ", "┄".repeat(m - 2)),
-            (true, m) if m >= 1 => format!(" {}", "┄".repeat(m - 1)),
+            (false, m) if m >= 2 => {
+                format!(
+                    " {} ",
+                    theme.glyph(GlyphRole::StructureDotted).repeat(m - 2)
+                )
+            }
+            (true, m) if m >= 1 => {
+                format!(" {}", theme.glyph(GlyphRole::StructureDotted).repeat(m - 1))
+            }
             (_, m) => " ".repeat(m),
         }
     } else {
@@ -245,7 +256,8 @@ fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'sta
 fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -> Line<'static> {
     let cw = content_width(width);
     let tally = attention_tally(theme, &group.status_counts);
-    let head = format!("┄ {} ", group.label);
+    let dotted = theme.glyph(GlyphRole::StructureDotted);
+    let head = format!("{dotted} {} ", group.label);
     let tail = if tally.is_empty() {
         String::new()
     } else {
@@ -256,7 +268,7 @@ fn external_divider(theme: &Theme, group: &SidebarWorktreeGroup, width: usize) -
         .max(1);
     let mut spans = vec![
         Span::styled(head, theme.faint()),
-        Span::styled("┄".repeat(fill), theme.faint()),
+        Span::styled(dotted.repeat(fill), theme.faint()),
     ];
     if !tally.is_empty() {
         spans.push(Span::styled(tail, theme.muted()));

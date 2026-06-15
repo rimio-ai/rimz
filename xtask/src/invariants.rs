@@ -44,6 +44,7 @@ pub(crate) fn invariants(root: &Path) -> Result<()> {
     ensure_config_template_sections(root)?;
     ensure_sidebar_render_runtime_uses_snapshot_clock(root, &files)?;
     ensure_no_hardcoded_ui_colors(root, &files)?;
+    ensure_no_hardcoded_glyphs(root, &files)?;
     ensure_ledger_durability(root, &files)?;
     ensure_participant_identity(root, &files)?;
     ensure_no_core_pane_auto_use(root, &files)?;
@@ -384,6 +385,75 @@ fn names_color_variant(line: &str, needle: &str) -> bool {
     false
 }
 
+fn ensure_no_hardcoded_glyphs(root: &Path, files: &[PathBuf]) -> Result<()> {
+    let render_root = root.join("crates/rimz/src/sidebar_pane/render");
+    let mut violations = Vec::new();
+    for path in files {
+        if path.extension().and_then(OsStr::to_str) != Some("rs") || !path.starts_with(&render_root)
+        {
+            continue;
+        }
+        let Ok(relative) = path.strip_prefix(&render_root) else {
+            continue;
+        };
+        if ui_glyph_exempt(relative) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for (idx, line) in ui_glyph_violation_lines(&text) {
+            violations.push(format!("{}:{}: {}", path.display(), idx + 1, line.trim()));
+        }
+    }
+    if violations.is_empty() {
+        return Ok(());
+    }
+    bail!(
+        "sidebar render glyphs must route through theme.glyph(GlyphRole::…); defaults live in \
+         render/theme/glyphs.rs and animation defaults live in render/animation.rs\n{}",
+        violations.join("\n")
+    );
+}
+
+fn ui_glyph_exempt(relative: &Path) -> bool {
+    let file = relative.file_name().and_then(OsStr::to_str);
+    (file == Some("glyphs.rs")
+        && relative
+            .components()
+            .any(|component| component.as_os_str() == OsStr::new("theme")))
+        || file == Some("animation.rs")
+        || path_has_tests_component(relative)
+        || file.is_some_and(|name| name == "tests.rs" || name.ends_with("_tests.rs"))
+}
+
+fn ui_glyph_violation_lines(text: &str) -> Vec<(usize, &str)> {
+    const BANNED: [&str; 41] = [
+        "◇", "↘", "↗", "◌", "◍", "◎", "↻", "⧉", "¤", "⇅", "∞", "━", "─", "╸", "▰", "▱", "▐", "▕",
+        "▣", "▢", "▤", "◔", "◑", "◕", "◉", "▌", "▎", "🮇", "┤", "├", "⑂", "⇡", "⇣", "≡", "✓", "┄",
+        "⌘", "⚠", "⇄", "●", "○",
+    ];
+    let mut hits = Vec::new();
+    let mut in_tests = false;
+    for (idx, line) in text.lines().enumerate() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("mod tests") {
+            in_tests = true;
+        }
+        if in_tests
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("///")
+            || trimmed.starts_with("//!")
+        {
+            continue;
+        }
+        if BANNED.iter().any(|needle| line.contains(needle)) {
+            hits.push((idx, line));
+        }
+    }
+    hits
+}
+
 fn ensure_sidebar_enrich_folds_before_live_panes(root: &Path) -> Result<()> {
     let path = root.join("crates/rimz/src/sidebar/enrich.rs");
     let text =
@@ -484,6 +554,8 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         "[sidebar.budget]",
         "[sidebar.attention]",
         "[sidebar.theme]",
+        "[sidebar.animations]",
+        "[sidebar.glyphs]",
         "[sidebar.providers]",
         "[zellij]",
         "[tmux]",

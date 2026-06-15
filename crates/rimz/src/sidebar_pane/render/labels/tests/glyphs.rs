@@ -48,6 +48,7 @@ fn card_emphasis_maps_attention_tiers() {
 
 #[test]
 fn elapsed_glyph_fills_by_the_quarter_hour() {
+    let theme = Theme::fixed(false);
     for (secs, glyph) in [
         (0, "◔"),
         (900, "◔"),
@@ -60,7 +61,7 @@ fn elapsed_glyph_fills_by_the_quarter_hour() {
         (3601, "◉"),
         (48 * 3600, "◉"),
     ] {
-        assert_eq!(elapsed_glyph(secs), glyph, "elapsed_glyph({secs})");
+        assert_eq!(elapsed_glyph(&theme, secs), glyph, "elapsed_glyph({secs})");
     }
 }
 

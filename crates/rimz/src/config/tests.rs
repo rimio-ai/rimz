@@ -476,6 +476,44 @@ fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
 }
 
 #[test]
+fn sidebar_glyphs_parse_and_default_unicode() {
+    let dir = tempdir().expect("tempdir");
+    assert!(MachineConfig::default().sidebar.glyphs.is_unset());
+
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.glyphs]\n\
+             set = \"nerd-font\"\n\
+             [sidebar.glyphs.marker]\n\
+             token_total = \"◇\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.sidebar.glyphs.set.as_deref(), Some("nerd-font"));
+    assert_eq!(
+        config
+            .sidebar
+            .glyphs
+            .glyph(crate::config::GlyphRole::MarkerTokenTotal),
+        Some("◇")
+    );
+
+    assert!(
+        MachineConfig::load_from(&write(
+            &dir,
+            "[sidebar.glyphs.marker]\ntoken_total = \"ab\"\n",
+        ))
+        .is_err(),
+        "glyph overrides must occupy exactly one terminal cell"
+    );
+
+    assert!(
+        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.makr]\ntoken_total = \"Σ\"\n",))
+            .is_err(),
+        "glyph namespaces must be known"
+    );
+}
+
+#[test]
 fn sidebar_glow_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
     assert_eq!(

@@ -51,6 +51,8 @@ The rest of this doc reads that frame zone by zone.
 
 One vocabulary runs through the whole sidebar: a shape carries the meaning, color reinforces it. This is the complete legend, and the canonical home for it — every other doc points here, and the `?` overlay inside the app shows a short version in place.
 
+The tables show the default Unicode set. `[sidebar.glyphs]` can select Nerd Font or a custom sparse set without changing the meanings; see [theme.md → Glyphs](../reference/theme.md#glyphs).
+
 **Status — the leading cell of every agent row.**
 
 | glyph | state | meaning | needs you |

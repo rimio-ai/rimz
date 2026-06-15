@@ -19,6 +19,7 @@ mod compose;
 mod effects;
 mod embedded_themes;
 mod fmt;
+pub mod glyph_set;
 mod labels;
 mod odometer;
 mod oklab;

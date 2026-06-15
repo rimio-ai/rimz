@@ -493,7 +493,12 @@ fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
             truecolor,
             depth: ColorDepth::Indexed,
             glow,
-            animations: ResolvedAnimations::resolve(&SidebarAnimationsConfig::default(), &palette),
+            glyphs: GlyphSet::default(),
+            animations: ResolvedAnimations::resolve(
+                &SidebarAnimationsConfig::default(),
+                GlyphSetKind::Unicode,
+                &palette,
+            ),
             palette,
         }
     };

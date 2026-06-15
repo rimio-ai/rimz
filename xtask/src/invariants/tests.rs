@@ -58,6 +58,26 @@ fn ui_color_exemptions_cover_the_pipeline_and_tests() {
 }
 
 #[test]
+fn ui_glyph_exemptions_cover_glyph_tables_animation_and_tests() {
+    assert!(ui_glyph_exempt(Path::new("theme/glyphs.rs")));
+    assert!(ui_glyph_exempt(Path::new("animation.rs")));
+    assert!(ui_glyph_exempt(Path::new("labels/tests/meters.rs")));
+    assert!(ui_glyph_exempt(Path::new("tests/process.rs")));
+    assert!(!ui_glyph_exempt(Path::new("labels/meters.rs")));
+    assert!(!ui_glyph_exempt(Path::new("sections/provider.rs")));
+}
+
+#[test]
+fn ui_glyph_violations_flag_literals_but_skip_comments_and_tests() {
+    assert_eq!(ui_glyph_violation_lines("let glyph = \"◇\";\n").len(), 1);
+    assert!(ui_glyph_violation_lines("// `◇` in docs\n").is_empty());
+    assert!(
+        ui_glyph_violation_lines("mod tests {\nlet glyph = \"◇\";\n}\n").is_empty(),
+        "inline tests may assert rendered shapes"
+    );
+}
+
+#[test]
 fn ui_color_violations_flag_color_variants_but_allow_the_reset_sentinel() {
     // A named ANSI hue is intent — flagged.
     let named = format!(

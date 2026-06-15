@@ -397,9 +397,9 @@ pub(super) fn with_scrollbar(
     }
     let in_thumb = (thumb_start..thumb_start + thumb_len).contains(&row);
     line.spans.push(if in_thumb {
-        Span::styled(labels::SCROLL_THUMB, theme.muted())
+        Span::styled(labels::scroll_thumb_glyph(theme), theme.muted())
     } else {
-        Span::styled(labels::SCROLL_TRACK, theme.rule())
+        Span::styled(labels::scroll_track_glyph(theme), theme.rule())
     });
     line
 }

@@ -4,7 +4,7 @@
 //! docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
-use crate::config::{CardDensityMode, ContextSeverityConfig};
+use crate::config::{CardDensityMode, ContextSeverityConfig, GlyphRole};
 use crate::feed::{AgentStatus, ContextSeverity};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use jiff::Timestamp;
@@ -17,11 +17,11 @@ use crate::sidebar_pane::render::fmt::{
     time_remaining, tokens_int, window_short,
 };
 use crate::sidebar_pane::render::labels::{
-    CardAttention, CardEmphasis, TOKENS_TOTAL, activity_age_style, agent_glyph,
-    agent_lead_style_with_attention, agent_role_style_at, compacting_glyph, compacting_head_style,
-    context_breakdown_spans, context_compaction_spans, context_gauge_spans, context_total_spans,
-    elapsed_glyph, emphasize, loading_dots, resolver_glyph, resolver_style, severity_heat_amount,
-    severity_heat_color, subagent_glyph, subagent_head_style, todo_spans, unread_run_spans,
+    CardAttention, CardEmphasis, activity_age_style, agent_glyph, agent_lead_style_with_attention,
+    agent_role_style_at, compacting_glyph, compacting_head_style, context_breakdown_spans,
+    context_compaction_spans, context_gauge_spans, context_total_spans, elapsed_glyph, emphasize,
+    loading_dots, resolver_glyph, resolver_style, severity_heat_amount, severity_heat_color,
+    subagent_glyph, subagent_head_style, todo_spans, token_total_glyph, unread_run_spans,
     window_style,
 };
 use crate::sidebar_pane::render::theme::{Component, Theme};
@@ -34,20 +34,6 @@ use self::{description::*, gauge::*, identity::*};
 
 use super::process::{composed_row, process_detail_line, process_row_line};
 use super::{Gutter, Tier, content_width, pin_right, trim_spans_to_width, with_gutter};
-
-/// The context-meter label — a framed square reading as "the window", replacing
-/// the `ctx` word now that it is the row's one bar (the account-scoped budget
-/// bars moved to the provider dashboard). A fresh, unfilled window reads as the
-/// hollow [`CONTEXT_EMPTY_GLYPH`].
-const CONTEXT_GLYPH: &str = "▣";
-
-/// The context-meter label for an empty (0%) window: a hollow square, the
-/// unfilled sibling of `▣`, so a just-started window reads "nothing in it yet".
-const CONTEXT_EMPTY_GLYPH: &str = "▢";
-
-/// The expanded card's subagent-section glyph: stacked panes for the children an
-/// agent spawned this turn.
-const SUBAGENTS_GLYPH: &str = "⧉";
 
 /// Width budget for the agent name on line 1: short agent kinds (`claude`,
 /// `codex`) fit comfortably, and a longer name clips with `…` rather than
@@ -236,7 +222,7 @@ fn sub_agent_lines(
     let mut lines = vec![Line::from(trim_spans_to_width(
         vec![
             Span::styled(
-                format!("  {SUBAGENTS_GLYPH}"),
+                format!("  {}", theme.glyph(GlyphRole::MarkerSubagents)),
                 theme.styled(Component::SubagentHeader, Modifier::empty()),
             ),
             Span::styled(format!(" subagents ({})", sub_agents.len()), theme.body()),
@@ -360,7 +346,7 @@ fn append_sub_agent_tokens(
     match tokens {
         Some(total) => {
             left.push(Span::styled(
-                TOKENS_TOTAL,
+                token_total_glyph(theme),
                 theme.styled(Component::TokenTotal, Modifier::empty()),
             ));
             left.push(Span::styled(
@@ -428,7 +414,7 @@ fn sub_agent_elapsed(theme: &Theme, elapsed: Option<i64>) -> Vec<Span<'static>> 
     elapsed
         .map(|secs| {
             vec![Span::styled(
-                format!("{} {:>3}", elapsed_glyph(secs), elapsed_label(secs)),
+                format!("{} {:>3}", elapsed_glyph(theme, secs), elapsed_label(secs)),
                 activity_age_style(theme, secs),
             )]
         })

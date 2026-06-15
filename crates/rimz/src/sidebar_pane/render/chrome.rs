@@ -1,3 +1,4 @@
+use crate::config::GlyphRole;
 use crate::feed::AgentStatus;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
@@ -23,7 +24,11 @@ pub(super) fn repo_header_lines(
 ) -> Vec<Line<'static>> {
     let bold = Style::default().add_modifier(Modifier::BOLD);
     let clip = |text: &str| -> String { text.chars().take(width.max(1)).collect() };
-    let name = clip(&format!("⌘ {}", snapshot.display_name));
+    let name = clip(&format!(
+        "{} {}",
+        theme.glyph(GlyphRole::ChromeWorkspace),
+        snapshot.display_name
+    ));
     let name_width = name.chars().count();
 
     let Some(root) = snapshot.project_root.as_deref() else {
@@ -85,14 +90,21 @@ pub(super) fn abbreviate_under(path: &str, home: Option<&str>) -> String {
 /// it. Seals the header from the cockpit and brackets the provider dashboard —
 /// the structure the dropped border once carried.
 pub(super) fn hairline_rule(theme: &Theme, width: usize) -> Line<'static> {
-    Line::styled("─".repeat(width.max(1)), theme.rule())
+    Line::styled(
+        theme.glyph(GlyphRole::ChromeHairline).repeat(width.max(1)),
+        theme.rule(),
+    )
 }
 
 pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<Line<'static>> {
     if alert.is_active() {
         let elapsed = age_short(alert.since, now);
         vec![Line::styled(
-            format!("! Sidebar degraded for {elapsed}: {}", alert.reason),
+            format!(
+                "{} Sidebar degraded for {elapsed}: {}",
+                theme.glyph(GlyphRole::ChromeAlert),
+                alert.reason
+            ),
             theme.alarm(Modifier::BOLD),
         )]
     } else {
@@ -101,7 +113,11 @@ pub(super) fn alert_lines(theme: &Theme, alert: &Alert, now: Timestamp) -> Vec<L
             .map(|recovered_at| age_short(recovered_at, now))
             .unwrap_or_else(|| "0s".to_owned());
         vec![Line::styled(
-            format!("⚠ last alert {elapsed} ago: {}  ·  x dismiss", alert.reason),
+            format!(
+                "{} last alert {elapsed} ago: {}  ·  x dismiss",
+                theme.glyph(GlyphRole::ChromeAlert),
+                alert.reason
+            ),
             theme.warn(Modifier::DIM),
         )]
     }
@@ -118,7 +134,8 @@ pub(super) fn truth_notice_lines(
     let noun = if notice.carried == 1 { "pane" } else { "panes" };
     vec![Line::styled(
         format!(
-            "⚠ pane source degraded · {} carried {noun} · {elapsed}",
+            "{} pane source degraded · {} carried {noun} · {elapsed}",
+            theme.glyph(GlyphRole::ChromeAlert),
             notice.carried
         ),
         theme.warn(Modifier::DIM),
@@ -127,7 +144,11 @@ pub(super) fn truth_notice_lines(
 
 pub(super) fn gate_notice_lines(theme: &Theme, notice: &GateNotice) -> Vec<Line<'static>> {
     vec![Line::styled(
-        format!("⚠ pane updates held · {}", gate_rule_label(notice.rule)),
+        format!(
+            "{} pane updates held · {}",
+            theme.glyph(GlyphRole::ChromeAlert),
+            gate_rule_label(notice.rule)
+        ),
         theme.warn(Modifier::DIM),
     )]
 }
@@ -195,10 +216,15 @@ fn positioned_footer_line(
 
 fn link_badge(link: &SidebarLinkHealth, theme: &Theme, width: usize) -> Span<'static> {
     let mut text = match link.freshness {
-        SidebarLinkFreshness::Stale => "⇄ remote ?".to_owned(),
+        SidebarLinkFreshness::Stale => {
+            format!("{} remote ?", theme.glyph(GlyphRole::ChromeRemoteLink))
+        }
         SidebarLinkFreshness::Fresh => match link.rtt_ms {
-            Some(rtt) => format!("⇄ remote {rtt}ms"),
-            None => "⇄ remote …".to_owned(),
+            Some(rtt) => format!(
+                "{} remote {rtt}ms",
+                theme.glyph(GlyphRole::ChromeRemoteLink)
+            ),
+            None => format!("{} remote …", theme.glyph(GlyphRole::ChromeRemoteLink)),
         },
     };
     if link.freshness == SidebarLinkFreshness::Fresh && link.miss_pct > 10 {

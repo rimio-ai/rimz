@@ -141,19 +141,24 @@ impl AnimationFrames {
         if frames.is_empty() {
             return Err("animation frames must not be empty".to_owned());
         }
-        if frames.iter().any(String::is_empty) {
-            return Err("animation frames must not contain empty glyphs".to_owned());
-        }
         for frame in &frames {
-            let width = ratatui::text::Span::raw(frame.as_str()).width();
-            if width != 1 {
-                return Err(format!(
-                    "animation frames must occupy exactly one terminal cell; `{frame}` is {width} cells"
-                ));
-            }
+            validate_single_cell(frame).map_err(|err| format!("animation frames {err}"))?;
         }
         Ok(Self(frames))
     }
+}
+
+pub fn validate_single_cell(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("must not contain empty glyphs".to_owned());
+    }
+    let width = ratatui::text::Span::raw(value).width();
+    if width != 1 {
+        return Err(format!(
+            "must occupy exactly one terminal cell; `{value}` is {width} cells"
+        ));
+    }
+    Ok(())
 }
 
 impl<'de> Deserialize<'de> for AnimationFrames {

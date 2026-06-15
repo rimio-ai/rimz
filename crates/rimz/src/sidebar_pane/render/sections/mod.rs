@@ -16,6 +16,8 @@
 use ratatui::style::{Color, Modifier};
 use ratatui::text::{Line, Span};
 
+use crate::config::GlyphRole;
+
 use super::theme::{Component, Theme};
 
 mod agent_card;
@@ -41,38 +43,6 @@ pub(super) use provider::{
     provider_dashboard_block_rows,
 };
 pub(super) use worktree::worktree_group_lines;
-
-/// The cockpit/ledger session-count glyph: `◎` for the sessions (threads) that
-/// have run today. Shared by the cockpit summary and the W/M ledger rows, so a
-/// session count reads the same in both places.
-const SESSIONS_GLYPH: &str = "◎";
-
-/// An active provider-tab pick's `NO_COLOR` caps — when a chip fill drops with
-/// the colors, these notch the pick by shape inside the rail's reserved cells.
-const TAB_CAP_LEFT: char = '┤';
-const TAB_CAP_RIGHT: char = '├';
-
-/// The selected card's left accent: a bold half-block `▌` running the card's
-/// full height — the one loud lane marker on screen, mirrored by the right
-/// rail's `▐`.
-const SELECTED_SPINE: &str = "▌";
-
-/// The selected card's right accent: the mirrored half-block `▐`. This is the
-/// same right-rail vocabulary the scrollbar thumb uses.
-const SELECTED_SPINE_RIGHT: &str = "▐";
-
-/// The selected *worktree's* resting lane spine: a slim `▎` quarter-block
-/// (lighter than the selected card's `▌`) down the whole selected group —
-/// header and every row — so the worktree holding the selection reads as one
-/// bracketed lane, mirrored at equal width by the right rail's `🮇`. Non-selected
-/// worktrees carry no spine at all.
-const LANE_SPINE: &str = "▎";
-
-/// The selected worktree's right rail: `🮇` (`RIGHT ONE QUARTER BLOCK`), the
-/// exact right-edge mirror of the left lane's `▎` so both rails carry the same
-/// quarter-cell weight. Outside the Block Elements range, so it wants a font
-/// with Symbols-for-Legacy-Computing coverage.
-const LANE_SPINE_RIGHT: &str = "🮇";
 
 /// Inner content width: the sidebar width less the one-cell left gutter and the
 /// one-cell right rail. Card and worktree lines build to this width before
@@ -158,17 +128,23 @@ fn with_gutter(
         Gutter::Blank => (Span::raw(" "), Span::raw(" ")),
         Gutter::Lane => (
             Span::styled(
-                LANE_SPINE,
+                theme.glyph(GlyphRole::StructureLaneSpineLeft).to_owned(),
                 theme.styled(Component::LaneSpine, Modifier::DIM),
             ),
             Span::styled(
-                LANE_SPINE_RIGHT,
+                theme.glyph(GlyphRole::StructureLaneSpineRight).to_owned(),
                 theme.styled(Component::LaneSpine, Modifier::DIM),
             ),
         ),
         Gutter::Selected => (
-            Span::styled(SELECTED_SPINE, theme.selection()),
-            Span::styled(SELECTED_SPINE_RIGHT, theme.selection()),
+            Span::styled(
+                theme.glyph(GlyphRole::StructureCardSpineLeft).to_owned(),
+                theme.selection(),
+            ),
+            Span::styled(
+                theme.glyph(GlyphRole::StructureCardSpineRight).to_owned(),
+                theme.selection(),
+            ),
         ),
     };
     let left_cell = banded(left_cell, band);
