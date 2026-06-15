@@ -571,10 +571,12 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                     block_w,
                     zones,
                     now,
-                    fleet_tally,
-                    false,
-                    true,
-                    None,
+                    ActiveProviderBlockOptions {
+                        fleet_tally,
+                        allow_wide: false,
+                        include_totals: true,
+                        folded_footer: None,
+                    },
                 );
                 let pet = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
                 let footer = folded_footer
@@ -593,10 +595,12 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
                     width,
                     zones,
                     now,
-                    fleet_tally,
-                    false,
-                    true,
-                    folded_footer.clone(),
+                    ActiveProviderBlockOptions {
+                        fleet_tally,
+                        allow_wide: false,
+                        include_totals: true,
+                        folded_footer: folded_footer.clone(),
+                    },
                 ));
             }
         } else {
@@ -604,7 +608,17 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
             // account's main block, matching the cockpit's breathing room.
             lines.push(Line::from(""));
             lines.extend(active_provider_block_lines(
-                theme, active, width, zones, now, None, true, false, None,
+                theme,
+                active,
+                width,
+                zones,
+                now,
+                ActiveProviderBlockOptions {
+                    fleet_tally: None,
+                    allow_wide: true,
+                    include_totals: false,
+                    folded_footer: None,
+                },
             ));
         }
     }
@@ -634,18 +648,22 @@ fn single_block_lines(
     lines
 }
 
+struct ActiveProviderBlockOptions<'a> {
+    fleet_tally: Option<&'a SpendTally>,
+    allow_wide: bool,
+    include_totals: bool,
+    folded_footer: Option<Line<'static>>,
+}
+
 fn active_provider_block_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
     zones: &BudgetZonesConfig,
     now: Timestamp,
-    fleet_tally: Option<&SpendTally>,
-    allow_wide: bool,
-    include_totals: bool,
-    folded_footer: Option<Line<'static>>,
+    options: ActiveProviderBlockOptions<'_>,
 ) -> Vec<Line<'static>> {
-    let layout = ProviderLayout::for_width(width, allow_wide);
+    let layout = ProviderLayout::for_width(width, options.allow_wide);
     let mut lines = vec![provider_header_line(
         theme,
         panel,
@@ -654,10 +672,10 @@ fn active_provider_block_lines(
         layout.inline_art(),
     )];
     lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
-    if include_totals {
-        lines.extend(total_spend_lines(theme, fleet_tally, width, layout));
+    if options.include_totals {
+        lines.extend(total_spend_lines(theme, options.fleet_tally, width, layout));
     }
-    if let Some(footer) = folded_footer {
+    if let Some(footer) = options.folded_footer {
         lines.push(folded_footer_line(theme, footer, width));
     }
     lines
@@ -684,7 +702,7 @@ fn provider_stats_row_count(layout: ProviderLayout) -> usize {
 }
 
 fn total_spend_row_count(fleet_tally: Option<&SpendTally>, layout: ProviderLayout) -> usize {
-    if !fleet_tally.is_some_and(|tally| !tally.is_zero()) {
+    if fleet_tally.is_none_or(|tally| tally.is_zero()) {
         return 0;
     }
     usize::from(matches!(
