@@ -394,6 +394,21 @@ fn pane_closed_suppresses_short_lived_row() {
 }
 
 #[test]
+fn rebound_pane_under_new_row_id_is_not_short_lived() {
+    let mut observer = Observer::default();
+    observer.observe(sig(0, Vec::new()));
+    // A worktree pane first appears under a branch-keyed identity.
+    observer.observe(sig(11_000, vec![row("branch:wt", "p9", "branch:wt")]));
+
+    // Enumeration catches up: the same pane re-keys to its path identity. The
+    // old row id is gone, but the pane still backs a row, so it was rebound,
+    // not removed.
+    let drafts = observer.observe(sig(12_000, vec![row("/repo/wt", "p9", "/repo/wt")]));
+
+    assert!(!kinds(&drafts).contains(&"short_lived_row"));
+}
+
+#[test]
 fn first_enrichment_does_not_count_as_value_oscillation() {
     let mut observer = Observer::default();
     observer.observe(sig(0, vec![row_with_context_pct("a", "p1", "main", None)]));

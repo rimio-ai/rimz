@@ -282,6 +282,11 @@ impl Observer {
             .iter()
             .map(|row| row.row_id.as_str())
             .collect::<BTreeSet<_>>();
+        let present_pane_ids = sig
+            .rows
+            .iter()
+            .filter_map(|row| row.pane_id.as_deref())
+            .collect::<BTreeSet<_>>();
         let hidden_by_group = hidden_by_group(sig);
 
         for row in &sig.rows {
@@ -353,9 +358,19 @@ impl Observer {
                 .pane_id
                 .as_ref()
                 .is_some_and(|pane_id| pane_closed(sig, pane_id));
+            // The row id vanished while its pane still backs another row: the
+            // pane was rebound to a new identity (e.g. a worktree group re-keys
+            // from `branch:<name>` to its path as enumeration catches up), not
+            // removed. `group_migration` records that transition; the pane never
+            // blinked, so this is not a short-lived row.
+            let rebound = presence
+                .pane_id
+                .as_deref()
+                .is_some_and(|pane_id| present_pane_ids.contains(pane_id));
             if sig.at_ms.saturating_sub(presence.born_at) <= window
                 && !presence.short_lived_emitted
                 && !closed
+                && !rebound
                 && !presence.hidden_last_seen
                 && !hidden_now
             {
