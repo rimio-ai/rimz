@@ -139,12 +139,15 @@ Zellij receives its settings as `zellij attach ... options ...` on room birth an
 on_rebirth = true
 max = 8
 auto_continue = false
+auto_continue_overloaded = false
+auto_continue_overloaded_backoff_secs = [60, 120, 180]
+auto_continue_overloaded_max_retries = 10
 auto_continue_text = "continue"
 ```
 
 Resume covers two tenses. On a **rebirth** — reboot, multiplexer crash, reset, or clean Rimz rebirth — Rimz re-seeds prior agents from the durable rollup. Each restored agent starts idle in its own pane, so no model work happens until you type. `on_rebirth = false` or `--no-resume` comes up empty for a fresh room, and `max` bounds how many agents one birth relaunches. Mechanics live in [internals/sidebar/sidebar.md](../internals/sidebar/sidebar.md#resume-on-rebirth).
 
-While the room is **live**, `auto_continue` picks a rate-limit-parked agent's turn back up the moment its 5h/7d window resets: the producer types `auto_continue_text` into the agent's pane through the same send path `steer` uses, so the agent's next hook returns it to `running`. Off by default — with it on, Rimz types into a pane on its own when a `rate_limit` park's budget refills (an `overloaded` park recovers on a provider retry and is left alone). Each resume is throttled per agent and recorded as a text-free `agent.resumed` event. Mechanics live in [internals/agents/provider.md](../internals/agents/provider.md#spent-windows-and-paused-rows).
+While the room is **live**, `auto_continue` picks a rate-limit-parked agent's turn back up the moment its 5h/7d window resets: the producer types `auto_continue_text` into the agent's pane through the same send path `steer` uses, so the agent's next hook returns it to `running`. `auto_continue_overloaded` uses the same nudge text for an overload-parked agent on a bounded retry ramp; `auto_continue_overloaded_backoff_secs` sets the sequence, the last value repeats, and `auto_continue_overloaded_max_retries` stops attempts while leaving the row paused. Both toggles are off by default. Each resume is recorded as a text-free `agent.resumed` event. Mechanics live in [internals/agents/provider.md](../internals/agents/provider.md#spent-windows-and-paused-rows).
 
 ### Off-Box Error Reporting
 

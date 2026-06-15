@@ -177,8 +177,8 @@ enum AgentsSubcmd {
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(ExecArgs),
-    /// Hidden helper the producer spawns to nudge a rate-limit-parked agent when
-    /// its window resets (`sidebar::enrich` auto-continue).
+    /// Hidden helper the producer spawns to nudge a parked agent when its resume
+    /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
     AutoContinue(AutoContinueArgs),
 }

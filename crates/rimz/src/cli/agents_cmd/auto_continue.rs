@@ -1,13 +1,13 @@
 //! `rimz agents auto-continue` — the hidden helper the sidebar producer spawns to
-//! resume a rate-limit-parked agent when its 5h/7d window resets.
+//! resume a parked agent when its class-specific condition is due.
 //!
 //! The producer decides *which* agent and *when* (`sidebar::enrich`
-//! auto-continue, opt-in via `[resume] auto_continue`); this helper performs the
+//! auto-continue, opt-in via `[resume] auto_continue*`); this helper performs the
 //! two side effects the sidebar's read-only import graph must not: it types the
 //! nudge into the agent's live pane through the shared pane-send primitive and
-//! writes the `agent.resumed` audit record. Best-effort by contract — it
-//! inherits the producer's frame-validated target, so a vanished pane just fails
-//! the send and no audit record is written.
+//! writes the `agent.resumed` audit record. Best-effort by contract — it inherits
+//! the producer's frame-validated target, so a vanished pane just fails the send
+//! and no audit record is written.
 
 use anyhow::{Context, Result};
 use clap::Args;
@@ -30,6 +30,8 @@ pub struct AutoContinueArgs {
     pane: String,
     #[arg(long)]
     text: String,
+    #[arg(long)]
+    reason: String,
 }
 
 pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
@@ -66,7 +68,7 @@ pub fn run_auto_continue(args: AutoContinueArgs) -> Result<()> {
         &kind,
         &agent_id,
         &pane_id,
-        "rate_limit_window_reset",
+        &args.reason,
     );
     ledger
         .append_event(&event)

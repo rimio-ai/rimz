@@ -300,6 +300,9 @@ fn exact_set_keys() -> BTreeSet<String> {
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
+        "resume.auto_continue_overloaded",
+        "resume.auto_continue_overloaded_backoff_secs",
+        "resume.auto_continue_overloaded_max_retries",
         "resume.auto_continue_text",
         "accounts.oauth_usage",
         "remote_control.claude",
@@ -379,8 +382,6 @@ fn exact_set_keys() -> BTreeSet<String> {
         "tmux.aggressive_resize",
         "tmux.pane_border_status",
         "tmux.pane_border_lines",
-        "resume.on_rebirth",
-        "resume.max",
     ]
     .into_iter()
     .map(ToOwned::to_owned)

@@ -604,9 +604,10 @@ fn fold_machine_config_producing(
     // long-running task does not wait for the next turn boundary to repaint.
     refresh_codex_rate_limits(&snapshot, runtime);
     refresh_oauth_usage(&snapshot, runtime, &accounts_config);
-    // Opt-in: nudge a rate-limit-parked agent the moment its window resets, so a
-    // turn that stalled on a budget limit picks itself back up while you are away.
-    auto_continue::resume_rate_limit_parked(&snapshot, runtime, &resume_config);
+    // Opt-in: nudge a parked agent when its resume condition is due, so a turn
+    // that stopped on a budget limit or overload picks itself back up while you
+    // are away.
+    auto_continue::resume_parked(&snapshot, runtime, &resume_config);
     snapshot
 }
 

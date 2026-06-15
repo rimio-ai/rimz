@@ -129,6 +129,25 @@ fn api_error_self_clears_when_activity_resumes() {
     );
 }
 
+#[test]
+fn overloaded_turn_error_stays_paused_past_the_stall_window() {
+    let session = agent("claude", "busy-claude", AgentStatus::Running, 0)
+        .worktree("/repo/main")
+        .in_pane("%1")
+        .active_ago(default_stall_secs() + 3_600)
+        .overloaded_turn_error(10, "API Error: Overloaded");
+
+    let snapshot = room(Vec::new(), vec![session])
+        .with_live_panes(vec![pane("%1", "node", "/repo/main")], None);
+
+    let row = row(&snapshot, "busy-claude");
+    assert_eq!(
+        row.status(),
+        Some(AgentStatus::Paused),
+        "an overloaded park remains paused even when the generic stall backstop would fail a running row"
+    );
+}
+
 // ── The precedence ladder, pinned as an ordering ─────────────────────────────
 //
 // docs/internals/agents/agent.md commits to a strict order among the derived display

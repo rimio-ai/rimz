@@ -47,7 +47,7 @@ pub use notifications::{
     DesktopNotificationMode, NotificationSoundMode, NotificationTrigger, NotificationsPrefs,
 };
 pub use remote_control::RemoteControlConfig;
-pub use resume::ResumeConfig;
+pub use resume::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
 pub use sidebar::{
     AttentionConfig, BudgetPaceConfig, BudgetZonesConfig, CardDensityMode, ContextBand,
