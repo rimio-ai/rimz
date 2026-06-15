@@ -194,7 +194,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         bg: Color::Rgb(20, 20, 200),
     };
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some((0..10).map(|_| vec![cell.clone(), cell.clone()]).collect()),
+        grid: Some((0..8).map(|_| vec![cell.clone(), cell.clone()]).collect()),
         caption: Some("all caught up".to_owned()),
         loading: false,
         status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
@@ -246,12 +246,17 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
     assert!(!rendered.contains("Pets"), "{rendered}");
     assert_eq!(
         rendered.chars().filter(|ch| *ch == '▀').count(),
-        20,
+        16,
         "one height-matched pet grid is zipped onto the active block:\n{rendered}"
     );
-    assert!(
-        texts.iter().skip(2).all(|line| line.contains('▀')),
-        "every active-block row has a pet body row beside it:\n{rendered}"
+    assert_eq!(
+        texts
+            .iter()
+            .skip(2)
+            .filter(|line| line.contains('▀'))
+            .count(),
+        8,
+        "the pet body keeps its height while the bottom row is blank:\n{rendered}"
     );
     assert_eq!(
         hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
@@ -265,25 +270,109 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         .iter()
         .position(|line| line.contains('◎') && line.contains("12"))
         .expect("today sessions row");
-    let sessions = &texts[sessions_index];
-    assert!(!sessions.contains("$3.50"), "{sessions}");
-    let tokens = texts.get(sessions_index + 1).expect("today token row");
-    assert!(tokens.contains("◇ 498k"), "{tokens}");
-    assert!(!tokens.contains("$3.50"), "{tokens}");
-    let today_usd = texts.get(sessions_index + 2).expect("today USD row");
-    assert!(today_usd.contains("$3.50"), "{today_usd}");
+    let stats = &texts[sessions_index];
+    assert!(stats.contains(" ▐▛███▜▌"), "{stats}");
+    assert!(stats.contains("◇ 498k"), "{stats}");
+    assert!(stats.contains("$3.50"), "{stats}");
     assert!(rendered.contains("Total:"), "{rendered}");
-    assert!(rendered.contains("W:"), "{rendered}");
-    assert!(rendered.contains("M:"), "{rendered}");
+    assert!(rendered.contains("W: ◎"), "{rendered}");
+    assert!(rendered.contains("M: ◎"), "{rendered}");
+    let total_index = texts
+        .iter()
+        .position(|line| line.contains("Total:"))
+        .expect("total delimiter");
+    let above_total = texts
+        .get(total_index.saturating_sub(1))
+        .expect("row above total");
+    let provider_above_total = above_total.split('▀').next().unwrap_or(above_total).trim();
     assert!(
-        rendered.contains("$44.20") && rendered.contains("$101.99"),
-        "total USD row:\n{rendered}"
+        provider_above_total.is_empty(),
+        "normal layout has a blank provider row above Total:\n{rendered}"
     );
-    let spend = today_usd.find("$3.50").expect("today spend");
-    let pet_col = today_usd.find('▀').expect("pet column");
+    let week_tokens = texts
+        .iter()
+        .find(|line| line.contains("W: ◎"))
+        .expect("week token row");
+    let week_pet_col = week_tokens.find('▀').expect("pet column on week row");
     assert!(
-        spend < pet_col,
-        "$ stays left of the pet column: {today_usd}"
+        week_tokens.trim_start().starts_with("W: ◎  44"),
+        "history session group starts left:\n{rendered}"
+    );
+    assert!(
+        week_tokens[..week_pet_col.saturating_sub(1)]
+            .trim_end()
+            .ends_with("9.9M"),
+        "history token rows end at the pet gap:\n{rendered}"
+    );
+    let total_usd = texts
+        .iter()
+        .find(|line| line.contains("W: $"))
+        .expect("total USD row");
+    let provider_usd = total_usd.trim_end();
+    assert!(
+        !total_usd.contains('▀'),
+        "normal layout leaves an empty pet row below the sprite:\n{rendered}"
+    );
+    assert!(
+        provider_usd.trim_start().starts_with("W: $44.20"),
+        "week USD starts left:\n{rendered}"
+    );
+    assert!(
+        provider_usd.ends_with("M: $101.99"),
+        "month USD is pinned right:\n{rendered}"
+    );
+    assert!(
+        !total_usd.contains('·'),
+        "normal total USD row uses spacing, not a dot:\n{rendered}"
+    );
+    let header = texts
+        .get(sessions_index.saturating_sub(1))
+        .expect("provider header");
+    assert!(
+        !header.contains("▐▛███▜▌"),
+        "normal layout starts art one row below the header:\n{rendered}"
+    );
+    let spend = stats.find("$3.50").expect("today spend");
+    let pet_col = stats.find('▀').expect("pet column");
+    assert!(spend < pet_col, "$ stays left of the pet column: {stats}");
+}
+
+#[test]
+fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
+    let theme = Theme::fixed(false);
+    let providers = two_provider_panels();
+    let cell = crate::sidebar_pane::pets::PetCell {
+        ch: '▀',
+        fg: Color::Rgb(200, 20, 20),
+        bg: Color::Rgb(20, 20, 200),
+    };
+    let pet = crate::sidebar_pane::pets::PetView {
+        grid: Some((0..3).map(|_| vec![cell.clone(); 12]).collect()),
+        caption: Some("ready".to_owned()),
+        loading: false,
+        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        active_track: "idle",
+    };
+    let active = "claude".to_owned();
+
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        &providers,
+        Some(&active),
+        true,
+        None,
+        Some(&pet),
+        true,
+        66,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&lines);
+    let caption = texts.get(1).expect("caption line");
+
+    assert!(
+        caption.ends_with("    ready   "),
+        "caption is right-aligned with three trailing cells:\n{caption:?}"
     );
 }
 

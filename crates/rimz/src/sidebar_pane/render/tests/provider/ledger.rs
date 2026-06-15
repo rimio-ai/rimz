@@ -190,14 +190,127 @@ fn pets_provider_dashboard_owns_total_rows() {
         rendered.contains("$44.20") && rendered.contains("$101.99"),
         "W/M use fleet totals:\n{rendered}"
     );
+    let total_usd = lines
+        .iter()
+        .find(|line| line.contains("W: $"))
+        .expect("total USD row");
+    assert!(
+        total_usd.trim_start().starts_with("W: $44.20"),
+        "week USD starts left:\n{rendered}"
+    );
+    assert!(
+        total_usd.trim_end().ends_with("M: $101.99"),
+        "month USD is pinned right:\n{rendered}"
+    );
+    assert!(
+        !total_usd.contains('·'),
+        "normal total USD row uses spacing, not a dot:\n{rendered}"
+    );
+    let total_index = lines
+        .iter()
+        .position(|line| line.contains("Total:"))
+        .expect("total delimiter");
+    assert!(
+        lines[total_index.saturating_sub(1)].trim().is_empty(),
+        "normal layout has a blank row above Total:\n{rendered}"
+    );
     assert_eq!(
-        lines.iter().filter(|line| line.contains("W:")).count(),
+        lines.iter().filter(|line| line.contains("W: ◎")).count(),
         1,
         "tabbed dashboard does not duplicate the bottom W row:\n{rendered}"
     );
+    let week_tokens = lines
+        .iter()
+        .find(|line| line.contains("W: ◎"))
+        .expect("week token row");
+    assert!(
+        week_tokens.trim_start().starts_with("W: ◎  44"),
+        "history session group starts left:\n{rendered}"
+    );
+    assert!(
+        week_tokens.trim_end().ends_with("9.9M"),
+        "history token stats are pinned right:\n{rendered}"
+    );
     assert_eq!(
-        lines.iter().filter(|line| line.contains("M:")).count(),
+        lines.iter().filter(|line| line.contains("M: ◎")).count(),
         1,
         "tabbed dashboard does not duplicate the bottom M row:\n{rendered}"
+    );
+}
+
+#[test]
+fn pets_provider_dashboard_folds_footer_left_of_pet() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.sidebar.pets.enabled = true;
+    snapshot.link = Some(crate::SidebarLinkHealth {
+        rtt_ms: Some(210),
+        miss_pct: 0,
+        tier: crate::remote::link::LinkTier::Good,
+        freshness: crate::SidebarLinkFreshness::Fresh,
+        sampled_at_ms: 1_700_000_000_000,
+    });
+    let cell = crate::sidebar_pane::pets::PetCell {
+        ch: '▀',
+        fg: Color::Rgb(200, 20, 20),
+        bg: Color::Rgb(20, 20, 200),
+    };
+    let ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            grid: Some((0..6).map(|_| vec![cell.clone(); 12]).collect()),
+            caption: Some("ready".to_owned()),
+            loading: false,
+            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            active_track: "idle",
+        }),
+        ..Default::default()
+    };
+
+    let rendered = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui, 60, 34);
+    let lines = rendered.lines().collect::<Vec<_>>();
+    let footer_index = lines
+        .iter()
+        .position(|line| line.contains("⇄ remote 210ms"))
+        .expect("folded remote footer");
+    let footer = lines[footer_index];
+
+    assert!(
+        footer.contains("? for help"),
+        "footer keeps help:\n{footer}"
+    );
+    assert!(
+        !footer.contains('▀'),
+        "footer row is below the pet body:\n{rendered}"
+    );
+    assert!(
+        footer.trim_end().ends_with("? for help"),
+        "help is right-aligned on the bottom row:\n{footer}"
+    );
+    assert_eq!(
+        footer_index,
+        lines.len() - 1,
+        "folded footer is the bottom row:\n{rendered}"
+    );
+    assert!(
+        lines[footer_index.saturating_sub(1)].contains('▀'),
+        "the spare pet row sits above the footer:\n{rendered}"
+    );
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|line| line.contains("? for help"))
+            .count(),
+        1,
+        "footer is not duplicated below the pet dashboard:\n{rendered}"
     );
 }

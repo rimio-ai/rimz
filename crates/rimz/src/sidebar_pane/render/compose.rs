@@ -9,8 +9,8 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, fleet_size, fleet_total_lines,
-    trim_spans_to_width, unread_total, worktree_group_lines,
+    dashboard_panel_lines_with_footer, fleet_header_lines, fleet_ledger_lines, fleet_size,
+    fleet_total_lines, trim_spans_to_width, unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
 use super::{
@@ -192,6 +192,18 @@ pub(super) fn build_bottom_chrome(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = dashboard_present(snapshot, active);
     let tabbed = dashboard_present && dashboard_tabbed(snapshot);
+    let dashboard_owns_ledger = dashboard_present
+        && tabbed
+        && !snapshot.providers.is_empty()
+        && snapshot.sidebar.pets.enabled;
+    let fold_footer_into_dashboard = dashboard_owns_ledger
+        && !active
+        && snapshot.truth_degraded.is_none()
+        && ui.gate_notice.is_none()
+        && alert.is_none();
+    let folded_footer = fold_footer_into_dashboard
+        .then(|| footer_lines(snapshot, theme, inner).into_iter().next())
+        .flatten();
     if dashboard_present {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.
@@ -200,7 +212,7 @@ pub(super) fn build_bottom_chrome(
         // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
         let active_tab = active_dashboard_tab(snapshot, ui);
-        let (panel_lines, panel_hits) = dashboard_panel_lines(
+        let (panel_lines, panel_hits) = dashboard_panel_lines_with_footer(
             theme,
             &snapshot.providers,
             active_tab.as_ref(),
@@ -208,6 +220,7 @@ pub(super) fn build_bottom_chrome(
             snapshot.value_tally.as_ref(),
             ui.pet.as_ref(),
             snapshot.sidebar.pets.enabled,
+            folded_footer.clone(),
             inner,
             &snapshot.sidebar.budget,
             snapshot.now,
@@ -228,10 +241,6 @@ pub(super) fn build_bottom_chrome(
     }
     // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
     // provider block owns those totals inside its `Total:` section.
-    let dashboard_owns_ledger = dashboard_present
-        && tabbed
-        && !snapshot.providers.is_empty()
-        && snapshot.sidebar.pets.enabled;
     if !active && !dashboard_owns_ledger {
         let corner = if dashboard_present {
             fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
@@ -257,7 +266,7 @@ pub(super) fn build_bottom_chrome(
     }
     if !active {
         let footer = footer_lines(snapshot, theme, inner);
-        if !footer.is_empty() {
+        if folded_footer.is_none() && !footer.is_empty() {
             // No rule above the footer — it sits quietly under the dashboard's
             // own top rule, with one blank line of breathing room when a
             // dashboard is present (skipped in an empty room so the footer

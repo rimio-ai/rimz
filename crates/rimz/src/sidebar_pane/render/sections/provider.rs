@@ -31,8 +31,8 @@ const PROVIDER_ART_WIDTH: usize = 9;
 const PROVIDER_ART_MIN_WIDTH: usize = 34;
 
 /// Widths that choose the provider body density. Wide keeps the historical
-/// one-line stats row. Normal stacks sessions, tokens, and USD into a taller
-/// block. Narrow also drops input/output token splits.
+/// one-line stats row. Normal keeps that row in the narrower provider column.
+/// Narrow also drops input/output token splits.
 const PROVIDER_WIDE_MIN_WIDTH: usize = 52;
 const PROVIDER_NORMAL_MIN_WIDTH: usize = 40;
 
@@ -40,13 +40,21 @@ const PROVIDER_NORMAL_MIN_WIDTH: usize = 40;
 /// pet rides beside the dashboard.
 const PET_COLUMN_GAP: usize = 1;
 
+/// Pet captions leave three trailing cells so their right edge lines up with the
+/// sprite body's inner gap.
+const PET_CAPTION_RIGHT_PAD: usize = 3;
+
+/// The provider block folds the footer beside the pet on one shared bottom row.
+const PET_FOOTER_ROW_COUNT: usize = 1;
+
 /// The provider bar's label slot (`5h` / `7d` / `30d` / `ex` / `api`) and value
 /// column, shared by every provider bar so they align front and back. The label
 /// fits three cells (`30d`); the value holds `↻ ` plus a six-cell reset countdown
-/// slot and a one-cell right gutter (`↻  4h50m ` / `↻ 20h20m `), or a compact
-/// paid-usage value.
+/// slot (`↻  4h50m` / `↻ 20h20m`), or a compact paid-usage value with its
+/// existing one-cell gutter.
 const PROVIDER_LABEL_WIDTH: usize = 3;
 const PROVIDER_VALUE_WIDTH: usize = 9;
+const PROVIDER_RESET_VALUE_WIDTH: usize = 8;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
@@ -117,7 +125,11 @@ fn total_spend_lines(
     if rows.is_empty() {
         return Vec::new();
     }
-    let mut lines = Vec::with_capacity(rows.len() + 1);
+    let has_spacer = matches!(layout, ProviderLayout::Wide | ProviderLayout::Normal);
+    let mut lines = Vec::with_capacity(rows.len() + 1 + usize::from(has_spacer));
+    if has_spacer {
+        lines.push(Line::from(""));
+    }
     lines.push(Line::from(total_delimiter_row(theme, width)));
     lines.extend(rows);
     lines
@@ -158,9 +170,9 @@ fn total_ledger_rows(
         ProviderLayout::Normal | ProviderLayout::Narrow => {
             let detail = total_token_detail(theme, tally, tokens_short, layout, &cols, width);
             vec![
-                spend_token_row(theme, "W", &tally.week, tokens_short, detail, &cols, width),
-                spend_token_row(theme, "M", &tally.month, tokens_short, detail, &cols, width),
-                total_usd_row(theme, &tally.week, &tally.month, &cols, width),
+                split_spend_token_row(theme, "W", &tally.week, tokens_short, detail, &cols, width),
+                split_spend_token_row(theme, "M", &tally.month, tokens_short, detail, &cols, width),
+                total_usd_row(theme, &tally.week, &tally.month, width),
             ]
         }
     }
@@ -180,14 +192,8 @@ fn total_token_detail(
     let full_fits = [("W", &tally.week), ("M", &tally.month)]
         .into_iter()
         .all(|(label, window)| {
-            provider_spans_width(&spend_token_spans(
-                theme,
-                label,
-                window,
-                token_format,
-                TokenDetail::Full,
-                cols,
-            )) <= width
+            spend_token_row_width(theme, label, window, token_format, TokenDetail::Full, cols)
+                <= width
         });
     if full_fits {
         TokenDetail::Full
@@ -279,7 +285,7 @@ fn wm_row(
     pin_right(left, right, width)
 }
 
-fn spend_token_row(
+fn split_spend_token_row(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
@@ -288,47 +294,60 @@ fn spend_token_row(
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    Line::from(trim_spans_to_width(
-        spend_token_spans(theme, label, window, token_format, token_detail, cols),
+    pin_right(
+        spend_session_spans(theme, label, window, cols),
+        spend_token_metric_spans(theme, window, token_format, token_detail, cols),
         width,
-    ))
+    )
 }
 
 fn total_usd_row(
     theme: &Theme,
     week: &SpendWindow,
     month: &SpendWindow,
-    cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    Line::from(trim_spans_to_width(
-        vec![
-            Span::raw(" "),
-            Span::styled(
-                format!("{:>w$}", dollars2(week.usd), w = cols.usd),
-                theme.money_style(Modifier::BOLD),
-            ),
-            Span::raw("  "),
-            Span::styled(
-                format!("{:>w$}", dollars2(month.usd), w = cols.usd),
-                theme.money_style(Modifier::BOLD),
-            ),
-        ],
-        width,
-    ))
+    let label = theme.style(theme.component(Component::LedgerLabel), Modifier::empty());
+    let left = vec![
+        Span::raw(" "),
+        Span::styled("W: ".to_owned(), label),
+        Span::styled(dollars2(week.usd), theme.money_style(Modifier::BOLD)),
+    ];
+    let right = vec![
+        Span::styled("M: ".to_owned(), label),
+        Span::styled(dollars2(month.usd), theme.money_style(Modifier::BOLD)),
+    ];
+    pin_right(left, right, width)
 }
 
-fn spend_token_spans(
+fn spend_token_row_width(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
     token_format: fn(u64) -> String,
     token_detail: TokenDetail,
     cols: &WmColumns,
+) -> usize {
+    provider_spans_width(&spend_session_spans(theme, label, window, cols))
+        + 1
+        + provider_spans_width(&spend_token_metric_spans(
+            theme,
+            window,
+            token_format,
+            token_detail,
+            cols,
+        ))
+}
+
+fn spend_session_spans(
+    theme: &Theme,
+    label: &str,
+    window: &SpendWindow,
+    cols: &WmColumns,
 ) -> Vec<Span<'static>> {
     let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
-    let mut spans = vec![
+    vec![
         Span::raw(" "),
         Span::styled(
             format!("{label}: "),
@@ -339,7 +358,19 @@ fn spend_token_spans(
             format!(" {:>w$}", window.sessions, w = cols.sessions),
             value,
         ),
-        Span::raw("  "),
+    ]
+}
+
+fn spend_token_metric_spans(
+    theme: &Theme,
+    window: &SpendWindow,
+    token_format: fn(u64) -> String,
+    token_detail: TokenDetail,
+    cols: &WmColumns,
+) -> Vec<Span<'static>> {
+    let value = theme.body();
+    let marker = |color: Color| theme.style(color, Modifier::empty());
+    let mut spans = vec![
         Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
         Span::styled(
             format!(" {:>w$}", token_format(window.tokens), w = cols.total),
@@ -380,6 +411,26 @@ fn spend_token_spans(
             value,
         ),
     ]);
+    spans
+}
+
+fn spend_token_spans(
+    theme: &Theme,
+    label: &str,
+    window: &SpendWindow,
+    token_format: fn(u64) -> String,
+    token_detail: TokenDetail,
+    cols: &WmColumns,
+) -> Vec<Span<'static>> {
+    let mut spans = spend_session_spans(theme, label, window, cols);
+    spans.push(Span::raw("  "));
+    spans.extend(spend_token_metric_spans(
+        theme,
+        window,
+        token_format,
+        token_detail,
+        cols,
+    ));
     spans
 }
 
@@ -436,6 +487,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     )
 }
 
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
     theme: &Theme,
@@ -445,6 +497,35 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
     fleet_tally: Option<&SpendTally>,
     pet: Option<&PetView>,
     pets_enabled: bool,
+    width: usize,
+    zones: &BudgetZonesConfig,
+    now: Timestamp,
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+    dashboard_panel_lines_with_footer(
+        theme,
+        providers,
+        active_tab,
+        tabbed,
+        fleet_tally,
+        pet,
+        pets_enabled,
+        None,
+        width,
+        zones,
+        now,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
+    theme: &Theme,
+    providers: &[SidebarProviderPanel],
+    active_tab: Option<&String>,
+    tabbed: bool,
+    fleet_tally: Option<&SpendTally>,
+    pet: Option<&PetView>,
+    pets_enabled: bool,
+    folded_footer: Option<Line<'static>>,
     width: usize,
     zones: &BudgetZonesConfig,
     now: Timestamp,
@@ -497,9 +578,15 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
                     fleet_tally,
                     false,
                     true,
+                    None,
                 );
                 let pet = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
-                lines.extend(zip_provider_pet_lines(block, pet, block_w, pet_w, width));
+                let footer = folded_footer
+                    .clone()
+                    .map(|footer| folded_footer_line(theme, footer, block_w));
+                lines.extend(zip_provider_pet_lines(
+                    block, pet, footer, block_w, pet_w, width,
+                ));
             } else {
                 // A blank line below the rail sets the tabs apart from the active
                 // account's tall spend block when the pet column is unavailable.
@@ -513,6 +600,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
                     fleet_tally,
                     false,
                     true,
+                    folded_footer.clone(),
                 ));
             }
         } else {
@@ -520,7 +608,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
             // account's main block, matching the cockpit's breathing room.
             lines.push(Line::from(""));
             lines.extend(active_provider_block_lines(
-                theme, active, width, zones, now, None, true, false,
+                theme, active, width, zones, now, None, true, false, None,
             ));
         }
     }
@@ -559,6 +647,7 @@ fn active_provider_block_lines(
     fleet_tally: Option<&SpendTally>,
     allow_wide: bool,
     include_totals: bool,
+    folded_footer: Option<Line<'static>>,
 ) -> Vec<Line<'static>> {
     let layout = ProviderLayout::for_width(width, allow_wide);
     let mut lines = vec![provider_header_line(
@@ -572,6 +661,9 @@ fn active_provider_block_lines(
     if include_totals {
         lines.extend(total_spend_lines(theme, fleet_tally, width, layout));
     }
+    if let Some(footer) = folded_footer {
+        lines.push(folded_footer_line(theme, footer, width));
+    }
     lines
 }
 
@@ -580,19 +672,20 @@ pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
     fleet_tally: Option<&SpendTally>,
 ) -> usize {
     let layout = ProviderLayout::Normal;
-    1 + provider_body_row_count(panel, layout) + total_spend_row_count(fleet_tally, layout)
+    1 + provider_body_row_count(panel, layout)
+        + total_spend_row_count(fleet_tally, layout)
+        + PET_FOOTER_ROW_COUNT
 }
 
 fn provider_body_row_count(panel: &SidebarProviderPanel, layout: ProviderLayout) -> usize {
-    let art_start = usize::from(layout.inline_art());
+    let art_start = 0;
     let art = panel.art.len().saturating_sub(art_start);
     (provider_stats_row_count(layout) + provider_bar_count(panel)).max(art)
 }
 
 fn provider_stats_row_count(layout: ProviderLayout) -> usize {
     match layout {
-        ProviderLayout::Wide => 1,
-        ProviderLayout::Normal | ProviderLayout::Narrow => 3,
+        ProviderLayout::Wide | ProviderLayout::Normal | ProviderLayout::Narrow => 1,
     }
 }
 
@@ -600,10 +693,14 @@ fn total_spend_row_count(fleet_tally: Option<&SpendTally>, layout: ProviderLayou
     if !fleet_tally.is_some_and(|tally| !tally.is_zero()) {
         return 0;
     }
-    1 + match layout {
-        ProviderLayout::Wide => 2,
-        ProviderLayout::Normal | ProviderLayout::Narrow => 3,
-    }
+    usize::from(matches!(
+        layout,
+        ProviderLayout::Wide | ProviderLayout::Normal
+    )) + 1
+        + match layout {
+            ProviderLayout::Wide => 2,
+            ProviderLayout::Normal | ProviderLayout::Narrow => 3,
+        }
 }
 
 fn provider_bar_count(panel: &SidebarProviderPanel) -> usize {
@@ -611,6 +708,42 @@ fn provider_bar_count(panel: &SidebarProviderPanel) -> usize {
         return 1;
     }
     select_provider_bars(panel).len()
+}
+
+fn folded_footer_line(theme: &Theme, line: Line<'static>, width: usize) -> Line<'static> {
+    let (left, right) = split_footer_spans(theme, line.spans);
+    if right.is_empty() {
+        return Line::from(trim_spans_to_width(left, width));
+    }
+    pin_right(left, right, width)
+}
+
+fn split_footer_spans(
+    theme: &Theme,
+    spans: Vec<Span<'static>>,
+) -> (Vec<Span<'static>>, Vec<Span<'static>>) {
+    let mut left = Vec::new();
+    let mut right = Vec::new();
+    let mut saw_left = false;
+    for span in spans {
+        let content = span.content.as_ref();
+        if content.chars().all(char::is_whitespace) {
+            continue;
+        }
+        if content.contains("? for help") {
+            right.push(span);
+            continue;
+        }
+        if saw_left {
+            left.push(Span::raw("  "));
+        }
+        left.push(span);
+        saw_left = true;
+    }
+    if right.is_empty() {
+        right.push(Span::styled("? for help".to_owned(), theme.faint()));
+    }
+    (left, right)
 }
 
 fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
@@ -633,13 +766,20 @@ fn provider_pet_caption_line(
     line.spans.push(Span::raw(" ".repeat(PET_COLUMN_GAP)));
     let pet_line = super::pets::dashboard_pet_caption(pet)
         .map(|caption| {
-            let clipped = caption.chars().take(pet_w).collect::<String>();
-            let lead = pet_w.saturating_sub(clipped.chars().count());
+            let caption_w = pet_w.saturating_sub(PET_CAPTION_RIGHT_PAD);
+            let clipped = caption.chars().take(caption_w).collect::<String>();
+            let lead = caption_w.saturating_sub(clipped.chars().count());
             let mut spans = Vec::new();
             if lead > 0 {
                 spans.push(Span::raw(" ".repeat(lead)));
             }
-            spans.push(Span::styled(clipped, theme.muted()));
+            if !clipped.is_empty() {
+                spans.push(Span::styled(clipped, theme.muted()));
+            }
+            let trail = pet_w.saturating_sub(caption_w);
+            if trail > 0 {
+                spans.push(Span::raw(" ".repeat(trail)));
+            }
             Line::from(spans)
         })
         .unwrap_or_else(|| Line::from(""));
@@ -651,15 +791,23 @@ fn provider_pet_caption_line(
 fn zip_provider_pet_lines(
     block: Vec<Line<'static>>,
     pet: Vec<Line<'static>>,
+    footer: Option<Line<'static>>,
     block_w: usize,
     pet_w: usize,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let rows = block.len().max(pet.len());
+    let block_rows = block.len() + usize::from(footer.is_some());
+    let pet_rows = pet.len() + usize::from(!pet.is_empty());
+    let rows = block_rows.max(pet_rows);
     let mut lines = Vec::with_capacity(rows);
     for index in 0..rows {
+        let footer_row = footer.is_some() && index + 1 == rows;
         let mut block_line = pad_line_to(
-            block.get(index).cloned().unwrap_or_else(|| Line::from("")),
+            if footer_row {
+                footer.clone().unwrap_or_else(|| Line::from(""))
+            } else {
+                block.get(index).cloned().unwrap_or_else(|| Line::from(""))
+            },
             block_w,
         );
         block_line.spans.push(Span::raw(" ".repeat(PET_COLUMN_GAP)));
@@ -829,14 +977,7 @@ fn provider_header_left(
 ) -> Vec<Span<'static>> {
     let mut left = Vec::new();
     let art_fits = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
-    let show_art = art_fits && inline_art;
-    if show_art {
-        left.push(Span::styled(
-            pad_to(&panel.art[0], PROVIDER_ART_WIDTH),
-            theme.style(theme.brand_tone(panel), Modifier::empty()),
-        ));
-        left.push(Span::raw(" "));
-    } else if tabbed && art_fits {
+    if (tabbed || inline_art) && art_fits {
         left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
     }
     let version = panel
@@ -875,8 +1016,9 @@ fn provider_spans_width(spans: &[Span<'static>]) -> usize {
 }
 
 /// The provider body: the brand emblem in a fixed left column zipped against the
-/// right column. Wide uses the historical one-line stats row; normal and narrow
-/// stack sessions, token stats, and USD into a taller block.
+/// right column. The stats stay on one row; normal and narrow use the same row
+/// in the smaller provider column and drop input/output splits when it would
+/// otherwise clip.
 fn provider_body_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
@@ -888,7 +1030,7 @@ fn provider_body_lines(
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
     let bar_region = width.saturating_sub(art_column);
-    let art_start = usize::from(layout.inline_art());
+    let art_start = 0;
 
     let mut rights = provider_stats_rows(theme, panel, bar_region, layout);
     rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
@@ -929,23 +1071,37 @@ fn provider_stats_rows(
         .as_ref()
         .map(|spending| spending.today)
         .unwrap_or_default();
-    let sessions = vec![
+    let detail = provider_token_detail(theme, &today, layout, region);
+    vec![provider_stats_row(theme, &today, detail, region).spans]
+}
+
+fn provider_stats_row(
+    theme: &Theme,
+    today: &SpendWindow,
+    detail: TokenDetail,
+    region: usize,
+) -> Line<'static> {
+    let left = provider_stats_left_spans(theme, today, detail);
+    let right = vec![Span::styled(
+        dollars2(today.usd),
+        theme.money_style(Modifier::BOLD),
+    )];
+    pin_right(left, right, region)
+}
+
+fn provider_stats_left_spans(
+    theme: &Theme,
+    today: &SpendWindow,
+    detail: TokenDetail,
+) -> Vec<Span<'static>> {
+    let mut left = vec![
         Span::styled(
             SESSIONS_GLYPH,
             theme.styled(Component::Sessions, Modifier::empty()),
         ),
         Span::styled(format!(" {}", today.sessions), theme.body()),
+        Span::raw("  "),
     ];
-    let detail = provider_token_detail(
-        theme,
-        today.tokens,
-        today.input,
-        today.output,
-        today.cache_read,
-        tokens_int,
-        layout,
-        region,
-    );
     let token_breakdown = provider_token_breakdown_spans(
         theme,
         today.tokens,
@@ -955,46 +1111,27 @@ fn provider_stats_rows(
         tokens_int,
         detail,
     );
-    let right = vec![Span::styled(
-        dollars2(today.usd),
-        theme.money_style(Modifier::BOLD),
-    )];
-    if layout == ProviderLayout::Wide {
-        let mut left = sessions;
-        left.push(Span::raw("  "));
-        left.extend(token_breakdown);
-        return vec![pin_right(left, right, region).spans];
-    }
-    vec![
-        trim_spans_to_width(sessions, region),
-        trim_spans_to_width(token_breakdown, region),
-        pin_right(vec![Span::raw(" ")], right, region).spans,
-    ]
+    left.extend(token_breakdown);
+    left
 }
 
 fn provider_token_detail(
     theme: &Theme,
-    total: u64,
-    input: u64,
-    output: u64,
-    cache_read: u64,
-    format: fn(u64) -> String,
+    today: &SpendWindow,
     layout: ProviderLayout,
     region: usize,
 ) -> TokenDetail {
-    if layout == ProviderLayout::Narrow {
-        return TokenDetail::Summary;
+    match layout {
+        ProviderLayout::Wide => return TokenDetail::Full,
+        ProviderLayout::Narrow => return TokenDetail::Summary,
+        ProviderLayout::Normal => {}
     }
-    let full = provider_token_breakdown_spans(
-        theme,
-        total,
-        input,
-        output,
-        cache_read,
-        format,
-        TokenDetail::Full,
-    );
-    if provider_spans_width(&full) <= region {
+    let left = provider_stats_left_spans(theme, today, TokenDetail::Full);
+    let right = vec![Span::styled(
+        dollars2(today.usd),
+        theme.money_style(Modifier::BOLD),
+    )];
+    if provider_spans_width(&left) + provider_spans_width(&right) < region {
         TokenDetail::Full
     } else {
         TokenDetail::Summary
@@ -1163,7 +1300,6 @@ fn metered_bar_row(
     now: Timestamp,
 ) -> Option<Vec<Span<'static>>> {
     let label = window_label(window.duration_mins);
-    let bar_width = provider_bar_width(region);
     if !force_exhausted && window.used_percentage.is_none() {
         return Some(unknown_bar_row(theme, &label, region));
     }
@@ -1188,6 +1324,7 @@ fn metered_bar_row(
     } else {
         window.resets_at.map(|at| reset_countdown(at, now))
     };
+    let bar_width = provider_bar_width(region);
     let reset_marker_style = if reset.is_none() {
         theme.body()
     } else {
@@ -1239,8 +1376,7 @@ fn unknown_bar_row(theme: &Theme, label: &str, region: usize) -> Vec<Span<'stati
 
 /// The fixed-width reset value column. Only the reset marker carries a hot
 /// pace tone; the countdown text stays at the neutral soft tier in a fixed
-/// six-cell slot, and one trailing gutter cell keeps wide hour countdowns off
-/// the chrome edge.
+/// six-cell slot.
 fn reset_value_spans(
     theme: &Theme,
     countdown: Option<&str>,
@@ -1253,7 +1389,6 @@ fn reset_value_spans(
     vec![
         Span::styled("↻", marker_style),
         Span::styled(format!(" {countdown}"), theme.body()),
-        Span::raw(" "),
     ]
 }
 
@@ -1350,7 +1485,7 @@ fn dollars_compact(usd: f64) -> String {
 /// one cell, so a narrow sidebar still paints a (short) bar.
 fn provider_bar_width(region: usize) -> usize {
     region
-        .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_VALUE_WIDTH)
+        .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_RESET_VALUE_WIDTH)
         .max(1)
 }
 

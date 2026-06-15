@@ -592,7 +592,7 @@ fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
         std::slice::from_ref(panel),
         None,
         false,
-        40,
+        52,
         &crate::config::BudgetZonesConfig::default(),
         fixed_now(),
     )

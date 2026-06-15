@@ -1,5 +1,6 @@
 ---
 source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+assertion_line: 105
 expression: screen
 ---
  ⌘ query-engine
@@ -32,7 +33,7 @@ expression: screen
 
            Claude Max · v2.1.158                 ⇅ rc
   ▐▛███▜▌  ◎ 12  ◇ 498k ↘ 434k ↗ 64k ◌ 68k      $3.50
- ▝▜█████▛▘ <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻  <reset>
-   ▘▘ ▝▝   <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱ ↻  <reset>
+ ▝▜█████▛▘ <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱ ↻  <reset>
+   ▘▘ ▝▝   <t>  ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱▱▱▱▱▱▱▱▱ ↻  <reset>
 
                                            ? for help

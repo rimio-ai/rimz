@@ -96,8 +96,8 @@ fn provider_bar_tones_labels_and_reset_countdowns() {
         .map(|span| span.content.as_ref())
         .collect::<String>();
     assert!(
-        text.contains("↻  4h00m "),
-        "five-cell timers sit in the six-cell reset slot: {text:?}"
+        text.contains("↻  4h00m"),
+        "five-cell timers sit in the six-cell reset slot without a trailing gutter: {text:?}"
     );
     let (label_fg, glyph_fg, has_reset) = bar_row_facts(&rows[0]);
     assert!(has_reset, "started windows keep their reset countdown");
@@ -509,12 +509,12 @@ fn provider_window_layout_handles_single_windows_and_wide_hour_countdowns() {
         .collect::<String>();
     assert_eq!(text.chars().count(), 30, "row keeps the fixed region");
     assert!(
-        text.ends_with(' '),
-        "the value column keeps a one-cell right gutter: {text:?}"
+        !text.ends_with(' '),
+        "reset countdowns end at the right edge without an extra gutter: {text:?}"
     );
     assert_eq!(
         text.chars().position(|ch| ch == '↻'),
-        Some(21),
+        Some(22),
         "the reset marker stays at the left edge of the fixed reset slot: {text:?}"
     );
     assert!(text.contains("↻ 20h20m"), "{text:?}");
