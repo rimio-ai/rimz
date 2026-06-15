@@ -253,3 +253,151 @@ fn finished_subagent_verdict_survives_the_parked_wake() {
     assert_eq!(rows[0].sub_agents()[0].name, "Explore");
     assert_eq!(rows[0].sub_agents()[0].status, AgentStatus::Success);
 }
+
+#[test]
+fn context_reset_retires_prior_turn_subagents() {
+    // A child finishes inside the parent's turn, then the parent runs a context
+    // reset. Each reset advances `turn_started_at` past the child's activity, so
+    // the finished verdict drops from the expanded card — the user-typed
+    // `/compact` and `/clear` behave like the automatic compaction, which
+    // already opens a turn.
+    let history = |resets: Vec<EventEnvelope>| {
+        let mut events = vec![
+            raw_lifecycle_at(
+                "claude",
+                0,
+                serde_json::json!({
+                    "event_name": "SessionStart",
+                    "agent_id": "sess-root",
+                    "signal": { "signal": "registered" },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                10,
+                serde_json::json!({
+                    "event_name": "UserPromptSubmit",
+                    "agent_id": "sess-root",
+                    "signal": { "signal": "turn_started" },
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                20,
+                serde_json::json!({
+                    "event_name": "SubagentStart",
+                    "agent_id": "child-1",
+                    "signal": { "signal": "subagent_started" },
+                    "parent_agent_id": "sess-root",
+                    "task": "Explore",
+                }),
+            ),
+            raw_lifecycle_at(
+                "claude",
+                30,
+                serde_json::json!({
+                    "event_name": "SubagentStop",
+                    "agent_id": "child-1",
+                    "signal": { "signal": "subagent_stopped", "errored": false },
+                    "task": "Explore",
+                }),
+            ),
+        ];
+        events.extend(resets);
+        reduce_agent_states(&events)
+    };
+
+    // `/compact`: PreCompact opens the bracket, PostCompact (manual) closes it.
+    let manual_compact = vec![
+        raw_lifecycle_at(
+            "claude",
+            35,
+            serde_json::json!({
+                "event_name": "PreCompact",
+                "agent_id": "sess-root",
+                "signal": { "signal": "compacting" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            40,
+            serde_json::json!({
+                "event_name": "PostCompact",
+                "agent_id": "sess-root",
+                "signal": { "signal": "compaction_ended", "auto": false },
+            }),
+        ),
+    ];
+    // `/clear`: a fresh `SessionStart` carrying the `registered` signal.
+    let clear = vec![raw_lifecycle_at(
+        "claude",
+        40,
+        serde_json::json!({
+            "event_name": "SessionStart",
+            "agent_id": "sess-root",
+            "signal": { "signal": "registered" },
+        }),
+    )];
+    // Automatic compaction *mid-turn* resumes the same turn (the parent never
+    // ended it), so the boundary holds and the finished child stays listed.
+    let auto_compact = vec![
+        raw_lifecycle_at(
+            "claude",
+            35,
+            serde_json::json!({
+                "event_name": "PreCompact",
+                "agent_id": "sess-root",
+                "signal": { "signal": "compacting" },
+            }),
+        ),
+        raw_lifecycle_at(
+            "claude",
+            40,
+            serde_json::json!({
+                "event_name": "PostCompact",
+                "agent_id": "sess-root",
+                "signal": { "signal": "compaction_ended", "auto": true },
+            }),
+        ),
+    ];
+
+    let reset_at = Timestamp::from_second(epoch().as_second() + 40).unwrap();
+    let turn_at = Timestamp::from_second(epoch().as_second() + 10).unwrap();
+    for (label, resets, flushes) in [
+        ("/compact", manual_compact, true),
+        ("/clear", clear, true),
+        ("auto compaction mid-turn", auto_compact, false),
+    ] {
+        let agents = history(resets);
+        let parent = agents
+            .iter()
+            .find(|a| a.agent_id == "sess-root")
+            .expect("root row");
+        let now = Timestamp::from_second(epoch().as_second() + 50).unwrap();
+        let mut rows = vec![row_from_agent(parent, now)];
+        attach_sub_agents(&mut rows, &agents, now);
+
+        if flushes {
+            assert_eq!(
+                parent.turn_started_at,
+                Some(reset_at),
+                "{label}: the reset advances the subagent boundary",
+            );
+            assert!(
+                rows[0].sub_agents().is_empty(),
+                "{label}: the prior turn's finished child is flushed",
+            );
+        } else {
+            assert_eq!(
+                parent.turn_started_at,
+                Some(turn_at),
+                "{label}: the resumed turn keeps its boundary",
+            );
+            assert_eq!(
+                rows[0].sub_agents().len(),
+                1,
+                "{label}: the in-flight turn's child stays listed",
+            );
+        }
+    }
+}

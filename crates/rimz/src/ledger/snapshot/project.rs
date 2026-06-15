@@ -778,7 +778,23 @@ fn lifecycle_projection(
         None
     };
     let compaction_count = prior.map_or(0, |p| p.compaction_count) + u32::from(compaction_closed);
-    let turn_started_at = if opened_turn {
+    // A context reset that rests the agent retires the prior turn's subagents: a
+    // manual `/compact` (`CompactionEnded` resting to idle) summarizes away the
+    // turn the children belonged to, and a `/clear` (`Registered`) drops it
+    // outright. Advancing the subagent boundary here makes a user-typed reset
+    // behave like automatic compaction from a rested state, which already opens a
+    // turn. The rest gate is load-bearing: automatic compaction *mid-turn* resumes
+    // the same turn (stays `running`), so its in-flight children stay listed.
+    // Matching the signal — not `compaction_closed` — still fires when the
+    // `PreCompact` bracket open was missed; on a fresh-launch `Registered` it is a
+    // no-op (no children yet).
+    let resets_context = next.status == AgentStatus::Idle
+        && matches!(
+            signal,
+            lifecycle::LifecycleSignal::CompactionEnded { .. }
+                | lifecycle::LifecycleSignal::Registered
+        );
+    let turn_started_at = if opened_turn || resets_context {
         Some(timestamp)
     } else {
         prior.and_then(|p| p.turn_started_at)
