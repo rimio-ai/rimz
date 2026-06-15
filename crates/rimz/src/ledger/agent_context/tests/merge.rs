@@ -184,7 +184,10 @@ fn fresh_zero_codex_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: None,
         effort: Some("high".to_owned()),
-        tokens: Some(codex_tokens(258_000, Some(current_usage(0, 0, 0, 0)))),
+        tokens: Some(codex_tokens(
+            codex_default_window(),
+            Some(current_usage(0, 0, 0, 0)),
+        )),
         cost: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
@@ -196,12 +199,22 @@ fn fallback_window_refresh() -> LocalContextRefresh {
     LocalContextRefresh {
         model_id: None,
         effort: Some("high".to_owned()),
-        tokens: Some(tokens(258_000, 10, 90, None)),
+        tokens: Some(tokens(codex_default_window(), 10, 90, None)),
         cost: None,
         turn_complete: None,
         transcript_path: Some("/tmp/rollout.jsonl".to_owned()),
         transcript_stat: Some(stat()),
     }
+}
+
+/// Codex's descriptor-default fallback window — what a refresh carries before a
+/// rollout's exact `model_context_window` appears. Sourced from the descriptor
+/// so these fixtures track the adapter instead of rotting as a literal when the
+/// fallback moves (it went `258_000` → `272_000` and left this test stale).
+fn codex_default_window() -> u64 {
+    crate::agents::descriptor_by_kind("codex")
+        .and_then(|descriptor| descriptor.default_context_window)
+        .expect("codex descriptor declares a default context window")
 }
 
 fn assert_app_server_fields(merged: &AgentContextRecord, prior_at: Timestamp, local_at: Timestamp) {
