@@ -198,7 +198,7 @@ Adding an agent is implementing the trait plus a static [`AgentDescriptor`](../.
 - **`hook_cap`** (a descriptor field) is how long a blocking hook may park on the bridge before falling back to neutral — set from the upstream's published deadline.
 - **`observe_context`** normalizes a rich out-of-band payload into [`AgentContext`](../../../crates/rimz/src/agents/context.rs); **`local_context_refresh`** derives sidecar fields from local provider state during non-blocking progress hooks; `ends_session` / `moves_on` mark the events that expire a session's pending asks.
 - **`remote_control_status`** reads provider-owned local settings that affect remote-control display state; the static ability to drive pane or background sessions stays in the descriptor's `remote_control` capability.
-- **`probe_version`** defaults to the shared `<kind> --version` probe; adapters override only when the binary name or a richer primary transport differs.
+- **`probe_version`** defaults to the shared descriptor-resolved `--version` probe — `$PATH` first, then the descriptor's known install dirs; adapters override only when the binary name or a richer primary transport differs.
 - **`install_hooks`** / **`preview_hook_install`** / **`uninstall_hooks`** / **`hooks_installed`** own the per-user config write and report it (gated by the descriptor's `hook_install` capability).
 - **`probe_account`** / **`parse_spend`** / **`transcript_files`** feed the account and spend model in [provider.md](./provider.md).
 

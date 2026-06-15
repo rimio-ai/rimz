@@ -7,6 +7,7 @@
 //! Agent CLIs disagree on the stream — Claude and Codex print to stdout, Pi
 //! prints to stderr — so the probe reads both.
 
+use std::ffi::OsStr;
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 
@@ -77,7 +78,7 @@ impl FromStr for CliVersion {
 
 /// Run `<binary> --version` with captured stdio. Any failure is an absent
 /// version, not account truth or a launch precondition on its own.
-pub(crate) fn probe_cli_version(binary: &str) -> Option<String> {
+pub(crate) fn probe_cli_version(binary: impl AsRef<OsStr>) -> Option<String> {
     let output = Command::new(binary)
         .arg("--version")
         .stdin(Stdio::null())

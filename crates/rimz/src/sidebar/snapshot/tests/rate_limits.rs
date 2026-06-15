@@ -2,7 +2,7 @@ use super::*;
 
 #[test]
 fn account_cache_missing_probeable_versions_refreshes_on_retry_cadence() {
-    for kind in ["claude", "codex", "pi"] {
+    for kind in ["claude", "codex", "pi", "opencode"] {
         let workspace = WorkspaceId::from_project_root(Path::new("/tmp/provider-version"));
         let snapshot = SidebarSnapshot::build_with_agents(
             workspace.clone(),

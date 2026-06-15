@@ -529,7 +529,7 @@ pub trait AgentAdapter: Send + Sync {
     /// display-only: a failure leaves the provider header without a version,
     /// never affecting account truth, cache freshness, or ledger correctness.
     fn probe_version(&self) -> Option<String> {
-        version::probe_cli_version(self.descriptor().kind)
+        probe_descriptor_version(self.descriptor())
     }
 
     /// Every transcript/rollout JSONL this agent has on disk, fleet-wide — the
@@ -720,6 +720,18 @@ pub trait AgentAdapter: Send + Sync {
 /// `rimz start` notice and `rimz doctor`.
 pub fn hook_trust_fix(kind: &str) -> String {
     format!("run /hooks inside {kind} and trust the Rimz hooks")
+}
+
+fn probe_descriptor_version(descriptor: &AgentDescriptor) -> Option<String> {
+    probe_descriptor_version_with_locator(descriptor, locate_binary)
+}
+
+fn probe_descriptor_version_with_locator(
+    descriptor: &AgentDescriptor,
+    locate: impl FnOnce(&AgentDescriptor) -> Option<PathBuf>,
+) -> Option<String> {
+    let binary = locate(descriptor)?;
+    version::probe_cli_version(binary)
 }
 
 /// Resolve an agent's binary on this machine: `$PATH` first, then the
@@ -1042,6 +1054,28 @@ mod tests {
         // An agent declaring no install dirs is never found this way.
         let claude = descriptor_by_kind("claude").unwrap();
         assert_eq!(binary_in_install_dirs(claude, home.path()), None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn version_probe_uses_the_located_install_dir_binary() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let home = tempfile::tempdir().unwrap();
+        let opencode = descriptor_by_kind("opencode").unwrap();
+        let bin_dir = home.path().join(".opencode/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("opencode");
+        std::fs::write(&bin, b"#!/bin/sh\nprintf 'opencode 1.17.7\\n'\n").unwrap();
+        let mut permissions = std::fs::metadata(&bin).unwrap().permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&bin, permissions).unwrap();
+
+        let version = probe_descriptor_version_with_locator(opencode, |descriptor| {
+            binary_in_install_dirs(descriptor, home.path())
+        });
+
+        assert_eq!(version.as_deref(), Some("1.17.7"));
     }
 
     #[test]
