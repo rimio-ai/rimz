@@ -76,7 +76,7 @@ fn contested_focus_without_better_signal_uses_lowest_candidate_and_reports() {
 }
 
 #[test]
-fn contested_focus_prefers_source_active_candidate() {
+fn source_active_settles_multivalued_focus_without_contest() {
     let source = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
@@ -90,11 +90,40 @@ fn contested_focus_prefers_source_active_candidate() {
         prior: None,
     });
 
+    // The mux's authoritative active pane names one of the marked panes, so the
+    // multi-client focus marks are settled, not contested: no badge, no record.
     assert_eq!(frame.observed_at_ms, Some(4));
     assert_eq!(frame.tabs[0].active_pane, Some(source.clone()));
+    assert!(!frame.tabs[0].focus_contested);
+    assert!(diagnostics.is_empty());
+}
+
+#[test]
+fn source_active_naming_a_non_candidate_stays_contested() {
+    // The authoritative active pane points at a pane that is not among the
+    // focus-marked candidates, so it cannot settle them: a genuine contest,
+    // resolved by heuristic and recorded.
+    let absent = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let (frame, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::from([(ViewId::new_unchecked("tab_0"), absent)]),
+        prior: None,
+    });
+
+    assert_eq!(
+        frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(frame.tabs[0].focus_contested);
     assert!(matches!(
         diagnostics.as_slice(),
-        [DiagEvent::FocusContested { resolved, .. }] if resolved == &source
+        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
     ));
 }
 

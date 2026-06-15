@@ -57,8 +57,10 @@ pub struct TabFrame {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub active_pane: Option<PaneId>,
-    /// Raw focus marks for this view were multi-valued when this frame was
-    /// assembled. `active_pane` is the deterministic arbitration result.
+    /// Focus marks for this view were multi-valued and no authoritative active
+    /// pane settled them, so `active_pane` is a heuristic arbitration. A
+    /// multi-client tab whose mux-reported active pane names one of the marked
+    /// panes is settled, not contested.
     #[serde(default, skip_serializing_if = "is_false")]
     pub focus_contested: bool,
     pub panes: Vec<PaneState>,
@@ -438,14 +440,26 @@ fn resolve_tab_focus(
             [] => {}
             [only] => tab.active_pane = Some(only.clone()),
             _ => {
-                tab.focus_contested = true;
-                let resolved = resolve_contested_focus(tab, &candidates, source_active, prior);
-                tab.active_pane = Some(resolved.clone());
-                diagnostics.push(DiagEvent::FocusContested {
-                    view_id: tab.view_id.clone(),
-                    candidates,
-                    resolved,
-                });
+                // Zellij marks `is_focused` per client, so a multi-client tab
+                // reports several focused panes while its authoritative active
+                // pane stays single-valued. When that signal names one of the
+                // marked panes it settles them — a resolved fact, recorded as
+                // neither anomaly nor on-screen contest badge.
+                if let Some(active) = source_active
+                    .get(&tab.view_id)
+                    .filter(|pane| candidates.iter().any(|candidate| candidate == *pane))
+                {
+                    tab.active_pane = Some(active.clone());
+                } else {
+                    tab.focus_contested = true;
+                    let resolved = resolve_contested_focus(tab, &candidates, prior);
+                    tab.active_pane = Some(resolved.clone());
+                    diagnostics.push(DiagEvent::FocusContested {
+                        view_id: tab.view_id.clone(),
+                        candidates,
+                        resolved,
+                    });
+                }
             }
         }
     }
@@ -454,15 +468,8 @@ fn resolve_tab_focus(
 fn resolve_contested_focus(
     tab: &TabFrame,
     candidates: &[PaneId],
-    source_active: &BTreeMap<ViewId, PaneId>,
     prior: Option<&PaneFrame>,
 ) -> PaneId {
-    if let Some(source) = source_active
-        .get(&tab.view_id)
-        .filter(|pane| candidates.iter().any(|candidate| candidate == *pane))
-    {
-        return source.clone();
-    }
     let prior_tab = prior
         .and_then(|frame| frame.tabs.iter().find(|prior| prior.view_id == tab.view_id))
         .filter(|prior| prior.kind == tab.kind);
