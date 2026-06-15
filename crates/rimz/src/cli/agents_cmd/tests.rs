@@ -613,3 +613,33 @@ fn alias_launch_requires_its_system_prompt_file() {
         .expect_err("missing prompt fails the launch");
     assert!(err.to_string().contains("system-prompt-file"));
 }
+
+#[test]
+fn for_ping_builds_a_blocking_lowest_effort_ping_turn() {
+    let args = AgentsArgs::for_ping("claude", Some("main"));
+    assert_eq!(
+        args.spec.as_deref(),
+        Some("claude"),
+        "the spec is the bare kind"
+    );
+    assert_eq!(args.prompt.as_deref(), Some("ping"), "the prompt is `ping`");
+    assert_eq!(
+        args.effort.as_deref(),
+        Some("low"),
+        "lowest effort primes cheaply"
+    );
+    assert_eq!(
+        args.worktree.as_deref(),
+        Some("main"),
+        "the channel is carried"
+    );
+    assert!(args.print, "the ping is a supervised -p run");
+    assert!(!args.bg, "a window-priming ping blocks until the turn ends");
+    assert!(
+        args.passthrough.is_empty(),
+        "no passthrough flags are injected"
+    );
+
+    // No channel keeps the worktree unset, hosting the ping in the room itself.
+    assert_eq!(AgentsArgs::for_ping("codex", None).worktree, None);
+}

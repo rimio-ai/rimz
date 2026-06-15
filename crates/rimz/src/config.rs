@@ -20,6 +20,7 @@ use crate::ledger::paths::config_home;
 mod accounts;
 mod agents;
 mod animation;
+mod autoping;
 mod color;
 mod mux;
 mod notifications;
@@ -35,6 +36,7 @@ pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig, UnreadEffect,
 };
+pub use autoping::{AutoPingConfig, ScheduleEntry, Schedules};
 pub(crate) use color::xterm_rgb;
 pub use color::{ColorDepth, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex};
 pub use mux::{
@@ -95,6 +97,7 @@ pub struct MachineConfig {
     pub accounts: AccountsConfig,
     pub worktree: WorktreeConfig,
     pub agents: AgentsConfig,
+    pub autoping: AutoPingConfig,
     pub remote_control: RemoteControlConfig,
     pub notifications: NotificationsPrefs,
     pub sidebar: SidebarConfig,

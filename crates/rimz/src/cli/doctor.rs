@@ -56,6 +56,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         sidebar_renderer: "built into rimz",
         hooks: agents::collect_hooks(),
         coverage: agents::collect_coverage(),
+        autoping: collect_autoping(),
         remote_control: runtime::collect_remote_control(),
         rooms: runtime::collect_rooms(ws),
         protocols: ws.map(protocol::collect_protocols),
@@ -64,6 +65,32 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         agents: ws.map(|ws| agents::collect_agent_rollup(ws, audit)),
         diagnostics: ws.map(runtime::collect_diagnostics),
     }
+}
+
+/// The configured auto-ping schedules from the per-machine config. Read-only and
+/// workspace-independent: it surfaces the scheduled-execution surface this box
+/// carries; `rimz autoping list` reports each one's installed/enabled state.
+fn collect_autoping() -> model::AutoPing {
+    let schedules = rimz::config::MachineConfig::load()
+        .map(|config| config.autoping.schedules.0)
+        .unwrap_or_default();
+    let rows = schedules
+        .into_iter()
+        .map(|(name, entry)| {
+            let (when, valid) = match rimz::autoping::parse_schedule(&name, &entry) {
+                Ok(schedule) => (schedule.describe(), true),
+                Err(err) => (format!("invalid: {err}"), false),
+            };
+            model::AutoPingRow {
+                name,
+                kind: entry.kind,
+                when,
+                root: entry.root.display().to_string(),
+                valid,
+            }
+        })
+        .collect();
+    model::AutoPing { schedules: rows }
 }
 
 fn workspace_view(ws: &rimz::ResolvedWorkspace) -> model::Workspace {

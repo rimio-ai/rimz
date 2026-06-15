@@ -287,6 +287,49 @@ impl AgentsArgs {
             passthrough: Vec::new(),
         }
     }
+
+    /// A blocking lowest-effort `ping`→`pong` supervised run for auto-ping: the
+    /// plain `kind`, `"ping"` as the prompt, and `--effort low` (mapped to each
+    /// provider's own flag in [`rimz::agents::AgentAdapter::render_preset`]). This
+    /// matches the `<kind>-ping` virtual cell but in supervised mode, so the
+    /// transient card appears, pongs, and self-clears.
+    fn for_ping(kind: &str, worktree: Option<&str>) -> Self {
+        Self {
+            command: None,
+            spec: Some(kind.to_owned()),
+            prompt: Some("ping".to_owned()),
+            worktree: worktree.map(ToOwned::to_owned),
+            name: None,
+            bg: false,
+            same_tab: false,
+            new_tab: false,
+            ask: false,
+            yolo: false,
+            system_prompt_file: None,
+            effort: Some("low".to_owned()),
+            print: true,
+            timeout: None,
+            keep: false,
+            detach: false,
+            json: false,
+            output_format: None,
+            input_format: None,
+            passthrough: Vec::new(),
+        }
+    }
+}
+
+/// Drive one blocking window-priming ping for `rimz autoping run`. Routes through
+/// the same supervised `-p` path an interactive `rimz agents <kind> -p` uses:
+/// it brings the room up if it is down, spawns the transient ping pane, waits for
+/// the turn, closes the pane, and exits with the run's status code. `globals`
+/// carries the schedule's `--root`, so the workspace resolves with no mux pin.
+pub(crate) fn run_blocking_ping(
+    kind: &str,
+    worktree: Option<&str>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    run_print(AgentsArgs::for_ping(kind, worktree), globals)
 }
 
 /// Launch a missing agent for `steer`/`queue --create`. A *type* handle — a kind

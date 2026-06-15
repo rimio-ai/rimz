@@ -40,6 +40,21 @@
 ## review = "claude-plan,codex+vim"
 ## debug = "pi,htop+term"
 
+[autoping]
+# Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`
+# turn at a chosen time, so the provider's sliding budget window starts on your
+# schedule instead of whenever you first sit down. Per-machine and outside the
+# trust hash; the only thing an entry runs is the rimz-owned `autoping run`.
+# Edit entries here or with `rimz autoping add`, then apply them to this box's OS
+# scheduler with `rimz autoping install`.
+## [autoping.schedules.morning]
+## kind = "claude"                      # agent kind to prime (must support a ping turn)
+## root = "/home/you/code/app"          # absolute project root whose room hosts the ping
+## at = "07:00"                         # 24h local wall-clock firing time
+## days = "weekdays"                    # "daily", "weekdays", "weekends", or "mon,wed,fri"
+## worktree = "main"                    # optional channel to host the transient ping pane
+## # cron = "0 7 * * 1-5"               # raw cron escape hatch (cron backend only; replaces at/days)
+
 [remote_control]
 # claude = false                       # auto-launch `claude remote-control` in the managed daemon tab
 # codex = false                        # ensure the per-user Codex remote-control daemon on start

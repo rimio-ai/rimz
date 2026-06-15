@@ -4,6 +4,7 @@
 mod agents_cmd;
 mod agents_launch;
 mod attach_exec;
+mod autoping;
 mod claude;
 mod codex;
 mod config;
@@ -82,6 +83,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
+        Some(Subcmd::AutoPing(args)) => autoping::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
@@ -134,6 +136,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Gc(_)) => ("gc", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
+        Some(Subcmd::AutoPing(_)) => ("autoping", None, None),
         Some(Subcmd::Reload(_)) => ("reload", None, None),
         Some(Subcmd::Reset(_)) => ("reset", None, None),
         Some(Subcmd::Pane(_)) => ("pane", None, None),
@@ -483,6 +486,9 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
+    /// Schedule window-priming pings on this machine's OS scheduler.
+    #[command(name = "autoping")]
+    AutoPing(autoping::AutoPingArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
     Reload(reload::ReloadArgs),
     /// Force a clean rebirth of this workspace's room, destroying a stuck or

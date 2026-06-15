@@ -57,7 +57,7 @@ pub(crate) use rate_limits::{
     LIVE_HORIZON_SECS, PendingRefill, REFILL_CONFIRM_SECS, fuse_window, project_idle_window,
     read_rate_limits_cache, write_rate_limits_cache,
 };
-pub use rate_limits::{RateLimitsCache, merge_account_rate_limits};
+pub use rate_limits::{RateLimitsCache, merge_account_rate_limits, shortest_window_running};
 
 #[cfg(test)]
 pub(crate) use accounts::accounts_cache_version_refresh_due;

@@ -7,7 +7,7 @@
 This page is the map. Detailed examples and full command notes live in the command-group references:
 
 - [Getting started](./cli/getting-started.md) — `rimz`, `start`, `attach`, `remote`, `list`, `setup`, `doctor`.
-- [Agent control](./cli/agents.md) — `agents`, `steer`, `queue`, `pane`, `worktree`.
+- [Agent control](./cli/agents.md) — `agents`, `steer`, `queue`, `pane`, `worktree`, `autoping`.
 - [Feed, resolvers, hooks, and trust](./cli/feed.md) — `feed`, `event`, `resolver`, `hooks`, `trust`.
 - [Maintenance](./cli/maintenance.md) — `config`, `workspace`, `reload`, `reset`, `gc`, `ping`.
 
@@ -130,6 +130,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | `feed` | Post feed items, ask script questions, and resolve decisions. | [Feed](./cli/feed.md#feed-items-and-decisions) |
 | `agents` | List, launch, focus, wait for, and stop agent cards. | [Agent control](./cli/agents.md#agents) |
 | `worktree` | Create, list, and remove Rimz-owned git worktrees. | [Agent control](./cli/agents.md#manage-rimz-owned-worktrees) |
+| `autoping` | Schedule window-priming pings so a provider's budget window starts on your schedule. | [Auto-ping](../internals/agents/autoping.md) |
 | `list` | Show known rooms and their live backend. | [Getting started](./cli/getting-started.md#list-rooms) |
 | `list-themes` | Print the bundled sidebar theme names. | [Maintenance](./cli/maintenance.md#list-themes) |
 | `doctor` | Diagnose backend, hook, trust, resolver, and room-tree state. | [Getting started](./cli/getting-started.md#setup-and-doctor) |
@@ -160,4 +161,4 @@ Many read commands accept `--json`; those outputs are the scripting surface. Hum
 
 Hidden helper commands are machinery for hooks, sidebars, statuslines, and agent wrappers. They are omitted from `rimz --help` and are not the user-facing CLI contract.
 
-Examples include `rimz sidebar snapshot`, `rimz sidebar serve`, `rimz statusline feed`, `rimz hooks feed`, `rimz queue deliver`, `rimz agents exec`, `rimz agents auto-continue` (the producer's rate-limit-reset nudge), `rimz worktree cleanup`, `rimz claude ...`, and `rimz codex ...`. The owning internals docs describe the protocols: [ledger](../internals/sidebar/ledger.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/agents/harness.md).
+Examples include `rimz sidebar snapshot`, `rimz sidebar serve`, `rimz statusline feed`, `rimz hooks feed`, `rimz queue deliver`, `rimz agents exec`, `rimz agents auto-continue` (the producer's rate-limit-reset nudge), `rimz autoping run`, `rimz worktree cleanup`, `rimz claude ...`, and `rimz codex ...`. The owning internals docs describe the protocols: [ledger](../internals/sidebar/ledger.md), [state](../internals/sidebar/state.md), [agent](../internals/agents/agent.md), [provider](../internals/agents/provider.md), and [harness](../internals/agents/harness.md).

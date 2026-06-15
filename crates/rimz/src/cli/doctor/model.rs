@@ -32,6 +32,7 @@ pub(super) struct DoctorReport {
     pub(super) sidebar_renderer: &'static str,
     pub(super) hooks: Vec<HookRow>,
     pub(super) coverage: Vec<AgentCoverage>,
+    pub(super) autoping: AutoPing,
     pub(super) remote_control: RemoteControl,
     pub(super) rooms: Probe<Rooms>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -206,6 +207,23 @@ pub(super) struct PartialConcern {
 pub(super) struct UnsupportedConcern {
     pub(super) concern: String,
     pub(super) reason: String,
+}
+
+/// Configured window-priming pings: the scheduled-execution surface this machine
+/// carries, surfaced so it is never invisible. Installed/enabled state lives in
+/// `rimz autoping list`, which queries the OS scheduler.
+#[derive(Debug, Serialize)]
+pub(super) struct AutoPing {
+    pub(super) schedules: Vec<AutoPingRow>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct AutoPingRow {
+    pub(super) name: String,
+    pub(super) kind: String,
+    pub(super) when: String,
+    pub(super) root: String,
+    pub(super) valid: bool,
 }
 
 #[derive(Debug, Serialize)]

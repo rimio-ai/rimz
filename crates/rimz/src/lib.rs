@@ -11,6 +11,7 @@
 pub mod agent_activity;
 pub mod agents;
 pub mod agents_spec;
+pub mod autoping;
 pub mod binding_log;
 pub mod bridge;
 pub mod build_id;

@@ -702,3 +702,89 @@ fn fuse_mid_range_best_effort_drop_holds_most_drained() {
     assert_eq!(truth.unwrap().used_percentage, Some(80));
     assert!(pending.is_none());
 }
+
+// ── shortest_window_running: the window-priming ping guard ───────────────────
+
+use crate::sidebar::enrich::shortest_window_running;
+
+/// Seed `claude`'s windows into a fresh shared cache and report the ping guard's
+/// verdict for `now`.
+fn running_verdict(windows: Vec<RateLimitWindow>, now: Timestamp) -> Option<bool> {
+    let dir = tempfile::tempdir().unwrap();
+    let workspace = WorkspaceId::from_project_root(dir.path());
+    let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
+    runtime.ensure_dirs().unwrap();
+    write_rate_limits_cache(
+        &runtime.shared_rate_limits_path(),
+        &RateLimitsCache {
+            refreshed_at_ms: 0,
+            windows: BTreeMap::from([("claude".to_owned(), AgentRateLimits { windows })]),
+            pending: BTreeMap::new(),
+        },
+    );
+    shortest_window_running(&runtime, "claude", now)
+}
+
+#[test]
+fn ping_guard_skips_a_running_window_and_primes_an_idle_one() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    let full_out = now
+        .checked_add(SignedDuration::from_secs(300 * 60))
+        .unwrap();
+    let mid = now.checked_add(SignedDuration::from_secs(3600)).unwrap();
+    let passed = Timestamp::from_second(1_000_000_000).unwrap();
+
+    // A fresh window: ~1% used with the reset slid a full 5h out — not started.
+    assert_eq!(
+        running_verdict(vec![rl_window(1, Some(full_out))], now),
+        Some(false),
+        "a not-started window is primed"
+    );
+    // A live window counting down — already running, so the ping is skipped.
+    assert_eq!(
+        running_verdict(vec![rl_window(40, Some(mid))], now),
+        Some(true),
+        "a counting-down window is left alone"
+    );
+    // An idle window whose reset has passed projects to full — prime it again.
+    assert_eq!(
+        running_verdict(vec![rl_window(90, Some(passed))], now),
+        Some(false),
+        "a refilled idle window reads as not started"
+    );
+    // The shortest window decides: a not-started 5h under a running 7d still primes.
+    assert_eq!(
+        running_verdict(
+            vec![
+                rl_window_mins(1, Some(full_out), 300),
+                rl_window_mins(50, Some(mid), 7 * 24 * 60),
+            ],
+            now,
+        ),
+        Some(false),
+        "the shortest window drives the decision"
+    );
+}
+
+#[test]
+fn ping_guard_is_unknown_without_a_usable_reading() {
+    let now = Timestamp::from_second(2_000_000_000).unwrap();
+    // No window to read — the caller defaults to priming.
+    assert_eq!(
+        running_verdict(Vec::new(), now),
+        None,
+        "no window means no verdict"
+    );
+    // A bar with no usage percentage carries no verdict either.
+    let unknown = RateLimitWindow {
+        used_percentage: None,
+        resets_at: None,
+        duration_mins: Some(300),
+        ..Default::default()
+    };
+    assert_eq!(
+        running_verdict(vec![unknown], now),
+        None,
+        "an unknown bar yields no verdict"
+    );
+}

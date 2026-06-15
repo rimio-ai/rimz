@@ -147,6 +147,37 @@ fn alias_system_prompt_file_resolves_against_the_config_dir() {
 }
 
 #[test]
+fn autoping_schedules_parse_and_default_empty() {
+    let dir = tempdir().expect("tempdir");
+    assert!(
+        MachineConfig::default().autoping.schedules.0.is_empty(),
+        "no schedules ship by default",
+    );
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[autoping.schedules.morning]\n\
+             kind = \"claude\"\n\
+             root = \"/home/me/app\"\n\
+             at = \"07:00\"\n\
+             days = \"weekdays\"\n\
+             worktree = \"main\"\n",
+    ))
+    .expect("load");
+    let entry = config
+        .autoping
+        .schedules
+        .0
+        .get("morning")
+        .expect("morning schedule");
+    assert_eq!(entry.kind, "claude");
+    assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
+    assert_eq!(entry.at.as_deref(), Some("07:00"));
+    assert_eq!(entry.days.as_deref(), Some("weekdays"));
+    assert_eq!(entry.worktree.as_deref(), Some("main"));
+    assert_eq!(entry.cron, None);
+}
+
+#[test]
 fn legacy_tab_section_hard_errors() {
     let dir = tempdir().expect("tempdir");
     let err = MachineConfig::load_from(&write(&dir, "[tab]\n")).expect_err("legacy tab");

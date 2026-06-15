@@ -36,7 +36,7 @@ Rimz is a realtime dashboard for harnessing agentic coding: one human and tens o
 
 - **Realtime Harness Dashboard:** working state and task, model and effort, context health and compactions, token mix down to cache reads, live dollar cost, and the subagent tree
 - **Attention, Routed:** one glance at the cockpit line (`? 2  ! 1 …`) reads the whole fleet, the column below arrives already triaged, and one keypress drops you into the pane that is waiting
-- **Know Your Pace:** $ token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going
+- **Know Your Pace:** $ token insight for today, week, and month, with every provider's plan and 5h/7d budget bars draining in real time; one look tells you where the week is going, and `rimz autoping` can start a provider's window on a schedule so it resets before you sit down
 - **Extremely Lightweight:** a single binary that wraps the harnesses you already run (Claude Code, Codex, Pi) inside your familiar zellij or tmux: same keybinds, same terminal, and the official web, desktop, and mobile apps all keep working
 - **Local or Remote, Continuously:** start the room on your macbook or a server, close the laptop, and reattach from anywhere; the link heals itself, and even a reboot brings the room back with layout and agents resumed
 - **Worktrees, for every Agent:** open agents together, side by side in the same worktree with dynamic layout. For example use `claude,codex` to start Claude planning and Codex reviewing for agentic peer programming, or use `vim,codex+term` to start editor, agent and terminal side by side.

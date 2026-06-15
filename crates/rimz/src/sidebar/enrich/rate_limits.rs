@@ -75,6 +75,45 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
         .unwrap_or_default()
 }
 
+/// Whether `kind`'s shortest account-scoped budget window is currently running
+/// its clock. Window-priming callers (autoping) read this to skip a ping when
+/// the window has already started — the token is then spent only to *start* a
+/// window, never on one already counting down.
+///
+/// Reads the shared cache and projects the shortest window to `now` exactly as
+/// the dashboard does, so a window that refilled while idle reads as not-yet-
+/// started. The result is a deliberate tri-state: `Some(true)` means the clock
+/// is running (skip the ping), `Some(false)` means it has not started (prime
+/// it), and `None` means the state is unknown — no cached reading for the kind,
+/// an unknown bar, or no countdown to trust — so a priming caller acts rather
+/// than skips. Best-effort by nature: a cold cache (no sidebar ran recently)
+/// simply reads unknown and the ping proceeds.
+pub fn shortest_window_running(runtime: &RuntimePaths, kind: &str, now: Timestamp) -> Option<bool> {
+    let cache = read_rate_limits_cache(&runtime.shared_rate_limits_path());
+    shortest_window_running_in(&cache, kind, now)
+}
+
+fn shortest_window_running_in(cache: &RateLimitsCache, kind: &str, now: Timestamp) -> Option<bool> {
+    let shortest = cache
+        .windows
+        .get(kind)?
+        .windows
+        .iter()
+        .min_by_key(|window| window.duration_mins.unwrap_or(u32::MAX))?;
+    let projected = project_idle_window(shortest.clone(), now);
+    // An unknown reading (no percentage) tells us nothing — leave it to the caller.
+    projected.used_percentage?;
+    if projected.not_started(now) {
+        return Some(false);
+    }
+    // The clock has begun (or is unjudgeable as not-started). Call it running only
+    // with a real future reset to count down to; otherwise it is indeterminate.
+    match projected.resets_at {
+        Some(reset) if reset > now => Some(true),
+        _ => None,
+    }
+}
+
 /// Publish the rate-limit window cache for every tab to read, atomically so a
 /// reader never observes a half-written file. Best-effort: a write failure logs
 /// and leaves the prior cache in place.

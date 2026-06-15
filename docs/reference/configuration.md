@@ -21,7 +21,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent aliases and layouts, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent aliases and layouts, auto-ping schedules, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config`, `rimz autoping` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -32,12 +32,13 @@ Per-machine settings load leniently: a missing file is the default config, and u
 
 ## `config.toml` Per Machine
 
-Ten sections make up the per-machine file:
+Eleven sections make up the per-machine file:
 
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
 | `[agents]` | launch aliases and named layouts for `rimz agents <spec>` |
+| `[autoping]` | scheduled window-priming pings, applied to this machine's scheduler by `rimz autoping install` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[accounts]` | provider account-usage enrichment and display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
@@ -54,6 +55,19 @@ rimz config init --print
 ```
 
 The sections below explain the model and the knobs whose behavior is easy to misread.
+
+### Auto-ping
+
+```toml
+[autoping.schedules.morning]
+kind = "claude"          # provider to prime; must support a ping turn
+root = "/home/you/code/app"
+at = "07:00"             # 24h local wall-clock
+days = "weekdays"        # daily | weekdays | weekends | mon-fri | mon,wed,fri
+# cron = "0 7 * * 1-5"   # raw cron escape hatch (cron backend only; replaces at/days)
+```
+
+Each schedule fires a lowest-effort `ping`→`pong` turn at a chosen time, so the provider's sliding budget window starts on your schedule instead of whenever you first sit down. The config records the intent; `rimz autoping install` applies it to this machine's OS scheduler (a systemd user timer or the crontab) after a consent preview. The full model — the supervised-run path, the installer, and why each entry carries an absolute `root` — is [autoping.md](../internals/agents/autoping.md).
 
 ### Notifications
 

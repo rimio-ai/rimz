@@ -10,7 +10,7 @@
 //! transport-agnostic, so a new agent slots in with only a new producer — no
 //! change to this type, the sidecar, or the fold-in.
 
-use jiff::Timestamp;
+use jiff::{SignedDuration, Timestamp};
 use serde::{Deserialize, Serialize};
 
 /// Rich per-session enrichment that has no first-class home on
@@ -351,6 +351,11 @@ impl WindowSource {
     }
 }
 
+/// Grace allowed when judging a not-started window: a reset still within this
+/// much of a full window-length out counts as "clock not begun", absorbing the
+/// small skew between the first token and the provider stamping the reset.
+const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
+
 impl RateLimitWindow {
     /// Whether this window's budget is spent — the provider reports the cap as
     /// `used_percentage == 100` once the window is exhausted. Display code
@@ -358,6 +363,26 @@ impl RateLimitWindow {
     /// turn; the spent window alone does not change an agent's row.
     pub fn is_spent(&self) -> bool {
         self.used_percentage.is_some_and(|pct| pct >= 100)
+    }
+
+    /// Whether this window's sliding clock has not begun. These budgets start on
+    /// the first billable token, so until then the provider keeps `resets_at`
+    /// slid ~a full window-length ahead. Detection keys on that reset distance,
+    /// not a 0% reading — a fresh 5h window still reports ~1% used, never 0 — so
+    /// any usage above the ~1% floor short-circuits to "started" regardless of
+    /// the reset (this also covers a spent window at 100%). An absent reset or
+    /// duration can't be judged this way, so it reads as started: a known
+    /// reading whose countdown is a real one. Drives the dashboard's
+    /// no-countdown "ready to start" treatment and the window-priming ping guard.
+    pub fn not_started(&self, now: Timestamp) -> bool {
+        if self.used_percentage > Some(1) {
+            return false;
+        }
+        let (Some(reset), Some(mins)) = (self.resets_at, self.duration_mins) else {
+            return false;
+        };
+        let full = SignedDuration::from_secs(i64::from(mins) * 60);
+        reset.duration_since(now) >= full - NOT_STARTED_GRACE
     }
 }
 
@@ -435,6 +460,29 @@ mod tests {
         assert!(!window(Some(0)).is_spent());
         // An unreported window is not a spent one.
         assert!(!window(None).is_spent());
+    }
+
+    #[test]
+    fn window_not_started_keys_on_reset_distance_above_the_floor() {
+        let now = Timestamp::from_second(2_000_000_000).unwrap();
+        let full = SignedDuration::from_secs(300 * 60);
+        let started = |used, reset| RateLimitWindow {
+            used_percentage: Some(used),
+            resets_at: Some(reset),
+            duration_mins: Some(300),
+            ..Default::default()
+        };
+
+        // Reset slid a full window out at the ~1% floor — the clock has not begun.
+        assert!(started(1, now.checked_add(full).unwrap()).not_started(now));
+        // Any usage above the floor is a clearly-started window, reset notwithstanding.
+        assert!(!started(2, now.checked_add(full).unwrap()).not_started(now));
+        // A reset that has ticked well below full is a real countdown — started.
+        assert!(
+            !started(1, now.checked_add(SignedDuration::from_secs(3600)).unwrap()).not_started(now)
+        );
+        // An absent reset or duration can't be judged, so it reads as started.
+        assert!(!window(Some(0)).not_started(now));
     }
 
     #[test]

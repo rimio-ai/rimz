@@ -41,13 +41,6 @@ const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
 
 /// How close to a full window-length a reset must read to count as "not started".
-/// A not-started window keeps its reset slid to `now + duration`, but a live
-/// reading lands a hair under (minute-flooring + read latency) and a cached one
-/// drifts down until the next refresh — so allow this margin below the full
-/// window. A *started* window's reset has ticked well below full, so it clears
-/// the margin easily.
-const NOT_STARTED_GRACE: SignedDuration = SignedDuration::from_secs(120);
-
 /// The fleet ledger rows pinned to the bottom of the dashboard: the trailing
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
 /// across every provider (today's headline lives in the cockpit, so these climb
@@ -613,28 +606,6 @@ fn longer_window_spent(panel: &SidebarProviderPanel, window: &RateLimitWindow) -
     })
 }
 
-/// Whether a window has not started its clock. These budgets are sliding windows:
-/// the provider keeps `resets_at` slid a full window-length ahead until the first
-/// token, so a reset still within [`NOT_STARTED_GRACE`] of the full window means
-/// the clock hasn't begun — the displayed countdown would be a placeholder.
-///
-/// The not-started floor is ~1% used (a fresh 5h window reads `usedPercent: 1`,
-/// never 0), so detection keys on the reset distance, not a 0% reading. Any usage
-/// **above** that floor means the window has clearly started — its reset is then a
-/// real countdown — so >1% short-circuits to "started" regardless of the reset
-/// (this also covers a spent window at 100%). An absent reset or duration can't be
-/// judged, so it isn't flagged.
-fn window_not_started(window: &RateLimitWindow, now: Timestamp) -> bool {
-    if window.used_percentage > Some(1) {
-        return false;
-    }
-    let (Some(reset), Some(mins)) = (window.resets_at, window.duration_mins) else {
-        return false;
-    };
-    let full = SignedDuration::from_secs(i64::from(mins) * 60);
-    reset.duration_since(now) >= full - NOT_STARTED_GRACE
-}
-
 /// One metered budget bar row: the window's label (`5h`/`7d`/`30d`), the draining
 /// mana bar (filled = remaining), and the `↻ <reset>` countdown right-aligned in
 /// the value column. The reset marker is toned by burn pace when the window
@@ -649,7 +620,7 @@ fn window_not_started(window: &RateLimitWindow, now: Timestamp) -> bool {
 /// `↻` reads "send a message to start it" rather than a misleading ticking reset.
 /// These are sliding windows that begin counting only on the first token, so until
 /// then the provider keeps `resets_at` slid a full window-length ahead. Detect that
-/// by the reset distance ([`window_not_started`]), not a 0% reading — a fresh 5h
+/// by the reset distance ([`RateLimitWindow::not_started`]), not a 0% reading — a fresh 5h
 /// window still reports ~1% used, never 0. Codex reports a placeholder usedPercent
 /// (~99) with no `resets_at` before the first token; that variant is caught by the
 /// absent-reset + known-duration check in the `remaining` computation below.
@@ -667,7 +638,7 @@ fn metered_bar_row(
         return Some(unknown_bar_row(theme, &label, region));
     }
 
-    let not_started = !force_exhausted && window_not_started(window, now);
+    let not_started = !force_exhausted && window.not_started(now);
     let remaining = if force_exhausted {
         0
     } else {

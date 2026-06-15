@@ -14,8 +14,8 @@ use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, Mux, Presence,
-    Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
+    AgentCoverage, AgentRollup, AutoPing, Capabilities, Diagnostics, DoctorReport, HookStatus, Mux,
+    Presence, Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -78,6 +78,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
 
     render_hooks(w, report)?;
     render_coverage(w, report)?;
+    render_autoping(w, &report.autoping)?;
     render_remote_control(w, &report.remote_control)?;
     render_rooms(w, &report.rooms)?;
 
@@ -431,6 +432,34 @@ fn render_concern_list(w: &mut impl Write, items: &[String]) -> io::Result<()> {
     Ok(())
 }
 
+fn render_autoping(w: &mut impl Write, autoping: &AutoPing) -> io::Result<()> {
+    section(w, "AUTOPING")?;
+    if autoping.schedules.is_empty() {
+        return writeln!(w, "  {}", paint(palette::FAINT, "none configured"));
+    }
+    let mut table = Table::new(["", "NAME", "KIND", "WHEN", "ROOT"]);
+    for row in &autoping.schedules {
+        let health = if row.valid {
+            Health::Info
+        } else {
+            Health::Alarm
+        };
+        table.row([
+            badge(health),
+            cell(row.name.as_str()).fg(palette::ACCENT),
+            cell(row.kind.as_str()),
+            cell(row.when.as_str()).fg(style_of(health)),
+            cell(home_relative(&row.root)).fg(palette::BODY),
+        ]);
+    }
+    table.render(w)?;
+    note(
+        w,
+        Health::Neutral,
+        "`rimz autoping list` shows installed state",
+    )
+}
+
 fn render_remote_control(w: &mut impl Write, remote: &RemoteControl) -> io::Result<()> {
     section(w, "REMOTE CONTROL")?;
     match remote {
@@ -715,7 +744,7 @@ fn age_label(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        AgentCoverage, HookRow, PartialConcern, RemoteAgent, UnsupportedConcern,
+        AgentCoverage, AutoPingRow, HookRow, PartialConcern, RemoteAgent, UnsupportedConcern,
     };
 
     fn strip(
@@ -749,6 +778,9 @@ mod tests {
                 },
             ],
             coverage: Vec::new(),
+            autoping: AutoPing {
+                schedules: Vec::new(),
+            },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
                 recorded: 0,
@@ -800,6 +832,9 @@ mod tests {
                     reason: "no plan-approval gate".to_owned(),
                 }],
             }],
+            autoping: AutoPing {
+                schedules: Vec::new(),
+            },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
                 recorded: 0,
@@ -830,6 +865,60 @@ mod tests {
             out.contains("✗ plan") && out.contains("no plan-approval gate"),
             "gap with full reason:\n{out}"
         );
+    }
+
+    #[test]
+    fn autoping_section_lists_schedules_and_flags_invalid_ones() {
+        let autoping = AutoPing {
+            schedules: vec![
+                AutoPingRow {
+                    name: "morning".to_owned(),
+                    kind: "claude".to_owned(),
+                    when: "07:00 on weekdays".to_owned(),
+                    root: "/home/you/code/app".to_owned(),
+                    valid: true,
+                },
+                AutoPingRow {
+                    name: "broken".to_owned(),
+                    kind: "codex".to_owned(),
+                    when: "invalid: bad time".to_owned(),
+                    root: "/home/you/code/other".to_owned(),
+                    valid: false,
+                },
+            ],
+        };
+        let out = strip(|w| render_autoping(w, &autoping));
+        assert!(out.contains("AUTOPING"), "section title:\n{out}");
+        assert!(
+            out.contains("morning") && out.contains("07:00 on weekdays"),
+            "{out}"
+        );
+        assert!(
+            out.contains("broken") && out.contains("invalid: bad time"),
+            "{out}"
+        );
+        assert!(
+            out.contains('✗'),
+            "an invalid schedule carries a cross:\n{out}"
+        );
+        assert!(
+            out.contains("rimz autoping list"),
+            "the installed-state hint is present:\n{out}"
+        );
+    }
+
+    #[test]
+    fn autoping_section_reads_empty_when_unconfigured() {
+        let out = strip(|w| {
+            render_autoping(
+                w,
+                &AutoPing {
+                    schedules: Vec::new(),
+                },
+            )
+        });
+        assert!(out.contains("AUTOPING"), "{out}");
+        assert!(out.contains("none configured"), "{out}");
     }
 
     #[test]
