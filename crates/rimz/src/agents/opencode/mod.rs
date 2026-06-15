@@ -150,6 +150,13 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::RealtimeCost,
+        ConcernCoverage::Partial {
+            via: "SQLite message spend sum",
+            gap: "reconstructed on turn-end, not a provider-pushed realtime figure",
+        },
+    ),
+    (
         IntegrationConcern::RichContext,
         ConcernCoverage::Unsupported {
             reason: "per-launch random-port server has no discovery surface",
@@ -296,6 +303,17 @@ impl AgentAdapter for OpencodeAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "ses_1",
+            file_name: "opencode.db",
+            body: super::SpendFixtureBody::OpencodeSqlite {
+                data: r#"{"cost":0.42,"modelID":"gpt-5","providerID":"openai","time":{"created":1780394400000},"tokens":{"input":100,"output":50}}"#,
+            },
+        })
+    }
+
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
             FeedKind::Permission => {
@@ -403,6 +421,13 @@ impl AgentAdapter for OpencodeAdapter {
 
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::opencode_db_files()
+    }
+
+    fn session_transcript(&self, _session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| path.is_file()) {
+            return Some(path.to_path_buf());
+        }
+        self.transcript_files().into_iter().next()
     }
 
     fn parse_spend(

@@ -4,13 +4,16 @@
 //! same table so a new adapter inherits the classification/render contracts
 //! without adding a second hand-maintained per-agent switch.
 
+use std::fs;
+use std::path::{Path, PathBuf};
+
 use jiff::Timestamp;
 use serde_json::json;
 
 use super::lifecycle::{LifecycleSignal, TurnPhase};
 use super::{
     ADAPTERS, AgentAdapter, AgentErr, AgentHookClass, ClassificationSample, ConcernCoverage,
-    IntegrationConcern,
+    IntegrationConcern, PriceBook, SpendFixture, SpendFixtureBody,
 };
 use crate::feed::{AgentStatus, FeedKind, Resolution, ResolutionMethod, Surface};
 use crate::ledger::snapshot::{AgentCard, RowCard, SidebarRow, fold_ask_onto_row};
@@ -163,6 +166,19 @@ fn coverage_is_complete_and_honest() {
 }
 
 #[test]
+fn realtime_cost_matches_coverage() {
+    for adapter in ADAPTERS {
+        let kind = adapter.descriptor().kind;
+        let coverage = coverage_for(*adapter, IntegrationConcern::RealtimeCost);
+        assert_eq!(
+            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
+            realtime_cost_from_fixture(*adapter),
+            "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
+        );
+    }
+}
+
+#[test]
 fn pending_ask_projects_to_waiting() {
     for adapter in ADAPTERS {
         let kind = adapter.descriptor().kind;
@@ -303,11 +319,65 @@ fn assert_coverage_honest(
             wired, descriptor.capabilities.context_usage,
             "{kind} ContextUsage coverage must match the context_usage capability"
         ),
+        IntegrationConcern::RealtimeCost => assert_eq!(
+            !matches!(coverage, ConcernCoverage::Unsupported { .. }),
+            realtime_cost_from_fixture(adapter),
+            "{kind} RealtimeCost coverage must match session_cost_usd fixture output"
+        ),
         IntegrationConcern::AccountSpend => assert_eq!(
             wired, descriptor.capabilities.account_spend,
             "{kind} AccountSpend coverage must match the account_spend capability"
         ),
     }
+}
+
+fn coverage_for(adapter: &dyn AgentAdapter, concern: IntegrationConcern) -> ConcernCoverage {
+    adapter
+        .descriptor()
+        .coverage
+        .iter()
+        .find(|(declared, _)| *declared == concern)
+        .map(|(_, coverage)| *coverage)
+        .unwrap_or(ConcernCoverage::Unsupported {
+            reason: "coverage row missing",
+        })
+}
+
+fn realtime_cost_from_fixture(adapter: &dyn AgentAdapter) -> bool {
+    let Some(fixture) = adapter.spend_fixture() else {
+        return false;
+    };
+    let dir = tempfile::TempDir::new().expect("spend fixture tempdir");
+    let path = materialize_spend_fixture(dir.path(), &fixture);
+    super::spending::session_cost_usd(adapter, fixture.session_id, &path, &PriceBook::embedded())
+        .and_then(|cost| cost.total_cost_usd)
+        .is_some_and(|cost| cost > 0.0)
+}
+
+fn materialize_spend_fixture(dir: &Path, fixture: &SpendFixture) -> PathBuf {
+    let path = dir.join(fixture.file_name);
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).expect("spend fixture parent");
+    }
+    match fixture.body {
+        SpendFixtureBody::Jsonl(body) => {
+            fs::write(&path, format!("{body}\n")).expect("write spend JSONL fixture");
+        }
+        SpendFixtureBody::OpencodeSqlite { data } => {
+            let conn = rusqlite::Connection::open(&path).expect("open spend SQLite fixture");
+            conn.execute(
+                "CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)",
+                [],
+            )
+            .expect("create message table");
+            conn.execute(
+                "INSERT INTO message (id, session_id, data) VALUES ('msg', ?1, ?2)",
+                (fixture.session_id, data),
+            )
+            .expect("insert message fixture");
+        }
+    }
+    path
 }
 
 fn has_feed_kind(samples: &[ClassificationSample], feed_kind: FeedKind) -> bool {

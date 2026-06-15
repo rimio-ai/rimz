@@ -26,6 +26,12 @@ pub(super) fn handle_lifecycle_hook(
     let model_hint = recorded
         .as_ref()
         .and_then(|recorded| recorded.model_hint.as_deref());
+    let turn_ended = recorded.as_ref().is_some_and(|recorded| {
+        matches!(
+            recorded.observation.signal,
+            LifecycleSignal::TurnEnded { .. }
+        )
+    });
     if let Some(agent_id) = agent_id {
         let observed_turn_error = recorded
             .as_ref()
@@ -39,6 +45,7 @@ pub(super) fn handle_lifecycle_hook(
                 payload,
                 agent_id,
                 model_hint,
+                turn_ended,
                 observed_turn_error,
             },
         });
@@ -67,6 +74,7 @@ struct LifecycleEventContext<'a> {
     payload: &'a Value,
     agent_id: &'a str,
     model_hint: Option<&'a str>,
+    turn_ended: bool,
     observed_turn_error: Option<rimz::agents::AgentTurnError>,
 }
 
@@ -385,6 +393,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
         payload,
         agent_id,
         model_hint,
+        turn_ended,
         observed_turn_error,
     } = context;
     // Tombstone the session's statusline context sidecar so it cannot pin stale
@@ -424,6 +433,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
             payload,
             context_agent_id,
             model_hint,
+            turn_ended,
             observed_turn_error,
         );
     }
@@ -447,6 +457,7 @@ fn merge_agent_context_sidecars(
     payload: &Value,
     context_agent_id: &str,
     model_hint: Option<&str>,
+    turn_ended: bool,
     observed_turn_error: Option<rimz::agents::AgentTurnError>,
 ) {
     let mut turn_error_updated = false;
@@ -496,7 +507,15 @@ fn merge_agent_context_sidecars(
             .as_ref()
             .and_then(|record| record.transcript_stat.as_ref()),
     };
-    let Some(refresh) = agent.local_context_refresh(event_name, &refresh_ctx) else {
+    let mut refresh = agent.local_context_refresh(event_name, &refresh_ctx);
+    supplement_realtime_cost(
+        agent,
+        context_agent_id,
+        turn_ended,
+        prior.as_ref(),
+        &mut refresh,
+    );
+    let Some(refresh) = refresh else {
         return;
     };
     if let Err(err) = rimz::ledger::agent_context::merge_local_context(
@@ -516,6 +535,107 @@ fn merge_agent_context_sidecars(
     } else {
         let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
     }
+}
+
+fn supplement_realtime_cost(
+    agent: &dyn AgentAdapter,
+    context_agent_id: &str,
+    turn_ended: bool,
+    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+    refresh: &mut Option<rimz::agents::LocalContextRefresh>,
+) {
+    if !turn_ended || refresh_total_cost(refresh.as_ref()).is_some() {
+        return;
+    }
+    let Some(coverage) = realtime_cost_coverage(agent) else {
+        return;
+    };
+    let partial = matches!(coverage, rimz::agents::ConcernCoverage::Partial { .. });
+    if matches!(coverage, rimz::agents::ConcernCoverage::Unsupported { .. }) {
+        return;
+    }
+    if !partial && prior_total_cost(prior).is_some() {
+        return;
+    }
+
+    let prior_path = refresh
+        .as_ref()
+        .and_then(|refresh| refresh.transcript_path.as_deref())
+        .or_else(|| prior.and_then(|record| record.transcript_path.as_deref()))
+        .map(Path::new);
+    let Some(path) = agent.session_transcript(context_agent_id, prior_path) else {
+        return;
+    };
+    let Some(stat) = local_transcript_stat(&path) else {
+        return;
+    };
+    if prior_total_cost(prior).is_some()
+        && prior
+            .and_then(|record| record.transcript_stat.as_ref())
+            .is_some_and(|prior_stat| *prior_stat == stat)
+        && refresh
+            .as_ref()
+            .and_then(|refresh| refresh.transcript_stat.as_ref())
+            .is_none_or(|refresh_stat| *refresh_stat == stat)
+    {
+        return;
+    }
+
+    let Some(cost) = rimz::agents::spending::session_cost_usd(
+        agent,
+        context_agent_id,
+        &path,
+        &rimz::agents::PriceBook::embedded(),
+    ) else {
+        return;
+    };
+
+    let refresh = refresh.get_or_insert_with(|| rimz::agents::LocalContextRefresh {
+        model_id: None,
+        effort: prior.and_then(|record| record.context.effort.clone()),
+        tokens: prior.and_then(|record| record.context.tokens.clone()),
+        cost: None,
+        turn_complete: prior.and_then(|record| record.context.turn_complete),
+        transcript_path: None,
+        transcript_stat: None,
+    });
+    refresh.cost = Some(cost);
+    refresh.transcript_path = Some(path.to_string_lossy().into_owned());
+    refresh.transcript_stat = Some(stat);
+}
+
+fn realtime_cost_coverage(agent: &dyn AgentAdapter) -> Option<rimz::agents::ConcernCoverage> {
+    agent
+        .descriptor()
+        .coverage
+        .iter()
+        .find(|(concern, _)| *concern == rimz::agents::IntegrationConcern::RealtimeCost)
+        .map(|(_, coverage)| *coverage)
+}
+
+fn refresh_total_cost(refresh: Option<&rimz::agents::LocalContextRefresh>) -> Option<f64> {
+    refresh
+        .and_then(|refresh| refresh.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+}
+
+fn prior_total_cost(
+    prior: Option<&rimz::ledger::agent_context::AgentContextRecord>,
+) -> Option<f64> {
+    prior
+        .and_then(|record| record.context.cost.as_ref())
+        .and_then(|cost| cost.total_cost_usd)
+}
+
+fn local_transcript_stat(path: &Path) -> Option<rimz::agents::TranscriptStat> {
+    let meta = std::fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?;
+    let since_epoch = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(rimz::agents::TranscriptStat {
+        mtime_secs: since_epoch.as_secs().try_into().unwrap_or(i64::MAX),
+        mtime_nanos: since_epoch.subsec_nanos(),
+        len: meta.len(),
+    })
 }
 
 fn merge_rate_limit_context(
@@ -609,6 +729,63 @@ fn merge_turn_error_marker(
             );
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn turn_end_supplements_partial_realtime_cost_from_prior_transcript() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
+        let mut file = std::fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","model":"gpt-5","usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
+        )
+        .unwrap();
+
+        let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
+        let mut prior = rimz::ledger::agent_context::new_record(
+            "pi",
+            "sess-1",
+            rimz::ledger::agent_context::empty_context("pi", observed_at),
+        );
+        prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
+
+        let mut skipped = None;
+        supplement_realtime_cost(
+            &rimz::agents::PiAdapter,
+            "sess-1",
+            false,
+            Some(&prior),
+            &mut skipped,
+        );
+        assert!(skipped.is_none());
+
+        let mut refresh = None;
+        supplement_realtime_cost(
+            &rimz::agents::PiAdapter,
+            "sess-1",
+            true,
+            Some(&prior),
+            &mut refresh,
+        );
+
+        let refresh = refresh.expect("turn end supplements cost");
+        let cost = refresh
+            .cost
+            .and_then(|cost| cost.total_cost_usd)
+            .expect("supplemented total cost");
+        assert!((cost - 0.42).abs() < 1e-9);
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(transcript.to_string_lossy().as_ref())
+        );
+        assert!(refresh.transcript_stat.is_some());
     }
 }
 

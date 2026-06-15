@@ -181,6 +181,21 @@ pub struct ClassificationSample {
 }
 
 #[cfg(test)]
+#[derive(Clone, Debug)]
+pub struct SpendFixture {
+    pub session_id: &'static str,
+    pub file_name: &'static str,
+    pub body: SpendFixtureBody,
+}
+
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub enum SpendFixtureBody {
+    Jsonl(&'static str),
+    OpencodeSqlite { data: &'static str },
+}
+
+#[cfg(test)]
 impl ClassificationSample {
     pub(crate) fn new(
         event_name: &'static str,
@@ -360,6 +375,15 @@ pub trait AgentAdapter: Send + Sync {
     #[cfg(test)]
     fn installed_hook_events(&self) -> Vec<&'static str> {
         Vec::new()
+    }
+
+    /// Test-only representative transcript/store fixture that must produce a
+    /// positive session cost through the same spend parser the live-card fallback
+    /// uses. Adapters with declared realtime-cost coverage provide one so the
+    /// registry-wide conformance suite can prove the claim is backed by behavior.
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<SpendFixture> {
+        None
     }
 
     /// Render the agent-native decision JSON for this resolution. Called
@@ -550,6 +574,26 @@ pub trait AgentAdapter: Send + Sync {
     /// surface.
     fn transcript_files(&self) -> Vec<PathBuf> {
         Vec::new()
+    }
+
+    /// Resolve the local transcript/store that carries a live session's spend.
+    /// `prior_path` is the path already published in the context sidecar, so a
+    /// steady session pays one stat before falling back to provider discovery.
+    /// Providers with one-file-per-session stores usually need no override; stores
+    /// whose file name does not contain the session id provide their own mapping.
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| path.is_file()) {
+            return Some(path.to_path_buf());
+        }
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        self.transcript_files().into_iter().find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(session_id))
+        })
     }
 
     /// Parse one transcript file into cost entries for the spending pass,

@@ -25,9 +25,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
-use super::AgentAdapter;
 use super::descriptor::ThreadKey;
 use super::pricing::PriceBook;
+use super::{AgentAdapter, AgentCost};
 pub use crate::sidebar::timing::SPENDING_TTL;
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -436,6 +436,49 @@ pub fn discover_spending_files() -> Vec<(&'static dyn AgentAdapter, PathBuf)> {
                 .map(move |file| (*adapter, file))
         })
         .collect()
+}
+
+/// Compute one live session's cumulative USD cost from the transcript/store the
+/// adapter already parses for historical spending. Native thread ids select the
+/// requested session in multi-session stores; id-free entries are included only
+/// when the parsed file has no thread ids at all, which is the one-file-per-session
+/// shape used by JSONL transcript providers.
+pub fn session_cost_usd(
+    adapter: &dyn AgentAdapter,
+    session_id: &str,
+    transcript_path: &Path,
+    prices: &PriceBook,
+) -> Option<AgentCost> {
+    let session_id = session_id.trim();
+    if session_id.is_empty() {
+        return None;
+    }
+    let parsed = adapter.parse_spend(transcript_path, None, prices);
+    let has_thread_ids = parsed.entries.iter().any(|entry| {
+        entry
+            .thread_id
+            .as_deref()
+            .map(str::trim)
+            .is_some_and(|thread_id| !thread_id.is_empty())
+    });
+    let total = parsed
+        .entries
+        .iter()
+        .filter(|entry| {
+            entry
+                .thread_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|thread_id| !thread_id.is_empty())
+                .map_or(!has_thread_ids, |thread_id| thread_id == session_id)
+        })
+        .map(|entry| entry.cost_usd)
+        .filter(|cost| cost.is_finite() && *cost > 0.0)
+        .sum::<f64>();
+    (total > 0.0).then_some(AgentCost {
+        total_cost_usd: Some(total),
+        ..AgentCost::default()
+    })
 }
 
 /// Compute the fleet and per-provider trailing 24h / 7d / 30d / 365d spend and

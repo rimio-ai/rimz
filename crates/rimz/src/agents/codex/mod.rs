@@ -233,6 +233,12 @@ const CODEX_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::RealtimeCost,
+        ConcernCoverage::Wired {
+            via: "rollout tail",
+        },
+    ),
+    (
         IntegrationConcern::RichContext,
         ConcernCoverage::Wired { via: "app-server" },
     ),
@@ -484,6 +490,17 @@ impl AgentAdapter for CodexAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "sess-1",
+            file_name: "rollout-2026-06-02T10-00-00-sess-1.jsonl",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"timestamp":"2026-06-02T10:00:00.000Z","model":"gpt-5","usage":{"input_tokens":100,"output_tokens":50}}"#,
+            ),
+        })
+    }
+
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
             FeedKind::Permission => {
@@ -702,6 +719,13 @@ impl AgentAdapter for CodexAdapter {
 
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::codex_session_files()
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| path.is_file()) {
+            return Some(path.to_path_buf());
+        }
+        find_session_transcript(session_id)
     }
 
     /// Codex logs token counts, not dollars — each event is multiplied

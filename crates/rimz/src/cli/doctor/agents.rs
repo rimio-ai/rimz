@@ -226,19 +226,19 @@ mod tests {
             claude.supported,
             [
                 "turn", "perm", "plan", "ask", "compact", "sub", "bg", "end", "idle", "usage",
-                "rich", "install", "spend", "remote",
+                "live$", "rich", "install", "spend", "remote",
             ]
         );
         assert!(claude.unsupported.is_empty());
 
         let codex = coverage("codex");
-        assert_eq!(codex.wired, 10);
-        assert_eq!(codex.total, 14);
+        assert_eq!(codex.wired, 11);
+        assert_eq!(codex.total, 15);
         assert_eq!(
             codex.supported,
             [
-                "turn", "perm", "ask", "compact", "sub", "usage", "rich", "install", "spend",
-                "remote"
+                "turn", "perm", "ask", "compact", "sub", "usage", "live$", "rich", "install",
+                "spend", "remote"
             ]
         );
         // `end` and `idle` have no native hook, but pane liveness/the reaper and
@@ -270,7 +270,7 @@ mod tests {
         // window reconstruct the attention slice — partial, like Codex, not
         // absent.
         let pi_partial: Vec<&str> = pi.partial.iter().map(|p| p.concern.as_str()).collect();
-        assert_eq!(pi_partial, ["idle"]);
+        assert_eq!(pi_partial, ["idle", "live$"]);
         assert!(
             pi.partial
                 .iter()
@@ -287,7 +287,7 @@ mod tests {
     #[test]
     fn full_coverage_reports_no_gaps() {
         let claude = coverage("claude");
-        assert_eq!(claude.wired, 14);
+        assert_eq!(claude.wired, 15);
         assert!(claude.unsupported.is_empty());
     }
 }

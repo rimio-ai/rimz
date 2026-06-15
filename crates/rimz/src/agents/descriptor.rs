@@ -172,6 +172,7 @@ integration_concerns! {
     SessionEnd => "end",
     IdleNotification => "idle",
     ContextUsage => "usage",
+    RealtimeCost => "live$",
     RichContext => "rich",
     HookInstall => "install",
     AccountSpend => "spend",

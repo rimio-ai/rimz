@@ -199,6 +199,12 @@ const CLAUDE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::RealtimeCost,
+        ConcernCoverage::Wired {
+            via: "statusline cost",
+        },
+    ),
+    (
         IntegrationConcern::RichContext,
         ConcernCoverage::Wired { via: "statusline" },
     ),
@@ -538,6 +544,17 @@ impl AgentAdapter for ClaudeAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "sess-1",
+            file_name: "chat.jsonl",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"timestamp":"2026-06-02T10:00:00.000Z","sessionId":"sess-1","costUSD":0.42,"requestId":"req-1","message":{"id":"msg-1","model":"claude-sonnet-4-6","usage":{"input_tokens":100,"output_tokens":50}}}"#,
+            ),
+        })
+    }
+
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
             FeedKind::Permission => {
@@ -777,6 +794,30 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::all_jsonl_files()
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| path.is_file()) {
+            return Some(path.to_path_buf());
+        }
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        let matches_session = |path: &Path| {
+            path.components()
+                .any(|component| component.as_os_str().to_string_lossy().contains(session_id))
+        };
+        let files: Vec<PathBuf> = self
+            .transcript_files()
+            .into_iter()
+            .filter(|path| matches_session(path))
+            .collect();
+        files
+            .iter()
+            .find(|path| path.file_name().and_then(|name| name.to_str()) == Some("chat.jsonl"))
+            .cloned()
+            .or_else(|| files.into_iter().next())
     }
 
     /// Current Claude transcripts log no `costUSD`, so each turn is priced

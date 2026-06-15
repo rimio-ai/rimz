@@ -194,6 +194,13 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        IntegrationConcern::RealtimeCost,
+        ConcernCoverage::Partial {
+            via: "session transcript spend sum",
+            gap: "reconstructed on turn-end, not a provider-pushed realtime figure",
+        },
+    ),
+    (
         IntegrationConcern::RichContext,
         ConcernCoverage::Unsupported {
             reason: "no rich-context transport",
@@ -332,6 +339,17 @@ impl AgentAdapter for PiAdapter {
         ]
     }
 
+    #[cfg(test)]
+    fn spend_fixture(&self) -> Option<super::SpendFixture> {
+        Some(super::SpendFixture {
+            session_id: "sess-1",
+            file_name: "2026-06-02T10-00-00-000Z_sess-1.jsonl",
+            body: super::SpendFixtureBody::Jsonl(
+                r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","model":"gpt-5","usage":{"input":100,"output":50,"cost":{"total":0.42}}}}"#,
+            ),
+        })
+    }
+
     fn render_decision(&self, item: &FeedItem, resolution: &Resolution) -> Result<Value> {
         match item.kind {
             FeedKind::Permission => {
@@ -458,6 +476,21 @@ impl AgentAdapter for PiAdapter {
 
     fn transcript_files(&self) -> Vec<PathBuf> {
         spend::pi_session_files()
+    }
+
+    fn session_transcript(&self, session_id: &str, prior_path: Option<&Path>) -> Option<PathBuf> {
+        if let Some(path) = prior_path.filter(|path| path.is_file()) {
+            return Some(path.to_path_buf());
+        }
+        let session_id = session_id.trim();
+        if session_id.is_empty() {
+            return None;
+        }
+        self.transcript_files().into_iter().find(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.contains(session_id))
+        })
     }
 
     /// Pi logs `costUSD` directly, so the price book is unused. The resume
