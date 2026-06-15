@@ -230,7 +230,7 @@ pub struct SidebarThemeConfig {
     /// theme files are accepted.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub scheme: Option<String>,
-    /// Calm/positive: running tallies, low gauges, `+` additions, output tokens.
+    /// Calm/positive: running tallies, low gauges, `+` additions, cache-read tokens.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub good: Option<ThemeColor>,
     /// Caution floor: waiting glyphs at rest, low-mid gauges.
@@ -243,7 +243,7 @@ pub struct SidebarThemeConfig {
     /// Alarm, reserved for danger: failed glyphs, the 100% gauge crest, `-` removals.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub alarm: Option<ThemeColor>,
-    /// Data accent: the `◎` sessions glyph and the `◌` cache-read marker.
+    /// Data accent: the `◎` sessions glyph and the `↗` output marker.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub accent: Option<ThemeColor>,
     /// Cool informational: the `plan` posture pill, window tags.

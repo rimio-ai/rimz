@@ -35,7 +35,7 @@ fn assert_cost_tones_are_hot_and_distinct(theme: &Theme) {
     );
     assert_ne!(
         read, input,
-        "cache-read teal stays distinct from the input vermilion"
+        "cache-read green stays distinct from the input vermilion"
     );
     assert_eq!(
         write,
@@ -556,8 +556,8 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
             .fg
     };
     // The `▤` head wears the bar's severity tip; each composition marker legends
-    // the bar in its own segment tone — cache-read cyan, cache-write compaction
-    // violet, fresh input the expense vermilion, output green.
+    // the bar in its own segment tone — cache-read green, cache-write
+    // compaction violet, fresh input the expense vermilion, output blue.
     assert_eq!(tone(CONTEXT_FILLED), Some(theme.heat_tone(0.5)), "severity");
     assert_eq!(
         tone(TOKENS_CACHED),

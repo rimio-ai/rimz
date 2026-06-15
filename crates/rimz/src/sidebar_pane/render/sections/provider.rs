@@ -47,8 +47,8 @@ const PROVIDER_RESET_MARKER_PAD: usize =
 /// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
 /// at the soft tier — the ledger is the exact record next to the cockpit's
 /// coarse live read — each marker in its one shared color (the sky-blue window
-/// tag, the teal `◎`, the blue `◇`, the segment-toned arrows and ring) and the
-/// `$` bold dollar green; the
+/// tag, the teal `◎`, the blue `◇`/`↗`, the deep-red `↘`, and the green `◌`)
+/// and the `$` bold dollar green; the
 /// spend deliberately does **not** animate (only today's headline does). Both
 /// rows share one set of right-aligned column widths so the labels stack and
 /// every number column lines up. Empty (dropped) until something is recorded.
@@ -99,7 +99,8 @@ impl WmColumns {
 /// left-clustered, the `$ {spend}` pinned to the right edge. A one-cell lead
 /// pad sets the `W:`/`M:` tags a hair off the chrome edge. The window tag wears
 /// sky blue — distinct from the teal `◎` beside it — and each token marker its
-/// one shared color, with the figures at the soft tier ([`Theme::soft`]).
+/// one shared color (`↗` blue, `◌` green), with the figures at the soft tier
+/// ([`Theme::soft`]).
 /// Every numeric field is right-aligned to the shared [`WmColumns`] width, so
 /// the `W:` and `M:` rows stack into one tidy grid. Cache-write is folded into
 /// the `↘` input column, so the ledger keeps to the four headline token figures

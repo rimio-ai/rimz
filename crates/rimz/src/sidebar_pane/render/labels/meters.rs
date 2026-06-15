@@ -29,8 +29,8 @@ pub(in crate::sidebar_pane::render) const CONTEXT_COMPACTIONS: &str = "↻";
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
 /// token line shares (cockpit today line, provider today line, W/M ledger
 /// rows). Each marker wears its one color everywhere: the `◇` total in blue,
-/// `↘` input in the expense vermilion, `↗` output in green, and `◌` cache-read
-/// in teal. The figures read at the soft tier
+/// `↘` input in the expense vermilion, `↗` output in blue, and `◌` cache-read
+/// in green. The figures read at the soft tier
 /// ([`Theme::soft`]) like every stat figure; under `NO_COLOR` the glyph shapes
 /// still spell the split. `fmt` chooses the magnitude form (`tokens_int` live,
 /// `tokens_short` for the precise W/M rows). `total` is the caller's `◇` value

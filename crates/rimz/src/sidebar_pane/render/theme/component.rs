@@ -37,7 +37,7 @@ pub(crate) enum Component {
     /// The `⇡/⇣` commit-delta cluster on a worktree header — the branch facts
     /// rhyme with the worktree name's neutral heading tone.
     BranchDelta,
-    /// The `◌` cache-read token marker and the bar's cache-read run.
+    /// The `◌` cache-read token marker.
     CacheRead,
     /// The `W:`/`M:` timeframe label on a ledger row.
     LedgerLabel,
@@ -49,7 +49,7 @@ pub(crate) enum Component {
     ProcMem,
     /// The process `⇅` (I/O) marker.
     ProcIo,
-    /// The `↗` output token marker — generated output, conventionally green.
+    /// The `↗` output token marker.
     Output,
     /// The `↘` fresh-input token marker — the costliest read wears the `expense`
     /// red, the reddest marker in the sidebar: `alarm` saturated and deepened a
@@ -137,12 +137,12 @@ impl Component {
     pub(crate) fn resolve(self, palette: &Palette) -> Color {
         use Component::*;
         match self {
-            Sessions | CacheRead | WindowHuge => palette.accent,
+            Sessions | Output | WindowHuge => palette.accent,
             LaneSpine | FlashSelectionLanded => palette.selection,
             WorktreeHeader | BranchDelta => palette.body,
             LedgerLabel | TokenTotal | ProcCpu | WindowLarge => palette.cool,
             SubagentHeader | RemoteControl | ProcIo | CacheWrite => palette.meta,
-            ProcMem | Output | FlashResolved | FlashLifted | FlashCompleted => palette.good,
+            ProcMem | CacheRead | FlashResolved | FlashLifted | FlashCompleted => palette.good,
             Compaction | FlashWaiting => palette.warn,
             Input => palette.expense,
             FlashFailed => palette.alarm,

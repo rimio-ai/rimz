@@ -65,11 +65,11 @@ The palette runs a loudness hierarchy — attention loudest, selection next, str
 
 | slot | colors |
 | --- | --- |
-| `good` | calm/positive: running tallies, low gauges, `+` additions, the `↗` output marker |
+| `good` | calm/positive: running tallies, low gauges, `+` additions, the `◌` cache-read marker |
 | `warn` | the caution floor: waiting `?` glyphs at rest, the low-mid gauge rung |
 | `caution` | the warm amber "hot/costly" tier: the gauge mid-band and the age-heat midpoint (the fresh-input `↘` marker burns redder still — see `alarm`) |
 | `alarm` | danger: failed `!` glyphs, the 100% gauge crest, `-` removals; the fresh-input `↘` marker derives a deeper red a step past it |
-| `accent` | data: the `◎` sessions glyph and the `◌` cache-read marker |
+| `accent` | data: the `◎` sessions glyph and the `↗` output marker |
 | `cool` | cool informational: the `plan` posture pill, the larger window tags, the `◇` token total, and the paused `⏸` glyph |
 | `meta` | delegation and compaction accents: the `⇅ rc` flag, the subagent `⧉` marker, the live compacting head, and the cache-write `◍` marker |
 | `body` | body content text: stat figures, capability tokens, subagent lines, and the worktree header |
@@ -89,7 +89,7 @@ RGB values render as RGB under truecolor depth and quantize to the nearest xterm
 
 The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. The provider budget ("mana") bar rides the same full ramp: it anchors green at a brimming window and warms continuously toward red as it drains, with the `[sidebar.budget]` zones as its warm stops. The recede-when-healthy readers — the card age clock, the reset-countdown burn pace, and the remote link badge — keep a quiet resting tone and ride only the warm tail of the ramp (`warn` → `caution` → `alarm`) once they leave their calm zone, since a fresh agent, a sustainable pace, or a healthy link reads quiet rather than healthy-green. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The waiting `?`, failed `!`, and paused `⏸` glyphs wear their flat `warn`, `alarm`, and `cool` slots, held steady at any age, so a slot override restyles them directly.
 
-The context composition accents reuse stable sidebar tones: fresh input `↘` wears a deep red a step past the `alarm` stop — the costliest read in the breakdown and the reddest marker on screen, so it always reads hotter than the bar's scaled-to-red cache-read run (retune it through the `alarm` slot it derives from); cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
+The context composition accents reuse stable sidebar tones: fresh input `↘` wears a deep red a step past the `alarm` stop — the costliest read in the breakdown and the reddest marker on screen, so it always reads hotter than the bar's scaled-to-red cache-read run (retune it through the `alarm` slot it derives from); cache-read `◌` wears green; output `↗` wears blue; cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
 
 Money amounts use a fixed dollar green (`#85bb65` at truecolor depth, nearest xterm bucket at indexed depth), separate from the `good` success slot.
 
