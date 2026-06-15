@@ -52,7 +52,7 @@ Rebirth re-pins on both backends — tmux re-runs `ensure_session`, Zellij rebir
 
 ### Pane metadata
 
-`list_panes` reports each pane's **foreground command**, optional **spawn command**, and **cwd** alongside its id and view. The sidebar uses foreground for display, spawn for stable identity/classification when present, and cwd for worktree grouping (see [sidebar.md → Presence model](./sidebar.md#presence-model)). Foreground and cwd are cross-backend; spawn is Zellij-only metadata and stays optional on `PaneRef`.
+`list_panes` reports each pane's **foreground command**, optional **spawn command**, and **cwd** alongside its id and view. The sidebar uses foreground for display, spawn for stable identity/classification when present, and cwd for worktree grouping (see [sidebar.md → Presence model](./sidebar.md#presence-model)). Foreground and cwd are cross-backend; spawn is Zellij-only metadata and stays optional on `PaneRef`. On Zellij, the agent/process listing admits live floating terminal panes as normal panes so floating agents resolve through the same worktree protocol; sidebar geometry and one-sidebar-per-view reconcile continue to read tiled terminal panes.
 
 | field | tmux | Zellij |
 | --- | --- | --- |

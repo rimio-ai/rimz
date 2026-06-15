@@ -109,3 +109,18 @@ fn standalone_ask_is_not_an_agent_pane() {
         "a standalone ask never enters agent_panes"
     );
 }
+
+#[test]
+fn plain_shell_pane_is_not_an_agent_pane() {
+    // Expanded mux listings may admit more visible terminal panes, including
+    // floating shells. Only panes running a known agent command enter
+    // agent_panes.
+    let mut snapshot = room(Vec::new(), Vec::new());
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![pane("term1", "zsh", "/repo/main")], None);
+
+    assert!(
+        snapshot.agent_panes.is_empty(),
+        "a plain shell never becomes an addressable @agent"
+    );
+}

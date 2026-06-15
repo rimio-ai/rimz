@@ -1,5 +1,6 @@
 use super::*;
-use crate::ids::{MuxName, PaneId};
+use crate::feed::PaneRef;
+use crate::ids::{MuxName, PaneId, ViewKind};
 use crate::mux::SidebarWidth;
 use crate::schema::pane_topology::PaneTopologyCache;
 
@@ -158,7 +159,7 @@ fn views_with_sidebars_classifies_working_orphan_and_daemon_tabs() {
 }
 
 #[test]
-fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
+fn listed_pane_includes_live_floating_but_live_terminal_does_not() {
     let json = r#"[
           {"id": 0, "is_plugin": false, "is_suppressed": false, "tab_id": 0},
           {"id": 1, "is_plugin": true,  "is_suppressed": false, "tab_id": 0},
@@ -168,14 +169,84 @@ fn live_terminal_excludes_plugin_suppressed_and_dead_panes() {
           {"id": 5, "is_plugin": false, "is_suppressed": false, "is_floating": true, "tab_id": 0}
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let listed: Vec<u64> = parsed
+        .iter()
+        .filter(|p| p.is_listed_pane())
+        .map(|p| p.id)
+        .collect();
     let live: Vec<u64> = parsed
         .iter()
         .filter(|p| p.is_live_terminal())
         .map(|p| p.id)
         .collect();
-    // Only the plain live terminal pane survives; plugin, suppressed, held,
-    // exited, and floating panes are all dropped.
+    let tiled: Vec<u64> = parsed
+        .iter()
+        .filter(|p| p.is_terminal())
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(listed, vec![0, 5]);
     assert_eq!(live, vec![0]);
+    assert_eq!(tiled, vec![0, 3, 4]);
+}
+
+#[test]
+fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
+    let json = r#"[
+          {
+            "id": 1, "is_plugin": false, "tab_id": 0,
+            "pane_command": "zsh", "pane_cwd": "/repo/main"
+          },
+          {
+            "id": 2, "is_plugin": false, "is_floating": true,
+            "tab_id": 0, "tab_position": 4, "tab_name": "work",
+            "terminal_command": "codex", "pane_cwd": "/repo/main"
+          },
+          {
+            "id": 3, "is_plugin": true, "is_floating": true,
+            "tab_id": 0, "terminal_command": "codex"
+          },
+          {
+            "id": 4, "is_plugin": false, "is_floating": true, "is_held": true,
+            "tab_id": 0, "terminal_command": "claude"
+          }
+        ]"#;
+    let parsed: Vec<RawPane> = serde_json::from_str(json).unwrap();
+    let listing = RawPaneListing::from_cli(parsed, 1).into_pane_listing(
+        "rimz-test".to_owned(),
+        |mut p, session_name| {
+            if !p.is_listed_pane() {
+                return None;
+            }
+            let command = p.display_command();
+            Some(PaneRef {
+                pane_id: PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", p.id)),
+                session_name: session_name.to_owned(),
+                view_id: Some(format!("tab_{}", p.view_position())),
+                view_kind: Some(ViewKind::Tab),
+                view_name: p.tab_name.take(),
+                is_focused: p.is_focused,
+                pane_pid: p.pid(),
+                pane_process_start: p.process_start(),
+                command,
+                spawn_command: p.spawn_command().map(str::to_owned),
+                cwd: p.reported_cwd().map(str::to_owned),
+                resumed_session_id: None,
+                elevated_agent: None,
+                first_seen_at_ms: None,
+            })
+        },
+    );
+
+    let pane_ids: Vec<&str> = listing
+        .panes
+        .iter()
+        .map(|pane| pane.pane_id.raw())
+        .collect();
+    assert_eq!(pane_ids, vec!["terminal_1", "terminal_2"]);
+    assert_eq!(listing.panes[1].command, None);
+    assert_eq!(listing.panes[1].spawn_command.as_deref(), Some("codex"));
+    assert_eq!(listing.panes[1].cwd.as_deref(), Some("/repo/main"));
+    assert_eq!(listing.panes[1].view_id.as_deref(), Some("tab_4"));
 }
 #[test]
 fn floating_pane_teardown_targets_only_the_anchor_tab() {
@@ -228,6 +299,19 @@ fn session_panes_classify_clean_sidebar_and_suspended_commands() {
           {"id": 1, "is_plugin": false, "title": "claude", "is_held": true, "tab_id": 0}
         ]"#;
     let parsed: Vec<RawPane> = serde_json::from_str(suspended_command).unwrap();
+    assert_eq!(
+        classify_session_panes(&parsed),
+        SessionCleanliness::SuspendedCommandPane,
+    );
+
+    let suspended_floating_command = r#"[
+          {"id": 0, "is_plugin": false, "title": "rimz-sidebar", "is_held": false, "tab_id": 0},
+          {
+            "id": 1, "is_plugin": false, "is_floating": true,
+            "title": "codex", "is_held": true, "tab_id": 0
+          }
+        ]"#;
+    let parsed: Vec<RawPane> = serde_json::from_str(suspended_floating_command).unwrap();
     assert_eq!(
         classify_session_panes(&parsed),
         SessionCleanliness::SuspendedCommandPane,

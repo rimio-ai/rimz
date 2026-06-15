@@ -94,7 +94,7 @@ impl MuxBackend for ZellijBackend {
         )?;
         let session_name = opts.session_name.unwrap_or_default();
         Ok(raws.into_pane_listing(session_name, |mut p, session_name| {
-            if !p.is_live_terminal() {
+            if !p.is_listed_pane() {
                 return None;
             }
             let command = p.display_command();

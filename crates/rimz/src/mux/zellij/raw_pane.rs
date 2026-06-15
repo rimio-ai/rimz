@@ -102,13 +102,18 @@ pub(super) fn has_healthy_sidebar(panes: &[RawPane]) -> bool {
     found
 }
 
-/// Any non-sidebar terminal pane Zellij is holding at a "Waiting to run" prompt —
+/// Any non-sidebar command pane Zellij is holding at a "Waiting to run" prompt —
 /// the fingerprint of a resurrected (serialized) room, where every command pane
-/// comes back `start_suspended`. A clean rebirth has none: every command runs.
+/// comes back `start_suspended`. Floating panes count here because a floating
+/// agent is a real command pane, even though geometry ignores overlays.
 pub(super) fn has_suspended_command_pane(panes: &[RawPane]) -> bool {
     panes
         .iter()
-        .any(|pane| pane.is_terminal() && !is_sidebar_pane(pane) && pane.is_held)
+        .any(|pane| is_session_health_command_pane(pane) && pane.is_held)
+}
+
+fn is_session_health_command_pane(pane: &RawPane) -> bool {
+    !pane.is_plugin && !pane.is_suppressed && !is_sidebar_pane(pane)
 }
 
 /// `ZELLIJ_PANE_ID` is the bare integer of the pane the caller runs in. `rimz
@@ -390,21 +395,28 @@ pub(super) struct RawPane {
 }
 
 impl RawPane {
-    /// A real tiled terminal pane: not plugin chrome, not suppressed, and not a
-    /// floating overlay.
-    /// The single definition of "counts as a pane" shared by the pane listing,
-    /// sidebar recovery, and column math.
+    /// A tiled terminal pane for geometry and sidebar reconcile: not plugin
+    /// chrome, not suppressed, and not a floating overlay. Held and exited panes
+    /// still occupy layout cells until Zellij closes them.
     pub(super) fn is_terminal(&self) -> bool {
         !self.is_plugin && !self.is_suppressed && !self.is_floating
     }
 
-    /// A terminal pane hosting a live command. Excludes held/exited corpses so a
-    /// dead command never renders a row. Zellij can omit command fields for a
-    /// live implicit shell pane, so the projection preserves that as `None`; the
-    /// producer's frame rotation repairs raced-null fields from the last good
-    /// observation when one exists.
+    /// A live terminal pane that belongs in the listing feed. Floating panes are
+    /// included here because agent discovery and process presence follow visible
+    /// terminals, while geometry and sidebar reconcile keep using
+    /// [`Self::is_terminal`] to exclude overlays from column math.
+    pub(super) fn is_listed_pane(&self) -> bool {
+        !self.is_plugin && !self.is_suppressed && !self.is_held && !self.exited
+    }
+
+    /// A live tiled terminal pane. Excludes held/exited corpses so a dead command
+    /// never drives sidebar recovery or geometry. Zellij can omit command fields
+    /// for a live implicit shell pane, so the projection preserves that as
+    /// `None`; the producer's frame rotation repairs raced-null fields from the
+    /// last good observation when one exists.
     pub(super) fn is_live_terminal(&self) -> bool {
-        self.is_terminal() && !self.is_held && !self.exited
+        self.is_listed_pane() && !self.is_floating
     }
 
     /// The live foreground command the pane reports. `pane_command` is the
