@@ -124,10 +124,11 @@ fn walk_fleet_spending(
     use crate::agents::pricing;
     use crate::agents::spending::{
         PROVIDER_SPENDING_VERSION, ProviderSpendingCache, SpendScope, Spending, SpendingCaches,
-        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache,
-        compute_spending_with_origins_and_scope, read_provider_spending_cache, read_spending_cache,
-        unix_secs_now, write_provider_spending_cache, write_spending_cache,
-        write_workspace_spending_cache,
+        WORKSPACE_SPENDING_VERSION, WorkspaceSpendingCache, compute_daily_spend,
+        compute_model_breakdown, compute_spending_with_origins_and_scope,
+        read_provider_spending_cache, read_spending_cache, unix_secs_now,
+        write_provider_spending_cache, write_provider_spending_cache_with_rollups,
+        write_spending_cache, write_workspace_spending_cache,
     };
 
     let provider_path = runtime.shared_provider_spending_path();
@@ -177,6 +178,8 @@ fn walk_fleet_spending(
             provider: ProviderSpendingCache {
                 version: PROVIDER_SPENDING_VERSION,
                 refreshed_at_ms,
+                days: Default::default(),
+                models: Default::default(),
                 spending,
             },
             workspace,
@@ -209,12 +212,20 @@ fn walk_fleet_spending(
         &origin_overrides,
         Some(&scope),
     );
+    let days = compute_daily_spend(&files, &cache);
+    let models = compute_model_breakdown(&files, &cache);
     let refreshed_at_ms = unix_now_ms();
     if publish && cache.dirty {
         write_spending_cache(&cache_path, &cache);
     }
     if publish {
-        write_provider_spending_cache(&provider_path, refreshed_at_ms, &spending);
+        write_provider_spending_cache_with_rollups(
+            &provider_path,
+            refreshed_at_ms,
+            &spending,
+            &days,
+            &models,
+        );
         if let Some(scope_hash) = scope_hash.as_deref() {
             write_workspace_spending_cache(
                 &runtime.workspace_spending_path(scope_hash),
@@ -229,6 +240,8 @@ fn walk_fleet_spending(
         provider: ProviderSpendingCache {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms,
+            days,
+            models,
             spending,
         },
         workspace: WorkspaceSpendingCache {
@@ -522,6 +535,7 @@ mod tests {
             version: PROVIDER_SPENDING_VERSION,
             refreshed_at_ms: unix_now_ms(),
             spending,
+            ..ProviderSpendingCache::default()
         };
 
         let _held =

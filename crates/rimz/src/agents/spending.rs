@@ -238,8 +238,9 @@ const SPENDING_CACHE_VERSION: u32 = 9;
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
 /// the producer recomputes once from the still-current entry cache. `0` is the
 /// implicit pre-versioning shape. v1: cache-write folds into `◇`/`↘`. v2:
-/// live-session baselines moved to a per-workspace sidecar.
-pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 2;
+/// live-session baselines moved to a per-workspace sidecar. v3: the published
+/// aggregate carries per-day and per-model rollups for `rimz stats`.
+pub(crate) const PROVIDER_SPENDING_VERSION: u32 = 3;
 
 /// Aggregate version for the per-workspace cockpit tally cache. This is
 /// independent of the shared raw-entry cache version: a semantic change here
@@ -1060,6 +1061,10 @@ pub fn read_spending_cache(path: &Path) -> SpendingDiskCache {
 /// Atomic write: temp file + rename, matching the project's ledger durability
 /// contract.
 pub fn write_spending_cache(path: &Path, cache: &SpendingDiskCache) {
+    let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
+        path,
+        std::time::Duration::from_secs(3_600),
+    );
     let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, cache);
 }
 
@@ -1080,16 +1085,29 @@ pub struct ProviderSpendingCache {
     /// When the producer last walked and published, for the TTL gate.
     #[serde(default)]
     pub refreshed_at_ms: u64,
+    /// Account-global UTC-day buckets keyed by epoch day, published so the stats
+    /// command can render its heatmap without walking transcripts.
+    #[serde(default)]
+    pub days: BTreeMap<i64, DaySpend>,
+    /// Account-global model buckets, published so `rimz stats` can render its
+    /// model breakdown without walking transcripts.
+    #[serde(default)]
+    pub models: BTreeMap<String, ModelSpend>,
     #[serde(flatten)]
     pub spending: Spending,
 }
 
 impl ProviderSpendingCache {
+    /// Whether this cache carries the current published aggregate shape.
+    pub fn is_current_version(&self) -> bool {
+        self.version == PROVIDER_SPENDING_VERSION
+    }
+
     /// Whether the published walk is young enough that the producer skips the
     /// transcript walk this tick. Saturating, so a clock that ran backwards
     /// reads fresh rather than re-walking every tick.
     pub fn is_fresh(&self, now_ms: u64) -> bool {
-        self.version == PROVIDER_SPENDING_VERSION
+        self.is_current_version()
             && now_ms.saturating_sub(self.refreshed_at_ms) <= SPENDING_TTL.as_millis() as u64
     }
 }
@@ -1100,11 +1118,31 @@ impl ProviderSpendingCache {
 /// transcript history. Follows the same temp-then-rename durability contract
 /// as [`write_spending_cache`].
 pub fn write_provider_spending_cache(path: &Path, refreshed_at_ms: u64, spending: &Spending) {
+    let days = BTreeMap::new();
+    let models = BTreeMap::new();
+    write_provider_spending_cache_with_rollups(path, refreshed_at_ms, spending, &days, &models);
+}
+
+/// Atomic write of the provider aggregate plus the rollups consumed by
+/// `rimz stats`.
+pub fn write_provider_spending_cache_with_rollups(
+    path: &Path,
+    refreshed_at_ms: u64,
+    spending: &Spending,
+    days: &BTreeMap<i64, DaySpend>,
+    models: &BTreeMap<String, ModelSpend>,
+) {
     let cache = ProviderSpendingCache {
         version: PROVIDER_SPENDING_VERSION,
         refreshed_at_ms,
+        days: days.clone(),
+        models: models.clone(),
         spending: spending.clone(),
     };
+    let _ = crate::ledger::atomic::sweep_stale_temp_siblings(
+        path,
+        std::time::Duration::from_secs(3_600),
+    );
     let _ = crate::ledger::atomic::write_temp_then_rename_cache(path, &cache);
 }
 

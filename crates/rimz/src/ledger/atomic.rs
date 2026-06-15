@@ -17,6 +17,7 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use serde::Serialize;
 
@@ -47,6 +48,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
         })?;
     }
     let tmp = temp_sibling(path);
+    let mut temp_guard = TempFileGuard::new(tmp.clone());
     {
         let mut file = File::create(&tmp).map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
@@ -66,6 +68,7 @@ pub fn write_bytes_atomically(path: &Path, bytes: &[u8]) -> Result<()> {
         path: path.to_path_buf(),
         source: e,
     })?;
+    temp_guard.disarm();
     sync_parent_dir(path)?;
     Ok(())
 }
@@ -82,6 +85,29 @@ enum Fsync {
     /// Skip both fsyncs. The rename stays atomic (a reader never sees a torn
     /// file), but the write is not crash-durable.
     Skip,
+}
+
+struct TempFileGuard {
+    path: PathBuf,
+    active: bool,
+}
+
+impl TempFileGuard {
+    fn new(path: PathBuf) -> Self {
+        TempFileGuard { path, active: true }
+    }
+
+    fn disarm(&mut self) {
+        self.active = false;
+    }
+}
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
 }
 
 /// Write `value` as pretty JSON to `path` via a same-directory temp file
@@ -113,6 +139,7 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
         })?;
     }
     let tmp = temp_sibling(path);
+    let mut temp_guard = TempFileGuard::new(tmp.clone());
     {
         let mut file = File::create(&tmp).map_err(|e| AtomicErr::Io {
             path: tmp.clone(),
@@ -135,6 +162,7 @@ fn write_temp_then_rename_with<T: Serialize>(path: &Path, value: &T, fsync: Fsyn
         path: path.to_path_buf(),
         source: e,
     })?;
+    temp_guard.disarm();
     if fsync == Fsync::Durable {
         sync_parent_dir(path)?;
     }
@@ -232,6 +260,43 @@ fn sync_parent_dir(path: &Path) -> Result<()> {
     sync_dir(parent)
 }
 
+/// Remove temp siblings old enough that they cannot be an active write by this
+/// process family. Callers use this on large rebuilt caches, where process death
+/// can otherwise leave expensive orphan temp files behind.
+pub fn sweep_stale_temp_siblings(path: &Path, min_age: Duration) -> usize {
+    let Some(parent) = path.parent() else {
+        return 0;
+    };
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return 0;
+    };
+    let prefix = format!("{file_name}.tmp.");
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return 0;
+    };
+    let now = SystemTime::now();
+    let mut removed = 0;
+    for entry in entries.filter_map(std::result::Result::ok) {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
+        }
+        let old_enough = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age >= min_age);
+        if old_enough && std::fs::remove_file(&path).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
+}
+
 /// fsync a directory so its rename/unlink operations are durable.
 pub fn sync_dir(dir: &Path) -> Result<()> {
     let handle = File::open(dir).map_err(|e| AtomicErr::Io {
@@ -295,6 +360,53 @@ mod tests {
         assert!(read.ends_with('\n'));
         let parsed: serde_json::Value = serde_json::from_str(&read).unwrap();
         assert_eq!(parsed["a"], 1);
+    }
+
+    #[test]
+    fn failed_temp_rename_cleans_its_temp_file() {
+        struct Broken;
+
+        impl serde::Serialize for Broken {
+            fn serialize<S>(&self, _serializer: S) -> std::result::Result<S::Ok, S::Error>
+            where
+                S: serde::Serializer,
+            {
+                Err(serde::ser::Error::custom("boom"))
+            }
+        }
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("file.json");
+
+        let _ = write_temp_then_rename_cache(&path, &Broken).unwrap_err();
+
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_str()
+                    .is_some_and(|name| name.starts_with("file.json.tmp."))
+            })
+            .collect();
+        assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn stale_temp_sibling_sweep_keeps_other_files() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("file.json");
+        let stale = dir.path().join("file.json.tmp.1.dead");
+        let other = dir.path().join("other.json.tmp.1.dead");
+        std::fs::write(&stale, b"stale").unwrap();
+        std::fs::write(&other, b"other").unwrap();
+
+        let removed = sweep_stale_temp_siblings(&path, Duration::ZERO);
+
+        assert_eq!(removed, 1);
+        assert!(!stale.exists());
+        assert!(other.exists());
     }
 
     #[test]

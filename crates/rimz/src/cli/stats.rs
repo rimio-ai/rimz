@@ -3,29 +3,34 @@
 //! here it stands alone so the figures read from inside a room, where the lobby
 //! never appears.
 //!
-//! Account-global and read-only: it refreshes the shared spending cache *in
-//! memory* (the same incremental transcript walk the sidebar producer runs) and
-//! never writes it back, so it adds no new write path and never races the
-//! producer's owned writes.
+//! Account-global and read-only: it reads the producer's published provider
+//! aggregate when available. A standalone first launch walks transcripts once in
+//! memory and never writes back, so the command adds no producer race.
 //!
 //! Windows: the heatmap and the model breakdown read the full available history
 //! (the cache spans the trailing year); "Active days" reports the trailing four
 //! weeks; the Week/Month/Year totals are the trailing 7/30/365 days.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Write;
+use std::io::{IsTerminal, Write};
+use std::path::PathBuf;
+use std::sync::mpsc;
+use std::thread;
+use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use clap::Args;
 use serde::Serialize;
 
 use super::GlobalFlags;
 use crate::cli::render;
 use rimz::RuntimePaths;
+use rimz::agents::AgentAdapter;
 use rimz::agents::pricing::PriceBook;
 use rimz::agents::spending::{
-    DaySpend, ModelSpend, compute_daily_spend, compute_model_breakdown, compute_spending,
-    discover_spending_files, read_spending_cache, unix_secs_now, utc_date,
+    DaySpend, ModelSpend, ProviderSpendingCache, SpendTally, compute_daily_spend,
+    compute_model_breakdown, compute_spending, discover_spending_files,
+    read_provider_spending_cache, read_spending_cache, unix_secs_now, utc_date,
 };
 use rimz::config::Semantic;
 
@@ -45,6 +50,10 @@ const MAX_MODELS: usize = 6;
 /// A two-column body (models, insights) needs at least this much panel width;
 /// narrower terminals stack to one column.
 const TWO_COL_MIN: usize = 56;
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const SPINNER_TICK: Duration = Duration::from_millis(80);
+const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
+const SPINNER_CLEAR_COLS: usize = 96;
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -67,37 +76,187 @@ pub struct StatsArgs {
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
-    let stats = load_stats();
+    let loaded = load_stats(!args.json)?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
     if args.json {
-        return emit_json(&stats, today_day, args.dollars);
+        return emit_json(&loaded.stats, today_day, args.dollars);
     }
-    render_panel(&stats, today_day, args.dollars)
+    render_panel(
+        &loaded.stats,
+        today_day,
+        args.dollars,
+        !loaded.header_printed,
+    )
 }
 
-/// The refreshed, deduplicated history `rimz stats` renders: per-day buckets, the
-/// per-model breakdown, and the trailing-year session count — all from one
-/// in-memory refresh of the shared cache.
+struct LoadedStats {
+    stats: Stats,
+    header_printed: bool,
+}
+
+/// The deduplicated account-global history `rimz stats` renders: per-day buckets,
+/// the per-model breakdown, and producer-priced trailing windows.
 struct Stats {
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, ModelSpend>,
-    sessions: u32,
+    total: SpendTally,
 }
 
-/// Read the shared spending cache, refresh it in memory via the incremental
-/// walk, then derive every view from the same deduplicated entries. Embedded
-/// pricing keeps the walk offline and lock-free; entries the producer already
-/// priced keep their cached cost.
-fn load_stats() -> Stats {
-    let files = discover_spending_files();
+impl Stats {
+    fn from_provider(cache: ProviderSpendingCache) -> Self {
+        let ProviderSpendingCache {
+            days,
+            models,
+            spending,
+            ..
+        } = cache;
+        Stats {
+            by_day: days,
+            by_model: models,
+            total: spending.total,
+        }
+    }
+}
+
+fn load_stats(human: bool) -> Result<LoadedStats> {
     let paths = RuntimePaths::shared();
+    load_stats_from_paths(&paths, human)
+}
+
+fn load_stats_from_paths(paths: &RuntimePaths, human: bool) -> Result<LoadedStats> {
+    if let Some(stats) = load_published_stats(paths) {
+        return Ok(LoadedStats {
+            stats,
+            header_printed: false,
+        });
+    }
+
+    if should_animate_cold_stats(
+        human,
+        std::io::stdout().is_terminal(),
+        std::io::stderr().is_terminal(),
+    ) {
+        return load_cold_stats_with_spinner(paths);
+    }
+
+    let stats = compute_cold_stats(paths);
+    if human {
+        write_cold_note()?;
+    }
+    Ok(LoadedStats {
+        stats,
+        header_printed: false,
+    })
+}
+
+fn load_published_stats(paths: &RuntimePaths) -> Option<Stats> {
+    let cache = read_provider_spending_cache(&paths.shared_provider_spending_path());
+    cache
+        .is_current_version()
+        .then(|| Stats::from_provider(cache))
+}
+
+fn compute_cold_stats(paths: &RuntimePaths) -> Stats {
+    compute_cold_stats_from_files(paths, discover_spending_files())
+}
+
+fn compute_cold_stats_from_files(
+    paths: &RuntimePaths,
+    files: Vec<(&'static dyn AgentAdapter, PathBuf)>,
+) -> Stats {
     let mut cache = read_spending_cache(&paths.shared_spending_cursor_path());
-    let spending = compute_spending(&files, &mut cache, &PriceBook::embedded(), unix_secs_now());
+    let total = compute_spending(&files, &mut cache, &PriceBook::embedded(), unix_secs_now()).total;
     Stats {
         by_day: compute_daily_spend(&files, &cache),
         by_model: compute_model_breakdown(&files, &cache),
-        sessions: spending.total.year.sessions,
+        total,
     }
+}
+
+fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
+    let geometry = PanelGeometry::current();
+    emit(&header_lines(geometry.panel_width), geometry.outer)?;
+
+    let files = discover_spending_files();
+    let file_count = files.len();
+    let paths = paths.clone();
+    let (tx, rx) = mpsc::channel();
+    let worker = thread::spawn(move || {
+        let stats = compute_cold_stats_from_files(&paths, files);
+        let _ = tx.send(stats);
+    });
+
+    let stats = wait_for_cold_stats(rx, file_count);
+    if worker.join().is_err() {
+        return Err(anyhow!("stats worker panicked"));
+    }
+    let stats = stats?;
+    write_cold_note()?;
+    Ok(LoadedStats {
+        stats,
+        header_printed: true,
+    })
+}
+
+fn wait_for_cold_stats(rx: mpsc::Receiver<Stats>, file_count: usize) -> Result<Stats> {
+    let start = Instant::now();
+    let mut frame = 0;
+    let mut shown = false;
+    loop {
+        match rx.recv_timeout(SPINNER_TICK) {
+            Ok(stats) => {
+                if shown {
+                    clear_spinner_line()?;
+                }
+                return Ok(stats);
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                if start.elapsed() < SPINNER_MIN_AGE {
+                    continue;
+                }
+                write_spinner_line(SPINNER_FRAMES[frame % SPINNER_FRAMES.len()], file_count)?;
+                frame += 1;
+                shown = true;
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                if shown {
+                    clear_spinner_line()?;
+                }
+                return Err(anyhow!("stats worker exited before sending a result"));
+            }
+        }
+    }
+}
+
+fn should_animate_cold_stats(human: bool, stdout_tty: bool, stderr_tty: bool) -> bool {
+    human && stdout_tty && stderr_tty
+}
+
+fn write_spinner_line(frame: char, file_count: usize) -> Result<()> {
+    let plural = if file_count == 1 { "" } else { "s" };
+    let mut stderr = std::io::stderr().lock();
+    write!(
+        stderr,
+        "\r{frame} Reading your history... {file_count} transcript file{plural}"
+    )?;
+    stderr.flush()?;
+    Ok(())
+}
+
+fn clear_spinner_line() -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    write!(stderr, "\r{:<width$}\r", "", width = SPINNER_CLEAR_COLS)?;
+    stderr.flush()?;
+    Ok(())
+}
+
+fn write_cold_note() -> Result<()> {
+    let mut stderr = std::io::stderr().lock();
+    writeln!(
+        stderr,
+        "rimz stats: computed from transcripts; start a Rimz sidebar to make this instant."
+    )?;
+    Ok(())
 }
 
 // ── The grid ───────────────────────────────────────────────────────────────────
@@ -175,12 +334,64 @@ fn level(value: f64, max: f64) -> usize {
 
 // ── Rendering ────────────────────────────────────────────────────────────────
 
-fn render_panel(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
-    let cols = term_cols();
-    let weeks = weeks_for_terminal(cols);
-    let panel_width = GUTTER + weeks * 2;
-    let outer = cols.saturating_sub(panel_width) / 2;
+struct PanelGeometry {
+    weeks: usize,
+    panel_width: usize,
+    outer: usize,
+}
 
+impl PanelGeometry {
+    fn current() -> Self {
+        let cols = term_cols();
+        let weeks = weeks_for_terminal(cols);
+        let panel_width = GUTTER + weeks * 2;
+        let outer = cols.saturating_sub(panel_width) / 2;
+        PanelGeometry {
+            weeks,
+            panel_width,
+            outer,
+        }
+    }
+}
+
+fn render_panel(stats: &Stats, today_day: i64, dollars: bool, include_header: bool) -> Result<()> {
+    let geometry = PanelGeometry::current();
+    let mut lines: Vec<String> = Vec::new();
+    if include_header {
+        lines.extend(header_lines(geometry.panel_width));
+    }
+
+    if stats.by_day.is_empty() {
+        let message = "No token usage recorded yet - run an agent and check back.";
+        lines.push(center(
+            &render::paint(muted(), message),
+            message.chars().count(),
+            geometry.panel_width,
+        ));
+        return emit(&lines, geometry.outer);
+    }
+
+    heatmap_lines(
+        &mut lines,
+        stats,
+        today_day,
+        geometry.weeks,
+        geometry.panel_width,
+        dollars,
+    );
+    lines.push(String::new());
+    windows_lines(&mut lines, stats);
+    if !stats.by_model.is_empty() {
+        lines.push(String::new());
+        models_lines(&mut lines, stats, geometry.panel_width);
+    }
+    lines.push(String::new());
+    insights_lines(&mut lines, stats, today_day, geometry.panel_width);
+
+    emit(&lines, geometry.outer)
+}
+
+fn header_lines(panel_width: usize) -> Vec<String> {
     let mut lines: Vec<String> = Vec::new();
     lines.push(String::new());
     // Indent the wordmark as one block (a single shared pad), so its lines stay
@@ -200,30 +411,7 @@ fn render_panel(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
         panel_width,
     ));
     lines.push(String::new());
-
-    if stats.by_day.is_empty() {
-        lines.push(center(
-            &render::paint(
-                muted(),
-                "No token usage recorded yet — run an agent and check back.",
-            ),
-            59,
-            panel_width,
-        ));
-        return emit(&lines, outer);
-    }
-
-    heatmap_lines(&mut lines, stats, today_day, weeks, panel_width, dollars);
-    lines.push(String::new());
-    windows_lines(&mut lines, stats, today_day);
-    if !stats.by_model.is_empty() {
-        lines.push(String::new());
-        models_lines(&mut lines, stats, panel_width);
-    }
-    lines.push(String::new());
-    insights_lines(&mut lines, stats, today_day, panel_width);
-
-    emit(&lines, outer)
+    lines
 }
 
 /// Print the assembled panel, each line indented to centre the block on screen.
@@ -299,9 +487,12 @@ fn ramp_key(styles: &[anstyle::Style; 5]) -> String {
 }
 
 /// The trailing Week / Month / Year totals, tokens and dollars, columns aligned.
-fn windows_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64) {
-    let w = Windows::of(&stats.by_day, today_day);
-    for (label, win) in [("Week", &w.week), ("Month", &w.month), ("Year", &w.year)] {
+fn windows_lines(lines: &mut Vec<String>, stats: &Stats) {
+    for (label, win) in [
+        ("Week", &stats.total.week),
+        ("Month", &stats.total.month),
+        ("Year", &stats.total.year),
+    ] {
         let tokens = format!("◇ {}", fmt_tokens(win.tokens));
         lines.push(format!(
             "  {}{}  {}  {}",
@@ -402,7 +593,7 @@ fn insights_lines(lines: &mut Vec<String>, stats: &Stats, today_day: i64, panel_
     lines.push(format!(
         "  {} {}",
         render::paint(muted(), "Sessions:"),
-        stats.sessions
+        stats.total.year.sessions
     ));
 
     let most = activity
@@ -506,44 +697,6 @@ fn visible_len(s: &str) -> usize {
 }
 
 // ── Trailing windows and activity ──────────────────────────────────────────────
-
-#[derive(Default)]
-struct Window {
-    tokens: u64,
-    usd: f64,
-}
-
-struct Windows {
-    week: Window,
-    month: Window,
-    year: Window,
-}
-
-impl Windows {
-    fn of(by_day: &BTreeMap<i64, DaySpend>, today_day: i64) -> Self {
-        let mut w = Windows {
-            week: Window::default(),
-            month: Window::default(),
-            year: Window::default(),
-        };
-        for (&day, spend) in by_day {
-            let age = today_day - day;
-            if (0..365).contains(&age) {
-                w.year.tokens += spend.tokens;
-                w.year.usd += spend.usd;
-            }
-            if (0..30).contains(&age) {
-                w.month.tokens += spend.tokens;
-                w.month.usd += spend.usd;
-            }
-            if (0..7).contains(&age) {
-                w.week.tokens += spend.tokens;
-                w.week.usd += spend.usd;
-            }
-        }
-        w
-    }
-}
 
 /// Cadence read from the per-day history: the trailing-four-week active ratio,
 /// the heaviest single day, and the longest and current active-day streaks.
@@ -813,7 +966,6 @@ struct DayJson {
 }
 
 fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
-    let windows = Windows::of(&stats.by_day, today_day);
     let activity = Activity::of(&stats.by_day, today_day);
     let total: u64 = stats.by_model.values().map(|m| m.tokens).sum();
 
@@ -852,7 +1004,7 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
 
     let doc = StatsJson {
         unit: if dollars { "usd" } else { "tokens" },
-        sessions: stats.sessions,
+        sessions: stats.total.year.sessions,
         active_days_28: activity.active_28,
         longest_streak: activity.longest_streak,
         current_streak: activity.current_streak,
@@ -861,16 +1013,16 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
             .map(|day| utc_date(day.max(0) as u64 * DAY_SECS as u64)),
         windows: WindowsJson {
             week: WindowJson {
-                tokens: windows.week.tokens,
-                usd: windows.week.usd,
+                tokens: stats.total.week.tokens,
+                usd: stats.total.week.usd,
             },
             month: WindowJson {
-                tokens: windows.month.tokens,
-                usd: windows.month.usd,
+                tokens: stats.total.month.tokens,
+                usd: stats.total.month.usd,
             },
             year: WindowJson {
-                tokens: windows.year.tokens,
-                usd: windows.year.usd,
+                tokens: stats.total.year.tokens,
+                usd: stats.total.year.usd,
             },
         },
         models,
@@ -930,18 +1082,45 @@ mod tests {
     }
 
     #[test]
-    fn trailing_windows_sum_the_right_days() {
+    fn published_stats_reads_rollups_and_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime =
+            RuntimePaths::under(rimz::WorkspaceId::from_project_root(dir.path()), dir.path())
+                .unwrap();
         let today = 20_000;
-        let mut by_day = BTreeMap::new();
-        by_day.insert(today, day(10, 1.0));
-        by_day.insert(today - 6, day(20, 2.0)); // inside the trailing week
-        by_day.insert(today - 10, day(40, 4.0)); // inside the month, outside the week
-        by_day.insert(today - 200, day(80, 8.0)); // inside the year, outside the month
-        let w = Windows::of(&by_day, today);
-        assert_eq!(w.week.tokens, 30);
-        assert_eq!(w.month.tokens, 70);
-        assert_eq!(w.year.tokens, 150);
-        assert!((w.year.usd - 15.0).abs() < 1e-9);
+        let by_day = BTreeMap::from([(today - 10, day(40, 4.0))]);
+        let by_model = BTreeMap::from([(
+            "gpt-5-codex".to_owned(),
+            ModelSpend {
+                usd: 7.0,
+                input: 70,
+                output: 30,
+                tokens: 100,
+            },
+        )]);
+        let mut spending = rimz::agents::spending::Spending::default();
+        spending.total.week.tokens = 7;
+        spending.total.week.usd = 0.7;
+        spending.total.month.tokens = 30;
+        spending.total.month.usd = 3.0;
+        spending.total.year.tokens = 365;
+        spending.total.year.usd = 36.5;
+        spending.total.year.sessions = 9;
+        rimz::agents::spending::write_provider_spending_cache_with_rollups(
+            &runtime.shared_provider_spending_path(),
+            123,
+            &spending,
+            &by_day,
+            &by_model,
+        );
+
+        let stats = load_published_stats(&runtime).expect("v3 aggregate is readable");
+
+        assert_eq!(stats.by_day, by_day);
+        assert_eq!(stats.by_model, by_model);
+        assert_eq!(stats.total.week.tokens, 7);
+        assert_eq!(stats.total.month.usd, 3.0);
+        assert_eq!(stats.total.year.sessions, 9);
     }
 
     #[test]
@@ -974,6 +1153,14 @@ mod tests {
             a.current_streak, 2,
             "a pending today does not break the streak"
         );
+    }
+
+    #[test]
+    fn cold_spinner_requires_human_stdout_and_stderr_ttys() {
+        assert!(should_animate_cold_stats(true, true, true));
+        assert!(!should_animate_cold_stats(false, true, true));
+        assert!(!should_animate_cold_stats(true, false, true));
+        assert!(!should_animate_cold_stats(true, true, false));
     }
 
     #[test]

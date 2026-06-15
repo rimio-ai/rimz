@@ -793,12 +793,40 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
     assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
     assert_eq!(cache.refreshed_at_ms, 12_345);
     assert_eq!(cache.spending, spending);
+    assert!(cache.days.is_empty());
+    assert!(cache.models.is_empty());
     assert!(cache.is_fresh(12_345));
+
+    let days = BTreeMap::from([(
+        NOW_SECS as i64 / 86_400,
+        DaySpend {
+            usd: 1.25,
+            tokens: 4_200,
+        },
+    )]);
+    let models = BTreeMap::from([(
+        "claude-opus-4-8".to_owned(),
+        ModelSpend {
+            usd: 1.25,
+            input: 3_000,
+            output: 1_200,
+            tokens: 4_200,
+        },
+    )]);
+    write_provider_spending_cache_with_rollups(&path, 12_346, &spending, &days, &models);
+    let cache = read_provider_spending_cache(&path);
+    assert_eq!(cache.version, PROVIDER_SPENDING_VERSION);
+    assert_eq!(cache.refreshed_at_ms, 12_346);
+    assert_eq!(cache.spending, spending);
+    assert_eq!(cache.days, days);
+    assert_eq!(cache.models, models);
 
     std::fs::write(&path, serde_json::to_vec(&spending).unwrap()).unwrap();
     let pre_stamp = read_provider_spending_cache(&path);
     assert_eq!(pre_stamp.refreshed_at_ms, 0);
     assert_eq!(pre_stamp.spending, spending);
+    assert!(pre_stamp.days.is_empty());
+    assert!(pre_stamp.models.is_empty());
     assert!(!pre_stamp.is_fresh(NOW_SECS * 1_000));
 
     let now_ms = NOW_SECS * 1_000;
@@ -806,6 +834,7 @@ fn provider_cache_staleness_and_error_cases_are_explicit() {
         version: 0,
         refreshed_at_ms: now_ms,
         spending: spending.clone(),
+        ..ProviderSpendingCache::default()
     };
     std::fs::write(&path, serde_json::to_vec(&stale_shape).unwrap()).unwrap();
     let version_mismatch = read_provider_spending_cache(&path);
