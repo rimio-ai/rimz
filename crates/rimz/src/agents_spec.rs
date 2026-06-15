@@ -14,8 +14,6 @@ use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
-/// Prefix marking a launch tab whose panes run in a Rimz-owned worktree.
-const WORKTREE_TAB_PREFIX: &str = "⑂ ";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
 const RESERVED_ALIAS_AND_LAYOUT_NAMES: &[&str] = &[
@@ -204,9 +202,18 @@ pub fn resolve_layout(
     })
 }
 
-pub fn default_tab_title(spec: &LayoutSpec, cwd: &Path, worktree_name: Option<&str>) -> String {
+/// The default tab title for a launch. A worktree launch shows the worktree
+/// name behind `branch_glyph` (the worktree header's branch glyph, resolved
+/// from the sidebar glyph set so the tab tracks Unicode/Nerd Font); otherwise
+/// the title is the first agent kind (or `term`) over the cwd basename.
+pub fn default_tab_title(
+    spec: &LayoutSpec,
+    cwd: &Path,
+    worktree_name: Option<&str>,
+    branch_glyph: &str,
+) -> String {
     if let Some(name) = worktree_name.filter(|name| !name.is_empty()) {
-        return format!("{WORKTREE_TAB_PREFIX}{name}");
+        return format!("{branch_glyph} {name}");
     }
     let kind = spec.first_agent_kind().unwrap_or("term");
     crate::resume::build_label(kind, None, cwd)

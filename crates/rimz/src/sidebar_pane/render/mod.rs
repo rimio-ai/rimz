@@ -61,6 +61,16 @@ pub(crate) use self::sections::{MakeUpHit, ProviderTabHit};
 pub(crate) use self::sections::{status_total, unread_total};
 use self::theme::Theme;
 
+/// The worktree branch glyph for the sidebar's effective glyph set — the glyph
+/// the worktree header draws. A launch tab whose panes run in a Rimz-owned
+/// worktree prefixes its title with this, so the tab tracks the configured set
+/// (Unicode, Nerd Font, or a per-glyph override) rather than a fixed glyph.
+pub fn worktree_branch_glyph(sidebar: &crate::config::SidebarConfig) -> String {
+    self::theme::GlyphSet::resolve_with_set(sidebar.glyph_set_source().as_deref(), &sidebar.glyphs)
+        .glyph(crate::config::GlyphRole::WorktreeBranch)
+        .to_owned()
+}
+
 #[cfg(test)]
 fn age_heat_amount_for_test(age_secs: i64) -> f32 {
     let first_quarter = crate::feed::ATTENTION_AGE_CEILING_SECS / 4;

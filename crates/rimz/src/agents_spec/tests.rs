@@ -598,20 +598,36 @@ fn title_uses_first_agent_or_terminal_and_worktree_name() {
     // No worktree → kind-prefixed, so multiple agent tabs in one room stay distinct.
     let agent = parse_layout_spec("term,codex", &AliasesConfig::default()).expect("parse");
     assert_eq!(
-        default_tab_title(&agent, Path::new("/code/query-engine"), None),
+        default_tab_title(&agent, Path::new("/code/query-engine"), None, "⑂"),
         "codex:query-engine"
     );
     assert_eq!(
         default_tab_title(
             &LayoutSpec::single(Cell::shell()),
             Path::new("/code/main"),
-            None
+            None,
+            "⑂"
         ),
         "term:main"
     );
-    // Worktree launch → worktree name behind the worktree glyph, no kind prefix.
+    // Worktree launch → worktree name behind the branch glyph, no kind prefix.
     assert_eq!(
-        default_tab_title(&agent, Path::new("/code/wt/tab-name"), Some("tab-name")),
+        default_tab_title(
+            &agent,
+            Path::new("/code/wt/tab-name"),
+            Some("tab-name"),
+            "⑂"
+        ),
         "⑂ tab-name"
+    );
+    // The Nerd Font set carries through to the tab prefix.
+    assert_eq!(
+        default_tab_title(
+            &agent,
+            Path::new("/code/wt/tab-name"),
+            Some("tab-name"),
+            "\u{e725}"
+        ),
+        "\u{e725} tab-name"
     );
 }
