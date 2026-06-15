@@ -199,9 +199,15 @@ pub(super) fn apply_fetch_outcome(
         .flat_map(|group| group.rows.iter())
         .map(|row| row.id.clone())
         .collect();
-    let focus_clear = focus_read_receipt(current, focused_row_id.as_deref(), &marks, now);
+    let focus_clear = read_receipt_for_row(
+        current,
+        focused_row_id.as_deref(),
+        UnreadClearCause::Focus,
+        &marks,
+        now,
+    );
     read_marks.observe_fold(focus_clear.ids.clone(), now.as_millisecond(), &live);
-    clear_focused_rows(current, &focus_clear.ids);
+    set_rows_unread(current, &focus_clear.ids, false);
     if let Some(diag) = diag {
         emit_unread_cleared_trace(diag, &focus_clear.trace);
     }
@@ -390,46 +396,55 @@ fn row_id_of_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> O
 }
 
 #[derive(Clone, Debug, Default)]
-struct FocusClear {
-    ids: Vec<String>,
-    trace: Vec<ClearedUnread>,
+pub(super) struct ReadClear {
+    pub(super) ids: Vec<String>,
+    pub(super) trace: Vec<ClearedUnread>,
 }
 
-fn focus_read_receipt(
+/// The read receipt to write for a row that was just read — by focusing its
+/// pane (`cause = Focus`) or by the `m` key (`cause = MarkRead`). Returns the
+/// row id to clear and, when the row was unread, the clear trace. An empty
+/// result means the row is already read or never needed a look, so nothing is
+/// written.
+pub(super) fn read_receipt_for_row(
     snapshot: &SidebarSnapshot,
-    focused_row_id: Option<&str>,
+    row_id: Option<&str>,
+    cause: UnreadClearCause,
     marks: &crate::sidebar::read_marks::ReadMarks,
     now: Timestamp,
-) -> FocusClear {
-    let Some(focused_row_id) = focused_row_id else {
-        return FocusClear::default();
+) -> ReadClear {
+    let Some(row_id) = row_id else {
+        return ReadClear::default();
     };
     let Some(row) = snapshot
         .worktree_groups
         .iter()
         .flat_map(|group| group.rows.iter())
-        .find(|row| row.id == focused_row_id)
+        .find(|row| row.id == row_id)
     else {
-        return FocusClear::default();
+        return ReadClear::default();
     };
     let needs_look = row
         .status()
         .is_some_and(crate::feed::AgentStatus::needs_a_look);
     if !row.unread && (!needs_look || unread::receipt_reaches(marks, &row.id, row.last_activity)) {
-        return FocusClear::default();
+        return ReadClear::default();
     }
     let trace = row
         .unread
-        .then(|| unread::cleared_unread(row, UnreadClearCause::Focus, Some(now.as_millisecond())))
+        .then(|| unread::cleared_unread(row, cause, Some(now.as_millisecond())))
         .into_iter()
         .collect();
-    FocusClear {
+    ReadClear {
         ids: vec![row.id.clone()],
         trace,
     }
 }
 
-fn clear_focused_rows(snapshot: &mut SidebarSnapshot, ids: &[String]) {
+/// Set the `unread` bit on the named rows in place — the instant local feedback
+/// for a focus/mark-read clear (`false`) or a mark-unread re-flag (`true`),
+/// ahead of the durable write the next produce re-derives.
+pub(super) fn set_rows_unread(snapshot: &mut SidebarSnapshot, ids: &[String], unread: bool) {
     if ids.is_empty() {
         return;
     }
@@ -439,12 +454,12 @@ fn clear_focused_rows(snapshot: &mut SidebarSnapshot, ids: &[String]) {
         .flat_map(|group| group.rows.iter_mut())
     {
         if ids.iter().any(|id| id == &row.id) {
-            row.unread = false;
+            row.unread = unread;
         }
     }
 }
 
-fn emit_unread_cleared_trace(diag: &crate::diag::DiagSink, changes: &[ClearedUnread]) {
+pub(super) fn emit_unread_cleared_trace(diag: &crate::diag::DiagSink, changes: &[ClearedUnread]) {
     use crate::schema::notify_trace::NotifyTraceEvent;
     for change in changes {
         let event = NotifyTraceEvent::UnreadCleared {
@@ -458,6 +473,25 @@ fn emit_unread_cleared_trace(diag: &crate::diag::DiagSink, changes: &[ClearedUnr
             cleared_at_ms: change.cleared_at_ms,
         };
         diag.trace_notify(event);
+    }
+}
+
+pub(super) fn emit_unread_marked_trace(
+    diag: &crate::diag::DiagSink,
+    opened: &[unread::OpenedUnread],
+) {
+    use crate::schema::notify_trace::NotifyTraceEvent;
+    for item in opened {
+        diag.trace_notify(NotifyTraceEvent::UnreadMarked {
+            row_id: item.row_id.clone(),
+            label: Some(item.label.clone()),
+            agent_kind: Some(item.agent_kind.clone()),
+            agent_id: Some(item.agent_id.clone()),
+            worktree: item.worktree.clone(),
+            pane_id: item.pane_id.clone(),
+            status: item.status.as_str().to_owned(),
+            episode_ms: item.episode_ms,
+        });
     }
 }
 

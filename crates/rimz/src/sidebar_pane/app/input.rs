@@ -42,8 +42,19 @@ pub(super) enum KeyAction {
     Down,
     WorktreeUp,
     WorktreeDown,
+    /// `g`/`G` — move the selection to the first / last visible row (browse,
+    /// no focus), the Vim top/bottom jump.
+    Top,
+    Bottom,
     Enter,
-    Space,
+    /// `n`/`Space` — jump to the next item that needs you and focus it; `N`
+    /// walks the same inbox in reverse. The fleet-scale triage keys.
+    InboxNext,
+    InboxPrev,
+    /// `m`/`M` — mark the selected row read / unread without jumping, the
+    /// email-inbox hygiene keys.
+    MarkRead,
+    MarkUnread,
     Help,
     Dismiss,
     Filter(FilterAction),
@@ -75,8 +86,15 @@ pub(super) fn encode_key(code: KeyCode) -> Option<String> {
         KeyCode::Char('j') => "key:down",
         KeyCode::Char('K') => "key:worktree_up",
         KeyCode::Char('J') => "key:worktree_down",
+        KeyCode::Char('g') => "key:top",
+        KeyCode::Char('G') => "key:bottom",
         KeyCode::Char('l') => "key:enter",
-        KeyCode::Char(' ') => "key:space",
+        // `n` and `Space` are one key: walk forward through the inbox and read.
+        // `N` walks it in reverse.
+        KeyCode::Char('n') | KeyCode::Char(' ') => "key:inbox_next",
+        KeyCode::Char('N') => "key:inbox_prev",
+        KeyCode::Char('m') => "key:mark_read",
+        KeyCode::Char('M') => "key:mark_unread",
         KeyCode::Char('?') => "key:help",
         KeyCode::Char('a') => "key:filter:all",
         KeyCode::Char('u') => "key:filter:unread",
@@ -137,10 +155,15 @@ pub(super) fn decode_wakeup(bytes: &[u8]) -> Wakeup {
         "key:down" => Wakeup::Key(KeyAction::Down),
         "key:worktree_up" => Wakeup::Key(KeyAction::WorktreeUp),
         "key:worktree_down" => Wakeup::Key(KeyAction::WorktreeDown),
+        "key:top" => Wakeup::Key(KeyAction::Top),
+        "key:bottom" => Wakeup::Key(KeyAction::Bottom),
         "key:tab_prev" => Wakeup::Key(KeyAction::TabPrev),
         "key:tab_next" => Wakeup::Key(KeyAction::TabNext),
         "key:enter" => Wakeup::Key(KeyAction::Enter),
-        "key:space" => Wakeup::Key(KeyAction::Space),
+        "key:inbox_next" => Wakeup::Key(KeyAction::InboxNext),
+        "key:inbox_prev" => Wakeup::Key(KeyAction::InboxPrev),
+        "key:mark_read" => Wakeup::Key(KeyAction::MarkRead),
+        "key:mark_unread" => Wakeup::Key(KeyAction::MarkUnread),
         "key:help" => Wakeup::Key(KeyAction::Help),
         "key:filter:all" => Wakeup::Key(KeyAction::Filter(FilterAction::All)),
         "key:filter:unread" => Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
@@ -319,6 +342,40 @@ mod tests {
                 KeyCode::Char('K'),
                 Wakeup::Key(KeyAction::WorktreeUp),
             ),
+            // top/bottom jumps
+            ("g → top", KeyCode::Char('g'), Wakeup::Key(KeyAction::Top)),
+            (
+                "G → bottom",
+                KeyCode::Char('G'),
+                Wakeup::Key(KeyAction::Bottom),
+            ),
+            // inbox triage: n and Space step forward, N steps back
+            (
+                "n → inbox next",
+                KeyCode::Char('n'),
+                Wakeup::Key(KeyAction::InboxNext),
+            ),
+            (
+                "space → inbox next",
+                KeyCode::Char(' '),
+                Wakeup::Key(KeyAction::InboxNext),
+            ),
+            (
+                "N → inbox prev",
+                KeyCode::Char('N'),
+                Wakeup::Key(KeyAction::InboxPrev),
+            ),
+            // mark read / unread without jumping
+            (
+                "m → mark read",
+                KeyCode::Char('m'),
+                Wakeup::Key(KeyAction::MarkRead),
+            ),
+            (
+                "M → mark unread",
+                KeyCode::Char('M'),
+                Wakeup::Key(KeyAction::MarkUnread),
+            ),
             // filter keys
             (
                 "a → all",
@@ -399,8 +456,14 @@ mod tests {
             KeyCode::Char('k'),
             KeyCode::Char('J'),
             KeyCode::Char('K'),
+            KeyCode::Char('g'),
+            KeyCode::Char('G'),
             KeyCode::Char('l'),
+            KeyCode::Char('n'),
+            KeyCode::Char('N'),
             KeyCode::Char(' '),
+            KeyCode::Char('m'),
+            KeyCode::Char('M'),
             KeyCode::Char('?'),
             KeyCode::Char('a'),
             KeyCode::Char('q'),

@@ -119,6 +119,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
         wasm,
         rimz_bin: rimz_shim,
         converge: false,
+        focus_key: None,
     };
     backend
         .ensure_presence_plugin(&opts)

@@ -956,3 +956,53 @@ fn timer_gate_collapses_a_superseded_chain() {
         "a stale fire arms no duplicate chain",
     );
 }
+
+#[test]
+fn focus_chord_parses_alt_and_ctrl_with_separators() {
+    assert_eq!(
+        FocusChord::parse("Alt+p"),
+        Some(FocusChord {
+            modifier: ChordModifier::Alt,
+            key: 'p',
+        }),
+    );
+    // `-` is an accepted separator, the modifier is case-insensitive, and the
+    // aliases match the host grammar.
+    assert_eq!(
+        FocusChord::parse("ctrl-S"),
+        Some(FocusChord {
+            modifier: ChordModifier::Ctrl,
+            key: 'S',
+        }),
+    );
+    assert_eq!(
+        FocusChord::parse("  m+j  "),
+        Some(FocusChord {
+            modifier: ChordModifier::Alt,
+            key: 'j',
+        }),
+    );
+}
+
+#[test]
+fn focus_chord_rejects_malformed_shapes() {
+    // No separator, unknown modifier, multi-char key, and a non-graphic key
+    // all skip the bind rather than register something broken.
+    assert_eq!(FocusChord::parse("p"), None);
+    assert_eq!(FocusChord::parse("super+p"), None);
+    assert_eq!(FocusChord::parse("alt+pp"), None);
+    assert_eq!(FocusChord::parse("alt+ "), None);
+    assert_eq!(FocusChord::parse(""), None);
+}
+
+#[test]
+fn reconfigure_requested_only_for_a_parseable_focus_key() {
+    // The plugin asks for `Reconfigure` only to bind the focus key, so an absent
+    // or disabled chord raises no prompt for a keybind it would never install.
+    assert!(reconfigure_requested(Some("Alt+p")));
+    assert!(reconfigure_requested(Some("ctrl-s")));
+    assert!(!reconfigure_requested(None));
+    assert!(!reconfigure_requested(Some("off")));
+    assert!(!reconfigure_requested(Some("")));
+    assert!(!reconfigure_requested(Some("super+p")));
+}

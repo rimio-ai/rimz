@@ -183,6 +183,36 @@ impl UnreadEpisodes {
     }
 }
 
+/// Open an unread episode for each row and persist `unread.json` — the one
+/// durable mark-unread write path, shared by the `rimz sidebar mark-unread` CLI
+/// and the renderer's `M` key. Each episode opens at `last_activity.max(now_ms)`
+/// so no read receipt can reach it, which keeps the elder's reconcile from
+/// pruning it and makes the write safe from any process, elder or not. Callers
+/// trace and wake; this owns only the persistence.
+pub fn mark_rows_unread(
+    runtime: &RuntimePaths,
+    rows: &[SidebarRow],
+    now_ms: i64,
+) -> atomic::Result<Vec<OpenedUnread>> {
+    let mut episodes = UnreadEpisodes::load(runtime);
+    // Unread is an agent-row concept: an episode opens on a `needs_a_look`
+    // status, so a process row (no status) can never be unread. Skip non-agent
+    // rows so every caller — the renderer's `M` key and `rimz sidebar
+    // mark-unread @process-pane` alike — stays panic-free at `opened_unread`.
+    let opened = rows
+        .iter()
+        .filter(|row| row.status().is_some())
+        .map(|row| {
+            let episode_ms = row.last_activity.as_millisecond().max(now_ms);
+            episodes.open_for_row(row, episode_ms)
+        })
+        .collect::<Vec<_>>();
+    if !opened.is_empty() {
+        episodes.persist(runtime)?;
+    }
+    Ok(opened)
+}
+
 pub(crate) fn derive(snapshot: &mut SidebarSnapshot, episodes: &UnreadEpisodes, marks: &ReadMarks) {
     for row in snapshot
         .worktree_groups
@@ -363,6 +393,14 @@ mod tests {
         }
     }
 
+    fn process_row(id: &str, last_activity: i64) -> SidebarRow {
+        SidebarRow {
+            card: RowCard::Process(crate::ProcessCard::default()),
+            name: "zsh".to_owned(),
+            ..row(id, AgentStatus::Idle, last_activity)
+        }
+    }
+
     fn snapshot(rows: Vec<SidebarRow>) -> SidebarSnapshot {
         let status_counts = rows
             .iter()
@@ -531,6 +569,43 @@ mod tests {
 
         assert!(out.opened[0].silent);
         assert!(snapshot.worktree_groups[0].rows[0].unread);
+    }
+
+    #[test]
+    fn mark_rows_unread_skips_process_rows_without_panicking() {
+        // `opened_unread` asserts an agent status; a process row carries none.
+        // The durable path must skip it rather than unwind, whether the target
+        // came from the `M` key or a `rimz sidebar mark-unread @process-pane`.
+        // (Regression: R1-01.)
+        let (_dir, runtime) = runtime();
+        let rows = vec![
+            process_row("term", 1_000),
+            row("a", AgentStatus::Waiting, 2_000),
+        ];
+
+        let opened = mark_rows_unread(&runtime, &rows, 5_000).expect("mark unread");
+
+        assert_eq!(opened.len(), 1, "only the agent row opens an episode");
+        assert_eq!(opened[0].row_id, "a");
+        let loaded = UnreadEpisodes::load(&runtime);
+        assert!(loaded.episodes.contains_key("a"));
+        assert!(!loaded.episodes.contains_key("term"));
+    }
+
+    #[test]
+    fn mark_rows_unread_writes_nothing_for_only_process_rows() {
+        // No agent row means no episode and no file write — the unread file stays
+        // absent rather than being rewritten with an empty map.
+        let (_dir, runtime) = runtime();
+
+        let opened =
+            mark_rows_unread(&runtime, &[process_row("term", 1_000)], 5_000).expect("mark unread");
+
+        assert!(opened.is_empty());
+        assert!(
+            !runtime.unread_path().exists(),
+            "no agent rows means no durable write",
+        );
     }
 
     #[test]

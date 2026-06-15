@@ -101,6 +101,21 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
         configuration.push_str(",rimz_bin=");
         configuration.push_str(&bin);
     }
+    // The focus chord the plugin binds at load. Grammar validation and the
+    // user-facing warning live in `cli::register_focus_key` (it runs for both
+    // backends); here we only guard the plugin-config separators and let the
+    // plugin's own parser skip anything malformed.
+    if let Some(focus_key) = opts.focus_key.as_deref() {
+        if focus_key.contains([',', '=']) {
+            tracing::debug!(
+                focus_key,
+                "focus_key contains a plugin-configuration separator; the Zellij focus keybind is disabled",
+            );
+        } else {
+            configuration.push_str(",focus_key=");
+            configuration.push_str(focus_key);
+        }
+    }
     configuration
 }
 
@@ -186,6 +201,7 @@ mod tests {
             wasm: std::path::PathBuf::from("/tmp/rimz-presence-zellij.wasm"),
             rimz_bin: std::path::PathBuf::from(rimz_bin),
             converge: false,
+            focus_key: None,
         }
     }
 
@@ -228,6 +244,24 @@ mod tests {
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
+    }
+
+    #[test]
+    fn presence_plugin_configuration_appends_focus_key() {
+        let mut opts = presence_opts("rimz-test", "/home/user/.cargo/bin/rimz");
+        opts.focus_key = Some("Alt+p".to_owned());
+        assert_eq!(
+            presence_plugin_configuration(&opts),
+            "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
+        );
+
+        // A chord carrying a plugin-config separator is dropped rather than
+        // shipped mis-parsable; the plugin keeps poll-only focus behaviour.
+        opts.focus_key = Some("Alt=p".to_owned());
+        assert_eq!(
+            presence_plugin_configuration(&opts),
+            "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
+        );
     }
 
     #[test]

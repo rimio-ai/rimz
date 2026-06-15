@@ -542,7 +542,11 @@ pub(super) fn scroll_lines(
         if ui.help_visible && !active {
             lines.push(Line::from(""));
             map.push(None);
-            extend_inert(&mut lines, &mut map, help_lines(theme));
+            extend_inert(
+                &mut lines,
+                &mut map,
+                help_lines(theme, snapshot.sidebar.focus_key_label()),
+            );
         }
     }
 

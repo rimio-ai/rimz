@@ -398,6 +398,42 @@ fn next_attention_jump_orders_unread_episodes_by_age() {
     );
 }
 #[test]
+fn step_attention_index_reverses_the_inbox_walk() {
+    use crate::feed::AgentStatus;
+    let ws = workspace();
+    let mut snapshot = filterable_snapshot(&ws);
+    let read_failed = &mut snapshot.worktree_groups[1].rows[0];
+    read_failed.last_activity = snapshot.now - Duration::from_secs(3_600);
+
+    let unread_success = &mut snapshot.worktree_groups[0].rows[1];
+    unread_success.name = "claude".to_owned();
+    unread_success.card = crate::RowCard::Agent(Box::new(crate::AgentCard {
+        status: Some(AgentStatus::Success),
+        phase: crate::agents::TurnPhase::Idle,
+        ..crate::AgentCard::default()
+    }));
+    unread_success.unread = true;
+    unread_success.last_activity = snapshot.now - Duration::from_secs(900);
+
+    // The forward triage order is [unread success @1, read failed @2]; reverse
+    // inverts every step and enters at the last row from outside the list.
+    assert_eq!(
+        step_attention_index(&snapshot, None, 1, false),
+        Some(2),
+        "reverse from the first candidate wraps to the last"
+    );
+    assert_eq!(
+        step_attention_index(&snapshot, None, 2, false),
+        Some(1),
+        "reverse steps to the previous candidate"
+    );
+    assert_eq!(
+        step_attention_index(&snapshot, None, 0, false),
+        Some(2),
+        "a selection outside the list enters at the last row going backward"
+    );
+}
+#[test]
 fn filtered_out_selection_drops_and_reseats_from_the_held_baseline() {
     use crate::feed::AgentStatus;
     let ws = workspace();

@@ -237,9 +237,12 @@ scrollbar = "auto"
 glow = "auto"
 card_density = "auto"
 trunk = "develop"
+focus_key = "Alt+p"
 ```
 
 `max_cols` caps the creation-time sidebar pane width so a percentage split does not swallow ultra-wide terminals. `refresh_ms` controls the renderer's animation grid, not the producer's data cadence. `scrollbar` controls only the right-margin overflow indicator.
+
+`focus_key` is the global multiplexer chord that focuses the sidebar from any pane, and toggles — press it again to return to your last working pane. It runs `rimz sidebar focus --toggle`, which resolves and focuses the room's sidebar pane. Both backends bind it automatically at session birth: tmux as a root-table `bind-key`, and Zellij through the presence plugin, which binds the chord at runtime once you grant it Reconfigure (the bind resets when the session ends and never touches your `config.kdl`) ([multiplexers.md → Focus key](../internals/sidebar/multiplexers.md#focus-key)). The default is `Alt+p` (`Alt` survives the terminal and Zellij's locked mode, and avoids tmux's `Ctrl+B` prefix); `Ctrl+<key>` is also accepted. Set it empty or `off` to register nothing and leave every key as it was. The sidebar's `?` overlay shows the active chord, and the in-sidebar keys (`n`/`N` to walk the inbox, `m`/`M` to mark read/unread, and the rest) are in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
 
 `[sidebar.theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[sidebar.animations]` status heads and `[sidebar.providers]` brand styling, lives in [theme.md](./theme.md).
 

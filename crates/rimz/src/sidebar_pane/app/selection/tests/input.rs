@@ -136,7 +136,9 @@ fn focus_keys_fire_without_mutating_selection() {
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
-    // Space triages to the next attention row, firing focus without selecting.
+    // The inbox keys triage to the next attention row, firing focus without
+    // selecting. With one attention row, `n` (forward) and `N` (reverse) both
+    // land on it.
     let mut snapshot = snapshot_with_panes(
         &ws,
         vec![
@@ -151,10 +153,21 @@ fn focus_keys_fire_without_mutating_selection() {
         ..crate::AgentCard::default()
     }));
     let mut ui = UiState::default();
-    let outcome = handle_key(KeyAction::Space, &mut ui, &snapshot);
-    assert_eq!(outcome, InputOutcome::focus(target));
+    let outcome = handle_key(KeyAction::InboxNext, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, 0, "the triage key moves no selection");
     assert_eq!(ui.selected_pane, None);
+
+    let outcome = handle_key(KeyAction::InboxPrev, &mut ui, &snapshot);
+    assert_eq!(
+        outcome,
+        InputOutcome::focus(target),
+        "N walks the inbox in reverse"
+    );
+    assert_eq!(
+        ui.selected_index, 0,
+        "the reverse triage key moves no selection"
+    );
 }
 #[test]
 fn arrow_key_reports_immediate_ui_change() {
@@ -357,4 +370,85 @@ fn help_overlay_holds_the_viewport_through_selection_churn() {
         map.contains(&Some(ui.selected_index)),
         "the selection is back on screen"
     );
+}
+#[test]
+fn top_and_bottom_keys_browse_to_the_ends() {
+    let ws = workspace();
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", false),
+            pane("terminal_2", "tab_0", false),
+            pane("terminal_3", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState::default();
+
+    // G jumps to the last visible row as a browse pick — selection only.
+    let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 2);
+    assert_eq!(outcome.focus, None, "the end jump never focuses");
+    assert!(ui.browse.is_some(), "G begins a browse pick");
+
+    // G again at the bottom is a no-op.
+    let outcome = handle_key(KeyAction::Bottom, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::default());
+
+    // g jumps back to the first row.
+    let outcome = handle_key(KeyAction::Top, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(ui.selected_index, 0);
+}
+#[test]
+fn mark_keys_name_the_selected_agent_row_without_focus() {
+    // `m`/`M` name the selected agent row's id for the loop to mark read /
+    // unread. They never focus, and they don't redraw here — the loop clears the
+    // row and repaints once after the durable write, so the frame never flashes
+    // the pre-clear state.
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    // Index 0 is the running `claude` agent row (the inbox participant).
+    let mut ui = UiState {
+        selected_index: 0,
+        ..Default::default()
+    };
+    let row_id = snapshot.worktree_groups[0].rows[0].id.clone();
+
+    let outcome = handle_key(KeyAction::MarkRead, &mut ui, &snapshot);
+    assert_eq!(outcome.mark_read, Some(row_id.clone()));
+    assert_eq!(outcome.focus, None);
+    assert!(!outcome.redraw, "the loop owns the repaint after the write");
+    assert_eq!(ui.selected_index, 0, "marking read moves no selection");
+
+    let outcome = handle_key(KeyAction::MarkUnread, &mut ui, &snapshot);
+    assert_eq!(outcome.mark_unread, Some(row_id));
+    assert_eq!(outcome.focus, None);
+}
+
+#[test]
+fn mark_keys_ignore_process_rows() {
+    // A process row has no status and can never be unread, so `m`/`M` on one are
+    // no-ops — never naming the row. This guards the downstream `opened_unread`
+    // invariant: were the id passed through, the unread write would panic on a
+    // statusless row. (Regression: R1-01.)
+    let ws = workspace();
+    let snapshot = filterable_snapshot(&ws);
+    // Index 1 is the `zsh` process row in the `main` group.
+    assert!(
+        snapshot.worktree_groups[0].rows[1].status().is_none(),
+        "fixture index 1 is the statusless process row",
+    );
+    let mut ui = UiState {
+        selected_index: 1,
+        ..Default::default()
+    };
+
+    let outcome = handle_key(KeyAction::MarkRead, &mut ui, &snapshot);
+    assert_eq!(outcome.mark_read, None, "no read mark on a process row");
+    assert_eq!(outcome, InputOutcome::default());
+
+    let outcome = handle_key(KeyAction::MarkUnread, &mut ui, &snapshot);
+    assert_eq!(outcome.mark_unread, None, "no unread mark on a process row");
+    assert_eq!(outcome, InputOutcome::default());
 }

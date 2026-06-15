@@ -1,6 +1,10 @@
 use super::remind::RemindState;
+use super::state::{
+    emit_unread_cleared_trace, emit_unread_marked_trace, read_receipt_for_row, set_rows_unread,
+};
 use super::*;
-use crate::sidebar::read_marks::ReadMarkStore;
+use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
+use crate::sidebar::unread::{self, UnreadClearCause};
 
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
@@ -307,6 +311,7 @@ impl LoopState {
         config: &ServeConfig,
         wakeup: Wakeup,
         terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
+        fetch: &mut FetchDispatcher,
         anim_start: Instant,
         diag: Option<&crate::diag::DiagSink>,
     ) -> Result<()> {
@@ -326,7 +331,97 @@ impl LoopState {
         if let Some(pane) = applied.focused {
             self.record_focus_intent(config, pane, anim_start, diag)?;
         }
+        if let Some(row_id) = applied.mark_read {
+            self.mark_row_read(config, fetch, &row_id, diag);
+        }
+        if let Some(row_id) = applied.mark_unread {
+            self.mark_row_unread(config, fetch, &row_id, diag);
+        }
         Ok(())
+    }
+
+    /// Mark a row read without jumping (`m`): write the durable manual receipt,
+    /// clear the row locally for an instant repaint, trace the clear, wake the
+    /// room so the elder prunes the episode and peer tabs converge, and refetch
+    /// so the receipt lands in the pulled snapshot. A no-op when the row is
+    /// already read.
+    fn mark_row_read(
+        &mut self,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        row_id: &str,
+        diag: Option<&crate::diag::DiagSink>,
+    ) {
+        let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
+            return;
+        };
+        let now = jiff::Timestamp::now();
+        let marks = self.read_marks.load_merged();
+        let clear = read_receipt_for_row(
+            &self.current,
+            Some(row_id),
+            UnreadClearCause::MarkRead,
+            &marks,
+            now,
+        );
+        if clear.ids.is_empty() {
+            return;
+        }
+        if let Err(err) = write_manual_read_marks(&runtime, clear.ids.clone(), now.as_millisecond())
+        {
+            warn!(error = %err, "mark-read receipt write failed");
+            return;
+        }
+        set_rows_unread(&mut self.current, &clear.ids, false);
+        if let Some(diag) = diag {
+            emit_unread_cleared_trace(diag, &clear.trace);
+        }
+        wake_room(&runtime);
+        self.dirty = true;
+        self.next_frame = Instant::now();
+        fetch.request(FetchRequest::default(), true);
+    }
+
+    /// Re-flag a row unread without jumping (`M`): open a durable episode through
+    /// the shared mark-unread path, set the row locally for an instant repaint,
+    /// trace the open, wake the room, and refetch so the episode lands in the
+    /// pulled snapshot. A no-op when the row has left the room.
+    fn mark_row_unread(
+        &mut self,
+        config: &ServeConfig,
+        fetch: &mut FetchDispatcher,
+        row_id: &str,
+        diag: Option<&crate::diag::DiagSink>,
+    ) {
+        let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
+            return;
+        };
+        let Some(row) = self
+            .current
+            .worktree_groups
+            .iter()
+            .flat_map(|group| group.rows.iter())
+            .find(|row| row.id == row_id)
+            .cloned()
+        else {
+            return;
+        };
+        let now_ms = jiff::Timestamp::now().as_millisecond();
+        let opened = match unread::mark_rows_unread(&runtime, std::slice::from_ref(&row), now_ms) {
+            Ok(opened) => opened,
+            Err(err) => {
+                warn!(error = %err, "mark-unread episode write failed");
+                return;
+            }
+        };
+        set_rows_unread(&mut self.current, std::slice::from_ref(&row.id), true);
+        if let Some(diag) = diag {
+            emit_unread_marked_trace(diag, &opened);
+        }
+        wake_room(&runtime);
+        self.dirty = true;
+        self.next_frame = Instant::now();
+        fetch.request(FetchRequest::default(), true);
     }
 
     pub(super) fn run_maintenance(
@@ -516,6 +611,14 @@ impl LoopState {
                 self.observer.dropped_msgs = self.observer.dropped_msgs.saturating_add(1);
             }
         }
+    }
+}
+
+/// Ping every sidebar in the room to refold after a mark read/unread — the
+/// elder prunes or keeps the episode and peer tabs converge on the new state.
+fn wake_room(runtime: &RuntimePaths) {
+    if let Err(err) = crate::ledger::wakeup::wake_sidebars(runtime) {
+        debug!(error = %err, "mark read/unread sidebar wake failed");
     }
 }
 

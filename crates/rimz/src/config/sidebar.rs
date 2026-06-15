@@ -156,6 +156,13 @@ pub struct SidebarConfig {
     /// form. Resolved producer-side onto the snapshot like the rest of
     /// `[sidebar]`.
     pub card_density: CardDensityMode,
+    /// The global multiplexer chord that focuses the sidebar from any pane — a
+    /// toggle, so pressing it again returns to your last working pane. Rimz
+    /// registers it room-scoped at session birth (tmux as a `bind-key`, Zellij
+    /// through the presence plugin), so it never touches your global config.
+    /// Default `Alt+p`; set empty or `off` to register nothing and leave your
+    /// keybinds untouched.
+    pub focus_key: String,
 }
 
 impl Default for SidebarConfig {
@@ -176,6 +183,7 @@ impl Default for SidebarConfig {
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
             card_density: CardDensityMode::default(),
+            focus_key: default_focus_key(),
         }
     }
 }
@@ -184,6 +192,24 @@ impl SidebarConfig {
     pub fn resolved_refresh_ms(&self) -> u16 {
         self.refresh_ms.clamp(MIN_REFRESH_MS, MAX_REFRESH_MS)
     }
+
+    /// The focus-sidebar chord to register and display, or `None` when the user
+    /// disabled it (empty / `off` / `none`).
+    pub fn focus_key_label(&self) -> Option<&str> {
+        let key = self.focus_key.trim();
+        if key.is_empty() || key.eq_ignore_ascii_case("off") || key.eq_ignore_ascii_case("none") {
+            None
+        } else {
+            Some(key)
+        }
+    }
+}
+
+/// The shipped default focus-sidebar chord: `Alt+p`, a toggle that reaches the
+/// sidebar and returns to the last pane. `Alt` survives the terminal and
+/// Zellij's locked mode; the user can rebind or disable it.
+pub fn default_focus_key() -> String {
+    "Alt+p".to_owned()
 }
 
 /// `[sidebar.theme]`: per-machine palette depth, scheme selection, and

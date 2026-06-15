@@ -262,7 +262,7 @@ pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
 /// The `?` overlay: keys and the glyph legend, every line in the faint chrome
 /// tier — reference material a reader summoned, not live state, so it recedes
 /// below the cards it sits under.
-pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
+pub(super) fn help_lines(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> {
     let faint = theme.faint();
     let waiting = status_glyph(theme, AgentStatus::Waiting);
     let attention = status_glyph(theme, AgentStatus::Failed);
@@ -271,14 +271,26 @@ pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
     let working = status_glyph(theme, AgentStatus::Running);
     let thinking = thinking_glyph(theme, 0);
     let idle = status_glyph(theme, AgentStatus::Idle);
-    vec![
+    let mut lines = vec![
         Line::styled("keys & legend", faint),
-        Line::styled("move     j/k rows   J/K worktrees", faint),
+        Line::styled("move     j/k rows   J/K worktrees   g/G ends", faint),
+        Line::styled("inbox    n/N next/prev needs-you (Space = n)", faint),
         Line::styled("focus    l or ↵     1-9 direct", faint),
+        Line::styled("read     m read      M unread", faint),
         Line::styled("accounts ←/→ tabs", faint),
         Line::styled("filter   u unread   q waiting   !/e attention", faint),
         Line::styled("         p paused   d done      w working", faint),
         Line::styled("         o idle     a all", faint),
+    ];
+    // The focus chord is a mux-level binding the renderer can't fire itself; it
+    // shows only when one is configured, naming the user's actual key.
+    if let Some(key) = focus_key {
+        lines.push(Line::styled(
+            format!("global   {key} sidebar (toggle)"),
+            faint,
+        ));
+    }
+    lines.extend([
         Line::styled("system   r reload   x dismiss", faint),
         Line::styled("help     ? close", faint),
         Line::styled(
@@ -289,5 +301,6 @@ pub(super) fn help_lines(theme: &Theme) -> Vec<Line<'static>> {
             format!("{done} done    {working} working  {thinking} think  {idle} idle"),
             faint,
         ),
-    ]
+    ]);
+    lines
 }

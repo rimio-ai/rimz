@@ -9,6 +9,60 @@ use std::hash::{Hash, Hasher};
 
 use serde::Serialize;
 
+/// The pipe message name the focus-sidebar keybind sends to this plugin. The
+/// chord (rimz-injected or a documented `config.kdl` bind) pipes this name, and
+/// the plugin runs `rimz sidebar focus --toggle` — reaching the sidebar from any
+/// pane, since a Zellij keybind cannot focus a pane by id on its own.
+pub const FOCUS_SIDEBAR_PIPE: &str = "rimz:focus_sidebar";
+
+/// The modifier half of a focus-key chord.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChordModifier {
+    Alt,
+    Ctrl,
+}
+
+/// A focus-key chord such as `Alt+p`, parsed from the rimz-injected
+/// `focus_key` load configuration so the wasm shell can bind it. The grammar
+/// matches the host's tmux binding (`rimz::mux::FocusChord`); it lives here too
+/// because the plugin cannot depend on the rimz crate, and the wasm shell maps
+/// the result onto a `KeyWithModifier` the host targets cannot name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FocusChord {
+    pub modifier: ChordModifier,
+    pub key: char,
+}
+
+impl FocusChord {
+    /// Parse a `Mod+key` (or `Mod-key`) chord. The modifier is case-insensitive
+    /// (`alt`/`meta`/`m` or `ctrl`/`control`/`c`); the key is one printable
+    /// ASCII character. Any other shape returns `None` so the caller skips the
+    /// bind rather than register a broken one.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let (modifier, key) = raw.trim().split_once(['+', '-'])?;
+        let modifier = match modifier.trim().to_ascii_lowercase().as_str() {
+            "alt" | "meta" | "m" => ChordModifier::Alt,
+            "ctrl" | "control" | "c" => ChordModifier::Ctrl,
+            _ => return None,
+        };
+        let mut chars = key.trim().chars();
+        let key = chars.next()?;
+        if chars.next().is_some() || !key.is_ascii_graphic() {
+            return None;
+        }
+        Some(Self { modifier, key })
+    }
+}
+
+/// Whether the plugin should request the `Reconfigure` permission, which it
+/// needs only to bind the focus key at runtime. Gated on a configured,
+/// parseable chord so a disabled or absent `focus_key` raises no permission
+/// prompt for a keybind that would never be installed — and matches the same
+/// grammar gate `register_focus_keybind` uses before binding.
+pub fn reconfigure_requested(focus_key: Option<&str>) -> bool {
+    focus_key.and_then(FocusChord::parse).is_some()
+}
+
 /// Floor between two `panes-changed` pokes — caps host forks under
 /// pathological manifest churn. A change that lands inside the floor is
 /// deferred, never dropped.

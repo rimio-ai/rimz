@@ -11,8 +11,9 @@ mod shell {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use rimz_presence_zellij::policy::{
-        self, CorrectionAction, FocusCorrection, FocusPatch, FocusResolution, FocusShortcut,
-        ForegroundCommandUpdate, PaneFields, Poke, PokePolicy, TimerGate,
+        self, ChordModifier, CorrectionAction, FOCUS_SIDEBAR_PIPE, FocusChord, FocusCorrection,
+        FocusPatch, FocusResolution, FocusShortcut, ForegroundCommandUpdate, PaneFields, Poke,
+        PokePolicy, TimerGate,
     };
     use zellij_tile::prelude::*;
 
@@ -36,6 +37,10 @@ mod shell {
         workspace_id: Option<String>,
         session_name: Option<String>,
         rimz_bin: Option<String>,
+        /// The focus-key chord rimz injected at load (e.g. `Alt+p`), bound once
+        /// the Reconfigure grant lands so the key reaches the sidebar from any
+        /// pane. Absent when the user disabled it or runs a hand-loaded plugin.
+        focus_key: Option<String>,
         /// Pokes are gated until a grant is observed — either the explicit
         /// permission result or any application-state event arriving, which
         /// proves the cached grant already covers us.
@@ -55,10 +60,18 @@ mod shell {
             self.workspace_id = configuration.get("workspace_id").cloned();
             self.session_name = configuration.get("session_name").cloned();
             self.rimz_bin = configuration.get("rimz_bin").cloned();
-            request_permission(&[
+            self.focus_key = configuration.get("focus_key").cloned();
+            let mut permissions = vec![
                 PermissionType::ReadApplicationState,
                 PermissionType::RunCommands,
-            ]);
+            ];
+            if policy::reconfigure_requested(self.focus_key.as_deref()) {
+                // Bind the focus chord at runtime (never written to disk); see
+                // `register_focus_keybind`. Requested only when a focus key is
+                // set and parses, so `focus_key = off` raises no extra prompt.
+                permissions.push(PermissionType::Reconfigure);
+            }
+            request_permission(&permissions);
             subscribe(&[
                 EventType::PaneUpdate,
                 EventType::TabUpdate,
@@ -77,6 +90,12 @@ mod shell {
             match event {
                 Event::PermissionRequestResult(PermissionStatus::Granted) => {
                     self.mark_granted(now);
+                    // The explicit grant is the authoritative moment every
+                    // requested permission — Reconfigure included — is live.
+                    // Re-issue the (idempotent) focus bind here so an upgrade
+                    // that proved an older two-permission cache via an app-state
+                    // event before answering the new prompt still binds.
+                    self.register_focus_keybind();
                 }
                 Event::PermissionRequestResult(PermissionStatus::Denied) => {
                     self.granted = false;
@@ -210,10 +229,17 @@ mod shell {
             false // headless: never render
         }
 
-        fn pipe(&mut self, _pipe_message: PipeMessage) -> bool {
-            // The launch channel: rimz loads this plugin via `zellij pipe
-            // --plugin`, the one load verb that works on a clientless session.
-            // The message carries nothing — loading was the point — and
+        fn pipe(&mut self, pipe_message: PipeMessage) -> bool {
+            // The focus-key channel: a keybind pipes `FOCUS_SIDEBAR_PIPE` and the
+            // plugin runs `rimz sidebar focus --toggle`, reaching the sidebar
+            // from any pane — a Zellij keybind cannot focus a pane by id itself.
+            if pipe_message.name == FOCUS_SIDEBAR_PIPE {
+                self.run_focus_sidebar();
+                return false;
+            }
+            // Otherwise the launch channel: rimz loads this plugin via `zellij
+            // pipe --plugin`, the one load verb that works on a clientless
+            // session. The message carries nothing — loading was the point — and
             // delivery itself releases the CLI (an explicit
             // `unblock_cli_pipe_input` would need a third permission,
             // `ReadCliPipes`, for nothing). The CLI blocks only while the
@@ -238,6 +264,7 @@ mod shell {
             }
             self.granted = true;
             hide_self();
+            self.register_focus_keybind();
             if self.pending_pregrant_change {
                 self.flush_pregrant_change(now);
             } else {
@@ -337,6 +364,72 @@ mod shell {
                 argv.push(workspace_id.to_owned());
             }
             self.append_topology_arg(&mut argv, now);
+            let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
+            run_command(&refs, BTreeMap::new());
+        }
+
+        /// Bind the rimz-injected focus chord (e.g. `Alt+p`) to a keybind that
+        /// pipes [`FOCUS_SIDEBAR_PIPE`] to this plugin, so the key reaches the
+        /// sidebar from any pane in locked mode — Rimz's default. Runtime-only:
+        /// `rebind_keys` with `write_config_to_disk = false` never touches the
+        /// user's `config.kdl` and resets when the session ends. The plugin
+        /// targets itself by id, so the keybind needs no plugin URL. Requires
+        /// the Reconfigure grant; a refused call is a harmless no-op with the
+        /// documented manual bind as the fallback, and the call is idempotent so
+        /// re-applying it on a later grant signal converges on the same bind.
+        fn register_focus_keybind(&self) {
+            let Some(chord) = self.focus_key.as_deref().and_then(FocusChord::parse) else {
+                return;
+            };
+            let base = KeyWithModifier::new(BareKey::Char(chord.key));
+            let key = match chord.modifier {
+                ChordModifier::Alt => base.with_alt_modifier(),
+                ChordModifier::Ctrl => base.with_ctrl_modifier(),
+            };
+            let pipe = actions::Action::KeybindPipe {
+                name: Some(FOCUS_SIDEBAR_PIPE.to_owned()),
+                payload: None,
+                args: None,
+                plugin: None,
+                plugin_id: Some(get_plugin_ids().plugin_id),
+                configuration: None,
+                launch_new: false,
+                skip_cache: false,
+                floating: None,
+                in_place: None,
+                cwd: None,
+                pane_title: None,
+            };
+            rebind_keys(
+                Vec::new(),
+                vec![(InputMode::Locked, key, vec![pipe])],
+                false,
+            );
+        }
+
+        /// Run `rimz sidebar focus --toggle` for the focus-key pipe. The command
+        /// resolves and focuses the room's sidebar pane (or toggles back), built
+        /// from the same load config the wake poke uses. Fire-and-forget through
+        /// the granted `RunCommands` capability.
+        fn run_focus_sidebar(&self) {
+            if !self.granted {
+                return;
+            }
+            let program = self.rimz_bin.as_deref().unwrap_or("rimz");
+            let mut argv = vec![
+                program.to_owned(),
+                "sidebar".to_owned(),
+                "focus".to_owned(),
+                "--toggle".to_owned(),
+            ];
+            if let Some(workspace_id) = self.workspace_id.as_deref() {
+                argv.push("--workspace-id".to_owned());
+                argv.push(workspace_id.to_owned());
+            }
+            if let Some(session_name) = self.session_name.as_deref() {
+                argv.push("--session-name".to_owned());
+                argv.push(session_name.to_owned());
+            }
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
         }

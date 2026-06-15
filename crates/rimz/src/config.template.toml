@@ -89,6 +89,7 @@
 # scrollbar = "auto"                  # "auto", "always", or "never"
 # glow = "auto"                       # transition flashes: "auto", "always", or "never"
 # card_density = "auto"               # "auto", "expanded", or "compact"
+# focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
 
 [sidebar.context]

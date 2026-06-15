@@ -41,7 +41,12 @@ fn render_footer_and_help_overlay() {
     assert!(help.contains("keys & legend"));
     assert!(help.contains("j/k rows"));
     assert!(help.contains("J/K worktrees"));
+    assert!(help.contains("g/G ends"));
+    assert!(help.contains("n/N next/prev"));
     assert!(help.contains("l or"));
+    assert!(help.contains("m read"));
+    assert!(help.contains("M unread"));
+    assert!(help.contains("Alt+p sidebar (toggle)"));
     assert!(help.contains("q waiting"));
     assert!(help.contains("!/e attention"));
     assert!(help.contains("? waiting"));
@@ -67,7 +72,7 @@ fn chrome_rebuilds_carry_line_level_styles() {
     let centered = center_line(Line::styled("? for help", theme.faint()), 30);
     assert_eq!(centered.style, theme.faint());
 
-    for line in help_lines(&theme) {
+    for line in help_lines(&theme, Some("Alt+p")) {
         assert_eq!(line.style, theme.faint());
     }
 }

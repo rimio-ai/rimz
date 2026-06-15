@@ -307,13 +307,16 @@ A [directory room](../reference/cli.md#start-and-attach-a-workspace) groups the 
 
 You don't read where to go; you go. Selecting a row focuses that pane — no mux pane number is ever shown.
 
-- `↑`/`↓` or `k`/`j` select a row; `K`/`J` select the previous or next worktree's first visible row; `↵` or `l` jumps to the selected pane.
+- `↑`/`↓` or `k`/`j` select a row; `K`/`J` select the previous or next worktree's first visible row; `g`/`G` select the first or last row; `↵` or `l` jumps to the selected pane.
+- `n`/`N` jump to the **next/previous thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first — and focus it to read. `␣` is an alias for `n`. One key tames a fleet; `N` walks back.
 - `1`–`9` jump by the row's visible position.
-- `␣` jump to the **next thing that needs you** — unread needs-a-look rows first, oldest episode first, then read waiting/failed rows oldest first, without selecting first. One key tames a fleet; press again for the next.
+- `m`/`M` mark the selected row read / unread **without jumping** — clear a finished card from the inbox, or re-flag one to keep it on your radar.
 - `u`, `q`, `!`/`e`, `p`, `d`, `w`, and `o` filter the body to unread/waiting/attention/paused/done/working/idle; the active filter key toggles back to all, and `a` clears to all directly.
 - `←/→` switch the provider dashboard's tab when the dashboard is tabbed — a pick in place, never a jump.
 - A click anywhere in a card's block jumps to it.
 - The mouse wheel scrolls the card list without moving the selection; the next selection change snaps the view back to the selected card.
+
+From any pane in the room, the configurable `Alt+p` ([configuration](../reference/configuration.md#sidebar-rendering)) focuses the sidebar and toggles back to your last working pane — the one key that reaches the room from inside an agent.
 
 ## Zone 3 — the provider dashboard
 
@@ -394,10 +397,15 @@ These notices clear when the next accepted pane frame lands. A health alert take
 
 ```
  keys & legend
- move     j/k rows   J/K worktrees
+ move     j/k rows   J/K worktrees   g/G ends
+ inbox    n/N next/prev needs-you (Space = n)
  focus    l or ↵     1-9 direct
+ read     m read      M unread
  accounts ←/→ tabs
- filter   q waiting  !/e attention
+ filter   u unread   q waiting   !/e attention
+          p paused   d done      w working
+          o idle     a all
+ global   Alt+p sidebar (toggle)
  system   r reload   x dismiss
  help     ? close
  ⢿ working   ⠁ thinking   ? waiting

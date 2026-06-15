@@ -6,6 +6,7 @@
 //! form that travels everywhere else.
 
 mod command;
+mod focus_key;
 mod keys;
 mod reconcile;
 pub mod recovery;
@@ -16,6 +17,7 @@ pub mod zellij;
 
 pub(crate) use command::COMMAND_TIMEOUT;
 pub use command::CommandSpec;
+pub use focus_key::{FocusChord, FocusKeyBinding};
 pub use keys::{BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, NamedKey, UnknownKey};
 pub use reconcile::{SidebarLiveness, SidebarRecovery};
 pub(crate) use reconcile::{ViewSidebars, plan_reconcile};
@@ -335,6 +337,12 @@ pub struct PresencePluginOptions {
     /// upgrade verb `rimz reload` passes; routine loads leave a healthy
     /// running plugin untouched.
     pub converge: bool,
+    /// The focus-key chord (`[sidebar] focus_key`, e.g. `Alt+p`) the plugin
+    /// binds at load so the key reaches the sidebar from any pane; `None` when
+    /// the user disabled it. tmux binds the same chord through `bind-key`
+    /// instead — the Zellij key has to route through the plugin because a plain
+    /// keybind cannot focus a pane by id.
+    pub focus_key: Option<String>,
 }
 
 /// One managed long-lived process the daemon view hosts beside the sidebar — the
@@ -453,6 +461,17 @@ pub trait MuxBackend: Send + Sync {
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
     fn focus_pane(&self, pane: &PaneId) -> Result<()>;
+    /// Register the chord that focuses the sidebar from any pane — the
+    /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
+    /// whose command resolves the pressing session at keypress, so one
+    /// server-global binding serves every room; Zellij routes it through the
+    /// presence plugin ([`MuxBackend::ensure_presence_plugin`]), so its default
+    /// is a no-op here. Best-effort: a convenience key never blocks a room from
+    /// opening.
+    fn register_focus_key(&self, binding: &FocusKeyBinding) -> Result<()> {
+        let _ = binding;
+        Ok(())
+    }
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture>;
     fn send_keys(&self, pane: &PaneId, text: &str) -> Result<()>;
     fn send_key(&self, pane: &PaneId, key: NamedKey) -> Result<()>;

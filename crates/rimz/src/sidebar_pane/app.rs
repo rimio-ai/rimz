@@ -276,7 +276,14 @@ pub fn serve(config: ServeConfig) -> Result<()> {
                 }
             }
             wakeup => {
-                state.on_input(&config, wakeup, &mut terminal, anim_start, diag.as_ref())?;
+                state.on_input(
+                    &config,
+                    wakeup,
+                    &mut terminal,
+                    &mut fetch,
+                    anim_start,
+                    diag.as_ref(),
+                )?;
             }
         }
 
@@ -401,26 +408,28 @@ fn apply_input(
         ui.animation_phase = wall_clock_phase(anim_start, snapshot.sidebar.resolved_refresh_ms());
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
-    if let Some(pane) = outcome.focus {
+    if let Some(pane) = &outcome.focus {
         // A jump fires the one-way focus command at the resolved pane. The
         // highlight moves only when the derived baseline catches up on a later
         // fold — late, never wrong — and any make-up filter clears as focus
         // leaves the tab (the redraw above repaints the reshaped body).
         spawn_pane_focus(pane.clone());
-        return Ok(InputApply {
-            painted: outcome.redraw,
-            focused: Some(pane),
-        });
     }
     Ok(InputApply {
         painted: outcome.redraw,
-        focused: None,
+        focused: outcome.focus,
+        // The `m`/`M` keys name a row to mark read/unread; the loop does the
+        // durable write and repaint (`on_input`), which owns the runtime paths.
+        mark_read: outcome.mark_read,
+        mark_unread: outcome.mark_unread,
     })
 }
 
 struct InputApply {
     painted: bool,
     focused: Option<PaneId>,
+    mark_read: Option<String>,
+    mark_unread: Option<String>,
 }
 
 fn handle_wakeup(wakeup: Wakeup, ui: &mut UiState, snapshot: &SidebarSnapshot) -> InputOutcome {

@@ -277,6 +277,7 @@ fn reconcile_live(
             wasm,
             rimz_bin: rimz_bin.to_path_buf(),
             converge: true,
+            focus_key: machine_config.sidebar.focus_key_label().map(str::to_owned),
         };
         if let Err(err) = backend.ensure_presence_plugin(&presence) {
             tracing::warn!(session = %ws.session_name, error = %err, "reload: presence plugin convergence failed");

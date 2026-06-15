@@ -136,6 +136,18 @@ enum SidebarSubcmd {
         #[arg(long)]
         worktree: Option<String>,
     },
+    /// Focus the session's sidebar pane — the global focus-key target. With
+    /// `--toggle`, return to the last working pane when already on the sidebar.
+    /// The tmux keybind passes `--session-name` (resolved per keypress); a bare
+    /// invocation resolves the room from the cwd. Hidden — the keybind and
+    /// scripts call it.
+    #[command(hide = true)]
+    Focus {
+        #[arg(long)]
+        session_name: Option<String>,
+        #[arg(long)]
+        toggle: bool,
+    },
     /// Exercise sidebar notification delivery. Hidden — test/API machinery.
     #[command(hide = true)]
     NotifyTest {
@@ -187,6 +199,7 @@ impl SidebarArgs {
             SidebarSubcmd::Wake { .. } => "sidebar wake",
             SidebarSubcmd::MarkRead { .. } => "sidebar mark-read",
             SidebarSubcmd::MarkUnread { .. } => "sidebar mark-unread",
+            SidebarSubcmd::Focus { .. } => "sidebar focus",
             SidebarSubcmd::NotifyTest { .. } => "sidebar notify-test",
         }
     }
@@ -260,6 +273,10 @@ pub fn run(args: SidebarArgs, globals: &GlobalFlags) -> Result<()> {
         ),
         SidebarSubcmd::MarkRead { target, worktree } => mark_read(globals, target, worktree),
         SidebarSubcmd::MarkUnread { target, worktree } => mark_unread(globals, target, worktree),
+        SidebarSubcmd::Focus {
+            session_name,
+            toggle,
+        } => focus(globals, session_name, toggle),
         SidebarSubcmd::NotifyTest {
             target,
             worktree,
@@ -650,15 +667,8 @@ fn mark_read(globals: &GlobalFlags, target: String, worktree: Option<String>) ->
 
 fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) -> Result<()> {
     let resolved = resolve_sidebar_targets(globals, &target, worktree.as_deref())?;
-    let mut episodes = rimz::sidebar::unread::UnreadEpisodes::load(&resolved.runtime);
     let now_ms = unix_now_ms_i64();
-    let mut opened = Vec::new();
-    for row in &resolved.rows {
-        let episode_ms = row.last_activity.as_millisecond().max(now_ms);
-        opened.push(episodes.open_for_row(row, episode_ms));
-    }
-    episodes
-        .persist(&resolved.runtime)
+    let opened = rimz::sidebar::unread::mark_rows_unread(&resolved.runtime, &resolved.rows, now_ms)
         .context("writing unread episodes")?;
     if let Some(diag) = diag_for_workspace(&resolved.workspace) {
         for item in &opened {
@@ -676,6 +686,84 @@ fn mark_unread(globals: &GlobalFlags, target: String, worktree: Option<String>) 
     }
     wake_sidebars(&resolved.runtime);
     emit_hidden_count("Marked unread", resolved.rows.len())
+}
+
+/// Focus the session's sidebar pane, the global focus-key target. `--toggle`
+/// returns to a working pane in the sidebar's tab when already on the sidebar,
+/// so one key reaches the sidebar and goes back. The session is the keypress's
+/// `--session-name` (the tmux binding resolves it per room); a bare invocation
+/// resolves the room from the cwd. Focus needs only the session — never the
+/// workspace id — so it skips the participant resolve when the session is given,
+/// which also lets the off-server `run-shell` child work without a room cwd.
+fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> Result<()> {
+    let session_name = match session_name {
+        Some(name) => name,
+        None => WorkspaceResolver::resolve_participant(".", globals.root.clone())?.session_name,
+    };
+    let mux = rimz::mux::auto_detect_backend(globals.mux)?;
+    let backend = rimz::mux::backend_for(mux);
+    let listing = backend
+        .list_panes(rimz::mux::PaneListOptions {
+            session_name: Some(session_name.clone()),
+            ..Default::default()
+        })
+        .context("listing panes")?;
+    let focused_pane = backend
+        .focused_client_panes(rimz::mux::ClientFocusOptions {
+            session_name: Some(session_name.clone()),
+            ..Default::default()
+        })
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .or_else(|| {
+            listing
+                .panes
+                .iter()
+                .find(|pane| pane.is_focused)
+                .map(|pane| pane.pane_id.clone())
+        });
+    let focused_tab = focused_pane.as_ref().and_then(|pane| {
+        listing
+            .panes
+            .iter()
+            .find(|candidate| &candidate.pane_id == pane)
+            .and_then(|candidate| candidate.view_id.clone())
+    });
+    // Focus the sidebar of the tab the user is on, falling back to any sidebar
+    // in the session.
+    let Some(sidebar) = listing
+        .panes
+        .iter()
+        .filter(|pane| pane.is_rimz_sidebar())
+        .find(|pane| focused_tab.is_some() && pane.view_id == focused_tab)
+        .or_else(|| listing.panes.iter().find(|pane| pane.is_rimz_sidebar()))
+        .map(|pane| pane.pane_id.clone())
+    else {
+        bail!("session {session_name} has no sidebar pane to focus");
+    };
+    let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
+    let target = if toggle && on_sidebar {
+        let sidebar_tab = listing
+            .panes
+            .iter()
+            .find(|pane| pane.pane_id == sidebar)
+            .and_then(|pane| pane.view_id.clone());
+        // The toggle-back target: a working pane in the sidebar's own tab. This
+        // is stateless; the Zellij plugin path tracks the precise prior pane.
+        listing
+            .panes
+            .iter()
+            .filter(|pane| pane.pane_id != sidebar && !pane.is_rimz_sidebar())
+            .find(|pane| sidebar_tab.is_none() || pane.view_id == sidebar_tab)
+            .map(|pane| pane.pane_id.clone())
+    } else {
+        Some(sidebar)
+    };
+    if let Some(target) = target {
+        backend.focus_pane(&target).context("focusing pane")?;
+    }
+    Ok(())
 }
 
 struct NotifyTestCommand {

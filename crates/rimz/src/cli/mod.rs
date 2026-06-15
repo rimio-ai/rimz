@@ -544,18 +544,6 @@ pub struct StartArgs {
     pub refresh_ms: Option<u16>,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn removed_run_and_tab_tokens_do_not_fall_through_to_path_start() {
-        assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
-        assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
-        assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
-    }
-}
-
 #[derive(Debug, Args, Default)]
 #[group(required = false, multiple = false)]
 pub struct AttachFlags {
@@ -678,6 +666,10 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         config: mux_config.clone(),
         detected_size,
     })?;
+    // Register the focus-sidebar chord (tmux binds it here; Zellij routes it
+    // through the presence plugin). Best-effort: a convenience key never blocks
+    // the room from opening.
+    register_focus_key(backend.as_ref(), &machine_config);
     // The daemon view (`rimzd`) is computed once, before the session is born: its
     // hosts depend on config and which agents are on PATH. When present, it leads
     // the session — on Zellij that order is fixed at birth (`open_sidebar` renders
@@ -729,6 +721,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         backend.as_ref(),
         &workspace.session_name,
         &workspace.workspace_id,
+        machine_config.sidebar.focus_key_label(),
     );
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     tracing::info!(
@@ -751,6 +744,7 @@ fn ensure_presence_plugin(
     backend: &dyn MuxBackend,
     session_name: &str,
     workspace_id: &WorkspaceId,
+    focus_key: Option<&str>,
 ) {
     let Some(wasm) = rimz::mux::zellij::presence_plugin_path() else {
         tracing::debug!(
@@ -765,6 +759,7 @@ fn ensure_presence_plugin(
         wasm,
         rimz_bin: sidebar::rimz_cli_program(),
         converge: false,
+        focus_key: focus_key.map(str::to_owned),
     };
     if let Err(err) = backend.ensure_presence_plugin(&opts) {
         tracing::debug!(
@@ -772,6 +767,29 @@ fn ensure_presence_plugin(
             error = %err,
             "presence plugin load failed; the producer keeps its pane poll",
         );
+    }
+}
+
+/// Register the focus-sidebar chord with the backend. tmux binds it directly;
+/// the Zellij backend's default is a no-op (its key routes through the presence
+/// plugin). The binding carries no room identity — the tmux command resolves the
+/// pressing session at keypress — so this is safe to call per room. A
+/// misconfigured chord warns and registers nothing; a backend error is logged —
+/// the key is convenience, never a launch precondition.
+fn register_focus_key(backend: &dyn MuxBackend, machine_config: &rimz::config::MachineConfig) {
+    let Some(label) = machine_config.sidebar.focus_key_label() else {
+        return;
+    };
+    let rimz_bin = sidebar::rimz_cli_program();
+    let Some(binding) = rimz::mux::FocusKeyBinding::resolve(label, &rimz_bin) else {
+        tracing::warn!(
+            focus_key = label,
+            "ignoring invalid [sidebar] focus_key; expected e.g. Alt+p"
+        );
+        return;
+    };
+    if let Err(err) = backend.register_focus_key(&binding) {
+        tracing::debug!(error = %err, "registering the focus-sidebar keybind failed");
     }
 }
 
@@ -809,6 +827,7 @@ fn attach_cwd(
         config: mux_config.clone(),
         detected_size,
     })?;
+    register_focus_key(backend.as_ref(), &machine_config);
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
     } else {
@@ -833,6 +852,7 @@ fn attach_cwd(
         backend.as_ref(),
         &workspace.session_name,
         &workspace.workspace_id,
+        machine_config.sidebar.focus_key_label(),
     );
     let spec = backend.attach_command(&workspace.session_name, &mux_config);
     run_attach_action(&spec, mode, mux)
@@ -873,6 +893,7 @@ fn attach_named(
                 config: mux_config.clone(),
                 detected_size,
             })?;
+            register_focus_key(backend.as_ref(), &machine_config);
             let resume_plan = if was_live {
                 rimz::resume::ResumePlan::default()
             } else {
@@ -896,7 +917,12 @@ fn attach_named(
             // external session by this name is never torn down.
             gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
             report_resume(&resume_plan);
-            ensure_presence_plugin(backend.as_ref(), &record.session_name, &record.workspace_id);
+            ensure_presence_plugin(
+                backend.as_ref(),
+                &record.session_name,
+                &record.workspace_id,
+                machine_config.sidebar.focus_key_label(),
+            );
         }
         Ok(None) => {
             tracing::warn!(
@@ -1032,4 +1058,16 @@ pub(crate) fn record_workspace(workspace: &rimz::ResolvedWorkspace) -> Result<()
     ledger
         .record_workspace(workspace)
         .context("recording workspace metadata")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn removed_run_and_tab_tokens_do_not_fall_through_to_path_start() {
+        assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
+        assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
+        assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
+    }
 }

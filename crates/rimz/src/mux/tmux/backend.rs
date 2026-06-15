@@ -218,6 +218,26 @@ impl MuxBackend for TmuxBackend {
         ])
     }
 
+    fn register_focus_key(&self, binding: &super::super::FocusKeyBinding) -> Result<()> {
+        // Root keytable (`-n`): the chord fires from any pane in the server, and
+        // `run-shell -b` runs the focus command off the server so the pane never
+        // blocks. The binding is server-global, so the command resolves the
+        // pressing session at keypress (`#{session_name}`) instead of baking one
+        // room in — a later room registering the same key stays correct for the
+        // first. Re-registering is idempotent: every room writes the same bind.
+        self.cmd()
+            .args([
+                "bind-key".to_owned(),
+                "-n".to_owned(),
+                binding.chord.to_tmux(),
+                "run-shell".to_owned(),
+                "-b".to_owned(),
+                binding.tmux_run_shell_command(),
+            ])
+            .run()
+            .map(|_| ())
+    }
+
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
         ensure_pane_backend(pane, MuxName::Tmux)?;
         let mut spec = self.cmd().args(["capture-pane", "-p", "-t", pane.raw()]);

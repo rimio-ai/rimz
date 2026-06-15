@@ -18,6 +18,16 @@ fn browse(pane: &PaneId, baseline: Option<&PaneId>) -> Browse {
     }
 }
 
+/// Forward inbox step from `selected` — the `Space`/`n` walk. A readable test
+/// seam over the directional [`step_attention_index`].
+fn next_attention_index(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    selected: usize,
+) -> Option<usize> {
+    step_attention_index(snapshot, filter, selected, true)
+}
+
 /// A group whose first row is a multi-line agent card (model, effort, and
 /// context% set so it carries identity + description + gauge, and selecting
 /// it reveals its deeper budget-bar and stats lines), followed by a

@@ -466,6 +466,11 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         config: mux_config.clone(),
         detected_size,
     })?;
+    // A supervised run can birth the room, so the focus chord registers here
+    // too (tmux binds it; Zellij routes it through the presence plugin below) —
+    // the key reaches the sidebar from any pane regardless of how the room came
+    // to be.
+    crate::cli::register_focus_key(backend.as_ref(), &machine_config);
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -482,6 +487,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         backend.as_ref(),
         &workspace.session_name,
         &workspace.workspace_id,
+        machine_config.sidebar.focus_key_label(),
     );
 
     let permission_mode = cell_mode.unwrap_or(mode_application.mode);

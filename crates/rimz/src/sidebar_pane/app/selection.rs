@@ -26,30 +26,51 @@ pub(super) struct InputOutcome {
     /// repaint until the baseline catches up.
     pub(super) focus: Option<PaneId>,
     pub(super) dismiss: bool,
+    /// The row id to mark read / unread without jumping — `Some` only on the
+    /// `m`/`M` keys. The durable receipt write, the instant local clear, and
+    /// the re-derive live in the loop (`on_input`), which owns the read-mark
+    /// store and the runtime paths; the handler only names the target row.
+    pub(super) mark_read: Option<String>,
+    pub(super) mark_unread: Option<String>,
 }
 
 impl InputOutcome {
     pub(super) fn redraw() -> Self {
         Self {
             redraw: true,
-            focus: None,
-            dismiss: false,
+            ..Self::default()
         }
     }
 
     pub(super) fn focus(pane: PaneId) -> Self {
         Self {
-            redraw: false,
             focus: Some(pane),
-            dismiss: false,
+            ..Self::default()
         }
     }
 
     pub(super) fn dismiss() -> Self {
         Self {
             redraw: true,
-            focus: None,
             dismiss: true,
+            ..Self::default()
+        }
+    }
+
+    /// Mark the selected row read / unread. No redraw here: the loop clears the
+    /// row and repaints once after the durable write, so the frame never
+    /// flashes the pre-clear state first.
+    fn mark_read(row_id: String) -> Self {
+        Self {
+            mark_read: Some(row_id),
+            ..Self::default()
+        }
+    }
+
+    fn mark_unread(row_id: String) -> Self {
+        Self {
+            mark_unread: Some(row_id),
+            ..Self::default()
         }
     }
 }
@@ -64,6 +85,46 @@ fn jump_to(ui: &mut UiState, snapshot: &SidebarSnapshot, pane: PaneId) -> InputO
     let mut outcome = InputOutcome::focus(pane);
     outcome.redraw = set_make_up_filter(ui, snapshot, None);
     outcome
+}
+
+/// Step the inbox triage list `forward` or backward from the current selection
+/// and jump to that row, focusing its pane — the `n`/`N` (and `Space`) walk
+/// through the rows that need you, oldest episode first. A walk with nothing to
+/// triage does nothing.
+fn inbox_jump(ui: &mut UiState, snapshot: &SidebarSnapshot, forward: bool) -> InputOutcome {
+    if let Some(index) =
+        step_attention_index(snapshot, ui.make_up_filter, ui.selected_index, forward)
+        && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
+    {
+        return jump_to(ui, snapshot, pane);
+    }
+    InputOutcome::default()
+}
+
+#[derive(Clone, Copy)]
+enum End {
+    Top,
+    Bottom,
+}
+
+/// Move the browse pick to the first or last visible row — the `g`/`G` Vim
+/// jump. Selection only, no focus, over the same filtered row universe ordinary
+/// selection walks. A no-op when already there or the body is empty.
+fn select_end_row(ui: &mut UiState, snapshot: &SidebarSnapshot, end: End) -> InputOutcome {
+    let len = visible_row_count(snapshot, ui.make_up_filter);
+    if len == 0 {
+        return InputOutcome::default();
+    }
+    let target = match end {
+        End::Top => 0,
+        End::Bottom => len - 1,
+    };
+    if ui.selected_index == target {
+        return InputOutcome::default();
+    }
+    select_row(ui, snapshot, target);
+    begin_or_continue_browse(ui);
+    InputOutcome::redraw()
 }
 
 pub(super) fn handle_key(
@@ -91,6 +152,8 @@ pub(super) fn handle_key(
         }
         KeyAction::WorktreeUp => select_adjacent_worktree(ui, snapshot, -1),
         KeyAction::WorktreeDown => select_adjacent_worktree(ui, snapshot, 1),
+        KeyAction::Top => select_end_row(ui, snapshot, End::Top),
+        KeyAction::Bottom => select_end_row(ui, snapshot, End::Bottom),
         KeyAction::Enter => {
             // Jump on the current row: fire the focus command at the selected
             // pane without moving the highlight — it follows once the derived
@@ -100,14 +163,19 @@ pub(super) fn handle_key(
                 None => InputOutcome::default(),
             }
         }
-        KeyAction::Space => {
-            if let Some(index) =
-                next_attention_index(snapshot, ui.make_up_filter, ui.selected_index)
-                && let Some(pane) = pane_at_row(snapshot, ui.make_up_filter, index)
-            {
-                return jump_to(ui, snapshot, pane);
+        KeyAction::InboxNext => inbox_jump(ui, snapshot, true),
+        KeyAction::InboxPrev => inbox_jump(ui, snapshot, false),
+        KeyAction::MarkRead => {
+            match agent_row_id_at(snapshot, ui.make_up_filter, ui.selected_index) {
+                Some(row_id) => InputOutcome::mark_read(row_id),
+                None => InputOutcome::default(),
             }
-            InputOutcome::default()
+        }
+        KeyAction::MarkUnread => {
+            match agent_row_id_at(snapshot, ui.make_up_filter, ui.selected_index) {
+                Some(row_id) => InputOutcome::mark_unread(row_id),
+                None => InputOutcome::default(),
+            }
         }
         KeyAction::Help => {
             ui.help_visible = !ui.help_visible;
@@ -395,6 +463,22 @@ fn pane_at_row(
         .map(|pane| pane.pane_id.clone())
 }
 
+/// The id of the visible agent row at `index` — the read/unread mark target
+/// (the receipt key), unlike the jump target, which is the row's pane. `m`/`M`
+/// act on inbox rows only, so a process row (no status) and an out-of-range
+/// index both yield `None`, making the key a no-op rather than a durable write
+/// the unread path would have to reject.
+fn agent_row_id_at(
+    snapshot: &SidebarSnapshot,
+    filter: Option<BodyFilter>,
+    index: usize,
+) -> Option<String> {
+    visible_rows(snapshot, filter)
+        .nth(index)
+        .filter(|row| row.status().is_some())
+        .map(|row| row.id.clone())
+}
+
 /// Pin the just-selected pane as the arrow-browse pick. The first arrow of a
 /// browse captures the baseline it began from — the clear condition — and a
 /// later arrow only moves the pick, so a long browse keeps one anchor and a
@@ -595,10 +679,16 @@ fn visible_rows(
         .filter(move |row| row_passes_filter(row, filter))
 }
 
-fn next_attention_index(
+/// The inbox triage list, stepped one row `forward` or backward from
+/// `selected`. The list is unread needs-a-look rows (oldest episode first) then
+/// read actionable rows (oldest first); `forward` wraps to the next, backward to
+/// the previous, and a selection outside the list enters at the first row
+/// forward or the last row backward.
+fn step_attention_index(
     snapshot: &SidebarSnapshot,
     filter: Option<BodyFilter>,
     selected: usize,
+    forward: bool,
 ) -> Option<usize> {
     let rows = visible_rows(snapshot, filter).collect::<Vec<_>>();
     let mut unread: Vec<_> = rows
@@ -621,11 +711,25 @@ fn next_attention_index(
     if candidates.is_empty() {
         return None;
     }
+    let len = candidates.len();
     candidates
         .iter()
         .position(|index| *index == selected)
-        .map(|position| candidates[(position + 1) % candidates.len()])
-        .or_else(|| candidates.first().copied())
+        .map(|position| {
+            let stepped = if forward {
+                position + 1
+            } else {
+                position + len - 1
+            };
+            candidates[stepped % len]
+        })
+        .or_else(|| {
+            if forward {
+                candidates.first().copied()
+            } else {
+                candidates.last().copied()
+            }
+        })
 }
 
 fn filter_total(snapshot: &SidebarSnapshot, filter: BodyFilter) -> usize {
