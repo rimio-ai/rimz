@@ -75,10 +75,27 @@ mod tests {
         let before = kinds.len();
         kinds.dedup();
         assert_eq!(kinds.len(), before, "duplicate kind in ADAPTERS");
+    }
 
-        // Sub-provider ids (the credential keys Pi's auth file uses) map to their
-        // metering kind, and no provider is claimed twice — the dashboard's
-        // window-borrow mapping.
+    #[test]
+    fn every_adapter_exposes_a_manual_compaction_command() {
+        // `--auto-compact` types this into the agent's composer; every wired
+        // agent supports the `/compact` slash command, so a new adapter that
+        // forgets to opt in fails here rather than silently never compacting.
+        for adapter in ADAPTERS {
+            assert_eq!(
+                adapter.compact_command(),
+                Some("/compact"),
+                "missing compact command for {}",
+                adapter.descriptor().kind
+            );
+        }
+    }
+
+    #[test]
+    fn sub_providers_are_unique_and_resolve_to_their_metering_kind() {
+        // The credential keys Pi's auth file uses, resolved through each
+        // descriptor's declaration — the dashboard's window-borrow mapping.
         assert_eq!(kind_for_sub_provider("anthropic"), Some("claude"));
         assert_eq!(kind_for_sub_provider("openai"), Some("codex"));
         assert_eq!(kind_for_sub_provider("openai-codex"), Some("codex"));

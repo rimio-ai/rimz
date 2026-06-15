@@ -584,6 +584,15 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// The interactive slash command that triggers a manual context compaction
+    /// in the agent's own composer. Typed as keystrokes ahead of a steered or
+    /// queued message under `--auto-compact`, never a bracketed paste — agents
+    /// treat pasted text as literal content and would not run a pasted command.
+    /// `None` when the agent exposes no such command.
+    fn compact_command(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Render typed per-machine launch alias presets into provider-native argv.
     /// Unsupported fields fail at launch so config cannot silently drop intent.
     fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {

@@ -735,7 +735,7 @@ fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) ->
 
 /// Context fill warms as it climbs: gold past 75%, rose past 90%.
 fn context_cell(agent: &AgentState) -> render::Cell {
-    let pct = context_pct_display(agent);
+    let pct = agent.context_fill_pct();
     let text = pct
         .map(|pct| format!("{}%", pct.round() as u8))
         .unwrap_or_else(|| "-".to_owned());
@@ -820,54 +820,6 @@ fn model_label(agent: &AgentState) -> String {
         (None, Some(effort)) => format!("auto@{effort}"),
         (None, None) => "-".to_owned(),
     }
-}
-
-/// The real context-window fill (0..=100): the live token composition over the
-/// model's window — "from sidebar or model". Prefers the precise used/window
-/// fraction, then the statusline's reported `used_percentage`, then the carried
-/// `context_pct`, so a session with no rich context still reads its last gauge.
-fn context_pct_display(agent: &AgentState) -> Option<f64> {
-    match (context_used_tokens(agent), resolved_context_window(agent)) {
-        (Some(used), Some(window)) if window > 0 => {
-            Some((used as f64 / window as f64 * 100.0).clamp(0.0, 100.0))
-        }
-        _ => agent
-            .context
-            .as_ref()
-            .and_then(|context| context.tokens.as_ref())
-            .and_then(|tokens| tokens.used_percentage)
-            .or(agent.context_pct)
-            .map(f64::from),
-    }
-}
-
-/// Tokens currently occupying the window: the statusline's rich breakdown, else
-/// the per-call split (`cache_read + fresh_input`) the rollout tail feeds.
-fn context_used_tokens(agent: &AgentState) -> Option<u64> {
-    agent
-        .context
-        .as_ref()
-        .and_then(|context| context.tokens.as_ref())
-        .and_then(rimz::agents::AgentTokenUsage::used_tokens)
-        .or_else(|| {
-            let fresh = agent.fresh_input_tokens?;
-            Some(agent.cache_read_input_tokens.unwrap_or(0) + fresh)
-        })
-}
-
-/// The window denominator: the statusline's `context_window_size`, else the
-/// adapter-resolved `context_window`, else the model descriptor's default.
-fn resolved_context_window(agent: &AgentState) -> Option<u64> {
-    agent
-        .context
-        .as_ref()
-        .and_then(|context| context.tokens.as_ref())
-        .and_then(|tokens| tokens.context_window_size)
-        .or(agent.context_window)
-        .or_else(|| {
-            rimz::agents::descriptor_by_kind(agent.kind.as_str())
-                .and_then(|descriptor| descriptor.default_context_window)
-        })
 }
 
 fn tokens_label(agent: &AgentState) -> String {

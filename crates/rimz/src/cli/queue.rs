@@ -5,12 +5,14 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
+use super::send::{SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::feed::{AgentState, pending_ask_for};
 use rimz::ids::{MessageId, PaneId};
 use rimz::message::{
-    DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head, settle_duration_from_env,
+    AutoCompact, DeliveryGate, MessageRecord, MessageStatus, gate_open, queue_head,
+    settle_duration_from_env,
 };
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 
@@ -23,25 +25,10 @@ pub struct QueueArgs {
     /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
     #[arg(long, value_parser = parse_gate, default_value = "done")]
     on: DeliveryGate,
-    /// Queue text without pressing Enter after delivery.
-    #[arg(long)]
-    no_enter: bool,
-    /// Restrict matches to one worktree branch, name, or path (the channel).
-    #[arg(long)]
-    worktree: Option<String>,
-    /// Queue for every agent the address matches. Without it, a selector that
-    /// matches more than one agent is an error that lists the handles to pick one.
-    #[arg(long)]
-    all: bool,
-    /// Launch the agent if the address matches none: a kind (`@codex`) or a role
-    /// (`@planner`) opens a fresh agent in the channel with this text as its first
-    /// prompt. An instance handle (pet name, ordinal) cannot create.
-    #[arg(long)]
-    create: bool,
-    /// Skip the fan-out confirmation prompt when broadcasting (`@all` or --all).
-    #[arg(long, short = 'y')]
-    yes: bool,
-    /// Text to deliver.
+    #[command(flatten)]
+    send: SendFlags,
+    /// Text to deliver. `\n` is a soft newline; `\\` a literal backslash. Omit it
+    /// and pass `--file` to deliver a file's contents verbatim.
     #[arg(last = true)]
     text: Vec<String>,
 }
@@ -77,37 +64,20 @@ enum QueueSubcmd {
 #[derive(Debug, Args)]
 struct AddArgs {
     target: String,
+    /// Deliver after a successful/idle turn (`done`) or after success/idle/failure (`any`).
     #[arg(long, value_parser = parse_gate, default_value = "done")]
     on: DeliveryGate,
-    #[arg(long)]
-    no_enter: bool,
-    #[arg(long)]
-    worktree: Option<String>,
-    #[arg(long)]
-    all: bool,
-    #[arg(long)]
-    create: bool,
-    #[arg(long, short = 'y')]
-    yes: bool,
+    #[command(flatten)]
+    send: SendFlags,
+    /// Text to deliver. `\n` is a soft newline; `\\` a literal backslash. Omit it
+    /// and pass `--file` to deliver a file's contents verbatim.
     #[arg(last = true)]
     text: Vec<String>,
 }
 
 pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        Some(QueueSubcmd::Add(add)) => add_message(
-            add.target,
-            add.worktree,
-            join_text(add.text)?,
-            !add.no_enter,
-            add.on,
-            FanoutFlags {
-                all: add.all,
-                create: add.create,
-                yes: add.yes,
-            },
-            globals,
-        ),
+        Some(QueueSubcmd::Add(add)) => queue_add(add.target, add.on, add.send, add.text, globals),
         Some(QueueSubcmd::List { json, target }) => list_messages(json, target, globals),
         Some(QueueSubcmd::Remove { message_id }) => remove_message(message_id, globals),
         Some(QueueSubcmd::Clear { target, worktree }) => clear_messages(target, worktree, globals),
@@ -116,29 +86,45 @@ pub fn run(args: QueueArgs, globals: &GlobalFlags) -> Result<()> {
             let target = args.target.ok_or_else(|| {
                 anyhow::anyhow!("expected a target, or `rimz queue list|remove|clear`")
             })?;
-            let text = join_text(args.text)?;
-            add_message(
-                target,
-                args.worktree,
-                text,
-                !args.no_enter,
-                args.on,
-                FanoutFlags {
-                    all: args.all,
-                    create: args.create,
-                    yes: args.yes,
-                },
-                globals,
-            )
+            queue_add(target, args.on, args.send, args.text, globals)
         }
     }
 }
 
-fn join_text(text: Vec<String>) -> Result<String> {
-    if text.is_empty() {
-        bail!("expected text after `--`");
-    }
-    Ok(text.join(" "))
+/// Shared enqueue for the `queue add` and bare `queue` forms: resolve the prompt
+/// from inline argv or `--file`, then split the mirrored `SendFlags` into the
+/// delivery spec and the fan-out controls and hand off.
+fn queue_add(
+    target: String,
+    gate: DeliveryGate,
+    send: SendFlags,
+    text: Vec<String>,
+    globals: &GlobalFlags,
+) -> Result<()> {
+    let SendFlags {
+        worktree,
+        no_enter,
+        force,
+        all,
+        create,
+        yes,
+        auto_compact,
+        file,
+    } = send;
+    let text = resolve_message(&text, file.as_deref())?;
+    add_message(
+        target,
+        worktree,
+        text,
+        MessageSpec {
+            enter: !no_enter,
+            gate,
+            force,
+            auto_compact,
+        },
+        FanoutFlags { all, create, yes },
+        globals,
+    )
 }
 
 /// The fan-out / create / confirm flags shared by both queue-add forms.
@@ -148,18 +134,23 @@ struct FanoutFlags {
     yes: bool,
 }
 
+/// How a queued message delivers: submit with Enter, the turn-boundary gate,
+/// whether to deliver past a pending ask, and an optional compact-first threshold.
+struct MessageSpec {
+    enter: bool,
+    gate: DeliveryGate,
+    force: bool,
+    auto_compact: Option<AutoCompact>,
+}
+
 fn add_message(
     target: String,
     worktree: Option<String>,
     text: String,
-    enter: bool,
-    gate: DeliveryGate,
+    spec: MessageSpec,
     flags: FanoutFlags,
     globals: &GlobalFlags,
 ) -> Result<()> {
-    if text.is_empty() {
-        bail!("expected non-empty text");
-    }
     rimz::target::require_mention(&target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
@@ -226,9 +217,11 @@ fn add_message(
             workspace.workspace_id.clone(),
             agent,
             text.clone(),
-            enter,
-            gate,
-        );
+            spec.enter,
+            spec.gate,
+        )
+        .with_force(spec.force)
+        .with_auto_compact(spec.auto_compact);
         let message_id = message.message_id.clone();
         ledger.queue_message(&message, &workspace.session_name)?;
         let _ = deliver_one(&workspace, &ledger, &message_id, Duration::ZERO);
@@ -342,12 +335,21 @@ fn deliver_one(
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let backend = rimz::mux::backend_for(candidate.pane_id.mux());
-    match super::pane::submit_message(
-        backend.as_ref(),
-        &candidate.pane_id,
-        &message.text,
-        message.enter,
-    ) {
+    // A `--auto-compact` message types `/compact` ahead of the text, so the
+    // prompt lands against a fresh window. A failed compaction fails the whole
+    // delivery through the same retry path as a failed message send.
+    let send = (|| {
+        if let Some(command) = candidate.compact {
+            super::pane::send_command(backend.as_ref(), &candidate.pane_id, command)?;
+        }
+        super::pane::submit_message(
+            backend.as_ref(),
+            &candidate.pane_id,
+            &message.text,
+            message.enter,
+        )
+    })();
+    match send {
         Ok(()) => {
             ledger.settle_message(
                 &message.message_id,
@@ -371,6 +373,10 @@ fn deliver_one(
 struct DeliveryCandidate {
     message: MessageRecord,
     pane_id: PaneId,
+    /// The `/compact` to type ahead of the text, set when `--auto-compact`'s
+    /// threshold is met at this delivery boundary. `None` leaves delivery as a
+    /// plain message send.
+    compact: Option<&'static str>,
 }
 
 fn delivery_candidate(
@@ -385,15 +391,27 @@ fn delivery_candidate(
     else {
         return Ok(None);
     };
-    let Some(head) = queue_head(pending.iter(), &message.kind, &message.agent_id) else {
+    let Some(head) = queue_head(
+        pending.iter(),
+        &message.kind,
+        &message.agent_id,
+        message.agent_name.as_deref(),
+    ) else {
         return Ok(None);
     };
     if head.message_id != *message_id {
         return Ok(None);
     }
-    let snapshot = ledger
+    let mut snapshot = ledger
         .snapshot_cached()
         .context("reading delivery snapshot")?;
+    // `--auto-compact` reads context fill, which the cached snapshot does not
+    // carry; fold the disposable context sidecars in for the freshest gauge.
+    if message.auto_compact.is_some()
+        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(message.workspace_id.clone())
+    {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    }
     let Some(agent) = snapshot
         .agents
         .iter()
@@ -404,24 +422,41 @@ fn delivery_candidate(
     if !gate_open(message.gate, agent.status) {
         return Ok(None);
     }
-    if pending_ask_for(
-        agent,
-        snapshot
-            .needs_attention
-            .iter()
-            .chain(snapshot.resolver_working.iter()),
-    )
-    .is_some()
+    // A pending ask reserves the agent's next input, so it defers delivery —
+    // unless the message was queued with `--force`, mirroring `steer --force`.
+    if !message.force
+        && pending_ask_for(
+            agent,
+            snapshot
+                .needs_attention
+                .iter()
+                .chain(snapshot.resolver_working.iter()),
+        )
+        .is_some()
     {
         return Ok(None);
     }
     let Some(pane) = agent.pane.as_ref() else {
         return Ok(None);
     };
+    let compact = compact_command_if_full(&message, agent);
+    let pane_id = pane.pane_id.clone();
     Ok(Some(DeliveryCandidate {
         message,
-        pane_id: pane.pane_id.clone(),
+        pane_id,
+        compact,
     }))
+}
+
+/// The agent's `/compact` when a `--auto-compact` message's threshold is met by
+/// the agent's current fill, else `None`. An agent kind with no compaction
+/// command can't compact, so it passes through as a plain send.
+fn compact_command_if_full(message: &MessageRecord, agent: &AgentState) -> Option<&'static str> {
+    let threshold = message.auto_compact?;
+    threshold
+        .triggered(agent)
+        .then(|| rimz::agents::find_adapter(message.kind.as_str())?.compact_command())
+        .flatten()
 }
 
 fn workspace_ledger_snapshot(

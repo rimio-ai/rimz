@@ -231,6 +231,75 @@ fn steer_no_enter_suppresses_the_keystroke() {
     );
 }
 
+/// A `\n` in the steered text is a soft composer newline: it rides inside the
+/// bracketed paste as a real newline byte, so the message lands multi-line and
+/// the submit Enter is still the one discrete keystroke. The CLI interprets the
+/// two-character `\n` escape so a multi-line prompt can be typed inline.
+#[test]
+fn steer_interprets_a_newline_escape_as_a_soft_break() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-nl", "feature-nl", &[("ZELLIJ_PANE_ID", "3")]);
+
+    let trace_log = env.project_root.join("zellij-nl-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--", "first\\nsecond"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The paste carries a real newline (`first<LF>second`), then a discrete Enter.
+    assert_text_then_enter(&trace_log, "first\nsecond");
+}
+
+/// `--file` sends a prompt read verbatim: a real newline rides as a soft break,
+/// a literal `\n` stays two characters (no inline unescaping), and the trailing
+/// newline is trimmed before the submit. queue shares the flag through the same
+/// `SendFlags`.
+#[test]
+fn steer_sends_a_file_as_the_prompt() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-file",
+        "feature-file",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let prompt_file = env.project_root.join("prompt.txt");
+    std::fs::write(&prompt_file, "keep \\n literal\nand a real break\n")
+        .expect("write prompt file");
+
+    let trace_log = env.project_root.join("zellij-file-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args([
+            "steer",
+            "@claude",
+            "--file",
+            prompt_file.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("steer --file");
+    assert!(
+        out.status.success(),
+        "steer --file failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // The literal `\n` survives as backslash-n, the real newline is the only soft
+    // break, and the trailing newline is gone.
+    assert_text_then_enter(&trace_log, "keep \\n literal\nand a real break");
+}
+
 /// Queue delivery routes through the same send path: a message delivered at an
 /// open gate presses Enter as a discrete key, not a literal carriage return.
 /// Bringing the agent to an idle turn boundary with a bound pane lets the queue
@@ -270,6 +339,224 @@ fn queue_delivery_presses_enter_as_discrete_key() {
     assert!(
         env.ledger().list_pending_messages().unwrap().is_empty(),
         "an idle agent with a bound pane should deliver the queued message inline"
+    );
+    assert_text_then_enter(&trace_log, "go");
+}
+
+/// `steer --auto-compact 70%` against a window past the threshold types `/compact`
+/// and submits it before pasting the message, so the prompt lands against a fresh
+/// window. The single-target run reports the compaction it ran.
+#[test]
+fn steer_auto_compact_runs_compact_before_a_full_window() {
+    let env = Env::new();
+    register_running_agent(&env, "sess-ac", "feature-ac", &[("ZELLIJ_PANE_ID", "3")]);
+    seed_context_fill(&env, "sess-ac", 80);
+
+    let trace_log = env.project_root.join("zellij-ac-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--auto-compact", "70%", "--", "go"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lines = trace_lines(&trace_log);
+    let compact_at = lines.iter().position(|line| is_compact_command(line));
+    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
+    assert!(
+        compact_at.is_some(),
+        "expected a `/compact` write-chars; trace: {lines:?}"
+    );
+    assert!(
+        paste_at.is_some(),
+        "expected a bracketed paste of `go`; trace: {lines:?}"
+    );
+    assert!(
+        compact_at < paste_at,
+        "compaction must precede the message; trace: {lines:?}"
+    );
+    assert!(
+        String::from_utf8_lossy(&out.stdout).contains("compacted"),
+        "a single steer reports the compaction it ran: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+}
+
+/// A window below the threshold delivers normally — no `/compact`, just the
+/// message pasted and submitted.
+#[test]
+fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-ac-low",
+        "feature-acl",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+    seed_context_fill(&env, "sess-ac-low", 50);
+
+    let trace_log = env.project_root.join("zellij-ac-low-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .args(["steer", "@claude", "--auto-compact", "70%", "--", "go"])
+        .output()
+        .expect("steer");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let lines = trace_lines(&trace_log);
+    assert!(
+        !lines.iter().any(|line| is_compact_command(line)),
+        "a window below the threshold must not compact; trace: {lines:?}"
+    );
+    assert_text_then_enter(&trace_log, "go");
+}
+
+/// Queue delivery honours `--auto-compact` at the turn boundary: an idle agent
+/// past the threshold gets `/compact` ahead of the queued text, in one delivery.
+#[test]
+fn queue_auto_compact_runs_compact_before_delivering() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-qac", "feature-qac", pane_env);
+    seed_context_fill(&env, "sess-qac", 80);
+    // A turn end opens the `done` gate; the agent keeps its bound pane.
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-qac",
+            "worktree_branch": "feature-qac",
+        }),
+        pane_env,
+    );
+
+    let trace_log = env.project_root.join("zellij-qac-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "@claude", "--auto-compact", "70%", "--", "go"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        env.ledger().list_pending_messages().unwrap().is_empty(),
+        "the queued message should deliver inline at the open gate"
+    );
+    let lines = trace_lines(&trace_log);
+    let compact_at = lines.iter().position(|line| is_compact_command(line));
+    let paste_at = lines.iter().position(|line| is_paste(line, "go"));
+    assert!(
+        compact_at.is_some() && paste_at.is_some() && compact_at < paste_at,
+        "compaction must precede the queued message; trace: {lines:?}"
+    );
+}
+
+/// A pending ask reserves the agent's next input, so a queued message defers at
+/// the open gate rather than landing on top of the ask — it stays pending for a
+/// later boundary, and nothing is pasted.
+#[test]
+fn queue_defers_delivery_under_a_pending_ask() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-qd", "feature-qd", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-qd",
+            "worktree_branch": "feature-qd",
+        }),
+        pane_env,
+    );
+    push_pending_agent_ask(&env, "sess-qd");
+
+    let trace_log = env.project_root.join("zellij-qd-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "@claude", "--", "go"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert_eq!(
+        env.ledger().list_pending_messages().unwrap().len(),
+        1,
+        "a pending ask defers delivery; the message stays queued"
+    );
+    assert!(
+        trace_lines(&trace_log)
+            .iter()
+            .all(|line| !is_paste(line, "go")),
+        "nothing is pasted while the ask reserves input"
+    );
+}
+
+/// `--force` mirrors `steer --force`: a queued message delivers past a pending
+/// ask at the open gate instead of deferring, pasting inline like any other
+/// delivery.
+#[test]
+fn queue_force_delivers_past_a_pending_ask() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-qf", "feature-qf", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-qf",
+            "worktree_branch": "feature-qf",
+        }),
+        pane_env,
+    );
+    push_pending_agent_ask(&env, "sess-qf");
+
+    let trace_log = env.project_root.join("zellij-qf-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .args(["queue", "@claude", "--force", "--", "go"])
+        .output()
+        .expect("queue add");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    assert!(
+        env.ledger().list_pending_messages().unwrap().is_empty(),
+        "--force delivers past the pending ask inline"
     );
     assert_text_then_enter(&trace_log, "go");
 }
@@ -447,6 +734,15 @@ fn is_enter_key(line: &str) -> bool {
     line.ends_with(&format!("\taction\twrite\t--pane-id\t{TRACE_PANE}\t13"))
 }
 
+/// A `zellij action write-chars --pane-id <pane> /compact` line — the compaction
+/// slash command typed as raw keystrokes ahead of an auto-compacted message,
+/// distinct from the bracketed paste a message rides.
+fn is_compact_command(line: &str) -> bool {
+    line.ends_with(&format!(
+        "\taction\twrite-chars\t--pane-id\t{TRACE_PANE}\t/compact"
+    ))
+}
+
 /// The shim recorded a bracketed paste of `text` followed by a discrete
 /// `write 13` — both to `TRACE_PANE` — with no carriage return folded in.
 fn assert_text_then_enter(trace_log: &Path, text: &str) {
@@ -492,6 +788,19 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
         }),
         pane_env,
     );
+}
+
+/// Seed a context sidecar so `--auto-compact` reads `used_pct` as the agent's
+/// window fill — the same record the producer would fold from a live statusline.
+fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
+    let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());
+    context.tokens = Some(rimz::agents::AgentTokenUsage {
+        used_percentage: Some(used_pct),
+        ..Default::default()
+    });
+    let record = rimz::ledger::agent_context::new_record("claude", agent_id, context);
+    rimz::ledger::agent_context::write_record(&env.runtime_paths(), &record)
+        .expect("seed context sidecar");
 }
 
 fn run_hook(env: &Env, payload: serde_json::Value, pane_env: &[(&str, &str)]) {

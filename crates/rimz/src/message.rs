@@ -36,6 +36,65 @@ impl std::fmt::Display for DeliveryGate {
     }
 }
 
+/// A context-fill threshold that triggers a manual `/compact` in the agent's own
+/// composer before the steered or queued text is delivered. An agent compacts on
+/// its own only at its ceiling (Codex around 90%), so a prompt sent past that
+/// ceiling can be cut in half by a compaction that fires mid-turn. A lower
+/// threshold compacts *first*, so the prompt always lands against a fresh window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutoCompact {
+    /// Compact once the window is at least this full, in percent (0..=100).
+    Percent(u8),
+    /// Compact once at least this many tokens occupy the window.
+    Tokens(u64),
+}
+
+impl AutoCompact {
+    /// Parse a CLI threshold: `70%` is a percentage of the window, a bare integer
+    /// (`120000`) is an absolute occupied-token count.
+    pub fn parse(raw: &str) -> Result<Self, String> {
+        let raw = raw.trim();
+        if let Some(pct) = raw.strip_suffix('%') {
+            let pct: u8 = pct
+                .trim()
+                .parse()
+                .map_err(|_| format!("invalid --auto-compact percentage `{raw}`"))?;
+            if pct > 100 {
+                return Err(format!("--auto-compact percentage `{pct}` exceeds 100"));
+            }
+            Ok(Self::Percent(pct))
+        } else {
+            let tokens: u64 = raw.parse().map_err(|_| {
+                format!("invalid --auto-compact threshold `{raw}`; use `70%` or a token count")
+            })?;
+            Ok(Self::Tokens(tokens))
+        }
+    }
+
+    /// Whether `agent`'s current context fill has reached this threshold. An
+    /// unknown fill never triggers — a missing reading is not a full window.
+    pub fn triggered(self, agent: &AgentState) -> bool {
+        match self {
+            Self::Percent(pct) => agent
+                .context_fill_pct()
+                .is_some_and(|fill| fill >= f64::from(pct)),
+            Self::Tokens(tokens) => agent
+                .occupied_context_tokens()
+                .is_some_and(|used| used >= tokens),
+        }
+    }
+}
+
+impl std::fmt::Display for AutoCompact {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Percent(pct) => write!(f, "{pct}%"),
+            Self::Tokens(tokens) => write!(f, "{tokens} tokens"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
@@ -90,6 +149,11 @@ pub struct MessageRecord {
     pub text: String,
     pub enter: bool,
     pub gate: DeliveryGate,
+    /// Deliver even when a pending ask reserves the agent's next input. Mirrors
+    /// `steer --force`; without it a pending ask defers delivery to a later
+    /// boundary.
+    #[serde(default)]
+    pub force: bool,
     pub status: MessageStatus,
     pub enqueued_at: Timestamp,
     pub updated_at: Timestamp,
@@ -101,6 +165,11 @@ pub struct MessageRecord {
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delivered_at: Option<Timestamp>,
+    /// When set, deliver a `/compact` ahead of the text if the agent's context
+    /// fill has reached this threshold at delivery time, so the message lands
+    /// against a fresh window instead of racing the agent's own auto-compaction.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto_compact: Option<AutoCompact>,
 }
 
 impl MessageRecord {
@@ -121,6 +190,7 @@ impl MessageRecord {
             text,
             enter,
             gate,
+            force: false,
             status: MessageStatus::Pending,
             enqueued_at: now,
             updated_at: now,
@@ -128,20 +198,47 @@ impl MessageRecord {
             last_attempt_at: None,
             last_error: None,
             delivered_at: None,
+            auto_compact: None,
         }
+    }
+
+    /// Attach a context-fill threshold that delivers a `/compact` ahead of the
+    /// text when the window is full enough at delivery time.
+    #[must_use]
+    pub fn with_auto_compact(mut self, auto_compact: Option<AutoCompact>) -> Self {
+        self.auto_compact = auto_compact;
+        self
+    }
+
+    /// Deliver past a pending ask at the boundary, mirroring `steer --force`.
+    #[must_use]
+    pub fn with_force(mut self, force: bool) -> Self {
+        self.force = force;
+        self
     }
 
     pub fn same_agent(&self, kind: &AgentKind, agent_id: &AgentSessionId) -> bool {
         self.kind == *kind && self.agent_id == *agent_id
     }
 
+    /// Whether this record belongs to the logical agent card `(kind, agent_id)`:
+    /// the exact session id, or the stable `agent_name` when one is carried. A
+    /// message queued against a provisional `launch_*` card keeps the launch id,
+    /// so name matching is what folds it into the session that card becomes on
+    /// registration — one card, one FIFO queue.
+    pub fn same_card(
+        &self,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        agent_name: Option<&str>,
+    ) -> bool {
+        self.kind == *kind
+            && (self.agent_id == *agent_id
+                || (agent_name.is_some() && self.agent_name.as_deref() == agent_name))
+    }
+
     pub fn same_agent_card(&self, agent: &AgentState) -> bool {
-        self.same_agent(&agent.kind, &agent.agent_id)
-            || (self.kind == agent.kind
-                && self
-                    .agent_name
-                    .as_deref()
-                    .is_some_and(|name| agent.name.as_deref() == Some(name)))
+        self.same_card(&agent.kind, &agent.agent_id, agent.name.as_deref())
     }
 }
 
@@ -155,15 +252,21 @@ pub fn gate_open(gate: DeliveryGate, status: AgentStatus) -> bool {
     }
 }
 
+/// The oldest pending message for one logical agent card, the next to deliver.
+/// FIFO spans a card's provisional `launch_*` id and the session id it registers
+/// as, so pass the stable `agent_name` when known: a message queued before
+/// registration still sorts ahead of one queued after.
 pub fn queue_head<'a>(
     pending: impl IntoIterator<Item = &'a MessageRecord>,
     kind: &AgentKind,
     agent_id: &AgentSessionId,
+    agent_name: Option<&str>,
 ) -> Option<&'a MessageRecord> {
     pending
         .into_iter()
         .filter(|message| {
-            message.status == MessageStatus::Pending && message.same_agent(kind, agent_id)
+            message.status == MessageStatus::Pending
+                && message.same_card(kind, agent_id, agent_name)
         })
         .min_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()))
 }
@@ -265,6 +368,134 @@ mod tests {
         provisional.agent_id = AgentSessionId::from("real-session");
 
         assert!(message.same_agent_card(&provisional));
+    }
+
+    #[test]
+    fn auto_compact_parses_percent_and_token_forms() {
+        assert_eq!(AutoCompact::parse("70%").unwrap(), AutoCompact::Percent(70));
+        assert_eq!(AutoCompact::parse(" 0% ").unwrap(), AutoCompact::Percent(0));
+        assert_eq!(
+            AutoCompact::parse("120000").unwrap(),
+            AutoCompact::Tokens(120_000)
+        );
+        assert!(AutoCompact::parse("101%").is_err());
+        assert!(AutoCompact::parse("abc").is_err());
+        assert!(AutoCompact::parse("70.5%").is_err());
+    }
+
+    #[test]
+    fn auto_compact_triggers_only_once_fill_is_reached() {
+        let mut a = agent("s1", None);
+        // An unknown fill is not a full window.
+        assert!(!AutoCompact::Percent(70).triggered(&a));
+        assert!(!AutoCompact::Tokens(1).triggered(&a));
+        // The percent threshold reads the carried gauge.
+        a.context_pct = Some(75);
+        assert!(AutoCompact::Percent(70).triggered(&a));
+        assert!(AutoCompact::Percent(75).triggered(&a));
+        assert!(!AutoCompact::Percent(76).triggered(&a));
+        // The token threshold reads the per-call split fallback.
+        a.cache_read_input_tokens = Some(100_000);
+        a.fresh_input_tokens = Some(20_000);
+        assert!(AutoCompact::Tokens(120_000).triggered(&a));
+        assert!(!AutoCompact::Tokens(120_001).triggered(&a));
+    }
+
+    #[test]
+    fn auto_compact_round_trips_through_a_message_record() {
+        let message = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        )
+        .with_auto_compact(Some(AutoCompact::Percent(70)));
+        let json = serde_json::to_string(&message).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.auto_compact, Some(AutoCompact::Percent(70)));
+    }
+
+    #[test]
+    fn force_defaults_off_and_round_trips_when_set() {
+        let base = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        assert!(
+            !base.force,
+            "a fresh record never forces past a pending ask"
+        );
+        let forced = base.with_force(true);
+        let json = serde_json::to_string(&forced).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert!(back.force);
+        // A record written before the field existed reads as not-forced.
+        let legacy = json.replace(",\"force\":true", "");
+        let back: MessageRecord = serde_json::from_str(&legacy).unwrap();
+        assert!(!back.force);
+    }
+
+    #[test]
+    fn auto_compact_tokens_threshold_reads_the_carried_total() {
+        // A transcript-derived session reports only a running total — no rich
+        // context blob and no per-call split. The percent gauge already scales
+        // off that total, so the token threshold must read it too rather than
+        // silently never firing.
+        let mut a = agent("s1", None);
+        a.total_tokens = Some(120_000);
+        a.context_window = Some(200_000);
+        assert!(AutoCompact::Tokens(100_000).triggered(&a));
+        assert!(AutoCompact::Tokens(120_000).triggered(&a));
+        assert!(!AutoCompact::Tokens(120_001).triggered(&a));
+    }
+
+    #[test]
+    fn queue_head_spans_provisional_and_registered_ids() {
+        // A message queued against a provisional `launch_*` card and a later
+        // message queued after the card registers share one logical agent, so
+        // FIFO must return the older provisional-card message as the head.
+        let provisional = agent("launch_1", Some("lucid-atlas"));
+        let registered = agent("real-session", Some("lucid-atlas"));
+        let ws = WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message"));
+        let mut older = MessageRecord::new(
+            ws.clone(),
+            &provisional,
+            "first".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        let mut newer = MessageRecord::new(
+            ws,
+            &registered,
+            "second".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        older.message_id = MessageId::parse("msg_00000000000000000000000000000001").unwrap();
+        newer.message_id = MessageId::parse("msg_00000000000000000000000000000002").unwrap();
+        let pending = [newer.clone(), older.clone()];
+
+        let head = queue_head(
+            pending.iter(),
+            &registered.kind,
+            &registered.agent_id,
+            registered.name.as_deref(),
+        )
+        .expect("the registered observation selects a head");
+        assert_eq!(
+            head.message_id, older.message_id,
+            "the older provisional-card message is the head, not the newer registered one"
+        );
+
+        // Without the stable name the provisional record is invisible to the
+        // registered id — the reordering this fix closes.
+        let exact = queue_head(pending.iter(), &registered.kind, &registered.agent_id, None)
+            .expect("the registered id still matches its own record");
+        assert_eq!(exact.message_id, newer.message_id);
     }
 
     fn agent(id: &str, name: Option<&str>) -> AgentState {

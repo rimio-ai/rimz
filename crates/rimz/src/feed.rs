@@ -1106,6 +1106,66 @@ impl AgentState {
             compacting: self.compacting_since.is_some(),
         }
     }
+
+    /// Tokens currently occupying the window: the folded statusline breakdown,
+    /// else the per-call split (`cache_read + fresh_input`) the rollout tail
+    /// reduces. `None` when nothing has reported occupancy yet.
+    pub fn context_used_tokens(&self) -> Option<u64> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(crate::agents::AgentTokenUsage::used_tokens)
+            .or_else(|| {
+                let fresh = self.fresh_input_tokens?;
+                Some(self.cache_read_input_tokens.unwrap_or(0) + fresh)
+            })
+    }
+
+    /// Tokens occupying the window for a `--auto-compact <tokens>` threshold: the
+    /// precise composition when known, else the carried turn total. The gauge's
+    /// `context_used_tokens` withholds a bare total so it never legends a partial
+    /// composition; a threshold instead scales against the same numerator the
+    /// percent gauge derives from, so `--auto-compact 100000` fires for a
+    /// transcript-derived session that reports only a running total — matching
+    /// `--auto-compact 70%`, which already reads that total through the gauge.
+    pub fn occupied_context_tokens(&self) -> Option<u64> {
+        self.context_used_tokens().or(self.total_tokens)
+    }
+
+    /// The window denominator: the folded statusline's `context_window_size`,
+    /// else the adapter-resolved `context_window`, else the model descriptor's
+    /// default.
+    pub fn resolved_context_window(&self) -> Option<u64> {
+        self.context
+            .as_ref()
+            .and_then(|context| context.tokens.as_ref())
+            .and_then(|tokens| tokens.context_window_size)
+            .or(self.context_window)
+            .or_else(|| {
+                crate::agents::descriptor_by_kind(self.kind.as_str())
+                    .and_then(|descriptor| descriptor.default_context_window)
+            })
+    }
+
+    /// The real context-window fill (0..=100): the live token composition over
+    /// the model's window. Prefers the precise used/window fraction, then the
+    /// folded statusline's `used_percentage`, then the carried `context_pct`, so
+    /// a session with no rich context still reads its last gauge. `None` when no
+    /// source has reported a fill.
+    pub fn context_fill_pct(&self) -> Option<f64> {
+        match (self.context_used_tokens(), self.resolved_context_window()) {
+            (Some(used), Some(window)) if window > 0 => {
+                Some((used as f64 / window as f64 * 100.0).clamp(0.0, 100.0))
+            }
+            _ => self
+                .context
+                .as_ref()
+                .and_then(|context| context.tokens.as_ref())
+                .and_then(|tokens| tokens.used_percentage)
+                .or(self.context_pct)
+                .map(f64::from),
+        }
+    }
 }
 
 /// The pending ask currently blocking `agent`, if any.

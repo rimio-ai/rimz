@@ -379,6 +379,10 @@ impl AgentAdapter for CodexAdapter {
         ])
     }
 
+    fn compact_command(&self) -> Option<&'static str> {
+        Some("/compact")
+    }
+
     fn render_preset(
         &self,
         preset: &super::LaunchPreset,

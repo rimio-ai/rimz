@@ -738,6 +738,7 @@ mod tests {
             text: "secret prompt body".to_owned(),
             enter: true,
             gate: DeliveryGate::Done,
+            force: false,
             status: MessageStatus::Pending,
             enqueued_at: now,
             updated_at: now,
@@ -745,6 +746,7 @@ mod tests {
             last_attempt_at: None,
             last_error: None,
             delivered_at: None,
+            auto_compact: None,
         };
         let typed =
             EventEnvelope::message_event(&message, "session", MessageEventMethod::Queued, None);

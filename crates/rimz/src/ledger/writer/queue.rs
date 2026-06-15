@@ -48,7 +48,12 @@ impl Ledger {
         if !claim_expired(message.last_attempt_at, now) {
             return Ok(None);
         }
-        let Some(head) = queue_head(pending.iter(), &message.kind, &message.agent_id) else {
+        let Some(head) = queue_head(
+            pending.iter(),
+            &message.kind,
+            &message.agent_id,
+            message.agent_name.as_deref(),
+        ) else {
             return Ok(None);
         };
         if head.message_id != *message_id {
@@ -185,11 +190,7 @@ impl Ledger {
         {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             for mut message in message_store::list(&self.inner.paths.queue_dir)? {
-                let same_card = message.same_agent(kind, agent_id)
-                    || (message.kind == *kind
-                        && agent_name.is_some()
-                        && message.agent_name.as_deref() == agent_name);
-                if !message.status.is_open() || !same_card {
+                if !message.status.is_open() || !message.same_card(kind, agent_id, agent_name) {
                     continue;
                 }
                 message.status = MessageStatus::Removed;

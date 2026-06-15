@@ -462,6 +462,14 @@ pub(super) fn send_enter(backend: &dyn MuxBackend, pane: &PaneId) -> Result<()> 
     send_key(backend, pane, NamedKey::Enter)
 }
 
+/// Type a slash command as raw keystrokes, then submit it. Commands take the
+/// raw type path rather than [`paste_text`]: agents treat bracketed-pasted text
+/// as literal content and would not run a pasted `/command`.
+pub(super) fn send_command(backend: &dyn MuxBackend, pane: &PaneId, command: &str) -> Result<()> {
+    send_text(backend, pane, command)?;
+    send_enter(backend, pane)
+}
+
 /// Bracketed-paste `text` into an agent composer, then press Enter as a
 /// discrete keystroke that lands outside the paste — a real submit — unless
 /// suppressed.

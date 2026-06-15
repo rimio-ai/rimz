@@ -467,6 +467,10 @@ impl AgentAdapter for PiAdapter {
         ])
     }
 
+    fn compact_command(&self) -> Option<&'static str> {
+        Some("/compact")
+    }
+
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {
         let mut argv = vec!["pi".to_owned()];
         argv.extend(extra_args.iter().cloned());

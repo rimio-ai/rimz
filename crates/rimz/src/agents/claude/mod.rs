@@ -397,6 +397,10 @@ impl AgentAdapter for ClaudeAdapter {
         ])
     }
 
+    fn compact_command(&self) -> Option<&'static str> {
+        Some("/compact")
+    }
+
     fn render_preset(
         &self,
         preset: &super::LaunchPreset,

@@ -112,42 +112,47 @@ rimz steer @planner -- "Rebase on main when the run lands."                # add
 rimz steer @codex --all -y -- "Pause and report status."                  # fan out to every codex
 rimz steer @planner#feat/x --create -- "Draft the new endpoint."          # launch it if not running
 rimz steer tmux:%12 --force -- "Answer the pending prompt with option 2."  # override a pending ask
+rimz steer @codex --auto-compact 70% -- "Continue the refactor."          # /compact first past 70% full
+rimz steer @claude -- "Step 1: read the spec.\nStep 2: list the gaps."    # \n is a soft composer newline
+rimz steer @claude --file ./review-notes.md                               # send a file's contents verbatim
 ```
 
 ```sh
-rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--all] [--create] [--yes] -- <TEXT...>
+rimz steer [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--no-enter] [--force] [--all] [--create] [--auto-compact <PCT|TOKENS>] [--yes] [--file <PATH>] -- <TEXT...>
 ```
 
 `<TARGET>` is an `@`-mention or a pane id. `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (a kind) and `@planner` (a role) name a type, and `@all` is the broadcast handle. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`; a pane id (`tmux:%12`) is a precise, channel-agnostic address. A bare selector without `@` is rejected with a `did you mean @…?` hint. A bare `@<kind>`, `@<alias>`, or `@all` also reaches a codex you started in a fresh pane before its first turn: `steer` addresses the pane it types into, so a just-launched agent is steerable without waiting for it to register a session.
 
-A selector that matches several agents is an ambiguity that lists the handles to pick one; `--all` (or the explicit `@all`) opts into the fan-out, which confirms past the first match unless `--yes` (`-y`) skips it, and off a TTY refuses without it. `--create` launches a missing agent from a kind or role address — opening the worktree when the channel is new — with the text as its first prompt; an instance handle (pet name, ordinal, session id) cannot create. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so every agent submits the message instead of taking a newline; `--no-enter` pastes without submitting. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. `steer` delivers to every reachable agent and prints which it reached and which it skipped, so a blocked or paneless agent skips while the rest still send. The audit event records metadata and text length, not message content.
+A selector that matches several agents is an ambiguity that lists the handles to pick one; `--all` (or the explicit `@all`) opts into the fan-out, which confirms past the first match unless `--yes` (`-y`) skips it, and off a TTY refuses without it. `--create` launches a missing agent from a kind or role address — opening the worktree when the channel is new — with the text as its first prompt; an instance handle (pet name, ordinal, session id) cannot create. `steer` types the text as a bracketed paste and then presses Enter as a discrete keystroke outside the paste, so the submit lands as a keystroke while any `\n` inside the text stays a soft composer newline — a multi-line prompt lands multi-line (write `\\` for a literal backslash). `--no-enter` pastes without submitting. `--file <PATH>` reads the prompt from a file instead of the `-- text` argv and sends it verbatim — real newlines stay soft breaks and every backslash stays literal, so code and regex paste unchanged — and conflicts with inline text, refusing an empty or unreadable file. A pending ask attached to an agent reserves the next input for that ask and skips that agent; `--force` records the override and sends anyway. `--auto-compact <PCT|TOKENS>` submits the agent's `/compact` ahead of the text when its context window has reached the threshold — a percentage (`70%`) or an occupied-token count (`120000`) — so the prompt lands against a fresh window instead of racing the agent's own auto-compaction; a window below the threshold (or an unbound pane with no fill reading) sends untouched. `steer` delivers to every reachable agent and prints which it reached and which it skipped, so a blocked or paneless agent skips while the rest still send. The audit event records metadata and text length, not message content.
 
 Target resolution, the bracketed-paste mechanism, and pane-answering resolver behavior are covered in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue) and [resolver internals](../../internals/agents/resolvers.md).
 
 ## Queue The Next Message
 
-`rimz queue` stores text for agents and delivers it after each reaches a safe turn boundary. It uses the same `@<agent>#<worktree>` grammar as `steer`. Because a queued message is durable and keyed on a session, `queue` addresses bound agents; a freshly started pane with no session yet is refused with a pointer to `steer`, which reaches the pane directly.
+`rimz queue` stores text for agents and delivers it after each reaches a safe turn boundary. It mirrors `steer` — the same address grammar and the same `--worktree`, `--no-enter`, `--force`, `--all`, `--create`, `--yes`, `--auto-compact`, and `--file` flags, and the same `\n` soft-newline text — and adds only `--on`, the delivery-timing gate that is the whole difference between sending now and sending at a boundary. Because a queued message is durable and keyed on a session, `queue` addresses bound agents; a freshly started pane with no session yet is refused with a pointer to `steer`, which reaches the pane directly.
 
 ```sh
 rimz queue @swift-otter -- "After this turn, add focused tests for the parser."
 rimz queue add @codex#cli-docs --on any -- "If the run failed, capture the error first."
 rimz queue @all --yes -- "When you reach a boundary, summarize what changed."
+rimz queue @claude --force -- "Answer the pending prompt, then continue."   # deliver past a pending ask
+rimz queue @codex#cli-docs --file ./follow-up.md                            # queue a file's contents verbatim
 rimz queue list --json
 rimz queue remove msg_01J...
 rimz queue clear @claude-2#cli-docs
 ```
 
 ```sh
-rimz queue [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--all] [--create] [--yes] -- <TEXT...>
-rimz queue add [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--all] [--create] [--yes] -- <TEXT...>
+rimz queue [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--force] [--all] [--create] [--auto-compact <PCT|TOKENS>] [--yes] [--file <PATH>] -- <TEXT...>
+rimz queue add [OPTIONS] <TARGET> [--worktree <WORKTREE>] [--on done|any] [--no-enter] [--force] [--all] [--create] [--auto-compact <PCT|TOKENS>] [--yes] [--file <PATH>] -- <TEXT...>
 rimz queue list [--json] [REF]
 rimz queue remove <MESSAGE_ID>
 rimz queue clear [--worktree <WORKTREE>] <REF>
 ```
 
-The bare form and `queue add` do the same work and take an `@`-mention. A selector matching several agents is an ambiguity until `--all` (or `@all`) opts into queuing one message per matched agent, confirming past the first unless `--yes` (`-y`) skips it. `--create` launches a missing kind or role with the text as its first prompt instead of queuing. `--on done` is the default gate and delivers after the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivered text rides as a bracketed paste with a discrete submit Enter, the same path as `steer`; `--no-enter` stores the text without it. The whole `queue` family takes the `@`-mention grammar — `list <ref>` and `clear <ref>` require the sigil and resolve a single agent.
+The bare form and `queue add` do the same work and take an `@`-mention. A selector matching several agents is an ambiguity until `--all` (or `@all`) opts into queuing one message per matched agent, confirming past the first unless `--yes` (`-y`) skips it. `--create` launches a missing kind or role with the text as its first prompt instead of queuing. `--on done` is the default gate and delivers after the agent is `idle` or `success`; `--on any` also delivers after `failed`; `running`, `waiting`, and `paused` keep the message pending. Delivered text rides as a bracketed paste with a discrete submit Enter, the same path as `steer`, so a `\n` in the text lands as a soft composer newline; `--no-enter` stores the text without the submit. `--force` marks the message to deliver past a pending ask at the boundary instead of deferring, mirroring `steer --force`. The whole `queue` family takes the `@`-mention grammar — `list <ref>` and `clear <ref>` require the sigil and resolve a single agent.
 
-Delivery is FIFO per agent, and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, skips delivery while a pending ask is attached, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap.
+Delivery is FIFO per agent, and one message is attempted per unparked root turn end. Rimz waits briefly for the pane composer to settle, re-checks the ledger snapshot, defers delivery while a pending ask is attached unless the message was queued with `--force`, claims the queue head, sends through the pane primitive, and marks the message delivered. Failed sends return to `pending` with an attempt count and become `abandoned` after the retry cap. `--auto-compact <PCT|TOKENS>` is evaluated at this delivery boundary, not at enqueue: when the agent's context fill has reached the threshold — a percentage (`70%`) or an occupied-token count (`120000`) — Rimz submits the agent's `/compact` ahead of the text in the same delivery, so a long-idle queue still compacts against the window the turn actually left behind.
 
 Queued delivery requires installed and trusted hooks, because turn-end hooks trigger the delivery helper. The record layout, gates, delivery walk, and hazards are in [harness.md → Talk and queue](../../internals/agents/harness.md#talk-and-queue).
 

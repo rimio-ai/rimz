@@ -3,8 +3,11 @@
 use anyhow::{Result, bail};
 use clap::Args;
 
+use super::send::{SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use rimz::feed::{AgentState, pending_ask_for};
+use rimz::message::AutoCompact;
+use rimz::mux::MuxBackend;
 use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
 use rimz::{PaneAgent, SidebarSnapshot};
@@ -14,28 +17,10 @@ pub struct SteerArgs {
     /// Agent mention: `@codex-2`, `@swift-otter`, `@codex` (every codex), `@all`,
     /// optionally `#worktree`; or a pane id (`tmux:%1`).
     target: String,
-    /// Restrict matches to one worktree branch, name, or path (the channel).
-    #[arg(long)]
-    worktree: Option<String>,
-    /// Type the text without pressing Enter.
-    #[arg(long)]
-    no_enter: bool,
-    /// Send even when a pending ask is attached to the agent.
-    #[arg(long)]
-    force: bool,
-    /// Fan out to every agent the address matches. Without it, a selector that
-    /// matches more than one agent is an error that lists the handles to pick one.
-    #[arg(long)]
-    all: bool,
-    /// Launch the agent if the address matches none: a kind (`@codex`) or a role
-    /// (`@planner`) opens a fresh agent in the channel with this text as its first
-    /// prompt. An instance handle (pet name, ordinal) cannot create.
-    #[arg(long)]
-    create: bool,
-    /// Skip the fan-out confirmation prompt when broadcasting (`@all` or --all).
-    #[arg(long, short = 'y')]
-    yes: bool,
-    /// Text to type into the agent pane.
+    #[command(flatten)]
+    send: SendFlags,
+    /// Text to type into the agent pane. `\n` is a soft newline; `\\` a literal
+    /// backslash. Omit it and pass `--file` to send a file's contents verbatim.
     #[arg(last = true)]
     text: Vec<String>,
 }
@@ -44,33 +29,55 @@ pub struct SteerArgs {
 /// pane (it came from the producer's pane fold), so the only skip is a pending
 /// ask reserving the next input.
 enum Outcome {
-    Sent(String),
+    Sent { label: String, compacted: bool },
     SkippedPending { label: String, request_id: String },
 }
 
+/// How a steer is delivered: send past a pending ask, submit with Enter, and an
+/// optional compact-first threshold.
+struct SteerSend {
+    force: bool,
+    enter: bool,
+    auto_compact: Option<AutoCompact>,
+}
+
 pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
-    if args.text.is_empty() {
-        bail!("expected non-empty text");
-    }
     rimz::target::require_mention(&args.target)?;
-    let text = args.text.join(" ");
+    let SendFlags {
+        worktree,
+        no_enter,
+        force,
+        all,
+        create,
+        yes,
+        auto_compact,
+        file,
+    } = args.send;
+    let text = resolve_message(&args.text, file.as_deref())?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
-    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    // `--auto-compact` reads context fill, which the resolution snapshot does not
+    // carry; fold the disposable context sidecars in for the freshest gauge.
+    if auto_compact.is_some()
+        && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
+    {
+        snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
+    }
     let channel = current_channel(&workspace);
     let targets = match super::resolve_pane_targets(
         &snapshot,
         &args.target,
-        args.worktree.as_deref(),
+        worktree.as_deref(),
         channel.as_deref(),
     ) {
         Ok(targets) => targets,
         // Create-on-miss: a kind/role address with --create launches a fresh
         // agent with this text as its first prompt, so no separate steer follows.
-        Err(_) if args.create => {
+        Err(_) if create => {
             return super::agents_cmd::create_on_miss(
                 &args.target,
-                args.worktree.as_deref(),
+                worktree.as_deref(),
                 channel.as_deref(),
                 &text,
                 globals,
@@ -81,24 +88,23 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
 
     if targets.len() > 1 {
         let labels: Vec<String> = targets.iter().map(|target| target.label()).collect();
-        if !args.all && !rimz::target::is_broadcast(&args.target) {
+        if !all && !rimz::target::is_broadcast(&args.target) {
             return Err(super::ambiguous_fanout("steer", &args.target, &labels));
         }
-        if !args.yes {
+        if !yes {
             super::confirm_fanout("Steer", &args.target, &labels)?;
         }
     }
 
+    let send = SteerSend {
+        force,
+        enter: !no_enter,
+        auto_compact,
+    };
     let mut outcomes = Vec::with_capacity(targets.len());
     for target in &targets {
         outcomes.push(steer_one(
-            &workspace,
-            &ledger,
-            &snapshot,
-            target,
-            &text,
-            args.force,
-            !args.no_enter,
+            &workspace, &ledger, &snapshot, target, &text, &send,
         )?);
     }
 
@@ -114,13 +120,12 @@ fn steer_one(
     snapshot: &SidebarSnapshot,
     target: &PaneAgent,
     text: &str,
-    force: bool,
-    enter: bool,
+    send: &SteerSend,
 ) -> Result<Outcome> {
     let label = target.label();
     // A pending ask reserves the next input — but only a bound session can hold
     // one; a lazy pane has no feed item, so it always sends.
-    if !force
+    if !send.force
         && let Some(agent) = bound_agent(snapshot, target)
         && let Some(ask) = pending_ask_for(
             agent,
@@ -137,6 +142,7 @@ fn steer_one(
     }
     let pane_id = &target.pane_id;
     let backend = rimz::mux::backend_for(pane_id.mux());
+    let compacted = compact_if_full(backend.as_ref(), snapshot, target, send.auto_compact)?;
     super::pane::paste_text(backend.as_ref(), pane_id, text)?;
     // Record the steer once the text lands and before the submit keystroke, so a
     // submitted steer is always preceded by its audit event. A failed Enter then
@@ -149,15 +155,43 @@ fn steer_one(
             target.kind.clone(),
             target.agent_id.clone(),
             pane_id.clone(),
-            force,
+            send.force,
             text.len(),
         ),
     );
     ledger.append_event(&event)?;
-    if enter {
+    if send.enter {
         super::pane::send_enter(backend.as_ref(), pane_id)?;
     }
-    Ok(Outcome::Sent(label))
+    Ok(Outcome::Sent { label, compacted })
+}
+
+/// Submit the agent's `/compact` ahead of the steer when `--auto-compact` is set
+/// and a bound agent's context has reached the threshold. A lazy pane carries no
+/// context, and an agent kind with no compaction command can't compact, so both
+/// pass through untouched. Returns whether a compaction was sent.
+fn compact_if_full(
+    backend: &dyn MuxBackend,
+    snapshot: &SidebarSnapshot,
+    target: &PaneAgent,
+    auto_compact: Option<AutoCompact>,
+) -> Result<bool> {
+    let Some(threshold) = auto_compact else {
+        return Ok(false);
+    };
+    let Some(agent) = bound_agent(snapshot, target) else {
+        return Ok(false);
+    };
+    if !threshold.triggered(agent) {
+        return Ok(false);
+    }
+    let Some(command) = rimz::agents::find_adapter(target.kind.as_str())
+        .and_then(|adapter| adapter.compact_command())
+    else {
+        return Ok(false);
+    };
+    super::pane::send_command(backend, &target.pane_id, command)?;
+    Ok(true)
 }
 
 /// The rollup session behind a bound pane target, for the pending-ask gate.
@@ -178,11 +212,26 @@ fn report(target: &str, total: usize, outcomes: &[Outcome]) -> Result<()> {
         outcomes.iter().filter_map(pick).collect()
     };
     let sent = labels(|outcome| match outcome {
-        Outcome::Sent(label) => Some(label.as_str()),
+        Outcome::Sent { label, .. } => Some(label.as_str()),
+        _ => None,
+    });
+    let compacted = labels(|outcome| match outcome {
+        Outcome::Sent {
+            label,
+            compacted: true,
+        } => Some(label.as_str()),
         _ => None,
     });
     if total == 1 {
         if !sent.is_empty() {
+            // A single steer stays quiet on success, but a compaction it ran on
+            // the user's behalf is reported so the extra turn is never silent.
+            if let Some(label) = compacted.first() {
+                #[expect(clippy::print_stdout, reason = "steer compaction notice")]
+                {
+                    println!("compacted {label}, then steered");
+                }
+            }
             return Ok(());
         }
         match outcomes.first() {
@@ -199,6 +248,9 @@ fn report(target: &str, total: usize, outcomes: &[Outcome]) -> Result<()> {
     let mut line = format!("steered {} agent(s)", sent.len());
     if !sent.is_empty() {
         line.push_str(&format!(": {}", sent.join(", ")));
+    }
+    if !compacted.is_empty() {
+        line.push_str(&format!("; compacted first: {}", compacted.join(", ")));
     }
     if !pending.is_empty() {
         line.push_str(&format!("; skipped pending ask: {}", pending.join(", ")));

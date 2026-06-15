@@ -27,6 +27,7 @@ mod reset;
 mod resolver;
 mod resume;
 mod room_recovery;
+mod send;
 mod session_record;
 mod setup;
 mod sidebar;
