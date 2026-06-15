@@ -19,6 +19,18 @@ struct AgentsHarness {
     args: AgentsArgs,
 }
 
+/// The launch args and mode of the sole agent cell in a single-column,
+/// single-row layout — the shape every `apply_launch_*` test builds.
+fn only_agent(layout: &LayoutSpec) -> (&[String], Option<PermissionMode>) {
+    let [column] = layout.columns.as_slice() else {
+        panic!("single column");
+    };
+    let [Cell::Agent { args, mode, .. }] = column.rows.as_slice() else {
+        panic!("single agent cell");
+    };
+    (args, *mode)
+}
+
 #[test]
 fn agents_launch_parses_spec_prompt_and_worktree_name() {
     let parsed = AgentsHarness::try_parse_from([
@@ -172,22 +184,12 @@ fn preset_renders_effort_per_adapter_and_fails_fast_for_pi() {
 
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
     apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("claude effort");
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, _) = only_agent(&layout);
     assert_eq!(args, &["--effort", "high"]);
 
     let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
     apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[]).expect("codex effort");
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, _) = only_agent(&layout);
     assert_eq!(args, &["-c", "model_reasoning_effort=high"]);
 
     // Pi has no effort flag: the launch refuses at the unsupported cell.
@@ -340,12 +342,7 @@ fn interactive_launch_without_mode_keeps_native_agent_permissions() {
     )
     .expect("apply launch options");
 
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, _) = only_agent(&layout);
     assert!(args.is_empty());
 }
 
@@ -368,12 +365,7 @@ fn explicit_interactive_mode_applies_even_when_alias_added_args() {
     )
     .expect("apply launch options");
 
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, _) = only_agent(&layout);
     assert!(
         args.iter()
             .any(|arg| arg == "--dangerously-bypass-approvals-and-sandbox")
@@ -402,14 +394,9 @@ fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
     )
     .expect("apply launch options");
 
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, mode, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, mode) = only_agent(&layout);
     assert_eq!(args, &yolo_args);
-    assert_eq!(*mode, Some(PermissionMode::Yolo));
+    assert_eq!(mode, Some(PermissionMode::Yolo));
 }
 
 #[test]
@@ -432,14 +419,9 @@ fn explicit_mode_skips_cells_with_virtual_or_alias_mode() {
     )
     .expect("apply launch options");
 
-    let [column] = layout.columns.as_slice() else {
-        panic!("single column");
-    };
-    let [Cell::Agent { args, mode, .. }] = column.rows.as_slice() else {
-        panic!("single agent cell");
-    };
+    let (args, mode) = only_agent(&layout);
     assert_eq!(args, &auto_args);
-    assert_eq!(*mode, Some(PermissionMode::Auto));
+    assert_eq!(mode, Some(PermissionMode::Auto));
 }
 
 #[test]

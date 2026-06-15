@@ -29,14 +29,7 @@ fn stream_json_prompt_rejects_malformed_lines() {
 
 #[test]
 fn terminal_run_is_not_sendable() {
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let mut record = RunRecord::new(
-        workspace_id,
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
+    let mut record = run_record("codex");
     record.status = RunStatus::Canceled;
 
     let err = ensure_sendable(&record).expect_err("terminal run rejects sends");
@@ -45,14 +38,8 @@ fn terminal_run_is_not_sendable() {
 
 #[test]
 fn pane_resolution_uses_snapshot_when_record_has_no_pane() {
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let mut record = RunRecord::new(
-        workspace_id.clone(),
-        AgentKind::new_unchecked("claude"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
+    let mut record = run_record("claude");
+    let workspace_id = record.workspace_id.clone();
     record.agent_id = Some(AgentSessionId::from("sess-1"));
     let pane_id = PaneId::from_parts(MuxName::Tmux, "%9");
     let mut pane = PaneRef::from_id(pane_id.clone());
@@ -250,14 +237,7 @@ fn transcript_cursor_skips_existing_attach_bytes_and_resets_on_path_change() {
         "{\"type\":\"event_msg\",\"payload\":{\"type\":\"agent_message\",\"message\":\"old\"}}\n",
     )
     .unwrap();
-    let workspace_id = WorkspaceId::from_project_root(Path::new("/tmp/rimz-run"));
-    let mut record = RunRecord::new(
-        workspace_id,
-        AgentKind::new_unchecked("codex"),
-        PermissionMode::Auto,
-        "go".to_owned(),
-        Path::new("/tmp/rimz-run").to_path_buf(),
-    );
+    let mut record = run_record("codex");
     record.transcript_path = Some(first.to_string_lossy().into_owned());
     let mut cursor = TranscriptCursor::new(false);
 
@@ -328,6 +308,16 @@ fn neutral_run_wait_marks_timeout() {
 
     assert_eq!(timed_out.status, RunStatus::TimedOut);
     assert_eq!(timed_out.status.exit_code(), 124);
+}
+
+fn run_record(kind: &str) -> RunRecord {
+    RunRecord::new(
+        WorkspaceId::from_project_root(Path::new("/tmp/rimz-run")),
+        AgentKind::new_unchecked(kind),
+        PermissionMode::Auto,
+        "go".to_owned(),
+        Path::new("/tmp/rimz-run").to_path_buf(),
+    )
 }
 
 fn send_run_frame(path: &Path, frame: &WakeupFrame) {
