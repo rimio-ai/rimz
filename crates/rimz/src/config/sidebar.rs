@@ -85,6 +85,50 @@ pub enum CardDensityMode {
     Compact,
 }
 
+/// `[sidebar.pets] glyphs`: which Unicode block tier the pet renderer uses.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum PetsGlyphMode {
+    /// Use the default renderer tier: sextants with the half-block floor.
+    #[default]
+    Auto,
+    /// Use half-block cells (`▀`), the broadest terminal-font floor.
+    Half,
+    /// Use Unicode sextants, the default quality/coverage tier.
+    Sextant,
+    /// Use Unicode 16 octants. Sharpest tier, intended for explicit opt-in.
+    Octant,
+}
+
+/// `[sidebar.pets]`: opt-in animated companion in the provider dashboard.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PetsConfig {
+    /// Enable the pet dashboard tab and the best-effort CDN/cache asset load.
+    pub enabled: bool,
+    /// Which pet to show. A built-in catalog id (`codex`, `dewey`, …) wins; an
+    /// `http(s)://` selector is your own WebP sheet fetched and cached like a
+    /// built-in; a path-like selector (`/`, `.`, or leading `~`) is a local
+    /// sheet or a petdex pet directory; and a bare slug (`wall-e`) is a petdex
+    /// pet installed under `~/.codex/pets/<slug>/`.
+    pub pet: String,
+    /// Unicode block-glyph tier.
+    pub glyphs: PetsGlyphMode,
+    /// Show canned captions on fleet-status changes.
+    pub voice: bool,
+}
+
+impl Default for PetsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            pet: "codex".to_owned(),
+            glyphs: PetsGlyphMode::default(),
+            voice: true,
+        }
+    }
+}
+
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -175,6 +219,10 @@ pub struct SidebarConfig {
     /// form. Resolved producer-side onto the snapshot like the rest of
     /// `[sidebar]`.
     pub card_density: CardDensityMode,
+    /// Opt-in animated companion in the provider dashboard. Best-effort
+    /// display enrichment: it reads the snapshot's fleet status and never
+    /// participates in ledger correctness.
+    pub pets: PetsConfig,
     /// The global multiplexer chord that focuses the sidebar from any pane — a
     /// toggle, so pressing it again returns to your last working pane. Rimz
     /// registers it room-scoped at session birth (tmux as a `bind-key`, Zellij
@@ -202,6 +250,7 @@ impl Default for SidebarConfig {
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
             card_density: CardDensityMode::default(),
+            pets: PetsConfig::default(),
             focus_key: default_focus_key(),
         }
     }

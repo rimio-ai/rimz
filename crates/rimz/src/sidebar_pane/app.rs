@@ -25,6 +25,7 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
+use crate::sidebar_pane::pets::{PetAssets, PetGridSize};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -66,6 +67,7 @@ pub use health::Health;
 pub use state::{RenderState, compute_next_state};
 
 const SIDEBAR_TERMINAL_TITLE: &str = "rimz-sidebar";
+const PET_FALLBACK_TERMINAL_SIZE: (u16, u16) = (54, 34);
 
 thread_local! {
     static PRODUCE_PANIC_DIAGNOSTIC_SUPPRESSED: Cell<bool> = const { Cell::new(false) };
@@ -393,6 +395,7 @@ fn set_terminal_title() -> io::Result<()> {
 fn apply_input(
     wakeup: Wakeup,
     ui: &mut UiState,
+    pet_assets: &mut PetAssets,
     health: &mut Health,
     terminal: &mut Terminal<CrosstermBackend<io::Stdout>>,
     snapshot: &SidebarSnapshot,
@@ -406,6 +409,12 @@ fn apply_input(
         // Carry the live spin phase into the instant paint so a keypress mid-spin
         // never rewinds the animation to a stale frame.
         ui.animation_phase = wall_clock_phase(anim_start, snapshot.sidebar.resolved_refresh_ms());
+        refresh_pet_view(
+            ui,
+            pet_assets,
+            snapshot,
+            terminal.size().ok().map(|size| (size.width, size.height)),
+        );
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
     if let Some(pane) = &outcome.focus {
@@ -423,6 +432,33 @@ fn apply_input(
         mark_read: outcome.mark_read,
         mark_unread: outcome.mark_unread,
     })
+}
+
+fn refresh_pet_view(
+    ui: &mut UiState,
+    pet_assets: &mut PetAssets,
+    snapshot: &SidebarSnapshot,
+    terminal_size: Option<(u16, u16)>,
+) {
+    let (width, height) = terminal_size.unwrap_or(PET_FALLBACK_TERMINAL_SIZE);
+    let status = render::fleet_pet_status(snapshot);
+    let pets_tab_active = matches!(
+        render::active_dashboard_tab(snapshot, ui),
+        Some(render::DashboardTabId::Pets)
+    );
+    let size = if pets_tab_active && render::pet_body_enabled(snapshot) {
+        PetGridSize::for_sidebar_space(width.saturating_sub(2), height)
+    } else {
+        None
+    };
+    ui.pet = pet_assets.view(
+        &snapshot.sidebar.pets,
+        status,
+        ui.animation_phase,
+        snapshot.sidebar.resolved_refresh_ms(),
+        size,
+        render::pet_motion_enabled(snapshot, status),
+    );
 }
 
 struct InputApply {

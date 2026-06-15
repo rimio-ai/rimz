@@ -3,6 +3,8 @@
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::BudgetZonesConfig;
+use crate::sidebar_pane::pets::PetView;
+use crate::sidebar_pane::render::DashboardTabId;
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
 use ratatui::style::{Color, Modifier, Style};
@@ -179,7 +181,7 @@ pub(crate) struct ProviderTabHit {
     pub(crate) line: usize,
     pub(crate) col_start: u16,
     pub(crate) col_end: u16,
-    pub(crate) kind: String,
+    pub(crate) kind: DashboardTabId,
 }
 
 /// The pinned per-provider dashboard. In stacked mode every account paints its
@@ -196,6 +198,7 @@ pub(crate) struct ProviderTabHit {
 /// and one end column across every block, so the dashboard reads as one aligned
 /// grid.
 /// Bottom chrome — the tabs are its only hit targets, never a jump.
+#[cfg(test)]
 pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
@@ -205,10 +208,36 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     zones: &BudgetZonesConfig,
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
+    dashboard_panel_lines(
+        theme,
+        providers,
+        active_kind.map(DashboardTabId::provider).as_ref(),
+        tabbed,
+        None,
+        false,
+        width,
+        zones,
+        now,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
+    theme: &Theme,
+    providers: &[SidebarProviderPanel],
+    active_tab: Option<&DashboardTabId>,
+    tabbed: bool,
+    pet: Option<&PetView>,
+    pets_enabled: bool,
+    width: usize,
+    zones: &BudgetZonesConfig,
+    now: Timestamp,
+) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
-    let Some(first) = providers.first() else {
+    let first = providers.first();
+    if first.is_none() && !pets_enabled {
         return (lines, Vec::new());
-    };
+    }
     if !tabbed {
         let mut blocks = Vec::new();
         for (index, panel) in providers.iter().enumerate() {
@@ -222,17 +251,33 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
         return (blocks, Vec::new());
     }
 
-    let active = active_kind
-        .and_then(|kind| providers.iter().find(|panel| panel.kind == kind))
-        .unwrap_or(first);
-    let (rail, hits) = provider_tab_rail(theme, providers, &active.kind, width);
+    let fallback = first.map(|panel| DashboardTabId::Provider(panel.kind.clone()));
+    let active_tab = active_tab
+        .cloned()
+        .or(fallback)
+        .unwrap_or(DashboardTabId::Pets);
+    let (rail, hits) = provider_tab_rail(theme, providers, &active_tab, pets_enabled, width);
     lines.push(rail);
-    // A blank line below the rail sets the tabs apart from the active
-    // account's block, matching the cockpit's breathing room; the header
-    // then sits directly over the stats line as the grid's title row.
-    lines.push(Line::from(""));
-    lines.push(provider_header_line(theme, active, width, true));
-    lines.extend(provider_body_lines(theme, active, width, zones, now));
+    match &active_tab {
+        DashboardTabId::Pets if pets_enabled => {
+            // A blank line below the rail sets the pet off the tabs, matching
+            // the breathing room above a provider block's body.
+            lines.push(Line::from(""));
+            lines.extend(super::pets::pet_panel_lines(pet, theme, width));
+        }
+        DashboardTabId::Provider(kind) => {
+            // A blank line below the rail sets the tabs apart from the active
+            // account's block, matching the cockpit's breathing room; the header
+            // then sits directly over the stats line as the grid's title row.
+            lines.push(Line::from(""));
+            let active = providers.iter().find(|panel| panel.kind == *kind).or(first);
+            if let Some(active) = active {
+                lines.push(provider_header_line(theme, active, width, true));
+                lines.extend(provider_body_lines(theme, active, width, zones, now));
+            }
+        }
+        DashboardTabId::Pets => {}
+    }
     (lines, hits)
 }
 
@@ -272,7 +317,8 @@ fn single_block_lines(
 fn provider_tab_rail(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
-    active_kind: &str,
+    active_tab: &DashboardTabId,
+    pets_enabled: bool,
     width: usize,
 ) -> (Line<'static>, Vec<ProviderTabHit>) {
     let rail = theme.body();
@@ -283,14 +329,26 @@ fn provider_tab_rail(
     let stub = RAIL_STUB.min(width);
     spans.push(fill(stub));
     col += stub;
+    let pets_label = tab_label("pets");
+    let pet_cells = if pets_enabled {
+        pets_label.chars().count() + 4
+    } else {
+        0
+    };
+    let provider_limit = if pets_enabled && width >= pet_cells {
+        width - pet_cells
+    } else {
+        width
+    };
     for (index, panel) in providers.iter().enumerate() {
         let gap = if index > 0 { RAIL_STUB } else { 0 };
-        let active = panel.kind == active_kind;
+        let id = DashboardTabId::Provider(panel.kind.clone());
+        let active = &id == active_tab;
         // Kind labels are registry-fixed ASCII slugs, so chars == cells; the
         // footprint adds the two pad spaces and the two reserved rail cells.
         let label = tab_label(&panel.kind);
         let cells = label.chars().count() + 4;
-        if col + gap + cells > width {
+        if col + gap + cells > provider_limit {
             break;
         }
         if gap > 0 {
@@ -327,14 +385,75 @@ fn provider_tab_rail(
             line: 0,
             col_start: col as u16,
             col_end: (col + cells) as u16,
-            kind: panel.kind.clone(),
+            kind: id,
         });
         col += cells;
+    }
+    if pets_enabled && width >= pet_cells {
+        let target = width - pet_cells;
+        if col < target {
+            spans.push(fill(target - col));
+            col = target;
+        }
+        push_tab(
+            theme,
+            &mut spans,
+            &mut hits,
+            &mut col,
+            DashboardTabId::Pets,
+            pets_label,
+            *active_tab == DashboardTabId::Pets,
+            width,
+        );
     }
     if col < width {
         spans.push(fill(width - col));
     }
     (Line::from(spans), hits)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_tab(
+    theme: &Theme,
+    spans: &mut Vec<Span<'static>>,
+    hits: &mut Vec<ProviderTabHit>,
+    col: &mut usize,
+    id: DashboardTabId,
+    label: String,
+    active: bool,
+    width: usize,
+) {
+    let rail = theme.body();
+    let fill = |cells: usize| Span::styled(RAIL_FILL.to_string().repeat(cells), rail);
+    let cells = label.chars().count() + 4;
+    if *col + cells > width {
+        return;
+    }
+    if active {
+        let chip = theme.pet_chip(Modifier::BOLD);
+        let (left, right) = if chip.bg.is_none() {
+            (
+                Span::styled(TAB_CAP_LEFT.to_string(), rail),
+                Span::styled(TAB_CAP_RIGHT.to_string(), rail),
+            )
+        } else {
+            (fill(1), fill(1))
+        };
+        spans.push(left);
+        spans.push(Span::styled(format!(" {label} "), chip));
+        spans.push(right);
+    } else {
+        spans.push(fill(1));
+        spans.push(Span::styled(format!(" {label} "), theme.pet_label()));
+        spans.push(fill(1));
+    }
+    hits.push(ProviderTabHit {
+        line: 0,
+        col_start: *col as u16,
+        col_end: (*col + cells) as u16,
+        kind: id,
+    });
+    *col += cells;
 }
 
 /// The rail's fill glyph — the same `─` the plain hairline draws — and the

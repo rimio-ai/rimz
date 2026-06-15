@@ -547,6 +547,18 @@ impl Theme {
         }
     }
 
+    pub(crate) fn pet_chip(&self, modifier: Modifier) -> Style {
+        self.chip(self.palette.accent, modifier)
+    }
+
+    pub(crate) fn pet_label(&self) -> Style {
+        self.style(self.palette.accent, Modifier::empty())
+    }
+
+    pub(crate) fn pet_body_enabled(&self) -> bool {
+        !self.no_color
+    }
+
     /// A neutral chrome tone laid flat: the color as `fg`, or a `DIM` weight
     /// toggle under `no_color`. The shared body of [`body`](Self::body),
     /// [`muted`](Self::muted), and [`faint`](Self::faint).

@@ -94,6 +94,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
   - [ledger.md](./docs/internals/sidebar/ledger.md) — durable state and the blocking decision bridge.
   - [multiplexers.md](./docs/internals/sidebar/multiplexers.md) — Zellij and tmux backend contracts.
   - [trust.md](./docs/internals/sidebar/trust.md) — executable-surface hash, trust states, auto-revoke.
+  - [pets.md](./docs/internals/sidebar/pets.md) — opt-in provider-dashboard pets: pane-local cell-art rendering, the fleet-status sprite model, canned captions, and the Codex-CDN asset cache.
 - **`health/`** — is the running system correct and within budget.
   - [observe.md](./docs/internals/health/observe.md) — the sidebar observer: windowed flap detection and per-frame consistency checks over the rendered frame stream, recorded as typed anomalies in the [diagnostics](./docs/internals/health/diagnostics.md) channel.
   - [diagnostics.md](./docs/internals/health/diagnostics.md) — durable typed sidebar anomaly log: taxonomy, retention, frame captures, inspection examples, and the episode investigation workflow; plus the live-state read path for card-content questions.

@@ -82,6 +82,36 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
         );
     }
 }
+
+#[test]
+fn pets_enabled_defaults_dashboard_to_pets_and_cycles_providers() {
+    let ws = workspace();
+    let mut snapshot = tabbed_snapshot(&ws);
+    snapshot.sidebar.pets.enabled = true;
+    let mut ui = UiState::default();
+
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui),
+        Some(crate::sidebar_pane::render::DashboardTabId::Pets)
+    );
+
+    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+    assert_eq!(outcome, InputOutcome::redraw());
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui),
+        Some(crate::sidebar_pane::render::DashboardTabId::Provider(
+            "claude".to_owned()
+        ))
+    );
+
+    handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
+    assert_eq!(
+        render::active_dashboard_tab(&snapshot, &ui),
+        Some(crate::sidebar_pane::render::DashboardTabId::Pets),
+        "cycling wraps back to the pinned pet tab"
+    );
+}
+
 #[test]
 fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     let ws = workspace();
@@ -152,13 +182,13 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
                 line: 30,
                 col_start: 3,
                 col_end: 13,
-                kind: "claude".to_owned(),
+                kind: crate::sidebar_pane::render::DashboardTabId::provider("claude"),
             },
             crate::sidebar_pane::render::ProviderTabHit {
                 line: 30,
                 col_start: 15,
                 col_end: 24,
-                kind: "codex".to_owned(),
+                kind: crate::sidebar_pane::render::DashboardTabId::provider("codex"),
             },
         ],
         ..Default::default()

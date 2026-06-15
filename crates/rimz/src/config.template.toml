@@ -112,6 +112,12 @@
 # stalled_after_secs = 1800           # silent running agent becomes actionable after this many seconds
 # inactive_after_secs = 3600          # a card idle this many seconds sinks below live work (the prompt-cache window)
 
+[sidebar.pets]
+# enabled = false                     # opt-in animated companion tab in the provider dashboard
+# pet = "codex"                       # built-in id (codex, dewey, ...), an https:// URL, a petdex pet name (~/.codex/pets/<name>), or a path to your own .webp sheet
+# glyphs = "auto"                     # "auto", "half", "sextant", or "octant"
+# voice = true                        # canned captions on fleet-status changes
+
 [sidebar.theme]
 # Palette depth and scheme are optional. mode = "auto" uses truecolor when COLORTERM advertises it, otherwise 256. Unset scheme uses the bundled TokyoNight Night theme; set a bundled Alacritty theme name (rimz list-themes) or a path to an Alacritty TOML file.
 # Slot overrides accept either 256-color indexes or "#rrggbb"; omitted slots use the selected scheme. The bundled catalog lives under crates/rimz/themes/alacritty.

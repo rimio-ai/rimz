@@ -9,4 +9,5 @@
 
 pub mod app;
 mod osc;
+pub(crate) mod pets;
 pub mod render;

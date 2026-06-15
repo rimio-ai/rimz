@@ -21,6 +21,7 @@ use super::theme::{Component, Theme};
 mod agent_card;
 mod cockpit;
 mod fleet;
+mod pets;
 mod process;
 mod provider;
 mod worktree;
@@ -31,7 +32,9 @@ pub(super) use fleet::{fleet_header_lines, fleet_size};
 #[cfg(test)]
 pub(super) use process::proc_stats_spans;
 pub(crate) use provider::ProviderTabHit;
-pub(super) use provider::{fleet_ledger_lines, provider_panel_lines};
+#[cfg(test)]
+pub(super) use provider::provider_panel_lines;
+pub(super) use provider::{dashboard_panel_lines, fleet_ledger_lines};
 pub(super) use worktree::worktree_group_lines;
 
 /// The cockpit/ledger session-count glyph: `◎` for the sessions (threads) that

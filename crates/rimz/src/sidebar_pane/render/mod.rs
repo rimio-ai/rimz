@@ -37,7 +37,9 @@ use self::compose::lead_unread;
 #[cfg(test)]
 use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
-pub(crate) use self::ui_state::{BodyFilter, Browse, DashboardTab, GateNotice, ManualScroll};
+pub(crate) use self::ui_state::{
+    BodyFilter, Browse, DashboardTab, DashboardTabId, GateNotice, ManualScroll,
+};
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
@@ -46,6 +48,7 @@ use std::io::{self, Write};
 
 use crate::config::AnimationSpec;
 use crate::feed::AgentStatus;
+use crate::sidebar_pane::pets::FleetPetStatus;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
 use ratatui::layout::Rect;
@@ -245,30 +248,114 @@ pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> O
 /// its panel is still on the dashboard, else the selection-derived kind
 /// ([`selected_agent_kind`]) when a panel exists for it, else the first panel.
 /// `None` only when the dashboard is empty.
+#[cfg(test)]
 pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
+    active_dashboard_tab(snapshot, ui).and_then(|tab| match tab {
+        DashboardTabId::Provider(kind) => Some(kind),
+        DashboardTabId::Pets => None,
+    })
+}
+
+pub(crate) fn active_dashboard_tab(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+) -> Option<DashboardTabId> {
     let panels = &snapshot.providers;
     let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);
     if let Some(tab) = &ui.dashboard_tab
-        && has_panel(&tab.kind)
+        && dashboard_has_tab(snapshot, &tab.id)
     {
-        return Some(tab.kind.clone());
+        return Some(tab.id.clone());
+    }
+    if snapshot.sidebar.pets.enabled {
+        return Some(DashboardTabId::Pets);
     }
     if let Some(kind) = selected_agent_kind(snapshot, ui)
         && has_panel(&kind)
     {
-        return Some(kind);
+        return Some(DashboardTabId::Provider(kind));
     }
-    panels.first().map(|panel| panel.kind.clone())
+    panels
+        .first()
+        .map(|panel| DashboardTabId::Provider(panel.kind.clone()))
 }
 
-/// Whether the provider dashboard paints a tab rail. A single provider always
-/// paints as a bare block; the configured mode only matters once multiple
-/// provider panels are present.
+pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<DashboardTabId> {
+    let mut tabs = snapshot
+        .providers
+        .iter()
+        .map(|panel| DashboardTabId::Provider(panel.kind.clone()))
+        .collect::<Vec<_>>();
+    if snapshot.sidebar.pets.enabled {
+        tabs.push(DashboardTabId::Pets);
+    }
+    tabs
+}
+
+fn dashboard_has_tab(snapshot: &SidebarSnapshot, id: &DashboardTabId) -> bool {
+    match id {
+        DashboardTabId::Provider(kind) => {
+            snapshot.providers.iter().any(|panel| panel.kind == *kind)
+        }
+        DashboardTabId::Pets => snapshot.sidebar.pets.enabled,
+    }
+}
+
+/// Whether the dashboard paints a tab rail. Pets always use the rail because
+/// the pet is a dashboard tab even when no providers are present. Without pets,
+/// a single provider keeps the historical bare block.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
+    if snapshot.sidebar.pets.enabled {
+        return true;
+    }
     snapshot
         .sidebar
         .provider_tabs
         .tabs(snapshot.providers.len())
+}
+
+pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
+    !alert_active && (!snapshot.providers.is_empty() || snapshot.sidebar.pets.enabled)
+}
+
+pub(crate) fn fleet_pet_status(snapshot: &SidebarSnapshot) -> FleetPetStatus {
+    let mut blocked = false;
+    let mut running = false;
+    for status in snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter_map(SidebarRow::status)
+    {
+        match status {
+            AgentStatus::Waiting => return FleetPetStatus::NeedsInput,
+            AgentStatus::Failed | AgentStatus::Paused => blocked = true,
+            AgentStatus::Running => running = true,
+            AgentStatus::Idle | AgentStatus::Success => {}
+        }
+    }
+    if blocked {
+        FleetPetStatus::Blocked
+    } else if running {
+        FleetPetStatus::Running
+    } else {
+        FleetPetStatus::Idle
+    }
+}
+
+pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
+    Theme::for_sidebar(&snapshot.sidebar).pet_body_enabled()
+}
+
+pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, status: FleetPetStatus) -> bool {
+    let animations = &snapshot.sidebar.animations;
+    let spec = match status {
+        FleetPetStatus::Idle => animations.idle.as_ref(),
+        FleetPetStatus::Running => animations.working.as_ref(),
+        FleetPetStatus::Blocked => animations.failed.as_ref(),
+        FleetPetStatus::NeedsInput => animations.waiting.as_ref(),
+    };
+    spec_needs_motion(spec)
 }
 
 pub fn draw_to_terminal<B: Backend>(

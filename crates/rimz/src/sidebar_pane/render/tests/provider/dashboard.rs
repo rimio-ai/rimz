@@ -78,7 +78,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
-            kind: "codex".to_owned(),
+            id: DashboardTabId::provider("codex"),
             derived_at_start: Some("claude".to_owned()),
         }),
         ..Default::default()
@@ -115,6 +115,72 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
         "the other block stays off screen:\n{rendered}"
     );
 }
+
+#[test]
+fn render_pets_dashboard_body_uses_pet_view() {
+    let theme = Theme::fixed(false);
+    let pet = crate::sidebar_pane::pets::PetView {
+        grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
+            ch: '▀',
+            fg: Color::Rgb(200, 20, 20),
+            bg: Color::Rgb(20, 20, 200),
+        }]]),
+        caption: Some("all caught up".to_owned()),
+        loading: false,
+        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+    };
+
+    let (lines, hits) = dashboard_panel_lines(
+        &theme,
+        &[],
+        Some(&DashboardTabId::Pets),
+        true,
+        Some(&pet),
+        true,
+        24,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(rendered.contains("Pets"), "{rendered}");
+    assert!(rendered.contains('▀'), "sprite cells render:\n{rendered}");
+    assert!(rendered.contains("all caught up"), "{rendered}");
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].kind, DashboardTabId::Pets);
+}
+
+#[test]
+fn render_pets_dashboard_body_drops_sprite_under_no_color() {
+    let theme = Theme::fixed(true);
+    let pet = crate::sidebar_pane::pets::PetView {
+        grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
+            ch: '▀',
+            fg: Color::Rgb(200, 20, 20),
+            bg: Color::Rgb(20, 20, 200),
+        }]]),
+        caption: Some("someone needs you".to_owned()),
+        loading: false,
+        status: crate::sidebar_pane::pets::FleetPetStatus::NeedsInput,
+    };
+
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        &[],
+        Some(&DashboardTabId::Pets),
+        true,
+        Some(&pet),
+        true,
+        24,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(!rendered.contains('▀'), "sprite is omitted:\n{rendered}");
+    assert!(rendered.contains("someone needs you"), "{rendered}");
+}
+
 #[test]
 fn render_scroll_keeps_gap_above_provider_dashboard() {
     let mut snapshot = overflowing_fleet();

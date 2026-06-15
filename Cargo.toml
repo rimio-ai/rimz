@@ -129,6 +129,10 @@ notify = { version = "8", default-features = false, features = ["macos_kqueue"] 
 # Hashing
 sha2 = "0.11"
 hex = "0.4"
+# Pet sprite sheets are WebP-only. `image-webp` is decode-only-capable, pure
+# Rust, and avoids both libwebp C bindings and the full `image` crate tree for
+# the sidebar's one-format asset cache.
+image-webp = "0.2"
 # Event-log frame checksum: hardware CRC32 for the per-frame validate and the
 # repair scan. Already in the tree through flate2 and already carries a
 # supply-chain exemption, so the direct dep adds zero footprint.

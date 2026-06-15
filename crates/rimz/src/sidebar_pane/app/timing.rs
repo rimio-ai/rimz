@@ -2,10 +2,54 @@ use super::*;
 
 pub(super) fn is_animating(snapshot: &SidebarSnapshot, ui: &UiState, phase: u64) -> bool {
     render::has_live_animation(snapshot)
+        || pet_animating(snapshot, ui)
         || ui.tally.any_rolling(phase)
         || ui.cost_rolls.any_rolling(phase)
         || ui.scrollbar.fading(phase)
         || ui.effects.any_active()
+}
+
+fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+    snapshot.sidebar.pets.enabled
+        && ui.pet.as_ref().is_some_and(|view| {
+            view.loading
+                || (view.grid.is_some()
+                    && render::pet_body_enabled(snapshot)
+                    && render::pet_motion_enabled(snapshot, view.status))
+        })
+        && matches!(
+            render::active_dashboard_tab(snapshot, ui),
+            Some(render::DashboardTabId::Pets)
+        )
+}
+
+fn pet_frame_interval(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    refresh_ms: u16,
+) -> Option<Duration> {
+    if !snapshot.sidebar.pets.enabled
+        || !matches!(
+            render::active_dashboard_tab(snapshot, ui),
+            Some(render::DashboardTabId::Pets)
+        )
+    {
+        return None;
+    }
+    let view = ui.pet.as_ref()?;
+    if view.loading {
+        return Some(crate::sidebar::timing::animation_frame(refresh_ms));
+    }
+    if view.grid.is_some()
+        && render::pet_body_enabled(snapshot)
+        && render::pet_motion_enabled(snapshot, view.status)
+    {
+        return Some(crate::sidebar_pane::pets::animation_frame(
+            view.status,
+            refresh_ms,
+        ));
+    }
+    None
 }
 
 /// Floor for the frame-boundary recv timeout. When the loop is at or past the
@@ -30,6 +74,10 @@ pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Durati
     if ui.scrollbar.fading(ui.animation_phase) || ui.effects.any_active() {
         return base;
     }
+    let cadence = render::animation_cadence(snapshot);
+    if cadence == render::AnimationCadence::Fast {
+        return base;
+    }
     // The money rolls click once per `CLICK_PHASES` phases, so a rolling room
     // samples on the matching money grid — one paint per distinct click, and
     // the one-click settle flash can never fall between samples. A fast room
@@ -39,11 +87,21 @@ pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Durati
     // idempotently, and the climb window bounds the extra paints.
     let money_rolling =
         ui.tally.any_rolling(ui.animation_phase) || ui.cost_rolls.any_rolling(ui.animation_phase);
-    match render::animation_cadence(snapshot) {
+    let money_grid =
+        || crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES);
+    // The foreground Pets tab paints on its track cadence, but a money climb in
+    // the still-visible cockpit must keep sampling on the money grid, so a
+    // rolling room takes the faster of the two.
+    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, refresh_ms) {
+        return if money_rolling {
+            pet_interval.min(money_grid())
+        } else {
+            pet_interval
+        };
+    }
+    match cadence {
         render::AnimationCadence::Fast => base,
-        _ if money_rolling => {
-            crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES)
-        }
+        _ if money_rolling => money_grid(),
         render::AnimationCadence::Breath => {
             crate::sidebar::timing::breath_animation_frame(refresh_ms)
         }

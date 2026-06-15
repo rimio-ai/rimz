@@ -95,3 +95,32 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
         );
     }
 }
+
+#[test]
+fn pets_tab_is_pinned_to_the_right_edge() {
+    let theme = Theme::fixed(false);
+    let panels = two_provider_panels();
+    let zones = crate::config::BudgetZonesConfig::default();
+    let (lines, hits) = dashboard_panel_lines(
+        &theme,
+        &panels,
+        Some(&DashboardTabId::Pets),
+        true,
+        None,
+        true,
+        40,
+        &zones,
+        fixed_now(),
+    );
+    let rail = rail_text(&lines);
+
+    assert!(
+        rail.ends_with("─ Pets ─"),
+        "pets tab sits at the right edge:\n{rail}"
+    );
+    let pets = hits
+        .iter()
+        .find(|hit| hit.kind == DashboardTabId::Pets)
+        .expect("pets hit");
+    assert_eq!((pets.col_start, pets.col_end), (32, 40));
+}

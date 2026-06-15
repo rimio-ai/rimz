@@ -13,7 +13,9 @@ use ratatui::text::Line;
 use serde_json::json;
 use std::time::Duration;
 
-use super::sections::{fleet_header_lines, provider_panel_lines, worktree_group_lines};
+use super::sections::{
+    dashboard_panel_lines, fleet_header_lines, provider_panel_lines, worktree_group_lines,
+};
 
 mod agent_card;
 mod alert;

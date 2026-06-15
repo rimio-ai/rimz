@@ -74,6 +74,7 @@ crc32fast.workspace = true
 fs4.workspace = true
 glob.workspace = true
 hex.workspace = true
+image-webp.workspace = true
 jiff.workspace = true
 notify.workspace = true
 sentry.workspace = true

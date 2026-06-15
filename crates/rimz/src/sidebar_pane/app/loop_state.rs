@@ -5,6 +5,7 @@ use super::state::{
 use super::*;
 use crate::sidebar::read_marks::{ReadMarkStore, write_manual_read_marks};
 use crate::sidebar::unread::{self, UnreadClearCause};
+use crate::sidebar_pane::pets::PetAssets;
 
 pub(super) struct LoopState {
     last_snapshot: Option<SidebarSnapshot>,
@@ -17,6 +18,7 @@ pub(super) struct LoopState {
     gate: GateState,
     self_close: SelfCloseState,
     ui: UiState,
+    pet_assets: PetAssets,
     read_marks: ReadMarkStore,
     remind: RemindState,
     dirty: bool,
@@ -51,6 +53,7 @@ impl LoopState {
             gate: GateState::default(),
             self_close: SelfCloseState::default(),
             ui: UiState::default(),
+            pet_assets: PetAssets::default(),
             read_marks,
             remind: RemindState::default(),
             dirty: true,
@@ -285,6 +288,7 @@ impl LoopState {
             if apply_input(
                 Wakeup::Resize,
                 &mut self.ui,
+                &mut self.pet_assets,
                 &mut self.health,
                 terminal,
                 &self.current,
@@ -318,6 +322,7 @@ impl LoopState {
         let applied = apply_input(
             wakeup,
             &mut self.ui,
+            &mut self.pet_assets,
             &mut self.health,
             terminal,
             &self.current,
@@ -495,6 +500,12 @@ impl LoopState {
                 wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
             let animating = is_animating(&self.current, &self.ui, self.ui.animation_phase);
             if self.dirty || animating {
+                refresh_pet_view(
+                    &mut self.ui,
+                    &mut self.pet_assets,
+                    &self.current,
+                    terminal.size().ok().map(|size| (size.width, size.height)),
+                );
                 render::draw_to_terminal_with_ui(
                     terminal,
                     &self.current,

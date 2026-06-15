@@ -98,6 +98,10 @@ criteria = "safe-to-deploy"
 version = "1.25.0"
 criteria = "safe-to-deploy"
 
+[[exemptions.byteorder-lite]]
+version = "0.1.0"
+criteria = "safe-to-deploy"
+
 [[exemptions.bytes]]
 version = "1.11.1"
 criteria = "safe-to-deploy"
@@ -432,6 +436,10 @@ criteria = "safe-to-deploy"
 
 [[exemptions.idna_adapter]]
 version = "1.2.2"
+criteria = "safe-to-deploy"
+
+[[exemptions.image-webp]]
+version = "0.2.4"
 criteria = "safe-to-deploy"
 
 [[exemptions.include_dir]]
@@ -789,6 +797,10 @@ criteria = "safe-to-run"
 [[exemptions.prost-derive]]
 version = "0.11.9"
 criteria = "safe-to-run"
+
+[[exemptions.quick-error]]
+version = "2.0.1"
+criteria = "safe-to-deploy"
 
 [[exemptions.r-efi]]
 version = "5.3.0"

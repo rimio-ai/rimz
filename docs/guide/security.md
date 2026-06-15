@@ -91,6 +91,10 @@ max_payload_bytes  = 8192
 - `redacted` — keeps bounded payloads with built-in redaction. Default.
 - `full` — keeps hook payloads as delivered. `rimz doctor` warns.
 
+## Optional asset fetches
+
+Enabling `[sidebar.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
+
 ## Off-box error reporting
 
 Setting `[sentry] dsn` in the per-machine config (or `RIMZ_SENTRY_DSN`) routes Rimz diagnostics to a Sentry project. It is off by default: with no DSN, no client is created and Rimz makes no network calls. The target is a per-machine setting and never the committed project config, so a clone or pull cannot redirect a contributor's telemetry to a foreign endpoint, and the DSN stays off the project trust surface.

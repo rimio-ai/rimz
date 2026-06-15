@@ -9,11 +9,14 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    fleet_header_lines, fleet_ledger_lines, fleet_size, provider_panel_lines, trim_spans_to_width,
+    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, fleet_size, trim_spans_to_width,
     unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
-use super::{Alert, UiState, active_provider_kind, dashboard_tabbed, labels, row_passes_filter};
+use super::{
+    Alert, UiState, active_dashboard_tab, dashboard_present, dashboard_tabbed, labels,
+    row_passes_filter,
+};
 
 /// Lay out the frame as three vertical zones: the top-pinned cockpit (identity,
 /// summary, make-up line, and fixed separator), a scroll viewport over the
@@ -187,7 +190,7 @@ pub(super) fn build_bottom_chrome(
     let active = alert.is_some_and(Alert::is_active);
     let mut bottom: Vec<Line<'static>> = Vec::new();
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
-    let dashboard_present = !active && !snapshot.providers.is_empty();
+    let dashboard_present = dashboard_present(snapshot, active);
     if dashboard_present {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.
@@ -195,13 +198,15 @@ pub(super) fn build_bottom_chrome(
         // The panel owns its top hairline (the tab rail when several accounts
         // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
-        let active_kind = active_provider_kind(snapshot, ui);
+        let active_tab = active_dashboard_tab(snapshot, ui);
         let tabbed = dashboard_tabbed(snapshot);
-        let (panel_lines, panel_hits) = provider_panel_lines(
+        let (panel_lines, panel_hits) = dashboard_panel_lines(
             theme,
             &snapshot.providers,
-            active_kind.as_deref(),
+            active_tab.as_ref(),
             tabbed,
+            ui.pet.as_ref(),
+            snapshot.sidebar.pets.enabled,
             inner,
             &snapshot.sidebar.budget,
             snapshot.now,

@@ -7,8 +7,9 @@ use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_provider_kind,
-    dashboard_tabbed, row_passes_filter, selected_agent_kind, status_total, unread_total,
+    BodyFilter, Browse, DashboardTab, DashboardTabId, ManualScroll, UiState, active_dashboard_tab,
+    dashboard_tabbed, dashboard_tabs, row_passes_filter, selected_agent_kind, status_total,
+    unread_total,
 };
 
 use super::input::{FilterAction, KeyAction};
@@ -208,24 +209,23 @@ pub(super) fn handle_key(
     }
 }
 
-/// Step the dashboard's tab `step` panels left or right of the currently
-/// active one, wrapping at the ends — the manual layer over the
-/// selection-derived default ([`active_provider_kind`]). A dashboard with
-/// fewer than two panels has nothing to cycle.
+/// Step the dashboard's tab `step` entries left or right of the currently
+/// active one, wrapping at the ends — the manual layer over the dashboard
+/// default. A dashboard with fewer than two tabs has nothing to cycle.
 fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize) -> InputOutcome {
     if !dashboard_tabbed(snapshot) {
         return InputOutcome::default();
     }
-    let panels = &snapshot.providers;
-    if panels.len() < 2 {
+    let tabs = dashboard_tabs(snapshot);
+    if tabs.len() < 2 {
         return InputOutcome::default();
     }
-    let current = active_provider_kind(snapshot, ui)
-        .and_then(|kind| panels.iter().position(|panel| panel.kind == kind))
+    let current = active_dashboard_tab(snapshot, ui)
+        .and_then(|active| tabs.iter().position(|tab| *tab == active))
         .unwrap_or(0);
-    let len = panels.len() as isize;
+    let len = tabs.len() as isize;
     let next = (current as isize + step).rem_euclid(len) as usize;
-    pick_dashboard_tab(ui, snapshot, panels[next].kind.clone());
+    pick_dashboard_tab(ui, snapshot, tabs[next].clone());
     InputOutcome::redraw()
 }
 
@@ -233,13 +233,13 @@ fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize
 /// selection-derived kind it began from — the clear condition — and a later
 /// pick only moves the tab, so a browse through the tabs keeps one anchor and
 /// a genuine selection change still ends it (the [`Browse`] discipline).
-fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, kind: String) {
+fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, id: DashboardTabId) {
     let derived_at_start = match ui.dashboard_tab.take() {
         Some(tab) => tab.derived_at_start,
         None => selected_agent_kind(snapshot, ui),
     };
     ui.dashboard_tab = Some(DashboardTab {
-        kind,
+        id,
         derived_at_start,
     });
 }
@@ -252,8 +252,8 @@ pub(super) fn handle_mouse_click(
 ) -> InputOutcome {
     // The dashboard's tabs are the bottom block's only hit targets — a
     // click on one picks that tab in place, never a jump.
-    if let Some(kind) = tab_kind_at(ui, column, row) {
-        pick_dashboard_tab(ui, snapshot, kind);
+    if let Some(tab) = tab_kind_at(ui, column, row) {
+        pick_dashboard_tab(ui, snapshot, tab);
         return InputOutcome::redraw();
     }
     // The cockpit's make-up buckets are the top block's only hit targets — a
@@ -301,7 +301,7 @@ fn pin_manual_scroll(ui: &mut UiState) {
 /// The provider kind whose tab sits under a click, from the tab hit map
 /// the renderer emitted in lockstep with the frame (`UiState::tab_hits`, the
 /// tab rail's twin of `line_map`).
-fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
+fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<DashboardTabId> {
     ui.tab_hits
         .iter()
         .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
@@ -608,11 +608,8 @@ pub(super) fn reconcile_selection(
     if let Some(tab) = &ui.dashboard_tab {
         let derived = selected_agent_kind(snapshot, ui);
         let derived_moved = derived.is_some() && derived != tab.derived_at_start;
-        let panel_gone = !snapshot
-            .providers
-            .iter()
-            .any(|panel| panel.kind == tab.kind);
-        if derived_moved || panel_gone {
+        let tab_gone = !dashboard_tabs(snapshot).iter().any(|id| id == &tab.id);
+        if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }
     }

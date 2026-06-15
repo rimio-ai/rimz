@@ -306,6 +306,46 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
     assert_eq!(animation_cadence(&idle), AnimationCadence::Breath);
 }
+
+#[test]
+fn fleet_pet_status_uses_attention_precedence() {
+    let statuses = |statuses: &[AgentStatus]| {
+        snapshot_with(
+            Vec::new(),
+            statuses
+                .iter()
+                .enumerate()
+                .map(|(index, status)| {
+                    agent(
+                        &format!("agent-{index}"),
+                        "claude",
+                        *status,
+                        Some("/repo/main"),
+                        Some("main"),
+                        None,
+                    )
+                })
+                .collect(),
+        )
+    };
+
+    assert_eq!(
+        fleet_pet_status(&statuses(&[AgentStatus::Running, AgentStatus::Waiting])),
+        crate::sidebar_pane::pets::FleetPetStatus::NeedsInput
+    );
+    assert_eq!(
+        fleet_pet_status(&statuses(&[AgentStatus::Running, AgentStatus::Failed])),
+        crate::sidebar_pane::pets::FleetPetStatus::Blocked
+    );
+    assert_eq!(
+        fleet_pet_status(&statuses(&[AgentStatus::Idle, AgentStatus::Running])),
+        crate::sidebar_pane::pets::FleetPetStatus::Running
+    );
+    assert_eq!(
+        fleet_pet_status(&statuses(&[AgentStatus::Idle, AgentStatus::Success])),
+        crate::sidebar_pane::pets::FleetPetStatus::Idle
+    );
+}
 /// Honesty test: a running agent silent past the stall window is projected
 /// to the attention bucket, so its cell reads as the attention `!` rather than
 /// the working spinner — a wedged agent stops spinning and asks for a look.

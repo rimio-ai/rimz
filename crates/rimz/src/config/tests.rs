@@ -628,6 +628,27 @@ fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
 }
 
 #[test]
+fn sidebar_pets_defaults_parse_and_round_trip() {
+    let dir = tempdir().expect("tempdir");
+    let config = MachineConfig::load_from(&write(
+        &dir,
+        "[sidebar.pets]\nenabled = true\npet = \"dewey\"\nglyphs = \"octant\"\nvoice = false\n",
+    ))
+    .expect("load");
+    assert!(config.sidebar.pets.enabled);
+    assert_eq!(config.sidebar.pets.pet, "dewey");
+    assert_eq!(config.sidebar.pets.glyphs, PetsGlyphMode::Octant);
+    assert!(!config.sidebar.pets.voice);
+
+    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
+    assert_eq!(defaults.sidebar.pets, PetsConfig::default());
+
+    let encoded = toml::to_string(&config.sidebar.pets).expect("serialize pets");
+    let round_tripped: PetsConfig = toml::from_str(&encoded).expect("parse pets");
+    assert_eq!(round_tripped, config.sidebar.pets);
+}
+
+#[test]
 fn context_severity_bands_default_and_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");

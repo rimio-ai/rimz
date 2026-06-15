@@ -1,6 +1,7 @@
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 use crate::schema::diag::GateRule;
+use crate::sidebar_pane::pets::PetView;
 use jiff::Timestamp;
 
 use super::sections::{MakeUpHit, ProviderTabHit};
@@ -71,11 +72,17 @@ pub struct UiState {
     /// moves plus a short settle window. Crate-internal, like `tally`.
     pub(crate) scrollbar: ScrollbarFade,
     /// The dashboard tab the user picked by hand (`←`/`→` or a click on a tab
-    /// label), riding above the selection-derived default. Ends like a browse:
-    /// it clears when the selection-derived provider kind *genuinely* changes
-    /// from the value captured at pick time (a `None` derivation — a process
-    /// row — holds it), or when its panel leaves the dashboard.
+    /// label), riding above the default. With pets enabled the resting default
+    /// is `Pets`; otherwise it is still the selection-derived provider. Ends
+    /// like a browse: it clears when the selection-derived provider kind
+    /// *genuinely* changes from the value captured at pick time (a `None`
+    /// derivation — a process row — holds it), or when its target leaves the
+    /// dashboard.
     pub(crate) dashboard_tab: Option<DashboardTab>,
+    /// The current pet dashboard view, folded by the serve loop from the latest
+    /// snapshot and the renderer-local asset cache before drawing. Render reads
+    /// this data only; it never fetches, decodes, or slices pet assets.
+    pub(crate) pet: Option<PetView>,
     /// Hit-test map of the dashboard tab rail in the most recently drawn
     /// frame: the absolute screen line and column range of each tab's
     /// cap-to-cap footprint, written as a byproduct of every draw like
@@ -107,8 +114,29 @@ pub struct UiState {
 /// genuinely changes from `derived_at_start`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DashboardTab {
-    pub(crate) kind: String,
+    pub(crate) id: DashboardTabId,
     pub(crate) derived_at_start: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub(crate) enum DashboardTabId {
+    Provider(String),
+    Pets,
+}
+
+impl DashboardTabId {
+    #[cfg(test)]
+    pub(crate) fn provider(kind: impl Into<String>) -> Self {
+        Self::Provider(kind.into())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn as_str(&self) -> &str {
+        match self {
+            Self::Provider(kind) => kind,
+            Self::Pets => "pets",
+        }
+    }
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible

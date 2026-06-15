@@ -90,6 +90,49 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
 }
 
 #[test]
+fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.sidebar.pets.enabled = true;
+    let ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
+                ch: '▀',
+                fg: ratatui::style::Color::White,
+                bg: ratatui::style::Color::Black,
+            }]]),
+            caption: Some("resting".to_owned()),
+            loading: false,
+            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        }),
+        ..Default::default()
+    };
+
+    assert!(is_animating(&snapshot, &ui, 0));
+    assert_eq!(frame_interval(&snapshot, &ui), Duration::from_millis(625));
+
+    snapshot.sidebar.animations.idle =
+        Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
+    assert!(!is_animating(&snapshot, &ui, 0));
+}
+
+#[test]
+fn refresh_pet_view_skips_body_when_terminal_is_too_short() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.sidebar.pets.enabled = true;
+    let mut ui = UiState::default();
+    let mut assets = PetAssets::default();
+
+    refresh_pet_view(&mut ui, &mut assets, &snapshot, Some((54, 11)));
+
+    let pet = ui.pet.expect("pet view");
+    assert_eq!(pet.grid, None);
+    assert!(!pet.loading);
+    assert_eq!(pet.caption.as_deref(), Some("resting"));
+}
+
+#[test]
 fn heartbeat_write_due_on_first_or_aged_write_only() {
     assert!(heartbeat_write_due(None));
     assert!(!heartbeat_write_due(Some(Instant::now())));
