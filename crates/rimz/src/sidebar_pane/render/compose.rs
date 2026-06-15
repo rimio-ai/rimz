@@ -175,11 +175,11 @@ pub(crate) fn compose_lines(
 /// Bottom-pinned chrome, top to bottom: a fixed separator when the provider
 /// dashboard is present, the per-provider dashboard (account-scoped budgets +
 /// brand emblem, which opens with its own top hairline — the tab rail when
-/// several accounts register), the fleet ledger, the navigation footer
-/// (centered), then the sticky health alert. While an alert is active the body
-/// is a stale/empty fetch, so the panel and footer step aside and the alert
-/// speaks alone. Every chrome line is gutter-padded so it breathes in the same
-/// one-cell frame as the body.
+/// several accounts register), the fallback fleet ledger for no-table layouts,
+/// the navigation footer (centered), then the sticky health alert. While an
+/// alert is active the body is a stale/empty fetch, so the panel and footer step
+/// aside and the alert speaks alone. Every chrome line is gutter-padded so it
+/// breathes in the same one-cell frame as the body.
 pub(super) fn build_bottom_chrome(
     snapshot: &SidebarSnapshot,
     alert: Option<&Alert>,
@@ -191,6 +191,7 @@ pub(super) fn build_bottom_chrome(
     let mut bottom: Vec<Line<'static>> = Vec::new();
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = dashboard_present(snapshot, active);
+    let tabbed = dashboard_present && dashboard_tabbed(snapshot);
     if dashboard_present {
         // The pinned separator lifts the dashboard off the cards. It is part
         // of bottom chrome, so the viewport reserves it before windowing.
@@ -199,12 +200,12 @@ pub(super) fn build_bottom_chrome(
         // register), so its line 0 lands after the separator.
         let panel_base = bottom.len();
         let active_tab = active_dashboard_tab(snapshot, ui);
-        let tabbed = dashboard_tabbed(snapshot);
         let (panel_lines, panel_hits) = dashboard_panel_lines(
             theme,
             &snapshot.providers,
             active_tab.as_ref(),
             tabbed,
+            snapshot.value_tally.as_ref(),
             ui.pet.as_ref(),
             snapshot.sidebar.pets.enabled,
             inner,
@@ -225,11 +226,13 @@ pub(super) fn build_bottom_chrome(
             .collect();
         bottom.extend(panel_lines.into_iter().map(pad_chrome));
     }
-    // The fleet ledger — the static `W:`/`M:` week/month rows — seals the bottom
-    // of the dashboard. It rides under the dashboard's blank-line block
-    // separator when an account block is present, else carries its own hairline
-    // so it never floats unsealed against the body.
-    if !active {
+    // The static `W:`/`M:` rows seal the main dashboard. The pet-enabled tall
+    // provider block owns those totals inside its `Total:` section.
+    let dashboard_owns_ledger = dashboard_present
+        && tabbed
+        && !snapshot.providers.is_empty()
+        && snapshot.sidebar.pets.enabled;
+    if !active && !dashboard_owns_ledger {
         let corner = fleet_ledger_lines(theme, snapshot.value_tally.as_ref(), inner);
         if !corner.is_empty() {
             if dashboard_present {

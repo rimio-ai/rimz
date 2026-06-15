@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, SyncSender};
 use std::time::{Duration, Instant};
 
-use crate::config::NotificationsPrefs;
+use crate::config::{NotificationsPrefs, PetsSize};
 use crate::ids::PaneId;
 use crate::ledger::paths::PathErr;
 use crate::schema::sidebar_event::{SidebarEvent, SidebarEventEnvelope};
@@ -448,7 +448,14 @@ fn refresh_pet_view(
         && render::dashboard_present(snapshot, alert_active)
         && render::pet_body_enabled(snapshot)
     {
-        PetGridSize::for_dashboard_column(width.saturating_sub(2), height)
+        let inner = width.saturating_sub(2);
+        match snapshot.sidebar.pets.size {
+            PetsSize::Medium => PetGridSize::for_dashboard_column(inner, height),
+            PetsSize::Small => match render::active_dashboard_block_rows(snapshot, ui) {
+                Some(rows) => PetGridSize::for_dashboard_block(rows, inner, height),
+                None => PetGridSize::for_standalone_dashboard(inner, height),
+            },
+        }
     } else {
         None
     };

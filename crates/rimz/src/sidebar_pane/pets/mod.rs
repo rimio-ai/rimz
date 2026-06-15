@@ -47,11 +47,44 @@ impl PetGridSize {
     const MIN_ROWS: u16 = 4;
     const MAX_ROWS: u16 = 10;
     const DASHBOARD_BLOCK_MIN_COLS: u16 = 35;
+    const DASHBOARD_PET_GAP_COLS: u16 = 1;
 
     pub(crate) fn for_dashboard_column(width: u16, height: u16) -> Option<Self> {
         let cols = width
             .saturating_sub(Self::DASHBOARD_BLOCK_MIN_COLS)
             .min(Self::MAX_COLS);
+        if cols < Self::MIN_COLS {
+            return None;
+        }
+        Self::for_cols_and_height(cols, height)
+    }
+
+    pub(crate) fn for_dashboard_block(
+        target_rows: u16,
+        inner_width: u16,
+        terminal_height: u16,
+    ) -> Option<Self> {
+        let max_rows_for_height = terminal_height / 3;
+        if max_rows_for_height < Self::MIN_ROWS {
+            return None;
+        }
+        let rows = target_rows.clamp(Self::MIN_ROWS, Self::MAX_ROWS.min(max_rows_for_height));
+        let max_cols = inner_width
+            .saturating_sub(Self::DASHBOARD_BLOCK_MIN_COLS + Self::DASHBOARD_PET_GAP_COLS);
+        if max_cols < Self::MIN_COLS {
+            return None;
+        }
+        let aspect_cols = ((u32::from(rows) * catalog::FRAME_WIDTH * 2) / catalog::FRAME_HEIGHT)
+            .max(u32::from(Self::MIN_COLS))
+            .min(u32::from(Self::MAX_COLS)) as u16;
+        Some(Self {
+            cols: aspect_cols.min(max_cols),
+            rows,
+        })
+    }
+
+    pub(crate) fn for_standalone_dashboard(width: u16, height: u16) -> Option<Self> {
+        let cols = width.min(Self::MAX_COLS);
         if cols < Self::MIN_COLS {
             return None;
         }
@@ -465,20 +498,32 @@ fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::PetsGlyphMode;
+    use crate::config::{PetsGlyphMode, PetsSize};
 
     #[test]
-    fn pet_grid_size_reserves_provider_dashboard_column() {
-        assert!(PetGridSize::for_dashboard_column(46, 34).is_none());
+    fn pet_grid_size_matches_provider_dashboard_block_height() {
+        assert!(PetGridSize::for_dashboard_block(7, 47, 34).is_none());
         assert_eq!(
-            PetGridSize::for_dashboard_column(47, 34)
-                .expect("size")
-                .cols,
-            12
+            PetGridSize::for_dashboard_block(7, 48, 34).expect("size"),
+            PetGridSize { cols: 12, rows: 7 }
         );
-        let wide = PetGridSize::for_dashboard_column(80, 34).expect("size");
+        assert_eq!(
+            PetGridSize::for_dashboard_block(12, 80, 34).expect("size"),
+            PetGridSize { cols: 18, rows: 10 },
+            "target rows clamp to the maximum dashboard height"
+        );
+        assert_eq!(
+            PetGridSize::for_dashboard_block(2, 80, 34).expect("size"),
+            PetGridSize { cols: 12, rows: 4 },
+            "target rows clamp to the minimum dashboard height"
+        );
+        assert!(PetGridSize::for_dashboard_block(7, 80, 11).is_none());
+    }
+
+    #[test]
+    fn standalone_pet_grid_size_uses_available_dashboard_width() {
+        let wide = PetGridSize::for_standalone_dashboard(80, 34).expect("size");
         assert_eq!((wide.cols, wide.rows), (20, 10), "caps at 20x10");
-        assert!(PetGridSize::for_dashboard_column(80, 11).is_none());
     }
 
     #[test]
@@ -518,6 +563,7 @@ mod tests {
         let config = PetsConfig {
             enabled: true,
             pet: "  ".to_owned(),
+            size: PetsSize::Medium,
             glyphs: PetsGlyphMode::Auto,
             voice: true,
         };
@@ -542,6 +588,7 @@ mod tests {
         let config = PetsConfig {
             enabled: true,
             pet: "/no/such/pet/sheet.webp".to_owned(),
+            size: PetsSize::Medium,
             glyphs: PetsGlyphMode::Auto,
             voice: true,
         };
@@ -574,6 +621,7 @@ mod tests {
         let config = PetsConfig {
             enabled: true,
             pet: "codex".to_owned(),
+            size: PetsSize::Medium,
             glyphs: PetsGlyphMode::Auto,
             voice: true,
         };
@@ -602,6 +650,7 @@ mod tests {
         let config = PetsConfig {
             enabled: true,
             pet: "codex".to_owned(),
+            size: PetsSize::Medium,
             glyphs: PetsGlyphMode::Auto,
             voice: true,
         };
@@ -755,6 +804,7 @@ mod tests {
         PetsConfig {
             enabled: true,
             pet: "codex".to_owned(),
+            size: PetsSize::Medium,
             glyphs: PetsGlyphMode::Auto,
             voice: true,
         }

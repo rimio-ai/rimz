@@ -51,8 +51,8 @@ pub use resume::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
 pub use sidebar::{
     AttentionConfig, BudgetPaceConfig, BudgetZonesConfig, CardDensityMode, ContextBand,
-    ContextSeverityConfig, GlowMode, PetsConfig, PetsGlyphMode, ProviderTabsMode, ScrollbarMode,
-    SidebarConfig, SidebarProviderStyle, SidebarThemeConfig,
+    ContextSeverityConfig, GlowMode, PetsConfig, PetsGlyphMode, PetsSize, ProviderTabsMode,
+    ScrollbarMode, SidebarConfig, SidebarProviderStyle, SidebarThemeConfig,
 };
 pub use worktree::{WorktreeBase, WorktreeConfig};
 

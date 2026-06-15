@@ -267,6 +267,16 @@ pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> 
     panels.first().map(|panel| panel.kind.clone())
 }
 
+pub(crate) fn active_dashboard_block_rows(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<u16> {
+    let active_kind = active_dashboard_tab(snapshot, ui)?;
+    snapshot
+        .providers
+        .iter()
+        .find(|panel| panel.kind == active_kind)
+        .map(|panel| sections::provider_dashboard_block_rows(panel, snapshot.value_tally.as_ref()))
+        .and_then(|rows| u16::try_from(rows).ok())
+}
+
 pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {
     snapshot
         .providers

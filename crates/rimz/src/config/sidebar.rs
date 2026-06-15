@@ -100,6 +100,17 @@ pub enum PetsGlyphMode {
     Octant,
 }
 
+/// `[sidebar.pets] size`: how much space the provider-dashboard pet occupies.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "lowercase")]
+pub enum PetsSize {
+    /// Match the original dashboard pet footprint.
+    #[default]
+    Medium,
+    /// Fit the pet to the active provider block height.
+    Small,
+}
+
 /// `[sidebar.pets]`: opt-in animated companion in the provider dashboard.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
@@ -112,6 +123,8 @@ pub struct PetsConfig {
     /// sheet or a petdex pet directory; and a bare slug (`wall-e`) is a petdex
     /// pet installed under `~/.codex/pets/<slug>/`.
     pub pet: String,
+    /// Dashboard pet footprint.
+    pub size: PetsSize,
     /// Unicode block-glyph tier.
     pub glyphs: PetsGlyphMode,
     /// Show canned captions on fleet-status changes.
@@ -123,6 +136,7 @@ impl Default for PetsConfig {
         Self {
             enabled: false,
             pet: "codex".to_owned(),
+            size: PetsSize::default(),
             glyphs: PetsGlyphMode::default(),
             voice: true,
         }

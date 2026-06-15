@@ -115,6 +115,7 @@
 [sidebar.pets]
 # enabled = false                     # opt-in animated companion tab in the provider dashboard
 # pet = "codex"                       # built-in id (codex, dewey, ...), an https:// URL, a petdex pet name (~/.codex/pets/<name>), or a path to your own .webp sheet
+# size = "medium"                     # "medium" keeps the original pet footprint; "small" fits the active provider block
 # glyphs = "auto"                     # "auto", "half", "sextant", or "octant"
 # voice = true                        # canned captions on fleet-status changes
 

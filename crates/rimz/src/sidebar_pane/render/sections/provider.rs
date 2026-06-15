@@ -1,5 +1,5 @@
-//! The pinned provider dashboard — per-provider header, brand emblem, stats and
-//! budget bars — and the W/M fleet ledger rows that seal the bottom.
+//! The pinned provider dashboard — per-provider header, brand emblem, spend
+//! table and budget bars — and the fallback W/M fleet ledger rows.
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::BudgetZonesConfig;
@@ -21,9 +21,9 @@ use crate::sidebar_pane::render::theme::{Component, Theme};
 use super::{SESSIONS_GLYPH, TAB_CAP_LEFT, TAB_CAP_RIGHT, pin_right, trim_spans_to_width};
 
 /// The provider dashboard's fixed art column width: the brand emblem is padded
-/// to this many cells so the stats/bar column to its right starts at one shared
-/// cell for every provider block — the bars align across providers by
-/// construction. Dropped (bars run full-width) below [`PROVIDER_ART_MIN_WIDTH`].
+/// to this many cells so the bar column to its right starts at one shared cell
+/// for every provider block — the bars align across providers by construction.
+/// Dropped (bars run full-width) below [`PROVIDER_ART_MIN_WIDTH`].
 const PROVIDER_ART_WIDTH: usize = 9;
 
 /// Narrowest sidebar that still affords the art column beside a bar; below it
@@ -45,12 +45,10 @@ const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
 
-/// How close to a full window-length a reset must read to count as "not started".
-/// The fleet ledger rows pinned to the bottom of the dashboard: the trailing
+/// The fallback fleet ledger rows pinned below no-table dashboards: the trailing
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
-/// across every provider (today's headline lives in the cockpit, so these climb
-/// `week → month`). The token figures read the precise one-decimal form (`16.5k`)
-/// at the soft tier — the ledger is the exact record next to the cockpit's
+/// across every provider. The token figures read the precise one-decimal form
+/// (`16.5k`) at the soft tier — the ledger is the exact record next to the cockpit's
 /// coarse live read — each marker in its one shared color (the sky-blue window
 /// tag, the teal `◎`, the blue `◇`/`↗`, the deep-red `↘`, and the green `◌`)
 /// and the `$` bold dollar green; the
@@ -65,15 +63,18 @@ pub(in crate::sidebar_pane::render) fn fleet_ledger_lines(
     let Some(tally) = tally.filter(|t| !t.is_zero()) else {
         return Vec::new();
     };
-    let cols = WmColumns::measure(&tally.week, &tally.month);
+    let cols = WmColumns::measure([
+        (&tally.week, TokenFormat::Precise),
+        (&tally.month, TokenFormat::Precise),
+    ]);
     vec![
-        wm_row(theme, "W", &tally.week, &cols, width),
-        wm_row(theme, "M", &tally.month, &cols, width),
+        wm_row(theme, "W", &tally.week, TokenFormat::Precise, &cols, width),
+        wm_row(theme, "M", &tally.month, TokenFormat::Precise, &cols, width),
     ]
 }
 
-/// The shared right-aligned column widths for the `W:`/`M:` ledger rows, measured
-/// across both windows so a 2- and a 3-digit figure stack on one right edge.
+/// The shared right-aligned column widths for ledger rows, measured across every
+/// rendered window so a 2- and a 3-digit figure stack on one right edge.
 struct WmColumns {
     sessions: usize,
     total: usize,
@@ -84,20 +85,122 @@ struct WmColumns {
 }
 
 impl WmColumns {
-    fn measure(week: &SpendWindow, month: &SpendWindow) -> Self {
-        let max2 = |a: String, b: String| a.chars().count().max(b.chars().count());
-        Self {
-            sessions: max2(week.sessions.to_string(), month.sessions.to_string()),
-            total: max2(tokens_short(week.tokens), tokens_short(month.tokens)),
-            input: max2(tokens_short(week.input), tokens_short(month.input)),
-            output: max2(tokens_short(week.output), tokens_short(month.output)),
-            cache_read: max2(
-                tokens_short(week.cache_read),
-                tokens_short(month.cache_read),
-            ),
-            usd: max2(dollars2(week.usd), dollars2(month.usd)),
+    fn measure<'a>(windows: impl IntoIterator<Item = (&'a SpendWindow, TokenFormat)>) -> Self {
+        let mut cols = Self {
+            sessions: 1,
+            total: 1,
+            input: 1,
+            output: 1,
+            cache_read: 1,
+            usd: 1,
+        };
+        for (window, token_format) in windows {
+            cols.sessions = cols
+                .sessions
+                .max(window.sessions.to_string().chars().count());
+            cols.total = cols
+                .total
+                .max(token_format.tokens(window.tokens).chars().count());
+            cols.input = cols
+                .input
+                .max(token_format.tokens(window.input).chars().count());
+            cols.output = cols
+                .output
+                .max(token_format.tokens(window.output).chars().count());
+            cols.cache_read = cols
+                .cache_read
+                .max(token_format.tokens(window.cache_read).chars().count());
+            cols.usd = cols.usd.max(dollars2(window.usd).chars().count());
+        }
+        cols
+    }
+}
+
+#[derive(Clone, Copy)]
+enum TokenFormat {
+    Compact,
+    Precise,
+}
+
+impl TokenFormat {
+    fn tokens(self, value: u64) -> String {
+        match self {
+            Self::Compact => tokens_int(value),
+            Self::Precise => tokens_short(value),
         }
     }
+}
+
+fn spend_table_rows(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    fleet_tally: Option<&SpendTally>,
+    width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    let today = panel
+        .spending
+        .as_ref()
+        .map(|spending| spending.today)
+        .unwrap_or_default();
+    let fleet = fleet_tally.filter(|tally| !tally.is_zero());
+    let mut measured = vec![(&today, TokenFormat::Compact)];
+    if let Some(tally) = fleet {
+        measured.push((&tally.week, TokenFormat::Precise));
+        measured.push((&tally.month, TokenFormat::Precise));
+    }
+    let cols = WmColumns::measure(measured);
+    let mut rows = spend_table_window_rows(theme, "T", &today, TokenFormat::Compact, &cols, width);
+    if let Some(tally) = fleet {
+        rows.push(total_delimiter_row(theme, width));
+        rows.extend(spend_table_window_rows(
+            theme,
+            "W",
+            &tally.week,
+            TokenFormat::Precise,
+            &cols,
+            width,
+        ));
+        rows.extend(spend_table_window_rows(
+            theme,
+            "M",
+            &tally.month,
+            TokenFormat::Precise,
+            &cols,
+            width,
+        ));
+    }
+    rows
+}
+
+fn spend_table_window_rows(
+    theme: &Theme,
+    label: &str,
+    window: &SpendWindow,
+    token_format: TokenFormat,
+    cols: &WmColumns,
+    width: usize,
+) -> Vec<Vec<Span<'static>>> {
+    vec![
+        spend_token_row(theme, label, window, token_format, cols, width).spans,
+        spend_usd_row(theme, window, cols, width).spans,
+    ]
+}
+
+fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
+    let label = "── Total: ";
+    let used = 1 + label.chars().count();
+    let fill = width.saturating_sub(used);
+    trim_spans_to_width(
+        vec![
+            Span::raw(" "),
+            Span::styled(
+                label.to_owned(),
+                theme.styled(Component::LedgerLabel, Modifier::empty()),
+            ),
+            Span::styled(RAIL_FILL.to_string().repeat(fill), theme.faint()),
+        ],
+        width,
+    )
 }
 
 /// One ledger row — `W: ◎ {sessions}  ◇ {total} ↘ {in} ↗ {out} ◌ {cache_read}`
@@ -114,12 +217,55 @@ fn wm_row(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
+    token_format: TokenFormat,
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
+    let left = spend_token_spans(theme, label, window, token_format, cols);
+    let right = vec![Span::styled(
+        format!("{:>w$}", dollars2(window.usd), w = cols.usd),
+        theme.money_style(Modifier::BOLD),
+    )];
+    pin_right(left, right, width)
+}
+
+fn spend_token_row(
+    theme: &Theme,
+    label: &str,
+    window: &SpendWindow,
+    token_format: TokenFormat,
+    cols: &WmColumns,
+    width: usize,
+) -> Line<'static> {
+    Line::from(trim_spans_to_width(
+        spend_token_spans(theme, label, window, token_format, cols),
+        width,
+    ))
+}
+
+fn spend_usd_row(
+    theme: &Theme,
+    window: &SpendWindow,
+    cols: &WmColumns,
+    width: usize,
+) -> Line<'static> {
+    let right = vec![Span::styled(
+        format!("{:>w$}", dollars2(window.usd), w = cols.usd),
+        theme.money_style(Modifier::BOLD),
+    )];
+    pin_right(vec![Span::raw(" ")], right, width)
+}
+
+fn spend_token_spans(
+    theme: &Theme,
+    label: &str,
+    window: &SpendWindow,
+    token_format: TokenFormat,
+    cols: &WmColumns,
+) -> Vec<Span<'static>> {
     let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
-    let left = vec![
+    vec![
         Span::raw(" "),
         Span::styled(
             format!("{label}: "),
@@ -133,7 +279,11 @@ fn wm_row(
         Span::raw("  "),
         Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
         Span::styled(
-            format!(" {:>w$}", tokens_short(window.tokens), w = cols.total),
+            format!(
+                " {:>w$}",
+                token_format.tokens(window.tokens),
+                w = cols.total
+            ),
             value,
         ),
         Span::styled(
@@ -141,7 +291,7 @@ fn wm_row(
             marker(theme.component(Component::Input)),
         ),
         Span::styled(
-            format!("{:>w$}", tokens_short(window.input), w = cols.input),
+            format!("{:>w$}", token_format.tokens(window.input), w = cols.input),
             value,
         ),
         Span::styled(
@@ -149,7 +299,11 @@ fn wm_row(
             marker(theme.component(Component::Output)),
         ),
         Span::styled(
-            format!("{:>w$}", tokens_short(window.output), w = cols.output),
+            format!(
+                "{:>w$}",
+                token_format.tokens(window.output),
+                w = cols.output
+            ),
             value,
         ),
         Span::styled(
@@ -159,17 +313,12 @@ fn wm_row(
         Span::styled(
             format!(
                 "{:>w$}",
-                tokens_short(window.cache_read),
+                token_format.tokens(window.cache_read),
                 w = cols.cache_read
             ),
             value,
         ),
-    ];
-    let right = vec![Span::styled(
-        format!("{:>w$}", dollars2(window.usd), w = cols.usd),
-        theme.money_style(Modifier::BOLD),
-    )];
-    pin_right(left, right, width)
+    ]
 }
 
 /// One clickable tab in the dashboard's tab rail: the rail line's position,
@@ -189,13 +338,12 @@ pub(crate) struct ProviderTabHit {
 
 /// The pinned per-provider dashboard. In stacked mode every account paints its
 /// own block — the dashboard's top hairline, then each provider header and
-/// brand/stat body separated from the next by a blank row. In
+/// brand/budget/spend body separated from the next by a blank row. In
 /// tabbed mode the top hairline becomes a [tab rail](provider_tab_rail) — each
 /// account set into the rule, the active one a brand-filled bold chip — over
 /// the active provider's block alone, so the budgets read one account at a time;
-/// the header then drops the name the rail carries and indents to the stats
-/// column, sitting directly over the `◎` line as the right-column grid's title
-/// row. A metered account drains one "mana" bar per included budget window and
+/// the header then drops the name the rail carries and sits beside the emblem's
+/// first row. A metered account drains one "mana" bar per included budget window and
 /// may swap in an `ex` paid-usage row when an included cap is spent; an
 /// unmetered API-key account shows one `api` spend row. The bars share one start
 /// and one end column across every block, so the dashboard reads as one aligned
@@ -218,6 +366,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
         active_tab.as_ref(),
         tabbed,
         None,
+        None,
         false,
         width,
         zones,
@@ -231,6 +380,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
     providers: &[SidebarProviderPanel],
     active_tab: Option<&String>,
     tabbed: bool,
+    fleet_tally: Option<&SpendTally>,
     pet: Option<&PetView>,
     pets_enabled: bool,
     width: usize,
@@ -264,27 +414,47 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
         .or_else(|| first.map(|panel| panel.kind.clone()))
         .unwrap_or_default();
     let (rail, hits) = provider_tab_rail(theme, providers, &active_kind, width);
-    lines.push(rail);
-    // A blank line below the rail sets the tabs apart from the active account's
-    // block, matching the cockpit's breathing room; the header then sits
-    // directly over the stats line as the grid's title row.
-    lines.push(Line::from(""));
     let active = providers
         .iter()
         .find(|panel| panel.kind == active_kind)
         .or(first);
+    lines.push(rail);
     if let Some(active) = active {
-        if pets_enabled
-            && let Some(pet_w) = pet_column_width(pet)
-            && pet_w + PET_COLUMN_GAP < width
-        {
-            let block_w = width.saturating_sub(pet_w + PET_COLUMN_GAP);
-            let block = active_provider_block_lines(theme, active, block_w, true, zones, now);
-            let pet = super::pets::pet_panel_lines(pet, theme, pet_w);
-            lines.extend(zip_provider_pet_lines(block, pet, block_w, pet_w, width));
+        if pets_enabled {
+            if let Some(pet_w) = pet_column_width(theme, pet)
+                && pet_w + PET_COLUMN_GAP < width
+            {
+                let block_w = width.saturating_sub(pet_w + PET_COLUMN_GAP);
+                lines.push(provider_pet_caption_line(theme, pet, block_w, pet_w, width));
+                let block = active_provider_pet_block_lines(
+                    theme,
+                    active,
+                    block_w,
+                    zones,
+                    now,
+                    fleet_tally,
+                );
+                let pet = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
+                lines.extend(zip_provider_pet_lines(block, pet, block_w, pet_w, width));
+            } else {
+                // A blank line below the rail sets the tabs apart from the active
+                // account's tall spend block when the pet column is unavailable.
+                lines.push(Line::from(""));
+                lines.extend(active_provider_pet_block_lines(
+                    theme,
+                    active,
+                    width,
+                    zones,
+                    now,
+                    fleet_tally,
+                ));
+            }
         } else {
-            lines.extend(active_provider_block_lines(
-                theme, active, width, false, zones, now,
+            // A blank line below the rail sets the tabs apart from the active
+            // account's main block, matching the cockpit's breathing room.
+            lines.push(Line::from(""));
+            lines.extend(active_provider_main_block_lines(
+                theme, active, width, zones, now,
             ));
         }
     }
@@ -299,38 +469,115 @@ fn single_block_lines(
     now: Timestamp,
 ) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
-    lines.push(provider_header_line(theme, panel, width, false));
+    lines.push(provider_header_line(theme, panel, width, false, false));
     // A blank line below the provider name sets the identity apart from
     // the emblem + stats body, matching the cockpit's breathing room.
     lines.push(Line::from(""));
-    lines.extend(provider_body_lines(theme, panel, width, false, zones, now));
-    lines
-}
-
-fn active_provider_block_lines(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    width: usize,
-    two_line_stats: bool,
-    zones: &BudgetZonesConfig,
-    now: Timestamp,
-) -> Vec<Line<'static>> {
-    let mut lines = vec![provider_header_line(theme, panel, width, true)];
-    lines.extend(provider_body_lines(
-        theme,
-        panel,
-        width,
-        two_line_stats,
-        zones,
-        now,
+    lines.extend(provider_main_body_lines(
+        theme, panel, width, false, zones, now,
     ));
     lines
 }
 
-fn pet_column_width(pet: Option<&PetView>) -> Option<usize> {
-    pet.and_then(|view| view.grid.as_ref())
+fn active_provider_main_block_lines(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    width: usize,
+    zones: &BudgetZonesConfig,
+    now: Timestamp,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![provider_header_line(theme, panel, width, true, false)];
+    lines.extend(provider_main_body_lines(
+        theme, panel, width, false, zones, now,
+    ));
+    lines
+}
+
+fn active_provider_pet_block_lines(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    width: usize,
+    zones: &BudgetZonesConfig,
+    now: Timestamp,
+    fleet_tally: Option<&SpendTally>,
+) -> Vec<Line<'static>> {
+    let mut lines = vec![provider_header_line(theme, panel, width, true, true)];
+    lines.extend(provider_pet_body_lines(
+        theme,
+        panel,
+        width,
+        zones,
+        now,
+        fleet_tally,
+        1,
+    ));
+    lines
+}
+
+pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
+    panel: &SidebarProviderPanel,
+    fleet_tally: Option<&SpendTally>,
+) -> usize {
+    1 + provider_body_row_count(panel, fleet_tally, 1)
+}
+
+fn provider_body_row_count(
+    panel: &SidebarProviderPanel,
+    fleet_tally: Option<&SpendTally>,
+    art_start: usize,
+) -> usize {
+    let art = panel.art.len().saturating_sub(art_start);
+    provider_bar_count(panel).max(art) + spend_table_row_count(fleet_tally)
+}
+
+fn spend_table_row_count(fleet_tally: Option<&SpendTally>) -> usize {
+    2 + if fleet_tally.is_some_and(|tally| !tally.is_zero()) {
+        5
+    } else {
+        0
+    }
+}
+
+fn provider_bar_count(panel: &SidebarProviderPanel) -> usize {
+    if !panel.metered || panel.windows.is_empty() {
+        return 1;
+    }
+    select_provider_bars(panel).len()
+}
+
+fn pet_column_width(theme: &Theme, pet: Option<&PetView>) -> Option<usize> {
+    theme
+        .pet_body_enabled()
+        .then(|| pet.and_then(|view| view.grid.as_ref()))
+        .flatten()
         .and_then(|grid| grid.iter().map(Vec::len).max())
         .filter(|width| *width > 0)
+}
+
+fn provider_pet_caption_line(
+    theme: &Theme,
+    pet: Option<&PetView>,
+    block_w: usize,
+    pet_w: usize,
+    width: usize,
+) -> Line<'static> {
+    let mut line = pad_line_to(Line::from(""), block_w);
+    line.spans.push(Span::raw(" ".repeat(PET_COLUMN_GAP)));
+    let pet_line = super::pets::dashboard_pet_caption(pet)
+        .map(|caption| {
+            let clipped = caption.chars().take(pet_w).collect::<String>();
+            let lead = pet_w.saturating_sub(clipped.chars().count());
+            let mut spans = Vec::new();
+            if lead > 0 {
+                spans.push(Span::raw(" ".repeat(lead)));
+            }
+            spans.push(Span::styled(clipped, theme.muted()));
+            Line::from(spans)
+        })
+        .unwrap_or_else(|| Line::from(""));
+    line.spans.extend(pad_line_to(pet_line, pet_w).spans);
+    line.spans = trim_spans_to_width(line.spans, width);
+    line
 }
 
 fn zip_provider_pet_lines(
@@ -477,16 +724,15 @@ fn tab_label(kind: &str) -> String {
 /// reads `Claude v2.1.158 · Claude Max` — the product name in the brand color,
 /// version and plan dim. Tabbed, the rail already names the account, so the
 /// name drops and the line reads `Claude Max · v2.1.158` — plan first, the
-/// version demoted to trailing trivia — indented to the stats column
-/// (the art column's width, zero when the narrow pane drops the emblem) so it
-/// sits over the `◎` line as the right-column grid's title row. Plan drops out
-/// when unknown; version renders as `v?` until an out-of-band probe or live
-/// context fills it.
+/// version demoted to trailing trivia — beside the emblem's first row. Plan
+/// drops out when unknown; version renders as `v?` until an out-of-band probe or
+/// live context fills it.
 fn provider_header_line(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
     tabbed: bool,
+    inline_art: bool,
 ) -> Line<'static> {
     let mut left = Vec::new();
     let version = panel
@@ -497,7 +743,15 @@ fn provider_header_line(
     if tabbed {
         let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
         if show_art {
-            left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+            if inline_art {
+                left.push(Span::styled(
+                    pad_to(&panel.art[0], PROVIDER_ART_WIDTH),
+                    theme.style(theme.brand_tone(panel), Modifier::empty()),
+                ));
+                left.push(Span::raw(" "));
+            } else {
+                left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+            }
         }
         if let Some(plan) = panel.plan.as_deref() {
             left.push(Span::styled(plan.to_owned(), theme.muted()));
@@ -526,11 +780,10 @@ fn provider_header_line(
     pin_right(left, right, width)
 }
 
-/// The block beneath the header: the brand emblem in a fixed left column zipped
+/// The main dashboard body: the brand emblem in a fixed left column zipped
 /// against the right column — aggregate stats on the first line, the budget bars
-/// below. The art is dropped (and the bars run full width) when the sidebar is
-/// too narrow to fit both.
-fn provider_body_lines(
+/// below. This is the default provider layout when pets are not enabled.
+fn provider_main_body_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
@@ -542,9 +795,6 @@ fn provider_body_lines(
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
     let bar_region = width.saturating_sub(art_column);
 
-    // The right column, top to bottom: aggregate stats then the budget bars,
-    // packed directly so the three rows line up against the three-line emblem and
-    // the bars sit right under the numbers (no separator row).
     let mut rights = provider_stats_rows(theme, panel, bar_region, two_line_stats);
     rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
 
@@ -568,19 +818,53 @@ fn provider_body_lines(
     lines
 }
 
-/// The provider's aggregate stats line beside the emblem: today's `◎` session
-/// count then the token breakdown `◇ ↘ ↗ ◌` (integer magnitudes) on the
-/// left — the fleet-ledger rows' exact vocabulary, scoped to this provider —
-/// with the bold dollar-green spend pinned to the right edge of the bar
-/// `region`. Always rendered — an idle account reads `◎ 0  ◇ 0 …  $0.00` so
-/// the line above the budget bars is never blank. Every figure is today's
-/// transcript-history burn for this provider, summed across every session from
-/// the JSONL — the accurate cross-session total, and the only cost source for
-/// token-only providers like Codex. Cache-write is folded into `↘`, so the
-/// line keeps to the headline figures and the `◎` count fits beside the emblem.
-/// The summed `+/-` churn is intentionally absent —
-/// a noisy per-account aggregate; per-worktree churn lives on the group
-/// headers and per-agent churn on the work line.
+/// The pet dashboard body: the emblem/bars stay compact above a full-width spend
+/// table. The table uses extra rows because the pet column narrows the block.
+fn provider_pet_body_lines(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    width: usize,
+    zones: &BudgetZonesConfig,
+    now: Timestamp,
+    fleet_tally: Option<&SpendTally>,
+    art_start: usize,
+) -> Vec<Line<'static>> {
+    let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
+    let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
+    let bar_region = width.saturating_sub(art_column);
+    let art = if show_art {
+        panel.art.get(art_start..).unwrap_or(&[])
+    } else {
+        &[]
+    };
+
+    // Budget rows sit beside the emblem; the spend table below gets the whole
+    // block width so its right-pinned dollar column stays legible beside pets.
+    let bar_rows = provider_bar_rows(theme, panel, bar_region, zones, now);
+    let spend_rows = spend_table_rows(theme, panel, fleet_tally, width);
+
+    let rows = art.len().max(bar_rows.len());
+    let mut lines = Vec::with_capacity(rows + spend_rows.len());
+    for index in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        if let Some(art_line) = art.get(index).map(String::as_str) {
+            spans.push(Span::styled(
+                pad_to(art_line, PROVIDER_ART_WIDTH),
+                theme.style(theme.brand_tone(panel), Modifier::empty()),
+            ));
+            spans.push(Span::raw(" "));
+        } else if show_art && bar_rows.get(index).is_some() {
+            spans.push(Span::raw(" ".repeat(art_column)));
+        }
+        if let Some(right) = bar_rows.get(index) {
+            spans.extend(right.iter().cloned());
+        }
+        lines.push(Line::from(trim_spans_to_width(spans, width)));
+    }
+    lines.extend(spend_rows.into_iter().map(Line::from));
+    lines
+}
+
 fn provider_stats_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,

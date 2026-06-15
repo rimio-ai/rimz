@@ -14,9 +14,7 @@ pub(super) fn pet_panel_lines(
     theme: &Theme,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let caption = pet
-        .and_then(|view| view.caption.as_deref())
-        .or_else(|| pet.and_then(|view| view.loading.then_some("fetching pet...")));
+    let caption = pet_caption(pet);
     let grid = theme
         .pet_body_enabled()
         .then(|| pet.and_then(|view| view.grid.as_ref()))
@@ -34,6 +32,30 @@ pub(super) fn pet_panel_lines(
         }
     });
     vec![centered_caption(fallback, theme, width)]
+}
+
+pub(super) fn dashboard_pet_caption(pet: Option<&PetView>) -> Option<&str> {
+    pet_caption(pet)
+}
+
+pub(super) fn dashboard_pet_grid_lines(
+    pet: Option<&PetView>,
+    theme: &Theme,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let Some(grid) = theme
+        .pet_body_enabled()
+        .then(|| pet.and_then(|view| view.grid.as_ref()))
+        .flatten()
+    else {
+        return Vec::new();
+    };
+    grid_lines(grid, width)
+}
+
+fn pet_caption(pet: Option<&PetView>) -> Option<&str> {
+    pet.and_then(|view| view.caption.as_deref())
+        .or_else(|| pet.and_then(|view| view.loading.then_some("fetching pet...")))
 }
 
 /// The sprite pinned to the right edge, with its caption set to the left,

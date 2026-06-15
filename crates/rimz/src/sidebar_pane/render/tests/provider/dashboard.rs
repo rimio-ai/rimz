@@ -31,8 +31,8 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     );
     // The metered Claude block: the rail names the account, so the header
     // drops the name and reads plan-first with the `⇅ rc` remote-control flag
-    // pinned to the top-right corner, the stats line leads with today's `◎`
-    // session count, then the 5h/7d budget bars drain.
+    // pinned to the top-right corner, then today's stats and 5h/7d budget bars
+    // paint beside the emblem.
     assert!(rendered.contains("Claude Max · v2.1.158"), "{rendered}");
     assert!(
         !rendered.contains("Claude v2.1.158"),
@@ -136,6 +136,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
         &[],
         None,
         true,
+        None,
         Some(&pet),
         true,
         24,
@@ -170,6 +171,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         &[],
         None,
         true,
+        None,
         Some(&pet),
         true,
         24,
@@ -183,40 +185,46 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
 }
 
 #[test]
-fn render_provider_dashboard_overlays_pet_and_reflows_stats() {
+fn render_provider_dashboard_balances_spend_table_beside_pet() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
+    let cell = crate::sidebar_pane::pets::PetCell {
+        ch: '▀',
+        fg: Color::Rgb(200, 20, 20),
+        bg: Color::Rgb(20, 20, 200),
+    };
     let pet = crate::sidebar_pane::pets::PetView {
-        grid: Some(vec![
-            vec![
-                crate::sidebar_pane::pets::PetCell {
-                    ch: '▀',
-                    fg: Color::Rgb(200, 20, 20),
-                    bg: Color::Rgb(20, 20, 200),
-                },
-                crate::sidebar_pane::pets::PetCell {
-                    ch: '▀',
-                    fg: Color::Rgb(200, 20, 20),
-                    bg: Color::Rgb(20, 20, 200),
-                },
-            ],
-            vec![
-                crate::sidebar_pane::pets::PetCell {
-                    ch: '▀',
-                    fg: Color::Rgb(200, 20, 20),
-                    bg: Color::Rgb(20, 20, 200),
-                },
-                crate::sidebar_pane::pets::PetCell {
-                    ch: '▀',
-                    fg: Color::Rgb(200, 20, 20),
-                    bg: Color::Rgb(20, 20, 200),
-                },
-            ],
-        ]),
+        grid: Some((0..10).map(|_| vec![cell.clone(), cell.clone()]).collect()),
         caption: Some("all caught up".to_owned()),
         loading: false,
         status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
         active_track: "idle",
+    };
+    let fleet = crate::SpendTally {
+        week: crate::SpendWindow {
+            usd: 44.20,
+            tokens: 4_200_000,
+            input: 3_100_000,
+            output: 1_100_000,
+            cache_read: 9_900_000,
+            sessions: 44,
+            ..Default::default()
+        },
+        month: crate::SpendWindow {
+            usd: 101.99,
+            tokens: 9_100_000,
+            input: 6_100_000,
+            output: 3_000_000,
+            cache_read: 20_000_000,
+            sessions: 101,
+            ..Default::default()
+        },
+        year: crate::SpendWindow {
+            usd: 101.99,
+            tokens: 9_100_000,
+            ..Default::default()
+        },
+        ..Default::default()
     };
     let active = "claude".to_owned();
 
@@ -225,6 +233,7 @@ fn render_provider_dashboard_overlays_pet_and_reflows_stats() {
         &providers,
         Some(&active),
         true,
+        Some(&fleet),
         Some(&pet),
         true,
         52,
@@ -237,31 +246,40 @@ fn render_provider_dashboard_overlays_pet_and_reflows_stats() {
     assert!(!rendered.contains("Pets"), "{rendered}");
     assert_eq!(
         rendered.chars().filter(|ch| *ch == '▀').count(),
-        4,
-        "one pet grid is zipped onto the active block:\n{rendered}"
+        20,
+        "one height-matched pet grid is zipped onto the active block:\n{rendered}"
+    );
+    assert!(
+        texts.iter().skip(2).all(|line| line.contains('▀')),
+        "every active-block row has a pet body row beside it:\n{rendered}"
     );
     assert_eq!(
         hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
         vec!["claude", "codex"]
     );
-    let sessions = texts
+    let today_index = texts
         .iter()
-        .find(|line| line.contains("◎ 12"))
-        .expect("session line");
-    assert!(sessions.contains("$3.50"), "{sessions}");
+        .position(|line| line.contains("T:"))
+        .expect("today row");
+    let today = &texts[today_index];
+    assert!(today.contains('◎') && today.contains("12"), "{today}");
+    assert!(today.contains("◇ 498k"), "{today}");
+    assert!(!today.contains("$3.50"), "{today}");
+    let today_usd = texts.get(today_index + 1).expect("today USD row");
+    assert!(today_usd.contains("$3.50"), "{today_usd}");
+    assert!(rendered.contains("Total:"), "{rendered}");
+    assert!(rendered.contains("W:"), "{rendered}");
+    assert!(rendered.contains("M:"), "{rendered}");
+    let spend = today_usd.find("$3.50").expect("today spend");
+    let pet_col = today_usd.find('▀').expect("pet column");
     assert!(
-        !sessions.contains('◇'),
-        "tokens move off the headline line when the pet column is reserved: {sessions}"
+        spend < pet_col,
+        "$ stays left of the pet column: {today_usd}"
     );
-    let tokens = texts
-        .iter()
-        .find(|line| line.contains("◇ 498k"))
-        .expect("token line");
-    assert!(!tokens.contains("$3.50"), "{tokens}");
 }
 
 #[test]
-fn render_provider_dashboard_keeps_single_line_stats_without_pet_column() {
+fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let active = "claude".to_owned();
@@ -272,6 +290,7 @@ fn render_provider_dashboard_keeps_single_line_stats_without_pet_column() {
         Some(&active),
         true,
         None,
+        None,
         false,
         52,
         &crate::config::BudgetZonesConfig::default(),
@@ -281,10 +300,14 @@ fn render_provider_dashboard_keeps_single_line_stats_without_pet_column() {
 
     let stats = rendered
         .lines()
-        .find(|line| line.contains("◎ 12"))
-        .expect("stats line");
+        .find(|line| line.contains('◎') && line.contains("$3.50"))
+        .expect("today stats row");
     assert!(stats.contains("◇ 498k"), "{stats}");
     assert!(stats.contains("$3.50"), "{stats}");
+    assert!(
+        !rendered.contains("T:"),
+        "no-pets dashboard keeps the main layout:\n{rendered}"
+    );
 }
 
 #[test]

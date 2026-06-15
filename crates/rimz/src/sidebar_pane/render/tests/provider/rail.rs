@@ -108,6 +108,7 @@ fn pets_enabled_keeps_rail_to_provider_tabs_only() {
         Some(&active),
         true,
         None,
+        None,
         true,
         40,
         &zones,

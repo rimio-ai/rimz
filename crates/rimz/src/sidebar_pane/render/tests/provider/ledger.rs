@@ -127,3 +127,70 @@ fn render_fleet_ledger_pins_week_month_rows_under_the_dashboard() {
     );
     assert_snapshot("fleet_ledger", rendered);
 }
+
+#[test]
+fn pets_provider_dashboard_owns_total_rows() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.context = Some(claude_context(fixed_now()));
+    let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
+    snapshot.providers = two_provider_panels();
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.sidebar.pets.enabled = true;
+    snapshot.value_tally = Some(crate::SpendTally {
+        week: crate::SpendWindow {
+            usd: 44.20,
+            tokens: 4_200_000,
+            input: 3_100_000,
+            output: 1_100_000,
+            cache_read: 9_900_000,
+            sessions: 44,
+            ..Default::default()
+        },
+        month: crate::SpendWindow {
+            usd: 101.99,
+            tokens: 9_100_000,
+            input: 6_100_000,
+            output: 3_000_000,
+            cache_read: 20_000_000,
+            sessions: 101,
+            ..Default::default()
+        },
+        year: crate::SpendWindow {
+            usd: 101.99,
+            tokens: 9_100_000,
+            ..Default::default()
+        },
+        ..Default::default()
+    });
+
+    let rendered = snapshot_to_screen(&snapshot, 60, 34);
+    let lines = rendered.lines().collect::<Vec<_>>();
+
+    assert!(rendered.contains("T:"), "provider-today row:\n{rendered}");
+    assert!(
+        rendered.contains("$3.50"),
+        "T: uses active provider today:\n{rendered}"
+    );
+    assert!(rendered.contains("Total:"), "scope delimiter:\n{rendered}");
+    assert!(
+        rendered.contains("$44.20") && rendered.contains("$101.99"),
+        "W/M use fleet totals:\n{rendered}"
+    );
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("W:")).count(),
+        1,
+        "tabbed dashboard does not duplicate the bottom W row:\n{rendered}"
+    );
+    assert_eq!(
+        lines.iter().filter(|line| line.contains("M:")).count(),
+        1,
+        "tabbed dashboard does not duplicate the bottom M row:\n{rendered}"
+    );
+}
