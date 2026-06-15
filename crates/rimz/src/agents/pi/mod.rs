@@ -174,9 +174,14 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
         },
     ),
     (
+        // No idle Notification event, but the attention slice is
+        // reconstructed: `agent_end` settles a finished turn to a calm state
+        // and the stall window escalates a silent `running` row — Codex's
+        // partial minus the `request_user_input` leg pi has no tool for.
         IntegrationConcern::IdleNotification,
-        ConcernCoverage::Unsupported {
-            reason: "no idle notification event",
+        ConcernCoverage::Partial {
+            via: "turn-end + stall window",
+            gap: "no idle Notification hook; no idle-timeout nudge",
         },
     ),
     (

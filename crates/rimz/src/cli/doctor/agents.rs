@@ -266,15 +266,22 @@ mod tests {
                 "turn", "perm", "compact", "end", "usage", "install", "spend"
             ]
         );
+        // Pi has no idle Notification hook, but `agent_end` plus the stall
+        // window reconstruct the attention slice — partial, like Codex, not
+        // absent.
+        let pi_partial: Vec<&str> = pi.partial.iter().map(|p| p.concern.as_str()).collect();
+        assert_eq!(pi_partial, ["idle"]);
+        assert!(
+            pi.partial
+                .iter()
+                .all(|p| !p.via.is_empty() && !p.gap.is_empty())
+        );
         let pi_gaps: Vec<&str> = pi
             .unsupported
             .iter()
             .map(|gap| gap.concern.as_str())
             .collect();
-        assert_eq!(
-            pi_gaps,
-            ["plan", "ask", "sub", "bg", "idle", "rich", "remote"]
-        );
+        assert_eq!(pi_gaps, ["plan", "ask", "sub", "bg", "rich", "remote"]);
     }
 
     #[test]
