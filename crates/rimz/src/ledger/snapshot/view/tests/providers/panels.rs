@@ -8,6 +8,8 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
     let by_provider = provider_spend([("claude", 1.0), ("codex", 5.0), ("pi", 3.0)]);
 
     let mut snapshot = room(Vec::new(), vec![claude.clone(), codex.clone(), pi.clone()]);
+    // The cap only trims the stacked dashboard; pin `never` so it bites here.
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.sidebar.max_provider_blocks = 3;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
@@ -26,11 +28,38 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
     );
 
     let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
+    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Never;
     snapshot.sidebar.max_provider_blocks = 2;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
     assert_eq!(provider_kinds(&snapshot), vec!["codex", "pi"]);
+}
+
+#[test]
+fn tabbed_dashboard_shows_every_provider_past_the_cap() {
+    // Three or more providers auto-tab, and a tabbed dashboard is bounded by its
+    // single active block — so every logged-in provider keeps its tab even under
+    // a cap that would trim the stacked layout to two. This is what keeps Pi on
+    // the dashboard once OpenCode joins as a fourth account.
+    let agents = vec![
+        agent("claude", "c1", AgentStatus::Idle, 10),
+        agent("codex", "x1", AgentStatus::Idle, 20),
+        agent("pi", "p1", AgentStatus::Idle, 30),
+        agent("opencode", "o1", AgentStatus::Idle, 40),
+    ];
+    let mut snapshot = room(Vec::new(), agents);
+    // Default `auto` tabs at four providers; a tight cap must not trim them.
+    snapshot.sidebar.max_provider_blocks = 2;
+    let snapshot =
+        snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
+
+    // Painted in the registry's display order, not alphabetically — pi before
+    // opencode.
+    assert_eq!(
+        provider_kinds(&snapshot),
+        vec!["claude", "codex", "pi", "opencode"]
+    );
 }
 
 #[test]

@@ -44,7 +44,7 @@ pub(crate) use scrollbar::ScrollbarFade;
 
 use std::io::{self, Write};
 
-use crate::config::{AnimationSpec, ProviderTabsMode};
+use crate::config::AnimationSpec;
 use crate::feed::AgentStatus;
 use crate::{SidebarRow, SidebarSnapshot};
 use ratatui::backend::{Backend, CrosstermBackend, TestBackend};
@@ -265,11 +265,10 @@ pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> 
 /// paints as a bare block; the configured mode only matters once multiple
 /// provider panels are present.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
-    match snapshot.sidebar.provider_tabs {
-        ProviderTabsMode::Auto => snapshot.providers.len() >= 3,
-        ProviderTabsMode::Always => snapshot.providers.len() > 1,
-        ProviderTabsMode::Never => false,
-    }
+    snapshot
+        .sidebar
+        .provider_tabs
+        .tabs(snapshot.providers.len())
 }
 
 pub fn draw_to_terminal<B: Backend>(

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 
 use crate::agents::{AgentAccount, AgentRateLimits, RateLimitWindow, SpendTally};
-use crate::config::ThemeColor;
+use crate::config::{ProviderTabsMode, ThemeColor};
 use crate::feed::AgentState;
 
 use super::{SidebarProviderPanel, SidebarSnapshot};
@@ -23,12 +23,16 @@ impl SidebarSnapshot {
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
     /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. With no explicit
-    /// `provider_list`, the set is capped to `max_provider_blocks` by today's
-    /// spend, then ordered stably by kind — the panels are the dashboard's tabs,
-    /// so the row never reorders as spend shifts. An explicit `provider_list`
-    /// supplies the shown set and order, with `all` expanding the remaining
-    /// discovered providers and bypassing the cap. Producer-only: the pure
-    /// reducer leaves `providers` empty.
+    /// `provider_list`, a *stacked* dashboard is capped to `max_provider_blocks`
+    /// by today's spend; a *tabbed* dashboard (three or more providers under
+    /// `auto`) is height-bounded by its active block, so it shows every
+    /// discovered provider. The retained set paints in the registry's display
+    /// order (`claude, codex, pi, opencode`) — the panels are the dashboard's
+    /// tabs, so the row never reorders as spend shifts. An explicit
+    /// `provider_list` overrides the shown set and order, with `all` expanding
+    /// the remaining discovered providers (in that same display order) and
+    /// bypassing the cap. Producer-only: the pure reducer leaves `providers`
+    /// empty.
     pub fn with_provider_aggregates(
         mut self,
         probed_accounts: &BTreeMap<String, AgentAccount>,
@@ -168,6 +172,7 @@ impl SidebarSnapshot {
             panels,
             &self.sidebar.provider_list,
             self.sidebar.max_provider_blocks,
+            self.sidebar.provider_tabs,
         );
         self
     }
@@ -204,23 +209,33 @@ fn resolve_provider_panels(
     mut panels: Vec<SidebarProviderPanel>,
     provider_list: &[String],
     max_provider_blocks: usize,
+    provider_tabs: ProviderTabsMode,
 ) -> Vec<SidebarProviderPanel> {
     if provider_list.is_empty() {
         // Today's JSONL spend decides only *which* panels survive the cap — the
         // provider you are actively spending on always earns its block, and a
         // token-only provider (Codex) ranks on the same transcript-derived
-        // footing as a live-cost one. The retained set then orders stably by
-        // kind: the panels are the dashboard's tabs, and a tab row must not
-        // reorder as today's spend shifts between providers.
+        // footing as a live-cost one. Ties break by registry display order, so a
+        // capped, stacked dashboard keeps the earlier-listed providers.
         panels.sort_by(|left, right| {
             right
                 .rank_cost()
                 .partial_cmp(&left.rank_cost())
                 .unwrap_or(Ordering::Equal)
-                .then_with(|| left.kind.cmp(&right.kind))
+                .then_with(|| display_order(left, right))
         });
-        panels.truncate(max_provider_blocks);
-        panels.sort_by(|left, right| left.kind.cmp(&right.kind));
+        // The cap bounds the *stacked* dashboard's height; a tabbed dashboard is
+        // bounded by its single active block, so it shows every provider. The
+        // tab decision keys on the full discovered count, so the producer and
+        // the renderer's `dashboard_tabbed` agree (no truncation when tabbed
+        // means the count they see is identical).
+        if !provider_tabs.tabs(panels.len()) {
+            panels.truncate(max_provider_blocks);
+        }
+        // The shown set paints in the registry's canonical order (claude, codex,
+        // pi, opencode) — the panels are the dashboard's tabs, and a tab row must
+        // not reorder as today's spend shifts between providers.
+        panels.sort_by(display_order);
         return panels;
     }
 
@@ -238,9 +253,16 @@ fn resolve_provider_panels(
     for kind in provider_list {
         if kind == "all" {
             if !emitted_all {
-                resolved.extend(by_kind.iter().filter_map(|(kind, panel)| {
-                    (!explicitly_named.contains(kind.as_str())).then_some(panel.clone())
-                }));
+                // `all` expands the not-yet-named providers in the same registry
+                // display order as the default dashboard, so `["all"]` matches an
+                // empty list.
+                let mut remaining: Vec<SidebarProviderPanel> = by_kind
+                    .values()
+                    .filter(|panel| !explicitly_named.contains(panel.kind.as_str()))
+                    .cloned()
+                    .collect();
+                remaining.sort_by(display_order);
+                resolved.extend(remaining);
                 emitted_all = true;
             }
             continue;
@@ -252,6 +274,25 @@ fn resolve_provider_panels(
         }
     }
     resolved
+}
+
+/// Order two panels by the registry's canonical display order — each kind's slot
+/// in [`known_kinds`](crate::agents::known_kinds) (`claude, codex, pi, opencode`),
+/// an unregistered kind sorting last by name. The default dashboard and `all`
+/// expansion both use this, so the row reads in the canonical agent order rather
+/// than an alphabetical accident; an explicit `provider_list` overrides it.
+fn display_order(left: &SidebarProviderPanel, right: &SidebarProviderPanel) -> Ordering {
+    display_rank(&left.kind)
+        .cmp(&display_rank(&right.kind))
+        .then_with(|| left.kind.cmp(&right.kind))
+}
+
+/// A kind's position in the registry's display order; unregistered kinds sort
+/// last.
+fn display_rank(kind: &str) -> usize {
+    crate::agents::known_kinds()
+        .position(|known| known == kind)
+        .unwrap_or(usize::MAX)
 }
 
 /// The content-fresh live budget windows across every session of a provider,

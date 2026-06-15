@@ -54,6 +54,21 @@ pub enum ProviderTabsMode {
     Never,
 }
 
+impl ProviderTabsMode {
+    /// Whether a dashboard of `count` providers lays out as a tab rail rather
+    /// than stacked blocks: `auto` tabs at three or more, `always` at more than
+    /// one, `never` not at all. A tabbed dashboard is bounded by its single
+    /// active block, so it shows every provider — `max_provider_blocks` only
+    /// trims the stacked layout.
+    pub fn tabs(self, count: usize) -> bool {
+        match self {
+            ProviderTabsMode::Auto => count >= 3,
+            ProviderTabsMode::Always => count > 1,
+            ProviderTabsMode::Never => false,
+        }
+    }
+}
+
 /// `[sidebar] card_density`: how much detail resting agent cards show.
 /// Display-only.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
@@ -84,9 +99,11 @@ pub struct SidebarConfig {
     /// shipped emblem intact.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub providers: BTreeMap<String, SidebarProviderStyle>,
-    /// Most provider blocks the pinned dashboard shows before the rest are
-    /// elided. Providers are few, so the cap rarely bites; it bounds the panel
-    /// height on a box that links many accounts.
+    /// Most provider blocks the *stacked* dashboard shows before the rest are
+    /// elided; a tabbed dashboard is height-bounded by its active block, so it
+    /// shows every provider regardless of this cap. Providers are few, so the
+    /// cap rarely bites; it bounds the panel height on a box that links many
+    /// accounts and explicitly stacks them.
     pub max_provider_blocks: usize,
     /// How provider blocks lay out: `auto` stacks one or two providers and tabs
     /// three or more; `always` tabs whenever more than one provider is present;
@@ -94,9 +111,11 @@ pub struct SidebarConfig {
     /// the rest of `[sidebar]`.
     pub provider_tabs: ProviderTabsMode,
     /// Provider kinds to show in the dashboard and their order. Empty means all
-    /// discovered providers, still governed by `max_provider_blocks`; `"all"`
-    /// expands to every remaining discovered provider at that position; without
-    /// `"all"` this is a strict allowlist. An explicit list bypasses
+    /// discovered providers in the registry's display order (`claude, codex, pi,
+    /// opencode`), still governed by `max_provider_blocks`; an explicit list
+    /// overrides both the set and the order. `"all"` expands to every remaining
+    /// discovered provider at that position (in that same display order);
+    /// without `"all"` this is a strict allowlist. An explicit list bypasses
     /// `max_provider_blocks`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub provider_list: Vec<String>,
