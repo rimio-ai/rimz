@@ -57,7 +57,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn registry_kinds_are_unique_and_resolve_to_their_descriptors() {
+    fn registry_resolves_kinds_and_sub_providers_without_collisions() {
+        // Every kind round-trips through resolution, an unknown kind errors, and
+        // no two adapters claim the same kind.
         for adapter in ADAPTERS {
             let kind = adapter.descriptor().kind;
             assert_eq!(
@@ -73,12 +75,10 @@ mod tests {
         let before = kinds.len();
         kinds.dedup();
         assert_eq!(kinds.len(), before, "duplicate kind in ADAPTERS");
-    }
 
-    #[test]
-    fn sub_providers_are_unique_and_resolve_to_their_metering_kind() {
-        // The credential keys Pi's auth file uses, resolved through each
-        // descriptor's declaration — the dashboard's window-borrow mapping.
+        // Sub-provider ids (the credential keys Pi's auth file uses) map to their
+        // metering kind, and no provider is claimed twice — the dashboard's
+        // window-borrow mapping.
         assert_eq!(kind_for_sub_provider("anthropic"), Some("claude"));
         assert_eq!(kind_for_sub_provider("openai"), Some("codex"));
         assert_eq!(kind_for_sub_provider("openai-codex"), Some("codex"));

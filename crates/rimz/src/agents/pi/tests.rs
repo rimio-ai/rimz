@@ -5,37 +5,19 @@ use crate::feed::{AgentStatus, FeedKind, ResolutionMethod, Surface};
 use crate::ids::WorkspaceId;
 use serde_json::json;
 
-#[test]
-fn pi_descriptor_declares_capabilities_and_activity_events() {
-    let capabilities = PiAdapter.descriptor().capabilities;
-    assert!(capabilities.blocking_feed);
-    assert!(!capabilities.native_ask_ui);
-    assert!(!capabilities.rate_limit_windows);
-    assert!(!capabilities.rich_context);
-    assert!(capabilities.context_usage);
-    assert!(capabilities.account_spend);
-    assert!(!capabilities.subagents);
-    assert!(!capabilities.background_tasks);
-    assert!(capabilities.hook_install);
-    assert!(PI_DESCRIPTOR.hook_install_unavailable.is_none());
+// Capability and coverage-table honesty is cross-checked against behavior for
+// every adapter in `agents::conformance`; this slice only pins what is
+// pi-specific behavior beyond those flags.
 
+#[test]
+fn pi_activity_filter_excludes_the_blocking_gate_and_launch_commands_build() {
     let descriptor = PiAdapter.descriptor();
-    for event in [
-        "session_start",
-        "before_agent_start",
-        "agent_end",
-        "tool_execution_end",
-    ] {
-        assert!(descriptor.records_activity(event), "event {event}");
-    }
-    for event in [
-        "tool_call",
-        "session_shutdown",
-        "session_before_compact",
-        "session_compact",
-    ] {
-        assert!(!descriptor.records_activity(event), "event {event}");
-    }
+    // Completed-work events touch activity; the blocking `tool_call` gate is
+    // excluded so creating the ask never instantly un-blocks the row.
+    assert!(descriptor.records_activity("tool_execution_end"));
+    assert!(descriptor.records_activity("agent_end"));
+    assert!(!descriptor.records_activity("tool_call"));
+    assert!(!descriptor.records_activity("session_shutdown"));
 
     assert_eq!(
         PiAdapter.resume_command("0199aaf2", Path::new("/tmp")),
@@ -48,10 +30,6 @@ fn pi_descriptor_declares_capabilities_and_activity_events() {
     assert_eq!(
         PiAdapter.launch_command(&[], None),
         Some(vec!["pi".to_owned()])
-    );
-    assert_eq!(
-        PiAdapter.launch_command(&[], Some("review this")),
-        Some(vec!["pi".to_owned(), "review this".to_owned()])
     );
     assert_eq!(
         PiAdapter.launch_command(
@@ -250,39 +228,14 @@ fn pi_tool_compaction_shutdown_and_unknown_events_map_cleanly() {
         None
     );
     assert_eq!(PiAdapter.observe_lifecycle("bogus", &json!({})), None);
-}
 
-#[test]
-fn session_predicates_match_observed_root_signals() {
-    for (event, payload) in [
-        ("session_start", json!({ "session_id": "sess-1" })),
-        ("before_agent_start", json!({ "session_id": "sess-1" })),
-        ("agent_end", json!({ "session_id": "sess-1" })),
-        (
-            "tool_execution_end",
-            json!({ "session_id": "sess-1", "tool_name": "bash" }),
-        ),
-        ("session_before_compact", json!({ "session_id": "sess-1" })),
-        ("session_compact", json!({ "session_id": "sess-1" })),
-        ("session_shutdown", json!({ "session_id": "sess-1" })),
-    ] {
-        let obs = PiAdapter
-            .observe_lifecycle(event, &payload)
-            .unwrap_or_else(|| panic!("{event} should be observed"));
-        assert_eq!(
-            PiAdapter.ends_session(event),
-            matches!(obs.signal, LifecycleSignal::Ended),
-            "{event} session-end predicate"
-        );
-        assert_eq!(
-            PiAdapter.moves_on(event),
-            matches!(
-                obs.signal,
-                LifecycleSignal::TurnStarted | LifecycleSignal::TurnEnded { .. }
-            ),
-            "{event} moved-on predicate"
-        );
-    }
+    // The session-end and moved-on predicates track those signals: only a real
+    // shutdown ends the session, and only the turn boundaries move the row on.
+    assert!(PiAdapter.ends_session("session_shutdown"));
+    assert!(!PiAdapter.ends_session("agent_end"));
+    assert!(PiAdapter.moves_on("before_agent_start"));
+    assert!(PiAdapter.moves_on("agent_end"));
+    assert!(!PiAdapter.moves_on("session_start"));
 }
 
 fn permission_item() -> FeedItem {

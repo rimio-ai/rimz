@@ -1,43 +1,35 @@
 use super::*;
 
 #[test]
-fn transcript_tail_populates_context_gauge() {
+fn transcript_tail_drives_context_window_and_tokens() {
     // Claude reports token usage only in the transcript JSONL; the Stop hook
     // reads its tail for the gauge numerator. A bare model id carries no `[1m]`
     // marker, so the adapter asserts no window — the fold applies the 200k
-    // descriptor default and derives the percentage (100k of 200k = 50%).
+    // descriptor default (100k of 200k = 50%).
     let dir = tempfile::tempdir().unwrap();
-    let transcript = dir.path().join("session.jsonl");
+    let bare = dir.path().join("bare.jsonl");
     std::fs::write(
-            &transcript,
+            &bare,
             "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
     let obs = ClaudeAdapter
         .observe_lifecycle(
             "Stop",
-            &json!({
-                "session_id": "sess-1",
-                "transcript_path": transcript.to_str().unwrap(),
-            }),
+            &json!({ "session_id": "sess-1", "transcript_path": bare.to_str().unwrap() }),
         )
         .unwrap();
     assert_eq!(obs.total_tokens, Some(100_500));
     assert_eq!(obs.context_window, None);
     assert_eq!(obs.model.as_deref(), Some("claude-opus-4-7"));
-}
 
-#[test]
-fn payload_one_million_marker_widens_the_context_window() {
     // The 1M beta is signalled by a `[1m]` marker that rides only the hook
     // payload's model field — the transcript writes the bare id. The adapter
-    // asserts the 1M window from the payload-resolved model; the fold divides
-    // by it (100k of 1M = 10%, where the bare-id 200k default would over-read
-    // it as 50%).
-    let dir = tempfile::tempdir().unwrap();
-    let transcript = dir.path().join("session.jsonl");
+    // asserts the 1M window from the payload-resolved model (100k of 1M = 10%,
+    // where the bare-id 200k default would over-read it as 50%).
+    let extended = dir.path().join("extended.jsonl");
     std::fs::write(
-            &transcript,
+            &extended,
             "{\"type\":\"assistant\",\"message\":{\"model\":\"claude-opus-4-8\",\"usage\":{\"input_tokens\":100000,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0,\"output_tokens\":500}}}\n",
         )
         .unwrap();
@@ -47,7 +39,7 @@ fn payload_one_million_marker_widens_the_context_window() {
             &json!({
                 "session_id": "sess-1",
                 "model": "claude-opus-4-8[1m]",
-                "transcript_path": transcript.to_str().unwrap(),
+                "transcript_path": extended.to_str().unwrap(),
             }),
         )
         .unwrap();
@@ -151,57 +143,42 @@ fn stop_failure_hook_maps_to_turn_error_marker() {
 }
 
 #[test]
-fn fresh_transcript_reports_zero_context_not_unknown() {
-    // A brand-new session has a transcript with no assistant usage yet. It
-    // must report an explicit zero numerator (total_tokens = 0), not None, so
-    // the fold derives an empty (0%) gauge for a just-launched idle agent
-    // rather than hiding the bar.
+fn transcript_usage_absent_reports_zero_or_unknown() {
     let dir = tempfile::tempdir().unwrap();
-    let transcript = dir.path().join("session.jsonl");
+
+    // A brand-new session has a transcript with no assistant usage yet: it
+    // reports an explicit zero numerator (Some(0)), not None, so the fold draws
+    // an empty (0%) gauge for a just-launched idle agent instead of hiding it.
+    let fresh = dir.path().join("fresh.jsonl");
     std::fs::write(
-        &transcript,
+        &fresh,
         "{\"type\":\"user\",\"message\":{\"role\":\"user\"}}\n",
     )
     .unwrap();
     let obs = ClaudeAdapter
         .observe_lifecycle(
             "SessionStart",
-            &json!({
-                "session_id": "sess-1",
-                "transcript_path": transcript.to_str().unwrap(),
-            }),
+            &json!({ "session_id": "sess-1", "transcript_path": fresh.to_str().unwrap() }),
         )
         .unwrap();
     assert_eq!(obs.total_tokens, Some(0));
     assert_eq!(obs.context_window, None);
-}
 
-#[test]
-fn missing_transcript_leaves_context_unknown() {
-    // No readable transcript means unknown, not zero — the gauge stays
-    // hidden rather than asserting a false 0%.
+    // No readable transcript means unknown (None), not a false 0%.
     let obs = ClaudeAdapter
         .observe_lifecycle(
             "SessionStart",
-            &json!({
-                "session_id": "sess-1",
-                "transcript_path": "/nonexistent/path/session.jsonl",
-            }),
+            &json!({ "session_id": "sess-1", "transcript_path": "/nonexistent/session.jsonl" }),
         )
         .unwrap();
     assert_eq!(obs.total_tokens, None);
     assert_eq!(obs.context_window, None);
-}
 
-#[test]
-fn transcript_requires_session_id() {
-    // Transcript reads are keyed by the agent's own session identity. A
-    // transcript path without a session id stays unknown; the sidebar row
-    // projection is responsible for the visible 0% baseline.
-    let dir = tempfile::tempdir().unwrap();
-    let transcript = dir.path().join("session.jsonl");
+    // Transcript reads are keyed by the agent's own session identity: a path
+    // with no session id stays unknown even when the file carries usage.
+    let usage = dir.path().join("usage.jsonl");
     std::fs::write(
-        &transcript,
+        &usage,
         "{\"message\":{\"model\":\"claude-opus-4-7\",\"usage\":\
              {\"input_tokens\":100000,\"output_tokens\":500}}}\n",
     )
@@ -209,7 +186,7 @@ fn transcript_requires_session_id() {
     let obs = ClaudeAdapter
         .observe_lifecycle(
             "SessionStart",
-            &json!({ "transcript_path": transcript.to_str().unwrap() }),
+            &json!({ "transcript_path": usage.to_str().unwrap() }),
         )
         .unwrap();
     assert_eq!(obs.total_tokens, None);

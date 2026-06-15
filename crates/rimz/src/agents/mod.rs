@@ -993,7 +993,7 @@ mod tests {
     }
 
     #[test]
-    fn subagent_identity_resolves_distinct_child_and_parent() {
+    fn subagent_identity_needs_a_distinct_child_and_parent() {
         match resolve_subagent_identity(
             "claude",
             "SubagentStart",
@@ -1010,17 +1010,14 @@ mod tests {
             }
             SubagentIdentity::Quarantined => panic!("expected resolved"),
         }
-    }
-
-    #[test]
-    fn subagent_identity_quarantines_missing_or_equal_ids() {
-        let cases = [
+        // A missing child or parent, equal ids, or a blank child all quarantine —
+        // a malformed subagent event can never fold onto its parent's row.
+        for (child, parent) in [
             (None, Some("root")),
             (Some("child"), None),
             (Some("same"), Some("same")),
             (Some("  "), Some("root")),
-        ];
-        for (child, parent) in cases {
+        ] {
             assert!(
                 matches!(
                     resolve_subagent_identity("claude", "SubagentStart", child, parent, &json!({})),

@@ -128,46 +128,32 @@ mod tests {
     }
 
     #[test]
-    fn rc_settings_from_reads_boolean_keys() {
+    fn rc_settings_from_reads_flags_conflicts_and_ignores_empties() {
         let parsed = settings(json!({
             "disableRemoteControl": true,
             "remoteControlAtStartup": true,
             "disableAgentView": true
         }));
-
         assert!(parsed.disable_remote_control);
         assert!(parsed.remote_control_at_startup);
         assert!(parsed.disable_agent_view);
-    }
 
-    #[test]
-    fn rc_settings_from_detects_auth_conflict_settings() {
+        // An apiKeyHelper or an env auth token (either key) is an auth conflict.
         assert!(settings(json!({ "apiKeyHelper": "op read key" })).api_key_helper);
-        assert!(
-            settings(json!({
-                "env": { "ANTHROPIC_API_KEY": "sk-ant" }
-            }))
-            .env_auth_conflict
-        );
-        assert!(
-            settings(json!({
-                "env": { "ANTHROPIC_AUTH_TOKEN": "token" }
-            }))
-            .env_auth_conflict
-        );
-    }
+        assert!(settings(json!({ "env": { "ANTHROPIC_API_KEY": "sk-ant" } })).env_auth_conflict);
+        assert!(settings(json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "token" } })).env_auth_conflict);
 
-    #[test]
-    fn rc_settings_from_ignores_absent_or_empty_values() {
-        let parsed = settings(json!({
-            "disableRemoteControl": false,
-            "remoteControlAtStartup": false,
-            "disableAgentView": false,
-            "apiKeyHelper": "",
-            "env": { "ANTHROPIC_API_KEY": "" }
-        }));
-
-        assert_eq!(parsed, ClaudeRcSettings::default());
+        // Falsey, empty, and empty-env values read as the default (nothing set).
+        assert_eq!(
+            settings(json!({
+                "disableRemoteControl": false,
+                "remoteControlAtStartup": false,
+                "disableAgentView": false,
+                "apiKeyHelper": "",
+                "env": { "ANTHROPIC_API_KEY": "" }
+            })),
+            ClaudeRcSettings::default()
+        );
     }
 
     #[test]

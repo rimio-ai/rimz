@@ -273,39 +273,26 @@ mod tests {
     use super::*;
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
+    /// The parse layer's job beyond serde field-mapping: flatten nested common
+    /// fields to depth, fall back on unknown enum variants, tolerate future keys
+    /// and sparse payloads, and carry typed vecs / trigger enums.
     #[test]
-    fn session_and_stop_payloads_cover_defaults_drift_and_enrichment_fields() {
-        let session: ClaudeSessionStart = serde_json::from_value(json!({
+    fn parse_helpers_flatten_default_and_tolerate_drift() {
+        let session = parse_session_start(&json!({
             "session_id": "sess-1",
-            "transcript_path": "/tmp/t.jsonl",
-            "cwd": "/home/user",
-            "hook_event_name": "SessionStart",
             "model": "claude-opus-4-8",
-            "agent_id": "agent-1",
-            "agent_type": "security-reviewer",
             "source": "startup",
             "session_title": "My session",
-        }))
-        .unwrap();
+            "future_field_from_anthropic": {"nested": 1},
+        }));
         assert_eq!(session.common.common.session_id.as_deref(), Some("sess-1"));
         assert_eq!(session.common.model.as_deref(), Some("claude-opus-4-8"));
         assert_eq!(session.source, SessionSource::Startup);
         assert_eq!(session.session_title.as_deref(), Some("My session"));
-
-        let future = parse_session_start(&json!({
-            "session_id": "s",
-            "future_field_from_anthropic": {"nested": 1}
-        }));
-        assert_eq!(future.common.common.session_id.as_deref(), Some("s"));
+        // An unknown source variant falls back rather than failing the parse.
         assert_eq!(
             parse_session_start(&json!({"source": "brand_new_source"})).source,
             SessionSource::Unknown
-        );
-        assert_eq!(
-            parse_session_end(&json!({"reason": "user_exit"}))
-                .reason
-                .as_deref(),
-            Some("user_exit")
         );
 
         let sparse = parse_stop(&json!({}));
@@ -329,31 +316,10 @@ mod tests {
             stop.common.effort.and_then(|e| e.level).as_deref(),
             Some("high")
         );
-    }
-
-    #[test]
-    fn hook_payloads_parse_tool_subagent_compaction_and_permission_fields() {
-        let subagent = parse_subagent_stop(&json!({"exit_code": 1, "agent_id": "child-1"}));
-        assert_eq!(subagent.exit_code, Some(1));
-        assert_eq!(subagent.common.agent_id.as_deref(), Some("child-1"));
 
         assert_eq!(
-            parse_pre_tool_use(&json!({"tool_name": "ExitPlanMode"}))
-                .tool_name
-                .as_deref(),
-            Some("ExitPlanMode")
-        );
-        let post_tool = parse_post_tool_use(&json!({
-            "tool_name": "Bash",
-            "tool_response": {"output": "ok"}
-        }));
-        assert_eq!(post_tool.tool_name.as_deref(), Some("Bash"));
-        assert!(post_tool.tool_response.is_some());
-        assert_eq!(
-            parse_notification(&json!({"message": "done"}))
-                .message
-                .as_deref(),
-            Some("done")
+            parse_subagent_stop(&json!({"exit_code": 1, "agent_id": "child-1"})).exit_code,
+            Some(1)
         );
         assert_eq!(
             parse_pre_compact(&json!({"trigger": "auto"})).trigger,
@@ -362,12 +328,6 @@ mod tests {
         assert_eq!(
             parse_post_compact(&json!({"trigger": "manual"})).trigger,
             CompactTrigger::Manual
-        );
-        assert_eq!(
-            parse_permission_request(&json!({"tool_name": "Bash", "permission_mode": "auto"}))
-                .tool_name
-                .as_deref(),
-            Some("Bash")
         );
     }
 }

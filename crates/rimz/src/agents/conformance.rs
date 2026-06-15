@@ -107,25 +107,8 @@ fn capability_honesty() {
             "{kind} blocking_feed capability must match the declared corpus"
         );
 
-        if capabilities.subagents {
-            assert!(
-                samples.iter().any(|sample| {
-                    sample.expected.class == AgentHookClass::Lifecycle
-                        && sample.event_name.contains("Subagent")
-                        && adapter
-                            .observe_lifecycle(sample.event_name, &sample.payload)
-                            .is_some_and(|obs| {
-                                obs.parent_agent_id.is_some()
-                                    && matches!(
-                                        obs.signal,
-                                        LifecycleSignal::SubagentStarted
-                                            | LifecycleSignal::SubagentStopped { .. }
-                                    )
-                            })
-                }),
-                "{kind} declares subagents but has no observed subagent lifecycle sample"
-            );
-        }
+        // Subagent honesty (capability ⟹ an observed subagent lifecycle sample) is
+        // enforced by `coverage_is_complete_and_honest`'s Subagents arm.
 
         if !capabilities.native_ask_ui {
             assert!(

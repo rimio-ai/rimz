@@ -502,34 +502,28 @@ mod tests {
     }
 
     #[test]
-    fn duplicates_parse_raw_for_the_downstream_dedup() {
-        // All (msg, req) dedup lives in `spending::compute_spending`, so an
-        // incremental suffix parse never has to see earlier lines; the raw
-        // parse keeps both copies.
+    fn parse_is_raw_and_dedup_lives_downstream() {
+        // All (msg, req) dedup and sidechain suppression live in
+        // `spending::compute_spending`, so an incremental suffix parse never has
+        // to see earlier lines; the raw parse keeps every copy.
         let dir = TempDir::new().unwrap();
-        let line = claude_line("2026-01-01", 1.0, "msg-a", "req-a");
-        let file = write_jsonl(dir.path(), "chat.jsonl", &[&line, &line]);
-        let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        assert_eq!(entries.len(), 2, "raw parse; the aggregation pass dedups");
-    }
 
-    #[test]
-    fn sidechain_within_file_replaced_by_main_chain() {
-        let dir = TempDir::new().unwrap();
-        // Sidechain replay with same msg_id appears first (higher cost/tokens).
+        // Byte-identical exact-key duplicate: both kept.
+        let line = claude_line("2026-01-01", 1.0, "msg-a", "req-a");
+        let dup = write_jsonl(dir.path(), "dup.jsonl", &[&line, &line]);
+        assert_eq!(parse_claude_spend(&dup, 0, &no_prices()).entries.len(), 2);
+
+        // Sidechain replay sharing a msg_id but a distinct req_id is a separate
+        // exact-key, so both ride through; cross-file suppression is downstream.
         let file = write_jsonl(
             dir.path(),
             "chat.jsonl",
             &[
                 &sidechain_line("2026-01-01", 5.0, "msg-x", "req-sc"),
-                // Different req_id → separate exact-key, but msg_id matches.
-                // The cross-file suppression handles this; per-file dedup only
-                // fires when the same (msg_id, req_id) pair repeats.
                 &claude_line("2026-01-01", 0.05, "msg-x", "req-main"),
             ],
         );
         let entries = parse_claude_spend(&file, 0, &no_prices()).entries;
-        // Two distinct exact-keys: the suppression happens in compute_spending.
         assert_eq!(entries.len(), 2);
         let sc = entries.iter().find(|e| e.is_sidechain).unwrap();
         let main = entries.iter().find(|e| !e.is_sidechain).unwrap();

@@ -329,7 +329,7 @@ mod tests {
     }
 
     #[test]
-    fn tool_classification_reads_the_tool_name() {
+    fn descriptor_classifies_mutating_editing_and_blocking_tools() {
         let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
         assert!(claude.tool_mutates(&json!({ "tool_name": "Edit" })));
         assert!(claude.tool_mutates(&json!({ "tool_name": "Bash" })));
@@ -338,16 +338,6 @@ mod tests {
         // Command runners mutate but do not edit — the reasoning phase survives.
         assert!(!claude.tool_edits_files(&json!({ "tool_name": "Bash" })));
         assert!(claude.tool_edits_files(&json!({ "tool_name": "Write" })));
-
-        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
-        assert!(codex.tool_mutates(&json!({ "tool_name": "apply_patch" })));
-        assert!(codex.tool_edits_files(&json!({ "tool_name": "apply_patch" })));
-        assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
-    }
-
-    #[test]
-    fn blocking_tool_classification_is_per_descriptor() {
-        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
         assert_eq!(
             claude.blocking_tool_kind(Some("ExitPlanMode")),
             Some(FeedKind::PlanApproval)
@@ -359,6 +349,9 @@ mod tests {
         assert_eq!(claude.blocking_tool_kind(Some("request_user_input")), None);
 
         let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert!(codex.tool_mutates(&json!({ "tool_name": "apply_patch" })));
+        assert!(codex.tool_edits_files(&json!({ "tool_name": "apply_patch" })));
+        assert!(!codex.tool_edits_files(&json!({ "tool_name": "shell" })));
         assert_eq!(
             codex.blocking_tool_kind(Some("request_user_input")),
             Some(FeedKind::Question)
@@ -369,31 +362,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_control_capabilities_are_pinned_per_adapter() {
+    fn capabilities_are_pinned_per_adapter() {
         let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
         assert!(claude.capabilities.remote_control.pane_sessions);
         assert!(claude.capabilities.remote_control.background_sessions);
-
-        let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
-        assert!(codex.capabilities.remote_control.pane_sessions);
-        assert!(codex.capabilities.remote_control.background_sessions);
-
-        let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
-        assert!(!pi.capabilities.remote_control.pane_sessions);
-        assert!(!pi.capabilities.remote_control.background_sessions);
-    }
-
-    #[test]
-    fn rich_context_capability_is_independent_of_rate_limit_windows() {
-        let claude = crate::agents::registry::descriptor_by_kind("claude").unwrap();
         assert!(claude.capabilities.rich_context);
         assert!(claude.capabilities.rate_limit_windows);
 
         let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
+        assert!(codex.capabilities.remote_control.pane_sessions);
+        assert!(codex.capabilities.remote_control.background_sessions);
         assert!(codex.capabilities.rich_context);
         assert!(codex.capabilities.rate_limit_windows);
 
         let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
+        assert!(!pi.capabilities.remote_control.pane_sessions);
+        assert!(!pi.capabilities.remote_control.background_sessions);
         assert!(!pi.capabilities.rich_context);
         assert!(!pi.capabilities.rate_limit_windows);
     }

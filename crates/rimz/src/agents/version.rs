@@ -118,23 +118,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parses_leading_cli_version_token() {
+    fn from_str_parses_leading_token_and_rejects_garbage() {
         assert_eq!(
             "2.1.173 (Claude Code)".parse::<CliVersion>(),
             Ok(CliVersion::new(2, 1, 173))
         );
         assert_eq!("v2.1".parse::<CliVersion>(), Ok(CliVersion::new(2, 1, 0)));
-    }
 
-    #[test]
-    fn orders_numeric_segments() {
-        assert!(CliVersion::new(2, 1, 51) < CliVersion::new(2, 1, 157));
-        assert!(CliVersion::new(2, 1, 157) < CliVersion::new(2, 1, 173));
-        assert!(CliVersion::new(2, 10, 0) > CliVersion::new(2, 9, 9));
-    }
-
-    #[test]
-    fn rejects_garbage_versions() {
         assert_eq!("".parse::<CliVersion>(), Err(VersionParseErr::Empty));
         assert_eq!(
             "2".parse::<CliVersion>(),
@@ -147,25 +137,15 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_probe_stdout_to_the_first_parseable_version() {
-        assert_eq!(
-            normalize_cli_version_output("codex-cli 0.139.0\n").as_deref(),
-            Some("0.139.0")
-        );
-        assert_eq!(
-            normalize_cli_version_output("2.1.173 (Claude Code)").as_deref(),
-            Some("2.1.173")
-        );
-        assert_eq!(
-            normalize_cli_version_output("not a version").as_deref(),
-            Some("not a version")
-        );
-        assert_eq!(normalize_cli_version_output("   "), None);
+    fn orders_numeric_segments() {
+        assert!(CliVersion::new(2, 1, 51) < CliVersion::new(2, 1, 157));
+        assert!(CliVersion::new(2, 1, 157) < CliVersion::new(2, 1, 173));
+        assert!(CliVersion::new(2, 10, 0) > CliVersion::new(2, 9, 9));
     }
 
     #[test]
-    fn selects_version_from_whichever_stream_carries_it() {
-        // Claude and Codex print `--version` to stdout.
+    fn picks_version_from_either_stream_and_falls_back_to_raw() {
+        // Claude and Codex print `--version` to stdout; the first parseable token wins.
         assert_eq!(
             cli_version_from_streams("2.1.173 (Claude Code)\n", "").as_deref(),
             Some("2.1.173")
@@ -179,7 +159,12 @@ mod tests {
             cli_version_from_streams("", "0.78.1\n").as_deref(),
             Some("0.78.1")
         );
-        // No output on either stream is an absent version.
+        // No parseable token falls back to the trimmed raw string; nothing at all
+        // is an absent version.
+        assert_eq!(
+            cli_version_from_streams("not a version", "").as_deref(),
+            Some("not a version")
+        );
         assert_eq!(cli_version_from_streams("", ""), None);
     }
 }

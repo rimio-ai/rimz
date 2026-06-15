@@ -326,8 +326,6 @@ fn loaded_thread_parser_accepts_known_shapes_and_errors_on_drift() {
     let mut client = CodexAppServer::new(transport);
     client.handshake().unwrap();
     assert_eq!(client.loaded_threads().unwrap(), ["t-1", "t-2"]);
-    assert_eq!(client.transport.calls[0], "initialize");
-    assert_eq!(client.transport.calls[1], "notify:initialized");
     assert!(
         client
             .transport

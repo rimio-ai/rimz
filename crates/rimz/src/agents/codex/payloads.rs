@@ -238,64 +238,36 @@ mod tests {
     use crate::agents::hook_types::{CompactTrigger, SessionSource};
 
     #[test]
-    fn session_and_stop_payloads_cover_defaults_drift_and_enrichment_fields() {
+    fn wire_catalog_parses_flatten_depth_enums_and_tolerates_drift() {
+        // The doubly-flattened common fields reach through `common.common`, an
+        // unknown future field is ignored, and the session-source enum maps.
+        let session = parse_session_start(&json!({
+            "session_id": "s1",
+            "model": "gpt-5.5-codex",
+            "source": "startup",
+            "future_openai_field": true,
+        }));
+        assert_eq!(session.common.common.session_id.as_deref(), Some("s1"));
+        assert_eq!(session.common.model.as_deref(), Some("gpt-5.5-codex"));
+        assert_eq!(session.source, SessionSource::Startup);
         assert_eq!(
             parse_session_start(&json!({"source": "compact"})).source,
             SessionSource::Compact
         );
-        let session = parse_session_start(&json!({"model": "gpt-5.5-codex", "source": "startup"}));
-        assert_eq!(session.common.model.as_deref(), Some("gpt-5.5-codex"));
-        assert_eq!(session.source, SessionSource::Startup);
 
-        let future = parse_session_start(&json!({
-            "session_id": "s1",
-            "future_openai_field": true
-        }));
-        assert_eq!(future.common.common.session_id.as_deref(), Some("s1"));
-
+        // `#[serde(default)]` makes a sparse payload deserialize cleanly.
         let sparse = parse_stop(&json!({}));
         assert_eq!(sparse.stop_hook_active, None);
         assert_eq!(sparse.last_assistant_message, None);
         assert_eq!(sparse.common.turn_id, None);
 
-        let stop = parse_stop(&json!({
-            "stop_hook_active": true,
-            "last_assistant_message": "All done!"
-        }));
-        assert_eq!(stop.last_assistant_message.as_deref(), Some("All done!"));
-    }
-
-    #[test]
-    fn hook_payloads_parse_tool_subagent_and_compaction_fields() {
-        let pre_tool = parse_pre_tool_use(&json!({
-            "tool_name": "Bash",
-            "tool_use_id": "tu-1",
-            "tool_input": {"command": "ls"}
-        }));
-        assert_eq!(pre_tool.tool_name.as_deref(), Some("Bash"));
-        assert_eq!(pre_tool.tool_use_id.as_deref(), Some("tu-1"));
-        assert!(pre_tool.tool_input.is_some());
-
-        let permission = parse_permission_request(&json!({
-            "tool_name": "Bash",
-            "tool_input": {"command": "rm -rf /"}
-        }));
-        assert_eq!(permission.tool_name.as_deref(), Some("Bash"));
-        assert!(permission.tool_input.is_some());
-
-        let post_tool = parse_post_tool_use(&json!({
-            "tool_name": "Bash",
-            "tool_response": {"output": "ok"}
-        }));
-        assert_eq!(post_tool.tool_name.as_deref(), Some("Bash"));
-        assert!(post_tool.tool_response.is_some());
-
+        // The richer tool/subagent/compaction catalog entries pick up their
+        // enrichment fields and map the compaction-trigger enum.
         let subagent = parse_subagent_stop(&json!({
             "agent_id": "child-1",
             "agent_type": "code-reviewer",
             "agent_transcript_path": "/tmp/rollout-child.jsonl",
-            "stop_hook_active": false,
-            "last_assistant_message": "Done."
+            "last_assistant_message": "Done.",
         }));
         assert_eq!(subagent.agent_id.as_deref(), Some("child-1"));
         assert_eq!(subagent.agent_type.as_deref(), Some("code-reviewer"));
@@ -304,6 +276,13 @@ mod tests {
             Some("/tmp/rollout-child.jsonl")
         );
         assert_eq!(subagent.last_assistant_message.as_deref(), Some("Done."));
+        assert!(
+            parse_permission_request(
+                &json!({"tool_name": "Bash", "tool_input": {"command": "rm -rf /"}})
+            )
+            .tool_input
+            .is_some()
+        );
         assert_eq!(
             parse_pre_compact(&json!({"trigger": "auto"})).trigger,
             CompactTrigger::Auto

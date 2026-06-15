@@ -70,32 +70,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn enum_deserializers_accept_known_values_and_fall_back_to_unknown() {
+    fn hook_payloads_parse_unknown_values_and_sparse_objects() {
+        // Enums fall back to Unknown for unrecognised upstream values.
         let compact: SessionSource = serde_json::from_str(r#""compact""#).unwrap();
         assert_eq!(compact, SessionSource::Compact);
         let unknown: SessionSource = serde_json::from_str(r#""brandNewSource""#).unwrap();
         assert_eq!(unknown, SessionSource::Unknown);
-
         let auto: CompactTrigger = serde_json::from_str(r#""auto""#).unwrap();
         assert_eq!(auto, CompactTrigger::Auto);
         let unknown: CompactTrigger = serde_json::from_str(r#""future""#).unwrap();
         assert_eq!(unknown, CompactTrigger::Unknown);
         assert_eq!(CompactTrigger::default(), CompactTrigger::Unknown);
-    }
 
-    #[test]
-    fn common_payloads_are_sparse_and_forward_compatible() {
+        // Structs deserialize sparse payloads — including unknown fields — cleanly.
         let c: HookEventCommon = serde_json::from_value(json!({})).unwrap();
         assert!(c.session_id.is_none());
-        assert!(c.cwd.is_none());
-
         let c: HookEventCommon = serde_json::from_value(json!({
             "session_id": "s1",
             "future_field": {"nested": 1}
         }))
         .unwrap();
         assert_eq!(c.session_id.as_deref(), Some("s1"));
-
         let t: BackgroundTask = serde_json::from_value(json!({})).unwrap();
         assert!(t.id.is_none());
         assert!(t.status.is_none());

@@ -104,16 +104,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fallback_model_is_present() {
-        let mut entries = HashMap::new();
-        put_builtins(&mut entries);
-        assert!(entries.contains_key("gpt-5"), "gpt-5 fallback must exist");
-    }
-
-    #[test]
-    fn builtins_overwrite_existing() {
-        let mut entries = HashMap::new();
-        entries.insert(
+    fn builtins_overwrite_prior_entries_and_guarantee_the_codex_fallback() {
+        let mut entries = HashMap::from([(
             "gpt-5".to_owned(),
             Pricing {
                 input: 999.0,
@@ -121,8 +113,10 @@ mod tests {
                 cache_read: 999.0,
                 cache_create: 999.0,
             },
-        );
+        )]);
         put_builtins(&mut entries);
+        // gpt-5 is the Codex parser's mandatory fallback; builtins win over any
+        // stale prior entry. Indexing also asserts the fallback is present.
         assert!((entries["gpt-5"].input - 1.25e-6).abs() < 1e-18);
     }
 }

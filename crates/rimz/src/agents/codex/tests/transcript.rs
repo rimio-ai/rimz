@@ -1,16 +1,15 @@
 use super::*;
 
 #[test]
-fn transcript_tail_populates_context_split_cumulative_totals_and_model() {
-    // Codex reports token usage only in the rollout JSONL; the lifecycle
-    // hooks read its tail to fill the context gauge. Half the model's
-    // 258_400-token window = 50% with the `last_token_usage.total_tokens`
-    // surfacing through to `total_tokens`. The same event carries both the
-    // latest-call split and cumulative session billing totals.
+fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rollout-session.jsonl");
+
+    // Codex reports token usage only in the rollout JSONL. A full `token_count`
+    // event carries the model, the latest-call split, the cumulative billing
+    // totals, and the model context window.
+    let full = dir.path().join("rollout-session.jsonl");
     std::fs::write(
-        &path,
+        &full,
         "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n\
              {\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-5.5\"}}\n\
              {\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":\
@@ -21,7 +20,7 @@ fn transcript_tail_populates_context_split_cumulative_totals_and_model() {
              \"model_context_window\":258400}}}\n",
     )
     .unwrap();
-    let usage = usage_from_transcript(&path);
+    let usage = usage_from_transcript(&full);
     assert_eq!(usage.reported_context_window(), Some(258_400));
     assert_eq!(usage.total_tokens, Some(130_000));
     assert_eq!(usage.model.as_deref(), Some("gpt-5.5"));
@@ -31,6 +30,47 @@ fn transcript_tail_populates_context_split_cumulative_totals_and_model() {
     assert_eq!(usage.cumulative_input_tokens, Some(1000));
     assert_eq!(usage.cumulative_output_tokens, Some(200));
     assert_eq!(usage.cumulative_cached_tokens, 400);
+
+    // A brand-new session (rollout opened, no `token_count` yet) reads as an
+    // explicit zero with the provider-default window, so the gauge draws an
+    // empty bar rather than vanishing.
+    let fresh = dir.path().join("fresh.jsonl");
+    std::fs::write(
+        &fresh,
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&fresh);
+    assert_eq!(usage.context_window, Some(258_000));
+    assert_eq!(usage.reported_context_window(), None);
+    assert_eq!(usage.total_tokens, Some(0));
+    assert_eq!(usage.last_input_tokens, Some(0));
+    assert_eq!(usage.last_cached_input_tokens, Some(0));
+    assert_eq!(usage.last_output_tokens, Some(0));
+
+    // An unreadable rollout is unknown, not zero — the gauge stays hidden.
+    let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
+    assert_eq!(usage.context_window, None);
+    assert_eq!(usage.total_tokens, None);
+
+    // An older `last_token_usage` carrying only input + total leaves the
+    // cached/output sides and the cumulative totals unknown rather than zero,
+    // so no spurious cost estimate is produced.
+    let older = dir.path().join("older.jsonl");
+    std::fs::write(
+        &older,
+        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
+             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
+             \"model_context_window\":100000}}}\n",
+    )
+    .unwrap();
+    let usage = usage_from_transcript(&older);
+    assert_eq!(usage.last_input_tokens, Some(500));
+    assert_eq!(usage.last_cached_input_tokens, None);
+    assert_eq!(usage.last_output_tokens, None);
+    assert_eq!(usage.cumulative_input_tokens, None);
+    assert_eq!(usage.cumulative_output_tokens, None);
+    assert_eq!(usage.cumulative_cached_tokens, 0);
 }
 
 #[test]
@@ -179,12 +219,10 @@ fn turn_error_detector_self_clears_only_on_newer_live_clocked_records() {
 }
 
 #[test]
-fn turn_complete_detector_marks_clean_review_completion() {
-    // A Codex `/review` runs in review mode and closes on a clean
-    // `task_complete` that fires no `Stop` hook — the success twin of the
-    // dead-turn detector. The tail mirrors a real review session: task start,
-    // the `/review` prompt, the review exit, the final agent message, then a
-    // clean `task_complete`.
+fn turn_complete_detector_marks_clean_completion_but_skips_errored_and_superseded() {
+    // A Codex `/review` closes on a clean `task_complete` that fires no `Stop`
+    // hook — the success twin of the dead-turn detector. The tail mirrors a real
+    // review session ending on a clean `task_complete`.
     let task_started = json!({"timestamp":"2026-06-14T05:51:39.805Z","type":"event_msg","payload":{"type":"task_started"}});
     let user_message = json!({"timestamp":"2026-06-14T05:51:40.861Z","type":"event_msg","payload":{"type":"user_message","message":"/review"}});
     let exited = json!({"timestamp":"2026-06-14T05:59:49.267Z","type":"event_msg","payload":{"type":"exited_review_mode"}});
@@ -201,25 +239,17 @@ fn turn_complete_detector_marks_clean_review_completion() {
         ),
         "a clean task_complete at the tail marks the turn done"
     );
-}
 
-#[test]
-fn turn_complete_detector_skips_errored_and_superseded_turns() {
-    // An errored `task_complete` is a death, owned by `detect_turn_error`.
+    // An errored `task_complete` is a death owned by `detect_turn_error`, and an
+    // empty-or-absent `error` (`null`/`false`/`""`/`{}`) is too ambiguous to
+    // claim success over — only a record with no `error` field at all settles.
     let errored = json!({
         "timestamp": "2026-06-14T05:59:49.268Z",
         "type": "event_msg",
         "payload": { "type": "task_complete", "error": { "message": "API Error" } }
     })
     .to_string();
-    assert!(
-        detect_turn_complete(&errored).is_none(),
-        "an errored task_complete is a dead turn, not a completion"
-    );
-
-    // An empty-or-absent-error `task_complete` is ambiguous: the death detector
-    // treats it as benign, so the completion detector must not claim success
-    // over it either. Only a record with no `error` field at all settles.
+    assert!(detect_turn_complete(&errored).is_none());
     for empty_error in [json!(false), serde_json::Value::Null, json!(""), json!({})] {
         let ambiguous = json!({
             "timestamp": "2026-06-14T05:59:49.268Z",
@@ -251,37 +281,11 @@ fn turn_complete_detector_skips_errored_and_superseded_turns() {
 }
 
 #[test]
-fn absent_or_empty_transcripts_distinguish_zero_from_unknown() {
-    // A brand-new session has a rollout with no `token_count` event yet.
-    // It must read as 0% (empty gauge), not `None` (no gauge), so a
-    // just-launched idle Codex shows an empty context bar — matching the
-    // Claude adapter's fresh-session behaviour.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rollout-session.jsonl");
-    std::fs::write(
-        &path,
-        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"sess-1\"}}\n",
-    )
-    .unwrap();
-    let usage = usage_from_transcript(&path);
-    assert_eq!(usage.context_window, Some(258_000));
-    assert_eq!(usage.reported_context_window(), None);
-    assert_eq!(usage.total_tokens, Some(0));
-    // The per-call split reads an explicit zero too, mirroring the totals.
-    assert_eq!(usage.last_input_tokens, Some(0));
-    assert_eq!(usage.last_cached_input_tokens, Some(0));
-    assert_eq!(usage.last_output_tokens, Some(0));
-
-    // No readable rollout means unknown, not zero — the gauge stays
-    // hidden rather than asserting a false 0%.
-    let usage = usage_from_transcript(Path::new("/nonexistent/path/rollout.jsonl"));
-    assert_eq!(usage.context_window, None);
-    assert_eq!(usage.total_tokens, None);
-}
-
-#[test]
-fn transcript_enrichment_maps_codex_split_to_rich_usage() {
-    let usage = TranscriptUsage {
+fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals() {
+    // The latest-call split maps onto `current_usage` (cached slice removed from
+    // the input numerator), with no baked percentage — the gauge derives it from
+    // `current_usage` over the window downstream. No cumulative totals → no cost.
+    let split = TranscriptUsage {
         context_window: Some(10_000),
         context_window_reported: true,
         total_tokens: Some(4_200),
@@ -293,12 +297,10 @@ fn transcript_enrichment_maps_codex_split_to_rich_usage() {
         cumulative_cached_tokens: 0,
         cumulative_output_tokens: None,
     };
-    let (tokens, cost, model_id) = transcript_enrichment(&usage, None);
+    let (tokens, cost, model_id) = transcript_enrichment(&split, None);
     let tokens = tokens.expect("tokens are mapped");
     let current = tokens.current_usage.expect("current usage is mapped");
     assert_eq!(tokens.context_window_size, Some(10_000));
-    // No baked percentage: the gauge derives it from `current_usage` over the
-    // window downstream, so the rich blob leaves the percentage unset.
     assert_eq!(tokens.used_percentage, None);
     assert_eq!(tokens.remaining_percentage, None);
     assert_eq!(current.input_tokens, Some(200));
@@ -309,20 +311,21 @@ fn transcript_enrichment_maps_codex_split_to_rich_usage() {
         current.input_tokens.unwrap()
             + current.cache_read_input_tokens.unwrap()
             + current.cache_creation_input_tokens.unwrap_or(0),
-        usage.last_input_tokens.unwrap(),
+        split.last_input_tokens.unwrap(),
         "rich context numerator matches the row-level fallback"
     );
     assert_eq!(cost, None);
     assert_eq!(model_id.as_deref(), Some("gpt-5"));
-}
 
-#[test]
-fn transcript_enrichment_prices_cumulative_totals_from_usage_or_model_hint() {
-    let usage = TranscriptUsage {
+    // Cumulative totals price against the known model — taken from the usage
+    // record, or from the prior model hint when the tail carries no turn_context.
+    let price = PriceBook::embedded().price("gpt-5").unwrap();
+    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
+    let cumulative = |model: Option<&str>| TranscriptUsage {
         context_window: None,
         context_window_reported: false,
         total_tokens: None,
-        model: Some("gpt-5".to_owned()),
+        model: model.map(ToOwned::to_owned),
         last_input_tokens: None,
         last_cached_input_tokens: None,
         last_output_tokens: None,
@@ -330,34 +333,17 @@ fn transcript_enrichment_prices_cumulative_totals_from_usage_or_model_hint() {
         cumulative_cached_tokens: 400,
         cumulative_output_tokens: Some(200),
     };
-    let (_tokens, cost, _model_id) = transcript_enrichment(&usage, None);
-    let cost = cost
-        .and_then(|cost| cost.total_cost_usd)
-        .expect("known model prices cumulative totals");
-    let price = PriceBook::embedded().price("gpt-5").unwrap();
-    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
-    assert!((cost - expected).abs() < f64::EPSILON);
-
-    let usage = TranscriptUsage {
-        context_window: None,
-        context_window_reported: false,
-        total_tokens: None,
-        model: None,
-        last_input_tokens: None,
-        last_cached_input_tokens: None,
-        last_output_tokens: None,
-        cumulative_input_tokens: Some(1_000),
-        cumulative_cached_tokens: 400,
-        cumulative_output_tokens: Some(200),
-    };
-    let (_tokens, cost, model_id) = transcript_enrichment(&usage, Some("gpt-5"));
-    let cost = cost
-        .and_then(|cost| cost.total_cost_usd)
-        .expect("prior model hint prices a tail without turn_context");
-    let price = PriceBook::embedded().price("gpt-5").unwrap();
-    let expected = 600.0 * price.input + 400.0 * price.cache_read + 200.0 * price.output;
-    assert!((cost - expected).abs() < f64::EPSILON);
-    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+    for (usage, hint, label) in [
+        (cumulative(Some("gpt-5")), None, "known model from usage"),
+        (cumulative(None), Some("gpt-5"), "prior model hint"),
+    ] {
+        let (_tokens, cost, model_id) = transcript_enrichment(&usage, hint);
+        let cost = cost
+            .and_then(|cost| cost.total_cost_usd)
+            .unwrap_or_else(|| panic!("{label} prices cumulative totals"));
+        assert!((cost - expected).abs() < f64::EPSILON, "{label}");
+        assert_eq!(model_id.as_deref(), Some("gpt-5"), "{label}");
+    }
 }
 
 #[test]
@@ -420,31 +406,6 @@ fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_re
             .and_then(|tokens| tokens.context_window_size),
         Some(100)
     );
-}
-
-#[test]
-fn older_token_count_shapes_leave_missing_fields_unknown() {
-    // An older rollout whose `last_token_usage` reports only `input_tokens`
-    // and `total_tokens` keeps the cached/output sides unknown rather than
-    // asserting a false zero — the card then renders the input it does know.
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("rollout-session.jsonl");
-    std::fs::write(
-        &path,
-        "{\"type\":\"event_msg\",\"payload\":{\"type\":\"token_count\",\"info\":{\
-             \"last_token_usage\":{\"input_tokens\":500,\"total_tokens\":600},\
-             \"model_context_window\":100000}}}\n",
-    )
-    .unwrap();
-    let usage = usage_from_transcript(&path);
-    assert_eq!(usage.last_input_tokens, Some(500));
-    assert_eq!(usage.last_cached_input_tokens, None);
-    assert_eq!(usage.last_output_tokens, None);
-    // Older rollout files that only have last_token_usage must not produce
-    // a spurious cost estimate.
-    assert_eq!(usage.cumulative_input_tokens, None);
-    assert_eq!(usage.cumulative_output_tokens, None);
-    assert_eq!(usage.cumulative_cached_tokens, 0);
 }
 
 #[test]

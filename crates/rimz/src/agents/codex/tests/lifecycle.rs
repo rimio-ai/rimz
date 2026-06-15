@@ -1,59 +1,116 @@
 use super::*;
 
 #[test]
-fn session_sources_map_to_lifecycle_signals() {
-    for (source, expected) in [
-        ("compact", LifecycleSignal::CompactionEnded { auto: None }),
-        ("startup", LifecycleSignal::Registered),
-        ("resume", LifecycleSignal::Registered),
-        ("clear", LifecycleSignal::Registered),
-        ("future", LifecycleSignal::Registered),
-    ] {
-        let obs = CodexAdapter
-            .observe_lifecycle(
-                "SessionStart",
-                &json!({ "session_id": "sess-1", "source": source }),
-            )
-            .unwrap();
-        assert_eq!(obs.agent_id.as_deref(), Some("sess-1"));
-        assert_eq!(obs.signal, expected, "{source}");
-        assert_eq!(obs.task, None);
-    }
-}
-
-#[test]
-fn compaction_pair_maps_trigger_to_lifecycle_signals() {
-    let pre = CodexAdapter
-        .observe_lifecycle(
+fn observe_lifecycle_maps_each_event_to_its_signal() {
+    // Each root event payload maps to its lifecycle signal; a payload that is
+    // observed-but-silent (a non-mutating tool) yields no observation at all.
+    // Identity and subagent boundaries are covered separately below.
+    use LifecycleSignal::*;
+    let cases: &[(&str, serde_json::Value, Option<LifecycleSignal>)] = &[
+        (
+            "SessionStart",
+            json!({"session_id":"s","source":"compact"}),
+            Some(CompactionEnded { auto: None }),
+        ),
+        (
+            "SessionStart",
+            json!({"session_id":"s","source":"startup"}),
+            Some(Registered),
+        ),
+        (
+            "SessionStart",
+            json!({"session_id":"s","source":"resume"}),
+            Some(Registered),
+        ),
+        (
+            "SessionStart",
+            json!({"session_id":"s","source":"clear"}),
+            Some(Registered),
+        ),
+        (
+            "SessionStart",
+            json!({"session_id":"s","source":"future"}),
+            Some(Registered),
+        ),
+        (
             "PreCompact",
-            &json!({ "session_id": "sess-1", "trigger": "manual" }),
+            json!({"session_id":"s","trigger":"manual"}),
+            Some(Compacting),
+        ),
+        (
+            "PostCompact",
+            json!({"session_id":"s","trigger":"auto"}),
+            Some(CompactionEnded { auto: Some(true) }),
+        ),
+        (
+            "PostCompact",
+            json!({"session_id":"s","trigger":"manual"}),
+            Some(CompactionEnded { auto: Some(false) }),
+        ),
+        (
+            "PostCompact",
+            json!({"session_id":"s","trigger":"future"}),
+            Some(CompactionEnded { auto: None }),
+        ),
+        (
+            "PostCompact",
+            json!({"session_id":"s"}),
+            Some(CompactionEnded { auto: None }),
+        ),
+        (
+            "PreToolUse",
+            json!({"session_id":"s","tool_name":"shell"}),
+            Some(ToolUsed {
+                mutates: false,
+                edits: false,
+            }),
+        ),
+        (
+            "PostToolUse",
+            json!({"session_id":"s","tool_name":"shell"}),
+            Some(ToolUsed {
+                mutates: true,
+                edits: false,
+            }),
+        ),
+        (
+            "PostToolUse",
+            json!({"session_id":"s","tool_name":"read"}),
+            None,
+        ),
+        (
+            "Stop",
+            json!({"session_id":"s"}),
+            Some(TurnEnded {
+                errored: false,
+                parked_on_background: false,
+            }),
+        ),
+        (
+            "Stop",
+            json!({"session_id":"s","status":"failed"}),
+            Some(TurnEnded {
+                errored: true,
+                parked_on_background: false,
+            }),
+        ),
+    ];
+    for (event, payload, expected) in cases {
+        let signal = CodexAdapter
+            .observe_lifecycle(event, payload)
+            .map(|obs| obs.signal);
+        assert_eq!(&signal, expected, "{event} {payload}");
+    }
+
+    // A SessionStart carries the session as the agent identity and no task.
+    let session = CodexAdapter
+        .observe_lifecycle(
+            "SessionStart",
+            &json!({"session_id":"sess-1","source":"startup"}),
         )
         .unwrap();
-    assert_eq!(pre.signal, LifecycleSignal::Compacting);
-
-    for (payload, expected) in [
-        (
-            json!({ "session_id": "sess-1", "trigger": "auto" }),
-            LifecycleSignal::CompactionEnded { auto: Some(true) },
-        ),
-        (
-            json!({ "session_id": "sess-1", "trigger": "manual" }),
-            LifecycleSignal::CompactionEnded { auto: Some(false) },
-        ),
-        (
-            json!({ "session_id": "sess-1", "trigger": "future" }),
-            LifecycleSignal::CompactionEnded { auto: None },
-        ),
-        (
-            json!({ "session_id": "sess-1" }),
-            LifecycleSignal::CompactionEnded { auto: None },
-        ),
-    ] {
-        let obs = CodexAdapter
-            .observe_lifecycle("PostCompact", &payload)
-            .unwrap();
-        assert_eq!(obs.signal, expected, "{payload}");
-    }
+    assert_eq!(session.agent_id.as_deref(), Some("sess-1"));
+    assert_eq!(session.task, None);
 }
 
 #[test]
@@ -141,65 +198,6 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
         .unwrap();
     assert_eq!(root.agent_id.as_deref(), Some("sess-parent"));
     assert_eq!(root.parent_agent_id, None);
-}
-
-#[test]
-fn tool_and_stop_events_map_to_progress_signals() {
-    let pre = CodexAdapter
-        .observe_lifecycle(
-            "PreToolUse",
-            &json!({ "session_id": "sess-1", "tool_name": "shell" }),
-        )
-        .unwrap();
-    assert_eq!(
-        pre.signal,
-        LifecycleSignal::ToolUsed {
-            mutates: false,
-            edits: false,
-        }
-    );
-
-    let mutating = CodexAdapter
-        .observe_lifecycle(
-            "PostToolUse",
-            &json!({ "session_id": "sess-1", "tool_name": "shell" }),
-        )
-        .unwrap();
-    assert_eq!(
-        mutating.signal,
-        LifecycleSignal::ToolUsed {
-            mutates: true,
-            edits: false,
-        }
-    );
-    assert!(
-        CodexAdapter
-            .observe_lifecycle(
-                "PostToolUse",
-                &json!({ "session_id": "sess-1", "tool_name": "read" }),
-            )
-            .is_none()
-    );
-
-    for (payload, expected) in [
-        (
-            json!({ "session_id": "sess-1" }),
-            LifecycleSignal::TurnEnded {
-                errored: false,
-                parked_on_background: false,
-            },
-        ),
-        (
-            json!({ "session_id": "sess-1", "status": "failed" }),
-            LifecycleSignal::TurnEnded {
-                errored: true,
-                parked_on_background: false,
-            },
-        ),
-    ] {
-        let obs = CodexAdapter.observe_lifecycle("Stop", &payload).unwrap();
-        assert_eq!(obs.signal, expected, "{payload}");
-    }
 }
 
 #[test]

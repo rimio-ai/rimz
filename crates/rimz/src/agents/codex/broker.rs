@@ -299,33 +299,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn render_banner_includes_session_socket_and_status() {
-        let banner = render_banner(&BrokerInfo {
+    fn render_banner_clears_screen_then_shows_session_socket_and_status() {
+        let with_session = render_banner(&BrokerInfo {
             session: Some("query-engine"),
             socket_path: Path::new("/run/user/1000/rimz/ws/codex-app-server.sock"),
         });
-        assert!(banner.contains("query-engine"), "{banner:?}");
-        assert!(banner.contains("codex-app-server.sock"), "{banner:?}");
-        assert!(banner.contains("ready"), "{banner:?}");
-    }
+        assert!(
+            with_session.starts_with("\x1b[2J\x1b[H"),
+            "{with_session:?}"
+        );
+        assert!(with_session.contains("query-engine"), "{with_session:?}");
+        assert!(
+            with_session.contains("codex-app-server.sock"),
+            "{with_session:?}"
+        );
+        assert!(with_session.contains("ready"), "{with_session:?}");
 
-    #[test]
-    fn render_banner_omits_session_line_when_absent() {
-        let banner = render_banner(&BrokerInfo {
+        let no_session = render_banner(&BrokerInfo {
             session: None,
             socket_path: Path::new("/run/x/codex-app-server.sock"),
         });
-        assert!(!banner.contains("session:"), "{banner:?}");
-        assert!(banner.contains("codex-app-server.sock"), "{banner:?}");
-        assert!(banner.contains("ready"), "{banner:?}");
-    }
-
-    #[test]
-    fn render_banner_clears_the_screen_first() {
-        let banner = render_banner(&BrokerInfo {
-            session: None,
-            socket_path: Path::new("/run/x/sock"),
-        });
-        assert!(banner.starts_with("\x1b[2J\x1b[H"), "{banner:?}");
+        assert!(!no_session.contains("session:"), "{no_session:?}");
+        assert!(
+            no_session.contains("codex-app-server.sock"),
+            "{no_session:?}"
+        );
     }
 }

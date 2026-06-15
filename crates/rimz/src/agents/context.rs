@@ -438,8 +438,10 @@ mod tests {
     }
 
     #[test]
-    fn used_tokens_sums_the_current_message_window_composition() {
-        // No breakdown yet (fresh session) → no occupancy.
+    fn current_usage_token_accounting() {
+        // used_tokens sums the current message's window composition, excluding
+        // output (it joins the window only next turn), and is None before the
+        // first API call.
         assert_eq!(AgentTokenUsage::default().used_tokens(), None);
         let tokens = AgentTokenUsage {
             context_window_size: Some(1_000_000),
@@ -452,22 +454,11 @@ mod tests {
             }),
             ..AgentTokenUsage::default()
         };
-        // Output is excluded — it joins the window next turn, not this one.
         assert_eq!(tokens.used_tokens(), Some(305_000));
-    }
 
-    #[test]
-    fn current_usage_is_zero_when_every_count_is_absent_or_zero() {
+        // is_zero holds when every count is absent or explicitly zero, and fails
+        // the moment one is non-zero.
         assert!(AgentCurrentUsage::default().is_zero());
-        assert!(
-            AgentCurrentUsage {
-                input_tokens: Some(0),
-                output_tokens: Some(0),
-                cache_creation_input_tokens: Some(0),
-                cache_read_input_tokens: Some(0),
-            }
-            .is_zero()
-        );
         assert!(
             AgentCurrentUsage {
                 input_tokens: Some(0),

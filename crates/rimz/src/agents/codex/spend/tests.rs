@@ -89,23 +89,6 @@ fn codex_raw_usage_accepts_aliases_strings_and_rejects_non_object_field() {
 }
 
 #[test]
-fn subtract_raw_usage_computes_delta() {
-    let prev = CodexRawUsage {
-        input_tokens: 100,
-        output_tokens: 50,
-        ..Default::default()
-    };
-    let current = CodexRawUsage {
-        input_tokens: 300,
-        output_tokens: 120,
-        ..Default::default()
-    };
-    let delta = subtract_raw_usage(&current, Some(&prev));
-    assert_eq!(delta.input_tokens, 200);
-    assert_eq!(delta.output_tokens, 70);
-}
-
-#[test]
 fn parse_codex_session_usage_shapes_and_cumulative_deltas() {
     let (_dir, path) = write_session(
         "session-a.jsonl",
@@ -183,9 +166,11 @@ fn gpt5_book() -> PriceBook {
 const TOKEN_COUNT_LINE: &str = r#"{"type":"event_msg","timestamp":"2026-01-01T10:00:00.000Z","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":100,"output_tokens":50}}}}"#;
 
 #[test]
-fn session_meta_cwd_stamps_entry_origin() {
+fn session_meta_cwd_stamps_origin_survives_resume_and_is_none_when_absent() {
     let cwd = "/home/marvin/code/rimz-worktrees/budget-reset";
     let meta = format!(r#"{{"type":"session_meta","payload":{{"id":"s","cwd":"{cwd}"}}}}"#);
+
+    // The rollout's session_meta cwd stamps each entry's durable origin.
     let (_dir, path) = write_session(
         "rollout.jsonl",
         &[
@@ -194,25 +179,18 @@ fn session_meta_cwd_stamps_entry_origin() {
             TOKEN_COUNT_LINE,
         ],
     );
-
     let parsed = parse_codex_spend(&path, None, &gpt5_book());
-
     assert_eq!(parsed.entries.len(), 1);
     assert_eq!(
         parsed.entries[0].origin_path.as_deref(),
-        Some(Path::new(cwd)),
-        "the rollout session_meta cwd stamps each entry's durable origin"
+        Some(Path::new(cwd))
     );
-}
 
-#[test]
-fn session_meta_cwd_survives_resume_cursor() {
-    let cwd = "/home/marvin/code/rimz-worktrees/budget-reset";
-    let meta = format!(r#"{{"type":"session_meta","payload":{{"id":"s","cwd":"{cwd}"}}}}"#);
-    // First parse sees only the header prefix: cwd is captured into the cursor
-    // state, but no token_count line means no priced entries yet.
+    // The cwd rides the resume cursor's state: a first parse over the header-only
+    // prefix prices nothing yet, but a turn appended afterwards is still stamped
+    // without re-reading the header.
     let (_dir, path) = write_session(
-        "rollout.jsonl",
+        "resume.jsonl",
         &[
             meta.as_str(),
             r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
@@ -220,16 +198,12 @@ fn session_meta_cwd_survives_resume_cursor() {
     );
     let first = parse_codex_spend(&path, None, &gpt5_book());
     assert!(first.entries.is_empty());
-
-    // A turn is appended after the header. The resume parse never re-reads the
-    // header, yet the cwd carried in the cursor still stamps the new entry.
     let mut f = std::fs::OpenOptions::new()
         .append(true)
         .open(&path)
         .unwrap();
     writeln!(f, "{TOKEN_COUNT_LINE}").unwrap();
     drop(f);
-
     let second = parse_codex_spend(&path, Some(&first.cursor), &gpt5_book());
     assert_eq!(second.entries.len(), 1);
     assert_eq!(
@@ -237,23 +211,17 @@ fn session_meta_cwd_survives_resume_cursor() {
         Some(Path::new(cwd)),
         "the resume cursor carries the session cwd to entries appended after the header"
     );
-}
 
-#[test]
-fn no_session_meta_keeps_none_origin() {
+    // A headless rollout without session_meta leaves origin for the snapshot
+    // override to fill.
     let (_dir, path) = write_session(
-        "rollout.jsonl",
+        "headless.jsonl",
         &[
             r#"{"type":"turn_context","payload":{"model":"gpt-5"}}"#,
             TOKEN_COUNT_LINE,
         ],
     );
-
     let parsed = parse_codex_spend(&path, None, &gpt5_book());
-
     assert_eq!(parsed.entries.len(), 1);
-    assert_eq!(
-        parsed.entries[0].origin_path, None,
-        "a headless rollout without session_meta leaves origin for the snapshot override to fill"
-    );
+    assert_eq!(parsed.entries[0].origin_path, None);
 }

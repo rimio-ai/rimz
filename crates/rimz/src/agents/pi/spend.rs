@@ -290,40 +290,20 @@ mod tests {
     }
 
     #[test]
-    fn skips_user_role_lines() {
+    fn skips_non_assistant_non_message_and_nonpositive_cost_lines() {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("session.jsonl");
         let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"user","usage":{{"cost":{{"total":1.0}}}}}}}}"#
-        )
-        .unwrap();
-
-        assert!(parse_pi_spend(&path, None).entries.is_empty());
-    }
-
-    #[test]
-    fn skips_non_message_type() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("session.jsonl");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(
-            f,
-            r#"{{"type":"tool_call","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":1.0}}}}}}}}"#
-        )
-        .unwrap();
-
-        assert!(parse_pi_spend(&path, None).entries.is_empty());
-    }
-
-    #[test]
-    fn skips_zero_and_negative_costs() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("session.jsonl");
-        let mut f = std::fs::File::create(&path).unwrap();
-        writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":0.0}}}}}}}}"#).unwrap();
-        writeln!(f, r#"{{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{{"role":"assistant","usage":{{"cost":{{"total":-1.0}}}}}}}}"#).unwrap();
+        // A non-assistant role, a non-`message` type, and zero/negative costs
+        // each disqualify a usage line — none reach the entry list.
+        for line in [
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"user","usage":{"cost":{"total":1.0}}}}"#,
+            r#"{"type":"tool_call","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":1.0}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":0.0}}}}"#,
+            r#"{"type":"message","timestamp":"2026-06-02T11:00:00.000Z","message":{"role":"assistant","usage":{"cost":{"total":-1.0}}}}"#,
+        ] {
+            writeln!(f, "{line}").unwrap();
+        }
 
         assert!(parse_pi_spend(&path, None).entries.is_empty());
     }

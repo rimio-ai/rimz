@@ -152,16 +152,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exhaustion_uses_remaining_or_used_against_limit() {
+    fn extra_credits_exhaustion_and_remaining_percentage() {
+        // Exhausted when disabled, when the remaining balance is zero, or when
+        // used has reached the limit; unknown values count as still usable.
         assert!(ExtraCredits::Disabled.is_exhausted());
         assert!(ExtraCredits::known(None, Some(0.0), None).is_exhausted());
         assert!(ExtraCredits::known(Some(50.0), None, Some(50.0)).is_exhausted());
         assert!(!ExtraCredits::known(Some(12.0), None, Some(50.0)).is_exhausted());
         assert!(ExtraCredits::known(None, None, None).is_usable());
-    }
 
-    #[test]
-    fn remaining_percentage_accepts_used_or_remaining_shapes() {
+        // Remaining percentage works from either a used or a remaining figure,
+        // and is None when neither pins the balance against the limit.
         assert_eq!(
             ExtraCredits::known(Some(12.0), None, Some(50.0)).remaining_percentage(),
             Some(76)

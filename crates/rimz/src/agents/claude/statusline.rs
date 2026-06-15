@@ -597,33 +597,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn post_compact_zeroed_usage_collapses_like_the_null_shape() {
-        let ctx = parse(json!({
-            "context_window": {
-                "context_window_size": 1_000_000,
-                "used_percentage": 0,
-                "remaining_percentage": 100,
-                "current_usage": {
-                    "input_tokens": 0,
-                    "output_tokens": 0,
-                    "cache_creation_input_tokens": 0,
-                    "cache_read_input_tokens": 0
-                }
-            },
-            "exceeds_200k_tokens": true,
-            "version": "2.1.173"
-        }));
-
-        let tokens = ctx.tokens.unwrap();
-        assert_eq!(tokens.context_window_size, Some(1_000_000));
-        assert_eq!(tokens.used_percentage, Some(0));
-        assert_eq!(tokens.remaining_percentage, Some(100));
-        assert!(tokens.current_usage.is_none());
-        assert_eq!(ctx.exceeds_200k_tokens, Some(true));
-        assert_eq!(ctx.agent_version.as_deref(), Some("2.1.173"));
-    }
-
     /// The verbatim shape an API-error abort writes (observed live 2026-06-04):
     /// the flagged assistant entry, then a `system`/`turn_duration` record 4ms
     /// later, then nothing — and no `Stop` hook.

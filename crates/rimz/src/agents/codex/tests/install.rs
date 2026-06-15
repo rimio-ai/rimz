@@ -165,21 +165,30 @@ command = "echo user"
 }
 
 #[test]
-fn uninstall_removes_legacy_block_and_preserves_user_keys() {
+fn uninstall_removes_legacy_block_and_rimz_commands_but_preserves_user_config() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+
+    // A path that was never written is a no-op, not an error.
+    let missing = dir.path().join("missing-config.toml");
+    let missing_report = uninstall_from(&missing).unwrap();
+    assert!(!missing_report.existed);
+    assert!(missing_report.removed_events.is_empty());
+
+    // The legacy `[hooks.rimz]` block is removed and its declared events
+    // reported, while user keys and a user `[hooks.*]` entry survive.
+    let legacy = dir.path().join("legacy.toml");
     std::fs::write(
-            &path,
+            &legacy,
             "model = \"o4-mini\"\n[hooks.user_custom]\ncommand = [\"echo\", \"hi\"]\n[hooks.rimz]\nevents = [\"SessionStart\", \"PermissionRequest\"]\nmanaged_by = \"rimz\"\n",
         )
         .unwrap();
-    let report = uninstall_from(&path).unwrap();
+    let report = uninstall_from(&legacy).unwrap();
     assert!(report.existed);
     assert_eq!(
         report.removed_events,
         vec!["PermissionRequest".to_owned(), "SessionStart".to_owned()]
     );
-    let parsed: toml::Table = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let parsed: toml::Table = toml::from_str(&std::fs::read_to_string(&legacy).unwrap()).unwrap();
     assert_eq!(
         parsed.get("model").and_then(toml::Value::as_str),
         Some("o4-mini")
@@ -187,16 +196,9 @@ fn uninstall_removes_legacy_block_and_preserves_user_keys() {
     let hooks = parsed.get("hooks").and_then(toml::Value::as_table).unwrap();
     assert!(hooks.contains_key("user_custom"));
     assert!(!hooks.contains_key(RIMZ_BLOCK));
-}
 
-#[test]
-fn uninstall_removes_rimz_hook_commands_and_preserves_user_hooks() {
-    let dir = tempfile::tempdir().unwrap();
-    let missing = dir.path().join("missing-config.toml");
-    let missing_report = uninstall_from(&missing).unwrap();
-    assert!(!missing_report.existed);
-    assert!(missing_report.removed_events.is_empty());
-
+    // A real install plus a user Stop hook: uninstall strips every rimz command
+    // and leaves the user hook intact.
     let path = dir.path().join("config.toml");
     install_into(&path).unwrap();
     std::fs::write(
@@ -207,7 +209,6 @@ fn uninstall_removes_rimz_hook_commands_and_preserves_user_hooks() {
             ),
         )
         .unwrap();
-
     let report = uninstall_from(&path).unwrap();
     assert!(report.existed);
     assert!(report.removed_events.contains(&"SessionStart".to_owned()));
@@ -217,7 +218,6 @@ fn uninstall_removes_rimz_hook_commands_and_preserves_user_hooks() {
             .contains(&"PermissionRequest".to_owned())
     );
     assert!(!hooks_installed_at(&path));
-
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("echo user stop"));
     assert!(!text.contains("rimz hooks feed --source codex"));

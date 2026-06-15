@@ -46,7 +46,7 @@ mod wire;
 
 use parse::{CodexSpendState, parse_codex_session};
 #[cfg(test)]
-use parse::{codex_line_kind, millis_to_rfc3339, subtract_raw_usage};
+use parse::{codex_line_kind, millis_to_rfc3339};
 #[cfg(test)]
 use wire::{CodexLogEntry, CodexRawUsage};
 

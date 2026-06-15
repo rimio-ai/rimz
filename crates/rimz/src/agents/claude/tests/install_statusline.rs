@@ -49,10 +49,11 @@ fn install_wraps_and_restores_existing_subagent_status_line() {
 }
 
 #[test]
-fn install_preserves_status_line_sibling_keys() {
-    // A real ccstatusline config carries rendering options alongside the
-    // command. They must ride the managed object so the wrap stays visually
-    // faithful while installed, and the whole original still restores.
+fn install_wraps_and_restores_user_status_line() {
+    // A command-object statusline (a real ccstatusline config) carries rendering
+    // options alongside the command. The siblings ride the managed object so the
+    // wrap stays visually faithful while installed, and the whole original — read
+    // back as the pass-through target — restores verbatim on uninstall.
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("settings.json");
     std::fs::write(
@@ -63,21 +64,36 @@ fn install_preserves_status_line_sibling_keys() {
     install_into(&path).unwrap();
     let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
-    // Sibling rendering keys are carried onto the managed object.
     assert_eq!(parsed["statusLine"]["padding"], 0);
     assert_eq!(parsed["statusLine"]["refreshInterval"], 10);
-    // The whole original is still captured for restoration.
     assert_eq!(parsed["statusLine"]["_rimz_wrapped"]["refreshInterval"], 10);
-
+    let root = read_existing_json(&path).unwrap();
+    assert_eq!(
+        wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
+        Some("npx -y ccstatusline@latest")
+    );
     uninstall_from(&path).unwrap();
     let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(
         restored["statusLine"]["command"],
         "npx -y ccstatusline@latest"
     );
-    assert_eq!(restored["statusLine"]["padding"], 0);
     assert_eq!(restored["statusLine"]["refreshInterval"], 10);
     assert!(restored["statusLine"].get("_rimz_managed").is_none());
+
+    // A bare-string statusline is captured whole the same way and restored.
+    std::fs::write(&path, r#"{ "statusLine": "echo hi" }"#).unwrap();
+    install_into(&path).unwrap();
+    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(parsed["statusLine"]["_rimz_wrapped"], "echo hi");
+    let root = read_existing_json(&path).unwrap();
+    assert_eq!(
+        wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
+        Some("echo hi")
+    );
+    uninstall_from(&path).unwrap();
+    let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(restored["statusLine"], "echo hi");
 }
 
 #[test]
@@ -108,32 +124,36 @@ fn reinstall_does_not_double_wrap() {
 }
 
 #[test]
-fn reinstall_repairs_recursive_status_line_wrap() {
+fn recursive_status_line_wrap_is_repaired_on_install_and_dropped_on_uninstall() {
+    // A `_rimz_wrapped` that itself holds the Rimz command is a recursive wrap
+    // (a prior bug's residue): never a user command. Install discards the inner
+    // command but keeps the sibling rendering options; uninstall restores
+    // nothing rather than re-installing Rimz's own command.
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    std::fs::write(
-        &path,
-        serde_json::to_string(&json!({
-            "statusLine": {
-                "_rimz_managed": true,
-                "_rimz_wrapped": {
-                    "type": "command",
-                    "command": STATUS_LINE_COMMAND,
-                    "padding": 0,
-                    "refreshInterval": 10
-                },
-                "type": "command",
-                "command": STATUS_LINE_COMMAND,
-                "padding": 0,
-                "refreshInterval": 10
+    let recursive = |extra: serde_json::Value| {
+        let mut wrapped = serde_json::Map::new();
+        wrapped.insert("type".into(), json!("command"));
+        wrapped.insert("command".into(), json!(STATUS_LINE_COMMAND));
+        let mut managed = wrapped.clone();
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                wrapped.insert(k.clone(), v.clone());
+                managed.insert(k.clone(), v.clone());
             }
-        }))
-        .unwrap(),
+        }
+        managed.insert("_rimz_managed".into(), json!(true));
+        managed.insert("_rimz_wrapped".into(), Value::Object(wrapped));
+        json!({ "statusLine": managed })
+    };
+
+    let install_path = dir.path().join("install.json");
+    std::fs::write(
+        &install_path,
+        serde_json::to_string(&recursive(json!({ "padding": 0, "refreshInterval": 10 }))).unwrap(),
     )
     .unwrap();
-
-    install_into(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    install_into(&install_path).unwrap();
+    let parsed: Value = serde_json::from_slice(&std::fs::read(&install_path).unwrap()).unwrap();
     assert_eq!(parsed["statusLine"]["command"], STATUS_LINE_COMMAND);
     assert!(
         parsed["statusLine"].get("_rimz_wrapped").is_none(),
@@ -141,31 +161,15 @@ fn reinstall_repairs_recursive_status_line_wrap() {
     );
     assert_eq!(parsed["statusLine"]["padding"], 0);
     assert_eq!(parsed["statusLine"]["refreshInterval"], 10);
-}
 
-#[test]
-fn uninstall_removes_recursive_status_line_wrap() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
+    let uninstall_path = dir.path().join("uninstall.json");
     std::fs::write(
-        &path,
-        serde_json::to_string(&json!({
-            "statusLine": {
-                "_rimz_managed": true,
-                "_rimz_wrapped": {
-                    "type": "command",
-                    "command": STATUS_LINE_COMMAND
-                },
-                "type": "command",
-                "command": STATUS_LINE_COMMAND
-            }
-        }))
-        .unwrap(),
+        &uninstall_path,
+        serde_json::to_string(&recursive(json!({}))).unwrap(),
     )
     .unwrap();
-
-    uninstall_from(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    uninstall_from(&uninstall_path).unwrap();
+    let parsed: Value = serde_json::from_slice(&std::fs::read(&uninstall_path).unwrap()).unwrap();
     assert!(
         parsed.get("statusLine").is_none(),
         "uninstall must not restore Rimz's own statusline command"
@@ -183,25 +187,6 @@ fn uninstall_removes_status_line_when_none_existed() {
         parsed.get("statusLine").is_none(),
         "a Rimz-added statusLine is removed on uninstall"
     );
-}
-
-#[test]
-fn install_captures_and_restores_bare_string_status_line() {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("settings.json");
-    std::fs::write(&path, r#"{ "statusLine": "echo hi" }"#).unwrap();
-    install_into(&path).unwrap();
-    let parsed: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(parsed["statusLine"]["_rimz_wrapped"], "echo hi");
-    // The feed command reads the bare string back as the pass-through target.
-    let root = read_existing_json(&path).unwrap();
-    assert_eq!(
-        wrapped_status_line_command_from(&root, &STATUS_LINE).as_deref(),
-        Some("echo hi")
-    );
-    uninstall_from(&path).unwrap();
-    let restored: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-    assert_eq!(restored["statusLine"], "echo hi");
 }
 
 #[test]
