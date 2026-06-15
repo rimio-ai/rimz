@@ -1,32 +1,16 @@
 use crate::config::{
     AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
-    SidebarAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
+    GlyphRole, SidebarAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
 };
 use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
 
-use super::theme::{GlyphSetKind, Palette, Theme};
+use super::theme::{GlyphSet, Palette, Theme};
 
 const THINKING_FRAMES: &[&str] = &[
     "⠁", "⠂", "⠄", "⡀", "⡈", "⡐", "⡠", "⣀", "⣁", "⣂", "⣄", "⣌", "⣔", "⣤", "⣥", "⣦", "⣮", "⣶", "⣷",
     "⣿", "⡿", "⠿", "⢟", "⠟", "⡛", "⠛", "⠫", "⢋", "⠋", "⠍", "⡉", "⠉", "⠑", "⠡", "⢁",
 ];
-const NERD_SLICE_FRAMES: &[&str] = &["\u{f0a9f}", "\u{f0aa1}", "\u{f0aa3}", "\u{f0aa5}"];
-const NERD_CLOCK_FRAMES: &[&str] = &[
-    "\u{f143f}",
-    "\u{f1440}",
-    "\u{f1441}",
-    "\u{f1442}",
-    "\u{f1443}",
-    "\u{f1444}",
-    "\u{f1445}",
-    "\u{f1446}",
-    "\u{f1447}",
-    "\u{f1448}",
-    "\u{f1449}",
-    "\u{f144a}",
-];
-
 pub(crate) const DEFAULT_BREATH_PERIOD: f32 = 24.0;
 const FRESH_ATTENTION_PERIOD: f32 = 26.0;
 const HOT_ATTENTION_PERIOD: f32 = 12.0;
@@ -417,7 +401,7 @@ impl Default for ResolvedAnimations {
         );
         Self::resolve(
             &SidebarAnimationsConfig::default(),
-            GlyphSetKind::Unicode,
+            &GlyphSet::default(),
             &palette,
         )
     }
@@ -426,7 +410,7 @@ impl Default for ResolvedAnimations {
 impl ResolvedAnimations {
     pub(crate) fn resolve(
         config: &SidebarAnimationsConfig,
-        set: GlyphSetKind,
+        glyphs: &GlyphSet,
         palette: &Palette,
     ) -> Self {
         Self {
@@ -434,48 +418,58 @@ impl ResolvedAnimations {
             thinking: resolve_role(
                 AnimationRole::Thinking,
                 config.thinking.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
             working: resolve_role(
                 AnimationRole::Working,
                 config.working.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
             compacting: resolve_role(
                 AnimationRole::Compacting,
                 config.compacting.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
             delegating: resolve_role(
                 AnimationRole::Delegating,
                 config.delegating.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
             resolving: resolve_role(
                 AnimationRole::Resolving,
                 config.resolving.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
-            idle: resolve_role(AnimationRole::Idle, config.idle.as_ref(), set, palette),
+            idle: resolve_role(AnimationRole::Idle, config.idle.as_ref(), glyphs, palette),
             success: resolve_role(
                 AnimationRole::Success,
                 config.success.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
-            paused: resolve_role(AnimationRole::Paused, config.paused.as_ref(), set, palette),
+            paused: resolve_role(
+                AnimationRole::Paused,
+                config.paused.as_ref(),
+                glyphs,
+                palette,
+            ),
             waiting: resolve_role(
                 AnimationRole::Waiting,
                 config.waiting.as_ref(),
-                set,
+                glyphs,
                 palette,
             ),
-            failed: resolve_role(AnimationRole::Failed, config.failed.as_ref(), set, palette),
+            failed: resolve_role(
+                AnimationRole::Failed,
+                config.failed.as_ref(),
+                glyphs,
+                palette,
+            ),
         }
     }
 
@@ -531,10 +525,6 @@ pub(crate) fn frame_at(animation: &Animation, phase: u64) -> String {
     animation.frames[index].clone()
 }
 
-pub(crate) fn still_frame(animation: &Animation) -> String {
-    animation.frames[0].clone()
-}
-
 pub(crate) fn effect_style(theme: &Theme, animation: &Animation, phase: u64) -> Style {
     let phase = animation.speed.effect_phase(phase);
     match animation.effect {
@@ -559,10 +549,10 @@ pub(crate) fn effect_weight(animation: &Animation, phase: u64) -> Modifier {
 fn resolve_role(
     role: AnimationRole,
     spec: Option<&AnimationSpec>,
-    set: GlyphSetKind,
+    glyphs: &GlyphSet,
     palette: &Palette,
 ) -> Animation {
-    let mut animation = builtin(role, set, palette);
+    let mut animation = builtin(role, glyphs, palette);
     if let Some(spec) = spec {
         if let Some(frames) = spec.frames.as_ref() {
             animation.frames = frames.as_slice().to_vec();
@@ -582,100 +572,85 @@ fn resolve_role(
     animation
 }
 
-fn builtin(role: AnimationRole, set: GlyphSetKind, palette: &Palette) -> Animation {
+/// The built-in animation for a role, before any `[sidebar.animations.<role>]`
+/// override. The animated spinners (thinking/working/delegating/resolving) and
+/// the compacting wave keep their Unicode braille/block frame sequences here in
+/// every preset; the single-frame status heads (idle/success/paused/waiting/
+/// failed) draw their one frame from the glyph set's `status` group, so
+/// `[sidebar.glyphs.status]` is the one place the head shapes are configured
+/// while this function keeps their colour, effect, and speed.
+fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animation {
+    let head = |role| vec![glyphs.glyph(role).to_owned()];
+    let seq = |frames: &[&str]| {
+        frames
+            .iter()
+            .map(|frame| frame.to_string())
+            .collect::<Vec<_>>()
+    };
     let (frames, color, effect, speed) = match role {
         AnimationRole::Thinking => (
-            match set {
-                GlyphSetKind::Unicode => THINKING_FRAMES.to_vec(),
-                GlyphSetKind::NerdFont => NERD_CLOCK_FRAMES.to_vec(),
-            },
+            seq(THINKING_FRAMES),
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Working => (
-            match set {
-                GlyphSetKind::Unicode => vec!["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"],
-                GlyphSetKind::NerdFont => NERD_SLICE_FRAMES.to_vec(),
-            },
+            seq(&["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"]),
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Compacting => (
-            vec!["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"],
+            seq(&["▁", "▃", "▄", "▅", "▆", "▇", "▆", "▅", "▄", "▃"]),
             palette.animation_color(AnimationColor::Meta),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Delegating => (
-            match set {
-                GlyphSetKind::Unicode => vec!["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"],
-                GlyphSetKind::NerdFont => NERD_SLICE_FRAMES.to_vec(),
-            },
+            seq(&["⢄", "⢂", "⢁", "⡁", "⡈", "⡐", "⡠"]),
             palette.animation_color(AnimationColor::Clay),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Resolving => (
-            match set {
-                GlyphSetKind::Unicode => {
-                    vec!["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
-                }
-                GlyphSetKind::NerdFont => NERD_CLOCK_FRAMES.to_vec(),
-            },
+            seq(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]),
             palette.animation_color(AnimationColor::Meta),
             Effect::Static,
             Speed::Fast,
         ),
         AnimationRole::Idle => (
-            match set {
-                GlyphSetKind::Unicode => vec!["○"],
-                GlyphSetKind::NerdFont => vec!["\u{f0130}"],
-            },
+            head(GlyphRole::StatusIdle),
             palette.animation_color(AnimationColor::Good),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Success => (
-            match set {
-                GlyphSetKind::Unicode => vec!["✓"],
-                GlyphSetKind::NerdFont => vec!["\u{f012c}"],
-            },
+            head(GlyphRole::StatusDone),
             palette.animation_color(AnimationColor::Good),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Paused => (
-            match set {
-                GlyphSetKind::Unicode => vec!["⏸\u{FE0E}"],
-                GlyphSetKind::NerdFont => vec!["\u{f03e4}"],
-            },
+            head(GlyphRole::StatusPaused),
             palette.animation_color(AnimationColor::Cool),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Waiting => (
-            match set {
-                GlyphSetKind::Unicode => vec!["?"],
-                GlyphSetKind::NerdFont => vec!["\u{f0625}"],
-            },
+            head(GlyphRole::StatusWaiting),
             palette.animation_color(AnimationColor::Warn),
             Effect::Static,
             Speed::Normal,
         ),
         AnimationRole::Failed => (
-            match set {
-                GlyphSetKind::Unicode => vec!["!"],
-                GlyphSetKind::NerdFont => vec!["\u{f0026}"],
-            },
+            head(GlyphRole::StatusAttention),
             palette.animation_color(AnimationColor::Alarm),
             Effect::Static,
             Speed::Normal,
         ),
     };
     Animation {
-        frames: frames.into_iter().map(ToOwned::to_owned).collect(),
+        frames,
         color,
         effect,
         speed,
@@ -687,6 +662,7 @@ fn builtin(role: AnimationRole, set: GlyphSetKind, palette: &Palette) -> Animati
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::validate_single_cell;
 
     fn test_palette() -> Palette {
         Palette::resolve_fixed(
@@ -696,7 +672,22 @@ mod tests {
     }
 
     fn resolve_for_test(config: &SidebarAnimationsConfig, palette: &Palette) -> ResolvedAnimations {
-        ResolvedAnimations::resolve(config, GlyphSetKind::Unicode, palette)
+        ResolvedAnimations::resolve(config, &GlyphSet::default(), palette)
+    }
+
+    fn nerd_glyph_set() -> GlyphSet {
+        GlyphSet::resolve(&crate::config::SidebarGlyphsConfig {
+            set: Some("nerd-font".to_owned()),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn builtin_spinner_frames_are_single_cell() {
+        for frame in THINKING_FRAMES {
+            validate_single_cell(frame)
+                .unwrap_or_else(|err| panic!("thinking frame {frame:?}: {err}"));
+        }
     }
 
     #[test]
@@ -718,34 +709,33 @@ mod tests {
     }
 
     #[test]
-    fn nerd_font_set_swaps_builtin_status_heads() {
+    fn nerd_font_swaps_static_heads_but_keeps_unicode_spinners() {
         let palette = test_palette();
-        let animations = ResolvedAnimations::resolve(
+        let unicode = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
+        let nerd = ResolvedAnimations::resolve(
             &SidebarAnimationsConfig::default(),
-            GlyphSetKind::NerdFont,
+            &nerd_glyph_set(),
             &palette,
         );
-        assert_eq!(
-            animations.role(AnimationRole::Thinking).frames(),
-            NERD_CLOCK_FRAMES
-        );
-        assert_eq!(
-            animations.role(AnimationRole::Working).frames(),
-            NERD_SLICE_FRAMES
-        );
-        assert_eq!(
-            animations.role(AnimationRole::Delegating).frames(),
-            NERD_SLICE_FRAMES
-        );
-        assert_eq!(animations.role(AnimationRole::Idle).frames(), ["\u{f0130}"]);
-        assert_eq!(
-            animations.role(AnimationRole::Success).frames(),
-            ["\u{f012c}"]
-        );
-        assert_eq!(
-            animations.role(AnimationRole::Failed).frames(),
-            ["\u{f0026}"]
-        );
+        // The agent's working/thinking motion keeps its Unicode spinner in every
+        // preset — the Nerd Font set does not theme the animated frames.
+        for role in [
+            AnimationRole::Thinking,
+            AnimationRole::Working,
+            AnimationRole::Delegating,
+            AnimationRole::Resolving,
+            AnimationRole::Compacting,
+        ] {
+            assert_eq!(
+                nerd.role(role).frames(),
+                unicode.role(role).frames(),
+                "{role:?} keeps its Unicode frames"
+            );
+        }
+        // The single-frame status heads take the curated Nerd Font icons.
+        assert_eq!(nerd.role(AnimationRole::Idle).frames(), ["\u{f2dd}"]);
+        assert_eq!(nerd.role(AnimationRole::Success).frames(), ["\u{f00c}"]);
+        assert_eq!(nerd.role(AnimationRole::Failed).frames(), ["\u{f12a}"]);
     }
 
     #[test]

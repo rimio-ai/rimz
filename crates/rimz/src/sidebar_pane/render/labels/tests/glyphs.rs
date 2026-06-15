@@ -720,8 +720,20 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
     );
     assert_eq!(
         status_glyph(&custom, AgentStatus::Idle),
-        "A",
-        "legend/status summaries keep the representative still frame"
+        "○",
+        "the still legend glyph reads [sidebar.glyphs.status], not the animation frames"
+    );
+
+    let shaped = crate::config::SidebarConfig {
+        glyphs: toml::from_str::<crate::config::SidebarGlyphsConfig>("[status]\nidle = \"o\"\n")
+            .expect("status glyph override"),
+        ..crate::config::SidebarConfig::default()
+    };
+    let shaped = Theme::fixed_for_sidebar(false, &shaped);
+    assert_eq!(
+        status_glyph(&shaped, AgentStatus::Idle),
+        "o",
+        "[sidebar.glyphs.status] drives the still legend glyph"
     );
 }
 

@@ -67,7 +67,10 @@ pub(super) fn description_line(
     // real activity above and add a distinct, faint secondary marker rather than
     // overwriting the description with a synthetic "N background tasks" count.
     if row.phase() == TurnPhase::Parked {
-        left.push(Span::styled("  ⋯ bg", theme.faint()));
+        left.push(Span::styled(
+            format!("  {} bg", theme.glyph(GlyphRole::CardParkedBg)),
+            theme.faint(),
+        ));
     }
     let todo_total = agent(row).and_then(|agent| agent.todo_total).unwrap_or(0);
     if tier == Tier::L2 && todo_total > 0 {

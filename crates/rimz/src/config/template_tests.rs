@@ -6,7 +6,19 @@ use super::*;
 fn template_defaults_deserialize_to_machine_defaults() {
     let uncommented = uncomment_default_lines(MachineConfig::template());
     let parsed: MachineConfig = toml::from_str(&uncommented).expect("template defaults parse");
-    assert_eq!(parsed, MachineConfig::default());
+
+    // The template ships the glyph groups as active defaults (paste-to-replace),
+    // so a fresh config pins them to the Unicode preset rather than leaving them
+    // unset. Those values render identically to the default glyph set
+    // (verified in the render crate's `template_glyph_defaults_match_unicode_preset`);
+    // normalize them away before comparing the rest of the config.
+    assert!(
+        !parsed.sidebar.glyphs.is_unset(),
+        "template ships active glyph defaults"
+    );
+    let mut normalized = parsed.clone();
+    normalized.sidebar.glyphs = super::SidebarGlyphsConfig::default();
+    assert_eq!(normalized, MachineConfig::default());
 }
 
 #[test]

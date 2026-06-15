@@ -131,6 +131,46 @@ fn span_for<'a>(lines: &'a [Line<'static>], text: &str) -> &'a Span<'static> {
 }
 
 #[test]
+fn parked_background_marker_falls_back_to_unicode() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("done"),
+    );
+    claude.phase = crate::agents::TurnPhase::Parked;
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+    let theme = Theme::fixed_for_sidebar(
+        true,
+        &crate::config::SidebarConfig {
+            glyphs: crate::config::SidebarGlyphsConfig {
+                set: Some("nerd-font".to_owned()),
+                ..crate::config::SidebarGlyphsConfig::default()
+            },
+            ..crate::config::SidebarConfig::default()
+        },
+    );
+    let rendered = rendered_group_lines_with(&snapshot, &theme, 0)
+        .into_iter()
+        .map(|line| {
+            line.spans
+                .into_iter()
+                .map(|span| span.content.into_owned())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // `card.parked_bg` sits outside the curated Nerd Font overlay, so the parked
+    // descriptor keeps its Unicode ellipsis even while the set is active — proven
+    // by the empty-context tile, which the overlay does iconify, rendering here.
+    assert!(rendered.contains("\u{f11d9}"), "{rendered}");
+    assert!(rendered.contains("⋯ bg"), "{rendered}");
+}
+
+#[test]
 fn unread_descriptor_grows_bold_without_dimming() {
     // A single actionable row leads, so it carries the 2-pole blink the lead row
     // keeps under `blink`; a non-lead unread row would settle to a steady crest.

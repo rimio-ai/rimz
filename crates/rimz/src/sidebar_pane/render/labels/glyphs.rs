@@ -1,6 +1,6 @@
 use super::*;
 use crate::config::GlyphRole;
-use crate::sidebar_pane::render::theme::Component;
+use crate::sidebar_pane::render::theme::{Component, GlyphSetKind};
 
 /// Paused: a media `pause` mark carrying the text-presentation selector
 /// (`U+FE0E`) so it renders as a single-cell monochrome glyph, never a
@@ -10,18 +10,27 @@ use crate::sidebar_pane::render::theme::Component;
 #[cfg(test)]
 pub(in crate::sidebar_pane::render) const PAUSED_GLYPH: &str = "⏸\u{FE0E}";
 
-/// The static status glyph — used for the legend, the worktree tally, the
-/// attention line, and as the leading cell for every non-animated state. The
-/// shape carries the status under `NO_COLOR`; color reinforces it. `Running`
-/// returns the representative working frame `⢿` as the still fallback
-/// (distinct from idle `○`); the animated working/thinking cells live in the
-/// role-specific helpers below.
+/// The still status glyph — used for the legend, the worktree tally, the
+/// attention line, the cockpit make-up buckets, and the leading cell for every
+/// non-animated state. The shape carries the status under `NO_COLOR`; color
+/// reinforces it. Each status reads its `[sidebar.glyphs.status]` shape (the
+/// representative working `⢿`, distinct from idle `○`), so the whole make-up
+/// row is configured in one place; the per-row animated working/thinking cells
+/// live in the role-specific helpers below and ride `[sidebar.animations]`.
 pub(in crate::sidebar_pane::render) fn status_glyph(theme: &Theme, status: AgentStatus) -> String {
-    let animation = theme.animations.status(status);
-    if status == AgentStatus::Running {
-        return frame_at(animation, 3);
+    theme.glyph(status_glyph_role(status)).to_owned()
+}
+
+/// The `status` glyph role carrying each agent status's still representative.
+fn status_glyph_role(status: AgentStatus) -> GlyphRole {
+    match status {
+        AgentStatus::Waiting => GlyphRole::StatusWaiting,
+        AgentStatus::Failed => GlyphRole::StatusAttention,
+        AgentStatus::Running => GlyphRole::StatusWorking,
+        AgentStatus::Idle => GlyphRole::StatusIdle,
+        AgentStatus::Success => GlyphRole::StatusDone,
+        AgentStatus::Paused => GlyphRole::StatusPaused,
     }
-    still_frame(animation)
 }
 
 /// Idle, waiting-for-a-prompt: a static `...` placeholder that stands in for the
@@ -34,19 +43,48 @@ pub(in crate::sidebar_pane::render) fn loading_dots(_animation_phase: u64) -> &'
     LOADING_DOTS
 }
 
-/// The clock-fill glyph for an elapsed span: the face fills a quarter per
-/// quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●` to the hour — and
-/// past the hour reads the ringed `◉`, so any time readout on a card carries
-/// its magnitude iconographically. One cell, so it never disturbs alignment.
+/// The age clock's Nerd Font faces: the `circle_slice` series fills one eighth
+/// per 7.5-minute step, so the icon tracks elapsed time twice as finely as the
+/// four-quarter Unicode clock. No eighth-circle glyph exists in Unicode, so that
+/// preset keeps its quarter faces.
+const NERD_AGE_SLICES: [&str; 8] = [
+    "\u{f0a9e}", // nf-md-circle_slice_1
+    "\u{f0a9f}", // nf-md-circle_slice_2
+    "\u{f0aa0}", // nf-md-circle_slice_3
+    "\u{f0aa1}", // nf-md-circle_slice_4
+    "\u{f0aa2}", // nf-md-circle_slice_5
+    "\u{f0aa3}", // nf-md-circle_slice_6
+    "\u{f0aa4}", // nf-md-circle_slice_7
+    "\u{f0aa5}", // nf-md-circle_slice_8
+];
+
+/// The clock-fill glyph for an elapsed span, filling toward the hour: Unicode
+/// fills a quarter per quarter hour — `◔` to 15m, `◑` to 30m, `◕` to 45m, `●`
+/// to the hour — while the Nerd Font preset fills an eighth per 7.5 minutes
+/// across the `circle_slice` series. Both read the ringed `◉` past the hour, so
+/// any time readout on a card carries its magnitude iconographically. One cell,
+/// so it never disturbs alignment.
 pub(in crate::sidebar_pane::render) fn elapsed_glyph(theme: &Theme, secs: i64) -> String {
-    let role = match secs {
+    if secs > 3600 {
+        return theme.glyph(GlyphRole::ClockOver).to_owned();
+    }
+    match theme.glyph_kind() {
+        GlyphSetKind::NerdFont => {
+            let eighth = (secs.max(0) / 450).min(7) as usize;
+            NERD_AGE_SLICES[eighth].to_owned()
+        }
+        GlyphSetKind::Unicode => theme.glyph(elapsed_quarter_role(secs)).to_owned(),
+    }
+}
+
+/// The Unicode quarter-clock role for an elapsed span under an hour.
+fn elapsed_quarter_role(secs: i64) -> GlyphRole {
+    match secs {
         i64::MIN..=900 => GlyphRole::ClockQ1,
         901..=1800 => GlyphRole::ClockQ2,
         1801..=2700 => GlyphRole::ClockQ3,
-        2701..=3600 => GlyphRole::ClockQ4,
-        _ => GlyphRole::ClockOver,
-    };
-    theme.glyph(role).to_owned()
+        _ => GlyphRole::ClockQ4,
+    }
 }
 
 pub(in crate::sidebar_pane::render) fn working_glyph(

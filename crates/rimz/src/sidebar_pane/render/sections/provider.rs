@@ -351,7 +351,7 @@ fn spend_session_spans(
             marker(theme.component(Component::LedgerLabel)),
         ),
         Span::styled(
-            theme.glyph(GlyphRole::MarkerSessions).to_owned(),
+            theme.glyph(GlyphRole::CockpitSessions).to_owned(),
             marker(theme.component(Component::Sessions)),
         ),
         Span::styled(
@@ -372,7 +372,7 @@ fn spend_token_metric_spans(
     let marker = |color: Color| theme.style(color, Modifier::empty());
     let mut spans = vec![
         Span::styled(
-            theme.glyph(GlyphRole::MarkerTokenTotal).to_owned(),
+            theme.glyph(GlyphRole::TokensTotal).to_owned(),
             marker(theme.component(Component::TokenTotal)),
         ),
         Span::styled(
@@ -383,7 +383,7 @@ fn spend_token_metric_spans(
     if token_detail == TokenDetail::Full {
         spans.extend([
             Span::styled(
-                format!(" {} ", theme.glyph(GlyphRole::MarkerTokenIn)),
+                format!(" {} ", theme.glyph(GlyphRole::TokensInput)),
                 marker(theme.component(Component::Input)),
             ),
             Span::styled(
@@ -391,7 +391,7 @@ fn spend_token_metric_spans(
                 value,
             ),
             Span::styled(
-                format!(" {} ", theme.glyph(GlyphRole::MarkerTokenOut)),
+                format!(" {} ", theme.glyph(GlyphRole::TokensOutput)),
                 marker(theme.component(Component::Output)),
             ),
             Span::styled(
@@ -402,7 +402,7 @@ fn spend_token_metric_spans(
     }
     spans.extend([
         Span::styled(
-            format!(" {} ", theme.glyph(GlyphRole::MarkerCacheRead)),
+            format!(" {} ", theme.glyph(GlyphRole::TokensCacheRead)),
             marker(theme.component(Component::CacheRead)),
         ),
         Span::styled(
@@ -905,11 +905,8 @@ fn provider_tab_rail(
             let chip = theme.chip(brand, Modifier::BOLD);
             let (left, right) = if chip.bg.is_none() {
                 (
-                    Span::styled(theme.glyph(GlyphRole::StructureTabCapLeft).to_owned(), rail),
-                    Span::styled(
-                        theme.glyph(GlyphRole::StructureTabCapRight).to_owned(),
-                        rail,
-                    ),
+                    Span::styled(theme.glyph(GlyphRole::ChromeTabCapLeft).to_owned(), rail),
+                    Span::styled(theme.glyph(GlyphRole::ChromeTabCapRight).to_owned(), rail),
                 )
             } else {
                 (fill(1), fill(1))
@@ -973,7 +970,7 @@ fn provider_header_line(
 ) -> Line<'static> {
     let right = if panel.remote_control {
         vec![Span::styled(
-            format!("{} rc", theme.glyph(GlyphRole::MarkerRemoteControl)),
+            format!("{} rc", theme.glyph(GlyphRole::ChromeRemoteControl)),
             theme.styled(Component::RemoteControl, Modifier::BOLD),
         )]
     } else {
@@ -1117,7 +1114,7 @@ fn provider_stats_left_spans(
 ) -> Vec<Span<'static>> {
     let mut left = vec![
         Span::styled(
-            theme.glyph(GlyphRole::MarkerSessions).to_owned(),
+            theme.glyph(GlyphRole::CockpitSessions).to_owned(),
             theme.styled(Component::Sessions, Modifier::empty()),
         ),
         Span::styled(format!(" {}", today.sessions), theme.body()),
@@ -1175,12 +1172,12 @@ fn provider_token_breakdown_spans(
     let marker = |color: Color| theme.style(color, Modifier::empty());
     vec![
         Span::styled(
-            theme.glyph(GlyphRole::MarkerTokenTotal).to_owned(),
+            theme.glyph(GlyphRole::TokensTotal).to_owned(),
             marker(theme.component(Component::TokenTotal)),
         ),
         Span::styled(format!(" {}", format(total)), value),
         Span::styled(
-            format!(" {} ", theme.glyph(GlyphRole::MarkerCacheRead)),
+            format!(" {} ", theme.glyph(GlyphRole::TokensCacheRead)),
             marker(theme.component(Component::CacheRead)),
         ),
         Span::styled(format(cache_read), value),
@@ -1407,10 +1404,7 @@ fn reset_value_spans(
     };
     let countdown = pad_countdown(countdown);
     vec![
-        Span::styled(
-            theme.glyph(GlyphRole::MarkerCompaction).to_owned(),
-            marker_style,
-        ),
+        Span::styled(theme.glyph(GlyphRole::MeterReset).to_owned(), marker_style),
         Span::styled(format!(" {countdown}"), theme.body()),
     ]
 }
@@ -1454,9 +1448,9 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
     let value = match credits {
         Some(ExtraCredits::Disabled) => "off".to_owned(),
         Some(credits) => extra_value_label(theme, credits),
-        None => theme.glyph(GlyphRole::MarkerInfinity).to_owned(),
+        None => theme.glyph(GlyphRole::ChromeInfinity).to_owned(),
     };
-    if value == theme.glyph(GlyphRole::MarkerInfinity) {
+    if value == theme.glyph(GlyphRole::ChromeInfinity) {
         return vec![
             Span::raw(" ".repeat(PROVIDER_RESET_MARKER_PAD)),
             Span::styled(value, theme.money_style(Modifier::BOLD)),
@@ -1476,7 +1470,7 @@ fn extra_value_spans(theme: &Theme, credits: Option<&ExtraCredits>) -> Vec<Span<
 }
 
 fn extra_value_label(theme: &Theme, credits: &ExtraCredits) -> String {
-    let infinity = theme.glyph(GlyphRole::MarkerInfinity);
+    let infinity = theme.glyph(GlyphRole::ChromeInfinity);
     match (
         credits.used_usd(),
         credits.remaining_usd(),

@@ -161,6 +161,22 @@ pub fn validate_single_cell(value: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// A glyph occupies one cell, or two when a double-width Nerd Font icon reserves
+/// its second cell with a trailing space. Empty, zero-width, and over-wide
+/// values are rejected so a glyph never bleeds past two columns.
+pub fn validate_glyph_cells(value: &str) -> Result<(), String> {
+    if value.is_empty() {
+        return Err("must not contain empty glyphs".to_owned());
+    }
+    let width = ratatui::text::Span::raw(value).width();
+    if !(1..=2).contains(&width) {
+        return Err(format!(
+            "must occupy one or two terminal cells; `{value}` is {width} cells"
+        ));
+    }
+    Ok(())
+}
+
 impl<'de> Deserialize<'de> for AnimationFrames {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where

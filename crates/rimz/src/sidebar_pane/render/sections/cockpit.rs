@@ -30,7 +30,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_summary_line(
 ) -> Line<'static> {
     let left = metric_spans(
         theme,
-        theme.glyph(GlyphRole::MarkerSessions),
+        theme.glyph(GlyphRole::CockpitSessions),
         theme.component(Component::Sessions),
         &sessions.to_string(),
     );
@@ -69,7 +69,7 @@ pub(in crate::sidebar_pane::render) fn cockpit_spend_line(
 ) -> Line<'static> {
     let mut left = metric_spans(
         theme,
-        theme.glyph(GlyphRole::MarkerActiveAgents),
+        theme.glyph(GlyphRole::CockpitAgents),
         theme.clay(),
         &live_agents.to_string(),
     );

@@ -488,17 +488,18 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
 fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     let theme = |no_color, truecolor, glow| {
         let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let glyphs = GlyphSet::default();
         Theme {
             no_color,
             truecolor,
             depth: ColorDepth::Indexed,
             glow,
-            glyphs: GlyphSet::default(),
             animations: ResolvedAnimations::resolve(
                 &SidebarAnimationsConfig::default(),
-                GlyphSetKind::Unicode,
+                &glyphs,
                 &palette,
             ),
+            glyphs,
             palette,
         }
     };

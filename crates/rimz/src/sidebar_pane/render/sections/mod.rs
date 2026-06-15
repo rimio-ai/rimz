@@ -128,21 +128,21 @@ fn with_gutter(
         Gutter::Blank => (Span::raw(" "), Span::raw(" ")),
         Gutter::Lane => (
             Span::styled(
-                theme.glyph(GlyphRole::StructureLaneSpineLeft).to_owned(),
+                theme.glyph(GlyphRole::ChromeSpineLaneLeft).to_owned(),
                 theme.styled(Component::LaneSpine, Modifier::DIM),
             ),
             Span::styled(
-                theme.glyph(GlyphRole::StructureLaneSpineRight).to_owned(),
+                theme.glyph(GlyphRole::ChromeSpineLaneRight).to_owned(),
                 theme.styled(Component::LaneSpine, Modifier::DIM),
             ),
         ),
         Gutter::Selected => (
             Span::styled(
-                theme.glyph(GlyphRole::StructureCardSpineLeft).to_owned(),
+                theme.glyph(GlyphRole::ChromeSpineCardLeft).to_owned(),
                 theme.selection(),
             ),
             Span::styled(
-                theme.glyph(GlyphRole::StructureCardSpineRight).to_owned(),
+                theme.glyph(GlyphRole::ChromeSpineCardRight).to_owned(),
                 theme.selection(),
             ),
         ),

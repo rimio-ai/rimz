@@ -6,7 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
-use rimz::config::{GlyphRole, MachineConfig, validate_single_cell};
+use rimz::config::{GlyphRole, MachineConfig, validate_glyph_cells};
 use rimz::ledger::atomic::write_bytes_atomically;
 use toml_edit::{DocumentMut, Item, Table, Value};
 
@@ -320,7 +320,15 @@ fn is_sidebar_glyph_set_key(path: &[String]) -> bool {
 fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
     matches!(
         namespace,
-        "marker" | "meter" | "clock" | "structure" | "chrome"
+        "status"
+            | "cockpit"
+            | "tokens"
+            | "meter"
+            | "clock"
+            | "worktree"
+            | "card"
+            | "process"
+            | "chrome"
     )
 }
 
@@ -348,6 +356,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "notifications.coalesce_ms",
         "notifications.remind_secs",
         "notifications.command",
+        "sidebar.style",
         "sidebar.refresh_ms",
         "sidebar.max_provider_blocks",
         "sidebar.provider_tabs",
@@ -477,7 +486,7 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
         let Some(glyph) = value.as_str() else {
             bail!("sidebar.glyphs.{namespace}.{role} must be a string");
         };
-        if let Err(err) = validate_single_cell(glyph) {
+        if let Err(err) = validate_glyph_cells(glyph) {
             bail!("sidebar glyph `{namespace}.{role}` {err}");
         }
     }
@@ -584,7 +593,8 @@ mod tests {
             "sidebar.animations.success.speed",
             "sidebar.animations.unread",
             "sidebar.glyphs.set",
-            "sidebar.glyphs.marker.token_total",
+            "sidebar.glyphs.status.working",
+            "sidebar.glyphs.tokens.total",
             "sidebar.glyphs.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
@@ -606,8 +616,8 @@ mod tests {
             "sidebar.animations.thinking.frames.extra",
             "sidebar.glyphs",
             "sidebar.glyphs.nope",
-            "sidebar.glyphs.marker.nope",
-            "sidebar.glyphs.marker.token_total.extra",
+            "sidebar.glyphs.tokens.nope",
+            "sidebar.glyphs.tokens.total.extra",
         ] {
             assert!(validate_set_key(&parse_key(key).unwrap()).is_err(), "{key}");
         }
@@ -619,9 +629,9 @@ mod tests {
             ("sidebar.animations.unread", true),
             ("sidebar.animations.nope", false),
             ("sidebar.glyphs", true),
-            ("sidebar.glyphs.marker", true),
-            ("sidebar.glyphs.marker.token_total", true),
-            ("sidebar.glyphs.marker.nope", false),
+            ("sidebar.glyphs.tokens", true),
+            ("sidebar.glyphs.tokens.total", true),
+            ("sidebar.glyphs.tokens.nope", false),
             ("accounts", true),
             ("accounts.usage_limit_usd", true),
             ("accounts.usage_limit_usd.codex", true),
@@ -682,7 +692,7 @@ mod tests {
             Some("nerd-font")
         );
 
-        let leaf = parse_key("sidebar.glyphs.marker.proc_cpu").expect("key");
+        let leaf = parse_key("sidebar.glyphs.process.cpu").expect("key");
         assert_eq!(parse_set_value(&leaf, "1").as_str(), Some("1"));
     }
 
@@ -716,13 +726,14 @@ mod tests {
             "unexpected error: {err}"
         );
 
-        let leaf = parse_key("sidebar.glyphs.marker.token_total").expect("key");
+        let leaf = parse_key("sidebar.glyphs.tokens.total").expect("key");
         validate_set_value(&leaf, &Value::from("◇")).expect("single-cell glyph");
-        let err = validate_set_value(&leaf, &Value::from("ab"))
-            .expect_err("wide glyph")
+        validate_set_value(&leaf, &Value::from("\u{efa0} ")).expect("double-width glyph");
+        let err = validate_set_value(&leaf, &Value::from("abc"))
+            .expect_err("over-wide glyph")
             .to_string();
         assert!(
-            err.contains("must occupy exactly one terminal cell"),
+            err.contains("must occupy one or two terminal cells"),
             "unexpected error: {err}"
         );
     }

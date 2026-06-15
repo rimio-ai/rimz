@@ -81,6 +81,7 @@
 ## command = "ntfy publish rimz"       # optional shell command; receives RIMZ_NOTIFY_* environment variables
 
 [sidebar]
+## style = "modern"                   # headline preset: "modern" (truecolor + Nerd Font) or "default" (auto color + Unicode); theme.mode / glyphs.set override it
 # refresh_ms = 100                    # render/animation grid; clamped internally
 # max_provider_blocks = 3             # cap discovered provider blocks when provider_list is empty
 # provider_tabs = "auto"              # "auto", "always", or "never"
@@ -202,21 +203,88 @@
 ## color = "alarm"
 
 [sidebar.glyphs]
-# Glyph sets are display-only. set is optional: "unicode" is the default,
-# "nerd-font" selects Nerd Font icons, and a path loads sparse overrides from a
-# TOML file. A custom file may set its own "unicode" or "nerd-font" base before
-# its overrides apply; explicit keys here win last. Every glyph must occupy
-# exactly one terminal cell.
-# Fractional bars, sub-cell spines, and the compacting wave keep their drawn
-# Unicode shapes in the Nerd Font preset because those glyphs are layout, not
-# icon tiles.
-## set = "unicode"
+# Glyphs are display-only and grouped the way the sidebar reads on screen.
+# Paste a different glyph over any value below to swap it; it takes effect on
+# the next render. Every glyph must occupy exactly one terminal cell.
+#
+# set is the fallback for any glyph you delete: "unicode" (default) is the shape
+# shown below, "nerd-font" swaps in Nerd Font icons, and a path loads a custom
+# glyph TOML. A custom file may pick its own "unicode"/"nerd-font" base; the keys
+# in this file win last.
 ## set = "nerd-font"
 ## set = "~/.config/rimz/glyphs.toml"
-## [sidebar.glyphs.marker]
-## token_total = "◇"
+
+# status — the leading cell of every agent row (the cockpit make-up line). The
+# shape lives here; its color and motion live in [sidebar.animations.<role>].
+# Note: status.attention is the animation role "failed", status.done is "success".
+[sidebar.glyphs.status]
+waiting = "?"
+attention = "!"
+paused = "⏸︎"
+done = "✓"
+idle = "○"
+working = "⢿"
+thinking = "⠁"
+delegating = "⢄"
+resolving = "⠙"
+compacting = "▇"
+
+# cockpit — the identity and summary row.
+[sidebar.glyphs.cockpit]
+workspace = "⌘"
+sessions = "◎"
+agents = "¤"
+
+# tokens — the token-accounting markers across cards, fleet lines, and dashboard.
+[sidebar.glyphs.tokens]
+total = "◇"
+input = "↘"
+output = "↗"
+cache_read = "◌"
+cache_write = "◍"
+filled = "▤"
+compaction = "↻"
+
+# worktree — the group header's git story.
+[sidebar.glyphs.worktree]
+branch = "⑂"
+ahead = "⇡"
+behind = "⇣"
+trunk_equal = "≡"
+trunk_clear = "✓"
+dotted = "┄"
+
+# card — the agent card body.
+[sidebar.glyphs.card]
+subagents = "⧉"
+todo_done = "●"
+todo_pending = "○"
+parked_bg = "⋯"
+
+# process — the process-row resource grid.
+[sidebar.glyphs.process]
+cpu = "C"
+mem = "M"
+io = "⇅"
+
+# chrome — framing and badges. remote_link and infinity carry icons in the
+# Nerd Font preset; alert, remote_control, the hairline, tab caps, and selection
+# spines stay their Unicode / box-drawing shape (no single-cell Nerd Font tile).
 ## [sidebar.glyphs.chrome]
-## workspace = "⌘"
+## alert = "⚠"
+## remote_link = "⇄"
+## remote_control = "⇅"
+## infinity = "∞"
+
+# meter — the context tiles and the reset marker carry icons in the Nerd Font
+# preset; the context/scroll/mana bars keep their box-drawing shape in every
+# preset. The age clock fills the clock faces by elapsed time — quarter steps in
+# Unicode, eighth steps across the circle-slice series in nerd-font.
+## [sidebar.glyphs.meter]
+## context_full = "▣"
+## reset = "↻"
+## [sidebar.glyphs.clock]
+## over = "◉"
 
 [sidebar.providers]
 # Provider styles are keyed by agent kind and every field is optional.

@@ -104,19 +104,19 @@ pub(in crate::sidebar_pane::render) fn proc_stats_spans(
     };
     let slots: [(GlyphRole, Component, usize, String); 3] = [
         (
-            GlyphRole::MarkerProcCpu,
+            GlyphRole::ProcessCpu,
             Component::ProcCpu,
             CPU_SLOT,
             fmt_cpu(cpu_pct),
         ),
         (
-            GlyphRole::MarkerProcMem,
+            GlyphRole::ProcessMem,
             Component::ProcMem,
             RSS_SLOT,
             fmt_rss(rss_kb),
         ),
         (
-            GlyphRole::MarkerProcIo,
+            GlyphRole::ProcessIo,
             Component::ProcIo,
             IO_SLOT,
             fmt_io(io_bps),

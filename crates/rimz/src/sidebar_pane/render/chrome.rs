@@ -26,7 +26,7 @@ pub(super) fn repo_header_lines(
     let clip = |text: &str| -> String { text.chars().take(width.max(1)).collect() };
     let name = clip(&format!(
         "{} {}",
-        theme.glyph(GlyphRole::ChromeWorkspace),
+        theme.glyph(GlyphRole::CockpitWorkspace),
         snapshot.display_name
     ));
     let name_width = name.chars().count();

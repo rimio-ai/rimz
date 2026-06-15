@@ -2,211 +2,267 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::validate_single_cell;
+use super::validate_glyph_cells;
 
-/// A configurable sidebar glyph role. The namespace groups match the TOML
-/// shape under `[sidebar.glyphs.<namespace>]`.
+/// A configurable sidebar glyph role. The namespaces mirror the on-screen
+/// reading order, so `[sidebar.glyphs.<namespace>]` groups the glyphs the way
+/// the sidebar lays them out: `status` heads, the `cockpit` identity row,
+/// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
+/// `card`, `process` rows, and `chrome`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GlyphRole {
-    MarkerTokenTotal,
-    MarkerTokenIn,
-    MarkerTokenOut,
-    MarkerCacheRead,
-    MarkerCacheWrite,
-    MarkerSessions,
-    MarkerCompaction,
-    MarkerSubagents,
-    MarkerActiveAgents,
-    MarkerTodoDone,
-    MarkerTodoPending,
-    MarkerRemoteControl,
-    MarkerProcCpu,
-    MarkerProcMem,
-    MarkerProcIo,
-    MarkerInfinity,
+    // status — the leading cell of every agent row.
+    StatusWaiting,
+    StatusAttention,
+    StatusPaused,
+    StatusDone,
+    StatusIdle,
+    StatusWorking,
+    StatusThinking,
+    StatusDelegating,
+    StatusResolving,
+    StatusCompacting,
+    // cockpit — the identity and summary row.
+    CockpitWorkspace,
+    CockpitSessions,
+    CockpitAgents,
+    // tokens — the token-accounting markers.
+    TokensTotal,
+    TokensInput,
+    TokensOutput,
+    TokensCacheRead,
+    TokensCacheWrite,
+    TokensFilled,
+    TokensCompaction,
+    // meter — the drawn gauges and bars.
+    MeterContextFull,
+    MeterContextEmpty,
     MeterBarFilled,
     MeterBarTrack,
     MeterBarCap,
     MeterManaFilled,
     MeterManaTrack,
+    MeterReset,
     MeterScrollThumb,
     MeterScrollTrack,
-    MeterContextFull,
-    MeterContextEmpty,
-    MeterContextFilled,
+    // clock — the last-activity age face.
     ClockQ1,
     ClockQ2,
     ClockQ3,
     ClockQ4,
     ClockOver,
-    StructureCardSpineLeft,
-    StructureCardSpineRight,
-    StructureLaneSpineLeft,
-    StructureLaneSpineRight,
-    StructureTabCapLeft,
-    StructureTabCapRight,
-    StructureBranch,
-    StructureAhead,
-    StructureBehind,
-    StructureTrunkEqual,
-    StructureTrunkClear,
-    StructureDotted,
-    ChromeWorkspace,
+    // worktree — the group header's git story.
+    WorktreeBranch,
+    WorktreeAhead,
+    WorktreeBehind,
+    WorktreeTrunkEqual,
+    WorktreeTrunkClear,
+    WorktreeDotted,
+    // card — the agent card body.
+    CardSubagents,
+    CardTodoDone,
+    CardTodoPending,
+    CardParkedBg,
+    // process — the process-row resource grid.
+    ProcessCpu,
+    ProcessMem,
+    ProcessIo,
+    // chrome — framing, spines, tabs, and badges.
     ChromeAlert,
     ChromeRemoteLink,
+    ChromeRemoteControl,
     ChromeHairline,
+    ChromeTabCapLeft,
+    ChromeTabCapRight,
+    ChromeSpineCardLeft,
+    ChromeSpineCardRight,
+    ChromeSpineLaneLeft,
+    ChromeSpineLaneRight,
+    ChromeInfinity,
 }
 
 impl GlyphRole {
     pub const ALL: &'static [Self] = &[
-        Self::MarkerTokenTotal,
-        Self::MarkerTokenIn,
-        Self::MarkerTokenOut,
-        Self::MarkerCacheRead,
-        Self::MarkerCacheWrite,
-        Self::MarkerSessions,
-        Self::MarkerCompaction,
-        Self::MarkerSubagents,
-        Self::MarkerActiveAgents,
-        Self::MarkerTodoDone,
-        Self::MarkerTodoPending,
-        Self::MarkerRemoteControl,
-        Self::MarkerProcCpu,
-        Self::MarkerProcMem,
-        Self::MarkerProcIo,
-        Self::MarkerInfinity,
+        Self::StatusWaiting,
+        Self::StatusAttention,
+        Self::StatusPaused,
+        Self::StatusDone,
+        Self::StatusIdle,
+        Self::StatusWorking,
+        Self::StatusThinking,
+        Self::StatusDelegating,
+        Self::StatusResolving,
+        Self::StatusCompacting,
+        Self::CockpitWorkspace,
+        Self::CockpitSessions,
+        Self::CockpitAgents,
+        Self::TokensTotal,
+        Self::TokensInput,
+        Self::TokensOutput,
+        Self::TokensCacheRead,
+        Self::TokensCacheWrite,
+        Self::TokensFilled,
+        Self::TokensCompaction,
+        Self::MeterContextFull,
+        Self::MeterContextEmpty,
         Self::MeterBarFilled,
         Self::MeterBarTrack,
         Self::MeterBarCap,
         Self::MeterManaFilled,
         Self::MeterManaTrack,
+        Self::MeterReset,
         Self::MeterScrollThumb,
         Self::MeterScrollTrack,
-        Self::MeterContextFull,
-        Self::MeterContextEmpty,
-        Self::MeterContextFilled,
         Self::ClockQ1,
         Self::ClockQ2,
         Self::ClockQ3,
         Self::ClockQ4,
         Self::ClockOver,
-        Self::StructureCardSpineLeft,
-        Self::StructureCardSpineRight,
-        Self::StructureLaneSpineLeft,
-        Self::StructureLaneSpineRight,
-        Self::StructureTabCapLeft,
-        Self::StructureTabCapRight,
-        Self::StructureBranch,
-        Self::StructureAhead,
-        Self::StructureBehind,
-        Self::StructureTrunkEqual,
-        Self::StructureTrunkClear,
-        Self::StructureDotted,
-        Self::ChromeWorkspace,
+        Self::WorktreeBranch,
+        Self::WorktreeAhead,
+        Self::WorktreeBehind,
+        Self::WorktreeTrunkEqual,
+        Self::WorktreeTrunkClear,
+        Self::WorktreeDotted,
+        Self::CardSubagents,
+        Self::CardTodoDone,
+        Self::CardTodoPending,
+        Self::CardParkedBg,
+        Self::ProcessCpu,
+        Self::ProcessMem,
+        Self::ProcessIo,
         Self::ChromeAlert,
         Self::ChromeRemoteLink,
+        Self::ChromeRemoteControl,
         Self::ChromeHairline,
+        Self::ChromeTabCapLeft,
+        Self::ChromeTabCapRight,
+        Self::ChromeSpineCardLeft,
+        Self::ChromeSpineCardRight,
+        Self::ChromeSpineLaneLeft,
+        Self::ChromeSpineLaneRight,
+        Self::ChromeInfinity,
     ];
 
     pub fn namespace(self) -> &'static str {
         match self {
-            Self::MarkerTokenTotal
-            | Self::MarkerTokenIn
-            | Self::MarkerTokenOut
-            | Self::MarkerCacheRead
-            | Self::MarkerCacheWrite
-            | Self::MarkerSessions
-            | Self::MarkerCompaction
-            | Self::MarkerSubagents
-            | Self::MarkerActiveAgents
-            | Self::MarkerTodoDone
-            | Self::MarkerTodoPending
-            | Self::MarkerRemoteControl
-            | Self::MarkerProcCpu
-            | Self::MarkerProcMem
-            | Self::MarkerProcIo
-            | Self::MarkerInfinity => "marker",
-            Self::MeterBarFilled
+            Self::StatusWaiting
+            | Self::StatusAttention
+            | Self::StatusPaused
+            | Self::StatusDone
+            | Self::StatusIdle
+            | Self::StatusWorking
+            | Self::StatusThinking
+            | Self::StatusDelegating
+            | Self::StatusResolving
+            | Self::StatusCompacting => "status",
+            Self::CockpitWorkspace | Self::CockpitSessions | Self::CockpitAgents => "cockpit",
+            Self::TokensTotal
+            | Self::TokensInput
+            | Self::TokensOutput
+            | Self::TokensCacheRead
+            | Self::TokensCacheWrite
+            | Self::TokensFilled
+            | Self::TokensCompaction => "tokens",
+            Self::MeterContextFull
+            | Self::MeterContextEmpty
+            | Self::MeterBarFilled
             | Self::MeterBarTrack
             | Self::MeterBarCap
             | Self::MeterManaFilled
             | Self::MeterManaTrack
+            | Self::MeterReset
             | Self::MeterScrollThumb
-            | Self::MeterScrollTrack
-            | Self::MeterContextFull
-            | Self::MeterContextEmpty
-            | Self::MeterContextFilled => "meter",
+            | Self::MeterScrollTrack => "meter",
             Self::ClockQ1 | Self::ClockQ2 | Self::ClockQ3 | Self::ClockQ4 | Self::ClockOver => {
                 "clock"
             }
-            Self::StructureCardSpineLeft
-            | Self::StructureCardSpineRight
-            | Self::StructureLaneSpineLeft
-            | Self::StructureLaneSpineRight
-            | Self::StructureTabCapLeft
-            | Self::StructureTabCapRight
-            | Self::StructureBranch
-            | Self::StructureAhead
-            | Self::StructureBehind
-            | Self::StructureTrunkEqual
-            | Self::StructureTrunkClear
-            | Self::StructureDotted => "structure",
-            Self::ChromeWorkspace
-            | Self::ChromeAlert
+            Self::WorktreeBranch
+            | Self::WorktreeAhead
+            | Self::WorktreeBehind
+            | Self::WorktreeTrunkEqual
+            | Self::WorktreeTrunkClear
+            | Self::WorktreeDotted => "worktree",
+            Self::CardSubagents
+            | Self::CardTodoDone
+            | Self::CardTodoPending
+            | Self::CardParkedBg => "card",
+            Self::ProcessCpu | Self::ProcessMem | Self::ProcessIo => "process",
+            Self::ChromeAlert
             | Self::ChromeRemoteLink
-            | Self::ChromeHairline => "chrome",
+            | Self::ChromeRemoteControl
+            | Self::ChromeHairline
+            | Self::ChromeTabCapLeft
+            | Self::ChromeTabCapRight
+            | Self::ChromeSpineCardLeft
+            | Self::ChromeSpineCardRight
+            | Self::ChromeSpineLaneLeft
+            | Self::ChromeSpineLaneRight
+            | Self::ChromeInfinity => "chrome",
         }
     }
 
     pub fn name(self) -> &'static str {
         match self {
-            Self::MarkerTokenTotal => "token_total",
-            Self::MarkerTokenIn => "token_in",
-            Self::MarkerTokenOut => "token_out",
-            Self::MarkerCacheRead => "cache_read",
-            Self::MarkerCacheWrite => "cache_write",
-            Self::MarkerSessions => "sessions",
-            Self::MarkerCompaction => "compaction",
-            Self::MarkerSubagents => "subagents",
-            Self::MarkerActiveAgents => "active_agents",
-            Self::MarkerTodoDone => "todo_done",
-            Self::MarkerTodoPending => "todo_pending",
-            Self::MarkerRemoteControl => "remote_control",
-            Self::MarkerProcCpu => "proc_cpu",
-            Self::MarkerProcMem => "proc_mem",
-            Self::MarkerProcIo => "proc_io",
-            Self::MarkerInfinity => "infinity",
+            Self::StatusWaiting => "waiting",
+            Self::StatusAttention => "attention",
+            Self::StatusPaused => "paused",
+            Self::StatusDone => "done",
+            Self::StatusIdle => "idle",
+            Self::StatusWorking => "working",
+            Self::StatusThinking => "thinking",
+            Self::StatusDelegating => "delegating",
+            Self::StatusResolving => "resolving",
+            Self::StatusCompacting => "compacting",
+            Self::CockpitWorkspace => "workspace",
+            Self::CockpitSessions => "sessions",
+            Self::CockpitAgents => "agents",
+            Self::TokensTotal => "total",
+            Self::TokensInput => "input",
+            Self::TokensOutput => "output",
+            Self::TokensCacheRead => "cache_read",
+            Self::TokensCacheWrite => "cache_write",
+            Self::TokensFilled => "filled",
+            Self::TokensCompaction => "compaction",
+            Self::MeterContextFull => "context_full",
+            Self::MeterContextEmpty => "context_empty",
             Self::MeterBarFilled => "bar_filled",
             Self::MeterBarTrack => "bar_track",
             Self::MeterBarCap => "bar_cap",
             Self::MeterManaFilled => "mana_filled",
             Self::MeterManaTrack => "mana_track",
+            Self::MeterReset => "reset",
             Self::MeterScrollThumb => "scroll_thumb",
             Self::MeterScrollTrack => "scroll_track",
-            Self::MeterContextFull => "context_full",
-            Self::MeterContextEmpty => "context_empty",
-            Self::MeterContextFilled => "context_filled",
             Self::ClockQ1 => "q1",
             Self::ClockQ2 => "q2",
             Self::ClockQ3 => "q3",
             Self::ClockQ4 => "q4",
             Self::ClockOver => "over",
-            Self::StructureCardSpineLeft => "card_spine_left",
-            Self::StructureCardSpineRight => "card_spine_right",
-            Self::StructureLaneSpineLeft => "lane_spine_left",
-            Self::StructureLaneSpineRight => "lane_spine_right",
-            Self::StructureTabCapLeft => "tab_cap_left",
-            Self::StructureTabCapRight => "tab_cap_right",
-            Self::StructureBranch => "branch",
-            Self::StructureAhead => "ahead",
-            Self::StructureBehind => "behind",
-            Self::StructureTrunkEqual => "trunk_equal",
-            Self::StructureTrunkClear => "trunk_clear",
-            Self::StructureDotted => "dotted",
-            Self::ChromeWorkspace => "workspace",
+            Self::WorktreeBranch => "branch",
+            Self::WorktreeAhead => "ahead",
+            Self::WorktreeBehind => "behind",
+            Self::WorktreeTrunkEqual => "trunk_equal",
+            Self::WorktreeTrunkClear => "trunk_clear",
+            Self::WorktreeDotted => "dotted",
+            Self::CardSubagents => "subagents",
+            Self::CardTodoDone => "todo_done",
+            Self::CardTodoPending => "todo_pending",
+            Self::CardParkedBg => "parked_bg",
+            Self::ProcessCpu => "cpu",
+            Self::ProcessMem => "mem",
+            Self::ProcessIo => "io",
             Self::ChromeAlert => "alert",
             Self::ChromeRemoteLink => "remote_link",
+            Self::ChromeRemoteControl => "remote_control",
             Self::ChromeHairline => "hairline",
+            Self::ChromeTabCapLeft => "tab_cap_left",
+            Self::ChromeTabCapRight => "tab_cap_right",
+            Self::ChromeSpineCardLeft => "spine_card_left",
+            Self::ChromeSpineCardRight => "spine_card_right",
+            Self::ChromeSpineLaneLeft => "spine_lane_left",
+            Self::ChromeSpineLaneRight => "spine_lane_right",
+            Self::ChromeInfinity => "infinity",
         }
     }
 
@@ -215,80 +271,10 @@ impl GlyphRole {
     }
 
     pub fn from_namespaced(namespace: &str, name: &str) -> Option<Self> {
-        match (namespace, name) {
-            ("marker", "token_total") => Some(Self::MarkerTokenTotal),
-            ("marker", "token_in") => Some(Self::MarkerTokenIn),
-            ("marker", "token_out") => Some(Self::MarkerTokenOut),
-            ("marker", "cache_read") => Some(Self::MarkerCacheRead),
-            ("marker", "cache_write") => Some(Self::MarkerCacheWrite),
-            ("marker", "sessions") => Some(Self::MarkerSessions),
-            ("marker", "compaction") => Some(Self::MarkerCompaction),
-            ("marker", "subagents") => Some(Self::MarkerSubagents),
-            ("marker", "active_agents") => Some(Self::MarkerActiveAgents),
-            ("marker", "todo_done") => Some(Self::MarkerTodoDone),
-            ("marker", "todo_pending") => Some(Self::MarkerTodoPending),
-            ("marker", "remote_control") => Some(Self::MarkerRemoteControl),
-            ("marker", "proc_cpu") => Some(Self::MarkerProcCpu),
-            ("marker", "proc_mem") => Some(Self::MarkerProcMem),
-            ("marker", "proc_io") => Some(Self::MarkerProcIo),
-            ("marker", "infinity") => Some(Self::MarkerInfinity),
-            ("meter", "bar_filled") => Some(Self::MeterBarFilled),
-            ("meter", "bar_track") => Some(Self::MeterBarTrack),
-            ("meter", "bar_cap") => Some(Self::MeterBarCap),
-            ("meter", "mana_filled") => Some(Self::MeterManaFilled),
-            ("meter", "mana_track") => Some(Self::MeterManaTrack),
-            ("meter", "scroll_thumb") => Some(Self::MeterScrollThumb),
-            ("meter", "scroll_track") => Some(Self::MeterScrollTrack),
-            ("meter", "context_full") => Some(Self::MeterContextFull),
-            ("meter", "context_empty") => Some(Self::MeterContextEmpty),
-            ("meter", "context_filled") => Some(Self::MeterContextFilled),
-            ("clock", "q1") => Some(Self::ClockQ1),
-            ("clock", "q2") => Some(Self::ClockQ2),
-            ("clock", "q3") => Some(Self::ClockQ3),
-            ("clock", "q4") => Some(Self::ClockQ4),
-            ("clock", "over") => Some(Self::ClockOver),
-            ("structure", "card_spine_left") => Some(Self::StructureCardSpineLeft),
-            ("structure", "card_spine_right") => Some(Self::StructureCardSpineRight),
-            ("structure", "lane_spine_left") => Some(Self::StructureLaneSpineLeft),
-            ("structure", "lane_spine_right") => Some(Self::StructureLaneSpineRight),
-            ("structure", "tab_cap_left") => Some(Self::StructureTabCapLeft),
-            ("structure", "tab_cap_right") => Some(Self::StructureTabCapRight),
-            ("structure", "branch") => Some(Self::StructureBranch),
-            ("structure", "ahead") => Some(Self::StructureAhead),
-            ("structure", "behind") => Some(Self::StructureBehind),
-            ("structure", "trunk_equal") => Some(Self::StructureTrunkEqual),
-            ("structure", "trunk_clear") => Some(Self::StructureTrunkClear),
-            ("structure", "dotted") => Some(Self::StructureDotted),
-            ("chrome", "workspace") => Some(Self::ChromeWorkspace),
-            ("chrome", "alert") => Some(Self::ChromeAlert),
-            ("chrome", "remote_link") => Some(Self::ChromeRemoteLink),
-            ("chrome", "hairline") => Some(Self::ChromeHairline),
-            _ => None,
-        }
-    }
-
-    pub fn is_drawn_unicode_in_nerd_font(self) -> bool {
-        matches!(
-            self,
-            Self::MeterBarFilled
-                | Self::MeterBarTrack
-                | Self::MeterBarCap
-                | Self::MeterManaFilled
-                | Self::MeterManaTrack
-                | Self::MeterScrollThumb
-                | Self::MeterScrollTrack
-                | Self::MeterContextFull
-                | Self::MeterContextEmpty
-                | Self::MeterContextFilled
-                | Self::StructureCardSpineLeft
-                | Self::StructureCardSpineRight
-                | Self::StructureLaneSpineLeft
-                | Self::StructureLaneSpineRight
-                | Self::StructureTabCapLeft
-                | Self::StructureTabCapRight
-                | Self::StructureDotted
-                | Self::ChromeHairline
-        )
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|role| role.namespace() == namespace && role.name() == name)
     }
 }
 
@@ -311,27 +297,36 @@ impl GlyphGroup {
             if GlyphRole::from_namespaced(namespace, name).is_none() {
                 return Err(format!("unknown sidebar glyph role `{namespace}.{name}`"));
             }
-            validate_single_cell(value)
+            validate_glyph_cells(value)
                 .map_err(|err| format!("sidebar glyph `{namespace}.{name}` {err}"))?;
         }
         Ok(Self(values))
     }
 }
 
-/// `[sidebar.glyphs]`: the selected glyph preset and sparse user overrides.
+/// `[sidebar.glyphs]`: the selected glyph preset and sparse user overrides,
+/// grouped by the sidebar's on-screen zones.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarGlyphsConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub set: Option<String>,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub marker: GlyphGroup,
+    pub status: GlyphGroup,
+    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
+    pub cockpit: GlyphGroup,
+    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
+    pub tokens: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub meter: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub clock: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
-    pub structure: GlyphGroup,
+    pub worktree: GlyphGroup,
+    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
+    pub card: GlyphGroup,
+    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
+    pub process: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub chrome: GlyphGroup,
 }
@@ -343,10 +338,14 @@ impl SidebarGlyphsConfig {
 
     pub fn glyph(&self, role: GlyphRole) -> Option<&str> {
         let group = match role.namespace() {
-            "marker" => &self.marker,
+            "status" => &self.status,
+            "cockpit" => &self.cockpit,
+            "tokens" => &self.tokens,
             "meter" => &self.meter,
             "clock" => &self.clock,
-            "structure" => &self.structure,
+            "worktree" => &self.worktree,
+            "card" => &self.card,
+            "process" => &self.process,
             "chrome" => &self.chrome,
             _ => return None,
         };
@@ -363,22 +362,32 @@ impl<'de> Deserialize<'de> for SidebarGlyphsConfig {
         #[serde(default, deny_unknown_fields)]
         struct RawSidebarGlyphsConfig {
             set: Option<String>,
-            marker: BTreeMap<String, String>,
+            status: BTreeMap<String, String>,
+            cockpit: BTreeMap<String, String>,
+            tokens: BTreeMap<String, String>,
             meter: BTreeMap<String, String>,
             clock: BTreeMap<String, String>,
-            structure: BTreeMap<String, String>,
+            worktree: BTreeMap<String, String>,
+            card: BTreeMap<String, String>,
+            process: BTreeMap<String, String>,
             chrome: BTreeMap<String, String>,
         }
 
         let raw = RawSidebarGlyphsConfig::deserialize(deserializer)?;
+        let group = |namespace, values| {
+            GlyphGroup::validate(namespace, values).map_err(serde::de::Error::custom)
+        };
         Ok(Self {
             set: raw.set,
-            marker: GlyphGroup::validate("marker", raw.marker).map_err(serde::de::Error::custom)?,
-            meter: GlyphGroup::validate("meter", raw.meter).map_err(serde::de::Error::custom)?,
-            clock: GlyphGroup::validate("clock", raw.clock).map_err(serde::de::Error::custom)?,
-            structure: GlyphGroup::validate("structure", raw.structure)
-                .map_err(serde::de::Error::custom)?,
-            chrome: GlyphGroup::validate("chrome", raw.chrome).map_err(serde::de::Error::custom)?,
+            status: group("status", raw.status)?,
+            cockpit: group("cockpit", raw.cockpit)?,
+            tokens: group("tokens", raw.tokens)?,
+            meter: group("meter", raw.meter)?,
+            clock: group("clock", raw.clock)?,
+            worktree: group("worktree", raw.worktree)?,
+            card: group("card", raw.card)?,
+            process: group("process", raw.process)?,
+            chrome: group("chrome", raw.chrome)?,
         })
     }
 }
@@ -390,36 +399,60 @@ mod tests {
     #[test]
     fn parses_sparse_overrides_and_defaults_to_unset() {
         let config: SidebarGlyphsConfig = toml::from_str(
-            "[marker]\n\
-             token_total = \"◇\"\n\
+            "[status]\n\
+             working = \"⢿\"\n\
              [clock]\n\
              over = \"◉\"\n",
         )
         .expect("glyphs config");
         assert_eq!(config.set, None);
-        assert_eq!(config.glyph(GlyphRole::MarkerTokenTotal), Some("◇"));
+        assert_eq!(config.glyph(GlyphRole::StatusWorking), Some("⢿"));
         assert_eq!(config.glyph(GlyphRole::ClockOver), Some("◉"));
         assert!(SidebarGlyphsConfig::default().is_unset());
     }
 
     #[test]
+    fn status_group_sets_the_whole_make_up_row_at_once() {
+        let config: SidebarGlyphsConfig = toml::from_str(
+            "[status]\n\
+             waiting = \"?\"\n\
+             attention = \"!\"\n\
+             paused = \"⏸\"\n\
+             done = \"✓\"\n\
+             working = \"⢿\"\n\
+             idle = \"○\"\n",
+        )
+        .expect("glyphs config");
+        assert_eq!(config.glyph(GlyphRole::StatusWaiting), Some("?"));
+        assert_eq!(config.glyph(GlyphRole::StatusAttention), Some("!"));
+        assert_eq!(config.glyph(GlyphRole::StatusPaused), Some("⏸"));
+        assert_eq!(config.glyph(GlyphRole::StatusDone), Some("✓"));
+        assert_eq!(config.glyph(GlyphRole::StatusWorking), Some("⢿"));
+        assert_eq!(config.glyph(GlyphRole::StatusIdle), Some("○"));
+    }
+
+    #[test]
     fn validates_known_roles_and_one_cell_values() {
-        let err = toml::from_str::<SidebarGlyphsConfig>("[marker]\nnope = \"x\"\n")
+        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\nnope = \"x\"\n")
             .expect_err("unknown role")
             .to_string();
-        assert!(err.contains("unknown sidebar glyph role `marker.nope`"));
+        assert!(err.contains("unknown sidebar glyph role `tokens.nope`"));
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[makr]\ntoken_total = \"Σ\"\n")
+        let err = toml::from_str::<SidebarGlyphsConfig>("[makr]\ntotal = \"Σ\"\n")
             .expect_err("unknown namespace")
             .to_string();
         assert!(err.contains("unknown field `makr`"));
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[marker]\ntoken_total = \"ab\"\n")
-            .expect_err("wide glyph")
+        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"abc\"\n")
+            .expect_err("over-wide glyph")
             .to_string();
-        assert!(err.contains("must occupy exactly one terminal cell"));
+        assert!(err.contains("must occupy one or two terminal cells"));
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[marker]\ntoken_total = \"\"\n")
+        // A double-width glyph padded to two cells is accepted.
+        toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"\u{efa0} \"\n")
+            .expect("double-width glyph");
+
+        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"\"\n")
             .expect_err("empty glyph")
             .to_string();
         assert!(err.contains("must not contain empty glyphs"));
@@ -428,10 +461,10 @@ mod tests {
     #[test]
     fn serializes_only_changed_keys() {
         let config: SidebarGlyphsConfig =
-            toml::from_str("[marker]\ntoken_total = \"◇\"\n").expect("glyphs config");
+            toml::from_str("[tokens]\ntotal = \"◇\"\n").expect("glyphs config");
         let serialized = toml::to_string(&config).expect("serialize");
-        assert!(serialized.contains("[marker]"));
-        assert!(serialized.contains("token_total = \"◇\""));
+        assert!(serialized.contains("[tokens]"));
+        assert!(serialized.contains("total = \"◇\""));
         assert_eq!(
             toml::to_string(&SidebarGlyphsConfig::default()).expect("serialize"),
             ""

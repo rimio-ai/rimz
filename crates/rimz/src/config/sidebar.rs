@@ -85,6 +85,22 @@ pub enum CardDensityMode {
     Compact,
 }
 
+/// `[sidebar] style`: a headline preset bundling color depth and glyph set so
+/// one switch picks the whole look. `modern` forces truecolor and the Nerd Font
+/// glyphs; `default` keeps auto color depth and the Unicode glyphs. An explicit
+/// `[sidebar.theme] mode` or `[sidebar.glyphs] set` always wins over the preset,
+/// so the switch is a starting point, not a lock.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SidebarStyle {
+    /// Auto color depth (truecolor when the terminal advertises it, otherwise
+    /// 256) with the default Unicode glyph vocabulary — the broad-terminal floor.
+    Default,
+    /// Truecolor depth with the Nerd Font glyph preset — assumes a Nerd Font v3+
+    /// face is active in the terminal.
+    Modern,
+}
+
 /// `[sidebar.pets] glyphs`: which Unicode block tier the pet renderer uses.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "lowercase")]
@@ -148,6 +164,12 @@ impl Default for PetsConfig {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
+    /// Headline display preset bundling color depth and glyph set: `modern`
+    /// (truecolor + Nerd Font) or `default` (auto color + Unicode). Unset leaves
+    /// each axis at its own default; an explicit `[sidebar.theme] mode` or
+    /// `[sidebar.glyphs] set` overrides the preset.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub style: Option<SidebarStyle>,
     /// Base render cadence in milliseconds. This controls animation and
     /// event-coalesced paint timing; data polling stays on `--tick-seconds`.
     pub refresh_ms: u16,
@@ -253,6 +275,7 @@ pub struct SidebarConfig {
 impl Default for SidebarConfig {
     fn default() -> Self {
         Self {
+            style: None,
             providers: BTreeMap::new(),
             refresh_ms: DEFAULT_REFRESH_MS,
             max_provider_blocks: default_max_provider_blocks(),
@@ -278,6 +301,31 @@ impl Default for SidebarConfig {
 impl SidebarConfig {
     pub fn resolved_refresh_ms(&self) -> u16 {
         self.refresh_ms.clamp(MIN_REFRESH_MS, MAX_REFRESH_MS)
+    }
+
+    /// The palette depth mode after folding in the [`style`](Self::style) preset:
+    /// an explicit `[sidebar.theme] mode` wins; otherwise `modern` forces
+    /// truecolor and every other case keeps auto detection.
+    pub fn effective_theme_mode(&self) -> ThemeMode {
+        match self.theme.mode {
+            ThemeMode::Auto => match self.style {
+                Some(SidebarStyle::Modern) => ThemeMode::Truecolor,
+                _ => ThemeMode::Auto,
+            },
+            explicit => explicit,
+        }
+    }
+
+    /// The glyph-set source after folding in the [`style`](Self::style) preset:
+    /// an explicit `[sidebar.glyphs] set` (a named preset or a custom path) wins;
+    /// otherwise `modern` selects `nerd-font` and every other case keeps the
+    /// Unicode default. The per-glyph overrides under `[sidebar.glyphs]` apply on
+    /// top of whichever base this picks.
+    pub fn glyph_set_source(&self) -> Option<String> {
+        self.glyphs.set.clone().or_else(|| match self.style {
+            Some(SidebarStyle::Modern) => Some("nerd-font".to_owned()),
+            _ => None,
+        })
     }
 
     /// The focus-sidebar chord to register and display, or `None` when the user

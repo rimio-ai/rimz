@@ -5,7 +5,9 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use crate::config::SidebarGlyphsConfig;
 
 const NAMED_SETS: [&str; 2] = ["unicode", "nerd-font"];
-const GLYPH_TABLES: [&str; 5] = ["marker", "meter", "clock", "structure", "chrome"];
+const GLYPH_TABLES: [&str; 9] = [
+    "status", "cockpit", "tokens", "meter", "clock", "worktree", "card", "process", "chrome",
+];
 
 pub fn validate_glyph_source(name_or_path: &str) -> Result<(), String> {
     if is_named_glyph_set(name_or_path) {
@@ -135,14 +137,14 @@ mod tests {
     fn custom_file_validates_known_tables_and_glyph_width() {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("glyphs.toml");
-        std::fs::write(&file, "[marker]\ntoken_total = \"◇\"\n").expect("write glyph file");
+        std::fs::write(&file, "[tokens]\ntotal = \"◇\"\n").expect("write glyph file");
         validate_glyph_source(file.to_str().expect("utf-8")).expect("valid glyph file");
 
-        std::fs::write(&file, "[marker]\ntoken_total = \"ab\"\n").expect("write glyph file");
+        std::fs::write(&file, "[tokens]\ntotal = \"abc\"\n").expect("write glyph file");
         let err = validate_glyph_source(file.to_str().expect("utf-8"))
-            .expect_err("wide glyph")
+            .expect_err("over-wide glyph")
             .to_string();
-        assert!(err.contains("must occupy exactly one terminal cell"));
+        assert!(err.contains("must occupy one or two terminal cells"));
 
         std::fs::write(&file, "[nope]\nthing = \"x\"\n").expect("write glyph file");
         let err = validate_glyph_source(file.to_str().expect("utf-8"))
@@ -155,11 +157,8 @@ mod tests {
     fn custom_file_rejects_unknown_base_set() {
         let dir = tempdir().expect("tempdir");
         let file = dir.path().join("glyphs.toml");
-        std::fs::write(
-            &file,
-            "set = \"nerd-fnot\"\n[marker]\ntoken_total = \"◇\"\n",
-        )
-        .expect("write glyph file");
+        std::fs::write(&file, "set = \"nerd-fnot\"\n[tokens]\ntotal = \"◇\"\n")
+            .expect("write glyph file");
 
         let err = validate_glyph_source(file.to_str().expect("utf-8"))
             .expect_err("unknown file-local base")

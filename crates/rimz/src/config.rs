@@ -35,7 +35,7 @@ pub use accounts::{AccountsConfig, UsageLimitUsd};
 pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig, TabPlacement};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
-    SidebarAnimationsConfig, UnreadEffect, validate_single_cell,
+    SidebarAnimationsConfig, UnreadEffect, validate_glyph_cells, validate_single_cell,
 };
 pub use autoping::{AutoPingConfig, ScheduleEntry, Schedules};
 pub(crate) use color::xterm_rgb;
@@ -54,7 +54,7 @@ pub use sentry::SentryConfig;
 pub use sidebar::{
     AttentionConfig, BudgetPaceConfig, BudgetZonesConfig, CardDensityMode, ContextBand,
     ContextSeverityConfig, GlowMode, PetsConfig, PetsGlyphMode, PetsSize, ProviderTabsMode,
-    ScrollbarMode, SidebarConfig, SidebarProviderStyle, SidebarThemeConfig,
+    ScrollbarMode, SidebarConfig, SidebarProviderStyle, SidebarStyle, SidebarThemeConfig,
 };
 pub use worktree::{WorktreeBase, WorktreeConfig};
 

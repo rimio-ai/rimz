@@ -484,8 +484,8 @@ fn sidebar_glyphs_parse_and_default_unicode() {
         &dir,
         "[sidebar.glyphs]\n\
              set = \"nerd-font\"\n\
-             [sidebar.glyphs.marker]\n\
-             token_total = \"◇\"\n",
+             [sidebar.glyphs.tokens]\n\
+             total = \"◇\"\n",
     ))
     .expect("load");
     assert_eq!(config.sidebar.glyphs.set.as_deref(), Some("nerd-font"));
@@ -493,22 +493,18 @@ fn sidebar_glyphs_parse_and_default_unicode() {
         config
             .sidebar
             .glyphs
-            .glyph(crate::config::GlyphRole::MarkerTokenTotal),
+            .glyph(crate::config::GlyphRole::TokensTotal),
         Some("◇")
     );
 
     assert!(
-        MachineConfig::load_from(&write(
-            &dir,
-            "[sidebar.glyphs.marker]\ntoken_total = \"ab\"\n",
-        ))
-        .is_err(),
-        "glyph overrides must occupy exactly one terminal cell"
+        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.tokens]\ntotal = \"abc\"\n",))
+            .is_err(),
+        "glyph overrides occupy at most two terminal cells"
     );
 
     assert!(
-        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.makr]\ntoken_total = \"Σ\"\n",))
-            .is_err(),
+        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.makr]\ntotal = \"Σ\"\n",)).is_err(),
         "glyph namespaces must be known"
     );
 }

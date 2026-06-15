@@ -114,6 +114,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
 | `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
+| `⋯ bg`          | an agent parked on background work — a faint secondary marker after the description, so the live status above stays honest |
 | `⑂ name`        | a group header with a git story — a worktree's live branch, or a directory room's child repo |
 | `name` (bold)   | a directory room's own pod — name-only, no git story |
 | `▎`             | the selection lane — the worktree you're in, a dim selection-tone bracket |
@@ -437,7 +438,7 @@ These notices clear when the next accepted pane frame lands. A health alert take
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:
 
 ```
- ! Sidebar degraded for 8s: snapshot failed: ledger not found
+ ⚠ Sidebar degraded for 8s: snapshot failed: ledger not found
 ```
 
 On recovery it doesn't vanish; it lingers as a dim, dismissable notice so a failure that flickered past is still visible after the fact:

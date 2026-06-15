@@ -14,7 +14,7 @@ use ratatui::text::Span;
 
 use super::animation::{
     AnimationRole, BREATH_DEEP_AMPLITUDE, BreathSample, UnreadAnim, UnreadEffect, effect_style,
-    effect_weight, frame_at, shimmer_lift, still_frame,
+    effect_weight, frame_at, shimmer_lift,
 };
 use super::theme::Theme;
 

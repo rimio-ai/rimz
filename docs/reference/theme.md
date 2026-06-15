@@ -10,6 +10,15 @@ rimz config set sidebar.theme "TokyoNight Night"
 
 Every key below also lives as commented TOML in the generated template: `rimz config init --print`.
 
+## Style preset
+
+`[sidebar] style` is the one-line headline that pairs color depth with the glyph set. `modern` runs truecolor with the [Nerd Font glyph set](#glyphs); `default` keeps [auto color depth](#color-depth) and the shipped Unicode glyphs. An explicit `[sidebar.theme] mode` or `[sidebar.glyphs] set` overrides the matching half of the preset, so you can take the Nerd Font icons at `256` color or pin truecolor with the Unicode glyphs.
+
+```toml
+[sidebar]
+style = "modern"   # truecolor + Nerd Font; or "default" for auto color + Unicode
+```
+
 ## Schemes
 
 `[sidebar.theme] scheme` picks the palette source. `rimz list-themes` prints every bundled name.
@@ -149,7 +158,7 @@ Brightening runs in the same space and holds hue: a lift raises OKLab lightness 
 
 ## Animations
 
-`[sidebar.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone. Built-in frames follow `[sidebar.glyphs] set`: the table below shows Unicode defaults, while `nerd-font` swaps status heads that have a single-cell Nerd Font equivalent. Any explicit `frames` override wins.
+`[sidebar.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone. The static status heads (`idle`/`success`/`paused`/`waiting`/`attention`) follow `[sidebar.glyphs] set`, so `nerd-font` swaps each for its curated icon; the animated spinners (`thinking`/`working`/`delegating`/`resolving`) and the `compacting` wave keep their Unicode frames in every preset. Any explicit `frames` override wins.
 
 ```toml
 [sidebar.animations.thinking]
@@ -206,50 +215,61 @@ unread = "shimmer"   # or "bright", "blink"
 
 ## Glyphs
 
-`[sidebar.glyphs] set` picks the glyph source for the sidebar vocabulary. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) remains the canonical meaning table; this section changes the shapes that carry those meanings.
+`[sidebar.glyphs]` shapes the sidebar vocabulary, grouped the way the sidebar reads on screen. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table; this section changes the shapes that carry those meanings. `rimz config init` writes the groups as **active defaults** — every glyph on its own line with its current value — so customizing is direct: paste a different glyph over any value and it takes effect on the next render. Each glyph must occupy exactly one terminal cell.
+
+Set a whole zone in one block. The cockpit make-up row is the `status` group:
+
+```toml
+[sidebar.glyphs.status]
+waiting = "?"   attention = "!"   paused = "⏸︎"
+done    = "✓"   working   = "⢿"   idle   = "○"
+```
+
+### Groups
+
+The groups follow the on-screen reading order:
+
+| group | controls |
+| --- | --- |
+| `status` | the leading status heads — `waiting`, `attention`, `paused`, `done`, `idle`, `working`, `thinking`, `delegating`, `resolving`, `compacting` |
+| `cockpit` | `workspace`, `sessions`, `agents` |
+| `tokens` | `total`, `input`, `output`, `cache_read`, `cache_write`, `filled`, `compaction` |
+| `meter` | the drawn gauges: `context_full`/`context_empty`, the `bar_*`/`mana_*` fills, `scroll_*` |
+| `clock` | the quarter-age faces `q1`…`q4`, `over` |
+| `worktree` | `branch`, `ahead`, `behind`, `trunk_equal`, `trunk_clear`, `dotted` |
+| `card` | `subagents`, `todo_done`, `todo_pending`, `parked_bg` |
+| `process` | `cpu`, `mem`, `io` |
+| `chrome` | `alert`, `remote_link`, `remote_control`, `infinity`, the `tab_cap_*`/`spine_*` framing, and `hairline` |
+
+The `status` group sets the head **shapes**; their colour, effect, and speed stay in [`[sidebar.animations]`](#animations), and the built-in animation frames follow `[sidebar.glyphs] set`. Two `status` names read across to animation roles: `status.attention` is the animation role `failed`, and `status.done` is `success`. A single-frame head (`waiting`/`attention`/`paused`/`done`/`idle`) reads its `status` shape directly; the animated heads (`working`/`thinking`/`delegating`/`resolving`) cycle a Unicode spinner sequence in every preset, with the `status` glyph as the still representative the cockpit buckets show.
+
+### The `set` fallback
+
+`set` themes every glyph you do not pin in a group, so deleting a line falls back to it:
 
 | `set` | source |
 | --- | --- |
 | unset or `unicode` | the shipped Unicode set shown in the interface legend |
-| `nerd-font` | a Nerd Font preset for markers, clocks, status heads, and chrome |
-| `/path/to/glyphs.toml` | a sparse custom TOML file layered over Unicode, or over the file-local `set` when present |
+| `nerd-font` | a curated Nerd Font overlay for the status heads, cockpit identity, token and process markers, context tiles, age clocks, the worktree branch, and chrome link badges |
+| `/path/to/glyphs.toml` | a custom TOML file layered over Unicode, or over the file-local `set` when present |
 
-Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. Layout-drawn roles stay Unicode in that preset — bars, spines, caps, scrollbars, dotted rules, and hairlines keep their box-drawing shapes because the terminal grid carries those shapes more precisely than icon substitutions.
+Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. The drawn gauges — the context ratio bar, the provider budget (mana) bar, and the scrollbar — along with the `chrome` spines/caps/hairline, the `worktree.dotted` seal, and the `status.compacting` wave, carry their shape from the terminal grid more precisely than any icon, so they keep their box-drawing glyphs in every preset.
 
-```toml
-[sidebar.glyphs]
-set = "nerd-font"
-```
+The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling `circle_slice` series in `nerd-font`, so the icon tracks elapsed time twice as finely. Every glyph ships as a single cell, which aligns on the `Mono` Nerd Font builds — `JetBrainsMono Nerd Font Mono`, `FiraCode Nerd Font` — where each icon advances one column. A face that draws icons double-width, such as the non-`Mono` `Cascadia Code NF`, keeps its columns aligned by padding the alignment-sensitive glyphs with a trailing space in a per-glyph override under `[sidebar.glyphs.cockpit]` and `[sidebar.glyphs.chrome]`.
 
-Sparse overrides live under grouped tables. Each value must occupy exactly one terminal cell, and an omitted role keeps the selected set's value.
-
-```toml
-[sidebar.glyphs]
-set = "nerd-font"
-
-[sidebar.glyphs.marker]
-token_total = "◇"
-active_agents = "¤"
-
-[sidebar.glyphs.chrome]
-workspace = "⌘"
-```
-
-The groups are `marker`, `meter`, `clock`, `structure`, and `chrome`. Marker roles cover token, session, subagent, todo, process, remote-control, and infinity markers. Meter roles cover context, budget, and scrollbar shapes. Clock roles cover the quarter-age faces. Structure roles cover spines, tab caps, branch/ahead/behind/trunk markers, and dotted separators. Chrome roles cover the workspace, alert, remote-link, and hairline shapes.
-
-Custom glyph files use the same sparse shape without the outer `sidebar.glyphs` prefix:
+A custom glyph file uses the same grouped shape without the outer `sidebar.glyphs` prefix, and may pick its own base `set` before its overrides apply:
 
 ```toml
 set = "nerd-font"
 
-[marker]
-token_total = "Σ"
+[status]
+working = "⢿"
 
-[structure]
+[worktree]
 branch = "⑂"
 ```
 
-The custom file's own `set` chooses its base before its sparse overrides are applied; the machine config can still layer final overrides on top. `rimz config set` validates named sets, custom-file readability, known role names, and one-cell glyph width before it writes.
+The machine config can still layer final overrides on top. `rimz config set` validates named sets, custom-file readability, known role names, and glyph width — one cell, or two when a trailing space pads a double-width icon — before it writes — for example `rimz config set sidebar.glyphs.status.waiting "?"` or `rimz config set sidebar.glyphs.set nerd-font`.
 
 ## Provider Styling
 
@@ -282,7 +302,8 @@ rimz config set sidebar.theme "TokyoNight Night"
 rimz config set sidebar.theme.good '#a0d0a0'
 rimz config set sidebar.glow always
 rimz config set sidebar.glyphs.set nerd-font
-rimz config set sidebar.glyphs.marker.token_total '◇'
+rimz config set sidebar.glyphs.status.working '⢿'
+rimz config set sidebar.glyphs.tokens.total '◇'
 rimz config set sidebar.animations.unread shimmer
 rimz config set sidebar.animations.idle.effect breathe
 rimz config set sidebar.providers.codex.color 33

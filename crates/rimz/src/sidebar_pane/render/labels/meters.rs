@@ -15,7 +15,7 @@ use jiff::SignedDuration;
 /// so it leads with `▤` and reorders the same four columns by how the window
 /// filled ([`context_breakdown_spans`]).
 pub(in crate::sidebar_pane::render) fn token_total_glyph(theme: &Theme) -> String {
-    theme.glyph(GlyphRole::MarkerTokenTotal).to_owned()
+    theme.glyph(GlyphRole::TokensTotal).to_owned()
 }
 
 /// The `◇ ↘ ↗ ◌` token breakdown as styled spans — the one shape every fleet
@@ -45,9 +45,9 @@ pub(in crate::sidebar_pane::render) fn token_breakdown_spans(
         ));
         spans.push(Span::styled(fmt(value), theme.body()));
     };
-    field(GlyphRole::MarkerTokenIn, Component::Input, input);
-    field(GlyphRole::MarkerTokenOut, Component::Output, output);
-    field(GlyphRole::MarkerCacheRead, Component::CacheRead, cache_read);
+    field(GlyphRole::TokensInput, Component::Input, input);
+    field(GlyphRole::TokensOutput, Component::Output, output);
+    field(GlyphRole::TokensCacheRead, Component::CacheRead, cache_read);
     spans
 }
 
@@ -78,14 +78,14 @@ pub(in crate::sidebar_pane::render) fn context_breakdown_spans(
     // The `·` seam frames the first *rendered* column, wherever it lands.
     let mut seam = " · ";
     for (role, component, value) in [
-        (GlyphRole::MarkerCacheRead, Component::CacheRead, cache_read),
+        (GlyphRole::TokensCacheRead, Component::CacheRead, cache_read),
         (
-            GlyphRole::MarkerCacheWrite,
+            GlyphRole::TokensCacheWrite,
             Component::CacheWrite,
             cache_write,
         ),
-        (GlyphRole::MarkerTokenIn, Component::Input, input),
-        (GlyphRole::MarkerTokenOut, Component::Output, output),
+        (GlyphRole::TokensInput, Component::Input, input),
+        (GlyphRole::TokensOutput, Component::Output, output),
     ] {
         if value == 0 {
             continue;
@@ -115,7 +115,7 @@ pub(in crate::sidebar_pane::render) fn context_compaction_spans(
     vec![
         Span::styled(" · ", theme.muted()),
         Span::styled(
-            theme.glyph(GlyphRole::MarkerCompaction).to_owned(),
+            theme.glyph(GlyphRole::TokensCompaction).to_owned(),
             compacting_style(theme),
         ),
         Span::styled(format!(" {count}"), theme.muted()),
@@ -138,24 +138,13 @@ pub(in crate::sidebar_pane::render) fn context_total_spans(
 ) -> Vec<Span<'static>> {
     vec![
         Span::styled(
-            theme.glyph(GlyphRole::MeterContextFilled).to_owned(),
+            theme.glyph(GlyphRole::TokensFilled).to_owned(),
             theme.style(severity, Modifier::empty()),
         ),
         Span::styled(format!(" {}", fmt(filled)), theme.muted()),
     ]
 }
 
-/// Heavy `━` for the thin context/rule bars' filled run, light `─` for the
-/// remaining track. The weight difference — not just the color — carries the
-/// meter, so it reads with color off.
-// Context bars spend one cell on a half-rule cap between composition segments,
-// giving the split a narrow visible notch while the bar still ends exactly at
-// its fill level.
-
-/// Segmented `▰` / `▱` for the provider dashboard's draining "mana / stamina"
-/// bars: a thin, ticked energy gauge that reads lighter than a solid `█` block
-/// while still distinct from the `━`/`─` context rule. The fill/hollow shape
-/// carries the meter, so it survives `NO_COLOR`.
 pub(in crate::sidebar_pane::render) fn scroll_thumb_glyph(theme: &Theme) -> String {
     theme.glyph(GlyphRole::MeterScrollThumb).to_owned()
 }
@@ -624,10 +613,10 @@ pub(in crate::sidebar_pane::render) fn todo_spans(
     let dots = format!(
         "{}{}",
         theme
-            .glyph(GlyphRole::MarkerTodoDone)
+            .glyph(GlyphRole::CardTodoDone)
             .repeat(scaled_done as usize),
         theme
-            .glyph(GlyphRole::MarkerTodoPending)
+            .glyph(GlyphRole::CardTodoPending)
             .repeat(scaled_total.saturating_sub(scaled_done) as usize)
     );
     vec![
@@ -670,7 +659,7 @@ pub(in crate::sidebar_pane::render) fn branch_delta_spans(
     let mut spans = Vec::new();
     if ahead > 0 {
         spans.push(Span::styled(
-            format!("{}{ahead}", theme.glyph(GlyphRole::StructureAhead)),
+            format!("{}{ahead}", theme.glyph(GlyphRole::WorktreeAhead)),
             style,
         ));
     }
@@ -679,7 +668,7 @@ pub(in crate::sidebar_pane::render) fn branch_delta_spans(
             spans.push(Span::raw(" "));
         }
         spans.push(Span::styled(
-            format!("{}{behind}", theme.glyph(GlyphRole::StructureBehind)),
+            format!("{}{behind}", theme.glyph(GlyphRole::WorktreeBehind)),
             style,
         ));
     }
@@ -697,7 +686,7 @@ pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
     trunk: &str,
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
-        format!("{} {trunk}", theme.glyph(GlyphRole::StructureTrunkEqual)),
+        format!("{} {trunk}", theme.glyph(GlyphRole::WorktreeTrunkEqual)),
         theme.good(Modifier::DIM),
     )]
 }
@@ -713,7 +702,7 @@ pub(in crate::sidebar_pane::render) fn trunk_clear_spans(
     trunk: &str,
 ) -> Vec<Span<'static>> {
     vec![Span::styled(
-        format!("{} {trunk}", theme.glyph(GlyphRole::StructureTrunkClear)),
+        format!("{} {trunk}", theme.glyph(GlyphRole::WorktreeTrunkClear)),
         theme.good(Modifier::DIM),
     )]
 }

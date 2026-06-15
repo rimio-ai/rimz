@@ -222,7 +222,7 @@ fn sub_agent_lines(
     let mut lines = vec![Line::from(trim_spans_to_width(
         vec![
             Span::styled(
-                format!("  {}", theme.glyph(GlyphRole::MarkerSubagents)),
+                format!("  {}", theme.glyph(GlyphRole::CardSubagents)),
                 theme.styled(Component::SubagentHeader, Modifier::empty()),
             ),
             Span::styled(format!(" subagents ({})", sub_agents.len()), theme.body()),

@@ -354,17 +354,18 @@ pub(crate) struct Theme {
 impl Default for Theme {
     fn default() -> Self {
         let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let glyphs = GlyphSet::default();
         Self {
             no_color: false,
             truecolor: false,
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
-            glyphs: GlyphSet::default(),
             animations: ResolvedAnimations::resolve(
                 &crate::config::SidebarAnimationsConfig::default(),
-                GlyphSetKind::Unicode,
+                &glyphs,
                 &palette,
             ),
+            glyphs,
             palette,
         }
     }
@@ -376,15 +377,16 @@ impl Theme {
     /// snapshot's `[sidebar]` config.
     pub(crate) fn for_sidebar(sidebar: &SidebarConfig) -> Self {
         let truecolor = truecolor_env();
-        let depth = sidebar.theme.mode.depth(truecolor);
+        let depth = sidebar.effective_theme_mode().depth(truecolor);
         let palette = Palette::resolve(&sidebar.theme, depth);
-        let glyphs = GlyphSet::resolve(&sidebar.glyphs);
+        let glyphs =
+            GlyphSet::resolve_with_set(sidebar.glyph_set_source().as_deref(), &sidebar.glyphs);
         Self {
             no_color: crate::tui::no_color(),
             truecolor,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, glyphs.kind(), &palette),
+            animations: ResolvedAnimations::resolve(&sidebar.animations, &glyphs, &palette),
             glyphs,
             palette,
         }
@@ -395,32 +397,34 @@ impl Theme {
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
         let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let glyphs = GlyphSet::default();
         Self {
             no_color,
             truecolor: false,
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
-            glyphs: GlyphSet::default(),
             animations: ResolvedAnimations::resolve(
                 &crate::config::SidebarAnimationsConfig::default(),
-                GlyphSetKind::Unicode,
+                &glyphs,
                 &palette,
             ),
+            glyphs,
             palette,
         }
     }
 
     #[cfg(test)]
     pub(crate) fn fixed_for_sidebar(no_color: bool, sidebar: &SidebarConfig) -> Self {
-        let depth = sidebar.theme.mode.depth(false);
+        let depth = sidebar.effective_theme_mode().depth(false);
         let palette = Palette::resolve_fixed(&sidebar.theme, depth);
-        let glyphs = GlyphSet::resolve(&sidebar.glyphs);
+        let glyphs =
+            GlyphSet::resolve_with_set(sidebar.glyph_set_source().as_deref(), &sidebar.glyphs);
         Self {
             no_color,
             truecolor: false,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, glyphs.kind(), &palette),
+            animations: ResolvedAnimations::resolve(&sidebar.animations, &glyphs, &palette),
             glyphs,
             palette,
         }
@@ -452,6 +456,14 @@ impl Theme {
 
     pub(crate) fn glyph(&self, role: GlyphRole) -> &str {
         self.glyphs.glyph(role)
+    }
+
+    /// Which glyph preset is active — Unicode or Nerd Font. The mana bar reads
+    /// this to choose between its box-drawing fill and the `nf-extra` progress
+    /// segments; most render code routes through [`Self::glyph`] and never needs
+    /// the kind.
+    pub(crate) fn glyph_kind(&self) -> GlyphSetKind {
+        self.glyphs.kind()
     }
 
     /// A component token's tone as a `Style` with `modifier`, honoring

@@ -500,19 +500,19 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
             .style
     };
     assert_eq!(
-        marker(lit.glyph(GlyphRole::MarkerTokenTotal)).fg,
+        marker(lit.glyph(GlyphRole::TokensTotal)).fg,
         Some(lit.component(Component::TokenTotal))
     );
     assert_eq!(
-        marker(lit.glyph(GlyphRole::MarkerTokenIn)).fg,
+        marker(lit.glyph(GlyphRole::TokensInput)).fg,
         Some(lit.component(Component::Input))
     );
     assert_eq!(
-        marker(lit.glyph(GlyphRole::MarkerTokenOut)).fg,
+        marker(lit.glyph(GlyphRole::TokensOutput)).fg,
         Some(lit.component(Component::Output))
     );
     assert_eq!(
-        marker(lit.glyph(GlyphRole::MarkerCacheRead)).fg,
+        marker(lit.glyph(GlyphRole::TokensCacheRead)).fg,
         Some(lit.component(Component::CacheRead))
     );
     for span in spans.iter().filter(|span| {
@@ -540,7 +540,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
     let spans = token_breakdown_spans(&theme, 76_000, 12_000, 64_000, 68_000, fmt::tokens_int);
     assert_eq!(
         text(&spans),
-        "\u{f04a0} 76k \u{f0120} 12k \u{f011d} 64k \u{f163b} 68k"
+        "\u{ed58} 76k \u{f103} 12k \u{f102} 64k \u{f1978} 68k"
     );
 
     let spans = context_gauge_spans(&theme, 0.5, &[], 50, 4);
@@ -558,7 +558,7 @@ fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
     );
     assert_eq!(
         text(&spans),
-        "▤ 76k · \u{f163b} 68k \u{f163e} 6k \u{f0120} 1k \u{f011d} 2k"
+        "\u{f0fe6} 76k · \u{f1978} 68k \u{f1c0} 6k \u{f103} 1k \u{f102} 2k"
     );
 }
 
@@ -601,27 +601,27 @@ fn context_breakdown_keeps_shape_marker_styles_and_compactions() {
     // the bar in its own segment tone — cache-read green, cache-write
     // compaction violet, fresh input the expense vermilion, output accent.
     assert_eq!(
-        tone(theme.glyph(GlyphRole::MeterContextFilled)),
+        tone(theme.glyph(GlyphRole::TokensFilled)),
         Some(theme.heat_tone(0.5)),
         "severity"
     );
     assert_eq!(
-        tone(theme.glyph(GlyphRole::MarkerCacheRead)),
+        tone(theme.glyph(GlyphRole::TokensCacheRead)),
         Some(theme.component(Component::CacheRead)),
         "cache read"
     );
     assert_eq!(
-        tone(theme.glyph(GlyphRole::MarkerCacheWrite)),
+        tone(theme.glyph(GlyphRole::TokensCacheWrite)),
         Some(theme.component(Component::CacheWrite)),
         "cache write"
     );
     assert_eq!(
-        tone(theme.glyph(GlyphRole::MarkerTokenIn)),
+        tone(theme.glyph(GlyphRole::TokensInput)),
         Some(theme.component(Component::Input)),
         "fresh input"
     );
     assert_eq!(
-        tone(theme.glyph(GlyphRole::MarkerTokenOut)),
+        tone(theme.glyph(GlyphRole::TokensOutput)),
         Some(theme.component(Component::Output)),
         "output"
     );
