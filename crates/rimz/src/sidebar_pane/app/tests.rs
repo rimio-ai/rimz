@@ -104,12 +104,20 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
             caption: Some("resting".to_owned()),
             loading: false,
             status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            active_track: "idle",
         }),
         ..Default::default()
     };
 
     assert!(is_animating(&snapshot, &ui, 0));
     assert_eq!(frame_interval(&snapshot, &ui), Duration::from_millis(625));
+
+    let mut jumping_ui = ui.clone();
+    jumping_ui.pet.as_mut().expect("pet").active_track = "jumping";
+    assert_eq!(
+        frame_interval(&snapshot, &jumping_ui),
+        Duration::from_millis(286)
+    );
 
     snapshot.sidebar.animations.idle =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));

@@ -32,6 +32,7 @@ pub(crate) struct PetView {
     pub(crate) caption: Option<String>,
     pub(crate) loading: bool,
     pub(crate) status: FleetPetStatus,
+    pub(crate) active_track: &'static str,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -72,6 +73,7 @@ pub(crate) struct PetAssets {
     loading: Option<LoadingPet>,
     failed: Option<FailedPet>,
     previous_status: Option<FleetPetStatus>,
+    celebrate_started_phase: Option<u64>,
     caption: Option<String>,
 }
 
@@ -102,6 +104,14 @@ fn retry_due(failed_at_phase: u64, phase: u64, refresh_ms: u16) -> bool {
     phase.saturating_sub(failed_at_phase) >= cooldown_phases
 }
 
+fn phase_elapsed(started_phase: u64, phase: u64, refresh_ms: u16) -> std::time::Duration {
+    std::time::Duration::from_millis(
+        phase
+            .saturating_sub(started_phase)
+            .saturating_mul(u64::from(refresh_ms.max(1))),
+    )
+}
+
 struct LoadedPet {
     id: String,
     frames: Vec<RgbaImage>,
@@ -119,6 +129,12 @@ struct MemoKey {
 
 type LoadResult = Result<Vec<RgbaImage>, String>;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SelectedTrack {
+    name: &'static str,
+    phase: u64,
+}
+
 impl PetAssets {
     pub(crate) fn view(
         &mut self,
@@ -134,21 +150,26 @@ impl PetAssets {
             self.loading = None;
             self.failed = None;
             self.previous_status = None;
+            self.celebrate_started_phase = None;
             self.caption = None;
             return None;
         }
 
+        let previous_status = self.previous_status;
+        let mut active_track = model::fleet_track(status);
         let Some(source) = asset::resolve_pet_source(&config.pet) else {
             self.loaded = None;
             self.loading = None;
             self.failed = None;
             self.previous_status = None;
+            self.celebrate_started_phase = None;
             self.caption = Some("no pet selected".to_owned());
             return Some(PetView {
                 grid: None,
                 caption: self.caption.clone(),
                 loading: false,
                 status,
+                active_track,
             });
         };
         let id = source.id();
@@ -174,6 +195,7 @@ impl PetAssets {
         let grid = size.and_then(|size| {
             self.loaded_grid(
                 id,
+                previous_status,
                 status,
                 phase,
                 refresh_ms,
@@ -181,6 +203,10 @@ impl PetAssets {
                 config.glyphs,
                 motion_enabled,
             )
+            .map(|(grid, track)| {
+                active_track = track;
+                grid
+            })
         });
         Some(PetView {
             grid,
@@ -189,6 +215,7 @@ impl PetAssets {
                 .or_else(|| loading.then(|| "fetching pet...".to_owned())),
             loading,
             status,
+            active_track,
         })
     }
 
@@ -230,6 +257,7 @@ impl PetAssets {
             Err(err) => {
                 tracing::debug!(pet = %id, error = %err, "pet asset unavailable");
                 self.loaded = None;
+                self.celebrate_started_phase = None;
                 self.failed = Some(FailedPet {
                     id,
                     caption: "pet unavailable".to_owned(),
@@ -246,6 +274,7 @@ impl PetAssets {
             .is_some_and(|loaded| loaded.id != pet_id)
         {
             self.loaded = None;
+            self.celebrate_started_phase = None;
         }
         if self
             .loading
@@ -313,24 +342,42 @@ impl PetAssets {
     fn loaded_grid(
         &mut self,
         pet_id: &str,
+        previous_status: Option<FleetPetStatus>,
         status: FleetPetStatus,
         phase: u64,
         refresh_ms: u16,
         size: PetGridSize,
         glyphs: PetsGlyphMode,
         motion_enabled: bool,
-    ) -> Option<PetCellGrid> {
+    ) -> Option<(PetCellGrid, &'static str)> {
+        let jump_duration = {
+            let loaded = self.loaded.as_ref()?;
+            if loaded.id != pet_id {
+                return None;
+            }
+            loaded
+                .animations
+                .get(model::TRACK_JUMPING)
+                .map(|animation| animation.loop_duration(refresh_ms))
+        };
+        let track = self.selected_track(
+            previous_status,
+            status,
+            phase,
+            refresh_ms,
+            motion_enabled,
+            jump_duration,
+        );
         let loaded = self.loaded.as_mut()?;
         if loaded.id != pet_id {
             return None;
         }
-        let track = model::fleet_track(status);
         let sprite_index = loaded
             .animations
-            .get(track)
+            .get(track.name)
             .map(|animation| {
                 if motion_enabled {
-                    animation.sprite_index(phase, refresh_ms)
+                    animation.sprite_index(track.phase, refresh_ms)
                 } else {
                     animation.first_sprite()
                 }
@@ -347,17 +394,52 @@ impl PetAssets {
             memo_key.cols == size.cols && memo_key.rows == size.rows && memo_key.glyphs == glyphs
         });
         if let Some(grid) = loaded.memo.get(&key) {
-            return Some(grid.clone());
+            return Some((grid.clone(), track.name));
         }
         let frame = loaded.frames.get(sprite_index)?;
         let grid = cellart::render_frame(frame, size.cols, size.rows, glyphs);
         loaded.memo.insert(key, grid.clone());
-        Some(grid)
+        Some((grid, track.name))
+    }
+
+    fn selected_track(
+        &mut self,
+        previous_status: Option<FleetPetStatus>,
+        status: FleetPetStatus,
+        phase: u64,
+        refresh_ms: u16,
+        motion_enabled: bool,
+        jump_duration: Option<std::time::Duration>,
+    ) -> SelectedTrack {
+        let steady = model::fleet_track(status);
+        if !motion_enabled || status != FleetPetStatus::Idle {
+            self.celebrate_started_phase = None;
+            return SelectedTrack {
+                name: steady,
+                phase,
+            };
+        }
+        if model::one_shot_track(previous_status, status).is_some() {
+            self.celebrate_started_phase = jump_duration.map(|_| phase);
+        }
+        if let (Some(started), Some(duration)) = (self.celebrate_started_phase, jump_duration) {
+            if phase_elapsed(started, phase, refresh_ms) < duration {
+                return SelectedTrack {
+                    name: model::TRACK_JUMPING,
+                    phase: phase.saturating_sub(started),
+                };
+            }
+            self.celebrate_started_phase = None;
+        }
+        SelectedTrack {
+            name: steady,
+            phase,
+        }
     }
 }
 
-pub(crate) fn animation_frame(status: FleetPetStatus, refresh_ms: u16) -> std::time::Duration {
-    model::fleet_track_frame_duration(status, refresh_ms)
+pub(crate) fn animation_frame(track: &str, refresh_ms: u16) -> std::time::Duration {
+    model::track_frame_duration(track, refresh_ms)
 }
 
 fn load_pet(source: PetSource) -> Result<Vec<RgbaImage>, asset::AssetErr> {
@@ -404,6 +486,7 @@ mod tests {
     fn disabled_config_clears_runtime_state() {
         let mut assets = PetAssets {
             previous_status: Some(FleetPetStatus::Running),
+            celebrate_started_phase: Some(1),
             caption: Some("x".to_owned()),
             failed: Some(FailedPet {
                 id: "codex".to_owned(),
@@ -425,6 +508,7 @@ mod tests {
                 .is_none()
         );
         assert_eq!(assets.previous_status, None);
+        assert_eq!(assets.celebrate_started_phase, None);
         assert_eq!(assets.caption, None);
         assert!(assets.failed.is_none());
     }
@@ -565,6 +649,58 @@ mod tests {
     }
 
     #[test]
+    fn work_to_idle_transition_jumps_once_then_settles() {
+        let refresh_ms = 100;
+        let mut assets = loaded_assets(Some(FleetPetStatus::Running));
+        let config = enabled_config();
+        let size = Some(PetGridSize { cols: 12, rows: 6 });
+
+        let view = assets
+            .view(&config, FleetPetStatus::Idle, 10, refresh_ms, size, true)
+            .expect("enabled pets produce a view");
+        assert_eq!(view.active_track, model::TRACK_JUMPING);
+        assert_eq!(assets.celebrate_started_phase, Some(10));
+
+        let jump = model::default_animations()
+            .remove(model::TRACK_JUMPING)
+            .expect("jumping track");
+        let phases = jump
+            .loop_duration(refresh_ms)
+            .as_millis()
+            .div_ceil(u128::from(refresh_ms));
+        let view = assets
+            .view(
+                &config,
+                FleetPetStatus::Idle,
+                10 + phases as u64,
+                refresh_ms,
+                size,
+                true,
+            )
+            .expect("enabled pets produce a view");
+        assert_eq!(view.active_track, model::TRACK_IDLE);
+        assert_eq!(assets.celebrate_started_phase, None);
+    }
+
+    #[test]
+    fn static_mode_skips_completion_jump() {
+        let mut assets = loaded_assets(Some(FleetPetStatus::Running));
+        let view = assets
+            .view(
+                &enabled_config(),
+                FleetPetStatus::Idle,
+                10,
+                100,
+                Some(PetGridSize { cols: 12, rows: 6 }),
+                false,
+            )
+            .expect("enabled pets produce a view");
+
+        assert_eq!(view.active_track, model::TRACK_IDLE);
+        assert_eq!(assets.celebrate_started_phase, None);
+    }
+
+    #[test]
     fn memoized_grids_are_evicted_on_resize() {
         let frame = RgbaImage {
             width: 1,
@@ -585,6 +721,7 @@ mod tests {
             assets
                 .loaded_grid(
                     "codex",
+                    None,
                     FleetPetStatus::Idle,
                     0,
                     100,
@@ -600,6 +737,7 @@ mod tests {
             assets
                 .loaded_grid(
                     "codex",
+                    None,
                     FleetPetStatus::Idle,
                     0,
                     100,
@@ -612,5 +750,32 @@ mod tests {
         let memo = &assets.loaded.as_ref().expect("loaded").memo;
         assert_eq!(memo.len(), 1);
         assert!(memo.keys().all(|key| key.cols == 13));
+    }
+
+    fn enabled_config() -> PetsConfig {
+        PetsConfig {
+            enabled: true,
+            pet: "codex".to_owned(),
+            glyphs: PetsGlyphMode::Auto,
+            voice: true,
+        }
+    }
+
+    fn loaded_assets(previous_status: Option<FleetPetStatus>) -> PetAssets {
+        let frame = RgbaImage {
+            width: 1,
+            height: 1,
+            data: vec![255, 0, 0, 255],
+        };
+        PetAssets {
+            loaded: Some(LoadedPet {
+                id: "codex".to_owned(),
+                frames: vec![frame; catalog::FRAME_COUNT],
+                animations: model::default_animations(),
+                memo: HashMap::new(),
+            }),
+            previous_status,
+            ..PetAssets::default()
+        }
     }
 }

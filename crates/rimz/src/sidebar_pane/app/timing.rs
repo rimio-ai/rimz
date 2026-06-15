@@ -45,7 +45,7 @@ fn pet_frame_interval(
         && render::pet_motion_enabled(snapshot, view.status)
     {
         return Some(crate::sidebar_pane::pets::animation_frame(
-            view.status,
+            view.active_track,
             refresh_ms,
         ));
     }

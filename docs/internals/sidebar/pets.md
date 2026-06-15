@@ -16,20 +16,24 @@ The renderer fuses visible fleet state into one pet status before choosing an an
 
 | fleet state | animation track | default caption |
 | --- | --- | --- |
-| an agent is waiting | `waiting` | `someone needs you` |
+| an agent is waiting | `waving` | `someone needs you` |
 | an agent failed or paused | `failed` | `rough patch - take a look` |
-| an agent is running | `running` | `room is moving` |
+| an agent is running | `moving` (`run-right` plus `run-left`) | `room is moving` |
 | the room is idle, successful, or empty | `idle` | `all caught up` after work, then `resting` |
+
+The work-to-idle edge plays `jumping` once before returning to `idle`, matching the same transition that chooses an `all caught up` caption. Static role animation overrides skip that one-shot and freeze the steady status track on its first frame.
+
+The built-in catalog follows the petdex/Codex sheet rows: row 0 `idle` (6 frames), row 1 `run-right` (8), row 2 `run-left` (8), row 3 `waving` (4), row 4 `jumping` (5), row 5 `failed` (8), row 6 `waiting` (6), row 7 `running` (6), and row 8 `review` (6). The default room mapping uses `moving`, `waving`, `jumping`, `failed`, and `idle`; `waiting`, `running`, and `review` remain defined catalog tracks for spec parity. Movement, waving, jumping, and failed tracks run at a calmer cadence, roughly half the Codex default speed.
 
 Captions are canned strings in the renderer. They read status transitions only; they do not read transcripts, prompts, terminal scrollback, or provider conversations. `[sidebar.pets] voice = false` disables those captions.
 
 ## Cell Art
 
-The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals. Explicit static role animation settings freeze the matching pet track on a stable frame; the default pet tracks keep their own lightweight cadence.
+The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals. Explicit static role animation settings freeze the matching pet track (`idle`, `moving`, `waving`, or `failed`) on a stable frame; the default pet tracks keep their own lightweight cadence.
 
 `[sidebar.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
 
-The render module receives only `PetView` data: a cell grid, an optional caption, loading state, and fused status. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
+The render module receives only `PetView` data: a cell grid, an optional caption, loading state, fused status, and active animation track. Network fetch, disk cache, WebP decode, frame slicing, animation selection, and memoized cell-art conversion stay in `src/sidebar_pane/pets/`.
 
 ## Assets
 

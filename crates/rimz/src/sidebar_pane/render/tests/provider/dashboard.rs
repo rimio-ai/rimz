@@ -128,6 +128,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
         caption: Some("all caught up".to_owned()),
         loading: false,
         status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        active_track: "idle",
     };
 
     let (lines, hits) = dashboard_panel_lines(
@@ -162,6 +163,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         caption: Some("someone needs you".to_owned()),
         loading: false,
         status: crate::sidebar_pane::pets::FleetPetStatus::NeedsInput,
+        active_track: "waving",
     };
 
     let (lines, _) = dashboard_panel_lines(
