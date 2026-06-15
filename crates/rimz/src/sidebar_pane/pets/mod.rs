@@ -41,6 +41,16 @@ pub(crate) struct PetGridSize {
     pub(crate) rows: u16,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PetViewFrame {
+    pub(crate) action: PetAction,
+    pub(crate) phase: u64,
+    pub(crate) refresh_ms: u16,
+    pub(crate) size: Option<PetGridSize>,
+    pub(crate) motion_enabled: bool,
+    pub(crate) unread_triggered: bool,
+}
+
 impl PetGridSize {
     const MIN_COLS: u16 = 12;
     const MAX_COLS: u16 = 20;
@@ -174,6 +184,26 @@ struct SelectedTrack {
     phase: u64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct LoadedGridRequest<'a> {
+    pet_id: &'a str,
+    previous_action: Option<PetAction>,
+    frame: PetViewFrame,
+    size: PetGridSize,
+    glyphs: PetsGlyphMode,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TrackSelection {
+    previous_action: Option<PetAction>,
+    action: PetAction,
+    phase: u64,
+    refresh_ms: u16,
+    motion_enabled: bool,
+    jump_duration: Option<std::time::Duration>,
+    unread_triggered: bool,
+}
+
 impl PetAssets {
     pub(crate) fn observe_unread_rows(
         &mut self,
@@ -187,16 +217,15 @@ impl PetAssets {
         triggered
     }
 
-    pub(crate) fn view(
-        &mut self,
-        config: &PetsConfig,
-        action: PetAction,
-        phase: u64,
-        refresh_ms: u16,
-        size: Option<PetGridSize>,
-        motion_enabled: bool,
-        unread_triggered: bool,
-    ) -> Option<PetView> {
+    pub(crate) fn view(&mut self, config: &PetsConfig, frame: PetViewFrame) -> Option<PetView> {
+        let PetViewFrame {
+            action,
+            phase,
+            refresh_ms,
+            size,
+            motion_enabled: _,
+            unread_triggered: _,
+        } = frame;
         if !config.enabled {
             self.loaded = None;
             self.loading = None;
@@ -246,17 +275,13 @@ impl PetAssets {
             .filter(|failed| failed.id == id)
             .map(|failed| failed.caption.clone());
         let grid = size.and_then(|size| {
-            self.loaded_grid(
-                id,
+            self.loaded_grid(LoadedGridRequest {
+                pet_id: id,
                 previous_action,
-                action,
-                phase,
-                refresh_ms,
+                frame,
                 size,
-                config.glyphs,
-                motion_enabled,
-                unread_triggered,
-            )
+                glyphs: config.glyphs,
+            })
             .map(|(grid, track)| {
                 active_track = track;
                 grid
@@ -392,19 +417,17 @@ impl PetAssets {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn loaded_grid(
         &mut self,
-        pet_id: &str,
-        previous_action: Option<PetAction>,
-        action: PetAction,
-        phase: u64,
-        refresh_ms: u16,
-        size: PetGridSize,
-        glyphs: PetsGlyphMode,
-        motion_enabled: bool,
-        unread_triggered: bool,
+        request: LoadedGridRequest<'_>,
     ) -> Option<(PetCellGrid, &'static str)> {
+        let LoadedGridRequest {
+            pet_id,
+            previous_action,
+            frame,
+            size,
+            glyphs,
+        } = request;
         let jump_duration = {
             let loaded = self.loaded.as_ref()?;
             if loaded.id != pet_id {
@@ -413,17 +436,17 @@ impl PetAssets {
             loaded
                 .animations
                 .get(model::TRACK_JUMPING)
-                .map(|animation| animation.loop_duration(refresh_ms))
+                .map(|animation| animation.loop_duration(frame.refresh_ms))
         };
-        let track = self.selected_track(
+        let track = self.selected_track(TrackSelection {
             previous_action,
-            action,
-            phase,
-            refresh_ms,
-            motion_enabled,
+            action: frame.action,
+            phase: frame.phase,
+            refresh_ms: frame.refresh_ms,
+            motion_enabled: frame.motion_enabled,
             jump_duration,
-            unread_triggered,
-        );
+            unread_triggered: frame.unread_triggered,
+        });
         let loaded = self.loaded.as_mut()?;
         if loaded.id != pet_id {
             return None;
@@ -432,8 +455,8 @@ impl PetAssets {
             .animations
             .get(track.name)
             .map(|animation| {
-                if motion_enabled {
-                    animation.sprite_index(track.phase, refresh_ms)
+                if frame.motion_enabled {
+                    animation.sprite_index(track.phase, frame.refresh_ms)
                 } else {
                     animation.first_sprite()
                 }
@@ -458,16 +481,16 @@ impl PetAssets {
         Some((grid, track.name))
     }
 
-    fn selected_track(
-        &mut self,
-        previous_action: Option<PetAction>,
-        action: PetAction,
-        phase: u64,
-        refresh_ms: u16,
-        motion_enabled: bool,
-        jump_duration: Option<std::time::Duration>,
-        unread_triggered: bool,
-    ) -> SelectedTrack {
+    fn selected_track(&mut self, selection: TrackSelection) -> SelectedTrack {
+        let TrackSelection {
+            previous_action,
+            action,
+            phase,
+            refresh_ms,
+            motion_enabled,
+            jump_duration,
+            unread_triggered,
+        } = selection;
         let steady = model::action_track(action);
         if !motion_enabled {
             self.jump_started_phase = None;
@@ -519,6 +542,24 @@ mod tests {
     use super::*;
     use crate::config::{PetsGlyphMode, PetsSize};
 
+    fn frame(
+        action: PetAction,
+        phase: u64,
+        refresh_ms: u16,
+        size: Option<PetGridSize>,
+        motion_enabled: bool,
+        unread_triggered: bool,
+    ) -> PetViewFrame {
+        PetViewFrame {
+            action,
+            phase,
+            refresh_ms,
+            size,
+            motion_enabled,
+            unread_triggered,
+        }
+    }
+
     #[test]
     fn pet_grid_size_matches_provider_dashboard_block_height() {
         assert!(PetGridSize::for_dashboard_block(7, 47, 34).is_none());
@@ -563,12 +604,14 @@ mod tests {
             assets
                 .view(
                     &PetsConfig::default(),
-                    PetAction::Idle,
-                    0,
-                    100,
-                    Some(PetGridSize { cols: 12, rows: 6 }),
-                    true,
-                    false,
+                    frame(
+                        PetAction::Idle,
+                        0,
+                        100,
+                        Some(PetGridSize { cols: 12, rows: 6 }),
+                        true,
+                        false,
+                    ),
                 )
                 .is_none()
         );
@@ -592,12 +635,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
-                true,
-                false,
+                frame(
+                    PetAction::Idle,
+                    0,
+                    100,
+                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert_eq!(view.grid, None);
@@ -620,12 +665,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
-                true,
-                false,
+                frame(
+                    PetAction::Idle,
+                    0,
+                    100,
+                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert_eq!(view.grid, None);
@@ -651,7 +698,7 @@ mod tests {
         };
 
         let view = assets
-            .view(&config, PetAction::Idle, 0, 100, None, true, false)
+            .view(&config, frame(PetAction::Idle, 0, 100, None, true, false))
             .expect("enabled pets produce a view");
 
         assert_eq!(view.grid, None);
@@ -682,12 +729,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Idle,
-                0,
-                100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
-                true,
-                false,
+                frame(
+                    PetAction::Idle,
+                    0,
+                    100,
+                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert!(!view.loading);
@@ -698,12 +747,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Idle,
-                1,
-                100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
-                true,
-                false,
+                frame(
+                    PetAction::Idle,
+                    1,
+                    100,
+                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert!(!view.loading);
@@ -730,7 +781,10 @@ mod tests {
         let size = Some(PetGridSize { cols: 12, rows: 6 });
 
         let view = assets
-            .view(&config, PetAction::Ask, 10, refresh_ms, size, true, false)
+            .view(
+                &config,
+                frame(PetAction::Ask, 10, refresh_ms, size, true, false),
+            )
             .expect("enabled pets produce a view");
         assert_eq!(view.active_track, model::TRACK_JUMPING);
         assert_eq!(assets.jump_started_phase, Some(10));
@@ -745,12 +799,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Ask,
-                10 + phases as u64,
-                refresh_ms,
-                size,
-                true,
-                false,
+                frame(
+                    PetAction::Ask,
+                    10 + phases as u64,
+                    refresh_ms,
+                    size,
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert_eq!(view.active_track, model::TRACK_ASK);
@@ -767,12 +823,7 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Running,
-                10,
-                refresh_ms,
-                size,
-                true,
-                true,
+                frame(PetAction::Running, 10, refresh_ms, size, true, true),
             )
             .expect("enabled pets produce a view");
         assert_eq!(view.active_track, model::TRACK_JUMPING);
@@ -788,12 +839,14 @@ mod tests {
         let view = assets
             .view(
                 &config,
-                PetAction::Running,
-                10 + phases as u64,
-                refresh_ms,
-                size,
-                true,
-                false,
+                frame(
+                    PetAction::Running,
+                    10 + phases as u64,
+                    refresh_ms,
+                    size,
+                    true,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
         assert_eq!(view.active_track, model::TRACK_RUNNING);
@@ -806,12 +859,14 @@ mod tests {
         let view = assets
             .view(
                 &enabled_config(),
-                PetAction::Idle,
-                10,
-                100,
-                Some(PetGridSize { cols: 12, rows: 6 }),
-                false,
-                false,
+                frame(
+                    PetAction::Idle,
+                    10,
+                    100,
+                    Some(PetGridSize { cols: 12, rows: 6 }),
+                    false,
+                    false,
+                ),
             )
             .expect("enabled pets produce a view");
 
@@ -838,34 +893,40 @@ mod tests {
 
         assert!(
             assets
-                .loaded_grid(
-                    "codex",
-                    None,
-                    PetAction::Idle,
-                    0,
-                    100,
-                    PetGridSize { cols: 12, rows: 6 },
-                    PetsGlyphMode::Half,
-                    true,
-                    false,
-                )
+                .loaded_grid(LoadedGridRequest {
+                    pet_id: "codex",
+                    previous_action: None,
+                    frame: PetViewFrame {
+                        action: PetAction::Idle,
+                        phase: 0,
+                        refresh_ms: 100,
+                        size: Some(PetGridSize { cols: 12, rows: 6 }),
+                        motion_enabled: true,
+                        unread_triggered: false,
+                    },
+                    size: PetGridSize { cols: 12, rows: 6 },
+                    glyphs: PetsGlyphMode::Half,
+                })
                 .is_some()
         );
         assert_eq!(assets.loaded.as_ref().expect("loaded").memo.len(), 1);
 
         assert!(
             assets
-                .loaded_grid(
-                    "codex",
-                    None,
-                    PetAction::Idle,
-                    0,
-                    100,
-                    PetGridSize { cols: 13, rows: 6 },
-                    PetsGlyphMode::Half,
-                    true,
-                    false,
-                )
+                .loaded_grid(LoadedGridRequest {
+                    pet_id: "codex",
+                    previous_action: None,
+                    frame: PetViewFrame {
+                        action: PetAction::Idle,
+                        phase: 0,
+                        refresh_ms: 100,
+                        size: Some(PetGridSize { cols: 13, rows: 6 }),
+                        motion_enabled: true,
+                        unread_triggered: false,
+                    },
+                    size: PetGridSize { cols: 13, rows: 6 },
+                    glyphs: PetsGlyphMode::Half,
+                })
                 .is_some()
         );
         let memo = &assets.loaded.as_ref().expect("loaded").memo;

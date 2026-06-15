@@ -267,7 +267,7 @@ fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
             let _ = progress_tx.send(ColdStatsEvent::Progress(progress));
         };
         let stats = load_or_refresh_stats(&paths, Some(&mut progress));
-        let _ = tx.send(ColdStatsEvent::Done(stats));
+        let _ = tx.send(ColdStatsEvent::Done(Box::new(stats)));
     });
 
     let stats = wait_for_cold_stats(rx, file_count);
@@ -283,7 +283,7 @@ fn load_cold_stats_with_spinner(paths: &RuntimePaths) -> Result<LoadedStats> {
 
 enum ColdStatsEvent {
     Progress(SpendProgress),
-    Done(Result<Stats>),
+    Done(Box<Result<Stats>>),
 }
 
 fn wait_for_cold_stats(rx: mpsc::Receiver<ColdStatsEvent>, file_count: usize) -> Result<Stats> {
@@ -301,7 +301,7 @@ fn wait_for_cold_stats(rx: mpsc::Receiver<ColdStatsEvent>, file_count: usize) ->
                 if shown {
                     clear_spinner_line()?;
                 }
-                return stats;
+                return *stats;
             }
             Ok(ColdStatsEvent::Progress(next)) => {
                 progress = next;
@@ -360,11 +360,11 @@ fn write_progress_line(frame: char, progress: SpendProgress) -> Result<()> {
 }
 
 fn progress_bar(done: usize, total: usize) -> String {
-    let filled = if total == 0 {
-        0
-    } else {
-        (done.saturating_mul(PROGRESS_BAR_WIDTH) / total).min(PROGRESS_BAR_WIDTH)
-    };
+    let filled = done
+        .saturating_mul(PROGRESS_BAR_WIDTH)
+        .checked_div(total)
+        .unwrap_or(0)
+        .min(PROGRESS_BAR_WIDTH);
     let mut bar = String::with_capacity(PROGRESS_BAR_WIDTH);
     bar.extend(std::iter::repeat_n('█', filled));
     bar.extend(std::iter::repeat_n('░', PROGRESS_BAR_WIDTH - filled));

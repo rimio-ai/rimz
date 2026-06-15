@@ -25,7 +25,7 @@ use crate::sidebar::observe::{self, ObserveMsg};
 use crate::sidebar::read_marks::ReadMarkStore;
 use crate::sidebar::timing::{FOCUS_STRANDED_EVENT_TTL, HEARTBEAT_WRITE_INTERVAL};
 use crate::sidebar_pane::osc;
-use crate::sidebar_pane::pets::{PetAssets, PetGridSize};
+use crate::sidebar_pane::pets::{PetAssets, PetGridSize, PetViewFrame};
 use crate::{MuxName, RuntimePaths, SidebarInstanceId, SidebarSnapshot, WorkspaceId};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
@@ -466,12 +466,14 @@ fn refresh_pet_view(
     };
     ui.pet = pet_assets.view(
         &snapshot.sidebar.pets,
-        action,
-        ui.animation_phase,
-        snapshot.sidebar.resolved_refresh_ms(),
-        size,
-        render::pet_motion_enabled(snapshot, action),
-        unread_triggered,
+        PetViewFrame {
+            action,
+            phase: ui.animation_phase,
+            refresh_ms: snapshot.sidebar.resolved_refresh_ms(),
+            size,
+            motion_enabled: render::pet_motion_enabled(snapshot, action),
+            unread_triggered,
+        },
     );
 }
 

@@ -426,7 +426,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
         );
     }
     if let Some(context_agent_id) = payload_context_agent_id(payload) {
-        merge_agent_context_sidecars(
+        merge_agent_context_sidecars(ContextSidecarInput {
             ledger,
             agent,
             event_name,
@@ -435,7 +435,7 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
             model_hint,
             turn_ended,
             observed_turn_error,
-        );
+        });
     }
     // An adapter can request a detached `rimz` helper after a lifecycle event.
     // Spawned with fresh stdio and never awaited, so it adds no latency to the
@@ -450,16 +450,28 @@ fn manage_agent_context(ctx: AgentContextHook<'_>) {
     }
 }
 
-fn merge_agent_context_sidecars(
-    ledger: &Ledger,
-    agent: &dyn AgentAdapter,
-    event_name: &str,
-    payload: &Value,
-    context_agent_id: &str,
-    model_hint: Option<&str>,
+struct ContextSidecarInput<'a> {
+    ledger: &'a Ledger,
+    agent: &'a dyn AgentAdapter,
+    event_name: &'a str,
+    payload: &'a Value,
+    context_agent_id: &'a str,
+    model_hint: Option<&'a str>,
     turn_ended: bool,
     observed_turn_error: Option<rimz::agents::AgentTurnError>,
-) {
+}
+
+fn merge_agent_context_sidecars(input: ContextSidecarInput<'_>) {
+    let ContextSidecarInput {
+        ledger,
+        agent,
+        event_name,
+        payload,
+        context_agent_id,
+        model_hint,
+        turn_ended,
+        observed_turn_error,
+    } = input;
     let mut turn_error_updated = false;
     if let Some(marker) = observed_turn_error {
         turn_error_updated |=
@@ -732,63 +744,6 @@ fn merge_turn_error_marker(
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::io::Write as _;
-
-    #[test]
-    fn turn_end_supplements_partial_realtime_cost_from_prior_transcript() {
-        let dir = tempfile::TempDir::new().unwrap();
-        let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
-        let mut file = std::fs::File::create(&transcript).unwrap();
-        writeln!(
-            file,
-            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","model":"gpt-5","usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
-        )
-        .unwrap();
-
-        let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
-        let mut prior = rimz::ledger::agent_context::new_record(
-            "pi",
-            "sess-1",
-            rimz::ledger::agent_context::empty_context("pi", observed_at),
-        );
-        prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
-
-        let mut skipped = None;
-        supplement_realtime_cost(
-            &rimz::agents::PiAdapter,
-            "sess-1",
-            false,
-            Some(&prior),
-            &mut skipped,
-        );
-        assert!(skipped.is_none());
-
-        let mut refresh = None;
-        supplement_realtime_cost(
-            &rimz::agents::PiAdapter,
-            "sess-1",
-            true,
-            Some(&prior),
-            &mut refresh,
-        );
-
-        let refresh = refresh.expect("turn end supplements cost");
-        let cost = refresh
-            .cost
-            .and_then(|cost| cost.total_cost_usd)
-            .expect("supplemented total cost");
-        assert!((cost - 0.42).abs() < 1e-9);
-        assert_eq!(
-            refresh.transcript_path.as_deref(),
-            Some(transcript.to_string_lossy().as_ref())
-        );
-        assert!(refresh.transcript_stat.is_some());
-    }
-}
-
 /// Fold this observation's signal onto the prior rollup state through the shared
 /// `lifecycle::step` table and log any anomaly once, under the
 /// `rimz::agent::lifecycle` target (stderr — never stdout, the hook decision
@@ -894,4 +849,61 @@ pub(super) fn append_lifecycle_event(
             transition.compaction_closed
                 || matches!(transition.kind, TransitionKind::Reconciled { .. })
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write as _;
+
+    #[test]
+    fn turn_end_supplements_partial_realtime_cost_from_prior_transcript() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let transcript = dir.path().join("2026-06-02T10-00-00-000Z_sess-1.jsonl");
+        let mut file = std::fs::File::create(&transcript).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"message","timestamp":"2026-06-02T10:00:00.000Z","message":{{"role":"assistant","model":"gpt-5","usage":{{"input":100,"output":50,"cost":{{"total":0.42}}}}}}}}"#
+        )
+        .unwrap();
+
+        let observed_at = jiff::Timestamp::from_second(1_780_394_400).unwrap();
+        let mut prior = rimz::ledger::agent_context::new_record(
+            "pi",
+            "sess-1",
+            rimz::ledger::agent_context::empty_context("pi", observed_at),
+        );
+        prior.transcript_path = Some(transcript.to_string_lossy().into_owned());
+
+        let mut skipped = None;
+        supplement_realtime_cost(
+            &rimz::agents::PiAdapter,
+            "sess-1",
+            false,
+            Some(&prior),
+            &mut skipped,
+        );
+        assert!(skipped.is_none());
+
+        let mut refresh = None;
+        supplement_realtime_cost(
+            &rimz::agents::PiAdapter,
+            "sess-1",
+            true,
+            Some(&prior),
+            &mut refresh,
+        );
+
+        let refresh = refresh.expect("turn end supplements cost");
+        let cost = refresh
+            .cost
+            .and_then(|cost| cost.total_cost_usd)
+            .expect("supplemented total cost");
+        assert!((cost - 0.42).abs() < 1e-9);
+        assert_eq!(
+            refresh.transcript_path.as_deref(),
+            Some(transcript.to_string_lossy().as_ref())
+        );
+        assert!(refresh.transcript_stat.is_some());
+    }
 }
