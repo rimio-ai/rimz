@@ -132,6 +132,7 @@ Full feed, resolver, hook, event, and trust examples live in [Feed, resolvers, h
 | `worktree` | Create, list, and remove Rimz-owned git worktrees. | [Agent control](./cli/agents.md#manage-rimz-owned-worktrees) |
 | `autoping` | Schedule window-priming pings so a provider's budget window starts on your schedule. | [Auto-ping](../internals/agents/autoping.md) |
 | `list` | Show known rooms and their live backend. | [Getting started](./cli/getting-started.md#list-rooms) |
+| `stats` | Token-activity heatmap, model breakdown, and usage insights, account-global. | [The Lobby](../internals/reach/welcome.md#rimz-stats) |
 | `list-themes` | Print the bundled sidebar theme names. | [Maintenance](./cli/maintenance.md#list-themes) |
 | `doctor` | Diagnose backend, hook, trust, resolver, and room-tree state. | [Getting started](./cli/getting-started.md#setup-and-doctor) |
 | `setup` | Print first-run environment state and write default config. | [Getting started](./cli/getting-started.md#setup-and-doctor) |

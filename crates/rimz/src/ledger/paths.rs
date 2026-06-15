@@ -153,6 +153,18 @@ impl RuntimePaths {
         Self::validated_under(workspace_id, &runtime_home())
     }
 
+    /// Account-global runtime paths with no bound room, for readers that run
+    /// outside a workspace — the provider-dashboard pace view (`rimz stats`) and
+    /// the lobby. Only the `shared_*` accessors carry meaning here; the
+    /// per-workspace fields resolve under a reserved all-zero sentinel id and are
+    /// never created.
+    pub fn shared() -> Self {
+        let sentinel = WorkspaceId::parse("ws_000000000000000000000000")
+            .expect("reserved all-zero workspace id is well-formed");
+        Self::under(sentinel, &runtime_home())
+            .expect("under() builds paths without IO and cannot fail")
+    }
+
     /// Build runtime paths rooted at `runtime_root`. Tests prefer this so they
     /// don't need to set `XDG_RUNTIME_DIR`. This raw constructor deliberately
     /// skips the socket budget; production callers use [`Self::for_workspace`] or
