@@ -452,3 +452,64 @@ fn mark_keys_ignore_process_rows() {
     assert_eq!(outcome.mark_unread, None, "no unread mark on a process row");
     assert_eq!(outcome, InputOutcome::default());
 }
+#[test]
+fn the_unread_snap_overrides_selection_follow_to_the_top() {
+    use crate::feed::AgentStatus;
+    // A tall room: a top-ranked unread waiting lead, then nine calm rows.
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    let mut lead = filter_row(
+        true,
+        "agent-lead",
+        "claude",
+        Some(AgentStatus::Waiting),
+        "terminal_1",
+        "/repo/main",
+    );
+    lead.unread = true;
+    let mut rows = vec![lead];
+    for n in 2..=10 {
+        rows.push(filter_row(
+            true,
+            &format!("agent-{n}"),
+            "claude",
+            Some(AgentStatus::Running),
+            &format!("terminal_{n}"),
+            "/repo/main",
+        ));
+    }
+    snapshot.worktree_groups = vec![crate::SidebarWorktreeGroup {
+        key: "/repo/main".to_owned(),
+        label: "main".to_owned(),
+        kind: crate::SidebarWorktreeKind::Worktree,
+        status_counts: Vec::new(),
+        rows,
+        hidden_count: 0,
+        diff_added: None,
+        diff_removed: None,
+        commits_ahead: None,
+        commits_behind: None,
+        trunk: None,
+        clean: None,
+    }];
+
+    // Selecting the last row scrolls the short viewport down, off the lead.
+    let mut ui = UiState {
+        selected_index: 9,
+        ..Default::default()
+    };
+    let following = render::compose_lines(&snapshot, None, &ui, 40, 12).scroll_offset;
+    assert!(
+        following > 0,
+        "following the bottom selection scrolls down off the top-ranked unread",
+    );
+
+    // Arming the snap returns the viewport to the top to reveal the lead, even
+    // though the selection still sits at the bottom — unread outranks selection.
+    ui.unread_focus = Some("agent-lead".to_owned());
+    let snapped = render::compose_lines(&snapshot, None, &ui, 40, 12).scroll_offset;
+    assert_eq!(
+        snapped, 0,
+        "the unread snap outranks selection-follow and reaches the top",
+    );
+}

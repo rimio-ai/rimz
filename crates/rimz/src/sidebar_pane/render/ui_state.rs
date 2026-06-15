@@ -66,6 +66,18 @@ pub struct UiState {
     /// The transient wheel-scroll pin riding above the auto-follow, or `None`
     /// while the viewport follows the selection (see [`ManualScroll`]).
     pub(crate) manual_scroll: Option<ManualScroll>,
+    /// The unread row id the viewport is snapped to: armed when a fresh
+    /// actionable unread arrives (it ranks to the top, so the snap reaches the
+    /// top) and held — overriding selection-follow, the higher-priority target —
+    /// until the user engages or the row stops being the actionable lead. A
+    /// manual scroll pin is respected: a new unread arriving mid-browse never
+    /// yanks the view (the jump banner keeps it reachable). Crate-internal
+    /// renderer state, like `manual_scroll`.
+    pub(crate) unread_focus: Option<String>,
+    /// The lead-unread row id observed on the previous fold — the edge detector
+    /// for `unread_focus`. A change to a fresh `Some` arms the snap once, so a
+    /// lead the user has already dismissed is never re-snapped while it lingers.
+    pub(crate) last_lead_unread: Option<String>,
     /// The agent-cards scrollbar's auto-hide fade: every draw folds the
     /// resolved viewport offset into it as a write-back byproduct, and the
     /// `auto` scrollbar mode reads it to paint the bar only while the viewport

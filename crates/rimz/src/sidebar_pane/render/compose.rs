@@ -1,6 +1,7 @@
 use crate::config::ScrollbarMode;
 use crate::feed::AgentStatus;
-use crate::{SidebarSnapshot, SidebarWorktreeGroup};
+use crate::{SidebarSnapshot, SidebarWorktreeGroup, lead_unread_row};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
@@ -109,8 +110,11 @@ pub(crate) fn compose_lines(
     let max_offset = scroll_len.saturating_sub(viewport);
     let mut offset = ui.scroll_offset.min(max_offset);
     if ui.manual_scroll.is_none() && !ui.help_visible {
-        offset = auto_scroll_to_selection(&scroll_map, ui.selected_index, offset, viewport)
-            .min(max_offset);
+        // A freshly-arrived unread outranks the selection: target its row (which
+        // ranks to the top, so this scrolls to top) while the snap is armed and
+        // on screen, otherwise follow the selected card as usual.
+        let target = unread_focus_ordinal(snapshot, ui).unwrap_or(ui.selected_index);
+        offset = auto_scroll_to_selection(&scroll_map, target, offset, viewport).min(max_offset);
     }
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
@@ -333,6 +337,40 @@ pub(super) fn auto_scroll_to_selection(
     offset
 }
 
+/// The visible-row ordinal of `id`, in the filtered body order the `line_map`
+/// indexes — the same order `app::visible_rows` builds, so the ordinal lines up
+/// with `selected_index` and the map entries. `None` when the id is absent or the
+/// make-up filter hides its row.
+fn visible_row_ordinal(snapshot: &SidebarSnapshot, ui: &UiState, id: &str) -> Option<usize> {
+    snapshot
+        .worktree_groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row_passes_filter(row, ui.make_up_filter))
+        .position(|row| row.id == id)
+}
+
+/// The visible-row ordinal of the armed unread-focus row, the auto-scroll target
+/// that outranks the selection. `None` when no snap is armed or the make-up filter
+/// hides the row, leaving the viewport to follow the selection.
+fn unread_focus_ordinal(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<usize> {
+    visible_row_ordinal(snapshot, ui, ui.unread_focus.as_deref()?)
+}
+
+/// The pinned `↑ N need you` jump banner, toned by the lead's status (`failed`
+/// the alarm red, else the caution warn). The persistent, always-visible
+/// companion to the viewport snap: rendered while an actionable unread waits and
+/// routed — through the line map, like a worktree header — to the lead (oldest)
+/// row, so the agent needing you is one click away even after you scroll off it.
+fn unread_banner_line(theme: &Theme, lead_status: AgentStatus, count: usize) -> Line<'static> {
+    let style = if lead_status == AgentStatus::Failed {
+        theme.alarm(Modifier::empty())
+    } else {
+        theme.warn(Modifier::empty())
+    };
+    Line::styled(format!("↑ {count} need you"), style)
+}
+
 /// Ride the scrollbar on a visible scroll-zone line: the right rail is the last
 /// sidebar column, already present on framed card lines and reserved by
 /// chrome/help lines. Overflow trims the line to the column before the rail,
@@ -386,11 +424,13 @@ pub(super) fn scroll_thumb(offset: usize, scroll_len: usize, viewport: usize) ->
 /// Compose the top-pinned cockpit zone and, in lockstep, its hit-test maps.
 /// Populated rooms end this fixed zone with a separator blank, so scrolled
 /// cards never touch the cockpit make-up line.
-/// Every row-map entry is `None` — identity, summary, and the make-up line are
-/// never jump targets — but the make-up line's status buckets are *filter*
-/// targets, returned as [`MakeUpHit`]s already translated to this zone's line
-/// indices and the chrome-gutter column space. Fixed height for a given room
-/// population, never windowed, so the scroll zone below starts at a stable row.
+/// Identity, summary, and the make-up line are never jump targets, so they map to
+/// `None`; the make-up line's status buckets are *filter* targets, returned as
+/// [`MakeUpHit`]s already translated to this zone's line indices and the
+/// chrome-gutter column space. The one row-map exception is the `↑ N need you`
+/// unread banner, whose entry is the lead row's ordinal so a click routes there
+/// like a worktree header. Fixed height for a given room population, never
+/// windowed, so the scroll zone below starts at a stable row.
 pub(super) fn top_lines(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
@@ -469,6 +509,23 @@ pub(super) fn top_lines(
         hit.col_end += 1;
     }
     extend_inert(&mut lines, &mut map, fleet_lines);
+    // The unread jump banner: a pinned, always-visible `↑ N need you` line while
+    // an actionable unread waits — the persistent companion to the viewport snap.
+    // Its line-map entry is the lead row's ordinal, so a click routes there like a
+    // worktree header; the agent needing you stays one click away even after the
+    // user scrolls or navigates off it.
+    if let Some(lead) = lead_unread_row(&snapshot.worktree_groups) {
+        let count = snapshot
+            .worktree_groups
+            .iter()
+            .flat_map(|group| &group.rows)
+            .filter(|row| row.unread && row.status().is_some_and(AgentStatus::is_actionable))
+            .count();
+        let status = lead.status().unwrap_or(AgentStatus::Waiting);
+        let ordinal = visible_row_ordinal(snapshot, ui, &lead.id);
+        lines.push(pad_chrome(unread_banner_line(theme, status, count)));
+        map.push(ordinal);
+    }
     if !snapshot.worktree_groups.is_empty() {
         lines.push(Line::from(""));
         map.push(None);
@@ -494,16 +551,12 @@ pub(super) fn top_lines(
 /// shifts it, and it mirrors the `␣` triage head (oldest actionable first).
 /// `None` when nothing unread needs an answer.
 pub(super) fn lead_unread(groups: &[SidebarWorktreeGroup]) -> Option<(&str, AgentStatus)> {
-    groups
-        .iter()
-        .flat_map(|group| &group.rows)
-        .filter(|row| row.unread)
-        .filter_map(|row| {
-            let status = row.status()?;
-            status.is_actionable().then_some((row, status))
-        })
-        .min_by_key(|(row, _)| row.last_activity)
-        .map(|(row, status)| (row.id.as_str(), status))
+    lead_unread_row(groups).map(|row| {
+        let status = row
+            .status()
+            .expect("a lead unread row is actionable, so it carries a status");
+        (row.id.as_str(), status)
+    })
 }
 
 pub(super) fn scroll_lines(

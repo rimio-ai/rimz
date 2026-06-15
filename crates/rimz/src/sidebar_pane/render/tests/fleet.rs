@@ -577,6 +577,26 @@ fn render_cockpit_unread_count() {
     );
 }
 
+/// While an agent awaits you, the cockpit closes with a pinned `↑ N need you`
+/// jump banner — the count of agents needing an answer, toned by the lead.
+#[test]
+fn render_unread_jump_banner() {
+    let mut snapshot = make_up_snapshot();
+    snapshot
+        .worktree_groups
+        .iter_mut()
+        .flat_map(|group| group.rows.iter_mut())
+        .find(|row| row.status() == Some(AgentStatus::Failed))
+        .expect("failed row")
+        .unread = true;
+
+    let screen = snapshot_to_screen(&snapshot, 38, 20);
+    assert!(
+        screen.lines().any(|line| line.contains("↑ 1 need you")),
+        "the unread jump banner pins under the cockpit:\n{screen}"
+    );
+}
+
 /// A make-up bucket click narrows the body to that status: only the `!` card
 /// remains — the running agent's worktree is skipped whole (header included),
 /// the status-less process tail drops, and the `+K more` line is suppressed —

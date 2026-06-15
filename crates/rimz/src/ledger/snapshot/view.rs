@@ -30,7 +30,7 @@ mod rows;
 
 pub use model::{
     SidebarLinkFreshness, SidebarLinkHealth, SidebarProviderPanel, SidebarStatusCount,
-    SidebarWorktreeGroup, SidebarWorktreeKind,
+    SidebarWorktreeGroup, SidebarWorktreeKind, lead_unread_row,
 };
 use reap::{agent_hook_session_stale, is_agent_native_item};
 

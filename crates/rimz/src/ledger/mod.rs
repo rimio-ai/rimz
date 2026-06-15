@@ -65,7 +65,7 @@ pub use crate::ledger::snapshot::{
     AgentCard, PaneAgent, ProcessCard, ProcessState, RowCallSplit, RowCard, SidebarLinkFreshness,
     SidebarLinkHealth, SidebarOwnView, SidebarProviderPanel, SidebarResolverState, SidebarRow,
     SidebarSnapshot, SidebarStatusCount, SidebarSubAgent, SidebarWorktreeGroup,
-    SidebarWorktreeKind, TruthNotice,
+    SidebarWorktreeKind, TruthNotice, lead_unread_row,
 };
 pub use crate::ledger::workspace_record::WorkspaceRecord;
 

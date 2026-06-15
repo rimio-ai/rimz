@@ -62,7 +62,7 @@ pub use crate::ledger::{
     RuntimeProjection, RuntimeScope, SidebarLinkFreshness, SidebarLinkHealth, SidebarOwnView,
     SidebarProviderPanel, SidebarResolverState, SidebarRow, SidebarSnapshot, SidebarStatusCount,
     SidebarSubAgent, SidebarWorktreeGroup, SidebarWorktreeKind, StatePaths, TruthNotice,
-    WorkspaceRecord,
+    WorkspaceRecord, lead_unread_row,
 };
 pub use crate::schema::event::EventEnvelope;
 pub use crate::target::TargetErr;

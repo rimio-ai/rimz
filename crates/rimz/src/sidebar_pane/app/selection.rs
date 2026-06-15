@@ -2,9 +2,9 @@
 //! the transient arrow-key browse layer above it, the key/mouse handlers that
 //! act on it, and the hit-test reader over the render-built line map.
 
-use crate::SidebarSnapshot;
 use crate::feed::AgentStatus;
 use crate::ids::PaneId;
+use crate::{SidebarSnapshot, lead_unread_row};
 
 use crate::sidebar_pane::render::{
     BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
@@ -133,6 +133,10 @@ pub(super) fn handle_key(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
+    // Any keystroke is engagement: dismiss the unread snap so navigation follows
+    // the selection again. A still-unanswered lead is one keystroke away on the
+    // jump banner, and a genuinely new unread re-arms the snap on its next fold.
+    ui.unread_focus = None;
     match action {
         KeyAction::Up => {
             if ui.selected_index > 0 {
@@ -250,6 +254,9 @@ pub(super) fn handle_mouse_click(
     ui: &mut UiState,
     snapshot: &SidebarSnapshot,
 ) -> InputOutcome {
+    // A click is engagement: dismiss the unread snap (the jump banner click below
+    // is itself a click, so it lands on the lead before the snap would re-arm).
+    ui.unread_focus = None;
     // The dashboard's tabs are the bottom block's only hit targets — a
     // click on one picks that tab in place, never a jump.
     if let Some(tab) = tab_kind_at(ui, column, row) {
@@ -279,6 +286,9 @@ pub(super) fn handle_mouse_click(
 /// Overshoot is fine: the draw clamps the offset to the zone and writes the
 /// effective value back.
 pub(super) fn handle_scroll(down: bool, ui: &mut UiState) -> InputOutcome {
+    // A wheel tick is engagement: dismiss the unread snap and let the manual pin
+    // own the viewport.
+    ui.unread_focus = None;
     pin_manual_scroll(ui);
     ui.scroll_offset = if down {
         ui.scroll_offset.saturating_add(SCROLL_STEP)
@@ -614,6 +624,26 @@ pub(super) fn reconcile_selection(
         if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }
+    }
+
+    // 7. Unread focus: a freshly-arrived actionable unread snaps the viewport to
+    //    it (it ranks to the top, so the snap reaches the top) with priority over
+    //    following the selection, holding there until the user engages (any input
+    //    clears it) or it stops being the lead. A manual scroll pin is respected —
+    //    a new unread arriving mid-browse never yanks the view; the jump banner
+    //    keeps it reachable. The edge fires once per fresh lead, so a lead the
+    //    user dismissed is not re-snapped while it lingers.
+    let lead = lead_unread_row(&snapshot.worktree_groups).map(|row| row.id.clone());
+    if lead != ui.last_lead_unread {
+        if lead.is_some() && ui.manual_scroll.is_none() {
+            ui.unread_focus = lead.clone();
+        }
+        ui.last_lead_unread = lead.clone();
+    }
+    // End the snap once its row is no longer the actionable lead — answered, read,
+    // or displaced by an older unread (the edge above arms the displacer instead).
+    if ui.unread_focus.is_some() && ui.unread_focus != lead {
+        ui.unread_focus = None;
     }
 }
 

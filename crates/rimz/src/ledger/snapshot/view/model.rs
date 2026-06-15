@@ -99,6 +99,22 @@ pub struct SidebarStatusCount {
     pub count: usize,
 }
 
+/// The single highest-priority unread row: the oldest (min `last_activity`)
+/// unread row that needs an *answer* (`waiting`/`failed`). The one global
+/// attention lead the sidebar ranks to the top, shimmers, and snaps the viewport
+/// to — computed over the whole unfiltered roster so a make-up filter never
+/// shifts it, mirroring the `␣` triage head (oldest actionable first). `None`
+/// when nothing unread needs an answer. The single home for the lead-unread rule;
+/// the renderer's `lead_unread` and the viewport's unread-focus snap both read it.
+pub fn lead_unread_row(groups: &[SidebarWorktreeGroup]) -> Option<&SidebarRow> {
+    groups
+        .iter()
+        .flat_map(|group| &group.rows)
+        .filter(|row| row.unread)
+        .filter(|row| row.status().is_some_and(AgentStatus::is_actionable))
+        .min_by_key(|row| row.last_activity)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SidebarLinkFreshness {

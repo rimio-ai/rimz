@@ -19,6 +19,7 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ¤ 16 (2)                                      $420.00    ← live agents · unread count · today's fleet usd value
  ─────────────────────────────────────────────────────
  ? 3   ! 0   ⏸ 0   ✓ 8                       ⢿ 3   ○ 2    ← make-up: attention/parked/done | working/free
+ ↑ 2 need you                                            ← unread jump banner: pinned while agents await you; click/jump to the oldest
 
 ▎⑂ feature ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄ +127 -43    ← the worktree you're in · commits diff · lines diff
 ▌⣾ claude · Opus 4.8 · xhigh · 1m                $1.27    ← line 1: identity · model · effort · context window · usd value
@@ -142,6 +143,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
 - **Today's spend.** The room's workspace-scoped spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any in-scope agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once the room records spend.
 - **Scope paths.** The workspace scope is path-prefix based over the project root and grouped worktree roots; a checkout reached through a different symlink spelling than the transcript's `cwd` can read as outside the room until the paths agree.
 - **The make-up — split by who might want you.** The **left cluster** is worth a glance: `?` waiting and `!` failed each wear their fixed tone — `?` yellow, `!` red — then `⏸` paused (blue) and `✓` done. A bucket echoes the continuous signal only when it owns the lead unread row — the one row that most needs you — so `?` or `!` shimmers on that row's age-paced cadence while every other unread bucket, `⏸` and `✓` included, holds the steady `bright` crest; with no unread match a bucket holds static at its semantic tone. The unread count holds steady on the `¤` summary line. The **right cluster** is the live-capacity tail: `⢿` working (every running agent — the thinking animation and the compaction pulse are per-row heads, not buckets), then a free `○` idle agent; either bucket holds the same steady unread emphasis while a visible recovered row is unread. Every bucket always shows; colored statuses wear their semantic tone, the idle glyph and count rest at the soft stat tier, and zero counts use the same soft tier beside their glyphs.
+- **The unread jump banner — the agent that needs you, one click away.** While any agent awaits an answer, a pinned `↑ N need you` line closes the cockpit, toned by the lead's status — yellow for a waiting lead, red for a failed one. It stays put regardless of scroll, so the oldest unanswered agent is always reachable: clicking it (or pressing the inbox key) jumps you straight to that row, like a worktree header. It is the steady companion to the viewport's snap — when an unread arrives the cards scroll to reveal it, and once you scroll or navigate past it this banner is how you get back. It clears the moment nothing is awaiting you.
 - **Each non-zero bucket is click-to-filter.** Clicking a bucket narrows the agent cards to that status; clicking it again — or answering the bucket down to zero, or jumping to any card — returns to all, and a zero bucket is inert. Keyboard filters mirror the buckets and add the unread lens: `u` unread, `q` waiting, `!`/`e` attention, `p` paused, `d` done, `w` working, `o` idle, `a` all. The waiting key is `q` (question), leaving `?` as the footer's help key. The picked bucket paints as a padded chip for colored statuses — dark ink on the fill, bold, with one space on each side like the dashboard tab — while idle keeps the soft stat gray and adds reverse video and weight; the unread lens is keyboard-only and leaves the cockpit buckets unpicked. Under `NO_COLOR`, reverse video marks the same fixed `glyph count` cells. The counts always span the full room, filtered or not, so the line stays the room's honest tally while the body narrows.
 
 An **empty room** has no make-up line at all — just identity and the `◎ 0` / `¤ 0` summary:
@@ -465,6 +467,7 @@ The renderer's golden tests in [`crates/rimz/src/sidebar_pane/render/`](../../cr
 | dirty tree blocks the markers | `worktree_dirty_tree_keeps_the_cluster` |
 | per-worktree cap | `group_cap_with_overflow` |
 | cockpit unread count | `cockpit_unread_count` |
+| unread jump banner | `unread_jump_banner` |
 | make-up bucket picked, body filtered | `make_up_filter_failed` |
 | unread lens picked, body filtered | `make_up_filter_unread` |
 | cards overflow, scrollbar mid-scroll | `scroll_overflow_shows_bar` |

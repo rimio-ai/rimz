@@ -805,3 +805,71 @@ fn lead_unread_is_none_without_an_actionable_unread_row() {
         "an unread result alone reserves nothing — it settles bright, never leads",
     );
 }
+
+#[test]
+fn unread_jump_banner_renders_and_routes_to_the_lead_row() {
+    // An unread waiting agent makes the pinned banner appear; its line-map entry
+    // routes a click to the lead (oldest actionable) row, like a worktree header.
+    let mut waiting = agent(
+        "a",
+        "claude",
+        AgentStatus::Waiting,
+        Some("/repo/main"),
+        Some("main"),
+        Some("a"),
+    );
+    waiting.last_activity = fixed_now() - Duration::from_secs(10 * 60);
+    let calm = agent(
+        "b",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("b"),
+    );
+    let mut snapshot = snapshot_with(Vec::new(), vec![waiting, calm]);
+    // 'a' is the actionable unread lead.
+    for row in snapshot.worktree_groups[0].rows.iter_mut() {
+        if row.id == "a" {
+            row.unread = true;
+        }
+    }
+
+    let composed = compose_lines(&snapshot, None, &UiState::default(), 54, 40);
+    let banner = composed
+        .lines
+        .iter()
+        .position(|line| line_texts(std::slice::from_ref(line))[0].contains("need you"))
+        .expect("the unread banner renders while an actionable unread waits");
+    let lead_ordinal = snapshot.worktree_groups[0]
+        .rows
+        .iter()
+        .position(|row| row.id == "a")
+        .expect("the lead row is in the room");
+    assert_eq!(
+        composed.line_map[banner],
+        Some(lead_ordinal),
+        "the banner routes a click to the lead row, like a worktree header",
+    );
+
+    // No actionable unread → no banner line.
+    let calm_only = snapshot_with(
+        Vec::new(),
+        vec![agent(
+            "b",
+            "claude",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("b"),
+        )],
+    );
+    let composed = compose_lines(&calm_only, None, &UiState::default(), 54, 40);
+    assert!(
+        !composed
+            .lines
+            .iter()
+            .any(|line| line_texts(std::slice::from_ref(line))[0].contains("need you")),
+        "no banner without an actionable unread",
+    );
+}
