@@ -227,7 +227,11 @@ pub fn diff_group_migrations(
         let Some(prev_group) = prev_rows.get(&pane_id) else {
             continue;
         };
-        if prev_group.group == next_group.group && prev_group.cwd == next_group.cwd {
+        // A group migration is a row moving between groups. A cwd that changes
+        // while the group identity holds (e.g. a worktree pane whose cwd flaps
+        // between two paths that both fold to `external`) is not a migration —
+        // gating on cwd here recorded spurious `external -> external` self-moves.
+        if prev_group.group == next_group.group {
             continue;
         }
         events.push(DiagEvent::GroupMigration {
@@ -422,6 +426,81 @@ mod tests {
 
         let text = std::fs::read_to_string(sink.log_path()).unwrap();
         assert_eq!(text.lines().count(), 2);
+    }
+
+    fn snapshot_in_group(
+        kind: crate::SidebarWorktreeKind,
+        key: &str,
+        pane: &str,
+        cwd: Option<&str>,
+    ) -> crate::SidebarSnapshot {
+        let mut pane_ref = crate::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, pane));
+        pane_ref.cwd = cwd.map(ToOwned::to_owned);
+        let row = crate::SidebarRow {
+            id: pane.to_owned(),
+            name: pane.to_owned(),
+            pane: Some(pane_ref),
+            worktree_path: None,
+            worktree_branch: None,
+            unread: false,
+            inactive: false,
+            last_activity: jiff::Timestamp::from_second(1_000).unwrap(),
+            card: crate::RowCard::Process(crate::ProcessCard::default()),
+        };
+        let group = crate::SidebarWorktreeGroup {
+            key: key.to_owned(),
+            label: key.to_owned(),
+            kind,
+            status_counts: Vec::new(),
+            rows: vec![row],
+            hidden_count: 0,
+            diff_added: None,
+            diff_removed: None,
+            commits_ahead: None,
+            commits_behind: None,
+            trunk: None,
+            clean: None,
+        };
+        let mut snapshot = crate::SidebarSnapshot::build_with_agents(
+            WorkspaceId::from_project_root(Path::new("/repo")),
+            Vec::new(),
+            Vec::new(),
+            jiff::Timestamp::from_second(1_000).unwrap(),
+        );
+        snapshot.worktree_groups = vec![group];
+        snapshot
+    }
+
+    #[test]
+    fn cwd_flap_within_one_group_is_not_a_migration() {
+        use crate::SidebarWorktreeKind::External;
+        // The pane stays in the `external` group while its cwd flaps between two
+        // out-of-project paths — a cwd change, not a row moving between groups.
+        let prev = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/a"));
+        let next = snapshot_in_group(External, "external", "terminal_1", Some("/tmp/b"));
+
+        assert!(diff_group_migrations(&prev, &next).is_empty());
+    }
+
+    #[test]
+    fn moving_between_groups_records_one_migration() {
+        let prev = snapshot_in_group(
+            crate::SidebarWorktreeKind::External,
+            "external",
+            "terminal_1",
+            Some("/tmp/a"),
+        );
+        let next = snapshot_in_group(
+            crate::SidebarWorktreeKind::Worktree,
+            "/repo/feature",
+            "terminal_1",
+            Some("/repo/feature"),
+        );
+
+        assert!(matches!(
+            diff_group_migrations(&prev, &next).as_slice(),
+            [DiagEvent::GroupMigration { pane_id, .. }] if pane_id.raw() == "terminal_1"
+        ));
     }
 
     #[test]
