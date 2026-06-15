@@ -16,6 +16,7 @@ pub(super) fn refresh_oauth_usage(
     accounts: &AccountsConfig,
 ) {
     refresh_claude_oauth_usage(snapshot, runtime, accounts);
+    refresh_pi_oauth_usage(snapshot, runtime, accounts);
 }
 
 fn refresh_claude_oauth_usage(
@@ -69,6 +70,30 @@ fn has_fresh_claude_statusline_windows(snapshot: &SidebarSnapshot) -> bool {
             && !limits.content_stale_at(now)
             && now.duration_since(context.observed_at).as_secs() <= CREDITS_TTL.as_secs() as i64
     })
+}
+
+fn refresh_pi_oauth_usage(
+    snapshot: &SidebarSnapshot,
+    runtime: &RuntimePaths,
+    accounts: &AccountsConfig,
+) {
+    if !accounts.oauth_usage || crate::agents::credits::oauth_usage_offline() {
+        return;
+    }
+    if !snapshot
+        .providers
+        .iter()
+        .any(|panel| panel.kind == "pi" && panel.metered)
+    {
+        return;
+    }
+    if crate::sidebar::enrich::provider_credits_entry_fresh(runtime, "pi") {
+        return;
+    }
+    if !oauth_usage_probe_due(runtime, "pi") {
+        return;
+    }
+    spawn_pi_usage_refresh(runtime);
 }
 
 pub(crate) fn oauth_usage_probe_due(runtime: &RuntimePaths, kind: &str) -> bool {
@@ -136,6 +161,44 @@ fn spawn_claude_usage_refresh(
             tags.operation = "claude.usage_refresh.spawn",
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn claude usage refresh",
+        );
+    }
+}
+
+fn spawn_pi_usage_refresh(runtime: &RuntimePaths) {
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(err) => {
+            tracing::warn!(
+                workspace = %runtime.workspace_id,
+                tags.operation = "pi.usage_refresh.locate_exe",
+                error = &err as &dyn std::error::Error,
+                "sidebar: cannot locate rimz to refresh pi usage",
+            );
+            return;
+        }
+    };
+    let mut cmd = std::process::Command::new(exe);
+    cmd.args([
+        "pi",
+        "refresh-usage",
+        "--workspace-id",
+        runtime.workspace_id.as_str(),
+    ]);
+    cmd.stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    tracing::info!(
+        target: crate::observability::BREADCRUMB_TARGET,
+        workspace = %runtime.workspace_id,
+        "sidebar: spawning pi usage refresh",
+    );
+    if let Err(err) = crate::child_process::spawn_detached_reaped(&mut cmd, "pi-refresh-usage") {
+        tracing::warn!(
+            workspace = %runtime.workspace_id,
+            tags.operation = "pi.usage_refresh.spawn",
+            error = &err as &dyn std::error::Error,
+            "sidebar: failed to spawn pi usage refresh",
         );
     }
 }
@@ -265,6 +328,7 @@ mod tests {
                 context_window: None,
                 total_tokens: None,
                 cache_read_input_tokens: None,
+                cache_write_input_tokens: None,
                 fresh_input_tokens: None,
                 output_tokens: None,
                 todo_done: None,

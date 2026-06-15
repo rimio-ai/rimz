@@ -60,9 +60,8 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert_eq!(registered.model.as_deref(), Some("claude-sonnet-4.5"));
     assert_eq!(registered.effort.as_deref(), Some("xhigh"));
     assert_eq!(registered.context_window, Some(200_000));
-    // The shared observation shape has no cache-write slot, so OpenCode folds
-    // cache-write into the input-side numerator for an accurate context gauge.
-    assert_eq!(registered.fresh_input_tokens, Some(140));
+    assert_eq!(registered.fresh_input_tokens, Some(100));
+    assert_eq!(registered.cache_write_input_tokens, Some(40));
     assert_eq!(registered.cache_read_input_tokens, Some(30));
     assert_eq!(registered.output_tokens, Some(20));
     assert_eq!(registered.total_tokens, Some(190));

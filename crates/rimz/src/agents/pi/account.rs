@@ -1,13 +1,12 @@
 //! Pi's out-of-band account probe: the `auth.json` credential map under Pi's
 //! config root.
 //!
-//! Pi exposes no plan tier and no rate-limit windows (the balance gap in
-//! [docs/internals/adapter/pi-reference.md]); its one account fact is the
-//! credential type per provider — `oauth` (a metered subscription) or
-//! `api_key` (unmetered). The probe labels the subscription the fleet actually
-//! uses: the provider of the freshest session, tail-read from the newest
-//! session JSONL, falling back to the first OAuth credential, else the first
-//! entry. The binary version is separate display enrichment exposed through
+//! Pi exposes no plan tier in its account file; provider windows arrive through
+//! the extension's response-header capture and the OAuth usage probe. The probe
+//! labels the subscription the fleet actually uses: the provider of the
+//! freshest session, tail-read from the newest session JSONL, falling back to
+//! the first OAuth credential, else the first entry. The binary version is
+//! separate display enrichment exposed through
 //! [`crate::agents::AgentAdapter::probe_version`], so an active Pi session can
 //! show `pi --version` even when no account file exists. Best-effort and
 //! producer-only — see [`crate::agents::account`] for the probe contract.
@@ -71,18 +70,16 @@ fn probe_auth(path: &Path, used: Option<String>) -> AccountProbe {
     AccountProbe::Found(AgentAccount {
         plan: Some(sub_label(provider, credential.kind.as_deref())),
         // The reference mapping: an OAuth credential is a metered
-        // subscription (Pi reads no window surface of its own — the dashboard
-        // borrows the metering sibling's, keyed by `sub_provider`), an API
-        // key is unmetered; an unknown type stays unknown.
+        // subscription, an API key is unmetered, and an unknown type stays
+        // unknown. Pi's own window feeders publish under the `pi` kind.
         metered: match credential.kind.as_deref() {
             Some("oauth") => Some(true),
             Some("api_key") => Some(false),
             _ => None,
         },
         version: None,
-        // The raw credential key (`anthropic`, `openai`, …) — the dashboard
-        // maps it to the agent kind metering that account and reuses its
-        // budget windows.
+        // The raw credential key (`anthropic`, `openai`, …), retained so the
+        // panel can name which backing subscription Pi is using.
         sub_provider: Some(provider.clone()),
     })
 }
@@ -118,7 +115,7 @@ fn provider_display(provider: &str) -> String {
 /// session file by mtime, tail-scanned newest-first for the last message's
 /// `message.provider`. Best-effort: any miss yields `None` and the credential
 /// map decides alone.
-fn used_provider() -> Option<String> {
+pub(super) fn used_provider() -> Option<String> {
     let (_, newest) = pi_session_files()
         .into_iter()
         .filter_map(|path| {
@@ -181,8 +178,8 @@ mod tests {
         assert_eq!(account.plan.as_deref(), Some("Anthropic OAuth"));
         assert_eq!(account.metered, Some(true));
         assert_eq!(account.version, None);
-        // The raw credential key rides along, so the dashboard can borrow the
-        // metering sibling's budget windows.
+        // The raw credential key rides along, so the dashboard can name the
+        // backing subscription Pi is using.
         assert_eq!(account.sub_provider.as_deref(), Some("anthropic"));
 
         let path = write_auth(

@@ -133,6 +133,10 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
                 "stop_reason": "stop",
                 "model": "gpt-5",
                 "total_tokens": 4200,
+                "input_tokens": 100,
+                "cache_write_input_tokens": 40,
+                "cache_read_input_tokens": 30,
+                "output_tokens": 20,
             }),
         )
         .expect("observation");
@@ -145,6 +149,10 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
     );
     assert_eq!(clean.model.as_deref(), Some("gpt-5"));
     assert_eq!(clean.total_tokens, Some(4200));
+    assert_eq!(clean.fresh_input_tokens, Some(100));
+    assert_eq!(clean.cache_write_input_tokens, Some(40));
+    assert_eq!(clean.cache_read_input_tokens, Some(30));
+    assert_eq!(clean.output_tokens, Some(20));
 
     for payload in [
         json!({ "session_id": "sess-1", "stop_reason": "aborted" }),
@@ -163,6 +171,48 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
             "payload {payload}",
         );
     }
+}
+
+#[test]
+fn pi_observes_live_rate_limit_context() {
+    let context = PiAdapter
+        .observe_context(
+            "pi",
+            &json!({
+                "rate_limits": [
+                    {
+                        "used_percentage": 72,
+                        "resets_at": 1_700_018_000i64,
+                        "duration_mins": 300,
+                        "observed_at": 1_700_000_000i64
+                    },
+                    {
+                        "used_percentage": 35,
+                        "resets_at": 1_700_604_800i64,
+                        "duration_mins": 10_080,
+                        "observed_at": 1_700_000_000i64
+                    }
+                ],
+                "input_tokens": 10
+            }),
+        )
+        .expect("rate-limit context");
+    assert_eq!(context.source, "pi");
+    assert!(context.tokens.is_none());
+    let windows = context.rate_limits.expect("windows").windows;
+    assert_eq!(windows.len(), 2);
+    assert_eq!(windows[0].used_percentage, Some(72));
+    assert_eq!(windows[0].duration_mins, Some(300));
+    assert_eq!(
+        windows[0].resets_at,
+        Some(jiff::Timestamp::from_second(1_700_018_000).unwrap())
+    );
+    assert_eq!(
+        windows[0].observed_at,
+        Some(jiff::Timestamp::from_second(1_700_000_000).unwrap())
+    );
+    assert_eq!(windows[0].source, WindowSource::BestEffort);
+    assert_eq!(windows[1].duration_mins, Some(10_080));
 }
 
 #[test]
@@ -365,6 +415,10 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("RIMZ_BIN"));
     assert!(EXTENSION_SOURCE.contains("getContextUsage"));
     assert!(EXTENSION_SOURCE.contains("Math.round"));
+    assert!(EXTENSION_SOURCE.contains(r#"pi.on("turn_end""#));
+    assert!(EXTENSION_SOURCE.contains(r#"pi.on("after_provider_response""#));
+    assert!(EXTENSION_SOURCE.contains("cache_write_input_tokens"));
+    assert!(EXTENSION_SOURCE.contains("rate_limits"));
     for event in WIRED_EVENTS {
         assert!(
             EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),

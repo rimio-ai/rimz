@@ -197,6 +197,45 @@ fn codex_card_renders_the_per_call_composition() {
     );
     assert_snapshot("codex_card_context_composition", rendered);
 }
+
+#[test]
+fn pi_card_renders_cache_write_in_the_per_call_composition() {
+    let mut pi = agent(
+        "pi-1",
+        "pi",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    pi.context_pct = Some(54);
+    pi.context_window = Some(258_400);
+    pi.total_tokens = Some(140_000);
+    pi.cache_read_input_tokens = Some(120_000);
+    pi.cache_write_input_tokens = Some(10_000);
+    pi.fresh_input_tokens = Some(9_200);
+    pi.output_tokens = Some(800);
+    let snapshot = snapshot_with(Vec::new(), vec![pi]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            help_visible: false,
+            animation_phase: 0,
+            line_map: Vec::new(),
+            ..Default::default()
+        },
+        48,
+        14,
+    );
+
+    assert!(
+        rendered.contains("▤ 139k · ◌ 120k ◍ 10k ↘ 9k ↗ 800"),
+        "the context line legends the four-way split:\n{rendered}"
+    );
+}
+
 /// The context bar reads left to right like the context line, segment order
 /// driven by the row-level split. Style-level, since text goldens cannot see
 /// the segment colors. Two inputs prove the ladder: a Codex two-bucket fill

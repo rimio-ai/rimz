@@ -59,9 +59,7 @@ pub use descriptor::{
 pub use lifecycle::{LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase, step};
 pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
-pub use registry::{
-    ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, kind_for_sub_provider, known_kinds,
-};
+pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
 pub use spending::{SpendTally, SpendWindow, Spending};
 
 pub use claude::ClaudeAdapter;

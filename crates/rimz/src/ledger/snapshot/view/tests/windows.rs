@@ -131,11 +131,12 @@ fn fresh_windows_replay_captured_free_reset() {
 fn call_split_projects_only_with_known_input_sides() {
     // The per-call split a rollout's `last_token_usage` feeds onto the
     // lifecycle rail projects onto the row, and its `filled()` — cache reads +
-    // fresh input, exactly the window numerator the `▣` percent scales —
-    // stands in for the severity axis's absolute-token read when no rich blob
-    // exists.
+    // cache writes + fresh input, exactly the window numerator the `▣` percent
+    // scales — stands in for the severity axis's absolute-token read when no
+    // rich blob exists.
     let mut codex = agent("codex", "sess-1", AgentStatus::Running, 1_000).worktree("/repo/main");
     codex.cache_read_input_tokens = Some(120_000);
+    codex.cache_write_input_tokens = Some(10_000);
     codex.fresh_input_tokens = Some(9_200);
     codex.output_tokens = Some(800);
     let snapshot = room_with_agent_panes(Vec::new(), vec![codex]);
@@ -145,10 +146,11 @@ fn call_split_projects_only_with_known_input_sides() {
         .call_split()
         .expect("the split projects onto the row");
     assert_eq!(split.cache_read, 120_000);
+    assert_eq!(split.cache_write, 10_000);
     assert_eq!(split.fresh_input, 9_200);
     assert_eq!(split.output, 800);
-    assert_eq!(split.filled(), 129_200);
-    assert_eq!(projected.context_used_tokens(), Some(129_200));
+    assert_eq!(split.filled(), 139_200);
+    assert_eq!(projected.context_used_tokens(), Some(139_200));
 
     // Until the input side of a call is known the row keeps the bare total —
     // a pre-first-turn agent never legends a partial composition.

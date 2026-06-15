@@ -88,12 +88,11 @@ pub struct AgentLifecycleObservation {
     #[serde(skip)]
     pub turn_error: Option<AgentTurnError>,
     /// The latest API call's per-call token split — what the agent card's
-    /// composition line legends (`◌` cache-read, `↘` fresh input, `↗` output).
-    /// Carry-forward enrichment for an agent with no richer realtime source
-    /// (Codex's rollout tail); Claude's statusline context supersedes it at
-    /// render. No cache-write field: the one provider that feeds this path
-    /// reports none per call.
+    /// composition line legends (`◌` cache-read, `◍` cache-write, `↘` fresh
+    /// input, `↗` output). Carry-forward enrichment for an agent with no richer
+    /// realtime source; Claude's statusline context supersedes it at render.
     pub cache_read_input_tokens: Option<u64>,
+    pub cache_write_input_tokens: Option<u64>,
     pub fresh_input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     /// Completed / total todos for the agent's current plan or task list.
@@ -135,6 +134,7 @@ impl AgentLifecycleObservation {
             total_tokens: None,
             turn_error: None,
             cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
             todo_done: None,

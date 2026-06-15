@@ -364,6 +364,7 @@ fn idle_agent_row(
             context_window: descriptor.default_context_window,
             total_tokens: None,
             cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
             todo_done: None,

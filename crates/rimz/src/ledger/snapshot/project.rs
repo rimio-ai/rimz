@@ -646,6 +646,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         context_window: enrichment.context_window,
         total_tokens: enrichment.total_tokens,
         cache_read_input_tokens: enrichment.cache_read_input_tokens,
+        cache_write_input_tokens: enrichment.cache_write_input_tokens,
         fresh_input_tokens: enrichment.fresh_input_tokens,
         output_tokens: enrichment.output_tokens,
         todo_done: enrichment.todo_done,
@@ -733,6 +734,7 @@ fn assemble_launch_state(
         context_window: prior.and_then(|state| state.context_window),
         total_tokens: prior.and_then(|state| state.total_tokens),
         cache_read_input_tokens: prior.and_then(|state| state.cache_read_input_tokens),
+        cache_write_input_tokens: prior.and_then(|state| state.cache_write_input_tokens),
         fresh_input_tokens: prior.and_then(|state| state.fresh_input_tokens),
         output_tokens: prior.and_then(|state| state.output_tokens),
         todo_done: prior.and_then(|state| state.todo_done),
@@ -796,6 +798,7 @@ struct EnrichmentProjection {
     context_window: Option<u64>,
     total_tokens: Option<u64>,
     cache_read_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
     fresh_input_tokens: Option<u64>,
     output_tokens: Option<u64>,
     todo_done: Option<u32>,
@@ -816,6 +819,9 @@ fn enrichment_projection(
     let cache_read_input_tokens = observation
         .cache_read_input_tokens
         .or_else(|| prior.and_then(|p| p.cache_read_input_tokens));
+    let cache_write_input_tokens = observation
+        .cache_write_input_tokens
+        .or_else(|| prior.and_then(|p| p.cache_write_input_tokens));
     let fresh_input_tokens = observation
         .fresh_input_tokens
         .or_else(|| prior.and_then(|p| p.fresh_input_tokens));
@@ -832,8 +838,12 @@ fn enrichment_projection(
         crate::agents::descriptor_by_kind(kind.as_str())
             .and_then(|descriptor| descriptor.default_context_window)
     });
-    let used_tokens =
-        context_used_tokens(cache_read_input_tokens, fresh_input_tokens, total_tokens);
+    let used_tokens = context_used_tokens(
+        cache_read_input_tokens,
+        cache_write_input_tokens,
+        fresh_input_tokens,
+        total_tokens,
+    );
     let context_pct = observation
         .context_pct
         .or_else(|| derive_context_pct(used_tokens, resolved_window))
@@ -843,6 +853,7 @@ fn enrichment_projection(
         context_window,
         total_tokens,
         cache_read_input_tokens,
+        cache_write_input_tokens,
         fresh_input_tokens,
         output_tokens,
         todo_done: observation
@@ -855,15 +866,19 @@ fn enrichment_projection(
 }
 
 /// Tokens currently occupying the window: the per-call context split
-/// (`cache_read + fresh_input`) when the adapter persists it, else the latest
-/// turn's token total. This is the gauge numerator the percentage scales.
+/// (`cache_read + cache_write + fresh_input`) when the adapter persists it,
+/// else the latest turn's token total. This is the gauge numerator the
+/// percentage scales.
 fn context_used_tokens(
     cache_read_input_tokens: Option<u64>,
+    cache_write_input_tokens: Option<u64>,
     fresh_input_tokens: Option<u64>,
     total_tokens: Option<u64>,
 ) -> Option<u64> {
     match fresh_input_tokens {
-        Some(fresh) => Some(cache_read_input_tokens.unwrap_or(0) + fresh),
+        Some(fresh) => Some(
+            cache_read_input_tokens.unwrap_or(0) + cache_write_input_tokens.unwrap_or(0) + fresh,
+        ),
         None => total_tokens,
     }
 }

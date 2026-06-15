@@ -25,19 +25,22 @@
 //! (`native_ask_ui: false`), so an ask nothing answers resolves neutrally —
 //! empty stdout lets the tool run, and no `native_ui` feed item is pushed:
 //! gating is opt-in via a resolver, never Rimz posing questions pi would not
-//! have asked. Subagents, background tasks, and rate-limit windows stay
-//! declared off (`docs/internals/adapter/pi-reference.md` → "What Pi cannot
-//! support") and the absences render deliberately.
+//! have asked. Subagents and background tasks stay declared off
+//! (`docs/externals/agent-adapter/pi-reference.md`) and the absences render
+//! deliberately.
 
 pub(crate) mod account;
+pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use jiff::Timestamp;
 use serde_json::{Value, json};
 
+use super::context::{AgentContext, AgentRateLimits, RateLimitWindow, WindowSource};
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
     RemoteControlCapability, ThreadKey, ToolClassification,
@@ -53,6 +56,22 @@ use super::{
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
+
+pub fn fetch_oauth_usage() -> Option<crate::agents::AccountUsageSnapshot> {
+    match oauth_usage::fetch() {
+        Ok(snapshot) => Some(snapshot),
+        Err(err) => {
+            if err.should_report() {
+                tracing::warn!(
+                    tags.operation = "pi.oauth_usage",
+                    error = &err as &dyn std::error::Error,
+                    "pi: OAuth usage probe failed",
+                );
+            }
+            None
+        }
+    }
+}
 
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
 /// descriptor-vs-trait split.
@@ -91,7 +110,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // `native_ui` feed item: gating is opt-in via a resolver, never Rimz
         // posing a question pi would not have asked.
         native_ask_ui: false,
-        rate_limit_windows: false,
+        rate_limit_windows: true,
         rich_context: false,
         context_usage: true,
         account_spend: true,
@@ -206,7 +225,7 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Wired {
-            via: "auth.json/session spend",
+            via: "auth.json/session spend + after_provider_response headers + OAuth usage probe",
         },
     ),
     (
@@ -428,7 +447,15 @@ impl AgentAdapter for PiAdapter {
         observation.context_pct = payload_context_pct(payload, None);
         observation.context_window = parsed.context_window;
         observation.total_tokens = parsed.total_tokens;
+        observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
+        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.fresh_input_tokens = parsed.input_tokens;
+        observation.output_tokens = parsed.output_tokens;
         Some(observation)
+    }
+
+    fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
+        pi_rate_limits_context(source, payload)
     }
 
     fn ends_session(&self, event_name: &str) -> bool {
@@ -511,6 +538,93 @@ impl AgentAdapter for PiAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+}
+
+fn pi_rate_limits_context(source: &str, payload: &Value) -> Option<AgentContext> {
+    let windows: Vec<RateLimitWindow> = payload
+        .get("rate_limits")?
+        .as_array()?
+        .iter()
+        .filter_map(parse_rate_limit_window)
+        .collect();
+    if windows.is_empty() {
+        return None;
+    }
+    Some(AgentContext {
+        source: source.to_owned(),
+        session_name: None,
+        session_preview: None,
+        model_id: None,
+        model_display_name: None,
+        effort: None,
+        thinking_enabled: None,
+        output_style: None,
+        vim_mode: None,
+        agent_version: None,
+        exceeds_200k_tokens: None,
+        cost: None,
+        tokens: None,
+        rate_limits: Some(AgentRateLimits { windows }),
+        pr: None,
+        account: None,
+        turn_error: None,
+        turn_complete: None,
+        observed_at: Timestamp::now(),
+    })
+}
+
+fn parse_rate_limit_window(value: &Value) -> Option<RateLimitWindow> {
+    let used_percentage = value
+        .get("used_percentage")
+        .or_else(|| value.get("usedPercent"))
+        .and_then(value_f64)
+        .map(|value| value.round().clamp(0.0, 100.0) as u8);
+    let resets_at = value
+        .get("resets_at")
+        .or_else(|| value.get("resetsAt"))
+        .and_then(timestamp_from_value);
+    let duration_mins = value
+        .get("duration_mins")
+        .or_else(|| value.get("durationMins"))
+        .and_then(Value::as_u64)
+        .and_then(|value| u32::try_from(value).ok());
+    let observed_at = value
+        .get("observed_at")
+        .or_else(|| value.get("observedAt"))
+        .and_then(timestamp_from_value);
+    (used_percentage.is_some() || resets_at.is_some() || duration_mins.is_some()).then_some(
+        RateLimitWindow {
+            used_percentage,
+            resets_at,
+            duration_mins,
+            observed_at,
+            source: WindowSource::BestEffort,
+        },
+    )
+}
+
+fn value_f64(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(number) => number.as_f64(),
+        Value::String(raw) => raw.trim().parse::<f64>().ok(),
+        _ => None,
+    }
+    .filter(|value| value.is_finite())
+}
+
+fn timestamp_from_value(value: &Value) -> Option<Timestamp> {
+    match value {
+        Value::Number(number) => number
+            .as_i64()
+            .and_then(|secs| Timestamp::from_second(secs).ok()),
+        Value::String(raw) => raw.parse::<Timestamp>().ok().or_else(|| {
+            raw.trim()
+                .parse::<i64>()
+                .ok()
+                .and_then(|secs| Timestamp::from_second(secs).ok())
+        }),
+        _ => None,
     }
 }
 

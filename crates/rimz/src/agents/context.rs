@@ -160,9 +160,7 @@ pub struct AgentAccount {
     pub version: Option<String>,
     /// The raw subscription-provider id the account runs on, for a
     /// multi-provider client (Pi's `auth.json` keys: `anthropic`, `openai`).
-    /// The dashboard maps it to the sibling agent kind metering that account
-    /// ([`kind_for_sub_provider`](super::kind_for_sub_provider)) and borrows
-    /// its budget windows. Single-provider probes leave it `None`.
+    /// Single-provider probes leave it `None`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sub_provider: Option<String>,
 }

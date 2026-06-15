@@ -41,19 +41,6 @@ pub fn known_kinds() -> impl Iterator<Item = &'static str> {
     ADAPTERS.iter().map(|adapter| adapter.descriptor().kind)
 }
 
-/// The agent kind whose account a subscription-provider id belongs to —
-/// `anthropic` → `claude`, `openai` → `codex` — resolved through each
-/// descriptor's [`sub_providers`](AgentDescriptor::sub_providers) declaration.
-/// Lets the dashboard borrow budget windows for a multi-provider client (Pi)
-/// running on a sibling kind's subscription.
-pub fn kind_for_sub_provider(provider: &str) -> Option<&'static str> {
-    ADAPTERS
-        .iter()
-        .map(|adapter| adapter.descriptor())
-        .find(|descriptor| descriptor.sub_providers.contains(&provider))
-        .map(|descriptor| descriptor.kind)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -95,14 +82,7 @@ mod tests {
     }
 
     #[test]
-    fn sub_providers_are_unique_and_resolve_to_their_metering_kind() {
-        // The credential keys Pi's auth file uses, resolved through each
-        // descriptor's declaration — the dashboard's window-borrow mapping.
-        assert_eq!(kind_for_sub_provider("anthropic"), Some("claude"));
-        assert_eq!(kind_for_sub_provider("openai"), Some("codex"));
-        assert_eq!(kind_for_sub_provider("openai-codex"), Some("codex"));
-        assert_eq!(kind_for_sub_provider("github-copilot"), None);
-
+    fn sub_providers_are_unique() {
         let mut providers: Vec<_> = ADAPTERS
             .iter()
             .flat_map(|adapter| adapter.descriptor().sub_providers)

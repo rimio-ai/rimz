@@ -306,6 +306,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         total_tokens: None,
         turn_error: None,
         cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
         todo_done: None,

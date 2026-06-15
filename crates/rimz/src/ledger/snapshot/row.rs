@@ -228,6 +228,8 @@ pub struct AgentCard {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_tokens: Option<u64>,
@@ -298,6 +300,7 @@ impl AgentCard {
         let fresh_input = self.fresh_input_tokens?;
         Some(RowCallSplit {
             cache_read: self.cache_read_input_tokens.unwrap_or(0),
+            cache_write: self.cache_write_input_tokens.unwrap_or(0),
             fresh_input,
             output: self.output_tokens.unwrap_or(0),
         })
@@ -363,6 +366,8 @@ pub struct ProcessCard {
 pub struct RowCallSplit {
     /// Tokens read back from cache (`◌`).
     pub cache_read: u64,
+    /// Tokens newly written into cache (`◍`).
+    pub cache_write: u64,
     /// Fresh, uncached input (`↘`).
     pub fresh_input: u64,
     /// Output generated (`↗`) — it joins the window next turn.
@@ -372,7 +377,7 @@ pub struct RowCallSplit {
 impl RowCallSplit {
     /// The window numerator — everything occupying the window after this call.
     pub fn filled(&self) -> u64 {
-        self.cache_read + self.fresh_input
+        self.cache_read + self.cache_write + self.fresh_input
     }
 }
 

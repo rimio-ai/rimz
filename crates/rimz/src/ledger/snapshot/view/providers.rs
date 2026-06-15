@@ -107,18 +107,7 @@ impl SidebarSnapshot {
             let windows = if declares_windows {
                 windows_for(&kind)
             } else {
-                // A provider with no window surface of its own (Pi) running on a
-                // metered sibling subscription shares that account's budget, so
-                // its block borrows the sibling kind's windows — same account,
-                // same bars. No metered sub, no mapped sibling, or no readings
-                // → bar-less, exactly as before.
-                account
-                    .as_ref()
-                    .filter(|account| account.metered == Some(true))
-                    .and_then(|account| account.sub_provider.as_deref())
-                    .and_then(crate::agents::kind_for_sub_provider)
-                    .map(windows_for)
-                    .unwrap_or_default()
+                Default::default()
             };
             let has_windows = !windows.is_empty();
 

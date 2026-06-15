@@ -466,6 +466,13 @@ fn merge_agent_context_sidecars(
         let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
     }
 
+    if payload.get("rate_limits").is_some()
+        && let Some(context) = agent.observe_context(agent.descriptor().kind, payload)
+        && merge_rate_limit_context(ledger, agent, context_agent_id, context)
+    {
+        let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+
     let prior = rimz::ledger::agent_context::read_one(
         ledger.runtime_paths(),
         agent.descriptor().kind,
@@ -508,6 +515,48 @@ fn merge_agent_context_sidecars(
         );
     } else {
         let _ = rimz::ledger::wakeup::wake_sidebars(ledger.runtime_paths());
+    }
+}
+
+fn merge_rate_limit_context(
+    ledger: &Ledger,
+    agent: &dyn AgentAdapter,
+    context_agent_id: &str,
+    context: rimz::agents::AgentContext,
+) -> bool {
+    let Some(rate_limits) = context.rate_limits else {
+        return false;
+    };
+    let kind = agent.descriptor().kind;
+    let observed_at = context.observed_at;
+    let prior =
+        rimz::ledger::agent_context::read_one(ledger.runtime_paths(), kind, context_agent_id);
+    let mut record = prior.unwrap_or_else(|| {
+        rimz::ledger::agent_context::new_record(
+            kind,
+            context_agent_id,
+            rimz::ledger::agent_context::empty_context(kind, observed_at),
+        )
+    });
+    if record.context.rate_limits.as_ref() == Some(&rate_limits) {
+        return false;
+    }
+    record.context.source = kind.to_owned();
+    record.context.rate_limits = Some(rate_limits);
+    record.context.observed_at = observed_at;
+    record.rate_limits_observed_at = Some(observed_at);
+    match rimz::ledger::agent_context::write_record(ledger.runtime_paths(), &record) {
+        Ok(()) => true,
+        Err(err) => {
+            warn!(
+                agent = kind,
+                session = %context_agent_id,
+                tags.operation = "agent.rate_limits_merge",
+                error = &err as &dyn std::error::Error,
+                "lifecycle: failed to merge rate-limit context",
+            );
+            false
+        }
     }
 }
 

@@ -31,6 +31,7 @@ fn inject_lifecycle(env: &Env, agent_kind: &str, agent_id: &str) {
         total_tokens: None,
         turn_error: None,
         cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
         todo_done: None,

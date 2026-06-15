@@ -119,6 +119,19 @@ pub(crate) fn fetch_usage() -> Result<CodexOauthUsage> {
     fetch_usage_with_url(&url, &credentials)
 }
 
+pub(crate) fn fetch_usage_with_token(
+    access_token: &str,
+    account_id: Option<&str>,
+) -> Result<CodexOauthUsage> {
+    fetch_usage_with_url(
+        &usage_url(None),
+        &CodexOauthCredentials {
+            access_token: access_token.to_owned(),
+            account_id: account_id.map(ToOwned::to_owned),
+        },
+    )
+}
+
 pub(crate) fn load_credentials_from(path: &Path) -> Result<CodexOauthCredentials> {
     let bytes = match std::fs::read(path) {
         Ok(bytes) => bytes,

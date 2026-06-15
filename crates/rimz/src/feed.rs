@@ -1039,13 +1039,14 @@ pub struct AgentState {
     /// discipline as `context_pct`.
     #[serde(default)]
     pub total_tokens: Option<u64>,
-    /// The latest API call's per-call token split (`◌` cache-read, `↘` fresh
-    /// input, `↗` output), carried forward like `total_tokens`. Fed by the
-    /// Codex rollout tail today; the card's composition line falls back to it
-    /// when no richer realtime context (Claude's statusline) is present. No
-    /// cache-write field — the provider feeding this path reports none.
+    /// The latest API call's per-call token split (`◌` cache-read, `◍`
+    /// cache-write, `↘` fresh input, `↗` output), carried forward like
+    /// `total_tokens`. The card's composition line falls back to it when no
+    /// richer realtime context (Claude's statusline) is present.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cache_read_input_tokens: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_write_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fresh_input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1130,7 +1131,7 @@ impl AgentState {
     }
 
     /// Tokens currently occupying the window: the folded statusline breakdown,
-    /// else the per-call split (`cache_read + fresh_input`) the rollout tail
+    /// else the per-call split (`cache_read + cache_write + fresh_input`) the lifecycle rail
     /// reduces. `None` when nothing has reported occupancy yet.
     pub fn context_used_tokens(&self) -> Option<u64> {
         self.context
@@ -1139,7 +1140,11 @@ impl AgentState {
             .and_then(crate::agents::AgentTokenUsage::used_tokens)
             .or_else(|| {
                 let fresh = self.fresh_input_tokens?;
-                Some(self.cache_read_input_tokens.unwrap_or(0) + fresh)
+                Some(
+                    self.cache_read_input_tokens.unwrap_or(0)
+                        + self.cache_write_input_tokens.unwrap_or(0)
+                        + fresh,
+                )
             })
     }
 
@@ -1309,6 +1314,7 @@ mod tests {
             context_window: None,
             total_tokens: None,
             cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
             fresh_input_tokens: None,
             output_tokens: None,
             todo_done: None,

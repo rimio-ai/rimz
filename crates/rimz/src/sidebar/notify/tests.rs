@@ -157,6 +157,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         context_window: None,
         total_tokens: None,
         cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
         todo_done: None,

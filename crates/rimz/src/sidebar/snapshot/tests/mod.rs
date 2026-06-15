@@ -107,6 +107,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         context_window: None,
         total_tokens: None,
         cache_read_input_tokens: None,
+        cache_write_input_tokens: None,
         fresh_input_tokens: None,
         output_tokens: None,
         todo_done: None,

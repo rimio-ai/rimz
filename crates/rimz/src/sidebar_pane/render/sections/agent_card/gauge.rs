@@ -176,9 +176,8 @@ pub(super) fn gauge_percent(row: &SidebarRow) -> Option<u8> {
 /// (compaction/delegation violet), fresh `input` (the expense vermilion) — the
 /// same tones the context line's markers wear, so the line legends the bar by
 /// construction. The rich statusline blob is preferred; the row-level
-/// [`SidebarRow::call_split`]
-/// (Codex's rollout `last_token_usage`, which reports no cache-write) stands in
-/// when the blob carries no split. `None` when neither source reported one (a
+/// [`SidebarRow::call_split`] stands in when the blob carries no split. `None`
+/// when neither source reported one (a
 /// fresh session, or a statusline blob cleared by `/compact` — a rollout-fed
 /// split refreshes with the next call instead), so the bar falls back to a
 /// single-color ramp.
@@ -199,7 +198,7 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
     let split = row.call_split()?;
     (split.filled() > 0).then_some([
         (split.cache_read, theme.component(Component::CacheRead)),
-        (0, theme.component(Component::CacheWrite)),
+        (split.cache_write, theme.component(Component::CacheWrite)),
         (split.fresh_input, theme.component(Component::Input)),
     ])
 }
@@ -216,9 +215,8 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 /// so the line doubles as the bar's legend. The `◇` totals stay the cockpit /
 /// fleet-ledger / subagent vocabulary — this line answers "what is in the
 /// window", not "what did today burn". The rich statusline blob is preferred;
-/// the row-level [`SidebarRow::call_split`] (Codex's rollout
-/// `last_token_usage`) stands in when the blob carries no split — its
-/// cache-write column is unreported there, so it drops from the line. Falls
+/// the row-level [`SidebarRow::call_split`] stands in when the blob carries no
+/// split. Falls
 /// back to the bare `▤` rollup total when neither source has a split (Claude
 /// before the first API call and right after `/compact`), so the line shows
 /// *something* for every agent. The age rides the right edge only once it
@@ -270,16 +268,13 @@ pub(super) fn context_tokens_line(
             tokens_int,
         ));
     } else if let Some(split) = row.call_split() {
-        // The row-level split — the lifecycle rail's per-call composition
-        // (Codex's rollout `last_token_usage`). Its protocol reports no
-        // per-call cache-write, so that column passes 0 and drops from the
-        // line.
+        // The row-level split — the lifecycle rail's per-call composition.
         left.extend(context_breakdown_spans(
             theme,
             severity,
             split.filled(),
             split.cache_read,
-            0,
+            split.cache_write,
             split.fresh_input,
             split.output,
             tokens_int,

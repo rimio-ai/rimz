@@ -34,6 +34,14 @@ pub(crate) struct PiHookPayload {
     /// (rounded on the wire); `agent_end` overrides with the last assistant
     /// message's `usage.totalTokens` when present.
     pub total_tokens: Option<u64>,
+    /// Latest provider call: fresh input, excluding cache reads and cache writes.
+    pub input_tokens: Option<u64>,
+    /// Latest provider call: generated output.
+    pub output_tokens: Option<u64>,
+    /// Latest provider call: cache-read input.
+    pub cache_read_input_tokens: Option<u64>,
+    /// Latest provider call: cache-write/cache-creation input.
+    pub cache_write_input_tokens: Option<u64>,
 }
 
 /// Tolerant parse: any non-conforming payload reads as the empty default —

@@ -388,13 +388,8 @@ impl AgentAdapter for OpencodeAdapter {
             .or_else(|| context_window_for(parsed.model.as_deref()));
         observation.total_tokens = parsed.total_tokens;
         observation.cache_read_input_tokens = parsed.cache_read_input_tokens;
-        observation.fresh_input_tokens =
-            match (parsed.input_tokens, parsed.cache_write_input_tokens) {
-                (Some(input), Some(cache_write)) => Some(input.saturating_add(cache_write)),
-                (Some(input), None) => Some(input),
-                (None, Some(cache_write)) => Some(cache_write),
-                (None, None) => None,
-            };
+        observation.cache_write_input_tokens = parsed.cache_write_input_tokens;
+        observation.fresh_input_tokens = parsed.input_tokens;
         observation.output_tokens = parsed.output_tokens;
         Some(observation)
     }

@@ -109,6 +109,19 @@ pub(crate) fn fetch_usage(cli_version: Option<&str>) -> Result<ClaudeOauthUsage>
     fetch_usage_with_url(&usage_url(), &credentials, cli_version)
 }
 
+pub(crate) fn fetch_usage_with_token(
+    access_token: &str,
+    cli_version: Option<&str>,
+) -> Result<ClaudeOauthUsage> {
+    fetch_usage_with_url(
+        &usage_url(),
+        &ClaudeOauthCredentials {
+            access_token: access_token.to_owned(),
+        },
+        cli_version,
+    )
+}
+
 pub(crate) fn load_credentials() -> Result<ClaudeOauthCredentials> {
     let path = credentials_path();
     match std::fs::read(&path) {
