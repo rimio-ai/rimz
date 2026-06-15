@@ -238,16 +238,23 @@ impl DeadPidTracker {
             let observation = self.by_pid.entry(key.clone()).or_default();
             if observation.reason.as_deref() != Some(reason.as_str()) {
                 observation.confirmations = 0;
+                observation.emitted = false;
                 observation.reason = Some(reason.clone());
             }
             observation.confirmations = observation.confirmations.saturating_add(1);
-            if observation.confirmations >= OBSERVE_DEADPID_CONFIRMATIONS {
+            // A dead or reused pid is a standing fact, not a recurring event: a
+            // pane present in the topology cache (which carries no pid) keeps a
+            // pid frozen from an earlier CLI read, so a reused pid would
+            // otherwise re-report every cooldown for the pane's whole life.
+            // Report each episode once; a changed reason or a re-armed key (the
+            // mismatch cleared and recurred) starts a new one.
+            if observation.confirmations >= OBSERVE_DEADPID_CONFIRMATIONS && !observation.emitted {
                 anomalies.push(AnomalyKind::DeadPid {
                     row_id: row.row_id.clone(),
                     pid,
                     reason,
                 });
-                observation.confirmations = 0;
+                observation.emitted = true;
             }
         }
         self.by_pid.retain(|key, _| active.contains(key));
@@ -258,6 +265,7 @@ impl DeadPidTracker {
 #[derive(Default)]
 struct DeadPidObservation {
     confirmations: u32,
+    emitted: bool,
     reason: Option<String>,
 }
 
@@ -309,6 +317,10 @@ mod tests {
 
     fn live_process_start(_: u32) -> Option<Timestamp> {
         Some(Timestamp::from_second(10).unwrap())
+    }
+
+    fn mismatched_process_start(_: u32) -> Option<Timestamp> {
+        Some(Timestamp::from_second(100).unwrap())
     }
 
     fn pane_id(raw: &str) -> PaneId {
@@ -388,6 +400,27 @@ mod tests {
             [AnomalyKind::DeadPid { row_id, pid: 123, reason }]
                 if row_id == "a" && reason == "gone"
         ));
+    }
+
+    #[test]
+    fn dead_pid_reports_each_episode_once_and_re_arms_on_reason_change() {
+        let mut tracker = DeadPidTracker::default();
+        let roster = roster_with_pid("a", 123, Timestamp::from_second(10).unwrap());
+
+        // Two confirmations arm the first report; the standing condition then
+        // stays quiet however many frames it persists.
+        assert!(tracker.check(&roster, missing_process_start).is_empty());
+        assert_eq!(tracker.check(&roster, missing_process_start).len(), 1);
+        assert!(tracker.check(&roster, missing_process_start).is_empty());
+        assert!(tracker.check(&roster, missing_process_start).is_empty());
+
+        // A different reason is a new episode: it re-arms and reports once more.
+        assert!(tracker.check(&roster, mismatched_process_start).is_empty());
+        assert!(matches!(
+            tracker.check(&roster, mismatched_process_start).as_slice(),
+            [AnomalyKind::DeadPid { reason, .. }] if reason == "starttime-mismatch"
+        ));
+        assert!(tracker.check(&roster, mismatched_process_start).is_empty());
     }
 
     #[test]
