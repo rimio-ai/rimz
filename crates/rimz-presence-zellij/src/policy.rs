@@ -440,6 +440,12 @@ pub fn opened_card_panes(
 /// next manifest that carries the omitted tabs. Publication uses this merged
 /// room, so partial `PaneUpdate` bursts neither shrink the topology cache nor
 /// emit spurious `panes-changed` pokes.
+///
+/// Retention is bounded by one-tab-per-pane: a pane id is unique across the
+/// session, so a copy left in a tab Zellij renumbered or dropped without a
+/// `PaneClosed` is stale and is evicted once the pane is reported fresh
+/// elsewhere — without this a moved/renumbered tab leaks the same pane into
+/// several tab positions forever.
 pub fn merged_room(
     previous: &BTreeMap<usize, Vec<PaneFields>>,
     next: &BTreeMap<usize, Vec<PaneFields>>,
@@ -451,7 +457,35 @@ pub fn merged_room(
     for (tab, panes) in next {
         merged.insert(*tab, panes.clone());
     }
+    enforce_one_tab_per_pane(&mut merged, next);
     merged
+}
+
+/// Drop every duplicate of a pane so each `(is_plugin, id)` lives under one tab.
+/// The fresh manifest is authoritative for where a pane lives, so a copy in any
+/// other tab is evicted; a residual duplicate among retained-only tabs keeps its
+/// lowest-positioned occurrence. Tabs emptied by eviction are removed.
+fn enforce_one_tab_per_pane(
+    room: &mut BTreeMap<usize, Vec<PaneFields>>,
+    authoritative: &BTreeMap<usize, Vec<PaneFields>>,
+) {
+    let mut home = BTreeMap::new();
+    for (tab, panes) in authoritative {
+        for pane in panes {
+            home.insert((pane.is_plugin, pane.id), *tab);
+        }
+    }
+    let mut kept = BTreeSet::new();
+    for (tab, panes) in room.iter_mut() {
+        panes.retain(|pane| {
+            let key = (pane.is_plugin, pane.id);
+            match home.get(&key) {
+                Some(fresh_tab) => fresh_tab == tab,
+                None => kept.insert(key),
+            }
+        });
+    }
+    room.retain(|_, panes| !panes.is_empty());
 }
 
 pub fn remove_pane_from_tabs(

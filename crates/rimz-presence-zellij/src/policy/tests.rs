@@ -554,6 +554,40 @@ fn merged_room_retains_tabs_a_partial_manifest_omits() {
     assert_eq!(merged_room(&previous, &BTreeMap::new()), previous);
 }
 
+#[test]
+fn merged_room_keeps_each_pane_under_one_tab() {
+    // A renumbered tab stranded a copy of pane 10 in tab 1 while the live pane
+    // lives in tab 0; a fresh manifest naming tab 0 evicts the stale copy and
+    // drops the emptied tab. Without this the same pane leaks into both tabs.
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(10, 1)]),
+    ]);
+
+    let merged = merged_room(
+        &previous,
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]),
+    );
+
+    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0]);
+    assert_eq!(
+        merged
+            .values()
+            .flatten()
+            .filter(|pane| pane.id == 10)
+            .count(),
+        1,
+        "a pane id lives under exactly one tab",
+    );
+
+    // The terminal and plugin id spaces are distinct: same id, both kept.
+    let merged = merged_room(
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]),
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), plugin_pane(10)])]),
+    );
+    assert_eq!(merged.get(&0).map(Vec::len), Some(2));
+}
+
 // --- opened_card_panes: which manifest panes earn a card-create poke ---
 
 #[test]
