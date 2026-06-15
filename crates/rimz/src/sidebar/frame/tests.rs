@@ -128,6 +128,74 @@ fn source_active_naming_a_non_candidate_stays_contested() {
 }
 
 #[test]
+fn steady_contest_records_once_then_re_emits_on_resolution_change() {
+    // First contest with no prior: the multi-client tab is recorded.
+    let (prior, diagnostics) = assemble_frame_with_diagnostics(
+        vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        7,
+        "rimz-test",
+    );
+    assert_eq!(
+        prior.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(matches!(
+        diagnostics.as_slice(),
+        [DiagEvent::FocusContested { resolved, .. }] if resolved.raw() == "terminal_1"
+    ));
+
+    // The same contest resolving to the same pane is steady state, not a new
+    // anomaly: the tab still carries the badge, but nothing is recorded.
+    let (steady, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), true),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+        ],
+        produced_at_ms: 8,
+        observed_at_ms: 8,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::new(),
+        prior: Some(&prior),
+    });
+    assert!(steady.tabs[0].focus_contested);
+    assert_eq!(
+        steady.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(
+        diagnostics.is_empty(),
+        "a steady contest resolving to the same pane is not re-recorded"
+    );
+
+    // A contest that resolves to a different active pane is a focus shift, and
+    // is recorded again.
+    let shifted_prior = steady;
+    let (shifted, diagnostics) = assemble_frame_from_inputs(FrameInputs {
+        panes: vec![
+            pane("terminal_1", "tab_0", Some("zsh"), false),
+            pane("terminal_2", "tab_0", Some("cargo build"), true),
+            pane("terminal_3", "tab_0", Some("zsh"), true),
+        ],
+        produced_at_ms: 9,
+        observed_at_ms: 9,
+        session_name: "rimz-test".to_owned(),
+        source_active: BTreeMap::new(),
+        prior: Some(&shifted_prior),
+    });
+    assert_ne!(
+        shifted.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        Some("terminal_1")
+    );
+    assert!(
+        matches!(diagnostics.as_slice(), [DiagEvent::FocusContested { .. }]),
+        "a changed resolution under contest is recorded as a focus shift"
+    );
+}
+
+#[test]
 fn contested_focus_prefers_newly_marked_candidate() {
     let prior = assemble_frame(
         vec![

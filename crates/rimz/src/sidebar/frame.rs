@@ -453,16 +453,42 @@ fn resolve_tab_focus(
                 } else {
                     tab.focus_contested = true;
                     let resolved = resolve_contested_focus(tab, &candidates, prior);
-                    tab.active_pane = Some(resolved.clone());
-                    diagnostics.push(DiagEvent::FocusContested {
-                        view_id: tab.view_id.clone(),
-                        candidates,
-                        resolved,
-                    });
+                    // A multi-client tab or a floating overlay leaves several
+                    // panes marked focused every frame, and the contest resolves
+                    // to the same pane each time. Record it as a transition — a
+                    // newly contested view or a changed resolution — so the
+                    // anomaly log stays a log of focus shifts instead of a
+                    // per-frame repeat that buries them.
+                    if focus_contest_is_transition(prior, &tab.view_id, &resolved) {
+                        diagnostics.push(DiagEvent::FocusContested {
+                            view_id: tab.view_id.clone(),
+                            candidates,
+                            resolved: resolved.clone(),
+                        });
+                    }
+                    tab.active_pane = Some(resolved);
                 }
             }
         }
     }
+}
+
+/// Whether a contested-focus resolution is a transition worth recording: the
+/// prior frame did not already resolve this view's contest to the same active
+/// pane. A steady multi-client or floating-overlay contest resolves to the same
+/// pane every frame, so recording only the transition keeps the diagnostic a
+/// signal of focus shifts rather than per-frame noise.
+fn focus_contest_is_transition(
+    prior: Option<&PaneFrame>,
+    view_id: &ViewId,
+    resolved: &PaneId,
+) -> bool {
+    let Some(prior_tab) =
+        prior.and_then(|frame| frame.tabs.iter().find(|tab| tab.view_id == *view_id))
+    else {
+        return true;
+    };
+    !(prior_tab.focus_contested && prior_tab.active_pane.as_ref() == Some(resolved))
 }
 
 fn resolve_contested_focus(
