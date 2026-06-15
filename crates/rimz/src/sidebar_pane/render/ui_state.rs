@@ -74,6 +74,10 @@ pub struct UiState {
     /// yanks the view (the jump banner keeps it reachable). Crate-internal
     /// renderer state, like `manual_scroll`.
     pub(crate) unread_focus: Option<String>,
+    /// The row id a manual mark-unread just reopened while it is the focused
+    /// pane. While armed, focus-read auto-clear skips that row; moving focus
+    /// off it releases the guard so a later revisit clears normally.
+    pub(crate) unread_guard: Option<String>,
     /// The lead-unread row id observed on the previous fold — the edge detector
     /// for `unread_focus`. A change to a fresh `Some` arms the snap once, so a
     /// lead the user has already dismissed is never re-snapped while it lingers.

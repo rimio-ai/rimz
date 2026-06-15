@@ -386,6 +386,51 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
 }
 
 #[test]
+fn manual_unread_guard_suppresses_focused_read_until_revisit() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
+    let read_marks = runtime.sidebar_read_marks_path(&instance_a);
+
+    a.ui.unread_guard = Some("sess-1".to_owned());
+    let mut still_focused =
+        row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
+    still_focused.worktree_groups[0].rows[0].unread = true;
+
+    a.apply(still_focused);
+
+    assert!(row_unread(&a.current));
+    assert_eq!(a.ui.unread_guard.as_deref(), Some("sess-1"));
+    assert!(
+        !read_marks.exists(),
+        "the guarded focused row must not write a read receipt"
+    );
+
+    let mut focus_left =
+        row_snapshot_at(&ws, AgentStatus::Success, false, fixed_time(1_700_000_000));
+    focus_left.worktree_groups[0].rows[0].unread = true;
+    a.apply(focus_left);
+
+    assert!(row_unread(&a.current));
+    assert_eq!(a.ui.unread_guard, None);
+    assert!(
+        !read_marks.exists(),
+        "leaving focus only releases the guard; it does not clear the row"
+    );
+
+    let mut refocused = row_snapshot_at(&ws, AgentStatus::Success, true, fixed_time(1_700_000_000));
+    refocused.worktree_groups[0].rows[0].unread = true;
+    a.apply(refocused);
+
+    assert!(
+        read_marks.exists(),
+        "revisiting the row writes the normal focused read receipt"
+    );
+    assert!(!row_unread(&a.current));
+}
+
+#[test]
 fn non_final_fast_success_keeps_refresh_alert_active() {
     let ws = workspace();
     let (_dir, mut h) = ApplyHarness::new(&ws);

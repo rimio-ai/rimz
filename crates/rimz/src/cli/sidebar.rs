@@ -850,19 +850,47 @@ fn resolve_sidebar_targets(
 ) -> Result<ResolvedSidebarTargets> {
     rimz::target::require_mention(target)?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
-    let ledger = open_ledger(&workspace)?;
-    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let state = StatePaths::for_workspace(workspace.workspace_id.clone())
+        .context("preparing state paths")?;
     let runtime = RuntimePaths::for_workspace(workspace.workspace_id.clone())
         .context("preparing runtime paths")?;
+    state.ensure_dirs().context("preparing state paths")?;
     runtime.ensure_dirs().context("preparing runtime paths")?;
     let channel = current_channel(&workspace);
-    let targets = super::resolve_pane_targets(&snapshot, target, worktree, channel.as_deref())?;
-    let rows = rows_for_targets(&snapshot, &targets)?;
+    if let Ok(snapshot) = read_published_snapshot(
+        &mut RollupCursor::new(),
+        &state,
+        &runtime,
+        &workspace.session_name,
+        None,
+    ) && let Ok(rows) = resolve_rows(&snapshot, target, worktree, channel.as_deref())
+        && !rows.is_empty()
+    {
+        return Ok(ResolvedSidebarTargets {
+            workspace,
+            runtime,
+            rows,
+        });
+    }
+
+    let ledger = open_ledger(&workspace)?;
+    let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
+    let rows = resolve_rows(&snapshot, target, worktree, channel.as_deref())?;
     Ok(ResolvedSidebarTargets {
         workspace,
         runtime,
         rows,
     })
+}
+
+fn resolve_rows(
+    snapshot: &SidebarSnapshot,
+    target: &str,
+    worktree: Option<&str>,
+    channel: Option<&str>,
+) -> Result<Vec<SidebarRow>> {
+    let targets = super::resolve_pane_targets(snapshot, target, worktree, channel)?;
+    rows_for_targets(snapshot, &targets)
 }
 
 fn rows_for_targets(snapshot: &SidebarSnapshot, targets: &[&PaneAgent]) -> Result<Vec<SidebarRow>> {

@@ -199,13 +199,14 @@ pub(super) fn apply_fetch_outcome(
         .flat_map(|group| group.rows.iter())
         .map(|row| row.id.clone())
         .collect();
-    let focus_clear = read_receipt_for_row(
+    let mut focus_clear = read_receipt_for_row(
         current,
         focused_row_id.as_deref(),
         UnreadClearCause::Focus,
         &marks,
         now,
     );
+    apply_manual_unread_guard(ui, focused_row_id.as_deref(), &mut focus_clear);
     read_marks.observe_fold(focus_clear.ids.clone(), now.as_millisecond(), &live);
     set_rows_unread(current, &focus_clear.ids, false);
     if let Some(diag) = diag {
@@ -380,6 +381,22 @@ fn focused_working_pane(snapshot: &SidebarSnapshot) -> Option<crate::ids::PaneId
         .filter(|view| !view.own_is_active)
         .and_then(|view| view.active_pane_id.clone())
         .filter(|pane| row_index_of_pane(snapshot, None, pane).is_some())
+}
+
+fn apply_manual_unread_guard(
+    ui: &mut UiState,
+    focused_row_id: Option<&str>,
+    focus_clear: &mut ReadClear,
+) {
+    let Some(guarded) = ui.unread_guard.clone() else {
+        return;
+    };
+    if focused_row_id == Some(guarded.as_str()) {
+        focus_clear.ids.retain(|id| id != &guarded);
+        focus_clear.trace.retain(|change| change.row_id != guarded);
+    } else {
+        ui.unread_guard = None;
+    }
 }
 
 fn row_id_of_pane(snapshot: &SidebarSnapshot, pane_id: &crate::ids::PaneId) -> Option<String> {

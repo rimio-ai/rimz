@@ -362,6 +362,9 @@ impl LoopState {
         row_id: &str,
         diag: Option<&crate::diag::DiagSink>,
     ) {
+        if self.ui.unread_guard.as_deref() == Some(row_id) {
+            self.ui.unread_guard = None;
+        }
         let Ok(runtime) = RuntimePaths::for_workspace(config.workspace_id.clone()) else {
             return;
         };
@@ -425,6 +428,7 @@ impl LoopState {
             }
         };
         set_rows_unread(&mut self.current, std::slice::from_ref(&row.id), true);
+        self.ui.unread_guard = Some(row.id.clone());
         if let Some(diag) = diag {
             emit_unread_marked_trace(diag, &opened);
         }

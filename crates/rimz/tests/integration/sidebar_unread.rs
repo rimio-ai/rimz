@@ -73,6 +73,41 @@ fn sidebar_mark_unread_and_mark_read_drive_snapshot_unread_bit() {
 }
 
 #[test]
+fn sidebar_mark_unread_resolves_from_published_snapshot_without_mux() {
+    let env = Env::new();
+    env.record(&env.project_root);
+    env.install_agent_hooks("claude");
+    register_running_agent(
+        &env,
+        "sess-published-unread",
+        "feature-published-unread",
+        &[("TMUX_PANE", "%1")],
+    );
+    let pane = tmux_pane("%1", "claude", &env.project_root);
+    publish_pane_frame(&env, std::slice::from_ref(&pane));
+
+    let out = env
+        .rimz()
+        .args(["sidebar", "mark-unread", "@claude"])
+        .output()
+        .expect("mark unread from published snapshot");
+    assert!(
+        out.status.success(),
+        "mark-unread failed without mux: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let unread_file: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(env.runtime_paths().unread_path()).unwrap())
+            .expect("unread json");
+    assert!(
+        unread_file["episodes"]["sess-published-unread"]
+            .as_i64()
+            .is_some(),
+        "mark-unread writes unread.json from the published pane frame: {unread_file}"
+    );
+}
+
+#[test]
 fn sidebar_notify_test_spawns_configured_command_with_notify_env() {
     let env = Env::new();
     env.install_agent_hooks("claude");
@@ -122,6 +157,20 @@ command = '''printf '%s|%s|%s|%s\n' "$RIMZ_NOTIFY_KIND" "$RIMZ_NOTIFY_AGENT" "$R
         logged.contains("success|") && logged.contains("|Test title|Test body"),
         "notify command env missing: {logged:?}"
     );
+}
+
+fn publish_pane_frame(env: &Env, panes: &[rimz::feed::PaneRef]) {
+    let runtime = env.runtime_paths();
+    runtime.ensure_dirs().expect("runtime dirs");
+    let workspace =
+        rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let frame = rimz::sidebar::snapshot::assemble_frame(
+        panes.to_vec(),
+        rimz::sidebar::snapshot::unix_now_ms(),
+        workspace.session_name,
+    );
+    rimz::ledger::atomic::write_temp_then_rename_cache(&runtime.root.join("snapshot.json"), &frame)
+        .expect("publish pane frame");
 }
 
 fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &[(&str, &str)]) {
