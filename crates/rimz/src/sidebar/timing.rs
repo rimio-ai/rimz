@@ -368,31 +368,3 @@ pub fn breath_animation_frame(refresh_ms: u16) -> Duration {
 pub fn money_animation_frame(refresh_ms: u16, click_phases: u64) -> Duration {
     Duration::from_millis(u64::from(refresh_ms) * click_phases)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pull_cadence_registry_points_at_the_named_constants() {
-        let accounts = PULL_CADENCES
-            .iter()
-            .find(|cadence| cadence.name == "accounts")
-            .expect("accounts cadence is registered");
-        assert_eq!(accounts.ttl, ACCOUNTS_TTL);
-        assert_eq!(accounts.retry_ttl, Some(ACCOUNTS_RETRY_TTL));
-
-        let panes = PULL_CADENCES
-            .iter()
-            .find(|cadence| cadence.name == "panes.poll")
-            .expect("pane cadence is registered");
-        assert_eq!(panes.ttl, SNAPSHOT_CACHE_TTL);
-        assert_eq!(panes.idle_ttl, Some(EVENT_PANE_TTL));
-
-        let link = PULL_CADENCES
-            .iter()
-            .find(|cadence| cadence.name == "link.stats")
-            .expect("link stats cadence is registered");
-        assert_eq!(link.ttl, LINK_STATS_STALE);
-    }
-}

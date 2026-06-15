@@ -56,35 +56,31 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     );
 }
 #[test]
-fn tab_keys_noop_without_a_second_panel() {
+fn tab_keys_noop_without_a_second_cyclable_panel() {
+    // TabNext is inert and leaves no browse pick whenever there is nothing to
+    // cycle through: a single account, or two auto-mode panels that the
+    // dashboard stacks rather than rendering as cyclable tabs.
     let ws = workspace();
-    let mut snapshot = clickable_block_snapshot(&ws);
-    snapshot.providers = vec![provider("claude")];
-    let mut ui = UiState::default();
+    let cases = [
+        ("one account: nothing to cycle", vec!["claude"]),
+        ("two auto-mode panels are stacked", vec!["claude", "codex"]),
+    ];
+    for (label, kinds) in cases {
+        let mut snapshot = clickable_block_snapshot(&ws);
+        snapshot.providers = kinds.iter().map(|k| provider(k)).collect();
+        let mut ui = UiState::default();
 
-    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
+        let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
 
-    assert_eq!(outcome, InputOutcome::default());
-    assert!(ui.dashboard_tab.is_none(), "one account: nothing to cycle");
-}
-#[test]
-fn tab_keys_noop_when_auto_mode_stacks_two_panels() {
-    let ws = workspace();
-    let mut snapshot = clickable_block_snapshot(&ws);
-    snapshot.providers = vec![provider("claude"), provider("codex")];
-    let mut ui = UiState::default();
-
-    let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
-
-    assert_eq!(outcome, InputOutcome::default());
-    assert!(
-        ui.dashboard_tab.is_none(),
-        "two auto-mode panels are stacked"
-    );
-    assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
-        Some("claude")
-    );
+        assert_eq!(outcome, InputOutcome::default(), "{label}");
+        assert!(ui.dashboard_tab.is_none(), "{label}");
+        // With no tab pick the dashboard shows its first, derived account.
+        assert_eq!(
+            render::active_provider_kind(&snapshot, &ui).as_deref(),
+            Some("claude"),
+            "{label}"
+        );
+    }
 }
 #[test]
 fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {

@@ -439,39 +439,39 @@ mod tests {
     }
 
     #[test]
-    fn liveness_collects_claimed_panes_and_flags_unlocated() {
+    fn liveness_collects_fresh_panes_flags_unlocated_and_skips_stale() {
         use crate::ids::{MuxName, PaneId};
 
         let h = Harness::new();
         let located = instance("a1");
         let unlocated = instance("b2");
+        let stale = instance("c3");
         h.write_sidebar_with_pane(&located, Some(PaneId::from_parts(MuxName::Tmux, "%7")));
         h.write_sidebar_with_pane(&unlocated, None);
+        let stale_path =
+            h.write_sidebar_with_pane(&stale, Some(PaneId::from_parts(MuxName::Tmux, "%9")));
+        make_stale(&stale_path);
 
         let live = sidebar_liveness(&h.runtime);
         assert!(
             live.claimed_panes
                 .contains(&PaneId::from_parts(MuxName::Tmux, "%7")),
-            "a heartbeat's pane is claimed",
+            "a fresh heartbeat's pane is claimed",
         );
-        assert_eq!(live.claimed_panes.len(), 1);
+        assert!(
+            !live
+                .claimed_panes
+                .contains(&PaneId::from_parts(MuxName::Tmux, "%9")),
+            "a stale sidebar claims no pane",
+        );
+        assert_eq!(
+            live.claimed_panes.len(),
+            1,
+            "only the fresh, located heartbeat claims a pane",
+        );
         assert!(
             live.has_unlocated,
             "a fresh heartbeat with no pane id flags the wildcard",
-        );
-    }
-
-    #[test]
-    fn liveness_skips_stale_heartbeats() {
-        use crate::ids::{MuxName, PaneId};
-
-        let h = Harness::new();
-        let stale = instance("c3");
-        let path = h.write_sidebar_with_pane(&stale, Some(PaneId::from_parts(MuxName::Tmux, "%9")));
-        make_stale(&path);
-        assert!(
-            sidebar_liveness(&h.runtime).claimed_panes.is_empty(),
-            "a stale sidebar claims no pane",
         );
     }
 

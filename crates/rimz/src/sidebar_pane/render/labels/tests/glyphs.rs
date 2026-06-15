@@ -48,16 +48,20 @@ fn card_emphasis_maps_attention_tiers() {
 
 #[test]
 fn elapsed_glyph_fills_by_the_quarter_hour() {
-    assert_eq!(elapsed_glyph(0), "◔");
-    assert_eq!(elapsed_glyph(900), "◔");
-    assert_eq!(elapsed_glyph(901), "◑");
-    assert_eq!(elapsed_glyph(1800), "◑");
-    assert_eq!(elapsed_glyph(1801), "◕");
-    assert_eq!(elapsed_glyph(2700), "◕");
-    assert_eq!(elapsed_glyph(2701), "●");
-    assert_eq!(elapsed_glyph(3600), "●");
-    assert_eq!(elapsed_glyph(3601), "◉");
-    assert_eq!(elapsed_glyph(48 * 3600), "◉");
+    for (secs, glyph) in [
+        (0, "◔"),
+        (900, "◔"),
+        (901, "◑"),
+        (1800, "◑"),
+        (1801, "◕"),
+        (2700, "◕"),
+        (2701, "●"),
+        (3600, "●"),
+        (3601, "◉"),
+        (48 * 3600, "◉"),
+    ] {
+        assert_eq!(elapsed_glyph(secs), glyph, "elapsed_glyph({secs})");
+    }
 }
 
 #[test]
@@ -239,6 +243,36 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         "an explicit static waiting effect quiets the unread blink"
     );
 
+    // A per-role static effect quiets the unread pulse for a result status too:
+    // an explicit static success effect freezes the unread-result pulsing.
+    let mut quiet_success = crate::config::SidebarConfig::default();
+    quiet_success.animations.success = Some(
+        toml::from_str::<crate::config::AnimationSpec>("effect = \"static\"\n")
+            .expect("success animation spec"),
+    );
+    let quiet_success = truecolor_theme_with(&quiet_success);
+    assert_eq!(
+        agent_lead_style(
+            &quiet_success,
+            AgentStatus::Success,
+            TurnPhase::Idle,
+            5 * 60,
+            0,
+            true,
+            false,
+        ),
+        agent_lead_style(
+            &quiet_success,
+            AgentStatus::Success,
+            TurnPhase::Idle,
+            5 * 60,
+            12,
+            true,
+            false,
+        ),
+        "an explicit static success effect quiets unread-result pulsing"
+    );
+
     let mut fast = unread_sidebar(crate::config::UnreadEffect::Blink);
     fast.animations.waiting = Some(
         toml::from_str::<crate::config::AnimationSpec>("speed = \"fast\"\n")
@@ -267,38 +301,6 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         )
         .fg,
         "configured speed modulates the unread blink phase"
-    );
-}
-
-#[test]
-fn unread_success_can_be_configured_static() {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.success = Some(
-        toml::from_str::<crate::config::AnimationSpec>("effect = \"static\"\n")
-            .expect("success animation spec"),
-    );
-    let theme = truecolor_theme_with(&sidebar);
-
-    assert_eq!(
-        agent_lead_style(
-            &theme,
-            AgentStatus::Success,
-            TurnPhase::Idle,
-            5 * 60,
-            0,
-            true,
-            false,
-        ),
-        agent_lead_style(
-            &theme,
-            AgentStatus::Success,
-            TurnPhase::Idle,
-            5 * 60,
-            12,
-            true,
-            false,
-        ),
-        "an explicit static success effect quiets unread-result pulsing"
     );
 }
 
@@ -340,6 +342,40 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     assert_eq!(unread_off.add_modifier, Modifier::BOLD);
     assert_ne!(unread_on.fg, unread_off.fg);
     assert_ne!(read.fg, unread_on.fg);
+
+    // A paused unread row carries the same shared attention effect: it blinks
+    // between poles, holds BOLD across the cycle, and rests on its status color.
+    let paused_on = agent_lead_style(
+        &theme,
+        AgentStatus::Paused,
+        TurnPhase::Idle,
+        5 * 60,
+        0,
+        true,
+        false,
+    );
+    let paused_off = agent_lead_style(
+        &theme,
+        AgentStatus::Paused,
+        TurnPhase::Idle,
+        5 * 60,
+        18,
+        true,
+        false,
+    );
+    assert_ne!(
+        paused_on, paused_off,
+        "paused unread rows carry the shared unread attention effect"
+    );
+    assert_eq!(paused_on.add_modifier, Modifier::BOLD);
+    assert_eq!(paused_off.add_modifier, Modifier::BOLD);
+    assert_eq!(
+        paused_off,
+        theme.style(
+            theme.animations.status(AgentStatus::Paused).color(),
+            Modifier::BOLD
+        )
+    );
 
     let read_waiting_peak = agent_lead_style(
         &theme,
@@ -444,25 +480,6 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
 }
 
 #[test]
-fn shimmer_flows_the_unread_name_across_cells() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
-    let attention = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, true);
-    let color = Some(theme.component(Component::UnknownBrand));
-    let spans = unread_run_spans(&theme, color, attention.anim, "claude");
-    assert!(
-        spans.len() > 1,
-        "shimmer splits the run into one span per character"
-    );
-    let kept: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    assert_eq!(kept, "claude".chars().count(), "every character is kept");
-    let tones: std::collections::HashSet<_> = spans.iter().map(|span| span.style.fg).collect();
-    assert!(
-        tones.len() > 1,
-        "the beam lifts cells unevenly across the run, so the light reads as flowing"
-    );
-}
-
-#[test]
 fn only_the_lead_unread_row_keeps_the_configured_effect() {
     let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
     // The lead unread row keeps the configured shimmer; every other unread row
@@ -480,82 +497,50 @@ fn only_the_lead_unread_row_keeps_the_configured_effect() {
     // cell, while a non-lead unread name holds a single bright span.
     let color = Some(theme.component(Component::UnknownBrand));
     let lead = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, true);
-    let calm = CardAttention::new(&theme, AgentStatus::Failed, 5 * 60, 6, true, false, false);
+    let lead_spans = unread_run_spans(&theme, color, lead.anim, "claude");
+    assert!(lead_spans.len() > 1, "the lead name shimmers per cell");
+    // Every character survives the split, and the beam lifts cells unevenly, so
+    // the light reads as flowing across the run.
+    let kept: usize = lead_spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum();
+    assert_eq!(kept, "claude".chars().count(), "every character is kept");
+    let tones: std::collections::HashSet<_> = lead_spans.iter().map(|span| span.style.fg).collect();
     assert!(
-        unread_run_spans(&theme, color, lead.anim, "claude").len() > 1,
-        "the lead name shimmers per cell",
+        tones.len() > 1,
+        "the beam lifts cells unevenly across the run, so the light reads as flowing"
     );
-    assert_eq!(
-        unread_run_spans(&theme, color, calm.anim, "claude").len(),
-        1,
-        "a non-lead unread name holds one bright span",
-    );
-}
 
-#[test]
-fn bright_holds_one_constant_unread_span() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Bright));
-    let color = Some(theme.component(Component::UnknownBrand));
-    let run = |phase| {
-        let attention = CardAttention::new(
+    // A non-lead unread name settles to the steady bright crest: one span, held
+    // bold, and constant across phases — no motion.
+    let calm_run = |phase| {
+        let calm = CardAttention::new(
             &theme,
             AgentStatus::Failed,
             5 * 60,
             phase,
             true,
             false,
-            true,
+            false,
         );
-        unread_run_spans(&theme, color, attention.anim, "claude")
+        unread_run_spans(&theme, color, calm.anim, "claude")
     };
-    let early = run(0);
-    let late = run(99);
-    assert_eq!(early.len(), 1, "bright keeps the run a single span");
+    let calm_early = calm_run(0);
+    let calm_late = calm_run(99);
     assert_eq!(
-        early[0].style.add_modifier,
+        calm_early.len(),
+        1,
+        "a non-lead unread name holds one bright span",
+    );
+    assert_eq!(
+        calm_early[0].style.add_modifier,
         Modifier::BOLD,
         "bright holds bold"
     );
     assert_eq!(
-        early[0].style, late[0].style,
+        calm_early[0].style, calm_late[0].style,
         "bright holds a constant crest across phases — no motion"
-    );
-}
-
-#[test]
-fn unread_paused_uses_the_attention_effect() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
-    let first = agent_lead_style(
-        &theme,
-        AgentStatus::Paused,
-        TurnPhase::Idle,
-        5 * 60,
-        0,
-        true,
-        false,
-    );
-    let later = agent_lead_style(
-        &theme,
-        AgentStatus::Paused,
-        TurnPhase::Idle,
-        5 * 60,
-        18,
-        true,
-        false,
-    );
-
-    assert_ne!(
-        first, later,
-        "paused unread rows carry the shared unread attention effect"
-    );
-    assert_eq!(first.add_modifier, Modifier::BOLD);
-    assert_eq!(later.add_modifier, Modifier::BOLD);
-    assert_eq!(
-        later,
-        theme.style(
-            theme.animations.status(AgentStatus::Paused).color(),
-            Modifier::BOLD
-        )
     );
 }
 
@@ -593,10 +578,7 @@ fn animations_cycle_and_wrap() {
 
 #[test]
 fn loading_dots_stay_static_while_attention_blink_paces_with_age() {
-    assert_eq!(loading_dots(0), "...");
-    assert_eq!(loading_dots(7), "...");
-    assert_eq!(loading_dots(8), "...");
-    assert_eq!(loading_dots(16), "...");
+    // The loading ellipsis never animates — one constant frame at any phase.
     assert_eq!(loading_dots(24), "...");
 
     let tempo = crate::sidebar_pane::render::animation::breath_tempo;

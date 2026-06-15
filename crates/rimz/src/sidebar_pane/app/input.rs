@@ -255,11 +255,6 @@ mod tests {
     }
 
     #[test]
-    fn reload_control_word_decodes_to_reload() {
-        assert_eq!(decode_wakeup(b"reload"), Wakeup::Reload);
-    }
-
-    #[test]
     fn r_key_triggers_a_reload() {
         // Pressing `r` re-execs the renderer in place through the local input
         // control word; external reloads arrive as typed sidebar events.
@@ -299,71 +294,90 @@ mod tests {
     }
 
     #[test]
-    fn vim_row_and_focus_keys_round_trip() {
-        assert_eq!(
-            decode_wakeup(encode_key(KeyCode::Char('j')).unwrap().as_bytes()),
-            Wakeup::Key(KeyAction::Down)
-        );
-        assert_eq!(
-            decode_wakeup(encode_key(KeyCode::Char('k')).unwrap().as_bytes()),
-            Wakeup::Key(KeyAction::Up)
-        );
-        assert_eq!(
-            decode_wakeup(encode_key(KeyCode::Char('l')).unwrap().as_bytes()),
-            Wakeup::Key(KeyAction::Enter)
-        );
-    }
-
-    #[test]
-    fn worktree_jump_keys_round_trip() {
-        assert_eq!(
-            decode_wakeup(encode_key(KeyCode::Char('J')).unwrap().as_bytes()),
-            Wakeup::Key(KeyAction::WorktreeDown)
-        );
-        assert_eq!(
-            decode_wakeup(encode_key(KeyCode::Char('K')).unwrap().as_bytes()),
-            Wakeup::Key(KeyAction::WorktreeUp)
-        );
-    }
-
-    #[test]
-    fn filter_keys_round_trip() {
+    fn keys_round_trip_through_the_wire() {
+        // Every keycode encodes to its wire word and decodes back to the wakeup
+        // the serve loop dispatches: vim row/focus keys, the J/K worktree jumps,
+        // and the full filter key set. (The `r` reload keypress is covered by
+        // `r_key_triggers_a_reload`; the literal reload word is checked below.)
         let cases = [
-            (KeyCode::Char('a'), KeyAction::Filter(FilterAction::All)),
-            (KeyCode::Char('u'), KeyAction::Filter(FilterAction::Unread)),
+            // vim row and focus keys
+            ("j → down", KeyCode::Char('j'), Wakeup::Key(KeyAction::Down)),
+            ("k → up", KeyCode::Char('k'), Wakeup::Key(KeyAction::Up)),
             (
+                "l → enter",
+                KeyCode::Char('l'),
+                Wakeup::Key(KeyAction::Enter),
+            ),
+            // worktree-jump keys
+            (
+                "J → worktree down",
+                KeyCode::Char('J'),
+                Wakeup::Key(KeyAction::WorktreeDown),
+            ),
+            (
+                "K → worktree up",
+                KeyCode::Char('K'),
+                Wakeup::Key(KeyAction::WorktreeUp),
+            ),
+            // filter keys
+            (
+                "a → all",
+                KeyCode::Char('a'),
+                Wakeup::Key(KeyAction::Filter(FilterAction::All)),
+            ),
+            (
+                "u → unread",
+                KeyCode::Char('u'),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Unread)),
+            ),
+            (
+                "q → waiting",
                 KeyCode::Char('q'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Waiting)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                    AgentStatus::Waiting,
+                ))),
             ),
             (
+                "! → failed",
                 KeyCode::Char('!'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
             ),
             (
+                "e → failed",
                 KeyCode::Char('e'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Failed)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Failed))),
             ),
             (
+                "o → idle",
                 KeyCode::Char('o'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Idle)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Idle))),
             ),
             (
+                "p → paused",
                 KeyCode::Char('p'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Paused)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(AgentStatus::Paused))),
             ),
             (
+                "w → running",
                 KeyCode::Char('w'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Running)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                    AgentStatus::Running,
+                ))),
             ),
             (
+                "d → success",
                 KeyCode::Char('d'),
-                KeyAction::Filter(FilterAction::Status(AgentStatus::Success)),
+                Wakeup::Key(KeyAction::Filter(FilterAction::Status(
+                    AgentStatus::Success,
+                ))),
             ),
         ];
-        for (key, action) in cases {
-            let encoded = encode_key(key).expect("filter key is encoded");
-            assert_eq!(decode_wakeup(encoded.as_bytes()), Wakeup::Key(action));
+        for (label, key, wakeup) in cases {
+            let encoded = encode_key(key).expect("key is encoded");
+            assert_eq!(decode_wakeup(encoded.as_bytes()), wakeup, "{label}");
         }
+        // The literal reload control word also decodes to a reload on its own.
+        assert_eq!(decode_wakeup(b"reload"), Wakeup::Reload);
     }
 
     #[test]

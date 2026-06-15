@@ -1,22 +1,6 @@
 use super::*;
 
 #[test]
-fn presence_event_mode_selects_ttl_at_boundary() {
-    let fresh_edge = PRESENCE_STAMP_FRESH.as_millis() as u64;
-    assert!(presence_event_mode(Some(0)));
-    assert!(presence_event_mode(Some(fresh_edge)));
-    assert!(!presence_event_mode(Some(fresh_edge + 1)));
-    assert!(!presence_event_mode(None), "absent stamp is poll mode");
-
-    assert_eq!(effective_pane_ttl(Some(0)), EVENT_PANE_TTL);
-    assert_eq!(
-        effective_pane_ttl(Some(PRESENCE_STAMP_FRESH.as_millis() as u64 + 1)),
-        SNAPSHOT_CACHE_TTL
-    );
-    assert_eq!(effective_pane_ttl(None), SNAPSHOT_CACHE_TTL);
-}
-
-#[test]
 fn presence_stamp_round_trips_through_the_runtime_root() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
@@ -66,6 +50,17 @@ fn cache_produced_at(produced_at_ms: u64) -> PaneFrame {
 
 #[test]
 fn event_mode_serves_a_cache_poll_mode_would_reject() {
+    // Stamp age selects the mode at the fresh boundary, and the mode picks the
+    // pane TTL: fresh → event, stale or absent → poll.
+    let fresh_edge = PRESENCE_STAMP_FRESH.as_millis() as u64;
+    assert!(presence_event_mode(Some(0)));
+    assert!(presence_event_mode(Some(fresh_edge)));
+    assert!(!presence_event_mode(Some(fresh_edge + 1)));
+    assert!(!presence_event_mode(None), "absent stamp is poll mode");
+    assert_eq!(effective_pane_ttl(Some(0)), EVENT_PANE_TTL);
+    assert_eq!(effective_pane_ttl(Some(fresh_edge + 1)), SNAPSHOT_CACHE_TTL);
+    assert_eq!(effective_pane_ttl(None), SNAPSHOT_CACHE_TTL);
+
     let now = unix_now_ms();
     let five_seconds_old = cache_produced_at(now - 5_000);
     assert!(
@@ -81,6 +76,14 @@ fn event_mode_serves_a_cache_poll_mode_would_reject() {
     assert!(
         !snapshot_cache_is_fresh(&one_second_old, now, None, SNAPSHOT_CACHE_TTL),
         "a stale stamp reverts to poll mode: a 1s-old cache no longer serves"
+    );
+
+    // A cache stamped ahead of this reader's clock saturates to age 0 and
+    // serves rather than re-producing every call.
+    let future = cache_produced_at(now + 60_000);
+    assert!(
+        snapshot_cache_is_fresh(&future, now, None, SNAPSHOT_CACHE_TTL),
+        "a cache stamped ahead of this reader serves rather than re-producing every call"
     );
 }
 
@@ -102,15 +105,5 @@ fn forced_pane_freshness_uses_observed_topology_time() {
     assert!(
         !snapshot_cache_is_fresh(&frame, now, Some(now - 1_000), EVENT_PANE_TTL),
         "a frame freshly republished from stale topology must not satisfy a post-event floor"
-    );
-}
-
-#[test]
-fn snapshot_cache_age_saturates_on_a_future_producer_clock() {
-    let now = unix_now_ms();
-    let future = cache_produced_at(now + 60_000);
-    assert!(
-        snapshot_cache_is_fresh(&future, now, None, SNAPSHOT_CACHE_TTL),
-        "a cache stamped ahead of this reader serves rather than re-producing every call"
     );
 }

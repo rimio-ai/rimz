@@ -301,14 +301,6 @@ fn active_process_rows_use_the_configured_working_animation_style() {
 }
 
 #[test]
-fn render_process_row_shows_without_hint() {
-    let snapshot = snapshot_with(Vec::new(), Vec::new())
-        .with_live_panes(vec![pane("%1", "zsh", "/repo/main")], None);
-    let rendered = snapshot_to_screen(&snapshot, 80, 18);
-
-    assert!(rendered.contains("○ zsh"));
-}
-#[test]
 fn render_agent_process_rows_present() {
     let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
         vec![

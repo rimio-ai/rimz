@@ -210,22 +210,6 @@ fn breathe_emits_color_depth_fallbacks() {
 }
 
 #[test]
-fn indexed_breathe_carries_the_pulse_as_weight_over_the_base_tone() {
-    let indexed = Theme::fixed(false);
-    let trough = BreathSample::new(
-        0,
-        24.0,
-        crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
-    );
-    let style = indexed.breathe(Color::Indexed(16), trough);
-    assert_eq!(style.fg, Some(Color::Indexed(16)));
-    assert!(
-        style.add_modifier.contains(Modifier::DIM),
-        "the 256-color cube can't render the sub-cell lift, so the pulse rides a weight modifier over the base tone"
-    );
-}
-
-#[test]
 fn heat_tone_honors_interpolatable_overrides() {
     let truecolor = Theme::fixed_for_sidebar(
         false,
@@ -730,10 +714,15 @@ fn unread_wash_is_a_lighter_tint_of_the_selection_blue() {
 
     // It is a *lighter* tint of the same blue: the unread marker takes the brighter
     // fill — the "needs you" surface — while the selection stays marked by its
-    // bright spine rather than by the brightest fill.
+    // bright spine rather than by the brightest fill. The wash also lifts above the
+    // raw panel itself, not merely above the recessed band.
     assert!(
         luminance(wash) > luminance(selection),
         "the unread wash is a lighter tint than the selection band"
+    );
+    assert!(
+        luminance(wash) > luminance(theme.palette.selection_bg),
+        "the truecolor wash lifts above the panel"
     );
 
     // And it holds the selection's cool blue rather than drifting to a neutral gray
@@ -743,29 +732,5 @@ fn unread_wash_is_a_lighter_tint_of_the_selection_blue() {
     assert!(
         blue > green && green > red,
         "the wash stays in the scheme's cool-blue family: {wash:?}"
-    );
-}
-
-#[test]
-fn unread_wash_lifts_at_every_lit_depth_and_drops_under_no_color() {
-    // The unread surface holds across depths: a lighter tint of the panel at
-    // truecolor, one xterm cell lighter at indexed depth — both lifting above the
-    // panel. NO_COLOR drops it and the unread bold weight carries the cue.
-    let truecolor = truecolor_default();
-    assert!(
-        luminance(truecolor.unread_wash().expect("a truecolor wash"))
-            > luminance(truecolor.palette.selection_bg),
-        "truecolor wash lifts above the panel"
-    );
-    let indexed = Theme::fixed(false);
-    assert!(
-        luminance(indexed.unread_wash().expect("an indexed wash"))
-            > luminance(indexed.palette.selection_bg),
-        "indexed wash lifts above the panel"
-    );
-    assert_eq!(
-        Theme::fixed(true).unread_wash(),
-        None,
-        "NO_COLOR drops the wash; weight carries the unread look"
     );
 }

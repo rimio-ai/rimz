@@ -16,6 +16,45 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     // worktree skips the forks a hot one pays.
     assert!(entry.is_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
 
+    // `is_fresh` is the hot-tier convenience over `is_fresh_for`, and the
+    // populated fields round-trip through the constructor.
+    let populated = DiffStatsCacheEntry::new(
+        1_000,
+        Some(DiffStats {
+            added: 2,
+            removed: 1,
+        }),
+        Some(4),
+        Some(2),
+        Some("main".to_owned()),
+        Some("feature-migration".to_owned()),
+        Some(true),
+    );
+    assert!(populated.is_fresh(1_000 + fast));
+    assert!(!populated.is_fresh(1_001 + fast));
+    assert_eq!(
+        populated.stats(),
+        Some(DiffStats {
+            added: 2,
+            removed: 1,
+        })
+    );
+    assert_eq!(populated.commits, Some(4));
+    assert_eq!(populated.behind, Some(2));
+    assert_eq!(populated.trunk.as_deref(), Some("main"));
+    assert_eq!(populated.branch.as_deref(), Some("feature-migration"));
+    assert_eq!(populated.clean, Some(true));
+
+    // An old producer's cache entry predates the `clean` column; the serde
+    // default reads it back as "not probed" (`None`), never a landed marker it
+    // can't prove.
+    let legacy: DiffStatsCacheEntry = serde_json::from_str(
+        r#"{"refreshed_at_ms":1000,"added":0,"removed":0,"commits":0,"behind":3,"trunk":"main","branch":"feat"}"#,
+    )
+    .unwrap();
+    assert_eq!(legacy.clean, None);
+    assert_eq!(legacy.stats(), Some(DiffStats::default()));
+
     let cache = WorktreeRootsCache {
         refreshed_at_ms: 1_000,
         roots: Vec::new(),

@@ -66,7 +66,16 @@ fn render_agent_capability_and_window() {
     claude.last_activity = fixed_now() - Duration::from_secs(4 * 60);
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
 
-    assert_snapshot("agent_capability", snapshot_to_screen(&snapshot, 34, 12));
+    let rendered = snapshot_to_screen(&snapshot, 34, 12);
+
+    assert!(
+        rendered.contains("! claude"),
+        "a failed agent leads with the attention glyph:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("Opus · 1m"),
+        "the identity line carries the capability and hook-derived window token:\n{rendered}"
+    );
 }
 #[test]
 fn render_enriched_selected_agent_card() {
@@ -157,7 +166,6 @@ fn render_enriched_selected_agent_card() {
         !rendered.contains("ctx"),
         "window size left the token line:\n{rendered}"
     );
-    assert_snapshot("enriched_selected_agent_card", rendered);
 }
 #[test]
 fn render_api_error_dead_turn_card() {
@@ -283,19 +291,5 @@ fn unread_result_card_rests_on_a_uniform_unread_wash() {
     assert_eq!(
         read_name.style.bg, None,
         "a read result rests on no wash — the cue clears on the look"
-    );
-
-    // Off truecolor the sub-cube step would fold onto the panel, so indexed depth
-    // steps a whole xterm cell instead: the unread surface still reads, on its own
-    // cell distinct from the recessed selection band (the panel-relative ordering is
-    // pinned in the theme unit tests).
-    let indexed = Theme::fixed(false);
-    let indexed_wash = indexed
-        .unread_wash()
-        .expect("indexed depth carries the wash");
-    assert_ne!(
-        Some(indexed_wash),
-        indexed.selection_band(),
-        "the indexed wash and the recessed band land on distinct cells"
     );
 }

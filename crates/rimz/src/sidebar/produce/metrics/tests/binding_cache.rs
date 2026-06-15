@@ -1,21 +1,6 @@
 use super::*;
 
 #[test]
-fn process_state_marks_zombie_and_persistent_uninterruptible_sleep_as_stuck() {
-    assert_eq!(
-        process_state_from_stat(Some('Z'), None),
-        Some(ProcessState::Stuck)
-    );
-    assert_eq!(process_state_from_stat(Some('D'), None), None);
-    assert_eq!(
-        process_state_from_stat(Some('D'), Some('D')),
-        Some(ProcessState::Stuck)
-    );
-    assert_eq!(process_state_from_stat(Some('R'), Some('D')), None);
-    assert_eq!(process_state_from_stat(None, Some('D')), None);
-}
-
-#[test]
 fn cached_root_pid_restores_only_a_live_unchanged_binding() {
     let entry = binding_entry(42, 777, "zsh");
     let alive = |pid: u32| (pid == 42).then_some(777);

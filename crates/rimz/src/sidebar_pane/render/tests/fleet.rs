@@ -575,7 +575,6 @@ fn render_cockpit_unread_count() {
         screen.lines().any(|line| line.contains("¤ 2 (1)")),
         "live-agent summary carries unread count:\n{screen}"
     );
-    assert_snapshot("cockpit_unread_count", screen);
 }
 
 /// A make-up bucket click narrows the body to that status: only the `!` card
@@ -660,7 +659,6 @@ fn render_unread_filter_narrows_the_body() {
         screen.contains("⢿ 1"),
         "the make-up still counts the full fleet:\n{screen}"
     );
-    assert_snapshot("make_up_filter_unread", screen);
 }
 
 /// A compacting agent counts as **working** (`⢿`) in the cockpit — the

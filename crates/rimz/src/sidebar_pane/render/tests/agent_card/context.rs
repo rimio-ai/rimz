@@ -26,9 +26,6 @@ fn agent_context_line_renders_compaction_markers() {
                 rendered.contains(expected),
                 "compaction {count} trails the context composition:\n{rendered}"
             );
-            if count == 2 {
-                assert_snapshot("agent_card_context_compactions", rendered);
-            }
         } else {
             assert!(
                 !rendered.contains('↻'),
@@ -76,42 +73,35 @@ fn render_agent_card_context_line_pins_age_not_resource_stats() {
     assert_snapshot("agent_card_context_age", rendered);
 }
 #[test]
-fn codex_line_two_prefers_thread_preview_over_thread_name_and_task() {
-    let mut codex = agent(
-        "codex-1",
-        "codex",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    let mut context = codex_context(fixed_now());
-    context.session_name = Some("TUI prototype".to_owned());
-    context.session_preview = Some("Create a TUI".to_owned());
-    codex.context = Some(context);
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
-    let rendered = snapshot_to_screen(&snapshot, 44, 12);
+fn codex_line_two_walks_the_descriptor_precedence_ladder() {
+    // Codex's line-two descriptor follows a precedence ladder: thread preview >
+    // thread name > task. A present preview wins over both name and task; with
+    // the preview absent the name still beats the task fall-through.
+    let codex_with = |session_name: &str, session_preview: Option<&str>| {
+        let mut codex = agent(
+            "codex-1",
+            "codex",
+            AgentStatus::Running,
+            Some("/repo/main"),
+            Some("main"),
+            Some("db migrate"),
+        );
+        let mut context = codex_context(fixed_now());
+        context.session_name = Some(session_name.to_owned());
+        context.session_preview = session_preview.map(str::to_owned);
+        codex.context = Some(context);
+        let snapshot = snapshot_with(Vec::new(), vec![codex]);
+        snapshot_to_screen(&snapshot, 44, 12)
+    };
 
+    // Preview present: it wins over the thread name and the task.
+    let rendered = codex_with("TUI prototype", Some("Create a TUI"));
     assert!(rendered.contains("Create a TUI"));
     assert!(!rendered.contains("TUI prototype"));
     assert!(!rendered.contains("db migrate"));
-}
-#[test]
-fn codex_line_two_prefers_thread_name_over_task_when_preview_is_absent() {
-    let mut codex = agent(
-        "codex-1",
-        "codex",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
-        Some("db migrate"),
-    );
-    let mut context = codex_context(fixed_now());
-    context.session_name = Some("TUI prototype".to_owned());
-    codex.context = Some(context);
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
-    let rendered = snapshot_to_screen(&snapshot, 44, 12);
 
+    // Preview absent: the thread name beats the task fall-through.
+    let rendered = codex_with("TUI prototype", None);
     assert!(rendered.contains("TUI prototype"));
     assert!(!rendered.contains("db migrate"));
 }
@@ -207,14 +197,57 @@ fn codex_card_renders_the_per_call_composition() {
     );
     assert_snapshot("codex_card_context_composition", rendered);
 }
-/// The bar's composition comes from the row-level split too: with no rich blob,
-/// a Codex card's fill leads with the cache-read health run, then the
-/// fresh-input accent — and no cache-write segment exists to paint — so the
-/// context line stays the bar's legend by construction. Style-level, since text
-/// goldens cannot see the segment colors.
+/// The context bar reads left to right like the context line, segment order
+/// driven by the row-level split. Style-level, since text goldens cannot see
+/// the segment colors. Two inputs prove the ladder: a Codex two-bucket fill
+/// (cache-read then fresh-input — no cache-write segment exists to paint, so the
+/// context line stays the bar's legend by construction), and a Claude
+/// three-bucket fill where the cache-write accent slots between the cache-read
+/// health run and the fresh-input tail.
 #[test]
-fn codex_calm_bar_splits_into_row_level_segments() {
+fn calm_context_bar_orders_segments_left_to_right() {
     let theme = Theme::fixed(false);
+    let bar_styles_for = |agent: crate::feed::AgentState| {
+        let snapshot = snapshot_with(Vec::new(), vec![agent]);
+        let mut lines = Vec::new();
+        let mut map = Vec::new();
+        let mut row_index = 0;
+        worktree_group_lines(
+            &theme,
+            &snapshot.worktree_groups[0],
+            &snapshot.providers,
+            snapshot.now,
+            44,
+            &snapshot.sidebar.context,
+            snapshot.sidebar.card_density,
+            None,
+            &mut row_index,
+            0,
+            0,
+            &CostRolls::default(),
+            lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
+            &mut lines,
+            &mut map,
+        );
+        // Identify segments by foreground: the selected card's band lays a bg
+        // behind every span, orthogonal to which composition accent the segment
+        // paints.
+        lines
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .filter(|span| span.content.contains('━'))
+            .map(|span| span.style.fg)
+            .collect::<Vec<_>>()
+    };
+    let input = theme
+        .style(theme.component(Component::Input), Modifier::empty())
+        .fg;
+    let cache_write = theme
+        .style(theme.component(Component::CacheWrite), Modifier::empty())
+        .fg;
+
+    // Two-bucket Codex fill from the row-level split: cache-read run then the
+    // fresh-input accent, with no cache-write segment to paint.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -228,43 +261,7 @@ fn codex_calm_bar_splits_into_row_level_segments() {
     codex.cache_read_input_tokens = Some(120_000);
     codex.fresh_input_tokens = Some(9_200);
     codex.output_tokens = Some(800);
-    let snapshot = snapshot_with(Vec::new(), vec![codex]);
-
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut row_index = 0;
-    worktree_group_lines(
-        &theme,
-        &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        44,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
-        None,
-        &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
-        &mut lines,
-        &mut map,
-    );
-
-    // Identify segments by foreground: the selected card's band lays a bg behind
-    // every span, orthogonal to which composition accent the segment paints.
-    let bar_styles: Vec<_> = lines
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .filter(|span| span.content.contains('━'))
-        .map(|span| span.style.fg)
-        .collect();
-    let input = theme
-        .style(theme.component(Component::Input), Modifier::empty())
-        .fg;
-    let cache_write = theme
-        .style(theme.component(Component::CacheWrite), Modifier::empty())
-        .fg;
+    let bar_styles = bar_styles_for(codex);
     assert!(
         bar_styles.contains(&input),
         "the fresh-input accent colors the bar tail"
@@ -281,14 +278,9 @@ fn codex_calm_bar_splits_into_row_level_segments() {
         input_at >= 1 && bar_styles[..input_at].iter().all(|style| *style != input),
         "the cache-read health run leads the bar before fresh input: {bar_styles:?}"
     );
-}
-/// When all per-call input buckets are present, the context bar reads left to
-/// right like the context line: the cache-read health run, then the
-/// cache-write and fresh-input accents in order. Style-level because the
-/// terminal text only shows the `━` run and its narrow segment caps.
-#[test]
-fn calm_context_bar_orders_cache_read_before_cache_write() {
-    let theme = Theme::fixed(false);
+
+    // Three-bucket Claude fill: the cache-write accent slots between the
+    // cache-read run and the fresh-input tail.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -310,43 +302,7 @@ fn calm_context_bar_orders_cache_read_before_cache_write() {
         }),
     });
     claude.context = Some(context);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
-
-    let mut lines = Vec::new();
-    let mut map = Vec::new();
-    let mut row_index = 0;
-    worktree_group_lines(
-        &theme,
-        &snapshot.worktree_groups[0],
-        &snapshot.providers,
-        snapshot.now,
-        44,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
-        None,
-        &mut row_index,
-        0,
-        0,
-        &CostRolls::default(),
-        lead_unread(&snapshot.worktree_groups).map(|(id, _)| id),
-        &mut lines,
-        &mut map,
-    );
-
-    // Identify segments by foreground: the selected card's band lays a bg behind
-    // every span, orthogonal to which composition accent the segment paints.
-    let bar_styles: Vec<_> = lines
-        .iter()
-        .flat_map(|line| line.spans.iter())
-        .filter(|span| span.content.contains('━'))
-        .map(|span| span.style.fg)
-        .collect();
-    let cache_write = theme
-        .style(theme.component(Component::CacheWrite), Modifier::empty())
-        .fg;
-    let input = theme
-        .style(theme.component(Component::Input), Modifier::empty())
-        .fg;
+    let bar_styles = bar_styles_for(claude);
     let write_at = bar_styles
         .iter()
         .position(|style| *style == cache_write)

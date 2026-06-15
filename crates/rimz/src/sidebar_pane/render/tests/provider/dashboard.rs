@@ -55,13 +55,15 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     assert!(!rendered.contains('∞'), "no unmetered bar:\n{rendered}");
     assert_snapshot("provider_dashboard", rendered);
 }
-/// A manual tab pick (`←`/`→` or a click on the label) swaps the dashboard to
-/// that provider's block: the brand chip moves onto `Codex` — fill alone, no
-/// glyph moves in the rail — and the unmetered block (the `∞` icon at the
-/// front, an empty `▱` track, no countdown) paints where Claude's was, fleet
-/// ledger and footer untouched.
+/// The dashboard paints the Codex block whichever way the active tab is
+/// derived: a manual pick (`←`/`→` or a click on the label) swaps the chip onto
+/// `Codex` — fill alone, no glyph moves in the rail — and with no manual pick
+/// the focus follows the selected pane's provider. Either way the unmetered
+/// block (the `∞` icon at the front, an empty `▱` track, no countdown) paints
+/// where Claude's was and the Claude block stays off screen.
 #[test]
-fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
+fn render_provider_dashboard_codex_tab_paints_however_derived() {
+    // A manual tab pick over a selected Claude row swaps to the Codex block.
     let mut claude = agent(
         "claude-1",
         "claude",
@@ -91,12 +93,9 @@ fn render_provider_dashboard_manual_tab_shows_the_picked_block() {
         "the unpicked block stays off screen:\n{rendered}"
     );
     assert_snapshot("provider_dashboard_codex_tab", rendered);
-}
-/// With no manual pick, the tab focus follows the selected pane's provider:
-/// a selected Codex row moves the brand chip onto the codex tab and paints
-/// its block, however the panels are ordered.
-#[test]
-fn render_provider_dashboard_tab_follows_the_selected_agent() {
+
+    // With no manual pick, the focus follows a selected Codex row to the same
+    // block, however the panels are ordered.
     let codex = agent(
         "codex-1",
         "codex",
@@ -199,7 +198,6 @@ fn render_provider_dashboard_auto_stacks_two_provider_blocks() {
         lines[codex_header - 1].trim().is_empty(),
         "a blank row separates stacked provider blocks:\n{rendered}"
     );
-    assert_snapshot("provider_dashboard_stacked", rendered);
 }
 /// A dashboard with a single account keeps its block bare — no tab rail, a
 /// plain hairline: there is nothing to switch to, so the header line alone

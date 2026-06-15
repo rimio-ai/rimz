@@ -297,9 +297,12 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
     scoped.today.sessions = 3;
     scoped.year.usd = 1.25;
     let hash = workspace_scope_hash(&project);
+    // An ancient stamp (`refreshed_at_ms = 1`): age is ignored once the hash
+    // matches, so consumer tabs hold the last matching workspace tally instead
+    // of flapping to zero.
     crate::agents::spending::write_workspace_spending_cache(
         &runtime.workspace_spending_path(&hash),
-        unix_now_ms(),
+        1,
         &hash,
         &scoped,
     );
@@ -317,7 +320,7 @@ fn cached_enrich_reads_workspace_spending_cache_separately_from_global() {
             .as_ref()
             .map(|tally| (tally.today.usd, tally.today.sessions)),
         Some((1.25, 3)),
-        "cockpit tally comes from the workspace cache"
+        "cockpit tally comes from the hash-matching workspace cache regardless of age"
     );
 }
 
@@ -406,45 +409,5 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
     assert!(
         !runtime.workspace_spending_path(&hash).exists(),
         "the consumer derive path stays read-only"
-    );
-}
-
-#[test]
-fn cached_enrich_uses_hash_matching_workspace_cache_regardless_of_age() {
-    let dir = tempfile::tempdir().unwrap();
-    let workspace = WorkspaceId::from_project_root(dir.path());
-    let runtime = RuntimePaths::under(workspace.clone(), dir.path()).unwrap();
-    runtime.ensure_dirs().unwrap();
-
-    let project = dir.path().join("repo");
-    let mut snapshot = SidebarSnapshot::build(workspace, Vec::new(), Vec::new(), Timestamp::now())
-        .with_project_root(Some(project.clone()));
-    crate::agents::spending::write_provider_spending_cache(
-        &runtime.shared_provider_spending_path(),
-        unix_now_ms(),
-        &crate::agents::spending::Spending::default(),
-    );
-
-    let mut scoped = crate::SpendTally::default();
-    scoped.today.usd = 2.50;
-    scoped.today.sessions = 4;
-    scoped.year.usd = 2.50;
-    let hash = workspace_scope_hash(&project);
-    crate::agents::spending::write_workspace_spending_cache(
-        &runtime.workspace_spending_path(&hash),
-        1,
-        &hash,
-        &scoped,
-    );
-
-    snapshot = enrich(snapshot, None, &runtime, None, EnrichMode::Cached, None);
-
-    assert_eq!(
-        snapshot
-            .workspace_value_tally
-            .as_ref()
-            .map(|tally| (tally.today.usd, tally.today.sessions)),
-        Some((2.50, 4)),
-        "consumer tabs hold the last matching workspace tally instead of flapping to zero"
     );
 }

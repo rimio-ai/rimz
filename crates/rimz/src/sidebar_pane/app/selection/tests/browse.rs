@@ -67,6 +67,41 @@ fn browse_survives_a_jump_and_ends_on_baseline_change() {
     reconcile_selection(&mut ui, &snapshot, Some(picked.clone()));
     assert_eq!(ui.browse, None, "a real baseline change ends the browse");
     assert_eq!(ui.selected_pane, Some(picked));
+
+    // A bare mouse-click jump (no prior browse) walks the same accept-latency
+    // contract: the click carries the target and the highlight holds on the
+    // old pane, an inert fold keeps it, and only the fold deriving the jumped
+    // pane moves both the highlight and the baseline onto it.
+    let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let snapshot = snapshot_with_panes(
+        &ws,
+        vec![
+            pane("terminal_1", "tab_0", true),
+            pane("terminal_2", "tab_0", false),
+        ],
+    );
+    let mut ui = UiState {
+        selected_index: 0,
+        selected_pane: Some(from.clone()),
+        baseline_pane: Some(from.clone()),
+        line_map: line_map_for(&snapshot, 0),
+        ..Default::default()
+    };
+
+    let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
+    assert_eq!(outcome.focus, Some(jumped.clone()));
+    assert_eq!(ui.selected_pane, Some(from.clone()));
+
+    // A fold still deriving the pre-jump pane keeps the old highlight.
+    reconcile_selection(&mut ui, &snapshot, Some(from.clone()));
+    assert_eq!(ui.selected_pane, Some(from));
+
+    // The fold that derives the jumped pane moves the highlight and baseline.
+    reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()));
+    assert_eq!(ui.selected_pane, Some(jumped.clone()));
+    assert_eq!(ui.baseline_pane, Some(jumped));
 }
 #[test]
 fn continued_browse_keeps_the_first_anchor() {

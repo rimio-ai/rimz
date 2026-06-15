@@ -1,59 +1,6 @@
 use super::*;
 
 #[test]
-fn row_index_maps_process_row_screen_positions() {
-    let ws = workspace();
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
-    );
-    let ui = UiState {
-        line_map: line_map_for(&snapshot, 0),
-        ..UiState::default()
-    };
-
-    // The worktree header is the first line that routes to row 0 — clicking
-    // the pod name jumps into its first row — and the first process row
-    // follows directly beneath it. Both route to row 0.
-    let header = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
-    let row0 = header + 1;
-    let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
-    assert_eq!(
-        ui.line_map[row0],
-        Some(0),
-        "the first process row follows its worktree header"
-    );
-
-    // The borderless title line at screen row 0 is inert chrome.
-    assert_eq!(
-        row_index_at_screen_position(&ui, 0),
-        None,
-        "the title line is not clickable content"
-    );
-    assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(header)),
-        Some(0),
-        "the worktree header jumps into its first row"
-    );
-    assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(row0)),
-        Some(0)
-    );
-    assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(row1)),
-        Some(1)
-    );
-    // The line just above the worktree header is the section gap — inert.
-    assert_eq!(
-        row_index_at_screen_position(&ui, screen_row_for(header - 1)),
-        None,
-        "the section gap is not a row"
-    );
-}
-#[test]
 fn every_line_of_an_agent_block_routes_to_that_agent() {
     // The user-visible contract: the whole multi-line agent card is one
     // click target, the worktree header that jumps into it routes there too,
@@ -91,9 +38,44 @@ fn every_line_of_an_agent_block_routes_to_that_agent() {
         map.contains(&None),
         "cockpit header / gaps / +K more stay inert"
     );
+
+    // The structural chrome around the block stays inert, and the worktree
+    // header jumps into its first row: the borderless title line at screen
+    // row 0 is not clickable, the worktree header routes to its first row,
+    // the process row beneath it follows, and the section gap just above the
+    // header is inert.
+    let header = ui.line_map.iter().position(|m| *m == Some(0)).unwrap();
+    let row_below_header = header + 1;
+    let process_row = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
+    assert_eq!(
+        row_index_at_screen_position(&ui, 0),
+        None,
+        "the title line is not clickable content"
+    );
+    assert_eq!(
+        row_index_at_screen_position(&ui, screen_row_for(header)),
+        Some(0),
+        "the worktree header jumps into its first row"
+    );
+    assert_eq!(
+        row_index_at_screen_position(&ui, screen_row_for(row_below_header)),
+        Some(0),
+        "the agent card line below the header still routes to row 0"
+    );
+    assert_eq!(
+        row_index_at_screen_position(&ui, screen_row_for(process_row)),
+        Some(1)
+    );
+    assert_eq!(
+        row_index_at_screen_position(&ui, screen_row_for(header - 1)),
+        None,
+        "the section gap is not a row"
+    );
 }
 #[test]
-fn mouse_click_fires_focus_without_moving_selection() {
+fn focus_keys_fire_without_mutating_selection() {
+    // Every jump — a mouse click, a digit ordinal, Enter, or the Space triage
+    // key — fires the focus command and mutates no selection state.
     let ws = workspace();
     let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
     let snapshot = snapshot_with_panes(
@@ -103,6 +85,8 @@ fn mouse_click_fires_focus_without_moving_selection() {
             pane("terminal_2", "tab_0", false),
         ],
     );
+
+    // A mouse click on terminal_2's row jumps without moving the selection.
     let mut ui = UiState {
         selected_index: 0,
         help_visible: false,
@@ -111,30 +95,16 @@ fn mouse_click_fires_focus_without_moving_selection() {
         ..Default::default()
     };
     let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
-
     let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
-
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert!(!outcome.redraw, "a jump changes nothing to repaint");
     assert_eq!(ui.selected_index, 0, "the click moves no selection");
     assert_eq!(ui.selected_pane, None);
     assert_eq!(ui.browse, None);
-}
-#[test]
-fn focus_keys_fire_without_mutating_selection() {
-    let ws = workspace();
-    let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", false),
-            pane("terminal_2", "tab_0", false),
-        ],
-    );
+
+    // A digit ordinal jumps to the second pane without moving the selection.
     let mut ui = UiState::default();
-
     let outcome = handle_key(KeyAction::Digit(2), &mut ui, &snapshot);
-
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, 0, "the digit moves no selection");
     assert_eq!(ui.selected_pane, None);
@@ -143,6 +113,7 @@ fn focus_keys_fire_without_mutating_selection() {
     let outcome = handle_key(KeyAction::Digit(9), &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
 
+    // Enter focuses the selected pane and reads, never writes, the selection.
     let mut ui = UiState {
         selected_index: 1,
         selected_pane: Some(target.clone()),
@@ -151,22 +122,21 @@ fn focus_keys_fire_without_mutating_selection() {
         line_map: Vec::new(),
         ..Default::default()
     };
-
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
-
     assert_eq!(outcome, InputOutcome::focus(target.clone()));
     assert_eq!(ui.selected_index, 1);
-    assert_eq!(ui.selected_pane, Some(target), "Enter reads, never writes");
+    assert_eq!(
+        ui.selected_pane,
+        Some(target.clone()),
+        "Enter reads, never writes"
+    );
 
     // With nothing selected there is no target and nothing happens.
     ui.selected_pane = None;
     let outcome = handle_key(KeyAction::Enter, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::default());
-}
-#[test]
-fn space_fires_focus_at_the_next_attention_row_without_selecting() {
-    let ws = workspace();
-    let target = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+
+    // Space triages to the next attention row, firing focus without selecting.
     let mut snapshot = snapshot_with_panes(
         &ws,
         vec![
@@ -181,9 +151,7 @@ fn space_fires_focus_at_the_next_attention_row_without_selecting() {
         ..crate::AgentCard::default()
     }));
     let mut ui = UiState::default();
-
     let outcome = handle_key(KeyAction::Space, &mut ui, &snapshot);
-
     assert_eq!(outcome, InputOutcome::focus(target));
     assert_eq!(ui.selected_index, 0, "the triage key moves no selection");
     assert_eq!(ui.selected_pane, None);

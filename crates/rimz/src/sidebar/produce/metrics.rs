@@ -16,7 +16,7 @@ mod zellij;
 
 pub(super) use zellij::backfill_zellij_pane_pids_from_proc;
 #[cfg(test)]
-use zellij::{backfill_zellij_pane_pids, process_state_from_stat, resolve_candidate_root};
+use zellij::{backfill_zellij_pane_pids, resolve_candidate_root};
 
 const METRICS_SAMPLE_VERSION: u8 = 2;
 

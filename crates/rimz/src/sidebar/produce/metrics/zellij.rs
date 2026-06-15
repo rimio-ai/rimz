@@ -1,8 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
-#[cfg(test)]
-use crate::ProcessState;
 use crate::sidebar::frame::PaneFrame;
 
 pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
@@ -23,19 +21,6 @@ pub(in crate::sidebar::produce) fn backfill_zellij_pane_pids_from_proc(
         &|pid| crate::proc::cwd(pid),
     );
     children
-}
-
-#[cfg(test)]
-pub(super) fn process_state_from_stat(
-    current: Option<char>,
-    prior: Option<char>,
-) -> Option<ProcessState> {
-    match current {
-        Some('Z') => Some(ProcessState::Stuck),
-        Some('D') if prior == Some('D') => Some(ProcessState::Stuck),
-        Some(_) => None,
-        None => None,
-    }
 }
 
 /// Backfill `pane_pid` for panes whose backend reported none (Zellij emits no

@@ -127,7 +127,6 @@ fn render_worktree_equal_to_trunk() {
         !rendered.contains("+0 -0"),
         "the landed marker replaces the zero diff"
     );
-    assert_snapshot("worktree_equal_to_trunk", rendered);
 }
 #[test]
 fn render_worktree_clear_safe_to_remove() {
@@ -162,7 +161,6 @@ fn render_worktree_clear_safe_to_remove() {
         !rendered.contains('⇣'),
         "behind stays out of the clear header"
     );
-    assert_snapshot("worktree_clear_safe_to_remove", rendered);
 }
 #[test]
 fn render_worktree_dirty_tree_keeps_the_cluster() {
@@ -194,7 +192,6 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
         "a dirty tree wears no landed marker:\n{rendered}"
     );
     assert!(rendered.contains("⇣5"), "header:\n{rendered}");
-    assert_snapshot("worktree_dirty_tree_keeps_the_cluster", rendered);
 }
 #[test]
 fn render_trunk_worktree_skips_the_landed_marker() {

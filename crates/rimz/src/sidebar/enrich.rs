@@ -42,7 +42,7 @@ pub use codex_refresh::refresh_codex_transcript_context;
 #[cfg(test)]
 pub(crate) use codex_refresh::{
     CodexRateLimitRefresh, codex_rate_limit_probe_due, codex_rate_limit_probe_marker,
-    codex_rate_limit_refreshes, provider_has_out_of_band_windows,
+    codex_rate_limit_refreshes,
 };
 pub(crate) use credits::apply_credits_cache;
 pub use credits::{

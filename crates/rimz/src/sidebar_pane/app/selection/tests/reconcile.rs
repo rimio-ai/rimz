@@ -80,45 +80,6 @@ fn baseline_changes_move_highlight_while_none_derivations_hold_it() {
     assert_eq!(ui.baseline_pane, Some(held));
 }
 #[test]
-fn highlight_moves_only_when_the_baseline_catches_up() {
-    // The "accepts latency" contract behind the one-packet jump: a jump
-    // action fires the focus command and mutates nothing, so a fold still
-    // deriving the old pane keeps the old highlight, and the jumped pane
-    // lights up only once the mux reports it focused.
-    let ws = workspace();
-    let from = PaneId::from_parts(MuxName::Zellij, "terminal_1");
-    let jumped = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let snapshot = snapshot_with_panes(
-        &ws,
-        vec![
-            pane("terminal_1", "tab_0", true),
-            pane("terminal_2", "tab_0", false),
-        ],
-    );
-    let mut ui = UiState {
-        selected_index: 0,
-        selected_pane: Some(from.clone()),
-        baseline_pane: Some(from.clone()),
-        line_map: line_map_for(&snapshot, 0),
-        ..Default::default()
-    };
-
-    // Click terminal_2's row: the outcome carries the target, the UI holds.
-    let row1 = ui.line_map.iter().position(|m| *m == Some(1)).unwrap();
-    let outcome = handle_mouse_click(1, screen_row_for(row1), &mut ui, &snapshot);
-    assert_eq!(outcome.focus, Some(jumped.clone()));
-    assert_eq!(ui.selected_pane, Some(from.clone()));
-
-    // A fold still deriving the pre-jump pane keeps the old highlight.
-    reconcile_selection(&mut ui, &snapshot, Some(from.clone()));
-    assert_eq!(ui.selected_pane, Some(from));
-
-    // The fold that derives the jumped pane moves it.
-    reconcile_selection(&mut ui, &snapshot, Some(jumped.clone()));
-    assert_eq!(ui.selected_pane, Some(jumped.clone()));
-    assert_eq!(ui.baseline_pane, Some(jumped));
-}
-#[test]
 fn selection_reanchors_to_its_pane_after_a_reorder() {
     // terminal_2 moved from row 1 to row 0 between folds with no baseline
     // change; the highlight follows its pane, not the old index.

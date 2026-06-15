@@ -128,6 +128,8 @@ fn contested_focus_prefers_newly_marked_candidate() {
 
 #[test]
 fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
+    // A three-pane prior with one clear winner: when every pane reports active
+    // (no visible transition), the active pane stays on the prior choice.
     let prior = assemble_frame(
         vec![
             pane("terminal_1", "tab_0", Some("zsh"), false),
@@ -152,12 +154,13 @@ fn contested_focus_sticks_to_prior_when_no_transition_is_visible() {
 
     assert_eq!(
         frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        Some("terminal_2")
+        Some("terminal_2"),
+        "three-pane: no transition keeps the prior active pane"
     );
-}
 
-#[test]
-fn two_candidate_contested_focus_sticks_after_prior_contest() {
+    // A two-pane prior that is itself already contested still sticks: the prior
+    // resolves to the first pane and sets the `focus_contested` guard, and the
+    // unchanged next frame holds that same choice.
     let (prior, _) = assemble_frame_from_inputs(FrameInputs {
         panes: vec![
             pane("terminal_1", "tab_0", Some("zsh"), true),
@@ -189,7 +192,8 @@ fn two_candidate_contested_focus_sticks_after_prior_contest() {
 
     assert_eq!(
         frame.tabs[0].active_pane.as_ref().map(PaneId::raw),
-        prior.tabs[0].active_pane.as_ref().map(PaneId::raw)
+        prior.tabs[0].active_pane.as_ref().map(PaneId::raw),
+        "two-pane: a prior contest sticks to its prior active pane"
     );
 }
 
@@ -427,42 +431,25 @@ fn own_view_derives_from_the_own_tab() {
         "rimz-test",
     );
 
+    // The pane in `tab_1` is not a sibling: the own view counts and names only
+    // the panes sharing the own tab, and the working set rides the fused focus
+    // filter over that same tab-local set.
     let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
 
     assert_eq!(view.sibling_count, 1);
     assert!(!view.own_is_active);
     assert_eq!(view.active_pane_id, Some(active.clone()));
-    assert_eq!(view.working_pane_ids, vec![active]);
+    assert_eq!(
+        view.working_pane_ids,
+        vec![active],
+        "the working set names only this tab's siblings — the fused \
+         focus filter rides it"
+    );
 }
 
 fn own_view(own: &str, panes: Vec<PaneRef>) -> Option<SidebarOwnView> {
     let own = PaneId::from_parts(MuxName::Zellij, own);
     SidebarOwnView::from_frame(&own, &assemble_frame(panes, 1, "rimz-test"))
-}
-
-#[test]
-fn own_view_counts_only_siblings_sharing_the_tab() {
-    let focused_here = PaneId::from_parts(MuxName::Zellij, "terminal_2");
-    let view = own_view(
-        "terminal_1",
-        vec![
-            pane("terminal_1", "tab_0", Some("zsh"), false),
-            pane("terminal_2", "tab_0", Some("zsh"), true),
-            // Another tab — not a sibling.
-            pane("terminal_3", "tab_1", Some("zsh"), true),
-        ],
-    )
-    .expect("own pane is present");
-
-    assert_eq!(view.sibling_count, 1);
-    assert!(!view.own_is_active);
-    assert_eq!(view.active_pane_id, Some(focused_here.clone()));
-    assert_eq!(
-        view.working_pane_ids,
-        vec![focused_here],
-        "the working set names only this tab's siblings — the fused \
-         focus filter rides it"
-    );
 }
 
 #[test]

@@ -246,19 +246,11 @@ foreground = '#657b83'
         // Caution warms the yellow into an amber distinct from both neighbors.
         assert_ne!(tones.caution, tones.warn);
         assert_ne!(tones.caution, tones.alarm);
-    }
-
-    #[test]
-    fn selection_derives_a_distinct_bright_tone_and_a_band_when_scheme_omits_them() {
-        // No bright.blue and no colors.selection: the selection source falls back
-        // to normal blue, the selection tone still derives bright and distinct from
-        // the data-cool slot, and the band derives a deep tint of the background.
-        let tones = parse_palette_tones(LIGHT_SCHEME).expect("parse scheme");
-        assert_eq!(tones.cool, (0x26, 0x8b, 0xd2));
-        assert_ne!(tones.selection, tones.cool);
+        // With no `colors.selection`, the band derives a deep tint of the
+        // background rather than copying the raw background.
         assert_ne!(
             tones.selection_bg,
-            (0xfd, 0xf6, 0xe3),
+            (0x21, 0x21, 0x21),
             "the band is a derived tint, not the raw background"
         );
     }

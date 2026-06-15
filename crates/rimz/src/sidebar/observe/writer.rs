@@ -335,15 +335,16 @@ mod tests {
     }
 
     #[test]
-    fn roster_frame_compare_ignores_timestamp_skew() {
-        let roster = roster(10, vec![("a", "terminal_1")]);
-        let frame = assemble_frame(vec![pane("terminal_1")], 11, "rimz-test");
-
-        assert!(compare_roster_to_frame(&roster, &frame).is_empty());
-    }
-
-    #[test]
     fn roster_frame_compare_reports_missing_panes() {
+        // Timestamp skew alone is no anomaly: a roster matched by a frame with a
+        // later produced-at stamp compares clean.
+        let skewed = roster(10, vec![("a", "terminal_1")]);
+        let frame = assemble_frame(vec![pane("terminal_1")], 11, "rimz-test");
+        assert!(
+            compare_roster_to_frame(&skewed, &frame).is_empty(),
+            "produced_at_ms skew alone reports no anomaly"
+        );
+
         let roster = roster(10, vec![("a", "terminal_1"), ("b", "terminal_2")]);
         let frame = assemble_frame(vec![pane("terminal_1")], 10, "rimz-test");
 

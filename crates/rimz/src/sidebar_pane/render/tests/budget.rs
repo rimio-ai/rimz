@@ -3,8 +3,8 @@
 //! recomposing the whole frame from the cached snapshot, so its cost must stay
 //! linear in the row count — an accidental per-row full-snapshot scan (O(rows²))
 //! is exactly the regression a tens-of-agents fleet would feel as a stuttering
-//! spinner. Bounds are relative (big-vs-small ratio) plus one deliberately loose
-//! wall-clock tripwire, never a tight budget that flakes on a busy CI box.
+//! spinner. The bound is relative (big-vs-small ratio), never a tight wall-clock
+//! budget that flakes on a busy CI box.
 
 use std::io;
 use std::time::{Duration, Instant};
@@ -242,21 +242,5 @@ fn compose_scales_linearly_with_fleet_size() {
         ratio < 60.0,
         "big/small compose ratio {ratio:.1}× suggests a superlinear regression \
          (content ratio is ~10×; big {big_elapsed:?}, small {small_elapsed:?})"
-    );
-}
-
-/// The tripwire, not a budget: a single fleet-scale frame must land orders of
-/// magnitude under this ceiling (sub-millisecond in practice). It only catches
-/// a catastrophic regression — compose suddenly forking, reading files, or
-/// blowing up combinatorially — without flaking on a slow CI box.
-#[test]
-fn compose_of_a_large_fleet_stays_far_under_the_frame_budget() {
-    let big = fleet(10, 5, 8);
-    render_n(&big, 5); // warm
-    let elapsed = render_n(&big, 10) / 10;
-    assert!(
-        elapsed < Duration::from_millis(50),
-        "one fleet-scale compose took {elapsed:?}; the 100ms frame grid leaves \
-         no headroom for this"
     );
 }

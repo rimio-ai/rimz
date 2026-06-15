@@ -238,10 +238,12 @@ fn configured_unread_episode_triggers_fire() {
 }
 
 #[test]
-fn projected_pending_agent_ask_notifies_as_waiting() {
+fn projected_ask_rows_notify_as_waiting() {
     let mut state = NotificationState::default();
     let prefs = prefs();
 
+    // An agent-backed projected ask: the rollup keeps the raw running lifecycle
+    // while the row paints Waiting, and the notification carries the agent id.
     let agent = agent("a1", AgentStatus::Running, false);
     let mut ask = agent_ask("claude", "a1");
     ask.updated_at = agent.last_activity + Duration::from_secs(1);
@@ -261,13 +263,10 @@ fn projected_pending_agent_ask_notifies_as_waiting() {
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].notification_kind, NotificationKind::Waiting);
     assert_eq!(out[0].agents[0].agent_id, AgentSessionId::from("a1"));
-}
 
-#[test]
-fn projected_standalone_ask_row_notifies_after_seed() {
+    // A standalone script ask row, seeded from a live pane with no agent: it
+    // reaches Waiting, notifies, and carries its own label.
     let mut state = NotificationState::default();
-    let prefs = prefs();
-
     let pane = PaneRef {
         pane_id: PaneId::from_parts(MuxName::Tmux, "%deploy"),
         session_name: "rimz-test".to_owned(),
@@ -456,7 +455,9 @@ fn link_degraded_opens_diagnostic_after_hysteresis() {
 }
 
 #[test]
-fn stale_link_stats_pause_degraded_hysteresis() {
+fn stale_link_stats_pause_hysteresis() {
+    // Degraded direction: a stale span pauses the degrade hold, and the stale
+    // span is not counted toward it.
     let mut state = LinkNotificationState::default();
     state.evaluate(
         &link_snapshot(LinkTier::Degraded, SidebarLinkFreshness::Fresh),
@@ -492,6 +493,65 @@ fn stale_link_stats_pause_degraded_hysteresis() {
             miss_pct: 4,
             since_ms: 11_000,
             recovered_after_ms: None,
+        })
+    );
+
+    // Recovery direction: from an active degraded episode the first good sample
+    // starts the recovery clock, a stale span pauses it, and the stale span is
+    // not counted toward recovery either.
+    let mut state = LinkNotificationState::default();
+    state.evaluate(
+        &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
+        0,
+    );
+    assert!(
+        state
+            .evaluate(
+                &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
+                10_000,
+            )
+            .is_some(),
+        "the link first enters an active degraded episode"
+    );
+    assert!(
+        state
+            .evaluate(
+                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
+                10_000,
+            )
+            .is_none(),
+        "the first good sample starts the recovery clock"
+    );
+    assert!(
+        state
+            .evaluate(
+                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Stale),
+                39_000,
+            )
+            .is_none()
+    );
+    assert!(
+        state
+            .evaluate(
+                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
+                50_000,
+            )
+            .is_none(),
+        "the stale span is not counted toward recovery"
+    );
+
+    let alert = state.evaluate(
+        &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
+        51_000,
+    );
+    assert_eq!(
+        alert,
+        Some(LinkAlert {
+            tier: LinkTier::Good,
+            rtt_ms: Some(42),
+            miss_pct: 0,
+            since_ms: 11_000,
+            recovered_after_ms: Some(40_000),
         })
     );
 }
@@ -579,65 +639,6 @@ fn disappearing_active_link_closes_diagnostic_episode() {
     assert!(
         state.evaluate(&snapshot(Vec::new()), 16_000).is_none(),
         "the expiry close is emitted once"
-    );
-}
-
-#[test]
-fn stale_link_stats_pause_recovery_hysteresis() {
-    let mut state = LinkNotificationState::default();
-    state.evaluate(
-        &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-        0,
-    );
-    assert!(
-        state
-            .evaluate(
-                &link_snapshot(LinkTier::Bad, SidebarLinkFreshness::Fresh),
-                10_000,
-            )
-            .is_some(),
-        "the link first enters an active degraded episode"
-    );
-    assert!(
-        state
-            .evaluate(
-                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                10_000,
-            )
-            .is_none(),
-        "the first good sample starts the recovery clock"
-    );
-    assert!(
-        state
-            .evaluate(
-                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Stale),
-                39_000,
-            )
-            .is_none()
-    );
-    assert!(
-        state
-            .evaluate(
-                &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-                50_000,
-            )
-            .is_none(),
-        "the stale span is not counted toward recovery"
-    );
-
-    let alert = state.evaluate(
-        &link_snapshot(LinkTier::Good, SidebarLinkFreshness::Fresh),
-        51_000,
-    );
-    assert_eq!(
-        alert,
-        Some(LinkAlert {
-            tier: LinkTier::Good,
-            rtt_ms: Some(42),
-            miss_pct: 0,
-            since_ms: 11_000,
-            recovered_after_ms: Some(40_000),
-        })
     );
 }
 

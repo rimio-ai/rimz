@@ -29,9 +29,8 @@ pub use super::frame::{
 pub(crate) use super::enrich::{
     CODEX_RATE_LIMIT_REFRESH_INTERVAL, CodexRateLimitRefresh, accounts_cache_version_refresh_due,
     apply_rate_limit_cache, codex_rate_limit_probe_due, codex_rate_limit_probe_marker,
-    codex_rate_limit_refreshes, project_idle_window, provider_has_out_of_band_windows,
-    read_rate_limits_cache, refresh_codex_transcript_context, stamp_context_severity,
-    write_rate_limits_cache,
+    codex_rate_limit_refreshes, project_idle_window, read_rate_limits_cache,
+    refresh_codex_transcript_context, stamp_context_severity, write_rate_limits_cache,
 };
 #[cfg(test)]
 use crate::agents::{AgentRateLimits, RateLimitWindow};

@@ -175,15 +175,6 @@ fn codex_transcript_backstop_is_stat_gated() {
     assert_ne!(third.transcript_stat, stat);
 }
 
-/// Only Codex exposes an account-scoped window read today; Claude's windows
-/// have no source outside a live statusline, so it never triggers a fetch.
-#[test]
-fn only_codex_has_an_out_of_band_window_read() {
-    assert!(provider_has_out_of_band_windows("codex"));
-    assert!(!provider_has_out_of_band_windows("claude"));
-    assert!(!provider_has_out_of_band_windows("pi"));
-}
-
 /// The config fold stamps every *agent* row's context-severity verdict from
 /// the `[sidebar.context]` bands — the one classification the renderer's color
 /// ramp and any future signal emitter read — and leaves process rows `None`.

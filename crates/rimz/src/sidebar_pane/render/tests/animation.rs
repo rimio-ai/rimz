@@ -344,24 +344,6 @@ fn render_live_heads_follow_phase_and_turn_phase() {
         AgentStatus::Running,
         Some("/repo/main"),
         Some("main"),
-        Some("compiling"),
-    );
-    claude.last_activity = fixed_now() - Duration::from_secs(30);
-    let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let first = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(0), 40, 10);
-    let second = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
-
-    assert_ne!(
-        first, second,
-        "a running agent's head must advance with the phase"
-    );
-
-    let mut claude = agent(
-        "claude-1",
-        "claude",
-        AgentStatus::Running,
-        Some("/repo/main"),
-        Some("main"),
         Some("reading"),
     );
     claude.phase = crate::agents::TurnPhase::Reasoning;

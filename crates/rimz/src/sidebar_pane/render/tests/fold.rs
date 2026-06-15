@@ -167,6 +167,11 @@ fn selecting_a_row_only_appends_never_reshapes_the_fold_lines() {
         4,
         "the fold is four card lines (incl. the context line): {fold:?}"
     );
+    // Counting the card lines directly (excluding the group header) agrees: four
+    // at rest and four selected, so selection never grows the resting height for
+    // a subagent-less card.
+    assert_eq!(unselected.len() - 1, 4, "{unselected:?}");
+    assert_eq!(selected.len() - 1, 4, "{selected:?}");
     // The context line rides the resting fold, not a reveal-on-select detail.
     assert!(
         fold.iter().any(|line| line.contains("▤ ")),
@@ -253,19 +258,6 @@ fn expanded_card_lists_subagents_only_when_selected() {
         !resting.contains("subagents"),
         "the resting card hides the subagent list:\n{resting}"
     );
-}
-/// The resting card is four lines (identity, description, ctx bar, token
-/// line); selecting it appends only the subagent list, so the deepest data is
-/// one keystroke away without ever reshaping a resting line.
-#[test]
-fn resting_card_is_four_lines_and_selection_only_appends() {
-    // Card lines, excluding the group header.
-    let resting = card_lines(usize::MAX).len() - 1;
-    let selected = card_lines(0).len() - 1;
-    assert_eq!(resting, 4, "identity, description, ctx, token line");
-    // This single-agent fixture has no subagents, so selection appends
-    // nothing — the resting height already carries every per-row stat.
-    assert_eq!(selected, 4);
 }
 #[test]
 fn bottom_chrome_dashboard_starts_with_a_blank_separator() {
