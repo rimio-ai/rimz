@@ -413,6 +413,7 @@ fn apply_input(
             ui,
             pet_assets,
             snapshot,
+            health.alert.as_ref().is_some_and(render::Alert::is_active),
             terminal.size().ok().map(|size| (size.width, size.height)),
         );
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
@@ -438,16 +439,16 @@ fn refresh_pet_view(
     ui: &mut UiState,
     pet_assets: &mut PetAssets,
     snapshot: &SidebarSnapshot,
+    alert_active: bool,
     terminal_size: Option<(u16, u16)>,
 ) {
     let (width, height) = terminal_size.unwrap_or(PET_FALLBACK_TERMINAL_SIZE);
     let status = render::fleet_pet_status(snapshot);
-    let pets_tab_active = matches!(
-        render::active_dashboard_tab(snapshot, ui),
-        Some(render::DashboardTabId::Pets)
-    );
-    let size = if pets_tab_active && render::pet_body_enabled(snapshot) {
-        PetGridSize::for_sidebar_space(width.saturating_sub(2), height)
+    let size = if snapshot.sidebar.pets.enabled
+        && render::dashboard_present(snapshot, alert_active)
+        && render::pet_body_enabled(snapshot)
+    {
+        PetGridSize::for_dashboard_column(width.saturating_sub(2), height)
     } else {
         None
     };

@@ -78,7 +78,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
-            id: DashboardTabId::provider("codex"),
+            kind: "codex".to_owned(),
             derived_at_start: Some("claude".to_owned()),
         }),
         ..Default::default()
@@ -134,7 +134,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
     let (lines, hits) = dashboard_panel_lines(
         &theme,
         &[],
-        Some(&DashboardTabId::Pets),
+        None,
         true,
         Some(&pet),
         true,
@@ -144,11 +144,10 @@ fn render_pets_dashboard_body_uses_pet_view() {
     );
     let rendered = line_texts(&lines).join("\n");
 
-    assert!(rendered.contains("Pets"), "{rendered}");
+    assert!(!rendered.contains("Pets"), "{rendered}");
     assert!(rendered.contains('▀'), "sprite cells render:\n{rendered}");
     assert!(rendered.contains("all caught up"), "{rendered}");
-    assert_eq!(hits.len(), 1);
-    assert_eq!(hits[0].kind, DashboardTabId::Pets);
+    assert!(hits.is_empty());
 }
 
 #[test]
@@ -169,7 +168,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
     let (lines, _) = dashboard_panel_lines(
         &theme,
         &[],
-        Some(&DashboardTabId::Pets),
+        None,
         true,
         Some(&pet),
         true,
@@ -181,6 +180,111 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
 
     assert!(!rendered.contains('▀'), "sprite is omitted:\n{rendered}");
     assert!(rendered.contains("someone needs you"), "{rendered}");
+}
+
+#[test]
+fn render_provider_dashboard_overlays_pet_and_reflows_stats() {
+    let theme = Theme::fixed(false);
+    let providers = two_provider_panels();
+    let pet = crate::sidebar_pane::pets::PetView {
+        grid: Some(vec![
+            vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: Color::Rgb(200, 20, 20),
+                    bg: Color::Rgb(20, 20, 200),
+                },
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: Color::Rgb(200, 20, 20),
+                    bg: Color::Rgb(20, 20, 200),
+                },
+            ],
+            vec![
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: Color::Rgb(200, 20, 20),
+                    bg: Color::Rgb(20, 20, 200),
+                },
+                crate::sidebar_pane::pets::PetCell {
+                    ch: '▀',
+                    fg: Color::Rgb(200, 20, 20),
+                    bg: Color::Rgb(20, 20, 200),
+                },
+            ],
+        ]),
+        caption: Some("all caught up".to_owned()),
+        loading: false,
+        status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+        active_track: "idle",
+    };
+    let active = "claude".to_owned();
+
+    let (lines, hits) = dashboard_panel_lines(
+        &theme,
+        &providers,
+        Some(&active),
+        true,
+        Some(&pet),
+        true,
+        52,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let texts = line_texts(&lines);
+    let rendered = texts.join("\n");
+
+    assert!(!rendered.contains("Pets"), "{rendered}");
+    assert_eq!(
+        rendered.chars().filter(|ch| *ch == '▀').count(),
+        4,
+        "one pet grid is zipped onto the active block:\n{rendered}"
+    );
+    assert_eq!(
+        hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
+        vec!["claude", "codex"]
+    );
+    let sessions = texts
+        .iter()
+        .find(|line| line.contains("◎ 12"))
+        .expect("session line");
+    assert!(sessions.contains("$3.50"), "{sessions}");
+    assert!(
+        !sessions.contains('◇'),
+        "tokens move off the headline line when the pet column is reserved: {sessions}"
+    );
+    let tokens = texts
+        .iter()
+        .find(|line| line.contains("◇ 498k"))
+        .expect("token line");
+    assert!(!tokens.contains("$3.50"), "{tokens}");
+}
+
+#[test]
+fn render_provider_dashboard_keeps_single_line_stats_without_pet_column() {
+    let theme = Theme::fixed(false);
+    let providers = two_provider_panels();
+    let active = "claude".to_owned();
+
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        &providers,
+        Some(&active),
+        true,
+        None,
+        false,
+        52,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    let stats = rendered
+        .lines()
+        .find(|line| line.contains("◎ 12"))
+        .expect("stats line");
+    assert!(stats.contains("◇ 498k"), "{stats}");
+    assert!(stats.contains("$3.50"), "{stats}");
 }
 
 #[test]

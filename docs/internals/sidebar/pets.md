@@ -1,14 +1,14 @@
 # Pets
 
-> Status: implemented. `[sidebar.pets] enabled = true` adds the optional Pets tab to the provider dashboard.
+> Status: implemented. `[sidebar.pets] enabled = true` adds a pet overlay to the provider dashboard.
 
-Pets are renderer-local attention art. The tab shows one animated companion for the whole room, driven by the same fleet state the sidebar already derives from the agent rows: waiting beats blocked, blocked beats running, running beats idle. The pet lives in the dashboard rather than the cards, so row layout stays stable while the bottom panel carries a glanceable room mood.
+Pets are renderer-local attention art. The dashboard shows one animated companion for the whole room, driven by the same fleet state the sidebar already derives from the agent rows: waiting beats blocked, blocked beats running, running beats idle. The pet lives in the dashboard rather than the cards, so row layout stays stable while the bottom panel carries a glanceable room mood.
 
 ## Dashboard Placement
 
-The provider dashboard owns the tab rail. Provider tabs pack from the left; when pets are enabled, `Pets` is pinned to the right edge and becomes the resting tab. `Left`/`Right` and mouse clicks pick any provider tab or the Pets tab. Disabling pets restores the provider-following dashboard behaviour.
+The provider dashboard owns the tab rail. Provider tabs pack from the left; when pets are enabled, the rail still contains provider tabs only and the active tab follows the selected provider unless the user picks another provider by `Left`/`Right` or mouse. A single provider still gets a one-tab rail while the pet is enabled, because the pet shares space with exactly one active provider block. With no provider blocks, the pet renders alone in the dashboard area.
 
-The Pets tab is best-effort enrichment. It paints only when selected, animates only while visible, and clears its renderer state as soon as the config disables it. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite, the body drops sprite cells and keeps the caption line, so color-dependent art becomes a text-only signal and pinned chrome yields to the room.
+The pet overlay is best-effort enrichment. When a sprite grid is available, the active provider block narrows and the pet column zips onto its right edge. The provider's brand emblem stays on the left, the provider stats restack into `◎ sessions` plus `$spend` on one line and `◇ ↘ ↗ ◌` tokens on the next, and the W/M fleet ledger below keeps the full dashboard width. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block returns to the full-width single-line stats layout.
 
 ## Fleet Status
 
@@ -65,4 +65,4 @@ glyphs = "auto"
 voice = true
 ```
 
-`enabled` gates the tab and CDN fetch. `pet` selects a built-in id, an `https://` URL, a petdex pet name, or a path to your own `.webp` sheet. `glyphs` selects the cell-art tier. `voice` controls canned captions. The full key reference lives in [configuration.md -> Sidebar Rendering](../../reference/configuration.md#sidebar-rendering).
+`enabled` gates the dashboard overlay and CDN fetch. `pet` selects a built-in id, an `https://` URL, a petdex pet name, or a path to your own `.webp` sheet. `glyphs` selects the cell-art tier. `voice` controls canned captions. The full key reference lives in [configuration.md -> Sidebar Rendering](../../reference/configuration.md#sidebar-rendering).

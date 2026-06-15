@@ -75,7 +75,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
     }];
 
     assert_eq!(
-        frame_interval(&slow, &UiState::default()),
+        frame_interval(&slow, &UiState::default(), false),
         crate::sidebar::timing::BREATH_ANIMATION_FRAME
     );
 
@@ -84,7 +84,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         .unwrap()
         .status = Some(crate::feed::AgentStatus::Running);
     assert_eq!(
-        frame_interval(&slow, &UiState::default()),
+        frame_interval(&slow, &UiState::default(), false),
         crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
     );
 }
@@ -109,19 +109,76 @@ fn pet_frame_interval_uses_pet_cadence_and_honours_static_motion() {
         ..Default::default()
     };
 
-    assert!(is_animating(&snapshot, &ui, 0));
-    assert_eq!(frame_interval(&snapshot, &ui), Duration::from_millis(625));
+    if render::pet_body_enabled(&snapshot) {
+        assert!(is_animating(&snapshot, &ui, 0, false));
+        assert_eq!(
+            frame_interval(&snapshot, &ui, false),
+            Duration::from_millis(625)
+        );
 
-    let mut jumping_ui = ui.clone();
-    jumping_ui.pet.as_mut().expect("pet").active_track = "jumping";
-    assert_eq!(
-        frame_interval(&snapshot, &jumping_ui),
-        Duration::from_millis(286)
-    );
+        let mut jumping_ui = ui.clone();
+        jumping_ui.pet.as_mut().expect("pet").active_track = "jumping";
+        assert_eq!(
+            frame_interval(&snapshot, &jumping_ui, false),
+            Duration::from_millis(286)
+        );
+    } else {
+        assert!(
+            !is_animating(&snapshot, &ui, 0, false),
+            "NO_COLOR suppresses pet body animation"
+        );
+        let mut loading_ui = ui.clone();
+        let pet = loading_ui.pet.as_mut().expect("pet");
+        pet.grid = None;
+        pet.loading = true;
+        assert!(is_animating(&snapshot, &loading_ui, 0, false));
+        assert_eq!(
+            frame_interval(&snapshot, &loading_ui, false),
+            crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+        );
+    }
 
     snapshot.sidebar.animations.idle =
         Some(toml::from_str("effect = \"static\"\n").expect("animation spec"));
-    assert!(!is_animating(&snapshot, &ui, 0));
+    assert!(!is_animating(&snapshot, &ui, 0, false));
+}
+
+#[test]
+fn active_alert_suppresses_hidden_pet_animation_cadence() {
+    let ws = workspace();
+    let mut snapshot = snapshot(&ws);
+    snapshot.sidebar.pets.enabled = true;
+    let ui = UiState {
+        pet: Some(crate::sidebar_pane::pets::PetView {
+            grid: Some(vec![vec![crate::sidebar_pane::pets::PetCell {
+                ch: '▀',
+                fg: ratatui::style::Color::White,
+                bg: ratatui::style::Color::Black,
+            }]]),
+            caption: Some("resting".to_owned()),
+            loading: false,
+            status: crate::sidebar_pane::pets::FleetPetStatus::Idle,
+            active_track: "idle",
+        }),
+        ..Default::default()
+    };
+    let alert_active = render::Alert::active("snapshot failed", snapshot.now).is_active();
+
+    assert!(render::dashboard_present(&snapshot, false));
+    assert!(!render::dashboard_present(&snapshot, alert_active));
+    assert!(!is_animating(&snapshot, &ui, 0, alert_active));
+    assert_eq!(
+        frame_interval(&snapshot, &ui, alert_active),
+        crate::sidebar::timing::animation_frame(crate::sidebar::timing::DEFAULT_REFRESH_MS)
+    );
+
+    if render::pet_body_enabled(&snapshot) {
+        assert!(is_animating(&snapshot, &ui, 0, false));
+        assert_eq!(
+            frame_interval(&snapshot, &ui, false),
+            Duration::from_millis(625)
+        );
+    }
 }
 
 #[test]
@@ -132,7 +189,7 @@ fn refresh_pet_view_skips_body_when_terminal_is_too_short() {
     let mut ui = UiState::default();
     let mut assets = PetAssets::default();
 
-    refresh_pet_view(&mut ui, &mut assets, &snapshot, Some((54, 11)));
+    refresh_pet_view(&mut ui, &mut assets, &snapshot, false, Some((54, 11)));
 
     let pet = ui.pet.expect("pet view");
     assert_eq!(pet.grid, None);

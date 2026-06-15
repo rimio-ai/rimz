@@ -71,7 +71,12 @@ impl LoopState {
 
     pub(super) fn frame_timing(&self, tick: Duration, anim_start: Instant) -> (bool, Duration) {
         let phase = wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
-        let active = is_animating(&self.current, &self.ui, phase) || self.dirty;
+        let alert_active = self
+            .health
+            .alert
+            .as_ref()
+            .is_some_and(render::Alert::is_active);
+        let active = is_animating(&self.current, &self.ui, phase, alert_active) || self.dirty;
         let timeout = if active {
             self.next_frame
                 .saturating_duration_since(Instant::now())
@@ -498,12 +503,23 @@ impl LoopState {
         if !self.should_exit && !paint_blocked && (active || self.dirty) && now >= self.next_frame {
             self.ui.animation_phase =
                 wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
-            let animating = is_animating(&self.current, &self.ui, self.ui.animation_phase);
+            let alert_active = self
+                .health
+                .alert
+                .as_ref()
+                .is_some_and(render::Alert::is_active);
+            let animating = is_animating(
+                &self.current,
+                &self.ui,
+                self.ui.animation_phase,
+                alert_active,
+            );
             if self.dirty || animating {
                 refresh_pet_view(
                     &mut self.ui,
                     &mut self.pet_assets,
                     &self.current,
+                    alert_active,
                     terminal.size().ok().map(|size| (size.width, size.height)),
                 );
                 render::draw_to_terminal_with_ui(
@@ -517,7 +533,7 @@ impl LoopState {
             self.next_frame = next_frame_after(
                 self.next_frame,
                 now,
-                frame_interval(&self.current, &self.ui),
+                frame_interval(&self.current, &self.ui, alert_active),
             );
         } else if !active && !self.dirty {
             // Idle re-arm only: with a fold pending, the armed boundary must

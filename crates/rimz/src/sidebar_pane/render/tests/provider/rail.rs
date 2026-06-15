@@ -97,14 +97,15 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
 }
 
 #[test]
-fn pets_tab_is_pinned_to_the_right_edge() {
+fn pets_enabled_keeps_rail_to_provider_tabs_only() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
     let zones = crate::config::BudgetZonesConfig::default();
+    let active = "claude".to_owned();
     let (lines, hits) = dashboard_panel_lines(
         &theme,
         &panels,
-        Some(&DashboardTabId::Pets),
+        Some(&active),
         true,
         None,
         true,
@@ -115,12 +116,15 @@ fn pets_tab_is_pinned_to_the_right_edge() {
     let rail = rail_text(&lines);
 
     assert!(
-        rail.ends_with("─ Pets ─"),
-        "pets tab sits at the right edge:\n{rail}"
+        !rail.contains("Pets"),
+        "pets are not a dashboard tab:\n{rail}"
     );
-    let pets = hits
-        .iter()
-        .find(|hit| hit.kind == DashboardTabId::Pets)
-        .expect("pets hit");
-    assert_eq!((pets.col_start, pets.col_end), (32, 40));
+    assert!(
+        rail.contains("Claude") && rail.contains("Codex"),
+        "provider tabs still render across the rail:\n{rail}"
+    );
+    assert_eq!(
+        hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
+        vec!["claude", "codex"]
+    );
 }

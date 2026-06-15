@@ -7,7 +7,7 @@ use crate::feed::AgentStatus;
 use crate::ids::PaneId;
 
 use crate::sidebar_pane::render::{
-    BodyFilter, Browse, DashboardTab, DashboardTabId, ManualScroll, UiState, active_dashboard_tab,
+    BodyFilter, Browse, DashboardTab, ManualScroll, UiState, active_dashboard_tab,
     dashboard_tabbed, dashboard_tabs, row_passes_filter, selected_agent_kind, status_total,
     unread_total,
 };
@@ -233,13 +233,13 @@ fn cycle_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, step: isize
 /// selection-derived kind it began from — the clear condition — and a later
 /// pick only moves the tab, so a browse through the tabs keeps one anchor and
 /// a genuine selection change still ends it (the [`Browse`] discipline).
-fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, id: DashboardTabId) {
+fn pick_dashboard_tab(ui: &mut UiState, snapshot: &SidebarSnapshot, kind: String) {
     let derived_at_start = match ui.dashboard_tab.take() {
         Some(tab) => tab.derived_at_start,
         None => selected_agent_kind(snapshot, ui),
     };
     ui.dashboard_tab = Some(DashboardTab {
-        id,
+        kind,
         derived_at_start,
     });
 }
@@ -301,7 +301,7 @@ fn pin_manual_scroll(ui: &mut UiState) {
 /// The provider kind whose tab sits under a click, from the tab hit map
 /// the renderer emitted in lockstep with the frame (`UiState::tab_hits`, the
 /// tab rail's twin of `line_map`).
-fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<DashboardTabId> {
+fn tab_kind_at(ui: &UiState, column: u16, row: u16) -> Option<String> {
     ui.tab_hits
         .iter()
         .find(|hit| hit.line == usize::from(row) && column >= hit.col_start && column < hit.col_end)
@@ -608,7 +608,9 @@ pub(super) fn reconcile_selection(
     if let Some(tab) = &ui.dashboard_tab {
         let derived = selected_agent_kind(snapshot, ui);
         let derived_moved = derived.is_some() && derived != tab.derived_at_start;
-        let tab_gone = !dashboard_tabs(snapshot).iter().any(|id| id == &tab.id);
+        let tab_gone = !dashboard_tabs(snapshot)
+            .iter()
+            .any(|kind| kind == &tab.kind);
         if derived_moved || tab_gone {
             ui.dashboard_tab = None;
         }

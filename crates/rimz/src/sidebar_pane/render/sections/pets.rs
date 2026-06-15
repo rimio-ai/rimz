@@ -36,10 +36,10 @@ pub(super) fn pet_panel_lines(
     vec![centered_caption(fallback, theme, width)]
 }
 
-/// The sprite pinned to the right edge — lined up under the right-aligned Pets
-/// tab — with its caption set to the left, vertically centered against the body
-/// so the panel spends rows on art, not on a separate caption line. Narrow panels
-/// (or a bodyless frame) fall back to a caption stacked underneath.
+/// The sprite pinned to the right edge, with its caption set to the left,
+/// vertically centered against the body so the panel spends rows on art, not on
+/// a separate caption line. Narrow panels (or a bodyless frame) fall back to a
+/// caption stacked underneath.
 fn body_lines(
     grid: &PetCellGrid,
     caption: Option<&str>,
@@ -130,7 +130,7 @@ fn wrap_words(text: &str, width: usize) -> Vec<String> {
 }
 
 /// The sprite rows right-aligned to the panel edge, so a caption-less (or too
-/// narrow) frame still sits the pet under the right-aligned Pets tab.
+/// narrow) frame still hugs the dashboard edge.
 fn grid_lines(grid: &PetCellGrid, width: usize) -> Vec<Line<'static>> {
     grid.iter()
         .map(|row| {

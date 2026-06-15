@@ -547,14 +547,6 @@ impl Theme {
         }
     }
 
-    pub(crate) fn pet_chip(&self, modifier: Modifier) -> Style {
-        self.chip(self.palette.accent, modifier)
-    }
-
-    pub(crate) fn pet_label(&self) -> Style {
-        self.style(self.palette.accent, Modifier::empty())
-    }
-
     pub(crate) fn pet_body_enabled(&self) -> bool {
         !self.no_color
     }

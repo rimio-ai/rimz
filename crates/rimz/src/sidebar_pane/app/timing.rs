@@ -1,39 +1,37 @@
 use super::*;
 
-pub(super) fn is_animating(snapshot: &SidebarSnapshot, ui: &UiState, phase: u64) -> bool {
+pub(super) fn is_animating(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    phase: u64,
+    alert_active: bool,
+) -> bool {
     render::has_live_animation(snapshot)
-        || pet_animating(snapshot, ui)
+        || pet_animating(snapshot, ui, alert_active)
         || ui.tally.any_rolling(phase)
         || ui.cost_rolls.any_rolling(phase)
         || ui.scrollbar.fading(phase)
         || ui.effects.any_active()
 }
 
-fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState) -> bool {
+fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState, alert_active: bool) -> bool {
     snapshot.sidebar.pets.enabled
+        && render::dashboard_present(snapshot, alert_active)
         && ui.pet.as_ref().is_some_and(|view| {
             view.loading
                 || (view.grid.is_some()
                     && render::pet_body_enabled(snapshot)
                     && render::pet_motion_enabled(snapshot, view.status))
         })
-        && matches!(
-            render::active_dashboard_tab(snapshot, ui),
-            Some(render::DashboardTabId::Pets)
-        )
 }
 
 fn pet_frame_interval(
     snapshot: &SidebarSnapshot,
     ui: &UiState,
+    alert_active: bool,
     refresh_ms: u16,
 ) -> Option<Duration> {
-    if !snapshot.sidebar.pets.enabled
-        || !matches!(
-            render::active_dashboard_tab(snapshot, ui),
-            Some(render::DashboardTabId::Pets)
-        )
-    {
+    if !snapshot.sidebar.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
         return None;
     }
     let view = ui.pet.as_ref()?;
@@ -65,7 +63,11 @@ pub(super) fn wall_clock_phase(start: Instant, refresh_ms: u16) -> u64 {
     (start.elapsed().as_millis() / u128::from(refresh_ms)) as u64
 }
 
-pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Duration {
+pub(super) fn frame_interval(
+    snapshot: &SidebarSnapshot,
+    ui: &UiState,
+    alert_active: bool,
+) -> Duration {
     let refresh_ms = snapshot.sidebar.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
     // A decaying one-shot flash needs the fast grid to read as motion; it is
@@ -89,10 +91,10 @@ pub(super) fn frame_interval(snapshot: &SidebarSnapshot, ui: &UiState) -> Durati
         ui.tally.any_rolling(ui.animation_phase) || ui.cost_rolls.any_rolling(ui.animation_phase);
     let money_grid =
         || crate::sidebar::timing::money_animation_frame(refresh_ms, render::CLICK_PHASES);
-    // The foreground Pets tab paints on its track cadence, but a money climb in
-    // the still-visible cockpit must keep sampling on the money grid, so a
-    // rolling room takes the faster of the two.
-    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, refresh_ms) {
+    // The dashboard pet paints on its track cadence, but a money climb in the
+    // still-visible cockpit must keep sampling on the money grid, so a rolling
+    // room takes the faster of the two.
+    if let Some(pet_interval) = pet_frame_interval(snapshot, ui, alert_active, refresh_ms) {
         return if money_rolling {
             pet_interval.min(money_grid())
         } else {

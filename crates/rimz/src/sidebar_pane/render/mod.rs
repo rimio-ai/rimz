@@ -37,9 +37,7 @@ use self::compose::lead_unread;
 #[cfg(test)]
 use self::compose::{auto_scroll_to_selection, build_bottom_chrome, pad_chrome, scroll_thumb};
 pub use self::ui_state::{Alert, AnimationCadence, UiState};
-pub(crate) use self::ui_state::{
-    BodyFilter, Browse, DashboardTab, DashboardTabId, GateNotice, ManualScroll,
-};
+pub(crate) use self::ui_state::{BodyFilter, Browse, DashboardTab, GateNotice, ManualScroll};
 pub(crate) use effects::EffectState;
 pub(crate) use odometer::{CLICK_PHASES, CostRolls, TallyAnim};
 pub(crate) use scrollbar::ScrollbarFade;
@@ -250,60 +248,40 @@ pub(crate) fn selected_agent_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> O
 /// `None` only when the dashboard is empty.
 #[cfg(test)]
 pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
-    active_dashboard_tab(snapshot, ui).and_then(|tab| match tab {
-        DashboardTabId::Provider(kind) => Some(kind),
-        DashboardTabId::Pets => None,
-    })
+    active_dashboard_tab(snapshot, ui)
 }
 
-pub(crate) fn active_dashboard_tab(
-    snapshot: &SidebarSnapshot,
-    ui: &UiState,
-) -> Option<DashboardTabId> {
+pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
     let panels = &snapshot.providers;
     let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);
     if let Some(tab) = &ui.dashboard_tab
-        && dashboard_has_tab(snapshot, &tab.id)
+        && dashboard_has_tab(snapshot, &tab.kind)
     {
-        return Some(tab.id.clone());
-    }
-    if snapshot.sidebar.pets.enabled {
-        return Some(DashboardTabId::Pets);
+        return Some(tab.kind.clone());
     }
     if let Some(kind) = selected_agent_kind(snapshot, ui)
         && has_panel(&kind)
     {
-        return Some(DashboardTabId::Provider(kind));
+        return Some(kind);
     }
-    panels
-        .first()
-        .map(|panel| DashboardTabId::Provider(panel.kind.clone()))
+    panels.first().map(|panel| panel.kind.clone())
 }
 
-pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<DashboardTabId> {
-    let mut tabs = snapshot
+pub(crate) fn dashboard_tabs(snapshot: &SidebarSnapshot) -> Vec<String> {
+    snapshot
         .providers
         .iter()
-        .map(|panel| DashboardTabId::Provider(panel.kind.clone()))
-        .collect::<Vec<_>>();
-    if snapshot.sidebar.pets.enabled {
-        tabs.push(DashboardTabId::Pets);
-    }
-    tabs
+        .map(|panel| panel.kind.clone())
+        .collect::<Vec<_>>()
 }
 
-fn dashboard_has_tab(snapshot: &SidebarSnapshot, id: &DashboardTabId) -> bool {
-    match id {
-        DashboardTabId::Provider(kind) => {
-            snapshot.providers.iter().any(|panel| panel.kind == *kind)
-        }
-        DashboardTabId::Pets => snapshot.sidebar.pets.enabled,
-    }
+fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
+    snapshot.providers.iter().any(|panel| panel.kind == kind)
 }
 
-/// Whether the dashboard paints a tab rail. Pets always use the rail because
-/// the pet is a dashboard tab even when no providers are present. Without pets,
-/// a single provider keeps the historical bare block.
+/// Whether the dashboard paints a tab rail. Pets keep the dashboard tabbed so
+/// the pet overlay rides one provider block at a time; without pets, a single
+/// provider keeps the historical bare block.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
     if snapshot.sidebar.pets.enabled {
         return true;

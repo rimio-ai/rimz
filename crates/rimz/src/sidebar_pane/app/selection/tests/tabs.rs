@@ -84,7 +84,7 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
 }
 
 #[test]
-fn pets_enabled_defaults_dashboard_to_pets_and_cycles_providers() {
+fn pets_enabled_keeps_provider_default_and_cycles_providers_only() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);
     snapshot.sidebar.pets.enabled = true;
@@ -92,23 +92,21 @@ fn pets_enabled_defaults_dashboard_to_pets_and_cycles_providers() {
 
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some(crate::sidebar_pane::render::DashboardTabId::Pets)
+        Some("claude".to_owned())
     );
 
     let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some(crate::sidebar_pane::render::DashboardTabId::Provider(
-            "claude".to_owned()
-        ))
+        Some("codex".to_owned())
     );
 
     handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
     assert_eq!(
         render::active_dashboard_tab(&snapshot, &ui),
-        Some(crate::sidebar_pane::render::DashboardTabId::Pets),
-        "cycling wraps back to the pinned pet tab"
+        Some("claude".to_owned()),
+        "cycling walks provider tabs only"
     );
 }
 
@@ -182,13 +180,13 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
                 line: 30,
                 col_start: 3,
                 col_end: 13,
-                kind: crate::sidebar_pane::render::DashboardTabId::provider("claude"),
+                kind: "claude".to_owned(),
             },
             crate::sidebar_pane::render::ProviderTabHit {
                 line: 30,
                 col_start: 15,
                 col_end: 24,
-                kind: crate::sidebar_pane::render::DashboardTabId::provider("codex"),
+                kind: "codex".to_owned(),
             },
         ],
         ..Default::default()

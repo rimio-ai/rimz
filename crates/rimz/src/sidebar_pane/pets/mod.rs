@@ -46,14 +46,19 @@ impl PetGridSize {
     const MAX_COLS: u16 = 20;
     const MIN_ROWS: u16 = 4;
     const MAX_ROWS: u16 = 10;
+    const DASHBOARD_BLOCK_MIN_COLS: u16 = 35;
 
-    pub(crate) fn for_sidebar_space(width: u16, height: u16) -> Option<Self> {
-        if width < Self::MIN_COLS {
+    pub(crate) fn for_dashboard_column(width: u16, height: u16) -> Option<Self> {
+        let cols = width
+            .saturating_sub(Self::DASHBOARD_BLOCK_MIN_COLS)
+            .min(Self::MAX_COLS);
+        if cols < Self::MIN_COLS {
             return None;
         }
-        let cols = width
-            .saturating_sub(10)
-            .clamp(Self::MIN_COLS, Self::MAX_COLS);
+        Self::for_cols_and_height(cols, height)
+    }
+
+    fn for_cols_and_height(cols: u16, height: u16) -> Option<Self> {
         let rows = ((u32::from(cols) * catalog::FRAME_HEIGHT) / catalog::FRAME_WIDTH / 2)
             .clamp(u32::from(Self::MIN_ROWS), u32::from(Self::MAX_ROWS)) as u16;
         let max_rows_for_height = height / 3;
@@ -463,23 +468,17 @@ mod tests {
     use crate::config::PetsGlyphMode;
 
     #[test]
-    fn pet_grid_size_tracks_sidebar_width_inside_bounds() {
+    fn pet_grid_size_reserves_provider_dashboard_column() {
+        assert!(PetGridSize::for_dashboard_column(46, 34).is_none());
         assert_eq!(
-            PetGridSize::for_sidebar_space(20, 34).expect("size").cols,
+            PetGridSize::for_dashboard_column(47, 34)
+                .expect("size")
+                .cols,
             12
         );
-        let wide = PetGridSize::for_sidebar_space(54, 34).expect("size");
+        let wide = PetGridSize::for_dashboard_column(80, 34).expect("size");
         assert_eq!((wide.cols, wide.rows), (20, 10), "caps at 20x10");
-        assert_eq!(
-            PetGridSize::for_sidebar_space(200, 34).expect("size").cols,
-            20
-        );
-        assert_eq!(
-            PetGridSize::for_sidebar_space(54, 20).expect("size").rows,
-            6
-        );
-        assert!(PetGridSize::for_sidebar_space(11, 34).is_none());
-        assert!(PetGridSize::for_sidebar_space(54, 11).is_none());
+        assert!(PetGridSize::for_dashboard_column(80, 11).is_none());
     }
 
     #[test]

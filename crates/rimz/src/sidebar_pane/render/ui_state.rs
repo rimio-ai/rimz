@@ -71,13 +71,11 @@ pub struct UiState {
     /// `auto` scrollbar mode reads it to paint the bar only while the viewport
     /// moves plus a short settle window. Crate-internal, like `tally`.
     pub(crate) scrollbar: ScrollbarFade,
-    /// The dashboard tab the user picked by hand (`←`/`→` or a click on a tab
-    /// label), riding above the default. With pets enabled the resting default
-    /// is `Pets`; otherwise it is still the selection-derived provider. Ends
-    /// like a browse: it clears when the selection-derived provider kind
-    /// *genuinely* changes from the value captured at pick time (a `None`
-    /// derivation — a process row — holds it), or when its target leaves the
-    /// dashboard.
+    /// The dashboard provider tab the user picked by hand (`←`/`→` or a click
+    /// on a tab label), riding above the selection-derived provider. Ends like
+    /// a browse: it clears when the selection-derived provider kind *genuinely*
+    /// changes from the value captured at pick time (a `None` derivation — a
+    /// process row — holds it), or when its target leaves the dashboard.
     pub(crate) dashboard_tab: Option<DashboardTab>,
     /// The current pet dashboard view, folded by the serve loop from the latest
     /// snapshot and the renderer-local asset cache before drawing. Render reads
@@ -114,29 +112,8 @@ pub struct UiState {
 /// genuinely changes from `derived_at_start`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DashboardTab {
-    pub(crate) id: DashboardTabId,
+    pub(crate) kind: String,
     pub(crate) derived_at_start: Option<String>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub(crate) enum DashboardTabId {
-    Provider(String),
-    Pets,
-}
-
-impl DashboardTabId {
-    #[cfg(test)]
-    pub(crate) fn provider(kind: impl Into<String>) -> Self {
-        Self::Provider(kind.into())
-    }
-
-    #[cfg(test)]
-    pub(crate) fn as_str(&self) -> &str {
-        match self {
-            Self::Provider(kind) => kind,
-            Self::Pets => "pets",
-        }
-    }
 }
 
 /// Arrow-key browse: pins `pane` WITHOUT moving focus, roaming every visible
