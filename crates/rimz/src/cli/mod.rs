@@ -5,7 +5,6 @@ mod agents_cmd;
 mod agents_launch;
 mod attach_exec;
 mod autoping;
-mod claude;
 mod codex;
 mod config;
 mod daemon_view;
@@ -20,7 +19,6 @@ mod list;
 mod list_themes;
 mod pane;
 mod parse;
-mod pi;
 mod queue;
 mod reload;
 mod remote;
@@ -94,9 +92,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Sidebar(args)) => sidebar::run(args, &globals),
         Some(Subcmd::Statusline(args)) => statusline::run(args, &globals),
         Some(Subcmd::Hooks(args)) => hooks::run(args, &globals),
-        Some(Subcmd::Claude(args)) => claude::run(args, &globals),
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
-        Some(Subcmd::Pi(args)) => pi::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
@@ -151,12 +147,10 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
             let (command, agent) = args.scope();
             (command, None, agent)
         }
-        Some(Subcmd::Claude(args)) => (args.command_label(), None, Some("claude")),
         Some(Subcmd::Codex(args)) => {
             let (command, session) = args.scope();
             (command, session, Some("codex"))
         }
-        Some(Subcmd::Pi(args)) => (args.command_label(), None, Some("pi")),
         Some(Subcmd::Config(_)) => ("config", None, None),
         Some(Subcmd::Trust(_)) => ("trust", None, None),
         Some(Subcmd::Doctor(_)) => ("doctor", None, None),
@@ -514,15 +508,9 @@ enum Subcmd {
     Statusline(statusline::StatuslineArgs),
     /// Install/uninstall agent hooks. Internal hook entrypoints live here too.
     Hooks(hooks::HooksArgs),
-    /// Claude helper API. The sidebar calls these; humans usually do not.
-    #[command(hide = true)]
-    Claude(claude::ClaudeArgs),
     /// Codex helper API. The Codex hook calls these; humans usually do not.
     #[command(hide = true)]
     Codex(codex::CodexArgs),
-    /// Pi helper API. The sidebar calls these; humans usually do not.
-    #[command(hide = true)]
-    Pi(pi::PiArgs),
     /// Inspect and edit the per-machine config.
     Config(config::ConfigArgs),
     /// Manage the project's executable-surface trust grant.

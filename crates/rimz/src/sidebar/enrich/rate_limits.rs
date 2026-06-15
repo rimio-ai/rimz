@@ -138,7 +138,7 @@ pub(crate) fn write_rate_limits_cache(path: &Path, cache: &RateLimitsCache) {
 /// concurrent producer frame. It converges within a frame or two because the
 /// producer carries the prior reading forward, and the out-of-band fetch is
 /// throttled — so a lost write is simply retried. Used by the detached
-/// `rimz codex refresh-rate-limits` helper, never on the per-tick path.
+/// `rimz agents refresh-usage` helper, never on the per-tick path.
 pub fn merge_account_rate_limits(runtime: &RuntimePaths, kind: &str, windows: AgentRateLimits) {
     let path = runtime.shared_rate_limits_path();
     let Some(_guard) = try_rate_limits_cache_lock(&runtime.shared_rate_limits_lock()) else {

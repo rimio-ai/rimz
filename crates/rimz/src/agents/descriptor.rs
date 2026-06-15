@@ -213,11 +213,10 @@ impl ConcernCoverage {
 }
 
 /// Explicit capability declaration. A provider that *cannot* do something
-/// declares it here instead of leaving an inferable absence. Three flags
-/// gate behavior today: `rate_limit_windows` (the provider dashboard's
-/// budget bars), `rich_context` (the provider-owned live context transport),
-/// `context_usage` and `account_spend` (the token/cost read paths),
-/// `registers_lazily` (cwd pane binding and synthesized idle rows),
+/// declares it here instead of leaving an inferable absence. Several flags
+/// gate behavior today: `rich_context` (the provider-owned live context
+/// transport), `context_usage` and `account_spend` (the token/cost read
+/// paths), `registers_lazily` (cwd pane binding and synthesized idle rows),
 /// `hook_install` (the install and doctor surfaces), and `native_ask_ui`
 /// (whether an unresolved blocking ask becomes a `native_ui` feed item). The
 /// rest state the adapter contract up front — pinned by each adapter's tests,
@@ -234,8 +233,6 @@ pub struct Capabilities {
     /// same ask neutrally with no feed item: there is no surface the item
     /// could route the human to, so pushing one would strand it waiting.
     pub native_ask_ui: bool,
-    /// Surfaces rate-limit windows / plan budgets the dashboard can meter.
-    pub rate_limit_windows: bool,
     /// Surfaces provider-owned rich context beyond the local lifecycle and
     /// transcript tail, such as account windows, official model labels, PR
     /// metadata, or agent version.
@@ -372,18 +369,20 @@ mod tests {
         assert!(claude.capabilities.remote_control.pane_sessions);
         assert!(claude.capabilities.remote_control.background_sessions);
         assert!(claude.capabilities.rich_context);
-        assert!(claude.capabilities.rate_limit_windows);
 
         let codex = crate::agents::registry::descriptor_by_kind("codex").unwrap();
         assert!(codex.capabilities.remote_control.pane_sessions);
         assert!(codex.capabilities.remote_control.background_sessions);
         assert!(codex.capabilities.rich_context);
-        assert!(codex.capabilities.rate_limit_windows);
 
         let pi = crate::agents::registry::descriptor_by_kind("pi").unwrap();
         assert!(!pi.capabilities.remote_control.pane_sessions);
         assert!(!pi.capabilities.remote_control.background_sessions);
         assert!(!pi.capabilities.rich_context);
-        assert!(pi.capabilities.rate_limit_windows);
+
+        let opencode = crate::agents::registry::descriptor_by_kind("opencode").unwrap();
+        assert!(!opencode.capabilities.remote_control.pane_sessions);
+        assert!(!opencode.capabilities.remote_control.background_sessions);
+        assert!(!opencode.capabilities.rich_context);
     }
 }

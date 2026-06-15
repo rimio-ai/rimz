@@ -10,6 +10,7 @@
 //! server-scoped and carries no session id.
 
 pub(crate) mod account;
+pub(crate) mod oauth_usage;
 pub(crate) mod payloads;
 pub(crate) mod spend;
 
@@ -54,7 +55,6 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
-        rate_limit_windows: false,
         rich_context: false,
         context_usage: true,
         account_spend: true,
@@ -164,7 +164,7 @@ const OPENCODE_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::AccountSpend,
         ConcernCoverage::Wired {
-            via: "SQLite message store + auth.json",
+            via: "SQLite message store + auth.json OAuth usage probe",
         },
     ),
     (
@@ -460,6 +460,10 @@ impl AgentAdapter for OpencodeAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "opencode.oauth_usage")
     }
 }
 

@@ -27,9 +27,9 @@ pub use super::frame::{
 
 #[cfg(test)]
 pub(crate) use super::enrich::{
-    CODEX_RATE_LIMIT_REFRESH_INTERVAL, CodexRateLimitRefresh, accounts_cache_version_refresh_due,
-    apply_rate_limit_cache, codex_rate_limit_probe_due, codex_rate_limit_probe_marker,
-    codex_rate_limit_refreshes, project_idle_window, read_rate_limits_cache,
+    CODEX_RATE_LIMIT_REFRESH_INTERVAL, CodexSessionRefresh, accounts_cache_version_refresh_due,
+    apply_rate_limit_cache, codex_session_probe_due, codex_session_probe_marker,
+    codex_session_refreshes, project_idle_window, read_rate_limits_cache,
     refresh_codex_transcript_context, stamp_context_severity, write_rate_limits_cache,
 };
 #[cfg(test)]

@@ -36,14 +36,14 @@ mod auto_continue;
 mod codex_refresh;
 mod credits;
 mod live_spend;
-mod oauth_refresh;
 mod rate_limits;
+mod usage_refresh;
 
 pub use codex_refresh::refresh_codex_transcript_context;
 #[cfg(test)]
 pub(crate) use codex_refresh::{
-    CodexRateLimitRefresh, codex_rate_limit_probe_due, codex_rate_limit_probe_marker,
-    codex_rate_limit_refreshes,
+    CodexSessionRefresh, codex_session_probe_due, codex_session_probe_marker,
+    codex_session_refreshes,
 };
 pub(crate) use credits::apply_credits_cache;
 pub use credits::{
@@ -58,13 +58,14 @@ pub(crate) use rate_limits::{
     read_rate_limits_cache, write_rate_limits_cache,
 };
 pub use rate_limits::{RateLimitsCache, merge_account_rate_limits, shortest_window_running};
+pub use usage_refresh::merge_oauth_usage_if_due;
 
 #[cfg(test)]
 pub(crate) use accounts::accounts_cache_version_refresh_due;
 use accounts::{cached_accounts_for_snapshot, produce_accounts, read_accounts_cache};
-use codex_refresh::refresh_codex_rate_limits;
+use codex_refresh::refresh_codex_sessions;
 use live_spend::refresh_live_spend_baselines;
-use oauth_refresh::refresh_oauth_usage;
+use usage_refresh::refresh_account_usage;
 
 /// The repo's worktree checkout roots the producer last published, read-only
 /// (no `git worktree list` fork). A consumer reuses whatever the elder cached,
@@ -599,11 +600,12 @@ fn fold_machine_config_producing(
     // back so the budgets survive a session ending or going idle.
     apply_rate_limit_cache(&mut snapshot, runtime, true);
     apply_credits_cache(&mut snapshot, runtime, &accounts_config);
-    // Codex's budget windows live behind the app-server. The producer refreshes
-    // active session sidecars and the idle account cache on a coarse cadence so a
-    // long-running task does not wait for the next turn boundary to repaint.
-    refresh_codex_rate_limits(&snapshot, runtime);
-    refresh_oauth_usage(&snapshot, runtime, &accounts_config);
+    // Codex's live sessions refresh their app-server-owned budget/context
+    // sidecars on a coarse cadence so a long-running task does not wait for the
+    // next turn boundary to repaint. The uniform driver then refreshes every
+    // metered provider's idle account usage (codex included, while idle).
+    refresh_codex_sessions(&snapshot, runtime);
+    refresh_account_usage(&snapshot, runtime, &accounts_config);
     // Opt-in: nudge a parked agent when its resume condition is due, so a turn
     // that stopped on a budget limit or overload picks itself back up while you
     // are away.

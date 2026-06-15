@@ -4,6 +4,7 @@ mod auto_continue;
 mod commands;
 mod exec;
 mod launch;
+mod refresh_usage;
 mod supervised;
 
 use std::collections::BTreeMap;
@@ -34,6 +35,7 @@ use auto_continue::{AutoContinueArgs, run_auto_continue};
 use commands::*;
 use exec::run_exec;
 use launch::*;
+use refresh_usage::{RefreshUsageArgs, run_refresh_usage};
 
 const CHILD_SIGNAL_GRACE: Duration = Duration::from_millis(300);
 const CHILD_WAIT_POLL: Duration = Duration::from_millis(25);
@@ -181,6 +183,10 @@ enum AgentsSubcmd {
     /// condition is due (`sidebar::enrich` auto-continue).
     #[command(hide = true)]
     AutoContinue(AutoContinueArgs),
+    /// Hidden helper the producer spawns to refresh one provider's account usage
+    /// (rate-limit windows + paid credits) into the shared cache.
+    #[command(hide = true)]
+    RefreshUsage(RefreshUsageArgs),
 }
 
 #[derive(Debug, Args)]
@@ -216,6 +222,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(exec, globals),
         Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
+        Some(AgentsSubcmd::RefreshUsage(args)) => return run_refresh_usage(args, globals),
         Some(AgentsSubcmd::List {
             json,
             all,

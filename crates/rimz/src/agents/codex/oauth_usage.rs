@@ -36,11 +36,11 @@ pub(crate) enum CodexOauthUsageErr {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl CodexOauthUsageErr {
+impl crate::agents::credits::OauthReportable for CodexOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent or API-key-only
     /// credentials are the normal state for an app-server or logged-out account,
     /// not a fault; parse and HTTP failures are.
-    pub(crate) fn should_report(&self) -> bool {
+    fn should_report(&self) -> bool {
         !matches!(self, Self::NoCredentials | Self::ApiKeyOnly)
     }
 }
@@ -51,7 +51,6 @@ pub(crate) type Result<T> = std::result::Result<T, CodexOauthUsageErr>;
 pub(crate) struct CodexOauthUsage {
     pub(crate) rate_limits: Option<AgentRateLimits>,
     pub(crate) extra_credits: Option<ExtraCredits>,
-    pub(crate) plan: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -85,7 +84,6 @@ struct CodexConfig {
 #[derive(Debug, Default, Deserialize)]
 #[serde(default)]
 struct UsageWire {
-    plan_type: Option<String>,
     rate_limit: RateLimitWire,
     credits: Option<CreditsWire>,
 }
@@ -259,7 +257,6 @@ pub(crate) fn parse_usage_response(body: &str) -> Result<CodexOauthUsage> {
             .as_ref()
             .and_then(CreditsWire::balance_usd)
             .map(|balance| ExtraCredits::known(None, Some(balance), None)),
-        plan: parsed.plan_type.filter(|plan| !plan.is_empty()),
     })
 }
 

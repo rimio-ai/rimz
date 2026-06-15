@@ -57,22 +57,6 @@ use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::ids::AgentSessionId;
 use crate::ledger::atomic;
 
-pub fn fetch_oauth_usage() -> Option<crate::agents::AccountUsageSnapshot> {
-    match oauth_usage::fetch() {
-        Ok(snapshot) => Some(snapshot),
-        Err(err) => {
-            if err.should_report() {
-                tracing::warn!(
-                    tags.operation = "pi.oauth_usage",
-                    error = &err as &dyn std::error::Error,
-                    "pi: OAuth usage probe failed",
-                );
-            }
-            None
-        }
-    }
-}
-
 /// Everything `const` about Pi, in one place. See [`AgentDescriptor`] for the
 /// descriptor-vs-trait split.
 static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -110,7 +94,6 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
         // `native_ui` feed item: gating is opt-in via a resolver, never Rimz
         // posing a question pi would not have asked.
         native_ask_ui: false,
-        rate_limit_windows: true,
         rich_context: false,
         context_usage: true,
         account_spend: true,
@@ -538,6 +521,10 @@ impl AgentAdapter for PiAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
+        crate::agents::credits::map_probe_snapshot(oauth_usage::fetch(), "pi.oauth_usage")
     }
 }
 

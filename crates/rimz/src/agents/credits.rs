@@ -147,6 +147,63 @@ fn clean_usd(value: Option<f64>) -> Option<f64> {
         .map(|value| value.max(0.0))
 }
 
+/// The outcome of an adapter's direct-OAuth account-usage query, mirroring the
+/// tri-state discipline of [`AccountProbe`](super::account::AccountProbe) so the
+/// shared refresh driver can key its cache TTL on the arm, not just the value:
+///
+/// - `Found` — a usage reading to merge.
+/// - `NoCredentials` — the probe ran and confidently found nothing to fetch (no
+///   OAuth login, an API-key-only file, an expired token, a provider with no
+///   quota surface). A settled state, logged at debug.
+/// - `Failed` — the probe could not complete (unreadable file, parse error, HTTP
+///   error). Transient, logged at warn, retried on the short TTL.
+/// - `Unsupported` — the adapter exposes no OAuth usage probe (the trait
+///   default). Nothing to spawn.
+#[derive(Clone, Debug, PartialEq)]
+pub enum OauthUsageProbe {
+    Found(AccountUsageSnapshot),
+    NoCredentials,
+    Failed,
+    Unsupported,
+}
+
+/// Whether an OAuth-usage error is worth reporting off-box. Implemented by each
+/// adapter's `oauth_usage` error so [`map_probe_snapshot`] can fold every
+/// adapter's result through one classifier instead of a hand-rolled match per
+/// adapter. The "report" set (HTTP/IO/parse faults) maps to `Failed`; the silent
+/// set (absent/api-key/expired credentials) maps to `NoCredentials`.
+pub(crate) trait OauthReportable {
+    fn should_report(&self) -> bool;
+}
+
+/// Fold an adapter's `Result<AccountUsageSnapshot, E>` into the shared
+/// [`OauthUsageProbe`], logging once at the right level. The single home for the
+/// debug-vs-warn split, so every adapter's `probe_oauth_usage` is a one-line
+/// delegation to its `oauth_usage` fetcher.
+pub(crate) fn map_probe_snapshot<E>(
+    result: std::result::Result<AccountUsageSnapshot, E>,
+    operation: &'static str,
+) -> OauthUsageProbe
+where
+    E: OauthReportable + std::error::Error + 'static,
+{
+    match result {
+        Ok(snapshot) => OauthUsageProbe::Found(snapshot),
+        Err(err) if !err.should_report() => {
+            tracing::debug!(error = %err, operation, "OAuth account usage unavailable");
+            OauthUsageProbe::NoCredentials
+        }
+        Err(err) => {
+            tracing::warn!(
+                tags.operation = operation,
+                error = &err as &dyn std::error::Error,
+                "OAuth account usage fetch failed",
+            );
+            OauthUsageProbe::Failed
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

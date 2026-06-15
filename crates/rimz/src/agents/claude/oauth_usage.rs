@@ -41,12 +41,12 @@ pub(crate) enum ClaudeOauthUsageErr {
     Http { kind: HttpErrKind, host: String },
 }
 
-impl ClaudeOauthUsageErr {
+impl crate::agents::credits::OauthReportable for ClaudeOauthUsageErr {
     /// Whether this failure is worth reporting off-box. Absent credentials, an
     /// expired token, and a missing usage scope are the normal state for an
     /// account that does not feed Rimz its usage, not a fault; parse and HTTP
     /// failures are.
-    pub(crate) fn should_report(&self) -> bool {
+    fn should_report(&self) -> bool {
         !matches!(
             self,
             Self::NoCredentials | Self::TokenExpired | Self::MissingScope

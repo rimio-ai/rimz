@@ -74,30 +74,6 @@ use crate::run::PermissionMode;
 /// margin so the bridge never holds the hook past Claude's kill window.
 const CLAUDE_HOOK_CAP: Duration = Duration::from_secs(120);
 
-/// Fetch Claude account usage from the local OAuth credential file. Best-effort
-/// wrapper for detached helpers: errors stay in tracing and the caller records
-/// retry state in the shared cache.
-pub fn fetch_oauth_usage(cli_version: Option<&str>) -> Option<AccountUsageSnapshot> {
-    match oauth_usage::fetch_usage(cli_version) {
-        Ok(usage) => Some(AccountUsageSnapshot {
-            rate_limits: usage.rate_limits,
-            extra_credits: usage.extra_credits,
-        }),
-        Err(err) if !err.should_report() => {
-            tracing::debug!(error = %err, "claude OAuth usage unavailable");
-            None
-        }
-        Err(err) => {
-            tracing::warn!(
-                tags.operation = "claude.oauth_usage",
-                error = &err as &dyn std::error::Error,
-                "claude OAuth usage fetch failed",
-            );
-            None
-        }
-    }
-}
-
 /// Everything `const` about Claude Code, in one place. See
 /// [`AgentDescriptor`] for the descriptor-vs-trait split.
 static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -126,7 +102,6 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
-        rate_limit_windows: true,
         rich_context: true,
         context_usage: true,
         account_spend: true,
@@ -775,6 +750,16 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
+        crate::agents::credits::map_probe_snapshot(
+            oauth_usage::fetch_usage(None).map(|usage| AccountUsageSnapshot {
+                rate_limits: usage.rate_limits,
+                extra_credits: usage.extra_credits,
+            }),
+            "claude.oauth_usage",
+        )
     }
 
     fn remote_control_status(

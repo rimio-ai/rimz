@@ -51,7 +51,7 @@ pub use context::{
     AgentTokenUsage, AgentTurnError, RateLimitWindow, SubagentContext, SubagentObservation,
     TurnErrorClass,
 };
-pub use credits::{AccountUsageSnapshot, ExtraCredits};
+pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
     RemoteControlCapability, ThreadKey, ToolClassification,
@@ -506,6 +506,18 @@ pub trait AgentAdapter: Send + Sync {
     /// login surface.
     fn probe_account(&self) -> account::AccountProbe {
         account::AccountProbe::LoggedOut
+    }
+
+    /// Query this provider's account usage (included rate-limit windows + paid
+    /// extra credits) directly from its own local OAuth credentials. This is the
+    /// uniform *API-query channel*: every adapter reads its own auth file with
+    /// its own token and normalizes the provider's quota surface into an
+    /// [`AccountUsageSnapshot`]. Producer-only and best-effort — the shared
+    /// refresh driver single-flights it behind the credits cache and keys the
+    /// cache TTL on the returned arm. Defaults to
+    /// [`OauthUsageProbe::Unsupported`] for an agent with no OAuth usage surface.
+    fn probe_oauth_usage(&self) -> OauthUsageProbe {
+        OauthUsageProbe::Unsupported
     }
 
     /// Dynamic remote-control state from this provider's own settings and

@@ -1305,9 +1305,10 @@ fn codex_stop_over_error_rollout_writes_turn_error_sidecar() {
     );
 }
 
-/// The sidebar's idle/account-only refresh path calls the hidden
-/// `refresh-rate-limits` helper, which reads the same app-server method and
-/// merges the windows into the shared provider cache.
+/// The sidebar's idle/account refresh path calls the uniform hidden
+/// `agents refresh-usage --kind codex` helper, which reads codex's app-server
+/// (its realtime channel, pollable while idle) and merges the windows into the
+/// shared provider cache.
 #[test]
 fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
     let env = Env::new();
@@ -1315,13 +1316,15 @@ fn codex_rate_limit_refresh_merges_account_cache_from_app_server() {
         .rimz()
         .env("RIMZ_CODEX_BIN", codex_appserver_stub())
         .args([
+            "agents",
+            "refresh-usage",
+            "--kind",
             "codex",
-            "refresh-rate-limits",
             "--workspace-id",
             env.workspace_id.as_str(),
         ])
         .output()
-        .expect("spawn codex refresh-rate-limits");
+        .expect("spawn agents refresh-usage codex");
     assert!(
         out.status.success(),
         "stderr: {}",

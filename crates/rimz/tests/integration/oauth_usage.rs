@@ -44,20 +44,20 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
     let output = env
         .rimz()
         .args([
-            "claude",
+            "agents",
             "refresh-usage",
+            "--kind",
+            "claude",
             "--workspace-id",
             env.workspace_id.as_str(),
             "--merge-windows",
-            "--agent-version",
-            "2.1.173",
         ])
         .env(
             "RIMZ_CLAUDE_OAUTH_USAGE_URL",
             format!("{origin}/api/oauth/usage"),
         )
         .bounded_output()
-        .expect("rimz claude refresh");
+        .expect("rimz agents refresh-usage claude");
     assert!(
         output.status.success(),
         "stderr: {}",
@@ -70,10 +70,12 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
             .to_ascii_lowercase()
             .contains("authorization: bearer claude-token")
     );
+    // The Claude version rides the user-agent; it now resolves from the local
+    // binary rather than a passed flag, so assert the product prefix only.
     assert!(
         request
             .to_ascii_lowercase()
-            .contains("user-agent: claude-code/2.1.173")
+            .contains("user-agent: claude-code/")
     );
 
     let runtime = env.runtime_paths();
@@ -98,7 +100,7 @@ fn claude_refresh_usage_populates_windows_and_extra_credits_from_oauth_endpoint(
 }
 
 #[test]
-fn codex_refresh_rate_limits_falls_back_to_oauth_usage_when_app_server_is_unreachable() {
+fn agents_refresh_usage_codex_falls_back_to_oauth_usage_when_app_server_is_unreachable() {
     let env = Env::new();
     let (origin, server) = serve_once(
         r#"{
@@ -140,15 +142,17 @@ fn codex_refresh_rate_limits_falls_back_to_oauth_usage_when_app_server_is_unreac
     let output = env
         .rimz()
         .args([
+            "agents",
+            "refresh-usage",
+            "--kind",
             "codex",
-            "refresh-rate-limits",
             "--workspace-id",
             env.workspace_id.as_str(),
         ])
         .env("RIMZ_CODEX_BIN", env.home_root.join("missing-codex"))
         .env("RIMZ_CODEX_APP_SERVER_SOCK", "")
         .bounded_output()
-        .expect("rimz codex refresh");
+        .expect("rimz agents refresh-usage codex");
     assert!(
         output.status.success(),
         "stderr: {}",

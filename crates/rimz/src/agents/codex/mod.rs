@@ -97,35 +97,6 @@ const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 const DEFAULT_MODEL: &str = "GPT-5.5";
 
-/// Fetch Codex account usage from the local OAuth credential file. The app-server
-/// remains the preferred source; this is the detached-helper fallback when the
-/// app-server returns no account-usage reading.
-pub fn fetch_oauth_usage() -> Option<AccountUsageSnapshot> {
-    match oauth_usage::fetch_usage() {
-        Ok(usage) => {
-            if let Some(plan) = usage.plan.as_deref() {
-                tracing::debug!(plan, "codex OAuth usage returned plan");
-            }
-            Some(AccountUsageSnapshot {
-                rate_limits: usage.rate_limits,
-                extra_credits: usage.extra_credits,
-            })
-        }
-        Err(err) if !err.should_report() => {
-            tracing::debug!(error = %err, "codex OAuth usage unavailable");
-            None
-        }
-        Err(err) => {
-            tracing::warn!(
-                tags.operation = "codex.oauth_usage",
-                error = &err as &dyn std::error::Error,
-                "codex OAuth usage fetch failed",
-            );
-            None
-        }
-    }
-}
-
 /// Everything `const` about Codex, in one place. See [`AgentDescriptor`] for
 /// the descriptor-vs-trait split.
 static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
@@ -156,7 +127,6 @@ static CODEX_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     capabilities: Capabilities {
         blocking_feed: true,
         native_ask_ui: true,
-        rate_limit_windows: true,
         rich_context: true,
         context_usage: true,
         account_spend: true,
@@ -669,6 +639,16 @@ impl AgentAdapter for CodexAdapter {
 
     fn probe_account(&self) -> crate::agents::account::AccountProbe {
         account::probe()
+    }
+
+    fn probe_oauth_usage(&self) -> crate::agents::OauthUsageProbe {
+        crate::agents::credits::map_probe_snapshot(
+            oauth_usage::fetch_usage().map(|usage| AccountUsageSnapshot {
+                rate_limits: usage.rate_limits,
+                extra_credits: usage.extra_credits,
+            }),
+            "codex.oauth_usage",
+        )
     }
 
     /// Codex has no statusline, so app-server-owned metadata (rate-limit

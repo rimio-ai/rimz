@@ -1,7 +1,7 @@
 use super::*;
 
 #[test]
-fn codex_rate_limit_refresh_targets_sessions_before_metered_idle_accounts() {
+fn codex_session_refreshes_target_live_root_sessions() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
 
@@ -13,91 +13,66 @@ fn codex_rate_limit_refresh_targets_sessions_before_metered_idle_accounts() {
         .agents
         .push(root_agent("codex", "sess-active", Some("gpt-5.5-codex")));
     assert_eq!(
-        codex_rate_limit_refreshes(&active_with_windows),
-        vec![CodexRateLimitRefresh::Session {
+        codex_session_refreshes(&active_with_windows),
+        vec![CodexSessionRefresh {
             session_id: "sess-active".to_owned(),
             model_hint: Some("gpt-5.5-codex".to_owned()),
         }],
         "active Codex sessions refresh their sidecars even when the dashboard already has windows"
     );
 
+    // An idle metered Codex account has no live session to refresh here — the
+    // uniform usage driver covers its account-scoped read while idle.
     let idle_metered =
         snapshot_with_panels(workspace.clone(), vec![provider_panel("codex", Vec::new())]);
-    assert_eq!(
-        codex_rate_limit_refreshes(&idle_metered),
-        vec![CodexRateLimitRefresh::Account],
-        "idle Codex accounts refresh the shared cache even before windows exist"
+    assert!(
+        codex_session_refreshes(&idle_metered).is_empty(),
+        "an idle account has no session sidecar to refresh"
     );
 
     let mut active_no_model =
-        snapshot_with_panels(workspace.clone(), vec![provider_panel("codex", Vec::new())]);
+        snapshot_with_panels(workspace, vec![provider_panel("codex", Vec::new())]);
     active_no_model
         .agents
         .push(root_agent("codex", "sess-active", None));
     assert_eq!(
-        codex_rate_limit_refreshes(&active_no_model),
-        vec![CodexRateLimitRefresh::Session {
+        codex_session_refreshes(&active_no_model),
+        vec![CodexSessionRefresh {
             session_id: "sess-active".to_owned(),
             model_hint: None,
         }],
-        "a stale account cache cannot refresh underneath a live Codex sidecar"
-    );
-
-    let mut unmetered_codex = provider_panel("codex", Vec::new());
-    unmetered_codex.metered = false;
-    let snapshot = snapshot_with_panels(
-        workspace,
-        vec![unmetered_codex, provider_panel("claude", Vec::new())],
-    );
-
-    assert!(
-        codex_rate_limit_refreshes(&snapshot).is_empty(),
-        "only metered Codex has an out-of-band budget read"
+        "a live Codex sidecar refreshes even with no model hint"
     );
 }
 
-/// The per-target throttle marker gates the out-of-band fetch: the first call is
-/// due (and touches the marker), the immediate next is not.
+/// The per-session throttle marker gates the app-server refresh: the first call
+/// is due (and touches the marker), the immediate next is not.
 #[test]
-fn codex_rate_limit_probe_throttles_per_target() {
+fn codex_session_probe_throttles_per_session() {
     let dir = tempfile::tempdir().unwrap();
     let workspace = WorkspaceId::from_project_root(dir.path());
     let runtime = RuntimePaths::under(workspace, dir.path()).unwrap();
     runtime.ensure_dirs().unwrap();
-    let account = CodexRateLimitRefresh::Account;
-    let session = CodexRateLimitRefresh::Session {
-        session_id: "sess/one".to_owned(),
-        model_hint: None,
-    };
-    let other_session = CodexRateLimitRefresh::Session {
-        session_id: "sess/two".to_owned(),
-        model_hint: None,
-    };
 
-    assert!(codex_rate_limit_probe_due(&runtime, &account));
+    assert!(codex_session_probe_due(&runtime, "sess/one"));
     assert!(
-        !codex_rate_limit_probe_due(&runtime, &account),
-        "a freshly-stamped account backs off"
-    );
-    assert!(codex_rate_limit_probe_due(&runtime, &session));
-    assert!(
-        !codex_rate_limit_probe_due(&runtime, &session),
+        !codex_session_probe_due(&runtime, "sess/one"),
         "a freshly-stamped session backs off"
     );
     assert!(
-        codex_rate_limit_probe_due(&runtime, &other_session),
+        codex_session_probe_due(&runtime, "sess/two"),
         "a different session has its own marker"
     );
 
     let old = SystemTime::now()
         .checked_sub(CODEX_RATE_LIMIT_REFRESH_INTERVAL + Duration::from_secs(1))
         .unwrap();
-    std::fs::File::open(codex_rate_limit_probe_marker(&runtime, &session))
+    std::fs::File::open(codex_session_probe_marker(&runtime, "sess/one"))
         .unwrap()
         .set_modified(old)
         .unwrap();
     assert!(
-        codex_rate_limit_probe_due(&runtime, &session),
+        codex_session_probe_due(&runtime, "sess/one"),
         "the session becomes due again after the 60s interval"
     );
 }

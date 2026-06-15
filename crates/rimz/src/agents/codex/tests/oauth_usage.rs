@@ -41,7 +41,6 @@ fn usage_url_respects_backend_api_base_and_codex_api_base() {
 fn usage_response_maps_windows_and_tolerates_bad_credit_balance() {
     let usage = parse_usage_response(
         r#"{
-            "plan_type": "pro",
             "rate_limit": {
                 "primary_window": {
                     "used_percent": 42.4,
@@ -77,7 +76,6 @@ fn usage_response_maps_windows_and_tolerates_bad_credit_balance() {
         usage.extra_credits,
         Some(ExtraCredits::known(None, Some(18.5), None))
     );
-    assert_eq!(usage.plan.as_deref(), Some("pro"));
 
     let usage = parse_usage_response(
         r#"{

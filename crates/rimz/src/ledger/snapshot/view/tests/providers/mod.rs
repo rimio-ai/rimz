@@ -12,4 +12,4 @@ fn provider_kinds(snapshot: &SidebarSnapshot) -> Vec<&str> {
 
 mod panels;
 mod pi;
-mod style;
+mod windows;

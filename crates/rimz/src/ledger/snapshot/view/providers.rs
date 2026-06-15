@@ -88,10 +88,7 @@ impl SidebarSnapshot {
             // live window usage only climbs, so this is both stable and the
             // truest. Same inputs always yield the same bars, regardless of which
             // session reported last; the enrich layer fuses this live reading with
-            // the cached and authoritative truth. A provider whose descriptor
-            // declares no rate-limit windows renders the absence deliberately — its
-            // panel never grows budget bars even if a stray reading lands in a
-            // session context; an unregistered kind keeps whatever it reports.
+            // the cached and authoritative truth.
             let now = self.now;
             let windows_for = |of_kind: &str| {
                 fresh_windows(
@@ -102,13 +99,7 @@ impl SidebarSnapshot {
                     now,
                 )
             };
-            let declares_windows = crate::agents::descriptor_by_kind(&kind)
-                .is_none_or(|descriptor| descriptor.capabilities.rate_limit_windows);
-            let windows = if declares_windows {
-                windows_for(&kind)
-            } else {
-                Default::default()
-            };
+            let windows = windows_for(&kind);
             let has_windows = !windows.is_empty();
 
             let metered = account

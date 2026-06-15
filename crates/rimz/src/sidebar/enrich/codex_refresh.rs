@@ -10,30 +10,25 @@ use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 use super::SidebarSnapshot;
 
-/// Refresh Codex enrichment from the producer. A live/root Codex session first
-/// refreshes its transcript-derived tokens/cost in process with a stat gate, then
-/// the existing detached helper refreshes app-server-owned budget/account fields
-/// on the coarse per-target cadence. A logged-in metered Codex account with no
-/// root session refreshes the account cache instead, so idle dashboards stay
-/// current.
-pub(super) fn refresh_codex_rate_limits(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
-    for refresh in codex_rate_limit_refreshes(snapshot) {
-        if let CodexRateLimitRefresh::Session {
-            session_id,
-            model_hint,
-        } = &refresh
-        {
-            refresh_codex_transcript_context(runtime, session_id, model_hint.as_deref());
-        }
-        if !codex_rate_limit_probe_due(runtime, &refresh) {
-            continue;
-        }
-        match refresh {
-            CodexRateLimitRefresh::Session {
-                session_id,
-                model_hint,
-            } => spawn_codex_context_refresh(runtime, &session_id, model_hint.as_deref()),
-            CodexRateLimitRefresh::Account => spawn_codex_account_window_fetch(runtime),
+/// Refresh each live/root Codex session's app-server-owned budget/account
+/// sidecar from the producer. A session first refreshes its transcript-derived
+/// tokens/cost in process with a stat gate, then the detached helper refreshes
+/// app-server-owned fields on the coarse per-session cadence so a long-running
+/// turn does not wait for the next turn boundary to repaint. The idle,
+/// account-scoped read lives in the uniform `usage_refresh` driver.
+pub(super) fn refresh_codex_sessions(snapshot: &SidebarSnapshot, runtime: &RuntimePaths) {
+    for refresh in codex_session_refreshes(snapshot) {
+        refresh_codex_transcript_context(
+            runtime,
+            &refresh.session_id,
+            refresh.model_hint.as_deref(),
+        );
+        if codex_session_probe_due(runtime, &refresh.session_id) {
+            spawn_codex_context_refresh(
+                runtime,
+                &refresh.session_id,
+                refresh.model_hint.as_deref(),
+            );
         }
     }
 }
@@ -84,57 +79,34 @@ pub fn refresh_codex_transcript_context(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum CodexRateLimitRefresh {
-    Session {
-        session_id: String,
-        model_hint: Option<String>,
-    },
-    Account,
+pub(crate) struct CodexSessionRefresh {
+    pub session_id: String,
+    pub model_hint: Option<String>,
 }
 
-pub(crate) fn codex_rate_limit_refreshes(snapshot: &SidebarSnapshot) -> Vec<CodexRateLimitRefresh> {
-    let sessions = snapshot
+pub(crate) fn codex_session_refreshes(snapshot: &SidebarSnapshot) -> Vec<CodexSessionRefresh> {
+    snapshot
         .agents
         .iter()
         .filter(|agent| agent.kind == "codex" && agent.parent_agent_id.is_none())
         .filter(|agent| !agent.agent_id.is_empty())
-        .map(|agent| CodexRateLimitRefresh::Session {
+        .map(|agent| CodexSessionRefresh {
             session_id: agent.agent_id.to_string(),
             model_hint: agent
                 .model
                 .clone()
                 .or_else(|| agent.context.as_ref().and_then(|ctx| ctx.model_id.clone())),
         })
-        .collect::<Vec<_>>();
-    if !sessions.is_empty() {
-        return sessions;
-    }
-
-    snapshot
-        .providers
-        .iter()
-        .filter(|panel| provider_has_out_of_band_windows(&panel.kind) && panel.metered)
-        .map(|_| CodexRateLimitRefresh::Account)
         .collect()
 }
 
-/// Whether a provider kind exposes an account-scoped, sessionless rate-limit read
-/// the producer can fetch out-of-band. Codex serves it from its app-server;
-/// Claude has none (its windows ride a live statusline), so it never qualifies.
-pub(crate) fn provider_has_out_of_band_windows(kind: &str) -> bool {
-    kind == "codex"
-}
-
-/// Throttle one Codex rate-limit refresh target via a marker file under the
-/// runtime root: skip when the last attempt is younger than the interval, touch
-/// it before spawning. Windows move on the scale of minutes, so a one-minute
-/// gate keeps a slow/unreachable app-server from spawning a helper every frame
-/// while still updating during long-running turns.
-pub(crate) fn codex_rate_limit_probe_due(
-    runtime: &RuntimePaths,
-    refresh: &CodexRateLimitRefresh,
-) -> bool {
-    let path = codex_rate_limit_probe_marker(runtime, refresh);
+/// Throttle one Codex session's app-server context refresh via a marker file
+/// under the runtime root: skip when the last attempt is younger than the
+/// interval, touch it before spawning. Windows move on the scale of minutes, so
+/// a one-minute gate keeps a slow/unreachable app-server from spawning a helper
+/// every frame while still updating during long-running turns.
+pub(crate) fn codex_session_probe_due(runtime: &RuntimePaths, session_id: &str) -> bool {
+    let path = codex_session_probe_marker(runtime, session_id);
     let due = std::fs::metadata(&path)
         .and_then(|meta| meta.modified())
         .ok()
@@ -147,23 +119,15 @@ pub(crate) fn codex_rate_limit_probe_due(
     due
 }
 
-pub(crate) fn codex_rate_limit_probe_marker(
-    runtime: &RuntimePaths,
-    refresh: &CodexRateLimitRefresh,
-) -> PathBuf {
-    match refresh {
-        CodexRateLimitRefresh::Account => runtime.shared_root.join("rate-limit-probe.codex"),
-        CodexRateLimitRefresh::Session { session_id, .. } => {
-            let mut hasher = Sha256::new();
-            hasher.update(b"codex-session");
-            hasher.update([0]);
-            hasher.update(session_id.as_bytes());
-            let digest = hex::encode(hasher.finalize());
-            runtime
-                .shared_root
-                .join(format!("rate-limit-probe.codex.{}", &digest[..32]))
-        }
-    }
+pub(crate) fn codex_session_probe_marker(runtime: &RuntimePaths, session_id: &str) -> PathBuf {
+    let mut hasher = Sha256::new();
+    hasher.update(b"codex-session");
+    hasher.update([0]);
+    hasher.update(session_id.as_bytes());
+    let digest = hex::encode(hasher.finalize());
+    runtime
+        .shared_root
+        .join(format!("rate-limit-probe.codex.{}", &digest[..32]))
 }
 
 /// Spawn the detached, fresh-stdio helper that refreshes one active Codex
@@ -217,49 +181,6 @@ fn spawn_codex_context_refresh(runtime: &RuntimePaths, session_id: &str, model_h
             tags.operation = "codex.context_refresh.spawn",
             error = &err as &dyn std::error::Error,
             "sidebar: failed to spawn codex context refresh",
-        );
-    }
-}
-
-/// Spawn the detached, fresh-stdio helper that fetches Codex's account windows
-/// and merges them into the shared cache. Best-effort: a spawn failure is logged
-/// and dropped — the dashboard keeps the prior reading until the next due frame.
-fn spawn_codex_account_window_fetch(runtime: &RuntimePaths) {
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(err) => {
-            tracing::warn!(
-                workspace = %runtime.workspace_id,
-                tags.operation = "codex.rate_limits.locate_exe",
-                error = &err as &dyn std::error::Error,
-                "sidebar: cannot locate rimz to refresh codex windows",
-            );
-            return;
-        }
-    };
-    let mut cmd = std::process::Command::new(exe);
-    cmd.args([
-        "codex",
-        "refresh-rate-limits",
-        "--workspace-id",
-        runtime.workspace_id.as_str(),
-    ])
-    .stdin(std::process::Stdio::null())
-    .stdout(std::process::Stdio::null())
-    .stderr(std::process::Stdio::null());
-    tracing::info!(
-        target: crate::observability::BREADCRUMB_TARGET,
-        workspace = %runtime.workspace_id,
-        "sidebar: spawning codex rate-limit refresh",
-    );
-    if let Err(err) =
-        crate::child_process::spawn_detached_reaped(&mut cmd, "codex-refresh-rate-limits")
-    {
-        tracing::warn!(
-            workspace = %runtime.workspace_id,
-            tags.operation = "codex.rate_limits.spawn",
-            error = &err as &dyn std::error::Error,
-            "sidebar: failed to spawn codex rate-limit refresh",
         );
     }
 }
