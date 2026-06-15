@@ -32,11 +32,7 @@ fn recently_finished_child_holds_off_the_stall() {
     let row = row(&snapshot, "sess-root");
     assert_eq!(row.status(), Some(AgentStatus::Running), "not a stall");
     assert_eq!(row.last_activity, ago(240));
-    let rollup = snapshot
-        .agents
-        .iter()
-        .find(|a| a.agent_id == "sess-root")
-        .expect("parent in rollup");
+    let rollup = rollup_agent(&snapshot, "sess-root");
     assert_eq!(
         rollup.last_activity,
         ago(660),

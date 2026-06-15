@@ -94,7 +94,7 @@ fn subagent_stop_without_start_keeps_parent_link_and_spares_the_parent() {
     assert_eq!(child.parent_agent_id.as_deref(), Some("sess-root"));
 
     let mut snapshot = SidebarSnapshot::build_with_carryover(
-        project_workspace(),
+        workspace(),
         Vec::new(),
         Vec::new(),
         agents,

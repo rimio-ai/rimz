@@ -56,7 +56,7 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
         ),
     ]);
 
-    let child = agent_by_id(&folded, "child-1");
+    let child = rollup_agent(&folded, "child-1");
     assert_eq!(
         child.subagent_description.as_deref(),
         Some("locate the render path")
@@ -64,14 +64,14 @@ fn with_subagent_context_enriches_matching_children_and_preserves_lifecycle_type
     assert_eq!(child.total_tokens, Some(12_400));
     assert_eq!(child.subagent_started_at, Some(started));
 
-    let fork = agent_by_id(&folded, "fork-1");
+    let fork = rollup_agent(&folded, "fork-1");
     assert_eq!(fork.task.as_deref(), Some("Explore"));
     assert_eq!(
         fork.subagent_description.as_deref(),
         Some("search the ledger")
     );
 
-    let typed = agent_by_id(&folded, "typed-1");
+    let typed = rollup_agent(&folded, "typed-1");
     assert_eq!(
         typed.task.as_deref(),
         Some("review"),
@@ -86,12 +86,4 @@ fn record(agent_id: &str, context: SubagentContext) -> SubagentContextRecord {
         agent_id: agent_id.into(),
         context,
     }
-}
-
-fn agent_by_id<'a>(snapshot: &'a SidebarSnapshot, id: &str) -> &'a AgentState {
-    snapshot
-        .agents
-        .iter()
-        .find(|a| a.agent_id == id)
-        .unwrap_or_else(|| panic!("{id} in rollup"))
 }

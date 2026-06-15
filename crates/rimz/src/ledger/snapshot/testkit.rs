@@ -90,6 +90,17 @@ pub(super) fn row<'a>(snapshot: &'a SidebarSnapshot, id: &str) -> &'a SidebarRow
         .unwrap_or_else(|| panic!("row {id} present in {:?}", rows(snapshot)))
 }
 
+/// The rolled-up [`AgentState`] with this id, or a panic — the rollup-side twin
+/// of [`row`], for tests that assert on agent-owned state rather than the
+/// projected row.
+pub(super) fn rollup_agent<'a>(snapshot: &'a SidebarSnapshot, id: &str) -> &'a AgentState {
+    snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id == id)
+        .unwrap_or_else(|| panic!("agent {id} in rollup"))
+}
+
 pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -> AgentState {
     // The `last_seen` arg is a recency rank, not an absolute epoch: anchor it
     // to the fixed test epoch (larger rank = more recent, all within ~100s of

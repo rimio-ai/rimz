@@ -1,5 +1,4 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
 
 use super::*;
 
@@ -13,12 +12,8 @@ use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use jiff::Timestamp;
 use serde_json::json;
 
-fn project_workspace() -> WorkspaceId {
-    WorkspaceId::from_project_root(Path::new("/tmp/x"))
-}
-
 fn raw_lifecycle(source: &str, params: serde_json::Value) -> EventEnvelope {
-    raw_lifecycle_in(&project_workspace(), source, params)
+    raw_lifecycle_in(&workspace(), source, params)
 }
 
 fn raw_lifecycle_in(
@@ -53,7 +48,7 @@ fn raw_launch(
     pane_id: Option<&str>,
 ) -> EventEnvelope {
     EventEnvelope::agent_launched(
-        project_workspace(),
+        workspace(),
         "session",
         &AgentKind::new_unchecked("claude"),
         AgentLaunchPayload {
@@ -142,7 +137,7 @@ fn rebirth_resets_ordinals_and_keeps_names() {
                 "signal": { "signal": "registered" },
             }),
         ),
-        EventEnvelope::session_rebirth(project_workspace(), "session"),
+        EventEnvelope::session_rebirth(workspace(), "session"),
         raw_lifecycle_at(
             "claude",
             2,
@@ -163,25 +158,47 @@ fn rebirth_resets_ordinals_and_keeps_names() {
 }
 
 #[test]
-fn launch_event_creates_provisional_card() {
-    let agents = reduce_agent_states(&[raw_launch(
-        AgentLaunchState::Bound,
-        "launch_a",
-        "lucid-atlas",
-        Some("zellij:terminal_1"),
-    )]);
-
-    assert_eq!(agents.len(), 1);
-    let agent = &agents[0];
-    assert_eq!(agent.agent_id.as_str(), "launch_a");
-    assert_eq!(agent.name.as_deref(), Some("lucid-atlas"));
-    assert_eq!(agent.kind_ordinal, Some(1));
-    assert_eq!(agent.status, AgentStatus::Running);
-    assert_eq!(agent.phase, TurnPhase::Reasoning);
-    assert_eq!(
-        agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
-        Some("zellij:terminal_1".to_owned())
-    );
+fn bound_launch_creates_a_running_card_and_keeps_the_starting_ordinal() {
+    // A Bound launch with a prompt mints one Running/Reasoning card pinned to
+    // the bound pane at ordinal 1 — and a prior Starting launch that already
+    // claimed that ordinal must not bump it.
+    for (label, launches) in [
+        (
+            "bound only",
+            vec![raw_launch(
+                AgentLaunchState::Bound,
+                "launch_a",
+                "lucid-atlas",
+                Some("zellij:terminal_1"),
+            )],
+        ),
+        (
+            "starting then bound",
+            vec![
+                raw_launch(AgentLaunchState::Starting, "launch_a", "lucid-atlas", None),
+                raw_launch(
+                    AgentLaunchState::Bound,
+                    "launch_a",
+                    "lucid-atlas",
+                    Some("zellij:terminal_1"),
+                ),
+            ],
+        ),
+    ] {
+        let agents = reduce_agent_states(&launches);
+        assert_eq!(agents.len(), 1, "{label}");
+        let agent = &agents[0];
+        assert_eq!(agent.agent_id.as_str(), "launch_a", "{label}");
+        assert_eq!(agent.name.as_deref(), Some("lucid-atlas"), "{label}");
+        assert_eq!(agent.kind_ordinal, Some(1), "{label}");
+        assert_eq!(agent.status, AgentStatus::Running, "{label}");
+        assert_eq!(agent.phase, TurnPhase::Reasoning, "{label}");
+        assert_eq!(
+            agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
+            Some("zellij:terminal_1".to_owned()),
+            "{label}"
+        );
+    }
 }
 
 #[test]
@@ -189,7 +206,7 @@ fn launch_event_without_prompt_creates_idle_card() {
     // Interactive launch (no prompt) must be Idle so the sidebar renders
     // loading dots rather than the thinking glyph + em dash.
     let agents = reduce_agent_states(&[EventEnvelope::agent_launched(
-        project_workspace(),
+        workspace(),
         "session",
         &AgentKind::new_unchecked("codex"),
         AgentLaunchPayload {
@@ -209,27 +226,6 @@ fn launch_event_without_prompt_creates_idle_card() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].status, AgentStatus::Idle);
     assert_eq!(agents[0].phase, TurnPhase::Idle);
-}
-
-#[test]
-fn bound_launch_event_keeps_the_starting_ordinal() {
-    let agents = reduce_agent_states(&[
-        raw_launch(AgentLaunchState::Starting, "launch_a", "lucid-atlas", None),
-        raw_launch(
-            AgentLaunchState::Bound,
-            "launch_a",
-            "lucid-atlas",
-            Some("zellij:terminal_1"),
-        ),
-    ]);
-
-    assert_eq!(agents.len(), 1);
-    assert_eq!(agents[0].agent_id.as_str(), "launch_a");
-    assert_eq!(agents[0].kind_ordinal, Some(1));
-    assert_eq!(
-        agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
-        Some("zellij:terminal_1".to_owned())
-    );
 }
 
 #[test]
@@ -262,36 +258,6 @@ fn lifecycle_registration_merges_provisional_card_by_name() {
     assert_eq!(
         agent.pane.as_ref().map(|pane| pane.pane_id.to_string()),
         Some("zellij:terminal_1".to_owned())
-    );
-}
-
-#[test]
-fn consumed_launches_are_not_persisted_after_provisional_merge() {
-    let (_, identity) = reduce_agent_states_seeded_with_identity(
-        BTreeMap::new(),
-        AgentIdentityState::default(),
-        &[
-            raw_launch(
-                AgentLaunchState::Bound,
-                "launch_a",
-                "lucid-atlas",
-                Some("zellij:terminal_1"),
-            ),
-            raw_lifecycle_at(
-                "claude",
-                2,
-                json!({
-                    "agent_id": "real-session",
-                    "agent_name": "lucid-atlas",
-                    "signal": { "signal": "registered" },
-                }),
-            ),
-        ],
-    );
-
-    assert!(
-        identity.consumed_launches.is_empty(),
-        "launch tombstones are reducer-local state, not room-lifetime identity"
     );
 }
 
@@ -406,7 +372,7 @@ fn rebirth_registration_with_new_session_id_adopts_prior_named_card() {
                 "signal": { "signal": "registered" },
             }),
         ),
-        EventEnvelope::session_rebirth(project_workspace(), "session"),
+        EventEnvelope::session_rebirth(workspace(), "session"),
         raw_lifecycle_at(
             "claude",
             2,

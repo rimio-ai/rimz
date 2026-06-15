@@ -3,8 +3,8 @@
 //! rebuild work end to end.
 
 use rimz::{
-    AbandonReason, EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod,
-    ResolverId, ResolverStep, ResolverStepState, Surface,
+    AbandonReason, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, ResolverId,
+    ResolverStep, ResolverStepState, Surface,
 };
 use serde_json::json;
 
@@ -449,42 +449,14 @@ fn runtime_projection_serves_lock_free_while_a_writer_holds_the_lock() {
     let h = crate::common::Harness::new();
 
     // One committed agent, so a clean projection has an agent to lose.
-    let obs = rimz::agents::AgentLifecycleObservation {
-        agent_id: Some("agent-1".into()),
-        agent_name: None,
-        agent_alias: None,
-        kind_ordinal: None,
-        signal: rimz::agents::lifecycle::LifecycleSignal::Registered,
-        agent_pid: None,
-        agent_process_start: None,
-        runtime_owner: None,
-        worktree_path: Some("/repo/main".to_owned()),
-        worktree_branch: Some("main".to_owned()),
-        task: None,
-        prompt: None,
-        transcript_path: None,
-        model: None,
-        effort: None,
-        context_pct: None,
-        context_window: None,
-        total_tokens: None,
-        turn_error: None,
-        cache_read_input_tokens: None,
-        fresh_input_tokens: None,
-        output_tokens: None,
-        todo_done: None,
-        todo_total: None,
-        pane_id: None,
-        parent_agent_id: None,
-    };
-    let envelope = EventEnvelope::agent_lifecycle(
-        h.workspace_id.clone(),
-        "rimz-test",
-        "claude",
-        "SessionStart",
-        &obs,
-    );
-    h.ledger.append_event(&envelope).expect("append agent");
+    h.ledger
+        .append_event(&crate::common::lifecycle_event(
+            &h,
+            "rimz-test",
+            "SessionStart",
+            "agent-1",
+        ))
+        .expect("append agent");
 
     // Hold the workspace lock as a writer would mid-mutation.
     let _guard = rimz::ledger::lock::WorkspaceLock::acquire(h.ledger.workspace_lock_path())

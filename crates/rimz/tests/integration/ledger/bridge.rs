@@ -31,44 +31,6 @@ fn expected_from(item: &FeedItem) -> ExpectedFrame {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn script_surface_resolves_via_bridge_wakeup() {
-    let h = crate::common::Harness::new();
-    if h.skip_if_sandboxed() {
-        return;
-    }
-    let item = fresh_script_item(h.workspace_id.clone());
-    let request_id = item.request_id.clone();
-    let expected = expected_from(&item);
-
-    let (sock, _path) = bridge::bind(&h.runtime_paths, &request_id).expect("bind");
-    h.ledger.push_feed_item(&item, "rimz-test").expect("push");
-
-    let ledger = h.ledger.clone();
-    let req_for_task = request_id.clone();
-    // No sleep: the waiter parks on `recv` before this runs, and the resolve's
-    // datagram is buffered on the bound socket regardless of ordering.
-    let resolver = tokio::task::spawn_blocking(move || {
-        ledger.resolve_feed_item(
-            &req_for_task,
-            Resolution::new(json!({ "choice": "yes" }), ResolutionMethod::Cli),
-            true,
-            "rimz-test",
-        )
-    });
-
-    let outcome = bridge::wait_for_resolution_owning(sock, expected, Some(Duration::from_secs(5)))
-        .await
-        .expect("wait_for_resolution_owning");
-    resolver.await.expect("resolver join").expect("resolve");
-    assert_eq!(outcome, BridgeOutcome::Resolved);
-
-    let after = h.ledger.load_feed_item(&request_id).expect("reload");
-    assert_eq!(after.status.to_string(), "resolved");
-    let decision = after.resolution.expect("resolution").decision;
-    assert_eq!(decision, json!({ "choice": "yes" }));
-}
-
-#[tokio::test(flavor = "current_thread")]
 async fn cap_timeout_returns_neutral() {
     let h = crate::common::Harness::new();
     if h.skip_if_sandboxed() {
@@ -173,6 +135,13 @@ async fn mismatched_nonce_is_dropped_real_resolve_wins() {
         .expect("wait_for_resolution_owning");
     resolver.await.expect("resolver join").expect("resolve");
     assert_eq!(outcome, BridgeOutcome::Resolved);
+
+    // The wrong-nonce frame changed nothing: the real resolve is what landed,
+    // decision payload and all.
+    let after = h.ledger.load_feed_item(&request_id).expect("reload");
+    assert_eq!(after.status.to_string(), "resolved");
+    let decision = after.resolution.expect("resolution").decision;
+    assert_eq!(decision, json!({ "choice": "yes" }));
 }
 
 #[test]

@@ -34,11 +34,7 @@ fn api_error_turn_escalates_running_to_attention() {
             .any(|count| count.status == AgentStatus::Failed && count.count == 1),
         "the dead turn counts in the attention tally"
     );
-    let rolled_up = snapshot
-        .agents
-        .iter()
-        .find(|a| a.agent_id == "live-claude")
-        .expect("agent in rollup");
+    let rolled_up = rollup_agent(&snapshot, "live-claude");
     assert_eq!(
         rolled_up.status,
         AgentStatus::Running,
@@ -60,6 +56,12 @@ fn codex_stop_over_rate_limit_terminal_row_parks_until_budget_resets() {
             vec![window(100, -60)],
             AgentStatus::Failed,
             Some("You've hit your usage limit"),
+        ),
+        (
+            "a reset short window still waits on a longer spent window",
+            vec![window(100, -60), window(100, 86_400)],
+            AgentStatus::Paused,
+            None,
         ),
     ] {
         let (label, windows, expected_status, expected_error_label) = case;

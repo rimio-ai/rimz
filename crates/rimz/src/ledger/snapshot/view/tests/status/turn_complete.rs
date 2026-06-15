@@ -20,11 +20,7 @@ fn clean_review_completion_settles_running_to_success() {
         Some(AgentStatus::Success),
         "a clean task_complete past last_activity settles the falsely-running row"
     );
-    let rolled_up = snapshot
-        .agents
-        .iter()
-        .find(|a| a.agent_id == "codex-review")
-        .expect("agent in rollup");
+    let rolled_up = rollup_agent(&snapshot, "codex-review");
     assert_eq!(
         rolled_up.status,
         AgentStatus::Running,

@@ -34,7 +34,7 @@ fn rebirth_boundary_unstamps_prior_panes_and_resumes_split_or_whole() {
     // A mux rebirth renumbers panes from zero, so the boundary must clear
     // every stamp recorded before it — while a stamp recorded after it is the
     // new incarnation's and stays, even on the very same reused pane id.
-    let workspace = project_workspace();
+    let workspace = workspace();
     let boundary = EventEnvelope::session_rebirth(workspace.clone(), "session");
 
     let events = vec![

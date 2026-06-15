@@ -528,12 +528,11 @@ fn rotation_serializes_with_writers_and_drops_no_append() {
         .expect("projection after the race");
 }
 
-#[test]
-fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
-    // The post-power-cut recovery path end-to-end: a zeroed mid-file frame
-    // hard-errors every cold read, `repair_event_log` truncates at the first
-    // invalid frame under the canonical workspace → publish lock order, and
-    // the republished caches reflect exactly the surviving prefix.
+/// Build a three-frame log (`kept`, `zeroed`, `behind-the-hole`), zero the
+/// middle frame's bytes to forge a post-power-cut mid-file corpse, and drop the
+/// fold bases so a read must fold the corrupt region. Returns the harness plus
+/// the survivor's byte offset and the total log length.
+fn corrupt_mid_frame_log() -> (crate::common::Harness, u64, u64) {
     use std::io::{Seek, SeekFrom, Write};
 
     let h = crate::common::Harness::new();
@@ -562,6 +561,17 @@ fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
     // Drop the fold bases so reads must fold the corrupt region.
     let _ = std::fs::remove_file(&h.ledger.paths().rollup_cache);
     let _ = std::fs::remove_file(&h.ledger.paths().latest_snapshot);
+
+    (h, committed, total)
+}
+
+#[test]
+fn repair_event_log_heals_a_mid_file_corpse_and_republishes() {
+    // The post-power-cut recovery path end-to-end: a zeroed mid-file frame
+    // hard-errors every cold read, `repair_event_log` truncates at the first
+    // invalid frame under the canonical workspace → publish lock order, and
+    // the republished caches reflect exactly the surviving prefix.
+    let (h, committed, total) = corrupt_mid_frame_log();
     assert!(
         h.ledger.runtime_projection(RuntimeScope::Runtime).is_err(),
         "a torn middle frame fails reads loudly before the repair"
@@ -596,35 +606,8 @@ fn publish_tail_self_heals_a_corrupt_event_log() {
     // tail healed the log: truncate-at-first-invalid is the documented
     // semantic, and resyncing past a hole would need frame magic the format
     // deliberately omits.
-    use std::io::{Seek, SeekFrom, Write};
-
-    let h = crate::common::Harness::new();
-    h.ledger
-        .append_event(&lifecycle(&h, "SessionStart", "kept"))
-        .expect("first event");
-    let committed = log_len(&h);
-    h.ledger
-        .append_event(&lifecycle(&h, "SessionStart", "zeroed"))
-        .expect("second event");
-    let corrupted = log_len(&h);
-    // A third frame puts the corpse mid-file — a corrupt *tail* frame is
-    // tolerated as in-flight, never repaired.
-    h.ledger
-        .append_event(&lifecycle(&h, "SessionStart", "behind-the-hole"))
-        .expect("third event");
-
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .open(&h.ledger.paths().events_log)
-        .expect("open log");
-    file.seek(SeekFrom::Start(committed)).expect("seek");
-    let hole = usize::try_from(corrupted - committed - 1).expect("hole len");
-    file.write_all(&vec![0u8; hole]).expect("zero the frame");
-    drop(file);
-    // Drop the fold bases so the next publish must fold the corrupt region,
-    // and the cadence stamp so that publish runs in the next tail.
-    let _ = std::fs::remove_file(&h.ledger.paths().rollup_cache);
-    let _ = std::fs::remove_file(&h.ledger.paths().latest_snapshot);
+    let (h, _, _) = corrupt_mid_frame_log();
+    // Drop the cadence stamp too, so the publish runs in the next write tail.
     force_next_publish(&h);
     assert!(
         h.ledger.runtime_projection(RuntimeScope::Runtime).is_err(),
