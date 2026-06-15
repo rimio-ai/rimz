@@ -44,17 +44,13 @@ const PET_COLUMN_GAP: usize = 1;
 /// sprite body's inner gap.
 const PET_CAPTION_RIGHT_PAD: usize = 3;
 
-/// The provider block folds the footer beside the pet on one shared bottom row.
-const PET_FOOTER_ROW_COUNT: usize = 1;
-
 /// The provider bar's label slot (`5h` / `7d` / `30d` / `ex` / `api`) and value
 /// column, shared by every provider bar so they align front and back. The label
 /// fits three cells (`30d`); the value holds `↻ ` plus a six-cell reset countdown
-/// slot (`↻  4h50m` / `↻ 20h20m`), or a compact paid-usage value with its
-/// existing one-cell gutter.
+/// slot (`↻  4h50m` / `↻ 20h20m`), an unknown slot, or a compact paid-usage
+/// value.
 const PROVIDER_LABEL_WIDTH: usize = 3;
-const PROVIDER_VALUE_WIDTH: usize = 9;
-const PROVIDER_RESET_VALUE_WIDTH: usize = 8;
+const PROVIDER_VALUE_WIDTH: usize = 8;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
@@ -672,9 +668,7 @@ pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
     fleet_tally: Option<&SpendTally>,
 ) -> usize {
     let layout = ProviderLayout::Normal;
-    1 + provider_body_row_count(panel, layout)
-        + total_spend_row_count(fleet_tally, layout)
-        + PET_FOOTER_ROW_COUNT
+    1 + provider_body_row_count(panel, layout) + total_spend_row_count(fleet_tally, layout)
 }
 
 fn provider_body_row_count(panel: &SidebarProviderPanel, layout: ProviderLayout) -> usize {
@@ -1190,7 +1184,7 @@ fn provider_bar_rows(
     }
     select_provider_bars(panel)
         .into_iter()
-        .filter_map(|bar| match bar {
+        .map(|bar| match bar {
             ProviderBar::Window(window) => metered_bar_row(
                 theme,
                 window,
@@ -1199,13 +1193,9 @@ fn provider_bar_rows(
                 zones,
                 now,
             ),
-            ProviderBar::Extra => Some(extra_credits_bar_row(
-                theme,
-                "ex",
-                panel.extra_credits.as_ref(),
-                region,
-                zones,
-            )),
+            ProviderBar::Extra => {
+                extra_credits_bar_row(theme, "ex", panel.extra_credits.as_ref(), region, zones)
+            }
         })
         .collect()
 }
@@ -1298,17 +1288,17 @@ fn metered_bar_row(
     force_exhausted: bool,
     zones: &BudgetZonesConfig,
     now: Timestamp,
-) -> Option<Vec<Span<'static>>> {
+) -> Vec<Span<'static>> {
     let label = window_label(window.duration_mins);
     if !force_exhausted && window.used_percentage.is_none() {
-        return Some(unknown_bar_row(theme, &label, region));
+        return unknown_bar_row(theme, &label, region);
     }
 
     let not_started = !force_exhausted && window.not_started(now);
     let remaining = if force_exhausted {
         0
     } else {
-        let raw = 100u8.saturating_sub(window.used_percentage?);
+        let raw = 100u8.saturating_sub(window.used_percentage.unwrap_or(100));
         // Codex reports a placeholder usedPercent (≈99) with no resetsAt before the
         // first token and a known duration — normalise to full so the bar matches
         // the empty countdown.
@@ -1356,7 +1346,7 @@ fn metered_bar_row(
         reset.as_deref(),
         reset_marker_style,
     ));
-    Some(spans)
+    spans
 }
 
 /// Unknown metered budget row: the same bar geometry as a reported window with
@@ -1485,7 +1475,7 @@ fn dollars_compact(usd: f64) -> String {
 /// one cell, so a narrow sidebar still paints a (short) bar.
 fn provider_bar_width(region: usize) -> usize {
     region
-        .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_RESET_VALUE_WIDTH)
+        .saturating_sub(PROVIDER_LABEL_WIDTH + 1 + 1 + PROVIDER_VALUE_WIDTH)
         .max(1)
 }
 

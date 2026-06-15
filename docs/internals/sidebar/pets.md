@@ -8,7 +8,7 @@ Pets are renderer-local attention art. The dashboard shows one animated companio
 
 The provider dashboard owns the tab rail. Provider tabs pack from the left; when pets are enabled, the rail still contains provider tabs only and the active tab follows the selected provider unless the user picks another provider by `Left`/`Right` or mouse. A single provider still gets a one-tab rail while the pet is enabled, because the pet shares space with exactly one active provider block. With no provider blocks, the pet renders alone in the dashboard area.
 
-The pet overlay is best-effort enrichment. When a sprite grid is available, the active provider block narrows and the pet column zips onto its right edge. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite to the active block height. With pets enabled, the provider side chooses the same normal/narrow layouts used by narrow provider blocks: today's sessions, token stats, and USD stay on one row when they fit, input/output token splits drop when they do not, `Total:` marks the scope change, and `W:`/`M:` read the account-global fleet totals with their USD on the third total row. The pet caption rides in the tab rail's spacer above the sprite. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the same layout uses the full provider block width.
+The pet overlay is best-effort enrichment. When a sprite grid is available, the active provider block narrows and the pet column zips onto its right edge. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite body to the active provider block height, while the zipper owns the one blank row below the sprite and the folded footer when present. The provider side still chooses from the same auto layout tiers: wide is the full-width block, normal is the taller block used beside the pet column, and narrow keeps the same rows while dropping input/output token splits and then version trivia when width requires it. Today's sessions, token stats, and USD stay on one row. `Total:` marks the scope change; normal/narrow totals add a blank provider row above it, put `W:`/`M:` session clusters left with token stats right, and put `W: $...` left with `M: $...` right on the third total row. The pet caption rides in the tab rail's spacer above the sprite, and the folded remote/help footer sits on the bottom row below the sprite. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block uses the available full width.
 
 ## Fleet Status
 
@@ -61,8 +61,9 @@ The `pet` selector resolves to one of four sources, tried in order: a built-in c
 [sidebar.pets]
 enabled = false
 pet = "codex"
+size = "medium"
 glyphs = "auto"
 voice = true
 ```
 
-`enabled` gates the dashboard overlay and CDN fetch. `pet` selects a built-in id, an `https://` URL, a petdex pet name, or a path to your own `.webp` sheet. `glyphs` selects the cell-art tier. `voice` controls canned captions. The full key reference lives in [configuration.md -> Sidebar Rendering](../../reference/configuration.md#sidebar-rendering).
+`enabled` gates the dashboard overlay and CDN fetch. `pet` selects a built-in id, an `https://` URL, a petdex pet name, or a path to your own `.webp` sheet. `size` chooses the original medium footprint or a small sprite body fitted to the active provider block. `glyphs` selects the cell-art tier. `voice` controls canned captions. The full key reference lives in [configuration.md -> Sidebar Rendering](../../reference/configuration.md#sidebar-rendering).

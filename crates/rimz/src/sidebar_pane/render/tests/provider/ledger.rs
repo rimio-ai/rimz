@@ -215,6 +215,11 @@ fn pets_provider_dashboard_owns_total_rows() {
         "normal layout has a blank row above Total:\n{rendered}"
     );
     assert_eq!(
+        crate::sidebar_pane::render::active_dashboard_block_rows(&snapshot, &UiState::default()),
+        Some(9),
+        "small pet sizing targets the provider block, excluding footer and bottom gap"
+    );
+    assert_eq!(
         lines.iter().filter(|line| line.contains("W: ◎")).count(),
         1,
         "tabbed dashboard does not duplicate the bottom W row:\n{rendered}"

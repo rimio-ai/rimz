@@ -37,8 +37,9 @@ A complete frame: a selected agent in a worktree, with the per-provider dashboar
  ▝▜█████▛▘ 5h ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 1h47m    ← 5-hour budget left, until reset time
    ▘▘ ▝▝   7d ▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▰▱▱▱▱   ↻ 5d22h    ← 7-day budget left, until reset time
 
- W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88    ← week stats: sessions · tokens · usd value
- M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66    ← month stats: sessions · tokens · usd value
+  ── Total: ────────────────────────────────────────────    ← fleet-total scope
+  W: ◎ 420  ◇ 202.9M ↘ 175.1M ↗ 27.8M ◌  5.2B $3,888.88    ← week stats: sessions · tokens · usd value
+  M: ◎ 860  ◇ 420.0M ↘ 366.0M ↗ 54.0M ◌ 10.8B $8,666.66    ← month stats: sessions · tokens · usd value
 
                                                     ? for help  ← footer help
 ```
@@ -322,18 +323,24 @@ From any pane in the room, the configurable `Alt+p` ([configuration](../referenc
 
 The budgets are account-scoped — every session of a provider shares one account's budget — so they leave the rows for a pinned panel at the bottom. `provider_tabs = "auto"` stacks one or two accounts as visible blocks and switches to a tab rail at three or more; `always` tabs whenever more than one provider is present; `never` stacks every provider block. `provider_list` picks which provider kinds show and their order, including the `"all"` token for "the rest here." In tabbed mode, the panel's top hairline becomes a tab rail naming every provider: each label in its brand color at full strength, the active tab a brand-filled bold chip set into the line. The rail's glyphs are identical whichever tab is active, so a switch moves color and weight alone — and under `NO_COLOR`, where the fill drops, `┤ ├` caps notch the active tab instead, carrying the pick by shape. One account's block paints at a time, so the budgets read one account deep instead of stacking. The rail names the account, so the block's header drops the product name and reads plan-first (`Claude Max · v2.1.169`), indented to start over the `◎` stats column. While no source has reported the binary version yet, the header shows `v?`; the plan label stays absent until the account surface names one. With pets disabled, the active tab **follows the selected pane's provider** — select a codex pane and the dashboard reads the ChatGPT account behind it; a process pane falls to the first tab. `←`/`→` or a click on a tab label picks one by hand; the pick holds until you select a pane of a *different* provider, then the follow-the-selection default takes over. A single account keeps its bare block. Every account that is logged in but idle this run still earns its block, so your accounts and budgets show even between turns. A metered provider normally shows the shortest and longest included windows it reports — both Claude and Codex a 5-hour and a 7-day today — and swaps a spent included row's partner to `ex` when paid extra usage becomes the useful next reading. Out-of-band account usage keeps those rows useful between turns: Claude refreshes from its local OAuth usage endpoint; Codex refreshes from the app-server first and falls back to its local OAuth usage endpoint when the app-server cannot supply account usage; Pi refreshes from the backing-provider OAuth token in its auth file into Pi-scoped caches.
 
-With `[sidebar.pets] enabled = true`, the rail still shows provider tabs only. The active provider block narrows and one pane-local cell-art companion rides on its right edge, driven by fused fleet state plus a canned caption. Manual provider picks still use the same `←`/`→` and click controls, and the pick clears on the same selected-provider change described above. Under `NO_COLOR`, or when the pane is too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block returns to the full-width single-line stats layout.
+With `[sidebar.pets] enabled = true`, the rail still shows provider tabs only. The active provider block narrows and one pane-local cell-art companion rides on its right edge, driven by fused fleet state plus a canned caption. Manual provider picks still use the same `←`/`→` and click controls, and the pick clears on the same selected-provider change described above. The provider side keeps the same auto layout tiers: wide uses the full historical row shape, normal uses the taller totals block that fits beside the pet column, and narrow drops input/output token splits and then version text when the row would crowd. Under `NO_COLOR`, or when the pane is too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block uses the available full width.
 
 ```
  ── Claude ──── Codex ──────────────────────────
-          Claude Max · v2.1.169          ▄▟████▙▄
- ▐▛███▜▌ ◎ 58              $188.88     ██▀█ █▀██
-▝▜█████▛▘ ◇ 17M ↘ 15M ↗ 2M ◌ 198M       ██ ▄ ▄ ██
-  ▘▘ ▝▝   5h ▰▰▰▰▰▰▱▱ ↻ 1h47m             ▜█▄██▄█▛
-          7d ▰▰▰▰▰▰▱▱ ↻ 5d22h              ▀▀  ▀▀
+                                      resting
+          Claude Max · v2.1.169      ▄▟████▙▄
+ ▐▛███▜▌ ◎ 58  ◇ 17M ↘ 15M ↗ 2M ◌ 198M $188.88
+▝▜█████▛▘ 5h ▰▰▰▰▰▰▱▱ ↻ 1h47m       ██▀█ █▀██
+  ▘▘ ▝▝   7d ▰▰▰▰▰▰▱▱ ↻ 5d22h       ██ ▄ ▄ ██
+                                      ▜█▄██▄█▛
+ ── Total: ────────────────────────    ▀▀  ▀▀
+ W: ◎ 420        ◇ 202.9M ◌ 5.2B
+ M: ◎ 860        ◇ 420.0M ◌ 10.8B
+ W: $3,888.88          M: $8,666.66
+ ⇄ remote 210ms              ? for help
 ```
 
-Each block's stats speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. With a pet column present, that provider stats row becomes two rows: sessions plus spend, then tokens.
+Each block's stats speaks the fleet ledger's vocabulary, scoped to the provider: today's `◎` session count, then the `◇ ↘ ↗ ◌` token breakdown, where `↘` input subsumes cache creation, with the spend pinned right. The stats row stays one row in every provider layout; normal and narrow hide the input/output split only when the width needs it. The `Total:` delimiter switches from provider-today facts to account-global fleet totals. Wide paints `W:` and `M:` as two full rows with USD pinned right; normal and narrow split each token row into a left `W:`/`M:` session cluster and right-aligned token stats, then put `W: $...` on the left and `M: $...` on the right of the third total row.
 
 A **metered account** drains one "mana" bar per included budget window toward its reset. The bar fills with what's *left*, sliding continuously green → gold → amber → red as it empties over a dim empty track — and a fully-spent window (0% left) flips its whole empty track red, so an exhausted budget never reads as an untouched one. Each window's label (`5h`/`7d`) wears its own bar's tone, while the `↻` reset countdown beside it wears the spend pace: soft when the current burn rate sustains to reset, then sliding gold → amber → red as it outruns the window, falling back to the quiet soft tier when pace is unknowable. A spent longer window gates the shorter ones: once the `7d` is exhausted the `5h` row is painted exhausted too — red, no countdown — regardless of its own reading, since that budget is unusable until the longer window resets. When paid extra usage is available or unknown, the second row becomes `ex`; known usage reads `$used/$limit`, a known remaining balance reads dollars, and an unknown or uncapped value reads `∞` over a dim empty track.
 
