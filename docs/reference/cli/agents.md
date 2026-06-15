@@ -67,7 +67,7 @@ rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <
 
 ### Listing and inspecting
 
-Bare `rimz agents` lists live root-agent cards, grouped by worktree channel. The lead `AGENT` column is the agent's canonical handle — its role alias (`@planner`) when it has one, else `@<kind>` within its channel, growing an ordinal (`@claude-2`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+Bare `rimz agents` lists live root-agent cards in attention order. The lead `AGENT` column is the agent's canonical address — its role alias (`@planner#auth-refresh`) when it has one, else `@<kind>#<channel>`, growing an ordinal (`@claude-2#auth-refresh`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
 
 ### The launch spec
 

@@ -295,7 +295,7 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
             None,
         )),
         worktree_path: None,
-        worktree_branch: None,
+        worktree_branch: Some("pets".to_owned()),
         task: None,
         prompt: None,
         transcript_path: None,
@@ -384,13 +384,19 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         "missing lifecycle column: {stdout}"
     );
     assert!(
-        stdout.contains("@claude"),
-        "stale card shows its canonical handle: {stdout}"
+        stdout.contains("@claude#pets"),
+        "stale card shows its channelled canonical address: {stdout}"
     );
     assert!(
         stdout.contains("stale"),
         "stale audit card should be labelled: {stdout}"
     );
+    for removed in ["TODO", "WORKTREE", "PANE"] {
+        assert!(
+            !stdout.contains(removed),
+            "agents list --all should omit the {removed} column: {stdout}"
+        );
+    }
 }
 
 #[test]

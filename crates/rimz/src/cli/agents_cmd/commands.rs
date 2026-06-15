@@ -81,6 +81,10 @@ pub(super) fn list_agents(
     }
 
     let groups = rimz::ledger::snapshot::group_live_agents_by_worktree(&agents, &snapshot);
+    let ordered_agents: Vec<&AgentState> = groups
+        .iter()
+        .flat_map(|group| group.agents.iter().copied())
+        .collect();
     let now = jiff::Timestamp::now();
     let mut out = render::out();
     let mut table = if live_keys.is_some() {
@@ -91,27 +95,18 @@ pub(super) fn list_agents(
             "MODEL",
             "CTX",
             "TOKENS",
-            "TODO",
             "AGE",
-            "WORKTREE",
-            "PANE",
         ])
-        .right(&[4, 5, 6, 7])
+        .right(&[4, 5, 6])
     } else {
-        render::Table::new([
-            "AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "TODO", "AGE", "WORKTREE", "PANE",
-        ])
-        .right(&[3, 4, 5, 6])
+        render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"]).right(&[3, 4, 5])
     };
-    for group in &groups {
-        table.section(format!("{} ({})", group.label, group.agents.len()));
-        for &agent in &group.agents {
-            let mut cells = agent_row(agent, &group.agents, now);
-            if let Some(live_keys) = live_keys.as_ref() {
-                cells.insert(2, lifecycle_cell(agent, live_keys));
-            }
-            table.row(cells);
+    for &agent in &ordered_agents {
+        let mut cells = agent_row(agent, &ordered_agents, now);
+        if let Some(live_keys) = live_keys.as_ref() {
+            cells.insert(2, lifecycle_cell(agent, live_keys));
         }
+        table.row(cells);
     }
     table.render(&mut out)?;
     Ok(())
@@ -722,20 +717,17 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
 
 /// The columns shared by `agents list` in both its default and `--all` shapes,
 /// in display order; the `--all` view inserts `LIFECYCLE` at index 2. The lead
-/// `AGENT` cell is the canonical `@kind` handle, disambiguated within the group
-/// (whose worktree heads the section, so the row omits the `#channel`).
+/// `AGENT` cell is the canonical address, including its `#channel` when one is
+/// present.
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
-        render::cell(rimz::target::agent_handle(agent, peers, false)).fg(render::palette::ACCENT),
+        render::cell(rimz::target::agent_handle(agent, peers, true)).fg(render::palette::ACCENT),
         render::cell(agent_status_label(agent))
             .fg(render::status::agent(agent.status, agent.phase)),
         render::cell(model_label(agent)).dash(),
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
-        render::cell(todo_label(agent)).dash(),
         render::cell(age_label(now, agent.last_seen)),
-        render::cell(worktree_label(agent)).dash(),
-        render::cell(pane_label(agent)).dash(),
     ]
 }
 
@@ -835,13 +827,6 @@ fn tokens_label(agent: &AgentState) -> String {
         .unwrap_or_else(|| "-".to_owned())
 }
 
-fn todo_label(agent: &AgentState) -> String {
-    match (agent.todo_done, agent.todo_total) {
-        (Some(done), Some(total)) => format!("{done}/{total}"),
-        _ => "-".to_owned(),
-    }
-}
-
 fn age_label(now: jiff::Timestamp, last_seen: jiff::Timestamp) -> String {
     let secs = now.duration_since(last_seen).as_secs().max(0);
     if secs < 60 {
@@ -865,10 +850,10 @@ fn compact_count(value: u64) -> String {
     }
 }
 
-/// The agent's channel for the `WORKTREE` column, dashed when it runs outside
-/// any worktree. The channel itself comes from [`rimz::target::agent_channel`],
-/// the single source of truth; this only chooses the table's `-` placeholder
-/// over the resolver's prose label.
+/// The agent's channel for the `show` view, dashed when it runs outside any
+/// worktree. The channel itself comes from [`rimz::target::agent_channel`], the
+/// single source of truth; this only chooses the `-` placeholder over the
+/// resolver's prose label.
 fn worktree_label(agent: &AgentState) -> String {
     rimz::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
 }

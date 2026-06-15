@@ -63,7 +63,7 @@ Reach a member that does not exist yet and create it from the address; read the 
 
 ```sh
 rimz steer @planner#feat/x --create -- "draft the API"     # opens a planner in #feat-x, this as its first prompt
-rimz agents list                        # the cards, grouped by channel
+rimz agents list                        # the cards, addressed by channel
 rimz agents show @codex#deps            # one member, with live context when active
 ```
 
