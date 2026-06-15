@@ -89,12 +89,16 @@ export const RimzPlugin: Plugin = async (input) => {
     return (await spawnRimz(payload, true)) || "";
   }
 
-  // The model's context window is the gauge's divisor. OpenCode carries no
-  // window on a message, so resolve it from the server's own model catalog
-  // (models.dev `Model.limit.context`), keyed `${providerID}/${modelID}` and by
-  // bare model id. The catalog is static per server launch, so fetch it once;
-  // a failed or empty read clears the memo so a later event retries, and until
-  // it resolves the field is simply omitted (the Rust fallback covers Claude).
+  // The model's context window is the gauge's divisor, and the gauge counts
+  // input-side tokens only (input + cache, never output), so the divisor is the
+  // model's max *input* tokens — the uniform context-window meaning across
+  // agents. OpenCode carries no window on a message, so resolve it from the
+  // server's own model catalog: prefer models.dev `Model.limit.input`, falling
+  // back to the total `Model.limit.context` for a model that lists no separate
+  // input cap. Key it `${providerID}/${modelID}` and by bare model id. The
+  // catalog is static per server launch, so fetch it once; a failed or empty
+  // read clears the memo so a later event retries, and until it resolves the
+  // field is simply omitted (the Rust fallback covers Claude).
   let catalogPromise: Promise<Map<string, number>> | undefined;
 
   async function loadCatalog(): Promise<Map<string, number>> {
@@ -107,10 +111,11 @@ export const RimzPlugin: Plugin = async (input) => {
       for (const provider of providers) {
         const models = provider.models ?? {};
         for (const modelID of Object.keys(models)) {
-          const context = models[modelID]?.limit?.context;
-          if (typeof context === "number" && Number.isFinite(context) && context > 0) {
-            windows.set(`${provider.id}/${modelID}`, context);
-            windows.set(modelID, context);
+          const limit = models[modelID]?.limit;
+          const cap = limit?.input ?? limit?.context;
+          if (typeof cap === "number" && Number.isFinite(cap) && cap > 0) {
+            windows.set(`${provider.id}/${modelID}`, cap);
+            windows.set(modelID, cap);
           }
         }
       }

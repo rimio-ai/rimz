@@ -68,8 +68,9 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert_eq!(registered.total_tokens, Some(190));
 
     // A non-Claude session has no local fallback window; the plugin resolves it
-    // from the model catalog and stamps `context_window` on the envelope, so the
-    // wire-carried value is used verbatim.
+    // from the model catalog — the model's max input tokens (`Model.limit.input`,
+    // 272k for gpt-5.5, not the 400k total) — and stamps `context_window` on the
+    // envelope, so the wire-carried value is used verbatim.
     let catalog_window = OpencodeAdapter
         .observe_lifecycle(
             "chat_message",
@@ -77,11 +78,11 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
                 "session_id": "ses_2",
                 "model": "gpt-5.5",
                 "provider_id": "openai",
-                "context_window": 400_000
+                "context_window": 272_000
             }),
         )
         .expect("observation");
-    assert_eq!(catalog_window.context_window, Some(400_000));
+    assert_eq!(catalog_window.context_window, Some(272_000));
     // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
     let unknown_window = OpencodeAdapter
         .observe_lifecycle(
@@ -354,9 +355,12 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
     assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));
-    // The gauge carries a catalog-resolved context window on every envelope.
+    // The gauge carries a catalog-resolved context window on every envelope,
+    // and the divisor is the model's max input tokens (the uniform cross-agent
+    // meaning), falling back to the total context only when no input cap exists.
     assert!(PLUGIN_SOURCE.contains("context_window: currentGauge?.contextWindow"));
     assert!(PLUGIN_SOURCE.contains("input.client.config.providers()"));
+    assert!(PLUGIN_SOURCE.contains("limit?.input ?? limit?.context"));
 
     for event in WIRED_EVENTS {
         assert!(
