@@ -6,7 +6,7 @@ pub(crate) fn detected_installable_adapters() -> Vec<&'static dyn rimz::agents::
     let mut detected = Vec::new();
     for agent in rimz::agents::ADAPTERS {
         let descriptor = agent.descriptor();
-        if which::which(descriptor.kind).is_err() {
+        if rimz::agents::locate_binary(descriptor).is_none() {
             continue;
         }
 

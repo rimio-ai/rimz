@@ -722,6 +722,30 @@ pub fn hook_trust_fix(kind: &str) -> String {
     format!("run /hooks inside {kind} and trust the Rimz hooks")
 }
 
+/// Resolve an agent's binary on this machine: `$PATH` first, then the
+/// descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs) joined under
+/// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
+/// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
+/// leaves the agent off `$PATH` yet present; this finds it. Returns the absolute
+/// path, or `None` when the binary is nowhere Rimz knows to look.
+pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
+    if let Ok(path) = which::which(descriptor.kind) {
+        return Some(path);
+    }
+    let home = PathBuf::from(std::env::var_os("HOME").filter(|value| !value.is_empty())?);
+    binary_in_install_dirs(descriptor, &home)
+}
+
+/// The `$PATH`-miss branch of [`locate_binary`], split out so it tests without
+/// touching process env: the first existing `<home>/<dir>/<kind>` file across
+/// the descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs).
+fn binary_in_install_dirs(descriptor: &AgentDescriptor, home: &Path) -> Option<PathBuf> {
+    descriptor.extra_bin_dirs.iter().find_map(|dir| {
+        let candidate = home.join(dir).join(descriptor.kind);
+        candidate.is_file().then_some(candidate)
+    })
+}
+
 /// Resolve an agent's per-user config file path. An explicit `override_env`
 /// value wins (so tests and tooling can point at a tempdir); otherwise the path
 /// is `$HOME` joined with `rel`. Returns an `Install` error naming the agent
@@ -1001,6 +1025,23 @@ mod tests {
         );
         assert_eq!(sanitize_user_prompt(None), None);
         assert_eq!(sanitize_user_prompt(Some("   ")), None);
+    }
+
+    #[test]
+    fn binary_resolves_from_a_known_install_dir_off_path() {
+        let home = tempfile::tempdir().unwrap();
+        let opencode = descriptor_by_kind("opencode").unwrap();
+        // Off PATH and not yet installed: nowhere under HOME to find it.
+        assert_eq!(binary_in_install_dirs(opencode, home.path()), None);
+        // OpenCode's installer drops the binary here without editing PATH.
+        let bin_dir = home.path().join(".opencode/bin");
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        let bin = bin_dir.join("opencode");
+        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
+        assert_eq!(binary_in_install_dirs(opencode, home.path()), Some(bin));
+        // An agent declaring no install dirs is never found this way.
+        let claude = descriptor_by_kind("claude").unwrap();
+        assert_eq!(binary_in_install_dirs(claude, home.path()), None);
     }
 
     #[test]

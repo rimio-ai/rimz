@@ -220,6 +220,8 @@ The record union is `oauth { access, refresh, expires (epoch ms), accountId?, en
 
 ## CLI and environment surface
 
+The official `curl -fsSL https://opencode.ai/install | bash` installer places the binary at `~/.opencode/bin/opencode` and appends that directory to `PATH` through a shell rc, so a non-login or daemon environment commonly runs with `opencode` installed but absent from `PATH`.
+
 The flags and variables an adapter (and the resume-on-rebirth planner) cares about:
 
 | Surface | Meaning |
@@ -262,13 +264,13 @@ The adapter verdict has landed in [opencode.md](../../internals/agents/adapter/o
 | `permission.ask` | blocking-feed | `waiting` — bridge wait inside the hook; `allow` / `deny` on a resolver answer, `ask` as the neutral path |
 
 - **Identity.** The plugin runs inside the server the pane's TUI embeds, so an interactive OpenCode is standalone and stampable — the in-process environment carries the pane id, and pid capture rides the spawned `rimz` child. A session exists only once created (typically at the first prompt), so OpenCode is a `registers_lazily` candidate — the Codex pattern: idle-row synthesis before the first turn, cwd-bind from `Session.directory` ([agent.md → The instance lifecycle](../../internals/agents/agent.md#the-instance-lifecycle)). A session served by a detached `opencode serve`, reached over `attach`, or driven from the web UI is daemon-routed/remote — the documented remote-agent gap.
-- **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The current adapter resolves Claude-family windows locally and leaves other model windows unknown until a model-limit catalog is added.
+- **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The plugin resolves the context-window divisor for every model family from OpenCode's own model catalog (`Model.limit.context`, read once per server launch via the in-process `client.config.providers()`), keyed `${providerID}/${modelID}` and stamped onto each lifecycle envelope; a Claude-family local table is the offline fallback when the catalog read is unavailable.
 - **Spend.** The SQLite store is the cost surface: per-message rows supply trailing-window bucketing and origin paths. The adapter opens SQLite read-only against the WAL database. Zero `cost` under a subscription login prices from tokens via [provider.md → Token pricing](../../internals/agents/provider.md#token-pricing) (the Codex rule); a positive `cost` is authoritative (the Pi rule).
 - **Account probe.** `auth.json` distinguishes oauth from API-key credentials per provider — enough for logged-in plus metered/unmetered on the dashboard, the same single account fact Pi's probe documents.
 
 **What OpenCode cannot support:**
 
 - **No balance surface.** No rate-limit windows and no plan tier, anywhere — so no mana bars, no spent-window fallback for `paused`, and `rate_limit_windows` declares off ([provider.md → Per-provider mapping](../../internals/agents/provider.md#per-provider-mapping)). The `session.status` `retry` state is the one throttling glimpse, and it is uncontracted.
-- **No rich-context transport.** The per-launch server sits on a random port with no discovery surface, so there is no statusline or app-server analogue to read out of band; the events and the SQLite store cover the gauge, so the gap costs little. A future increment: the Rimz plugin publishes its `serverUrl` to a runtime sidecar, the way the Codex broker holds a warm connection.
+- **No rich-context transport.** The per-launch server sits on a random port with no discovery surface, so Rust has no statusline or app-server analogue to read out of band; the in-process plugin reads its owning server directly (the model catalog for the context window), and the events plus the SQLite store cover the rest of the gauge. What stays absent is a balance transport — rate-limit windows and plan tier — which OpenCode does not expose at all. A future increment: the Rimz plugin publishes its `serverUrl` to a runtime sidecar, the way the Codex broker holds a warm connection, should Rust need an out-of-band read beyond what the plugin already stamps.
 - **Few native asks by default.** Permission defaults are permissive, so the blocking channel engages only as far as the user's `permission` config asks. The [#19927](https://github.com/anomalyco/opencode/issues/19927) hook-bypass report stays pinned as an upstream caveat to re-check on reference refresh.
 - **No per-session end event.** `dispose` fires per server, not per session; a session that ends inside a still-running instance leaves by pane liveness and the reaper alone, the Codex posture.

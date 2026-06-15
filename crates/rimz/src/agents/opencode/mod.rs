@@ -72,6 +72,7 @@ static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_model: None,
     hook_cap: Duration::from_secs(120),
     process_names: &["opencode", "bun"],
+    extra_bin_dirs: &[".opencode/bin"],
     activity_events: &[
         "session_created",
         "chat_message",
@@ -467,12 +468,16 @@ impl AgentAdapter for OpencodeAdapter {
     }
 }
 
+/// Offline fallback window when the plugin's catalog-resolved
+/// [`context_window`](payloads::OpencodeHookPayload::context_window) is absent —
+/// Claude-family only. Every other model resolves through the plugin's model
+/// catalog ([`plugin.ts`](./plugin.ts)); a bare id here stays unknown.
 fn context_window_for(model: Option<&str>) -> Option<u64> {
     let model = model?.trim().to_ascii_lowercase();
     if model.is_empty() {
         return None;
     }
-    if model.contains("[1m]") || model.contains("1m") && model.contains("claude") {
+    if model.contains("[1m]") || (model.contains("1m") && model.contains("claude")) {
         return Some(1_000_000);
     }
     if model.starts_with("claude-") || model.contains("/claude-") {

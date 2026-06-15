@@ -67,6 +67,30 @@ fn opencode_observes_lifecycle_enrichment_and_boundaries() {
     assert_eq!(registered.output_tokens, Some(20));
     assert_eq!(registered.total_tokens, Some(190));
 
+    // A non-Claude session has no local fallback window; the plugin resolves it
+    // from the model catalog and stamps `context_window` on the envelope, so the
+    // wire-carried value is used verbatim.
+    let catalog_window = OpencodeAdapter
+        .observe_lifecycle(
+            "chat_message",
+            &json!({
+                "session_id": "ses_2",
+                "model": "gpt-5.5",
+                "provider_id": "openai",
+                "context_window": 400_000
+            }),
+        )
+        .expect("observation");
+    assert_eq!(catalog_window.context_window, Some(400_000));
+    // Without a stamped window, a non-Claude model stays unknown (Claude-only fallback).
+    let unknown_window = OpencodeAdapter
+        .observe_lifecycle(
+            "chat_message",
+            &json!({ "session_id": "ses_2", "model": "gpt-5.5", "provider_id": "openai" }),
+        )
+        .expect("observation");
+    assert_eq!(unknown_window.context_window, None);
+
     let prompt = OpencodeAdapter
         .observe_lifecycle(
             "chat_message",
@@ -330,6 +354,9 @@ fn plugin_source_pins_rimz_wire_contract() {
     assert!(PLUGIN_SOURCE.contains("{\"status\":\"deny\"}"));
     assert!(PLUGIN_SOURCE.contains("export const RimzPlugin"));
     assert!(PLUGIN_SOURCE.contains("server: RimzPlugin"));
+    // The gauge carries a catalog-resolved context window on every envelope.
+    assert!(PLUGIN_SOURCE.contains("context_window: currentGauge?.contextWindow"));
+    assert!(PLUGIN_SOURCE.contains("input.client.config.providers()"));
 
     for event in WIRED_EVENTS {
         assert!(

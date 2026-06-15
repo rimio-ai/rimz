@@ -58,6 +58,13 @@ pub struct AgentDescriptor {
     /// plus any launcher (`node` for a JS bundle). Drives the PID-attribution
     /// `/proc` walk.
     pub process_names: &'static [&'static str],
+    /// Well-known install directories, relative to `$HOME`, where this agent's
+    /// binary (named [`kind`](Self::kind)) lives when its installer has not put
+    /// it on `$PATH` — OpenCode's installer drops `opencode` in `~/.opencode/bin`
+    /// and edits a shell rc the daemon never sources. Searched after `$PATH` by
+    /// [`locate_binary`](super::locate_binary); empty for an agent that only
+    /// ever ships on `$PATH`.
+    pub extra_bin_dirs: &'static [&'static str],
     /// Lifecycle events, in this agent's own wire vocabulary, that prove the
     /// agent is actively making progress — a tool completed, a turn started
     /// or ended, a subagent spawned or finished. These refresh the per-agent

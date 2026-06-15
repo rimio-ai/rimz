@@ -11,6 +11,7 @@ type Gauge = {
   cacheRead?: number;
   cacheWrite?: number;
   total?: number;
+  contextWindow?: number;
 };
 
 type Envelope = Record<string, unknown> & {
@@ -47,6 +48,7 @@ export const RimzPlugin: Plugin = async (input) => {
       cache_read_input_tokens: currentGauge?.cacheRead,
       cache_write_input_tokens: currentGauge?.cacheWrite,
       total_tokens: currentGauge?.total,
+      context_window: currentGauge?.contextWindow,
       ...extra,
     };
   }
@@ -87,6 +89,58 @@ export const RimzPlugin: Plugin = async (input) => {
     return (await spawnRimz(payload, true)) || "";
   }
 
+  // The model's context window is the gauge's divisor. OpenCode carries no
+  // window on a message, so resolve it from the server's own model catalog
+  // (models.dev `Model.limit.context`), keyed `${providerID}/${modelID}` and by
+  // bare model id. The catalog is static per server launch, so fetch it once;
+  // a failed or empty read clears the memo so a later event retries, and until
+  // it resolves the field is simply omitted (the Rust fallback covers Claude).
+  let catalogPromise: Promise<Map<string, number>> | undefined;
+
+  async function loadCatalog(): Promise<Map<string, number>> {
+    const windows = new Map<string, number>();
+    try {
+      // The client may be built with throwOnError on (payload returned directly)
+      // or off (wrapped in `{ data }`); accept either shape.
+      const res: any = await input.client.config.providers();
+      const providers = (res?.data ?? res)?.providers ?? [];
+      for (const provider of providers) {
+        const models = provider.models ?? {};
+        for (const modelID of Object.keys(models)) {
+          const context = models[modelID]?.limit?.context;
+          if (typeof context === "number" && Number.isFinite(context) && context > 0) {
+            windows.set(`${provider.id}/${modelID}`, context);
+            windows.set(modelID, context);
+          }
+        }
+      }
+    } catch {
+      // best-effort: an unreachable catalog leaves the window to the Rust fallback
+    }
+    return windows;
+  }
+
+  function ensureCatalog(): Promise<Map<string, number>> {
+    if (!catalogPromise) {
+      catalogPromise = loadCatalog().then((windows) => {
+        if (windows.size === 0) catalogPromise = undefined; // allow a later retry
+        return windows;
+      });
+    }
+    return catalogPromise;
+  }
+
+  function resolveWindow(sessionID: string, providerID?: string, modelID?: string): void {
+    if (!modelID) return;
+    void ensureCatalog().then((windows) => {
+      const window =
+        (providerID ? windows.get(`${providerID}/${modelID}`) : undefined) ?? windows.get(modelID);
+      const prior = gauge.get(sessionID);
+      if (typeof window !== "number" || !prior || prior.model !== modelID) return;
+      gauge.set(sessionID, { ...prior, contextWindow: window });
+    });
+  }
+
   function updateGauge(info: any): void {
     const sessionID = info?.sessionID;
     if (typeof sessionID !== "string" || sessionID.length === 0) {
@@ -97,16 +151,22 @@ export const RimzPlugin: Plugin = async (input) => {
       return;
     }
     const cache = tokens.cache || {};
+    const prior = gauge.get(sessionID);
+    const model = info?.modelID ?? prior?.model;
+    const providerID = info?.providerID ?? prior?.providerID;
     gauge.set(sessionID, {
-      model: info?.modelID,
-      providerID: info?.providerID,
-      effort: info?.variant,
+      model,
+      providerID,
+      effort: info?.variant ?? prior?.effort,
       input: numberOrUndefined(tokens.input),
       output: numberOrUndefined(tokens.output),
       cacheRead: numberOrUndefined(cache.read),
       cacheWrite: numberOrUndefined(cache.write),
       total: numberOrUndefined(tokens.total),
+      // keep the resolved window across token updates; re-resolve on a model switch
+      contextWindow: prior?.model === model ? prior?.contextWindow : undefined,
     });
+    resolveWindow(sessionID, providerID, model);
   }
 
   function numberOrUndefined(value: unknown): number | undefined {
@@ -207,12 +267,16 @@ export const RimzPlugin: Plugin = async (input) => {
       const sessionID = hookInput.sessionID;
       if (hookInput.model) {
         const prior = gauge.get(sessionID) || {};
+        const modelID = hookInput.model.modelID;
+        const providerID = hookInput.model.providerID;
         gauge.set(sessionID, {
           ...prior,
-          model: hookInput.model.modelID,
-          providerID: hookInput.model.providerID,
+          model: modelID,
+          providerID,
           effort: hookInput.variant,
+          contextWindow: prior.model === modelID ? prior.contextWindow : undefined,
         });
+        resolveWindow(sessionID, providerID, modelID);
       }
       send(base("chat_message", sessionID, {
         prompt: userMessageText(output.message, output.parts),

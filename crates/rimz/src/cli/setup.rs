@@ -75,6 +75,9 @@ struct DetectedWorkspace {
 struct DetectedAgent {
     name: &'static str,
     on_path: bool,
+    /// Where the binary resolves — on `$PATH`, or in a known install dir an
+    /// installer used without editing `$PATH`. `None` when nowhere known.
+    binary: Option<PathBuf>,
     hook_install: bool,
     hooks_installed: bool,
 }
@@ -111,6 +114,7 @@ impl SetupReport {
                 DetectedAgent {
                     name: descriptor.kind,
                     on_path: which::which(descriptor.kind).is_ok(),
+                    binary: rimz::agents::locate_binary(descriptor),
                     hook_install: descriptor.capabilities.hook_install,
                     hooks_installed: agent.hooks_installed(),
                 }
@@ -190,10 +194,10 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
         render::cell(format!("{} ({config_state})", report.config_path.display())).fg(config_style),
     );
     for agent in &report.agents {
-        let path_state = if agent.on_path {
-            "on PATH"
-        } else {
-            "not on PATH"
+        let path_state = match (&agent.binary, agent.on_path) {
+            (Some(_), true) => "on PATH".to_string(),
+            (Some(path), false) => format!("found at {}", path.display()),
+            (None, _) => "not found".to_string(),
         };
         let hook_state = if !agent.hook_install {
             "hook install unsupported"
@@ -202,7 +206,7 @@ fn print_report(report: &SetupReport) -> std::io::Result<()> {
         } else {
             "hooks not installed"
         };
-        let style = if !agent.on_path {
+        let style = if agent.binary.is_none() {
             render::palette::ALARM
         } else if agent.hook_install && !agent.hooks_installed {
             render::palette::WARN

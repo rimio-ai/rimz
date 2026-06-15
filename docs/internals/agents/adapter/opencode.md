@@ -30,15 +30,17 @@ OpenCode registers lazily: a pane can run `opencode` before a session id exists,
 
 **Install.** Install is whole-file ownership. A marked `rimz.ts` is reclaimed byte-for-byte on reinstall; an unmarked file at the path is user-authored and install/preview refuse to overwrite it. Uninstall removes only a marked file. The plugin needs `rimz` on `PATH`, or `RIMZ_BIN` set in the OpenCode process environment.
 
+**Binary detection.** OpenCode's installer drops the `opencode` binary in `~/.opencode/bin` and appends that dir to `PATH` through a shell rc, so a non-login environment often runs without it on `PATH`. Rimz's detection (`rimz doctor`/`rimz setup` and the install offer) searches the descriptor's `extra_bin_dirs` — `~/.opencode/bin` — after `PATH` through [`locate_binary`](../../../../crates/rimz/src/agents/mod.rs), so an installed OpenCode reads as found (`found at …`) rather than missing.
+
 **Resume.** `opencode --session <session_id>` restores a recorded session; the launching pane sets cwd and the plugin re-emits lifecycle events from the resumed server.
 
 ## Context and transcript
 
 The plugin keeps an in-memory token gauge per session from assistant `message.updated` and `message.part.updated` step-finish events, then stamps the latest gauge onto every forwarded lifecycle envelope. OpenCode reports `tokens.input`, `tokens.output`, `tokens.cache.read`, `tokens.cache.write`, and `tokens.total`; Rimz stores `cache_read_input_tokens`, `output_tokens`, and folds `cache.write` into `fresh_input_tokens` because the shared observation shape has no cache-write slot. That keeps the context numerator exact (`input + cache.read + cache.write`) while preserving the existing card composition fields.
 
-OpenCode messages carry no context-window divisor. The adapter resolves Claude-family windows locally (`200k`, or `1M` for `[1m]`/`1m` Claude ids) and leaves other model windows unknown until a dedicated model-limit catalog lands. The context gauge still carries raw token totals and the card renders the visible zero/unknown state according to the shared enrichment rules in [agent.md](../agent.md#enrichment).
+OpenCode messages carry no context-window divisor, so the plugin resolves one from OpenCode's own model catalog. It reads `client.config.providers()` once per server launch — the models.dev catalog the embedded server already holds — builds a `${providerID}/${modelID}` → `Model.limit.context` map, and stamps the resolved `context_window` onto the gauge for every model family. The read is best-effort and off the hook critical path: a failed or empty fetch clears the memo so a later event retries, and until one resolves the field is omitted. When the catalog read is unavailable the adapter falls back to a Claude-family local table (`200k`, or `1M` for `[1m]`/`1m` Claude ids); every other model then stays unknown and the card renders the visible zero/unknown state per the shared enrichment rules in [agent.md](../agent.md#enrichment).
 
-There is no rich-context transport: the embedded server listens on a random per-launch port and publishes no discovery handle outside the plugin process. The SQLite store and plugin gauge cover the important numeric context data without an out-of-band app-server read.
+There is no rich-context *transport* for Rust to read out of band: the embedded server listens on a random per-launch port and publishes no discovery handle outside the plugin process. The plugin reads its owning server directly for the model catalog, and the SQLite store plus the plugin gauge cover the rest of the numeric context data — what stays absent is a balance surface (rate-limit windows, plan tier), which OpenCode does not expose.
 
 ## Account and balance
 

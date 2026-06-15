@@ -147,6 +147,7 @@ static CLAUDE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     default_model: None,
     hook_cap: CLAUDE_HOOK_CAP,
     process_names: &["claude"],
+    extra_bin_dirs: &[],
     // `PreToolUse` (races the blocking ask) and `Notification` (idle) are
     // deliberately absent.
     activity_events: &[

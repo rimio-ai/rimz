@@ -112,6 +112,7 @@ static PI_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     // resolver chain budgets identically across agents.
     hook_cap: Duration::from_secs(120),
     process_names: &["pi"],
+    extra_bin_dirs: &[],
     // Pi's progress-proving events, in its own wire vocabulary. The blocking
     // `tool_call` is excluded like Claude's `PreToolUse`: it fires while the
     // ask is being created, so touching on it would instantly un-block the
