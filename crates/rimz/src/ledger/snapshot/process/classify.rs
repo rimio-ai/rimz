@@ -1,7 +1,8 @@
 /// The base name of the program a command runs, seeing past a `sudo` wrapper
 /// and through known wrappers to the real command: `npm` for `sudo npm install
-/// …`, `codex` for `node /usr/bin/codex`, `codex` for `rimz agents exec
-/// codex`, and `cargo` for `/usr/bin/cargo build`.
+/// …`, `codex` for `node /usr/bin/codex`, `opencode` for `bun
+/// /usr/bin/opencode`, `codex` for `rimz agents exec codex`, and `cargo` for
+/// `/usr/bin/cargo build`.
 pub(crate) fn program_label(command: &str) -> String {
     basename(effective_program(command)).to_owned()
 }
@@ -68,7 +69,7 @@ pub(crate) fn rimz_exec_worktree_path(command: &str) -> Option<&str> {
 
 /// The program a command names — seeing past a leading `sudo` and its options,
 /// Rimz's supervised `agents exec <kind>` wrapper, and, for a JS launcher
-/// (`node`/`npx`), through to the script it runs.
+/// (`node`/`npx`/`bun`), through to the script it runs.
 fn effective_program(command: &str) -> &str {
     effective_program_info(command).program
 }
@@ -113,12 +114,13 @@ fn effective_program_info(command: &str) -> EffectiveProgram<'_> {
 const SUDO_VALUE_FLAGS: &[&str] = &["u", "g", "h", "p", "C", "U", "r", "t", "T", "R"];
 
 /// JS launchers whose agent identity is the script they run, not the launcher
-/// binary — so `node …/codex` reads as codex.
-const LAUNCHERS: &[&str] = &["node", "nodejs", "npx"];
+/// binary — so `node …/codex` reads as codex and `bun …/opencode` reads as
+/// opencode.
+const LAUNCHERS: &[&str] = &["node", "nodejs", "npx", "bun"];
 
 /// The agent kind a command launches, matched against the program it runs
-/// (past any `sudo`, and through a `node`/`npx` launcher to its script) — never
-/// an install target.
+/// (past any `sudo`, and through a `node`/`npx`/`bun` launcher to its script)
+/// — never an install target.
 pub fn command_agent_kind(command: &str) -> Option<&'static str> {
     command_agent_kind_with_comm(command, None)
 }
@@ -186,7 +188,12 @@ mod tests {
             Some("codex")
         );
         assert_eq!(program_label("node /usr/bin/codex"), "codex");
-        // A bare launcher with no script is just the host (handled as idle `node`).
+        assert_eq!(
+            command_agent_kind_with_comm("bun /usr/bin/opencode", Some("bun")),
+            Some("opencode")
+        );
+        assert_eq!(program_label("bun /usr/bin/opencode"), "opencode");
+        // A bare launcher with no script is just the host.
         assert_eq!(command_agent_kind("node"), None);
         // sudo options, including a value-taking `-u user`, skip to the program.
         assert_eq!(
@@ -221,6 +228,11 @@ mod tests {
             Some("claude")
         );
         assert_eq!(command_agent_kind_with_comm("node", Some("node")), None);
+        assert_eq!(command_agent_kind_with_comm("bun", Some("bun")), None);
+        assert_eq!(
+            command_agent_kind_with_comm("bun run dev", Some("bun")),
+            None
+        );
         assert_eq!(command_agent_kind_with_comm("zsh", Some("zsh")), None);
     }
 

@@ -29,6 +29,10 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "1"
 flate2 = "1"
+# OpenCode stores usage in a WAL SQLite database; the adapter opens it
+# read-only for account-spend parsing. `bundled` keeps Rimz independent of a
+# system libsqlite3 at install time.
+rusqlite = { version = "0.40.1", features = ["bundled"] }
 # Format-preserving TOML edits for `rimz config set`; keeps the generated
 # config template's comments intact while changing one key.
 toml_edit = "0.25"

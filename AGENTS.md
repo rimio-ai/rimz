@@ -81,6 +81,7 @@ Every other document is a leaf from here. The `docs/` tree groups by purpose: **
     - [claude.md](./docs/internals/agents/adapter/claude.md) — Claude Code.
     - [codex.md](./docs/internals/agents/adapter/codex.md) — Codex.
     - [pi.md](./docs/internals/agents/adapter/pi.md) — Pi.
+    - [opencode.md](./docs/internals/agents/adapter/opencode.md) — OpenCode.
   - [provider.md](./docs/internals/agents/provider.md) — provider accounts, balances, spend, and pricing: the plan/metered model, the out-of-band account probe, the provider-dashboard aggregation, the full-history cost/spending walk, and the three-layer token price table (embedded snapshot, remote refresh, builtins).
   - [resolvers.md](./docs/internals/agents/resolvers.md) — resolver protocol, chain, pane primitives.
   - [harness.md](./docs/internals/agents/harness.md) — the agent harness end to end: the layout IR and backend tab/split placement, the agent-address grammar, supervised `rimz agents -p` runs (records, wakeups, output/input formats, posture, shared launch params), the `rimz agents exec` wrapper and run-pane cleanup, and the in-tab `steer`/`queue` message path (targets, gates, delivery, attempts, hazards).

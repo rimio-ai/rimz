@@ -1,0 +1,55 @@
+# OpenCode adapter
+
+> The agent-agnostic boundary, state machine, and context read-path are in [agent.md](../agent.md); the account, balance, spend, and pricing model is in [provider.md](../provider.md). The raw upstream protocol — the in-process plugin API, bus events, SQLite store, server API, and auth file — is in [opencode-reference.md](../../../externals/agent-adapter/opencode-reference.md).
+
+This doc is the single home for everything OpenCode-specific. OpenCode's integration surface is an in-process TypeScript plugin, so the adapter ships [`plugin.ts`](../../../../crates/rimz/src/agents/opencode/plugin.ts), embedded at compile time and installed as `~/.config/opencode/plugin/rimz.ts`. The plugin subscribes to OpenCode hooks and bus events, flattens them into a Rimz-authored snake-case envelope, and spawns `rimz hooks feed --source opencode` with `RIMZ_AGENT_PID` set to the OpenCode server process. The child direction inverts like Pi: OpenCode runs Rimz, and the blocking `permission.ask` hook reads Rimz's stdout to set OpenCode's `output.status`.
+
+## Hooks and lifecycle
+
+Native surface → internal mapping; the upstream hooks, bus payloads, SQLite schema, and auth shape are in [opencode-reference.md](../../../externals/agent-adapter/opencode-reference.md).
+
+| Native surface | Plugin emits | Channel | `observe_lifecycle` → [`LifecycleSignal`](../../../../crates/rimz/src/agents/lifecycle.rs) | Normalized fields |
+| --- | --- | --- | --- | --- |
+| `session.created` without `parentID` | `session_created` | lifecycle | `Registered` | worktree from `directory`/`cwd` |
+| `chat.message` | `chat_message` | lifecycle | `TurnStarted` | sanitized `prompt`, `model`, `effort` |
+| `session.idle` root | `session_idle` | lifecycle | `TurnEnded { errored: false, parked_on_background: false }` | latest token gauge stamped from `message.updated` |
+| `session.error` root | `session_error` | lifecycle | `TurnEnded { errored: true, parked_on_background: false }` | `error_class`, `error_message` |
+| `tool.execute.after` root mutating tool | `tool_after` | lifecycle | `ToolUsed { mutates: true, edits }` | `edit`/`write`/`apply_patch`/`patch` edit files; `bash` mutates only |
+| `session.created` with `parentID` | `SubagentStart` | lifecycle | `SubagentStarted` | child `session_id`, `parent_session_id`, sanitized title as task |
+| `session.idle` / `session.error` child | `SubagentStop` | lifecycle | `SubagentStopped { errored }` | child `session_id`, `parent_session_id` |
+| `experimental.session.compacting` | `session_compacting` | lifecycle | `Compacting` | leading compaction head |
+| `session.compacted` | `session_compacted` | lifecycle | `CompactionEnded { auto: None }` | clears the compaction head |
+| `permission.ask` | `permission_ask` | **blocking-feed** (`Permission`) | — | `tool_name`, `permission_type`, `title`; OpenCode awaits the handler |
+| `dispose` | — | — | — | server-scoped and carries no session id, so it is not forwarded |
+
+OpenCode registers lazily: a pane can run `opencode` before a session id exists, and the first prompt creates the session. The descriptor sets `registers_lazily`, so the sidebar can synthesize an idle row for a wired-but-unprompted OpenCode pane and bind the later session by cwd. Subagents are bracket-grained: the plugin turns child `session.created` into `SubagentStart` and child `session.idle`/`session.error` into `SubagentStop`; child tool events are skipped so parent state does not move while a child runs.
+
+**The blocking gate uses the native prompt.** `permission.ask` is OpenCode's awaited permission hook. A resolver answer renders `{"status":"allow"}` or `{"status":"deny","reason":...}`; the plugin applies only the native `status`. A timeout, missing resolver, stale resolver, spawn failure, empty stdout, or parse failure leaves `output.status = "ask"`, so OpenCode's own TUI dialog asks the human. The descriptor declares `native_ask_ui: true`; unresolved asks therefore become `native_ui` feed items and route the human back to the OpenCode pane.
+
+**Partial end and idle.** OpenCode exposes no per-session end hook: `dispose` belongs to the embedded server, not a session, so `SessionEnd` is `Partial` via pane liveness and the rollup reaper. There is no idle `Notification` event; idle attention is reconstructed from turn boundaries, `permission.ask`, and the stall window. Plan approval, user-question, background parking, rich context, and remote control have no wired surface in OpenCode 1.15.13 and stay declared unsupported.
+
+**Install.** Install is whole-file ownership. A marked `rimz.ts` is reclaimed byte-for-byte on reinstall; an unmarked file at the path is user-authored and install/preview refuse to overwrite it. Uninstall removes only a marked file. The plugin needs `rimz` on `PATH`, or `RIMZ_BIN` set in the OpenCode process environment.
+
+**Resume.** `opencode --session <session_id>` restores a recorded session; the launching pane sets cwd and the plugin re-emits lifecycle events from the resumed server.
+
+## Context and transcript
+
+The plugin keeps an in-memory token gauge per session from assistant `message.updated` and `message.part.updated` step-finish events, then stamps the latest gauge onto every forwarded lifecycle envelope. OpenCode reports `tokens.input`, `tokens.output`, `tokens.cache.read`, `tokens.cache.write`, and `tokens.total`; Rimz stores `cache_read_input_tokens`, `output_tokens`, and folds `cache.write` into `fresh_input_tokens` because the shared observation shape has no cache-write slot. That keeps the context numerator exact (`input + cache.read + cache.write`) while preserving the existing card composition fields.
+
+OpenCode messages carry no context-window divisor. The adapter resolves Claude-family windows locally (`200k`, or `1M` for `[1m]`/`1m` Claude ids) and leaves other model windows unknown until a dedicated model-limit catalog lands. The context gauge still carries raw token totals and the card renders the visible zero/unknown state according to the shared enrichment rules in [agent.md](../agent.md#enrichment).
+
+There is no rich-context transport: the embedded server listens on a random per-launch port and publishes no discovery handle outside the plugin process. The SQLite store and plugin gauge cover the important numeric context data without an out-of-band app-server read.
+
+## Account and balance
+
+[`opencode/account.rs`](../../../../crates/rimz/src/agents/opencode/account.rs) reads `auth.json` from the OpenCode data dir (`RIMZ_OPENCODE_DATA_DIR` for tests, else `XDG_DATA_HOME/opencode`, else `~/.local/share/opencode`). The credential `type` maps to the account fact OpenCode exposes: `oauth` → metered subscription, `api`/`api_key` → unmetered API key, `wellknown` → unknown metering. The selected credential is the newest used provider from the SQLite message tail when available, else the first OAuth credential, else the first provider by name. The raw provider key rides `sub_provider` so the dashboard can label which provider OpenCode used.
+
+OpenCode exposes no balance or plan-window surface. `rate_limit_windows` is off, so the provider panel shows account identity and spend, not budget bars. Provider retry/status events remain uncontracted enrichment and are not part of the account probe.
+
+## Cost
+
+[`opencode/spend.rs`](../../../../crates/rimz/src/agents/opencode/spend.rs) treats the SQLite database as the transcript file for the shared spend pass. Discovery returns `opencode.db` when present, else the first sorted `opencode-<channel>.db` in each data dir. The parser opens SQLite read-only with `SQLITE_OPEN_READ_ONLY | SQLITE_OPEN_URI`; failures produce an empty parse and keep the pass best-effort.
+
+The cursor is SQLite `rowid`, stored in `SpendCursor.offset`, so incremental parses read `message` rows with `rowid > offset`. Each row's `data` JSON must carry `tokens`, `modelID`, and `providerID`. Positive `cost` is used verbatim; zero cost is priced from tokens through `PriceBook`, including cache-read and cache-write rates. Missing token splits drop the row unless `tokens.total` is present, in which case the total is attributed to output as a conservative fallback. Unknown priced models are recorded for the existing pricing-refresh chase and recovered on a later cold reparse.
+
+OpenCode's whole database is one spending file, so `SpendWindow.sessions` counts the DB file as one thread for this provider. Spend dollars and tokens are exact; distinct OpenCode session count needs a spending-infra change to count session ids inside a file.

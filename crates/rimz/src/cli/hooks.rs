@@ -86,12 +86,12 @@ enum HooksSubcmd {
     /// Visible top-level command (not hidden) — the help text doubles as the
     /// install instruction.
     Install {
-        /// Agent name (`claude`, `codex`, `pi`). Omit to install every detected agent.
+        /// Agent name (`claude`, `codex`, `pi`, `opencode`). Omit to install every detected agent.
         agent: Option<String>,
     },
     /// Remove the adapter's Rimz-managed hook block.
     Uninstall {
-        /// Agent name (`claude`, `codex`, `pi`). Omit to remove every Rimz-managed hook set.
+        /// Agent name (`claude`, `codex`, `pi`, `opencode`). Omit to remove every Rimz-managed hook set.
         agent: Option<String>,
     },
 }

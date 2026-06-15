@@ -24,6 +24,7 @@ pub mod descriptor;
 pub(crate) mod hook_types;
 pub mod lifecycle;
 mod observation;
+pub mod opencode;
 pub mod pi;
 pub mod pricing;
 pub mod registry;
@@ -65,6 +66,7 @@ pub use spending::{SpendTally, SpendWindow, Spending};
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
+pub use opencode::OpencodeAdapter;
 pub use pi::PiAdapter;
 
 #[derive(Debug, thiserror::Error)]

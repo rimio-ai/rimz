@@ -247,28 +247,28 @@ The flags and variables an adapter (and the resume-on-rebirth planner) cares abo
 
 ## Mapping feasibility
 
-No verdict has landed — this section is the adapter's starting brief, the [agent.md → Adding an agent](../../internals/agents/agent.md#adding-an-agent) recipe applied to the surfaces above. Unlike Pi, the three operating paths can engage natively: `permission.ask` is a real blocking decision channel. Like Pi, the whole integration is one in-process file, so the Pi adapter ([`src/agents/pi/`](../../../crates/rimz/src/agents/pi/mod.rs)) is the structural template.
+The adapter verdict has landed in [opencode.md](../../internals/agents/adapter/opencode.md): OpenCode is wired as a first-class `AgentAdapter` through one Rimz-authored in-process plugin plus a read-only SQLite spend reader. Unlike Pi, the three operating paths engage natively because `permission.ask` is a real blocking decision channel with an upstream `ask` fallback. Like Pi, the integration is one whole-file plugin that runs Rimz as its child.
 
-| Native surface | Channel | Proposed mapping |
+| Native surface | Channel | Landed mapping |
 | --- | --- | --- |
 | `session.created` (no `parentID`) | lifecycle | `Registered` — worktree from `Session.directory` |
 | `chat.message` hook (or a user `message.updated`) | lifecycle | `TurnStarted` — sanitized prompt labels the row; `variant` ↔ the `effort` carry-forward |
 | `session.idle` | lifecycle | `TurnEnded { errored: false }` |
 | `session.error` | lifecycle | the error bit for the enclosing turn — a typed, in-band death certificate (`ApiError`, `MessageAbortedError`, …), Pi-grade: no transcript forensics needed |
 | `tool.execute.after` (mutating tool) | lifecycle | `ToolUsed { mutates: true, edits }` — `edit` / `write` / `apply_patch` edit files; `bash` mutates only; read-only tools stay silent |
-| `session.created` (with `parentID`) / child `session.idle` | lifecycle | `SubagentStarted` / `SubagentStopped` — the child session id keys the child, `parentID` links the parent, the `subtask` part's `agent` / `description` labels the task |
+| `session.created` (with `parentID`) / child `session.idle` or `session.error` | lifecycle | `SubagentStarted` / `SubagentStopped` — the child session id keys the child, `parentID` links the parent |
 | `experimental.session.compacting` → `session.compacted` | lifecycle | `Compacting` — a leading signal like Claude's `PreCompact`, cleared by the trailing event |
-| `dispose` | lifecycle | `Ended` best-effort (`ends_session`) — fires on server shutdown, which ends every session of an embedded instance; pane liveness and the rollup reaper are the backstop, the Codex posture |
+| `dispose` | — | not forwarded — server-scoped and carries no session id; pane liveness and the rollup reaper are the session-end posture |
 | `permission.ask` | blocking-feed | `waiting` — bridge wait inside the hook; `allow` / `deny` on a resolver answer, `ask` as the neutral path |
 
 - **Identity.** The plugin runs inside the server the pane's TUI embeds, so an interactive OpenCode is standalone and stampable — the in-process environment carries the pane id, and pid capture rides the spawned `rimz` child. A session exists only once created (typically at the first prompt), so OpenCode is a `registers_lazily` candidate — the Codex pattern: idle-row synthesis before the first turn, cwd-bind from `Session.directory` ([agent.md → The instance lifecycle](../../internals/agents/agent.md#the-instance-lifecycle)). A session served by a detached `opencode serve`, reached over `attach`, or driven from the web UI is daemon-routed/remote — the documented remote-agent gap.
-- **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge can ride the lifecycle events with no transcript tail at all; the window divisor resolves from the models.dev catalog (`Model.limit.context`), which Rimz's [pricing layer](../../internals/agents/provider.md#token-pricing) already mirrors.
-- **Spend.** The SQLite store is the cost surface: per-session precomputed `cost` plus token columns, per-message rows for window bucketing. This diverges from the shared JSONL walk infrastructure — `transcript_files` / `parse_spend` assume line-oriented files — so the adapter needs a read-only SQLite read, one new dependency to justify at adapter time, opened read-only against a WAL database. Zero `cost` under a subscription login prices from tokens via [provider.md → Token pricing](../../internals/agents/provider.md#token-pricing) (the Codex rule); a positive `cost` is authoritative (the Pi rule).
+- **Context gauge.** Every assistant message carries the full token split — in-process on `message.updated`, at rest in SQLite — so the gauge rides lifecycle events with no transcript tail. The current adapter resolves Claude-family windows locally and leaves other model windows unknown until a model-limit catalog is added.
+- **Spend.** The SQLite store is the cost surface: per-message rows supply trailing-window bucketing and origin paths. The adapter opens SQLite read-only against the WAL database. Zero `cost` under a subscription login prices from tokens via [provider.md → Token pricing](../../internals/agents/provider.md#token-pricing) (the Codex rule); a positive `cost` is authoritative (the Pi rule).
 - **Account probe.** `auth.json` distinguishes oauth from API-key credentials per provider — enough for logged-in plus metered/unmetered on the dashboard, the same single account fact Pi's probe documents.
 
 **What OpenCode cannot support:**
 
 - **No balance surface.** No rate-limit windows and no plan tier, anywhere — so no mana bars, no spent-window fallback for `paused`, and `rate_limit_windows` declares off ([provider.md → Per-provider mapping](../../internals/agents/provider.md#per-provider-mapping)). The `session.status` `retry` state is the one throttling glimpse, and it is uncontracted.
 - **No rich-context transport.** The per-launch server sits on a random port with no discovery surface, so there is no statusline or app-server analogue to read out of band; the events and the SQLite store cover the gauge, so the gap costs little. A future increment: the Rimz plugin publishes its `serverUrl` to a runtime sidecar, the way the Codex broker holds a warm connection.
-- **Few native asks by default.** Permission defaults are permissive, so the blocking channel engages only as far as the user's `permission` config asks — and the [#19927](https://github.com/anomalyco/opencode/issues/19927) hook bypass needs re-verification before `blocking_feed` is declared on.
+- **Few native asks by default.** Permission defaults are permissive, so the blocking channel engages only as far as the user's `permission` config asks. The [#19927](https://github.com/anomalyco/opencode/issues/19927) hook-bypass report stays pinned as an upstream caveat to re-check on reference refresh.
 - **No per-session end event.** `dispose` fires per server, not per session; a session that ends inside a still-running instance leaves by pane liveness and the reaper alone, the Codex posture.

@@ -8,12 +8,14 @@
 use super::claude::ClaudeAdapter;
 use super::codex::CodexAdapter;
 use super::descriptor::AgentDescriptor;
+use super::opencode::OpencodeAdapter;
 use super::pi::PiAdapter;
 use super::{AgentAdapter, AgentErr, Result};
 
 /// Every wired agent, in display order. `&'static dyn` — adapters are
 /// zero-sized const values, so resolution never allocates.
-pub static ADAPTERS: &[&'static dyn AgentAdapter] = &[&ClaudeAdapter, &CodexAdapter, &PiAdapter];
+pub static ADAPTERS: &[&'static dyn AgentAdapter] =
+    &[&ClaudeAdapter, &CodexAdapter, &PiAdapter, &OpencodeAdapter];
 
 /// Resolve an adapter for the `--source <agent>` CLI tag.
 pub fn adapter_by_kind(kind: &str) -> Result<&'static dyn AgentAdapter> {
