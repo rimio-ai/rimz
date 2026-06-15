@@ -104,7 +104,7 @@ fn codex_descriptor_declares_lazy_registration_and_idle_card_fallbacks() {
     assert_eq!(CodexAdapter.descriptor().default_model, Some("GPT-5.5"));
     assert_eq!(
         CodexAdapter.descriptor().default_context_window,
-        Some(258_000)
+        Some(272_000)
     );
 }
 

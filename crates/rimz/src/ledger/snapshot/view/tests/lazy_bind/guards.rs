@@ -126,7 +126,7 @@ fn stale_codex_ghosts_predating_pane_start_render_idle_live_pane() {
         );
         assert_eq!(
             rows[0].context_window(),
-            Some(258_000),
+            Some(272_000),
             "fresh Codex rows use the provider fallback window, not stale session stats: {label}",
         );
     }

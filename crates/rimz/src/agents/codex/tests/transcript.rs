@@ -41,7 +41,7 @@ fn usage_from_transcript_reads_split_totals_and_separates_zero_from_unknown() {
     )
     .unwrap();
     let usage = usage_from_transcript(&fresh);
-    assert_eq!(usage.context_window, Some(258_000));
+    assert_eq!(usage.context_window, Some(272_000));
     assert_eq!(usage.reported_context_window(), None);
     assert_eq!(usage.total_tokens, Some(0));
     assert_eq!(usage.last_input_tokens, Some(0));

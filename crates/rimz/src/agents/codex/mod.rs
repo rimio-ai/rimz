@@ -87,11 +87,14 @@ use crate::run::PermissionMode;
 /// before tightening.
 const CODEX_HOOK_CAP: Duration = Duration::from_secs(60);
 
-/// Codex's effective GPT-5.5 context tier. The rollout's
-/// `model_context_window` replaces this as soon as it appears; until then the
-/// agent card uses this stable provider fallback instead of briefly omitting
-/// the window token.
-const DEFAULT_CONTEXT_WINDOW: u64 = 258_000;
+/// Codex's GPT-5.5 backend input ceiling — the observed 272k-token limit above
+/// which the Codex backend rejects a prompt, listed by litellm and models.dev
+/// as the Codex-family `max_input_tokens` / `limit.input`. The rollout's
+/// `model_context_window` — Codex's effective window after its internal headroom
+/// (`258_400 = 272k × 95%`) — replaces this as soon as it appears; until then the
+/// agent card uses this stable provider fallback instead of briefly omitting the
+/// window token.
+const DEFAULT_CONTEXT_WINDOW: u64 = 272_000;
 const DEFAULT_MODEL: &str = "GPT-5.5";
 
 /// Fetch Codex account usage from the local OAuth credential file. The app-server
