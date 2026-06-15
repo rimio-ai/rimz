@@ -35,15 +35,14 @@ use crate::ledger::atomic;
 
 static OPENCODE_DESCRIPTOR: AgentDescriptor = AgentDescriptor {
     kind: "opencode",
-    display_name: "OpenCode",
+    display_name: "Open Code",
     brand: Brand {
         emblem: "
-  ___
- / _ \\
-| (_) |
- \\___/",
-        color: 214,
-        color_rgb: (0xf9, 0x73, 0x16),
+ ▗▛▀▀▀▜▖
+▝▜▌ █ ▐▛▘
+ ▝▀▀▀▀▀▘",
+        color: 208,
+        color_rgb: (0xff, 0x87, 0x00),
     },
     plan_label: PlanLabel::TitleCaseOnly,
     sub_providers: &[],
