@@ -555,6 +555,43 @@ fn merged_room_retains_tabs_a_partial_manifest_omits() {
 }
 
 #[test]
+fn merged_room_retains_a_tab_a_partial_manifest_reports_empty() {
+    // Zellij's serialization blip can carry an idle tab with an empty pane list
+    // instead of omitting it. An empty entry is no roster, not a closed tab — a
+    // live tab always holds a pane and panes leave through `PaneClosed` — so the
+    // tab keeps what it last held rather than collapsing out of the room.
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+        (2, vec![pane_in_tab(30, 2)]),
+    ]);
+
+    let merged = merged_room(
+        &previous,
+        &tabs_by_index(vec![
+            (0, vec![pane_in_tab(10, 0)]),
+            (1, vec![]),
+            (2, vec![]),
+        ]),
+    );
+
+    assert_eq!(
+        merged.keys().copied().collect::<Vec<_>>(),
+        vec![0, 1, 2],
+        "empty manifest entries retain their tabs instead of collapsing the room",
+    );
+    assert_eq!(merged.get(&1), previous.get(&1));
+    assert_eq!(merged.get(&2), previous.get(&2));
+
+    // The baseline drops empty entries too: an empty entry carries no roster.
+    let baseline = merged_room(
+        &BTreeMap::new(),
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)]), (1, vec![])]),
+    );
+    assert_eq!(baseline.keys().copied().collect::<Vec<_>>(), vec![0]);
+}
+
+#[test]
 fn merged_room_keeps_each_pane_under_one_tab() {
     // A renumbered tab stranded a copy of pane 10 in tab 1 while the live pane
     // lives in tab 0; a fresh manifest naming tab 0 evicts the stale copy and

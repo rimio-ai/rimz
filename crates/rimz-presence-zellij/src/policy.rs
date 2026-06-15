@@ -432,14 +432,16 @@ pub fn opened_card_panes(
     opened
 }
 
-/// Merge a Zellij pane manifest without letting omitted whole tabs churn the
-/// detection map. Zellij can deliver a `PaneUpdate` that carries only part of
-/// the room, so carried tabs overwrite exactly and absent tabs remain until a
-/// pane-close event removes them. The first manifest after plugin load is the
-/// baseline and is accepted as-is; a partial first manifest self-heals on the
-/// next manifest that carries the omitted tabs. Publication uses this merged
-/// room, so partial `PaneUpdate` bursts neither shrink the topology cache nor
-/// emit spurious `panes-changed` pokes.
+/// Merge a Zellij pane manifest without letting a partial `PaneUpdate` churn
+/// the detection map. Zellij can deliver a manifest that carries only part of
+/// the room — a tab omitted entirely, or carried with an empty pane list on its
+/// ~60s serialization blip — so carried non-empty tabs overwrite exactly while
+/// both an absent tab and a present-but-empty one retain what they last held
+/// until `PaneClosed` removes their panes. The first manifest after plugin load
+/// is the baseline; a partial first manifest self-heals on the next manifest
+/// that carries the omitted tabs. Publication uses this merged room, so partial
+/// `PaneUpdate` bursts neither shrink the topology cache nor emit spurious
+/// `panes-changed` pokes.
 ///
 /// Retention is bounded by one-tab-per-pane: a pane id is unique across the
 /// session, so a copy left in a tab Zellij renumbered or dropped without a
@@ -451,10 +453,22 @@ pub fn merged_room(
     next: &BTreeMap<usize, Vec<PaneFields>>,
 ) -> BTreeMap<usize, Vec<PaneFields>> {
     if previous.is_empty() {
-        return next.clone();
+        return next
+            .iter()
+            .filter(|(_, panes)| !panes.is_empty())
+            .map(|(tab, panes)| (*tab, panes.clone()))
+            .collect();
     }
     let mut merged = previous.clone();
     for (tab, panes) in next {
+        // An empty pane vector is a serialization artifact, never a real empty
+        // tab: a live tab always holds at least one pane, and a tab's panes
+        // leave through `PaneClosed`. Treat it like an omitted tab — retain what
+        // the tab last held — so a transiently-partial manifest cannot collapse
+        // an idle tab out of the published room.
+        if panes.is_empty() {
+            continue;
+        }
         merged.insert(*tab, panes.clone());
     }
     enforce_one_tab_per_pane(&mut merged, next);
