@@ -39,10 +39,39 @@ fn lazy_pane_lists_without_a_session() {
     snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
     let snapshot = snapshot.with_live_panes(vec![pane("term1", "codex", "/repo/main")], None);
 
+    assert_eq!(rows(&snapshot).len(), 1);
     assert_eq!(snapshot.agent_panes.len(), 1);
     assert_eq!(snapshot.agent_panes[0].kind.as_str(), "codex");
     assert_eq!(snapshot.agent_panes[0].agent_id, None);
     assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
+}
+
+#[test]
+fn floating_agent_pane_stays_addressable_without_room_row() {
+    let mut floating = pane("term1", "codex", "/repo/main");
+    floating.is_floating = true;
+    let mut snapshot = room(
+        Vec::new(),
+        vec![paneless_codex("sess-1", "/repo/main", 1_000)],
+    );
+    snapshot.wired_lazy_kinds = vec!["codex".to_owned()];
+    let snapshot = snapshot.with_live_panes(vec![floating], None);
+
+    assert!(rows(&snapshot).is_empty());
+    assert_eq!(snapshot.agent_panes.len(), 1);
+    assert_eq!(snapshot.agent_panes[0].kind.as_str(), "codex");
+    assert_eq!(
+        snapshot.agent_panes[0]
+            .agent_id
+            .as_ref()
+            .map(|id| id.as_str()),
+        Some("sess-1")
+    );
+    assert_eq!(snapshot.agent_panes[0].pane_id.raw(), "term1");
+
+    let targets = crate::target::resolve_targets(&snapshot, "@codex", None, Some("main")).unwrap();
+    assert_eq!(targets.len(), 1);
+    assert_eq!(targets[0].pane_id.raw(), "term1");
 }
 
 #[test]

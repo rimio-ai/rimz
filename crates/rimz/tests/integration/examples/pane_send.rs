@@ -158,6 +158,7 @@ fn stage_bridge_item_with_pane(
         view_kind: None,
         view_name: None,
         is_focused: false,
+        is_floating: false,
         command: Some("sh".to_owned()),
         spawn_command: None,
         cwd: None,

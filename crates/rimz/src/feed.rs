@@ -346,6 +346,10 @@ pub struct PaneRef {
     /// metadata; ledger correctness never depends on focus.
     #[serde(default, skip_serializing_if = "is_false")]
     pub is_focused: bool,
+    /// Whether this pane is a floating overlay rather than part of the tiled
+    /// room. Floating panes stay addressable but are not rendered as room rows.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_floating: bool,
     /// Foreground command as reported by the multiplexer, if available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub command: Option<String>,
@@ -393,6 +397,7 @@ impl PaneRef {
             view_kind: None,
             view_name: None,
             is_focused: false,
+            is_floating: false,
             command: None,
             spawn_command: None,
             cwd: None,

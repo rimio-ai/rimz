@@ -139,6 +139,8 @@ Rimz delivers human-authored text to a live member now (`rimz steer`) or at its 
 
 `steer` and `queue` require the `@` sigil — a bare selector fails with a `did you mean @…?` hint — so a stray word never broadcasts by accident; a pane id is the one sigil-free exception. They resolve the [address](#the-address) against a freshly produced snapshot, so a just-started pane is present.
 
+Floating Zellij panes participate in `steer` live-pane addressing while the sidebar room renders tiled panes.
+
 The two commands address different layers, because they deliver at different times. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md](./agent.md#the-instance-lifecycle)) — because the address a paste needs is the pane, which the producer already detects for that pane's idle row. `queue` keys a durable record on a session id, so it addresses **bound sessions**; an address that matches only an unbound pane has no key, so `queue` points it at `steer` to start the session first. A petname, kind ordinal, or session-id prefix names a bound session under either command.
 
 Fan-out and `--create` follow the [address rules](#the-address) above: more than one match needs `--all` (or `@all`) and confirms unless `-y`, and one blocked or paneless agent skips while the rest still send.

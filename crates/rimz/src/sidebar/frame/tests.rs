@@ -9,6 +9,7 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         view_kind: Some(ViewKind::Tab),
         view_name: None,
         is_focused: focused,
+        is_floating: false,
         command: command.map(ToOwned::to_owned),
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),
@@ -18,6 +19,19 @@ fn pane(raw: &str, view: &str, command: Option<&str>, focused: bool) -> PaneRef 
         elevated_agent: None,
         first_seen_at_ms: None,
     }
+}
+
+#[test]
+fn floating_flag_survives_frame_round_trip() {
+    let mut pane = pane("terminal_1", "tab_0", Some("codex"), true);
+    pane.is_floating = true;
+
+    let frame = assemble_frame(vec![pane], 7, "rimz-test");
+    assert!(frame.tabs[0].panes[0].is_floating);
+
+    let projected = frame.to_pane_refs();
+    assert_eq!(projected.len(), 1);
+    assert!(projected[0].is_floating);
 }
 
 #[test]

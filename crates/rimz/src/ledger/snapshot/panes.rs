@@ -228,6 +228,7 @@ mod tests {
             view_kind: Some(crate::ids::ViewKind::Tab),
             view_name: view_name.map(str::to_owned),
             is_focused: false,
+            is_floating: false,
             command: Some(command.to_owned()),
             spawn_command: None,
             cwd: Some("/repo/main".to_owned()),

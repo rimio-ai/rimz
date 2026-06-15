@@ -10,6 +10,7 @@ fn pane(command: Option<&str>, view_name: Option<&str>) -> PaneRef {
         view_kind: None,
         view_name: view_name.map(ToOwned::to_owned),
         is_focused: false,
+        is_floating: false,
         command: command.map(ToOwned::to_owned),
         spawn_command: None,
         cwd: None,

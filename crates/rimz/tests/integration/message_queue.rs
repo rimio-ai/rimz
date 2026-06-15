@@ -854,6 +854,7 @@ fn unbound_codex_pane(env: &Env) -> rimz::feed::PaneRef {
         view_kind: Some(rimz::ids::ViewKind::Tab),
         view_name: Some("project".to_owned()),
         is_focused: false,
+        is_floating: false,
         command: Some("codex".to_owned()),
         spawn_command: None,
         cwd: Some(env.project_root.display().to_string()),

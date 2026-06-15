@@ -225,6 +225,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
                 view_kind: Some(ViewKind::Tab),
                 view_name: p.tab_name.take(),
                 is_focused: p.is_focused,
+                is_floating: p.is_floating,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
                 command,
@@ -244,6 +245,7 @@ fn pane_listing_admits_floating_agent_panes_but_not_floating_plugins() {
         .collect();
     assert_eq!(pane_ids, vec!["terminal_1", "terminal_2"]);
     assert_eq!(listing.panes[1].command, None);
+    assert!(listing.panes[1].is_floating);
     assert_eq!(listing.panes[1].spawn_command.as_deref(), Some("codex"));
     assert_eq!(listing.panes[1].cwd.as_deref(), Some("/repo/main"));
     assert_eq!(listing.panes[1].view_id.as_deref(), Some("tab_4"));

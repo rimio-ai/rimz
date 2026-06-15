@@ -166,6 +166,7 @@ impl WakeEnv {
                 view_kind: Some(rimz::ids::ViewKind::Tab),
                 view_name: None,
                 is_focused: true,
+                is_floating: false,
                 command: Some("zsh".to_owned()),
                 spawn_command: None,
                 cwd: Some(self.project_root.to_string_lossy().into_owned()),

@@ -71,6 +71,8 @@ pub struct PaneState {
     pub pane_id: PaneId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub first_seen_at_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub is_floating: bool,
     pub current: PaneProcess,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous: Option<PaneProcess>,
@@ -173,6 +175,7 @@ impl PaneFrame {
             view_kind: Some(tab.kind),
             view_name: tab.name.clone(),
             is_focused: tab.active_pane.as_ref() == Some(&pane.pane_id),
+            is_floating: pane.is_floating,
             command: pane.current.command.clone(),
             spawn_command: pane.current.spawn_command.clone(),
             cwd: pane.current.cwd.clone(),
@@ -391,6 +394,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
         tab.panes.push(PaneState {
             pane_id: pane.pane_id,
             first_seen_at_ms: pane.first_seen_at_ms,
+            is_floating: pane.is_floating,
             current: PaneProcess {
                 pid: pane.pane_pid,
                 command: pane.command,

@@ -527,6 +527,7 @@ mod tests {
             view_id: Some(view.to_owned()),
             view_name: Some(name.to_owned()),
             is_focused: focused,
+            is_floating: false,
             command: Some(command.to_owned()),
             cwd: Some(cwd.to_owned()),
             ..PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))

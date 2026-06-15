@@ -167,6 +167,9 @@ pub(super) fn rows_from_panes(
             rows.push(row_from_process(pane, now));
         }
     }
+    // Floating panes stay in `agent_panes` so `@codex` still reaches them, but
+    // they never render as sidebar room rows.
+    rows.retain(|row| !row.pane.as_ref().is_some_and(|pane| pane.is_floating));
 
     RowProjection {
         rows,

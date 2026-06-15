@@ -105,6 +105,7 @@ impl MuxBackend for ZellijBackend {
                 view_kind: Some(ViewKind::Tab),
                 view_name: p.tab_name.take(),
                 is_focused: p.is_focused,
+                is_floating: p.is_floating,
                 pane_pid: p.pid(),
                 pane_process_start: p.process_start(),
                 command,

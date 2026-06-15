@@ -224,6 +224,7 @@ mod tests {
             view_kind: None,
             view_name: None,
             is_focused: false,
+            is_floating: false,
             command: None,
             spawn_command: None,
             cwd: None,

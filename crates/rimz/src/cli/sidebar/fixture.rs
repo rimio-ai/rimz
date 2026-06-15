@@ -256,6 +256,7 @@ fn pane_ref(raw: &str, command: &str, cwd: &str, focused: bool) -> rimz::feed::P
         view_kind: Some(rimz::ViewKind::Tab),
         view_name: Some("main".to_owned()),
         is_focused: focused,
+        is_floating: false,
         command: Some(command.to_owned()),
         spawn_command: None,
         cwd: Some(cwd.to_owned()),

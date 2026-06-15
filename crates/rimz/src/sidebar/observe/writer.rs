@@ -335,6 +335,7 @@ mod tests {
             view_kind: Some(ViewKind::Tab),
             view_name: None,
             is_focused: false,
+            is_floating: false,
             command: Some("zsh".to_owned()),
             spawn_command: None,
             cwd: Some("/repo".to_owned()),

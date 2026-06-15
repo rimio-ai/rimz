@@ -23,6 +23,7 @@ pub(crate) fn pane(raw: &str, view: &str, focused: bool) -> PaneRef {
         view_kind: Some(crate::ids::ViewKind::Tab),
         view_name: None,
         is_focused: focused,
+        is_floating: false,
         command: Some("zsh".to_owned()),
         spawn_command: None,
         cwd: Some("/repo/main".to_owned()),

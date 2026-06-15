@@ -559,6 +559,7 @@ mod tests {
                 panes: vec![PaneState {
                     pane_id: pane_id("terminal_9"),
                     first_seen_at_ms: Some(1),
+                    is_floating: false,
                     current: PaneProcess {
                         pid: Some(909),
                         command: Some("zsh".to_owned()),

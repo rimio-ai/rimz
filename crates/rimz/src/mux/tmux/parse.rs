@@ -30,6 +30,7 @@ pub(super) fn parse_pane_line(line: &str) -> Option<PaneRef> {
         view_kind: Some(ViewKind::Window),
         view_name: trimmed_nonempty(7),
         is_focused: cols.get(6).is_some_and(|value| value.trim() == "1"),
+        is_floating: false,
         command: if cols
             .get(8)
             .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE)

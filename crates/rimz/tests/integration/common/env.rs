@@ -35,6 +35,7 @@ pub fn tmux_pane(raw: &str, command: &str, cwd: &Path) -> PaneRef {
         view_kind: Some(rimz::ids::ViewKind::Window),
         view_name: None,
         is_focused: false,
+        is_floating: false,
         command: Some(command.to_owned()),
         spawn_command: None,
         cwd: Some(cwd.display().to_string()),

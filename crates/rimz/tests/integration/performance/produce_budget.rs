@@ -81,6 +81,7 @@ fn pane(i: usize) -> rimz::feed::PaneRef {
         view_kind: Some(rimz::ids::ViewKind::Tab),
         view_name: None,
         is_focused: false,
+        is_floating: false,
         command: Some("zsh".to_owned()),
         spawn_command: None,
         cwd: None,
