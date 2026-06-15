@@ -35,42 +35,102 @@ fn pane_in_tab(id: u32, tab: usize) -> PaneFields {
     }
 }
 
-// --- manifest_hash: what changes the hash and what must not ---
+fn sidebar_pane(id: u32) -> PaneFields {
+    PaneFields {
+        title: SIDEBAR_PANE_TITLE.to_owned(),
+        ..pane(id)
+    }
+}
+
+fn plugin_pane(id: u32) -> PaneFields {
+    PaneFields {
+        is_plugin: true,
+        ..pane(id)
+    }
+}
+
+fn focused(mut pane: PaneFields) -> PaneFields {
+    pane.is_focused = true;
+    pane
+}
+
+// --- manifest_hash: the projected stable subset folds; the rest does not ---
 
 #[test]
-fn hash_is_stable_over_identical_manifests() {
+fn identical_manifests_hash_equal() {
     let a = manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0));
     let b = manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0));
     assert_eq!(a, b);
 }
 
 #[test]
-fn pane_open_close_changes_the_hash() {
-    let one = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let two = manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0));
-    assert_ne!(one, two);
+fn every_stable_field_changes_the_hash() {
+    type Mutate = fn(&mut PaneFields);
+    let base = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+    let cases: &[(&str, Mutate)] = &[
+        ("focus", |p| p.is_focused = true),
+        ("terminal_command", |p| {
+            p.terminal_command = Some("claude".to_owned())
+        }),
+        ("exited", |p| p.exited = true),
+        ("suppressed", |p| p.is_suppressed = true),
+        ("held", |p| p.is_held = true),
+        ("plugin", |p| p.is_plugin = true),
+        ("floating", |p| p.is_floating = true),
+        ("tab_position", |p| p.tab_position = 7),
+        ("tab_name", |p| p.tab_name = Some("renamed".to_owned())),
+        ("pane_x", |p| p.pane_x = Some(20)),
+        ("pane_columns", |p| p.pane_columns = Some(120)),
+    ];
+    for &(field, mutate) in cases {
+        let mut changed = pane(1);
+        mutate(&mut changed);
+        assert_ne!(
+            base,
+            manifest_hash(&tabs(vec![changed]), Some(0)),
+            "{field} must fold into the roster hash",
+        );
+    }
+    // Opening or closing a pane changes the set of folded ids.
+    assert_ne!(
+        base,
+        manifest_hash(&tabs(vec![pane(1), pane(2)]), Some(0)),
+        "pane count must fold into the roster hash",
+    );
 }
 
 #[test]
-fn focus_move_changes_the_hash() {
-    let unfocused = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let mut focused_pane = pane(1);
-    focused_pane.is_focused = true;
-    let focused = manifest_hash(&tabs(vec![focused_pane]), Some(0));
-    assert_ne!(unfocused, focused);
+fn excluded_fields_and_navigation_hold_the_hash() {
+    let base = manifest_hash(&tabs(vec![pane(1)]), Some(0));
+
+    // The active tab is navigation, not roster shape.
+    assert_eq!(base, manifest_hash(&tabs(vec![pane(1)]), Some(1)));
+
+    // Titles mutate per output line and the foreground command publishes
+    // through CommandChanged; neither belongs in the roster hash.
+    let mut renamed = pane(1);
+    renamed.title = "line-mutated agent title".to_owned();
+    assert_eq!(
+        base,
+        manifest_hash(&tabs(vec![renamed]), Some(0)),
+        "title is excluded by projection",
+    );
+
+    let mut foreground = pane(1);
+    foreground.pane_command = Some("codex".to_owned());
+    assert_eq!(
+        base,
+        manifest_hash(&tabs(vec![foreground]), Some(0)),
+        "pane_command is excluded by projection",
+    );
 }
 
-#[test]
-fn focus_patch_reports_only_focus_moves() {
-    let mut previous_a = pane(1);
-    previous_a.is_focused = true;
-    let previous_b = pane(2);
-    let previous = tabs(vec![previous_a, previous_b]);
+// --- focus_shortcut: focus-only moves take the optimistic CLI patch ---
 
-    let next_a = pane(1);
-    let mut next_b = pane(2);
-    next_b.is_focused = true;
-    let next = tabs(vec![next_a, next_b]);
+#[test]
+fn focus_shortcut_patches_card_to_card_moves() {
+    let previous = tabs(vec![focused(pane(1)), pane(2)]);
+    let next = tabs(vec![pane(1), focused(pane(2))]);
 
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &next),
@@ -88,27 +148,18 @@ fn focus_patch_reports_only_focus_moves() {
 }
 
 #[test]
-fn focus_patch_ignores_focus_moves_to_sidebar() {
-    let mut work = pane(1);
-    work.is_focused = true;
-    let mut sidebar = pane(2);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    let previous = tabs(vec![work, sidebar]);
-
-    let work = pane(1);
-    let mut sidebar = pane(2);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let next = tabs(vec![work, sidebar]);
+fn focus_shortcut_ignores_moves_onto_the_sidebar() {
+    let previous = tabs(vec![focused(pane(1)), sidebar_pane(2)]);
+    let next = tabs(vec![pane(1), focused(sidebar_pane(2))]);
 
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &next),
-        Some(FocusShortcut::Ignore)
+        Some(FocusShortcut::Ignore),
     );
 }
 
 #[test]
-fn focus_patch_rejects_non_focus_changes() {
+fn focus_shortcut_rejects_non_focus_changes() {
     let previous = tabs(vec![pane(1)]);
 
     let mut command_changed = pane(1);
@@ -121,6 +172,7 @@ fn focus_patch_rejects_non_focus_changes() {
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![pane(1), pane(2)])),
         None,
+        "an opened pane is a topology change, not a focus-only patch",
     );
 
     let renamed = PaneFields {
@@ -130,7 +182,7 @@ fn focus_patch_rejects_non_focus_changes() {
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![renamed])),
         None,
-        "title-only changes are not focus changes and do not need a shortcut"
+        "a title-only change is not a focus change",
     );
 
     let foreground_changed = PaneFields {
@@ -140,7 +192,7 @@ fn focus_patch_rejects_non_focus_changes() {
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![foreground_changed])),
         None,
-        "foreground changes are not focus-only patches"
+        "a foreground change is not a focus-only patch",
     );
 
     let floating = PaneFields {
@@ -150,96 +202,95 @@ fn focus_patch_rejects_non_focus_changes() {
     assert_eq!(
         focus_shortcut_if_only_focus_changed(&previous, &tabs(vec![floating])),
         None,
-        "floating/tiled changes are topology changes, not focus-only patches"
+        "a tiled/floating change is a topology change, not a focus-only patch",
     );
 }
 
 #[test]
-fn active_tab_move_does_not_change_the_hash() {
-    let on_zero = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let on_one = manifest_hash(&tabs(vec![pane(1)]), Some(1));
-    assert_eq!(on_zero, on_one);
-}
+fn focus_shortcut_survives_a_partial_manifest_merge() {
+    let previous = tabs_by_index(vec![
+        (0, vec![focused(pane_in_tab(10, 0)), pane_in_tab(11, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let partial = tabs_by_index(vec![(
+        0,
+        vec![pane_in_tab(10, 0), focused(pane_in_tab(11, 0))],
+    )]);
 
-#[test]
-fn command_change_changes_the_hash_and_exit_flag_too() {
-    let shell = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let mut agent_pane = pane(1);
-    agent_pane.terminal_command = Some("claude".to_owned());
-    let agent = manifest_hash(&tabs(vec![agent_pane.clone()]), Some(0));
-    assert_ne!(shell, agent);
+    let merged = merged_room(&previous, &partial);
 
-    agent_pane.exited = true;
-    let exited = manifest_hash(&tabs(vec![agent_pane]), Some(0));
-    assert_ne!(agent, exited);
-}
-
-#[test]
-fn live_state_flags_change_the_hash() {
-    let live = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-
-    let mut suppressed = pane(1);
-    suppressed.is_suppressed = true;
-    assert_ne!(
-        live,
-        manifest_hash(&tabs(vec![suppressed]), Some(0)),
-        "suppressed panes disappear from the sidebar's live roster"
-    );
-
-    let mut held = pane(1);
-    held.is_held = true;
-    assert_ne!(
-        live,
-        manifest_hash(&tabs(vec![held]), Some(0)),
-        "held panes are no longer live working panes"
-    );
-
-    let mut plugin = pane(1);
-    plugin.is_plugin = true;
-    assert_ne!(
-        live,
-        manifest_hash(&tabs(vec![plugin]), Some(0)),
-        "plugin panes are chrome, not work rows"
-    );
-
-    let mut floating = pane(1);
-    floating.is_floating = true;
-    assert_ne!(
-        live,
-        manifest_hash(&tabs(vec![floating]), Some(0)),
-        "floating panes are overlays, not tiled work rows"
+    assert_eq!(
+        focus_shortcut_if_only_focus_changed(&previous, &merged),
+        Some(FocusShortcut::Patch(vec![
+            FocusPatch {
+                id: 10,
+                is_focused: false,
+            },
+            FocusPatch {
+                id: 11,
+                is_focused: true,
+            },
+        ])),
+        "a focus-only partial still patches after the omitted tab is merged back",
     );
 }
 
-#[test]
-fn floating_pane_is_not_a_live_card_pane() {
-    let mut floating = pane(1);
-    floating.is_floating = true;
+// --- FocusResolution: which pane a contested manifest resolves to ---
 
-    assert!(!floating.is_live_terminal());
-    assert!(!floating.is_card_pane());
+#[test]
+fn focus_resolution_prefers_the_false_to_true_transition() {
+    let previous = tabs_by_index(vec![(
+        0,
+        vec![focused(pane_in_tab(10, 0)), pane_in_tab(11, 0)],
+    )]);
+    let next = tabs_by_index(vec![(
+        0,
+        vec![focused(pane_in_tab(10, 0)), focused(pane_in_tab(11, 0))],
+    )]);
+
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&previous, &next);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
+    assert_eq!(resolution.active_panes_payload().get(&0_u64), Some(&11));
 }
 
 #[test]
-fn title_is_excluded_by_projection() {
-    let mut renamed = pane(1);
-    renamed.title = "line-mutated agent title".to_owned();
-    let a = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let b = manifest_hash(&tabs(vec![renamed]), Some(0));
-    assert_eq!(a, b);
+fn focus_resolution_sticks_when_contested_without_a_transition() {
+    let initial = tabs_by_index(vec![(
+        0,
+        vec![pane_in_tab(10, 0), focused(pane_in_tab(11, 0))],
+    )]);
+    let mut resolution = FocusResolution::default();
+    resolution.fold_pane_update(&BTreeMap::new(), &initial);
+
+    let contested = tabs_by_index(vec![(
+        0,
+        vec![focused(pane_in_tab(10, 0)), focused(pane_in_tab(11, 0))],
+    )]);
+    resolution.fold_pane_update(&contested, &contested);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
 }
 
 #[test]
-fn foreground_command_is_excluded_by_projection() {
-    let mut changed = pane(1);
-    changed.pane_command = Some("codex".to_owned());
-    let a = manifest_hash(&tabs(vec![pane(1)]), Some(0));
-    let b = manifest_hash(&tabs(vec![changed]), Some(0));
-    assert_eq!(a, b);
+fn focus_resolution_unresolves_ambiguous_simultaneous_card_flips() {
+    let previous = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
+    let next = tabs_by_index(vec![(
+        0,
+        vec![focused(pane_in_tab(10, 0)), focused(pane_in_tab(11, 0))],
+    )]);
+    let mut resolution = FocusResolution::default();
+
+    resolution.fold_pane_update(&previous, &next);
+
+    assert_eq!(resolution.focused_pane_id(Some(0)), None);
 }
 
+// --- topology payload: the --topology wire view over the merged room ---
+
 #[test]
-fn topology_payload_flattens_projected_panes() {
+fn topology_payload_serializes_projected_fields() {
     let mut first = pane(1);
     first.tab_position = 1;
     first.tab_name = Some("agent".to_owned());
@@ -263,60 +314,28 @@ fn topology_payload_flattens_projected_panes() {
         json["panes"][0]["terminal_command"],
         first.terminal_command.unwrap()
     );
-    assert!(json["panes"][0].get("pane_command").is_none());
+    assert!(
+        json["panes"][0].get("pane_command").is_none(),
+        "pane_command is omitted when absent",
+    );
 }
 
 #[test]
-fn topology_payload_waits_for_live_roster() {
+fn published_payload_requires_a_live_roster() {
     assert_eq!(
         published_topology_payload("rimz-test", 42, None, &BTreeMap::new()),
         None,
-        "bootstrap pokes omit --topology until PaneUpdate supplies a live roster"
+        "bootstrap pokes omit --topology until PaneUpdate supplies a live roster",
     );
-}
-
-#[test]
-fn topology_payload_skips_empty_live_roster() {
     assert_eq!(
         published_topology_payload("rimz-test", 42, Some(&BTreeMap::new()), &BTreeMap::new()),
         None,
-        "an empty live roster falls back to list-panes instead of publishing emptiness"
+        "an empty live roster falls back to list-panes instead of publishing emptiness",
     );
 }
 
 #[test]
-fn session_update_does_not_shrink_the_published_roster() {
-    let full_roster = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-        (2, vec![pane_in_tab(30, 2)]),
-    ]);
-    let partial_manifest = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-    let published_roster = merged_room(&full_roster, &partial_manifest);
-
-    let previous_payload =
-        published_topology_payload("rimz-test", 41, Some(&full_roster), &BTreeMap::new())
-            .expect("previous roster publishes");
-    let partial_payload =
-        published_topology_payload("rimz-test", 42, Some(&published_roster), &BTreeMap::new())
-            .expect("merged roster publishes");
-
-    assert_eq!(previous_payload.panes.len(), 3);
-    assert!(
-        partial_payload
-            .panes
-            .iter()
-            .any(|pane| pane.tab_position == 2),
-        "partial session-like manifests retain tabs already known through PaneUpdate"
-    );
-    assert_eq!(partial_payload.panes.len(), 3);
-}
-
-#[test]
-fn topology_payload_publishes_the_merged_detection_map() {
+fn published_payload_over_a_merged_room_keeps_every_tab() {
     let previous = tabs_by_index(vec![
         (0, vec![pane_in_tab(10, 0)]),
         (1, vec![pane_in_tab(20, 1)]),
@@ -324,15 +343,16 @@ fn topology_payload_publishes_the_merged_detection_map() {
     ]);
     let mut resized = pane_in_tab(10, 0);
     resized.pane_columns = Some(120);
-    let partial_detection = tabs_by_index(vec![(0, vec![resized.clone()])]);
-    let merged_detection = merged_room(&previous, &partial_detection);
+    // A partial manifest carrying only tab 0 must not drop tabs 1 and 2.
+    let merged = merged_room(&previous, &tabs_by_index(vec![(0, vec![resized.clone()])]));
 
-    let payload =
-        published_topology_payload("rimz-test", 42, Some(&merged_detection), &BTreeMap::new())
-            .expect("merged detection map publishes");
+    let payload = published_topology_payload("rimz-test", 42, Some(&merged), &BTreeMap::new())
+        .expect("merged roster publishes");
 
-    assert_eq!(partial_detection.len(), 1);
-    assert_eq!(payload.panes[0], resized);
+    assert_eq!(
+        payload.panes[0], resized,
+        "the carried tab's field update propagates",
+    );
     assert_eq!(
         payload
             .panes
@@ -340,14 +360,14 @@ fn topology_payload_publishes_the_merged_detection_map() {
             .map(|pane| pane.tab_position)
             .collect::<Vec<_>>(),
         vec![0, 1, 2],
+        "tabs known only through earlier PaneUpdates are retained in order",
     );
 }
 
 #[test]
-fn topology_payload_carries_retained_foreground_without_replacing_spawn() {
-    let mut foreground = BTreeMap::new();
-    foreground.insert(7, "codex".to_owned());
-    let mut projected = tabs(vec![PaneFields {
+fn foreground_overlay_reaches_the_payload_without_replacing_the_spawn() {
+    let foreground = BTreeMap::from([(7, "codex".to_owned())]);
+    let roster = tabs(vec![PaneFields {
         id: 7,
         terminal_command: Some(
             "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt".to_owned(),
@@ -355,56 +375,41 @@ fn topology_payload_carries_retained_foreground_without_replacing_spawn() {
         ..pane(7)
     }]);
 
-    apply_foreground_commands(&mut projected, &foreground);
-
-    let pane = &projected[&0][0];
-    assert_eq!(pane.pane_command.as_deref(), Some("codex"));
-    assert_eq!(
-        pane.terminal_command.as_deref(),
-        Some("/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt")
-    );
-    let payload = TopologyPayload::from_tabs("rimz-test", 42, &projected);
-    let json = serde_json::to_value(&payload).expect("topology payload serializes");
-    assert_eq!(json["panes"][0]["pane_command"], "codex");
-    assert_eq!(
-        json["panes"][0]["terminal_command"],
-        "/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt"
-    );
-}
-
-#[test]
-fn foreground_overlay_reaches_live_roster_payload() {
-    let foreground = BTreeMap::from([(7, "codex".to_owned())]);
-    let live_roster = tabs(vec![PaneFields {
-        id: 7,
-        terminal_command: Some("zsh".to_owned()),
-        ..pane(7)
-    }]);
-
-    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &foreground)
+    let payload = published_topology_payload("rimz-test", 42, Some(&roster), &foreground)
         .expect("live roster publishes");
 
     assert_eq!(payload.panes[0].pane_command.as_deref(), Some("codex"));
-    assert_eq!(payload.panes[0].terminal_command.as_deref(), Some("zsh"));
+    assert_eq!(
+        payload.panes[0].terminal_command.as_deref(),
+        Some("/home/me/.cargo/bin/rimz agents exec codex --worktree-path /repo/wt"),
+        "the exec spawn wrapper survives as terminal_command",
+    );
+    let json = serde_json::to_value(&payload).expect("payload serializes");
+    assert_eq!(json["panes"][0]["pane_command"], "codex");
 }
 
 #[test]
-fn launch_chrome_foreground_does_not_reach_live_roster_payload() {
+fn launch_chrome_never_reaches_the_payload() {
     let launch = "rimz agents claude,codex --worktree=quality-pass";
     let foreground = BTreeMap::from([(7, launch.to_owned())]);
-    let live_roster = tabs(vec![PaneFields {
+    let roster = tabs(vec![PaneFields {
         id: 7,
         pane_command: Some(launch.to_owned()),
         terminal_command: Some("zsh".to_owned()),
         ..pane(7)
     }]);
 
-    let payload = published_topology_payload("rimz-test", 42, Some(&live_roster), &foreground)
+    let payload = published_topology_payload("rimz-test", 42, Some(&roster), &foreground)
         .expect("live roster publishes");
 
-    assert_eq!(payload.panes[0].pane_command, None);
+    assert_eq!(
+        payload.panes[0].pane_command, None,
+        "launch chrome is scrubbed from both the foreground map and a stale pane_command",
+    );
     assert_eq!(payload.panes[0].terminal_command.as_deref(), Some("zsh"));
 }
+
+// --- foreground command tracking: classify events, retain across rebuilds ---
 
 #[test]
 fn launch_chrome_classifier_scopes_to_agents_launches() {
@@ -436,7 +441,7 @@ fn launch_chrome_classifier_scopes_to_agents_launches() {
 }
 
 #[test]
-fn foreground_command_update_remembers_real_foreground_commands() {
+fn foreground_command_update_remembers_real_work_and_forgets_the_rest() {
     assert_eq!(
         foreground_command_update(
             &[
@@ -446,31 +451,27 @@ fn foreground_command_update_remembers_real_foreground_commands() {
             ],
             true,
         ),
-        ForegroundCommandUpdate::Remember("cargo clippy --all-targets".to_owned())
+        ForegroundCommandUpdate::Remember("cargo clippy --all-targets".to_owned()),
     );
-}
-
-#[test]
-fn foreground_command_update_forgets_finished_empty_and_launch_chrome_events() {
     assert_eq!(
         foreground_command_update(&["cargo".to_owned(), "clippy".to_owned()], false),
         ForegroundCommandUpdate::Forget,
-        "a foreground-end event clears the retained command"
+        "a foreground-end event clears the retained command",
     );
     assert_eq!(
         foreground_command_update(&["".to_owned()], true),
         ForegroundCommandUpdate::Forget,
-        "an empty foreground event clears the retained command"
+        "an empty foreground event clears the retained command",
     );
     assert_eq!(
         foreground_command_update(&["rimz agents claude,codex".to_owned()], true),
         ForegroundCommandUpdate::Forget,
-        "launch chrome clears instead of publishing as foreground work"
+        "launch chrome clears instead of publishing as foreground work",
     );
 }
 
 #[test]
-fn foreground_retention_survives_rebuild_and_clears_on_close() {
+fn foreground_overlay_applies_and_clears_when_the_id_is_reused() {
     let command = joined_foreground_command(&["codex".to_owned(), "--foo".to_owned()])
         .expect("joined foreground");
     let mut foreground = BTreeMap::from([(9, command)]);
@@ -479,21 +480,12 @@ fn foreground_retention_survives_rebuild_and_clears_on_close() {
     apply_foreground_commands(&mut rebuilt, &foreground);
     assert_eq!(rebuilt[&0][0].pane_command.as_deref(), Some("codex --foo"));
 
-    let mut rebuilt_again = tabs(vec![pane(9)]);
-    apply_foreground_commands(&mut rebuilt_again, &foreground);
-    assert_eq!(
-        rebuilt_again[&0][0].pane_command.as_deref(),
-        Some("codex --foo"),
-        "a manifest rebuild does not wipe the retained foreground command"
-    );
-
+    // The foreground map is the source of truth: dropping the entry on close
+    // means a reused pane id does not inherit the stale command.
     foreground.remove(&9);
     let mut reused = tabs(vec![pane(9)]);
     apply_foreground_commands(&mut reused, &foreground);
-    assert_eq!(
-        reused[&0][0].pane_command, None,
-        "a pane id reused after close does not inherit stale foreground"
-    );
+    assert_eq!(reused[&0][0].pane_command, None);
 }
 
 #[test]
@@ -508,238 +500,146 @@ fn remove_pane_from_live_roster_prunes_empty_tab() {
     assert_eq!(
         live_roster.keys().copied().collect::<Vec<_>>(),
         vec![0],
-        "PaneClosed prunes the published roster immediately"
+        "PaneClosed prunes the published roster immediately",
     );
 }
 
-// --- manifest merging: partial Zellij manifests must not collapse the room ---
+// --- merged_room: partial Zellij manifests must not collapse the room ---
 
 #[test]
-fn partial_manifest_merge_retains_absent_tabs() {
+fn merged_room_replaces_carried_tabs_exactly() {
+    // The first manifest after load is the baseline, accepted whole.
+    let first = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]);
+    assert_eq!(merged_room(&BTreeMap::new(), &first), first);
+
+    // A carried tab overwrites wholesale: an updated field lands and a pane
+    // that vanished from the carried tab is pruned.
+    let previous = tabs_by_index(vec![
+        (0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+    let mut resized = pane_in_tab(10, 0);
+    resized.pane_columns = Some(120);
+    let next = tabs_by_index(vec![
+        (0, vec![resized.clone()]),
+        (1, vec![pane_in_tab(20, 1)]),
+    ]);
+
+    let merged = merged_room(&previous, &next);
+
+    assert_eq!(merged, next, "carried tabs replace wholesale");
+    assert!(
+        !merged.values().flatten().any(|pane| pane.id == 11),
+        "panes absent from a carried tab are pruned",
+    );
+}
+
+#[test]
+fn merged_room_retains_tabs_a_partial_manifest_omits() {
     let previous = tabs_by_index(vec![
         (0, vec![pane_in_tab(10, 0)]),
         (1, vec![pane_in_tab(20, 1)]),
         (2, vec![pane_in_tab(30, 2)]),
     ]);
-    let mut updated = pane_in_tab(10, 0);
-    updated.pane_columns = Some(120);
-    let next = tabs_by_index(vec![(0, vec![updated.clone()])]);
 
-    let merged = merged_room(&previous, &next);
-
-    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
-    assert_eq!(merged[&0], vec![updated]);
-    assert_eq!(merged.get(&1), previous.get(&1));
-    assert_eq!(merged.get(&2), previous.get(&2));
-}
-
-#[test]
-fn carried_tabs_replace_and_prune_closed_panes() {
-    let removed = pane_in_tab(11, 0);
-    let previous = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0), removed.clone()]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-    let next = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-
-    let merged = merged_room(&previous, &next);
-
-    assert_eq!(merged, next);
-    assert!(!merged.values().flatten().any(|pane| pane.id == removed.id));
-}
-
-#[test]
-fn empty_manifest_never_prunes() {
-    let previous = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-    let next = BTreeMap::new();
-
-    let merged = merged_room(&previous, &next);
-
-    assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1]);
-}
-
-#[test]
-fn manifest_missing_known_tab_merges_not_collapses() {
-    let previous = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-        (2, vec![pane_in_tab(30, 2)]),
-    ]);
-    let next = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-
-    let merged = merged_room(&previous, &next);
-
+    // A partial manifest carrying only tab 0 keeps tabs 1 and 2 intact.
+    let merged = merged_room(
+        &previous,
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]),
+    );
     assert_eq!(merged.keys().copied().collect::<Vec<_>>(), vec![0, 1, 2]);
     assert_eq!(merged.get(&2), previous.get(&2));
+
+    // An empty manifest is "nothing carried", never a collapse.
+    assert_eq!(merged_room(&previous, &BTreeMap::new()), previous);
 }
 
-#[test]
-fn first_manifest_replaces_regardless_of_coverage() {
-    let next = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0)])]);
-
-    let merged = merged_room(&BTreeMap::new(), &next);
-
-    assert_eq!(merged, next);
-}
+// --- opened_card_panes: which manifest panes earn a card-create poke ---
 
 #[test]
-fn opened_card_panes_no_spurious_opens_on_partial() {
-    let previous = tabs_by_index(vec![
-        (0, vec![pane_in_tab(10, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
+fn opened_card_panes_reports_only_new_card_panes() {
+    let previous = tabs(vec![pane(1)]);
+    let mut floating = pane(5);
+    floating.is_floating = true;
+    let next = tabs(vec![
+        pane(1),
+        pane(2),
+        sidebar_pane(3),
+        plugin_pane(4),
+        floating,
     ]);
-    let mut focused = pane_in_tab(10, 0);
-    focused.is_focused = true;
-    let partial = tabs_by_index(vec![(0, vec![focused])]);
-
-    let merged = merged_room(&previous, &partial);
-
-    assert!(opened_card_panes(&previous, &merged).is_empty());
-}
-
-#[test]
-fn focus_only_partial_still_takes_shortcut() {
-    let mut previous_focused = pane_in_tab(10, 0);
-    previous_focused.is_focused = true;
-    let previous = tabs_by_index(vec![
-        (0, vec![previous_focused, pane_in_tab(11, 0)]),
-        (1, vec![pane_in_tab(20, 1)]),
-    ]);
-    let mut next_focused = pane_in_tab(11, 0);
-    next_focused.is_focused = true;
-    let partial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), next_focused])]);
-
-    let merged = merged_room(&previous, &partial);
 
     assert_eq!(
-        focus_shortcut_if_only_focus_changed(&previous, &merged),
-        Some(FocusShortcut::Patch(vec![
-            FocusPatch {
-                id: 10,
-                is_focused: false,
-            },
-            FocusPatch {
-                id: 11,
-                is_focused: true,
-            },
-        ]))
+        opened_card_panes(&previous, &next),
+        vec![pane(2)],
+        "existing, sidebar, plugin, and floating panes never read as opens",
     );
 }
 
 #[test]
-fn focus_resolution_prefers_false_to_true_transition() {
-    let mut previous_focused = pane_in_tab(10, 0);
-    previous_focused.is_focused = true;
-    let previous = tabs_by_index(vec![(0, vec![previous_focused, pane_in_tab(11, 0)])]);
-    let mut old = pane_in_tab(10, 0);
-    old.is_focused = true;
-    let mut new = pane_in_tab(11, 0);
-    new.is_focused = true;
-    let next = tabs_by_index(vec![(0, vec![old, new])]);
-
-    let mut resolution = FocusResolution::default();
-    resolution.fold_pane_update(&previous, &next);
-
-    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
-    assert_eq!(resolution.active_panes_payload().get(&0_u64), Some(&11));
+fn first_manifest_after_load_reports_no_opens() {
+    let next = tabs(vec![pane(1), pane(2)]);
+    assert!(
+        opened_card_panes(&BTreeMap::new(), &next).is_empty(),
+        "the first manifest names every pre-existing pane; the pull covers the room",
+    );
 }
 
 #[test]
-fn focus_resolution_sticks_when_contested_without_transition() {
-    let mut focused = pane_in_tab(11, 0);
-    focused.is_focused = true;
-    let initial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), focused])]);
-    let mut resolution = FocusResolution::default();
-    resolution.fold_pane_update(&BTreeMap::new(), &initial);
-    let mut first = pane_in_tab(10, 0);
-    first.is_focused = true;
-    let mut second = pane_in_tab(11, 0);
-    second.is_focused = true;
-    let contested = tabs_by_index(vec![(0, vec![first, second])]);
+fn a_reused_terminal_id_is_not_an_open_but_a_new_id_space_is() {
+    // Terminal and plugin panes have separate id spaces: a terminal pane whose
+    // id collides with a known plugin pane is still a genuine open.
+    let previous = tabs(vec![plugin_pane(7)]);
+    let next = tabs(vec![plugin_pane(7), pane(7)]);
 
-    resolution.fold_pane_update(&contested, &contested);
-
-    assert_eq!(resolution.focused_pane_id(Some(0)), Some(11));
+    assert_eq!(opened_card_panes(&previous, &next), vec![pane(7)]);
 }
 
 #[test]
-fn focus_resolution_unresolves_ambiguous_simultaneous_card_flips() {
-    let previous = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
-    let mut first = pane_in_tab(10, 0);
-    first.is_focused = true;
-    let mut second = pane_in_tab(11, 0);
-    second.is_focused = true;
-    let next = tabs_by_index(vec![(0, vec![first, second])]);
-    let mut resolution = FocusResolution::default();
-
-    resolution.fold_pane_update(&previous, &next);
-
-    assert_eq!(resolution.focused_pane_id(Some(0)), None);
-}
-
-#[test]
-fn genuine_open_in_carried_tab_is_reported() {
+fn opened_card_panes_over_a_merged_partial_manifest() {
     let previous = tabs_by_index(vec![
         (0, vec![pane_in_tab(10, 0)]),
         (1, vec![pane_in_tab(20, 1)]),
     ]);
-    let partial = tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]);
 
-    let merged = merged_room(&previous, &partial);
+    // A partial re-sending only tab 0 (here a focus flip) opens nothing: the
+    // omitted tab 1 is retained, not treated as closed-then-reopened.
+    let focus_only = merged_room(
+        &previous,
+        &tabs_by_index(vec![(0, vec![focused(pane_in_tab(10, 0))])]),
+    );
+    assert!(opened_card_panes(&previous, &focus_only).is_empty());
 
+    // A genuinely new pane in the carried tab is the one open reported.
+    let with_open = merged_room(
+        &previous,
+        &tabs_by_index(vec![(0, vec![pane_in_tab(10, 0), pane_in_tab(11, 0)])]),
+    );
     assert_eq!(
-        opened_card_panes(&previous, &merged),
-        vec![pane_in_tab(11, 0)]
+        opened_card_panes(&previous, &with_open),
+        vec![pane_in_tab(11, 0)],
     );
 }
 
 // --- stranded_sidebar_pane: tab-switch classification reports the sidebar ---
 
 #[test]
-fn stranded_sidebar_pane_reports_focused_sidebar_with_working_pane() {
-    let mut sidebar = pane(1);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let work = pane(2);
-
+fn stranded_sidebar_pane_classifies_the_active_tab() {
+    // Sidebar holds focus while a live working sibling exists: stranded.
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![sidebar, work]), Some(0)),
+        stranded_sidebar_pane(&tabs(vec![focused(sidebar_pane(1)), pane(2)]), Some(0)),
         Some(1),
     );
-}
-
-#[test]
-fn stranded_sidebar_pane_leaves_working_focus_alone() {
-    let mut sidebar = pane(1);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    let mut work = pane(2);
-    work.is_focused = true;
-
+    // Work holds focus: nothing to correct.
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![sidebar, work]), Some(0)),
+        stranded_sidebar_pane(&tabs(vec![sidebar_pane(1), focused(pane(2))]), Some(0)),
         None,
     );
-}
-
-#[test]
-fn stranded_sidebar_pane_requires_a_live_working_pane() {
-    let mut sidebar = pane(1);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let mut held_work = pane(2);
-    held_work.is_held = true;
-
+    // Sidebar holds focus but the only sibling is held, not live work.
+    let mut held = pane(2);
+    held.is_held = true;
     assert_eq!(
-        stranded_sidebar_pane(&tabs(vec![sidebar, held_work]), Some(0)),
+        stranded_sidebar_pane(&tabs(vec![focused(sidebar_pane(1)), held]), Some(0)),
         None,
     );
 }
@@ -759,33 +659,32 @@ fn focus_correction_does_not_arm_on_load() {
 }
 
 #[test]
-fn focus_correction_clears_on_jump_landing_on_work() {
+fn focus_correction_clears_when_a_fresh_jump_lands_on_work() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
-    let mut sidebar = pane(10);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    let mut work = pane(11);
-    work.is_focused = true;
-    let manifest = tabs_by_index(vec![(0, vec![pane(1)]), (1, vec![sidebar, work])]);
+    let manifest = tabs_by_index(vec![
+        (0, vec![pane(1)]),
+        (1, vec![sidebar_pane(10), focused(pane(11))]),
+    ]);
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), true, 1_001),
         CorrectionAction::Clear,
-        "a fresh manifest from an explicit jump proves work holds focus before the settle deadline"
+        "a fresh manifest from an explicit jump proves work holds focus before the settle deadline",
     );
     assert_eq!(correction.next_deadline(), None);
 }
 
 #[test]
-fn focus_correction_broadcasts_on_native_switch_at_deadline() {
+fn focus_correction_broadcasts_a_stranded_sidebar_at_the_deadline() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
-    let mut sidebar = pane(10);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let manifest = tabs_by_index(vec![(0, vec![pane(1)]), (1, vec![sidebar, pane(11)])]);
+    let manifest = tabs_by_index(vec![
+        (0, vec![pane(1)]),
+        (1, vec![focused(sidebar_pane(10)), pane(11)]),
+    ]);
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS - 1),
@@ -799,19 +698,16 @@ fn focus_correction_broadcasts_on_native_switch_at_deadline() {
 }
 
 #[test]
-fn focus_correction_waits_until_deadline_on_fresh_sidebar_manifest() {
+fn focus_correction_waits_out_the_window_on_a_fresh_sidebar_manifest() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
-    let mut sidebar = pane(10);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let manifest = tabs_by_index(vec![(1, vec![sidebar, pane(11)])]);
+    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), pane(11)])]);
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), true, 1_001),
         CorrectionAction::Wait,
-        "a fresh manifest that still shows sidebar focus may predate an explicit jump's focus mark",
+        "a fresh manifest still showing sidebar focus may predate an explicit jump's focus mark",
     );
     assert_eq!(
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
@@ -820,22 +716,16 @@ fn focus_correction_waits_until_deadline_on_fresh_sidebar_manifest() {
 }
 
 #[test]
-fn focus_correction_retargets_on_rapid_switches() {
+fn focus_correction_retargets_to_the_latest_switch() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
     correction.on_active_tab_change(Some(1), Some(2), 1_050);
 
     assert_eq!(correction.next_deadline(), Some(1_050 + FOCUS_SETTLE_MS));
 
-    let mut sidebar_1 = pane(10);
-    sidebar_1.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar_1.is_focused = true;
-    let mut sidebar_2 = pane(20);
-    sidebar_2.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar_2.is_focused = true;
     let manifest = tabs_by_index(vec![
-        (1, vec![sidebar_1, pane(11)]),
-        (2, vec![sidebar_2, pane(21)]),
+        (1, vec![focused(sidebar_pane(10)), pane(11)]),
+        (2, vec![focused(sidebar_pane(20)), pane(21)]),
     ]);
 
     assert_eq!(
@@ -845,7 +735,7 @@ fn focus_correction_retargets_on_rapid_switches() {
 }
 
 #[test]
-fn focus_correction_drops_pending_when_tab_closes() {
+fn focus_correction_clears_when_the_target_tab_closes() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
@@ -862,16 +752,13 @@ fn focus_correction_drops_pending_when_tab_closes() {
 }
 
 #[test]
-fn focus_correction_no_broadcast_without_a_live_working_pane() {
+fn focus_correction_does_not_broadcast_without_live_work() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change(Some(0), Some(1), 1_000);
 
-    let mut sidebar = pane(10);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
     let mut held_work = pane(11);
     held_work.is_held = true;
-    let manifest = tabs_by_index(vec![(1, vec![sidebar, held_work])]);
+    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(10)), held_work])]);
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), false, 1_000 + FOCUS_SETTLE_MS),
@@ -880,32 +767,21 @@ fn focus_correction_no_broadcast_without_a_live_working_pane() {
 }
 
 #[test]
-fn focus_correction_clears_when_tab_position_renumbered_under_same_focused_pane() {
+fn focus_correction_clears_on_a_tab_renumber_under_the_same_pane() {
     let mut correction = FocusCorrection::default();
     correction.on_active_tab_change_with_focus(Some(2), Some(1), Some(42), 1_000);
 
-    let mut sidebar = pane(42);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    sidebar.is_focused = true;
-    let manifest = tabs_by_index(vec![(1, vec![sidebar, pane(43)])]);
+    let manifest = tabs_by_index(vec![(1, vec![focused(sidebar_pane(42)), pane(43)])]);
 
     assert_eq!(
         correction.resolve(&manifest, Some(1), true, 1_001),
         CorrectionAction::Clear,
-        "the same focused pane under a new tab position is a renumber, not navigation"
+        "the same focused pane under a new tab position is a renumber, not navigation",
     );
     assert_eq!(correction.next_deadline(), None);
 }
 
-#[test]
-fn focus_correction_next_deadline_is_settle_after_arm() {
-    let mut correction = FocusCorrection::default();
-    correction.on_active_tab_change(Some(0), Some(1), 7_000);
-
-    assert_eq!(correction.next_deadline(), Some(7_000 + FOCUS_SETTLE_MS));
-}
-
-// --- PokePolicy: immediate change, duplicate floor, keepalive ---
+// --- PokePolicy: immediate change, duplicate floor, settle, keepalive ---
 
 #[test]
 fn first_manifest_is_a_baseline_not_a_poke() {
@@ -915,7 +791,7 @@ fn first_manifest_is_a_baseline_not_a_poke() {
     assert_eq!(
         policy.next_wake_at(),
         KEEPALIVE_MS,
-        "only the keepalive is armed after the baseline"
+        "only the keepalive is armed after the baseline",
     );
 }
 
@@ -928,7 +804,7 @@ fn manifest_change_pokes_immediately() {
     assert_eq!(
         policy.due(10),
         vec![Poke::Changed],
-        "a sidebar-changing manifest should wake the producer now"
+        "a sidebar-changing manifest should wake the producer now",
     );
     assert_eq!(policy.due(11), Vec::<Poke>::new());
 }
@@ -950,7 +826,7 @@ fn change_pokes_once_more_after_the_settle_window() {
     assert_eq!(
         policy.next_wake_at(),
         10 + SETTLE_POKE_MS,
-        "the post-change settle poke is armed after the immediate one"
+        "the post-change settle poke is armed after the immediate one",
     );
     assert_eq!(policy.due(10 + SETTLE_POKE_MS - 1), Vec::<Poke>::new());
     assert_eq!(policy.due(10 + SETTLE_POKE_MS), vec![Poke::Changed]);
@@ -968,74 +844,29 @@ fn optimistic_signal_skips_immediate_poke_but_still_settles() {
 }
 
 #[test]
-fn duplicate_changes_inside_the_floor_defer_once() {
+fn duplicate_changes_inside_the_floor_defer_once_and_never_drop() {
     let mut policy = PokePolicy::new(0);
     policy.on_signal(100);
     assert_eq!(policy.due(100), vec![Poke::Changed]);
 
-    // A split or command handoff can fan out several events. The first one
-    // already refreshed panes, so duplicates inside the 100ms floor wait and
-    // collapse into one follow-up.
+    // A split or command handoff fans out several events. The first refreshed
+    // panes already, so duplicates inside the 100ms floor wait and collapse
+    // into one follow-up — deferred, never dropped.
     policy.on_signal(150);
     policy.on_signal(180);
     assert_eq!(policy.due(199), Vec::<Poke>::new());
     assert_eq!(
         policy.next_wake_at(),
         100 + POKE_FLOOR_MS,
-        "the follow-up is armed for the floor's end"
+        "the follow-up is armed for the floor's end",
     );
     assert_eq!(policy.due(200), vec![Poke::Changed]);
     assert_eq!(
         policy.next_wake_at(),
         200 + SETTLE_POKE_MS,
-        "the duplicate-burst poke gets its own settled read"
+        "the duplicate-burst poke gets its own settled read",
     );
     assert_eq!(policy.due(201), Vec::<Poke>::new());
-}
-
-#[test]
-fn explicit_signals_coalesce_with_manifest_changes_inside_the_floor() {
-    let mut policy = PokePolicy::new(0);
-    policy.on_manifest(11, 0);
-    policy.on_signal(10);
-    assert_eq!(policy.due(10), vec![Poke::Changed]);
-
-    policy.on_manifest(22, 50);
-    policy.on_signal(90);
-
-    assert_eq!(
-        policy.due(10 + POKE_FLOOR_MS - 1),
-        Vec::<Poke>::new(),
-        "the duplicate floor holds the burst"
-    );
-    assert_eq!(
-        policy.due(10 + POKE_FLOOR_MS),
-        vec![Poke::Changed],
-        "manifest and explicit signals collapse into one follow-up"
-    );
-}
-
-#[test]
-fn change_during_the_floor_is_deferred_never_dropped() {
-    let mut policy = PokePolicy::new(0);
-    policy.on_manifest(11, 0);
-    policy.on_manifest(22, 100);
-    assert_eq!(policy.due(100), vec![Poke::Changed]);
-    let poked_at = 100;
-
-    // A second change lands well inside the duplicate floor.
-    policy.on_manifest(33, poked_at + 50);
-    assert_eq!(policy.due(poked_at + POKE_FLOOR_MS - 1), Vec::<Poke>::new());
-    assert_eq!(
-        policy.next_wake_at(),
-        poked_at + POKE_FLOOR_MS,
-        "the wake is re-armed for the floor's end"
-    );
-    assert_eq!(
-        policy.due(poked_at + POKE_FLOOR_MS),
-        vec![Poke::Changed],
-        "the deferred change fires when the floor lifts"
-    );
 }
 
 #[test]
@@ -1055,7 +886,7 @@ fn keepalive_fires_on_cadence_without_changes() {
     assert_eq!(
         policy.next_wake_at(),
         2 * KEEPALIVE_MS,
-        "the next keepalive re-arms from the firing instant"
+        "the next keepalive re-arms from the firing instant",
     );
 }
 
@@ -1077,7 +908,7 @@ fn next_wake_is_the_earlier_of_change_and_keepalive() {
     assert_eq!(
         policy.next_wake_at(),
         40,
-        "a pending change wakes immediately before the keepalive"
+        "a pending change wakes immediately before the keepalive",
     );
 }
 
@@ -1090,7 +921,7 @@ fn timer_gate_dedupes_equal_and_later_deadlines() {
     assert!(!gate.should_arm(1_000), "same deadline: already covered");
     assert!(
         !gate.should_arm(5_000),
-        "later deadline: the armed timer wakes first"
+        "later deadline: the armed timer wakes first",
     );
     assert!(gate.should_arm(500), "earlier deadline supersedes");
 }
@@ -1106,12 +937,12 @@ fn timer_gate_collapses_a_superseded_chain() {
     gate.on_fire(30_100);
     assert!(
         gate.should_arm(60_000),
-        "after the earlier timer fires the keepalive re-arms"
+        "after the earlier timer fires the keepalive re-arms",
     );
     gate.on_fire(60_000);
     assert!(
         gate.should_arm(120_000),
-        "the fired keepalive chains forward"
+        "the fired keepalive chains forward",
     );
 
     // The timer superseded at 30_200 fires late, while the 120s chain is
@@ -1122,47 +953,6 @@ fn timer_gate_collapses_a_superseded_chain() {
     gate.on_fire(60_005);
     assert!(
         !gate.should_arm(120_000),
-        "a stale fire arms no duplicate chain"
+        "a stale fire arms no duplicate chain",
     );
-}
-
-// --- opened_card_panes: which manifest panes earn a card-create poke ---
-
-#[test]
-fn opened_card_panes_reports_only_genuinely_new_card_panes() {
-    let previous = tabs(vec![pane(1)]);
-    let mut sidebar = pane(3);
-    sidebar.title = SIDEBAR_PANE_TITLE.to_owned();
-    let mut plugin = pane(4);
-    plugin.is_plugin = true;
-    let next = tabs(vec![pane(1), pane(2), sidebar, plugin]);
-
-    let opened = opened_card_panes(&previous, &next);
-    assert_eq!(
-        opened,
-        vec![pane(2)],
-        "existing, sidebar, and plugin panes never read as opens"
-    );
-}
-
-#[test]
-fn first_manifest_after_load_reports_no_opens() {
-    let next = tabs(vec![pane(1), pane(2)]);
-    assert!(
-        opened_card_panes(&BTreeMap::new(), &next).is_empty(),
-        "the first manifest names every pre-existing pane; the pull covers the room"
-    );
-}
-
-#[test]
-fn a_reused_terminal_id_is_not_an_open_but_a_new_id_space_is() {
-    // Terminal and plugin panes have separate id spaces: a terminal pane whose
-    // id collides with a known plugin pane is still a genuine open.
-    let mut plugin = pane(7);
-    plugin.is_plugin = true;
-    let previous = tabs(vec![plugin.clone()]);
-    let next = tabs(vec![plugin, pane(7)]);
-
-    let opened = opened_card_panes(&previous, &next);
-    assert_eq!(opened, vec![pane(7)]);
 }

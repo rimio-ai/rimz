@@ -534,14 +534,6 @@ pub fn stranded_sidebar_pane_with_resolution(
         .then_some(focused.id)
 }
 
-#[cfg(test)]
-pub fn focused_pane_id(
-    tabs: &BTreeMap<usize, Vec<PaneFields>>,
-    active_tab: Option<usize>,
-) -> Option<u32> {
-    focused_pane(tabs, active_tab).map(|pane| pane.id)
-}
-
 pub fn resolved_focused_pane_id(
     tabs: &BTreeMap<usize, Vec<PaneFields>>,
     active_tab: Option<usize>,
