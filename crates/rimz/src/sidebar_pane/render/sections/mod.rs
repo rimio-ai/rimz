@@ -35,7 +35,7 @@ pub(crate) use provider::ProviderTabHit;
 #[cfg(test)]
 pub(super) use provider::provider_panel_lines;
 pub(super) use provider::{
-    dashboard_panel_lines, fleet_ledger_lines, provider_dashboard_block_rows,
+    dashboard_panel_lines, fleet_ledger_lines, fleet_total_lines, provider_dashboard_block_rows,
 };
 pub(super) use worktree::worktree_group_lines;
 

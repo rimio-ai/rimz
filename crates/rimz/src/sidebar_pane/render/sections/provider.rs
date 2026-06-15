@@ -1,5 +1,5 @@
-//! The pinned provider dashboard — per-provider header, brand emblem, spend
-//! table and budget bars — and the fallback W/M fleet ledger rows.
+//! The pinned provider dashboard — per-provider header, brand emblem, stats and
+//! budget bars — and the W/M fleet ledger rows.
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
 use crate::config::BudgetZonesConfig;
@@ -30,6 +30,12 @@ const PROVIDER_ART_WIDTH: usize = 9;
 /// the emblem is dropped so the bar keeps a legible length.
 const PROVIDER_ART_MIN_WIDTH: usize = 34;
 
+/// Widths that choose the provider body density. Wide keeps the historical
+/// one-line stats row. Normal stacks sessions, tokens, and USD into a taller
+/// block. Narrow also drops input/output token splits.
+const PROVIDER_WIDE_MIN_WIDTH: usize = 52;
+const PROVIDER_NORMAL_MIN_WIDTH: usize = 40;
+
 /// Blank cells between the active provider block and the pet column when the
 /// pet rides beside the dashboard.
 const PET_COLUMN_GAP: usize = 1;
@@ -44,6 +50,35 @@ const PROVIDER_VALUE_WIDTH: usize = 9;
 const PROVIDER_RESET_COUNTDOWN_WIDTH: usize = 6;
 const PROVIDER_RESET_MARKER_PAD: usize =
     PROVIDER_VALUE_WIDTH.saturating_sub(3 + PROVIDER_RESET_COUNTDOWN_WIDTH);
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderLayout {
+    Wide,
+    Normal,
+    Narrow,
+}
+
+impl ProviderLayout {
+    fn for_width(width: usize, allow_wide: bool) -> Self {
+        if allow_wide && width >= PROVIDER_WIDE_MIN_WIDTH {
+            Self::Wide
+        } else if width >= PROVIDER_NORMAL_MIN_WIDTH {
+            Self::Normal
+        } else {
+            Self::Narrow
+        }
+    }
+
+    fn inline_art(self) -> bool {
+        self != Self::Wide
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TokenDetail {
+    Full,
+    Summary,
+}
 
 /// The fallback fleet ledger rows pinned below no-table dashboards: the trailing
 /// week (`W:`) and month (`M:`), each reading `◎ sessions  ◇ ↘ ↗ ◌  $spend`
@@ -60,17 +95,105 @@ pub(in crate::sidebar_pane::render) fn fleet_ledger_lines(
     tally: Option<&SpendTally>,
     width: usize,
 ) -> Vec<Line<'static>> {
+    total_ledger_rows(theme, tally, width, ProviderLayout::Wide)
+}
+
+pub(in crate::sidebar_pane::render) fn fleet_total_lines(
+    theme: &Theme,
+    tally: Option<&SpendTally>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let layout = ProviderLayout::for_width(width, true);
+    total_spend_lines(theme, tally, width, layout)
+}
+
+fn total_spend_lines(
+    theme: &Theme,
+    tally: Option<&SpendTally>,
+    width: usize,
+    layout: ProviderLayout,
+) -> Vec<Line<'static>> {
+    let rows = total_ledger_rows(theme, tally, width, layout);
+    if rows.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = Vec::with_capacity(rows.len() + 1);
+    lines.push(Line::from(total_delimiter_row(theme, width)));
+    lines.extend(rows);
+    lines
+}
+
+fn total_ledger_rows(
+    theme: &Theme,
+    tally: Option<&SpendTally>,
+    width: usize,
+    layout: ProviderLayout,
+) -> Vec<Line<'static>> {
     let Some(tally) = tally.filter(|t| !t.is_zero()) else {
         return Vec::new();
     };
-    let cols = WmColumns::measure([
-        (&tally.week, TokenFormat::Precise),
-        (&tally.month, TokenFormat::Precise),
-    ]);
-    vec![
-        wm_row(theme, "W", &tally.week, TokenFormat::Precise, &cols, width),
-        wm_row(theme, "M", &tally.month, TokenFormat::Precise, &cols, width),
-    ]
+    let token_format: fn(u64) -> String = tokens_short;
+    let cols = WmColumns::measure([(&tally.week, token_format), (&tally.month, token_format)]);
+    match layout {
+        ProviderLayout::Wide => vec![
+            wm_row(
+                theme,
+                "W",
+                &tally.week,
+                tokens_short,
+                TokenDetail::Full,
+                &cols,
+                width,
+            ),
+            wm_row(
+                theme,
+                "M",
+                &tally.month,
+                tokens_short,
+                TokenDetail::Full,
+                &cols,
+                width,
+            ),
+        ],
+        ProviderLayout::Normal | ProviderLayout::Narrow => {
+            let detail = total_token_detail(theme, tally, tokens_short, layout, &cols, width);
+            vec![
+                spend_token_row(theme, "W", &tally.week, tokens_short, detail, &cols, width),
+                spend_token_row(theme, "M", &tally.month, tokens_short, detail, &cols, width),
+                total_usd_row(theme, &tally.week, &tally.month, &cols, width),
+            ]
+        }
+    }
+}
+
+fn total_token_detail(
+    theme: &Theme,
+    tally: &SpendTally,
+    token_format: fn(u64) -> String,
+    layout: ProviderLayout,
+    cols: &WmColumns,
+    width: usize,
+) -> TokenDetail {
+    if layout == ProviderLayout::Narrow {
+        return TokenDetail::Summary;
+    }
+    let full_fits = [("W", &tally.week), ("M", &tally.month)]
+        .into_iter()
+        .all(|(label, window)| {
+            provider_spans_width(&spend_token_spans(
+                theme,
+                label,
+                window,
+                token_format,
+                TokenDetail::Full,
+                cols,
+            )) <= width
+        });
+    if full_fits {
+        TokenDetail::Full
+    } else {
+        TokenDetail::Summary
+    }
 }
 
 /// The shared right-aligned column widths for ledger rows, measured across every
@@ -85,7 +208,9 @@ struct WmColumns {
 }
 
 impl WmColumns {
-    fn measure<'a>(windows: impl IntoIterator<Item = (&'a SpendWindow, TokenFormat)>) -> Self {
+    fn measure<'a>(
+        windows: impl IntoIterator<Item = (&'a SpendWindow, fn(u64) -> String)>,
+    ) -> Self {
         let mut cols = Self {
             sessions: 1,
             total: 1,
@@ -98,92 +223,16 @@ impl WmColumns {
             cols.sessions = cols
                 .sessions
                 .max(window.sessions.to_string().chars().count());
-            cols.total = cols
-                .total
-                .max(token_format.tokens(window.tokens).chars().count());
-            cols.input = cols
-                .input
-                .max(token_format.tokens(window.input).chars().count());
-            cols.output = cols
-                .output
-                .max(token_format.tokens(window.output).chars().count());
+            cols.total = cols.total.max(token_format(window.tokens).chars().count());
+            cols.input = cols.input.max(token_format(window.input).chars().count());
+            cols.output = cols.output.max(token_format(window.output).chars().count());
             cols.cache_read = cols
                 .cache_read
-                .max(token_format.tokens(window.cache_read).chars().count());
+                .max(token_format(window.cache_read).chars().count());
             cols.usd = cols.usd.max(dollars2(window.usd).chars().count());
         }
         cols
     }
-}
-
-#[derive(Clone, Copy)]
-enum TokenFormat {
-    Compact,
-    Precise,
-}
-
-impl TokenFormat {
-    fn tokens(self, value: u64) -> String {
-        match self {
-            Self::Compact => tokens_int(value),
-            Self::Precise => tokens_short(value),
-        }
-    }
-}
-
-fn spend_table_rows(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    fleet_tally: Option<&SpendTally>,
-    width: usize,
-) -> Vec<Vec<Span<'static>>> {
-    let today = panel
-        .spending
-        .as_ref()
-        .map(|spending| spending.today)
-        .unwrap_or_default();
-    let fleet = fleet_tally.filter(|tally| !tally.is_zero());
-    let mut measured = vec![(&today, TokenFormat::Compact)];
-    if let Some(tally) = fleet {
-        measured.push((&tally.week, TokenFormat::Precise));
-        measured.push((&tally.month, TokenFormat::Precise));
-    }
-    let cols = WmColumns::measure(measured);
-    let mut rows = spend_table_window_rows(theme, "T", &today, TokenFormat::Compact, &cols, width);
-    if let Some(tally) = fleet {
-        rows.push(total_delimiter_row(theme, width));
-        rows.extend(spend_table_window_rows(
-            theme,
-            "W",
-            &tally.week,
-            TokenFormat::Precise,
-            &cols,
-            width,
-        ));
-        rows.extend(spend_table_window_rows(
-            theme,
-            "M",
-            &tally.month,
-            TokenFormat::Precise,
-            &cols,
-            width,
-        ));
-    }
-    rows
-}
-
-fn spend_table_window_rows(
-    theme: &Theme,
-    label: &str,
-    window: &SpendWindow,
-    token_format: TokenFormat,
-    cols: &WmColumns,
-    width: usize,
-) -> Vec<Vec<Span<'static>>> {
-    vec![
-        spend_token_row(theme, label, window, token_format, cols, width).spans,
-        spend_usd_row(theme, window, cols, width).spans,
-    ]
 }
 
 fn total_delimiter_row(theme: &Theme, width: usize) -> Vec<Span<'static>> {
@@ -217,11 +266,12 @@ fn wm_row(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
-    token_format: TokenFormat,
+    token_format: fn(u64) -> String,
+    token_detail: TokenDetail,
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let left = spend_token_spans(theme, label, window, token_format, cols);
+    let left = spend_token_spans(theme, label, window, token_format, token_detail, cols);
     let right = vec![Span::styled(
         format!("{:>w$}", dollars2(window.usd), w = cols.usd),
         theme.money_style(Modifier::BOLD),
@@ -233,39 +283,52 @@ fn spend_token_row(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
-    token_format: TokenFormat,
+    token_format: fn(u64) -> String,
+    token_detail: TokenDetail,
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
     Line::from(trim_spans_to_width(
-        spend_token_spans(theme, label, window, token_format, cols),
+        spend_token_spans(theme, label, window, token_format, token_detail, cols),
         width,
     ))
 }
 
-fn spend_usd_row(
+fn total_usd_row(
     theme: &Theme,
-    window: &SpendWindow,
+    week: &SpendWindow,
+    month: &SpendWindow,
     cols: &WmColumns,
     width: usize,
 ) -> Line<'static> {
-    let right = vec![Span::styled(
-        format!("{:>w$}", dollars2(window.usd), w = cols.usd),
-        theme.money_style(Modifier::BOLD),
-    )];
-    pin_right(vec![Span::raw(" ")], right, width)
+    Line::from(trim_spans_to_width(
+        vec![
+            Span::raw(" "),
+            Span::styled(
+                format!("{:>w$}", dollars2(week.usd), w = cols.usd),
+                theme.money_style(Modifier::BOLD),
+            ),
+            Span::raw("  "),
+            Span::styled(
+                format!("{:>w$}", dollars2(month.usd), w = cols.usd),
+                theme.money_style(Modifier::BOLD),
+            ),
+        ],
+        width,
+    ))
 }
 
 fn spend_token_spans(
     theme: &Theme,
     label: &str,
     window: &SpendWindow,
-    token_format: TokenFormat,
+    token_format: fn(u64) -> String,
+    token_detail: TokenDetail,
     cols: &WmColumns,
 ) -> Vec<Span<'static>> {
     let value = theme.body();
     let marker = |color: Color| theme.style(color, Modifier::empty());
-    vec![
+    let mut spans = vec![
         Span::raw(" "),
         Span::styled(
             format!("{label}: "),
@@ -279,33 +342,31 @@ fn spend_token_spans(
         Span::raw("  "),
         Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
         Span::styled(
-            format!(
-                " {:>w$}",
-                token_format.tokens(window.tokens),
-                w = cols.total
+            format!(" {:>w$}", token_format(window.tokens), w = cols.total),
+            value,
+        ),
+    ];
+    if token_detail == TokenDetail::Full {
+        spans.extend([
+            Span::styled(
+                format!(" {TOKENS_IN} "),
+                marker(theme.component(Component::Input)),
             ),
-            value,
-        ),
-        Span::styled(
-            format!(" {TOKENS_IN} "),
-            marker(theme.component(Component::Input)),
-        ),
-        Span::styled(
-            format!("{:>w$}", token_format.tokens(window.input), w = cols.input),
-            value,
-        ),
-        Span::styled(
-            format!(" {TOKENS_OUT} "),
-            marker(theme.component(Component::Output)),
-        ),
-        Span::styled(
-            format!(
-                "{:>w$}",
-                token_format.tokens(window.output),
-                w = cols.output
+            Span::styled(
+                format!("{:>w$}", token_format(window.input), w = cols.input),
+                value,
             ),
-            value,
-        ),
+            Span::styled(
+                format!(" {TOKENS_OUT} "),
+                marker(theme.component(Component::Output)),
+            ),
+            Span::styled(
+                format!("{:>w$}", token_format(window.output), w = cols.output),
+                value,
+            ),
+        ]);
+    }
+    spans.extend([
         Span::styled(
             format!(" {TOKENS_CACHED} "),
             marker(theme.component(Component::CacheRead)),
@@ -313,12 +374,13 @@ fn spend_token_spans(
         Span::styled(
             format!(
                 "{:>w$}",
-                token_format.tokens(window.cache_read),
+                token_format(window.cache_read),
                 w = cols.cache_read
             ),
             value,
         ),
-    ]
+    ]);
+    spans
 }
 
 /// One clickable tab in the dashboard's tab rail: the rail line's position,
@@ -426,13 +488,15 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
             {
                 let block_w = width.saturating_sub(pet_w + PET_COLUMN_GAP);
                 lines.push(provider_pet_caption_line(theme, pet, block_w, pet_w, width));
-                let block = active_provider_pet_block_lines(
+                let block = active_provider_block_lines(
                     theme,
                     active,
                     block_w,
                     zones,
                     now,
                     fleet_tally,
+                    false,
+                    true,
                 );
                 let pet = super::pets::dashboard_pet_grid_lines(pet, theme, pet_w);
                 lines.extend(zip_provider_pet_lines(block, pet, block_w, pet_w, width));
@@ -440,21 +504,23 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
                 // A blank line below the rail sets the tabs apart from the active
                 // account's tall spend block when the pet column is unavailable.
                 lines.push(Line::from(""));
-                lines.extend(active_provider_pet_block_lines(
+                lines.extend(active_provider_block_lines(
                     theme,
                     active,
                     width,
                     zones,
                     now,
                     fleet_tally,
+                    false,
+                    true,
                 ));
             }
         } else {
             // A blank line below the rail sets the tabs apart from the active
             // account's main block, matching the cockpit's breathing room.
             lines.push(Line::from(""));
-            lines.extend(active_provider_main_block_lines(
-                theme, active, width, zones, now,
+            lines.extend(active_provider_block_lines(
+                theme, active, width, zones, now, None, true, false,
             ));
         }
     }
@@ -468,49 +534,44 @@ fn single_block_lines(
     zones: &BudgetZonesConfig,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    lines.push(provider_header_line(theme, panel, width, false, false));
-    // A blank line below the provider name sets the identity apart from
-    // the emblem + stats body, matching the cockpit's breathing room.
-    lines.push(Line::from(""));
-    lines.extend(provider_main_body_lines(
-        theme, panel, width, false, zones, now,
-    ));
+    let layout = ProviderLayout::for_width(width, true);
+    let mut lines = vec![provider_header_line(
+        theme,
+        panel,
+        width,
+        false,
+        layout.inline_art(),
+    )];
+    if layout == ProviderLayout::Wide {
+        // Wide stacked blocks keep the historical identity/body breathing room.
+        lines.push(Line::from(""));
+    }
+    lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
     lines
 }
 
-fn active_provider_main_block_lines(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    width: usize,
-    zones: &BudgetZonesConfig,
-    now: Timestamp,
-) -> Vec<Line<'static>> {
-    let mut lines = vec![provider_header_line(theme, panel, width, true, false)];
-    lines.extend(provider_main_body_lines(
-        theme, panel, width, false, zones, now,
-    ));
-    lines
-}
-
-fn active_provider_pet_block_lines(
+fn active_provider_block_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
     zones: &BudgetZonesConfig,
     now: Timestamp,
     fleet_tally: Option<&SpendTally>,
+    allow_wide: bool,
+    include_totals: bool,
 ) -> Vec<Line<'static>> {
-    let mut lines = vec![provider_header_line(theme, panel, width, true, true)];
-    lines.extend(provider_pet_body_lines(
+    let layout = ProviderLayout::for_width(width, allow_wide);
+    let mut lines = vec![provider_header_line(
         theme,
         panel,
         width,
-        zones,
-        now,
-        fleet_tally,
-        1,
-    ));
+        true,
+        layout.inline_art(),
+    )];
+    lines.extend(provider_body_lines(theme, panel, width, layout, zones, now));
+    if include_totals {
+        lines.extend(total_spend_lines(theme, fleet_tally, width, layout));
+    }
     lines
 }
 
@@ -518,23 +579,30 @@ pub(in crate::sidebar_pane::render) fn provider_dashboard_block_rows(
     panel: &SidebarProviderPanel,
     fleet_tally: Option<&SpendTally>,
 ) -> usize {
-    1 + provider_body_row_count(panel, fleet_tally, 1)
+    let layout = ProviderLayout::Normal;
+    1 + provider_body_row_count(panel, layout) + total_spend_row_count(fleet_tally, layout)
 }
 
-fn provider_body_row_count(
-    panel: &SidebarProviderPanel,
-    fleet_tally: Option<&SpendTally>,
-    art_start: usize,
-) -> usize {
+fn provider_body_row_count(panel: &SidebarProviderPanel, layout: ProviderLayout) -> usize {
+    let art_start = usize::from(layout.inline_art());
     let art = panel.art.len().saturating_sub(art_start);
-    provider_bar_count(panel).max(art) + spend_table_row_count(fleet_tally)
+    (provider_stats_row_count(layout) + provider_bar_count(panel)).max(art)
 }
 
-fn spend_table_row_count(fleet_tally: Option<&SpendTally>) -> usize {
-    2 + if fleet_tally.is_some_and(|tally| !tally.is_zero()) {
-        5
-    } else {
-        0
+fn provider_stats_row_count(layout: ProviderLayout) -> usize {
+    match layout {
+        ProviderLayout::Wide => 1,
+        ProviderLayout::Normal | ProviderLayout::Narrow => 3,
+    }
+}
+
+fn total_spend_row_count(fleet_tally: Option<&SpendTally>, layout: ProviderLayout) -> usize {
+    if !fleet_tally.is_some_and(|tally| !tally.is_zero()) {
+        return 0;
+    }
+    1 + match layout {
+        ProviderLayout::Wide => 2,
+        ProviderLayout::Normal | ProviderLayout::Narrow => 3,
     }
 }
 
@@ -734,41 +802,6 @@ fn provider_header_line(
     tabbed: bool,
     inline_art: bool,
 ) -> Line<'static> {
-    let mut left = Vec::new();
-    let version = panel
-        .version
-        .as_deref()
-        .map(|version| format!("v{version}"))
-        .unwrap_or_else(|| "v?".to_owned());
-    if tabbed {
-        let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
-        if show_art {
-            if inline_art {
-                left.push(Span::styled(
-                    pad_to(&panel.art[0], PROVIDER_ART_WIDTH),
-                    theme.style(theme.brand_tone(panel), Modifier::empty()),
-                ));
-                left.push(Span::raw(" "));
-            } else {
-                left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
-            }
-        }
-        if let Some(plan) = panel.plan.as_deref() {
-            left.push(Span::styled(plan.to_owned(), theme.muted()));
-            left.push(Span::styled(" · ", theme.faint()));
-        }
-        left.push(Span::styled(version, theme.muted()));
-    } else {
-        left.push(Span::styled(
-            panel.product_name.clone(),
-            theme.style(theme.brand_tone(panel), Modifier::BOLD),
-        ));
-        left.push(Span::styled(format!(" {version}"), theme.muted()));
-        if let Some(plan) = panel.plan.as_deref() {
-            left.push(Span::styled(" · ", theme.faint()));
-            left.push(Span::styled(plan.to_owned(), theme.muted()));
-        }
-    }
     let right = if panel.remote_control {
         vec![Span::styled(
             "⇅ rc",
@@ -777,33 +810,100 @@ fn provider_header_line(
     } else {
         Vec::new()
     };
+    let full = provider_header_left(theme, panel, width, tabbed, inline_art, true);
+    let left = if provider_spans_width(&full) + provider_spans_width(&right) <= width {
+        full
+    } else {
+        provider_header_left(theme, panel, width, tabbed, inline_art, false)
+    };
     pin_right(left, right, width)
 }
 
-/// The main dashboard body: the brand emblem in a fixed left column zipped
-/// against the right column — aggregate stats on the first line, the budget bars
-/// below. This is the default provider layout when pets are not enabled.
-fn provider_main_body_lines(
+fn provider_header_left(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
-    two_line_stats: bool,
+    tabbed: bool,
+    inline_art: bool,
+    include_version: bool,
+) -> Vec<Span<'static>> {
+    let mut left = Vec::new();
+    let art_fits = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
+    let show_art = art_fits && inline_art;
+    if show_art {
+        left.push(Span::styled(
+            pad_to(&panel.art[0], PROVIDER_ART_WIDTH),
+            theme.style(theme.brand_tone(panel), Modifier::empty()),
+        ));
+        left.push(Span::raw(" "));
+    } else if tabbed && art_fits {
+        left.push(Span::raw(" ".repeat(PROVIDER_ART_WIDTH + 1)));
+    }
+    let version = panel
+        .version
+        .as_deref()
+        .map(|version| format!("v{version}"))
+        .unwrap_or_else(|| "v?".to_owned());
+    if tabbed {
+        if let Some(plan) = panel.plan.as_deref() {
+            left.push(Span::styled(plan.to_owned(), theme.muted()));
+            if include_version {
+                left.push(Span::styled(" · ", theme.faint()));
+                left.push(Span::styled(version, theme.muted()));
+            }
+        } else if include_version {
+            left.push(Span::styled(version, theme.muted()));
+        }
+    } else {
+        left.push(Span::styled(
+            panel.product_name.clone(),
+            theme.style(theme.brand_tone(panel), Modifier::BOLD),
+        ));
+        if include_version {
+            left.push(Span::styled(format!(" {version}"), theme.muted()));
+        }
+        if let Some(plan) = panel.plan.as_deref() {
+            left.push(Span::styled(" · ", theme.faint()));
+            left.push(Span::styled(plan.to_owned(), theme.muted()));
+        }
+    }
+    left
+}
+
+fn provider_spans_width(spans: &[Span<'static>]) -> usize {
+    spans.iter().map(Span::width).sum()
+}
+
+/// The provider body: the brand emblem in a fixed left column zipped against the
+/// right column. Wide uses the historical one-line stats row; normal and narrow
+/// stack sessions, token stats, and USD into a taller block.
+fn provider_body_lines(
+    theme: &Theme,
+    panel: &SidebarProviderPanel,
+    width: usize,
+    layout: ProviderLayout,
     zones: &BudgetZonesConfig,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
     let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
     let bar_region = width.saturating_sub(art_column);
+    let art_start = usize::from(layout.inline_art());
 
-    let mut rights = provider_stats_rows(theme, panel, bar_region, two_line_stats);
+    let mut rights = provider_stats_rows(theme, panel, bar_region, layout);
     rights.extend(provider_bar_rows(theme, panel, bar_region, zones, now));
 
-    let rows = panel.art.len().max(rights.len());
+    let art = if show_art {
+        panel.art.get(art_start..).unwrap_or(&[])
+    } else {
+        &[]
+    };
+    let rows = art.len().max(rights.len());
     let mut lines = Vec::with_capacity(rows);
     for index in 0..rows {
         let mut spans: Vec<Span<'static>> = Vec::new();
         if show_art {
-            let art_line = panel.art.get(index).map(String::as_str).unwrap_or("");
+            let art_line = art.get(index).map(String::as_str).unwrap_or("");
             spans.push(Span::styled(
                 pad_to(art_line, PROVIDER_ART_WIDTH),
                 theme.style(theme.brand_tone(panel), Modifier::empty()),
@@ -818,58 +918,11 @@ fn provider_main_body_lines(
     lines
 }
 
-/// The pet dashboard body: the emblem/bars stay compact above a full-width spend
-/// table. The table uses extra rows because the pet column narrows the block.
-fn provider_pet_body_lines(
-    theme: &Theme,
-    panel: &SidebarProviderPanel,
-    width: usize,
-    zones: &BudgetZonesConfig,
-    now: Timestamp,
-    fleet_tally: Option<&SpendTally>,
-    art_start: usize,
-) -> Vec<Line<'static>> {
-    let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
-    let art_column = if show_art { PROVIDER_ART_WIDTH + 1 } else { 0 };
-    let bar_region = width.saturating_sub(art_column);
-    let art = if show_art {
-        panel.art.get(art_start..).unwrap_or(&[])
-    } else {
-        &[]
-    };
-
-    // Budget rows sit beside the emblem; the spend table below gets the whole
-    // block width so its right-pinned dollar column stays legible beside pets.
-    let bar_rows = provider_bar_rows(theme, panel, bar_region, zones, now);
-    let spend_rows = spend_table_rows(theme, panel, fleet_tally, width);
-
-    let rows = art.len().max(bar_rows.len());
-    let mut lines = Vec::with_capacity(rows + spend_rows.len());
-    for index in 0..rows {
-        let mut spans: Vec<Span<'static>> = Vec::new();
-        if let Some(art_line) = art.get(index).map(String::as_str) {
-            spans.push(Span::styled(
-                pad_to(art_line, PROVIDER_ART_WIDTH),
-                theme.style(theme.brand_tone(panel), Modifier::empty()),
-            ));
-            spans.push(Span::raw(" "));
-        } else if show_art && bar_rows.get(index).is_some() {
-            spans.push(Span::raw(" ".repeat(art_column)));
-        }
-        if let Some(right) = bar_rows.get(index) {
-            spans.extend(right.iter().cloned());
-        }
-        lines.push(Line::from(trim_spans_to_width(spans, width)));
-    }
-    lines.extend(spend_rows.into_iter().map(Line::from));
-    lines
-}
-
 fn provider_stats_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     region: usize,
-    two_line_stats: bool,
+    layout: ProviderLayout,
 ) -> Vec<Vec<Span<'static>>> {
     let today = panel
         .spending
@@ -883,27 +936,93 @@ fn provider_stats_rows(
         ),
         Span::styled(format!(" {}", today.sessions), theme.body()),
     ];
-    let token_breakdown = token_breakdown_spans(
+    let detail = provider_token_detail(
         theme,
         today.tokens,
         today.input,
         today.output,
         today.cache_read,
         tokens_int,
+        layout,
+        region,
+    );
+    let token_breakdown = provider_token_breakdown_spans(
+        theme,
+        today.tokens,
+        today.input,
+        today.output,
+        today.cache_read,
+        tokens_int,
+        detail,
     );
     let right = vec![Span::styled(
         dollars2(today.usd),
         theme.money_style(Modifier::BOLD),
     )];
-    if !two_line_stats {
+    if layout == ProviderLayout::Wide {
         let mut left = sessions;
         left.push(Span::raw("  "));
         left.extend(token_breakdown);
         return vec![pin_right(left, right, region).spans];
     }
     vec![
-        pin_right(sessions, right, region).spans,
+        trim_spans_to_width(sessions, region),
         trim_spans_to_width(token_breakdown, region),
+        pin_right(vec![Span::raw(" ")], right, region).spans,
+    ]
+}
+
+fn provider_token_detail(
+    theme: &Theme,
+    total: u64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    format: fn(u64) -> String,
+    layout: ProviderLayout,
+    region: usize,
+) -> TokenDetail {
+    if layout == ProviderLayout::Narrow {
+        return TokenDetail::Summary;
+    }
+    let full = provider_token_breakdown_spans(
+        theme,
+        total,
+        input,
+        output,
+        cache_read,
+        format,
+        TokenDetail::Full,
+    );
+    if provider_spans_width(&full) <= region {
+        TokenDetail::Full
+    } else {
+        TokenDetail::Summary
+    }
+}
+
+fn provider_token_breakdown_spans(
+    theme: &Theme,
+    total: u64,
+    input: u64,
+    output: u64,
+    cache_read: u64,
+    format: fn(u64) -> String,
+    detail: TokenDetail,
+) -> Vec<Span<'static>> {
+    if detail == TokenDetail::Full {
+        return token_breakdown_spans(theme, total, input, output, cache_read, format);
+    }
+    let value = theme.body();
+    let marker = |color: Color| theme.style(color, Modifier::empty());
+    vec![
+        Span::styled(TOKENS_TOTAL, marker(theme.component(Component::TokenTotal))),
+        Span::styled(format!(" {}", format(total)), value),
+        Span::styled(
+            format!(" {TOKENS_CACHED} "),
+            marker(theme.component(Component::CacheRead)),
+        ),
+        Span::styled(format(cache_read), value),
     ]
 }
 

@@ -9,8 +9,8 @@ use super::chrome::{
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
-    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, fleet_size, trim_spans_to_width,
-    unread_total, worktree_group_lines,
+    dashboard_panel_lines, fleet_header_lines, fleet_ledger_lines, fleet_size, fleet_total_lines,
+    trim_spans_to_width, unread_total, worktree_group_lines,
 };
 use super::theme::Theme;
 use super::{
@@ -233,11 +233,13 @@ pub(super) fn build_bottom_chrome(
         && !snapshot.providers.is_empty()
         && snapshot.sidebar.pets.enabled;
     if !active && !dashboard_owns_ledger {
-        let corner = fleet_ledger_lines(theme, snapshot.value_tally.as_ref(), inner);
+        let corner = if dashboard_present {
+            fleet_total_lines(theme, snapshot.value_tally.as_ref(), inner)
+        } else {
+            fleet_ledger_lines(theme, snapshot.value_tally.as_ref(), inner)
+        };
         if !corner.is_empty() {
-            if dashboard_present {
-                bottom.push(Line::from(""));
-            } else {
+            if !dashboard_present {
                 bottom.push(pad_chrome(hairline_rule(theme, inner)));
             }
             bottom.extend(corner.into_iter().map(pad_chrome));

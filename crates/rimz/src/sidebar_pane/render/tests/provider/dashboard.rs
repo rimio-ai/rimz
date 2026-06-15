@@ -185,7 +185,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
 }
 
 #[test]
-fn render_provider_dashboard_balances_spend_table_beside_pet() {
+fn render_provider_dashboard_balances_totals_beside_pet() {
     let theme = Theme::fixed(false);
     let providers = two_provider_panels();
     let cell = crate::sidebar_pane::pets::PetCell {
@@ -257,19 +257,28 @@ fn render_provider_dashboard_balances_spend_table_beside_pet() {
         hits.iter().map(|hit| hit.kind.as_str()).collect::<Vec<_>>(),
         vec!["claude", "codex"]
     );
-    let today_index = texts
+    assert!(
+        !rendered.contains("T:"),
+        "pet dashboard starts from the main provider stats layout:\n{rendered}"
+    );
+    let sessions_index = texts
         .iter()
-        .position(|line| line.contains("T:"))
-        .expect("today row");
-    let today = &texts[today_index];
-    assert!(today.contains('◎') && today.contains("12"), "{today}");
-    assert!(today.contains("◇ 498k"), "{today}");
-    assert!(!today.contains("$3.50"), "{today}");
-    let today_usd = texts.get(today_index + 1).expect("today USD row");
+        .position(|line| line.contains('◎') && line.contains("12"))
+        .expect("today sessions row");
+    let sessions = &texts[sessions_index];
+    assert!(!sessions.contains("$3.50"), "{sessions}");
+    let tokens = texts.get(sessions_index + 1).expect("today token row");
+    assert!(tokens.contains("◇ 498k"), "{tokens}");
+    assert!(!tokens.contains("$3.50"), "{tokens}");
+    let today_usd = texts.get(sessions_index + 2).expect("today USD row");
     assert!(today_usd.contains("$3.50"), "{today_usd}");
     assert!(rendered.contains("Total:"), "{rendered}");
     assert!(rendered.contains("W:"), "{rendered}");
     assert!(rendered.contains("M:"), "{rendered}");
+    assert!(
+        rendered.contains("$44.20") && rendered.contains("$101.99"),
+        "total USD row:\n{rendered}"
+    );
     let spend = today_usd.find("$3.50").expect("today spend");
     let pet_col = today_usd.find('▀').expect("pet column");
     assert!(
@@ -281,7 +290,8 @@ fn render_provider_dashboard_balances_spend_table_beside_pet() {
 #[test]
 fn render_provider_dashboard_without_pet_uses_main_stats_body() {
     let theme = Theme::fixed(false);
-    let providers = two_provider_panels();
+    let mut providers = two_provider_panels();
+    providers[0].plan = Some("Claude Max Enterprise".to_owned());
     let active = "claude".to_owned();
 
     let (lines, _) = dashboard_panel_lines(
@@ -308,6 +318,41 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
         !rendered.contains("T:"),
         "no-pets dashboard keeps the main layout:\n{rendered}"
     );
+}
+
+#[test]
+fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
+    let theme = Theme::fixed(false);
+    let mut providers = two_provider_panels();
+    providers[0].plan = Some("Claude Max Enterprise".to_owned());
+    let active = "claude".to_owned();
+
+    let (lines, _) = dashboard_panel_lines(
+        &theme,
+        &providers,
+        Some(&active),
+        true,
+        None,
+        None,
+        true,
+        38,
+        &crate::config::BudgetZonesConfig::default(),
+        fixed_now(),
+    );
+    let rendered = line_texts(&lines).join("\n");
+
+    assert!(
+        !rendered.contains("v2.1.158"),
+        "narrow header drops the version before truncating the plan:\n{rendered}"
+    );
+    assert!(rendered.contains("Claude Max Enterprise"), "{rendered}");
+    assert!(
+        !rendered.contains('↘') && !rendered.contains('↗'),
+        "narrow token stats hide input/output splits:\n{rendered}"
+    );
+    assert!(rendered.contains("◇ 498k"), "{rendered}");
+    assert!(rendered.contains("◌ 68k"), "{rendered}");
+    assert!(rendered.contains("$3.50"), "{rendered}");
 }
 
 #[test]

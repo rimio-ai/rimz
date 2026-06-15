@@ -173,10 +173,17 @@ fn pets_provider_dashboard_owns_total_rows() {
     let rendered = snapshot_to_screen(&snapshot, 60, 34);
     let lines = rendered.lines().collect::<Vec<_>>();
 
-    assert!(rendered.contains("T:"), "provider-today row:\n{rendered}");
+    assert!(
+        !rendered.contains("T:"),
+        "pet dashboard uses stacked main stats, not a T table:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("◎ 12"),
+        "provider today sessions:\n{rendered}"
+    );
     assert!(
         rendered.contains("$3.50"),
-        "T: uses active provider today:\n{rendered}"
+        "active provider today USD:\n{rendered}"
     );
     assert!(rendered.contains("Total:"), "scope delimiter:\n{rendered}");
     assert!(
