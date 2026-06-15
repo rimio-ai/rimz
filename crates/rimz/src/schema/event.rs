@@ -385,6 +385,35 @@ impl EventEnvelope {
         )
     }
 
+    /// Audit record for an automated rate-limit resume: the producer typed the
+    /// configured nudge into a parked agent's live pane the moment its 5h/7d
+    /// window reset. A plain audit event — it rides the [`EventKind::Other`]
+    /// carrier like `feed.*`, never folded into the agent rollup, because the
+    /// agent's own next hook drives its state back to `running`. The nudge text
+    /// never enters the log, mirroring `agent.steered`.
+    pub fn agent_resumed(
+        workspace_id: WorkspaceId,
+        session_name: impl Into<String>,
+        kind: &AgentKind,
+        agent_id: &AgentSessionId,
+        pane_id: &PaneId,
+        reason: &str,
+    ) -> Self {
+        Self::new(
+            workspace_id,
+            session_name,
+            "rimz",
+            "cli",
+            "agent.resumed",
+            json!({
+                "kind": kind,
+                "agent_id": agent_id,
+                "pane_id": pane_id,
+                "reason": reason,
+            }),
+        )
+    }
+
     pub fn message_event(
         message: &MessageRecord,
         session_name: impl Into<String>,
@@ -670,6 +699,31 @@ mod tests {
         );
         let decoded: AgentSteeredPayload = serde_json::from_value(value).unwrap();
         assert_eq!(decoded.agent_id, None);
+    }
+
+    #[test]
+    fn agent_resumed_records_an_audit_event_on_the_other_carrier() {
+        // Auto-continue is audit-only: the event rides the generic `Other`
+        // carrier (it never folds into the agent rollup), so the rollup reduce
+        // and wakeup paths skip it untouched while `feed list --audit` still
+        // surfaces it by method.
+        let event = EventEnvelope::agent_resumed(
+            workspace(),
+            "session",
+            &AgentKind::new_unchecked("claude"),
+            &AgentSessionId::from("sess-1"),
+            &PaneId::from_parts(MuxName::Tmux, "%1"),
+            "rate_limit_window_reset",
+        );
+        assert_eq!(event.method, "agent.resumed");
+        let EventKind::Other { method, params } = event.kind() else {
+            panic!("agent.resumed rides the Other audit carrier");
+        };
+        assert_eq!(method, "agent.resumed");
+        assert_eq!(params["kind"], "claude");
+        assert_eq!(params["agent_id"], "sess-1");
+        assert_eq!(params["pane_id"], "tmux:%1");
+        assert_eq!(params["reason"], "rate_limit_window_reset");
     }
 
     #[test]

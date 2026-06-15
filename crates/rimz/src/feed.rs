@@ -6,11 +6,14 @@
 //! lifecycle documented in `docs/internals/sidebar/ledger.md`. Do not rename
 //! serialized values without updating the docs.
 
+use std::collections::BTreeSet;
+
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::agents::lifecycle::{LifecycleState, TurnPhase};
+use crate::agents::{AgentContext, AgentTurnError, RateLimitWindow, TurnErrorClass};
 use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, ViewKind, WorkspaceId};
 
 /// One hour: the shared ceiling for attention heat and breath tempo, and the
@@ -761,13 +764,157 @@ pub fn is_stalled(
 /// projection over enrichment, never a status the agent reports.
 pub fn is_turn_dead(
     status: AgentStatus,
-    context: Option<&crate::agents::context::AgentContext>,
+    context: Option<&AgentContext>,
     last_activity: Timestamp,
 ) -> bool {
-    status == AgentStatus::Running
-        && context
-            .and_then(|context| context.turn_error.as_ref())
-            .is_some_and(|error| error.at > last_activity)
+    active_turn_error(status, context, last_activity).is_some()
+}
+
+/// The turn-error marker that explains a row's displayed state, or `None`. A
+/// `running` row reads its *active* marker (one that postdates `last_activity`,
+/// the [`is_turn_dead`] death certificate); a `failed` row reads its *terminal*
+/// marker (one inside the current turn, so an old error never explains a fresh
+/// failure). Every other status has resolved its turn already, so it carries no
+/// marker. Shared by the displayed-status projection and the rate-limit-park
+/// resume planner so the two never disagree about which error a row is parked
+/// on.
+pub(crate) fn display_turn_error(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+    turn_started_at: Option<Timestamp>,
+) -> Option<&AgentTurnError> {
+    active_turn_error(status, context, last_activity)
+        .or_else(|| terminal_turn_error(status, context, turn_started_at))
+}
+
+/// A `running` row's active turn-error marker: it postdates `last_activity`, so
+/// the explicit death certificate beats the stall window.
+fn active_turn_error(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    last_activity: Timestamp,
+) -> Option<&AgentTurnError> {
+    if status != AgentStatus::Running {
+        return None;
+    }
+    context
+        .and_then(|context| context.turn_error.as_ref())
+        .filter(|error| error.at > last_activity)
+}
+
+/// A `failed` row's terminal turn-error marker: it must fall inside the row's
+/// current turn (`turn_started_at` or later), so a stale marker from a prior
+/// turn never explains a fresh failure.
+fn terminal_turn_error(
+    status: AgentStatus,
+    context: Option<&AgentContext>,
+    turn_started_at: Option<Timestamp>,
+) -> Option<&AgentTurnError> {
+    if status != AgentStatus::Failed {
+        return None;
+    }
+    let started = turn_started_at?;
+    context
+        .and_then(|context| context.turn_error.as_ref())
+        .filter(|error| error.at >= started)
+}
+
+/// Each agent kind's rate-limit window standing, summarized across every session
+/// of that kind (the windows are account-scoped, so any session's reading speaks
+/// for the kind). A kind lands in `spent` while it has a window that is exhausted
+/// and not yet reset, and in `reset` once a window it had spent has refilled — the
+/// signal that lifts a `rate_limit` park.
+#[derive(Default)]
+pub(crate) struct RateLimitKindSummary {
+    pub spent: BTreeSet<AgentKind>,
+    pub reset: BTreeSet<AgentKind>,
+}
+
+/// Summarize every kind's spent/reset window standing from the agents' own
+/// rate-limit readings. Drives the displayed-status projection: a `rate_limit`
+/// park lifts to `failed` once its windows reset. The rate-limit-park resume
+/// planner derives its own per-agent deadline ([`rate_limit_resume_arm`]) so it
+/// can persist it before the ephemeral reading turns over.
+pub(crate) fn rate_limit_window_kinds(
+    agents: &[AgentState],
+    now: Timestamp,
+) -> RateLimitKindSummary {
+    let mut summary = RateLimitKindSummary::default();
+    for agent in agents {
+        if agent.parent_agent_id.is_some() {
+            continue;
+        }
+        let Some(limits) = agent
+            .context
+            .as_ref()
+            .and_then(|ctx| ctx.rate_limits.as_ref())
+        else {
+            continue;
+        };
+        let mut has_spent = false;
+        let mut has_reset = false;
+        for window in &limits.windows {
+            if !window.is_spent() {
+                continue;
+            }
+            if window_spent_unreset(window, now) {
+                has_spent = true;
+            } else {
+                has_reset = true;
+            }
+        }
+        if has_spent {
+            summary.spent.insert(agent.kind.clone());
+        }
+        if has_reset {
+            summary.reset.insert(agent.kind.clone());
+        }
+    }
+    summary
+}
+
+/// Whether a window is spent and has not yet reset — the budget is gone *now*.
+fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
+    window.is_spent() && window.resets_at.is_none_or(|reset| reset > now)
+}
+
+/// The reset deadline at which a rate-limit park may resume, or `None` when there
+/// is nothing to arm. This root agent stopped its last turn on a `rate_limit`
+/// certificate and its own reading still shows a spent, unreset window — the
+/// budget is gone *now* — so the resume is armed for the latest of those windows'
+/// resets, the instant the displayed-status projection would lift the park from
+/// `paused` to `failed`. The producer persists this deadline while the park is
+/// fresh, so the resume outlives the ephemeral context it was first seen through:
+/// neither a context-sidecar TTL expiry (a 5h/7d window outlasts the 3h context
+/// TTL) nor a fresh non-spent reading (Codex's app-server refresh rolls the
+/// window forward) can erase a pending resume once its deadline is recorded. An
+/// `overloaded` park is excluded: it carries no local reset window, so its turn
+/// recovers on a provider-side retry, not a window clock. A Rimz-derived
+/// projection over enrichment, never a status the agent reports.
+pub(crate) fn rate_limit_resume_arm(agent: &AgentState, now: Timestamp) -> Option<Timestamp> {
+    if agent.parent_agent_id.is_some() || agent.agent_id.is_empty() {
+        return None;
+    }
+    let parked_on_rate_limit = display_turn_error(
+        agent.status,
+        agent.context.as_ref(),
+        agent.last_activity,
+        agent.turn_started_at,
+    )
+    .is_some_and(|error| error.class == TurnErrorClass::PausedRateLimit);
+    if !parked_on_rate_limit {
+        return None;
+    }
+    agent
+        .context
+        .as_ref()
+        .and_then(|ctx| ctx.rate_limits.as_ref())
+        .into_iter()
+        .flat_map(|limits| limits.windows.iter())
+        .filter(|window| window_spent_unreset(window, now))
+        .filter_map(|window| window.resets_at)
+        .max()
 }
 
 /// Whether a `running` agent's latest turn completed cleanly with no `Stop` hook

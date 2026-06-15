@@ -220,6 +220,8 @@
 [resume]
 # on_rebirth = true                   # re-seed prior agents when a room is reborn
 # max = 8                             # cap auto-resumed agents per rebirth
+# auto_continue = false               # resume a rate-limit-parked agent when its 5h/7d window resets
+# auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [sentry]
 # Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no

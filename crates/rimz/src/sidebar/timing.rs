@@ -144,6 +144,12 @@ pub const SPENDING_TTL: Duration = Duration::from_secs(15);
 /// data tick, but budget windows move on the scale of minutes.
 pub const CODEX_RATE_LIMIT_REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
+/// Minimum gap between auto-continue nudges to one rate-limit-parked agent. One
+/// nudge resumes the turn within a frame, so this mostly bounds the brief window
+/// before the agent's first hook lands; if a nudge fails to wake a still-parked
+/// agent, Rimz retries on this cadence rather than typing every frame.
+pub const AUTO_CONTINUE_RETRY_INTERVAL: Duration = Duration::from_secs(120);
+
 /// Link stats are stale after three missed two-second publishes plus slack.
 /// Stale renders as dim unknown (`⇄ remote ?`) rather than red: during a hard
 /// drop the remote-rendered sidebar cannot reach the user, and a second local

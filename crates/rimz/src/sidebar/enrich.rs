@@ -32,6 +32,7 @@ use super::timing::{LINK_STATS_EXPIRE, LINK_STATS_STALE};
 pub(crate) use crate::sidebar::timing::CODEX_RATE_LIMIT_REFRESH_INTERVAL;
 
 mod accounts;
+mod auto_continue;
 mod codex_refresh;
 mod credits;
 mod live_spend;
@@ -591,6 +592,7 @@ fn fold_machine_config_producing(
     config: crate::config::MachineConfig,
 ) -> SidebarSnapshot {
     let accounts_config = config.accounts.clone();
+    let resume_config = config.resume.clone();
     let accounts = produce_accounts(&snapshot, runtime);
     let mut snapshot = fold_machine_config_with(snapshot, config, accounts, provider_spending);
     // The producer owns the account-scoped window cache: it writes live readings
@@ -602,6 +604,9 @@ fn fold_machine_config_producing(
     // long-running task does not wait for the next turn boundary to repaint.
     refresh_codex_rate_limits(&snapshot, runtime);
     refresh_oauth_usage(&snapshot, runtime, &accounts_config);
+    // Opt-in: nudge a rate-limit-parked agent the moment its window resets, so a
+    // turn that stalled on a budget limit picks itself back up while you are away.
+    auto_continue::resume_rate_limit_parked(&snapshot, runtime, &resume_config);
     snapshot
 }
 

@@ -1,5 +1,6 @@
 //! `rimz agents` — launcher sugar plus the hidden supervised exec wrapper.
 
+mod auto_continue;
 mod commands;
 mod exec;
 mod launch;
@@ -29,6 +30,7 @@ use rimz::mux::{LayoutPanes, PaneCmd, SplitPaneOptions, TabOptions, own_pane_id}
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
 use rimz::workspace::WorkspaceResolver;
 
+use auto_continue::{AutoContinueArgs, run_auto_continue};
 use commands::*;
 use exec::run_exec;
 use launch::*;
@@ -175,6 +177,10 @@ enum AgentsSubcmd {
     /// Hidden wrapper used inside launched agent panes.
     #[command(hide = true)]
     Exec(ExecArgs),
+    /// Hidden helper the producer spawns to nudge a rate-limit-parked agent when
+    /// its window resets (`sidebar::enrich` auto-continue).
+    #[command(hide = true)]
+    AutoContinue(AutoContinueArgs),
 }
 
 #[derive(Debug, Args)]
@@ -209,6 +215,7 @@ struct ExecArgs {
 pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
         Some(AgentsSubcmd::Exec(exec)) => return run_exec(exec, globals),
+        Some(AgentsSubcmd::AutoContinue(args)) => return run_auto_continue(args),
         Some(AgentsSubcmd::List {
             json,
             all,

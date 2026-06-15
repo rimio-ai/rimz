@@ -1,11 +1,8 @@
-use std::collections::BTreeSet;
-
 use jiff::Timestamp;
 
+use crate::agents::TurnErrorClass;
 use crate::agents::lifecycle::TurnPhase;
-use crate::agents::{AgentContext, AgentTurnError, RateLimitWindow, TurnErrorClass};
-use crate::feed::{AgentState, AgentStatus};
-use crate::ids::AgentKind;
+use crate::feed::{AgentState, AgentStatus, display_turn_error, rate_limit_window_kinds};
 use crate::ledger::snapshot::row::SidebarRow;
 
 /// Project each agent row's *displayed* status from its raw lifecycle status,
@@ -92,87 +89,4 @@ pub(super) fn project_display_status(
             agent.phase = TurnPhase::Idle;
         }
     }
-}
-
-fn display_turn_error(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-    turn_started_at: Option<Timestamp>,
-) -> Option<&AgentTurnError> {
-    active_turn_error(status, context, last_activity)
-        .or_else(|| terminal_turn_error(status, context, turn_started_at))
-}
-
-fn active_turn_error(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    last_activity: Timestamp,
-) -> Option<&AgentTurnError> {
-    if status != AgentStatus::Running {
-        return None;
-    }
-    context
-        .and_then(|context| context.turn_error.as_ref())
-        .filter(|error| error.at > last_activity)
-}
-
-fn terminal_turn_error(
-    status: AgentStatus,
-    context: Option<&AgentContext>,
-    turn_started_at: Option<Timestamp>,
-) -> Option<&AgentTurnError> {
-    if status != AgentStatus::Failed {
-        return None;
-    }
-    let started = turn_started_at?;
-    context
-        .and_then(|context| context.turn_error.as_ref())
-        .filter(|error| error.at >= started)
-}
-
-#[derive(Default)]
-struct RateLimitKindSummary {
-    spent: BTreeSet<AgentKind>,
-    reset: BTreeSet<AgentKind>,
-}
-
-fn rate_limit_window_kinds(agents: &[AgentState], now: Timestamp) -> RateLimitKindSummary {
-    let mut summary = RateLimitKindSummary::default();
-    for agent in agents {
-        if agent.parent_agent_id.is_some() {
-            continue;
-        }
-        let Some(limits) = agent
-            .context
-            .as_ref()
-            .and_then(|ctx| ctx.rate_limits.as_ref())
-        else {
-            continue;
-        };
-        let mut has_spent = false;
-        let mut has_reset = false;
-        for window in &limits.windows {
-            if !window.is_spent() {
-                continue;
-            }
-            if window_spent_unreset(window, now) {
-                has_spent = true;
-            } else {
-                has_reset = true;
-            }
-        }
-        if has_spent {
-            summary.spent.insert(agent.kind.clone());
-        }
-        if has_reset {
-            summary.reset.insert(agent.kind.clone());
-        }
-    }
-    summary
-}
-
-/// Whether a window is spent and has not yet reset — the budget is gone *now*.
-fn window_spent_unreset(window: &RateLimitWindow, now: Timestamp) -> bool {
-    window.is_spent() && window.resets_at.is_none_or(|reset| reset > now)
 }
