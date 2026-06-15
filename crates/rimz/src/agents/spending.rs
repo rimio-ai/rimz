@@ -124,6 +124,92 @@ pub struct SpendingCaches {
     pub workspace: WorkspaceSpendingCache,
 }
 
+/// One UTC day's deduplicated, account-global spend and token total — a cell of
+/// the [`compute_daily_spend`] contribution heatmap.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DaySpend {
+    pub usd: f64,
+    /// `input` (cache-write folded in) + `output`, matching [`SpendWindow`]'s
+    /// `◇` token total so a day's tokens agree with the trailing windows.
+    pub tokens: u64,
+}
+
+/// Bucket the full spend history by UTC day (days since the Unix epoch),
+/// account-global, for the token-usage heatmap. Reuses the same cross-file
+/// Claude `(message_id, request_id)` dedup and sidechain-replay suppression as
+/// the trailing-window tally, so a day's tokens match what [`aggregate_spending`]
+/// would fold for that span. Pure over an already-refreshed cache — the caller
+/// owns the walk that fills it.
+pub fn compute_daily_spend(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> BTreeMap<i64, DaySpend> {
+    let deduped = dedup_cached_entries(files, cache);
+    let mut by_day: BTreeMap<i64, DaySpend> = BTreeMap::new();
+    for_each_counted_entry(&deduped, |entry| {
+        let day = (entry.ts_secs / 86_400) as i64;
+        let cell = by_day.entry(day).or_default();
+        cell.usd += entry.cost_usd;
+        cell.tokens += entry.input + entry.cache_write + entry.output;
+    });
+    by_day
+}
+
+/// One model's deduplicated, account-global throughput across the full history —
+/// a row of the `rimz stats` model breakdown. `input` folds cache-write in to
+/// match the `◇` convention, so `tokens` stays `input + output`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ModelSpend {
+    pub usd: f64,
+    pub input: u64,
+    pub output: u64,
+    pub tokens: u64,
+}
+
+/// Bucket the full spend history by model id, account-global, reusing the same
+/// cross-file Claude dedup and sidechain-replay suppression as
+/// [`compute_daily_spend`] so a model's tokens agree with the trailing windows.
+/// An entry whose transcript named no model buckets under the empty key, which
+/// the caller folds into an "Other" row. Pure over an already-refreshed cache.
+pub fn compute_model_breakdown(
+    files: &[(&'static dyn AgentAdapter, PathBuf)],
+    cache: &SpendingDiskCache,
+) -> BTreeMap<String, ModelSpend> {
+    let deduped = dedup_cached_entries(files, cache);
+    let mut by_model: BTreeMap<String, ModelSpend> = BTreeMap::new();
+    for_each_counted_entry(&deduped, |entry| {
+        let cell = by_model
+            .entry(entry.model.clone().unwrap_or_default())
+            .or_default();
+        cell.usd += entry.cost_usd;
+        cell.input += entry.input + entry.cache_write;
+        cell.output += entry.output;
+        cell.tokens += entry.input + entry.cache_write + entry.output;
+    });
+    by_model
+}
+
+/// Visit every deduplicated entry that counts toward totals: each kept
+/// message-ID entry that is not a suppressed sidechain replay, then every ID-free
+/// entry. The shared spine of [`compute_daily_spend`] and
+/// [`compute_model_breakdown`].
+fn for_each_counted_entry(deduped: &DedupedCachedEntries, mut visit: impl FnMut(&CachedEntry)) {
+    for ((msg_id, _), (_, entry)) in &deduped.by_exact_key {
+        let is_sidechain_replay = entry.is_sidechain
+            && deduped
+                .msg_has_non_sidechain
+                .get(msg_id.as_str())
+                .copied()
+                .unwrap_or(false);
+        if !is_sidechain_replay {
+            visit(entry);
+        }
+    }
+    for (_, entry) in &deduped.free_entries {
+        visit(entry);
+    }
+}
+
 /// Bumped whenever the cached parse shape *or values* change, so an upgrade
 /// re-reads every file once. A finalized session's stable mtime otherwise pins
 /// its entries in the cache forever — a field added to or reshaped in
@@ -140,10 +226,13 @@ pub struct SpendingCaches {
 /// unknown-origin and disappear from the cockpit. v8 stores Codex
 /// `session_meta.cwd` in the parser cursor and stamps Codex entries from it;
 /// old finalized Codex files would otherwise sit at EOF with no origin and
-/// remain invisible to workspace-scoped cockpit tallies. A cache stamped with
-/// an older version is discarded on read, forcing a clean re-parse under the
-/// current shape. `0` is the implicit pre-versioning shape (no `version` field).
-const SPENDING_CACHE_VERSION: u32 = 8;
+/// remain invisible to workspace-scoped cockpit tallies. v9 records the per-entry
+/// model id for the `rimz stats` per-model breakdown; old finalized files would
+/// otherwise sit at EOF with no model and never attribute their tokens. A cache
+/// stamped with an older version is discarded on read, forcing a clean re-parse
+/// under the current shape. `0` is the implicit pre-versioning shape (no
+/// `version` field).
+const SPENDING_CACHE_VERSION: u32 = 9;
 
 /// Gates the aggregate meaning in provider-spending.json, independent of the
 /// raw per-file [`SPENDING_CACHE_VERSION`]. An older stamp reads as stale, so
@@ -263,6 +352,12 @@ pub struct CachedEntry {
     /// `isSidechain` flag from Claude entries.
     #[serde(default)]
     pub is_sidechain: bool,
+    /// Model id as the transcript named it (`claude-opus-4-8`, `gpt-5-codex`, …),
+    /// kept for the per-model token breakdown. `None` for an entry whose
+    /// transcript named no model. Carried through dedup so a kept turn keeps its
+    /// model.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Working-directory origin for workspace-scoped tallies. `None` means the
     /// parser could not prove the transcript's workspace; scoped aggregation
     /// omits it rather than guessing.

@@ -276,6 +276,7 @@ fn parse_message_entry(
         message_id: None,
         request_id: None,
         is_sidechain: false,
+        model: Some(model.to_owned()),
         origin_path: origin,
     })
 }

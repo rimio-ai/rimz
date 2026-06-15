@@ -356,6 +356,7 @@ fn cached_enrich_derives_workspace_spending_from_shared_cursor_on_cache_miss() {
                 message_id: Some("msg-miss".to_owned()),
                 request_id: Some("req-miss".to_owned()),
                 is_sidechain: false,
+                model: None,
                 origin_path: Some(project.join("src")),
             }],
             unknown_models: BTreeMap::new(),

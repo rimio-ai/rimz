@@ -148,6 +148,7 @@ pub(crate) fn parse_codex_spend(
             message_id: None,
             request_id: None,
             is_sidechain: false,
+            model: Some(model.to_owned()),
             // The session's durable origin, parsed from the rollout's
             // `session_meta` cwd and carried in `state` across resume cursors,
             // so a closed Codex session still scopes to its workspace. A trusted

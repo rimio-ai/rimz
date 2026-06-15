@@ -145,6 +145,7 @@ fn cache_hit_skips_io_and_version_gate_discards_old_entries() {
                     message_id: Some("msg-old".to_string()),
                     request_id: Some("req-old".to_string()),
                     is_sidechain: false,
+                    model: None,
                     origin_path: None,
                 }],
                 unknown_models: BTreeMap::new(),
@@ -657,6 +658,7 @@ fn cache_prune_keeps_existing_transcripts_missing_from_discovery() {
         message_id: None,
         request_id: None,
         is_sidechain: false,
+        model: None,
         origin_path: Some(origin.clone()),
     };
     let mut cache = SpendingDiskCache {
@@ -900,4 +902,103 @@ fn live_baselines_and_overlay_cases_stay_bounded() {
         let blended = today_spend_live_usd(walked, live.into_iter(), &baselines, published_at);
         assert!((blended - expected).abs() < 1e-9, "{name}");
     }
+}
+
+#[test]
+fn daily_spend_buckets_by_utc_day_and_drops_sidechain_replays() {
+    let day_a = NOW_SECS;
+    let day_b = NOW_SECS - 2 * 86_400;
+
+    // A Claude main-chain turn and its sidechain replay share
+    // `(message_id, request_id)`; only the main-chain turn must count, so the
+    // inflated replay can never double a day's tokens.
+    let main = CachedEntry {
+        ts_secs: day_a,
+        cost_usd: 1.0,
+        input: 100,
+        output: 50,
+        cache_write: 10,
+        cache_read: 0,
+        message_id: Some("msg-1".to_owned()),
+        request_id: Some("req-1".to_owned()),
+        is_sidechain: false,
+        model: Some("claude-opus-4-8".to_owned()),
+        origin_path: None,
+    };
+    let replay = CachedEntry {
+        is_sidechain: true,
+        cost_usd: 9.0,
+        input: 9_000,
+        ..main.clone()
+    };
+    // An id-free Codex turn on an earlier day buckets under its own date.
+    let codex = CachedEntry {
+        ts_secs: day_b,
+        cost_usd: 2.0,
+        input: 200,
+        output: 20,
+        cache_write: 0,
+        cache_read: 0,
+        message_id: None,
+        request_id: None,
+        is_sidechain: false,
+        model: Some("gpt-5-codex".to_owned()),
+        origin_path: None,
+    };
+
+    let claude_file = PathBuf::from("/x/claude.jsonl");
+    let codex_file = PathBuf::from("/x/codex.jsonl");
+    let cache = SpendingDiskCache {
+        files: HashMap::from([
+            (
+                claude_file.to_string_lossy().into_owned(),
+                FileCacheEntry {
+                    mtime_secs: 1,
+                    len: 1,
+                    cursor: SpendCursor::default(),
+                    origin_path: None,
+                    entries: vec![main, replay],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+            (
+                codex_file.to_string_lossy().into_owned(),
+                FileCacheEntry {
+                    mtime_secs: 1,
+                    len: 1,
+                    cursor: SpendCursor::default(),
+                    origin_path: None,
+                    entries: vec![codex],
+                    unknown_models: BTreeMap::new(),
+                },
+            ),
+        ]),
+        ..Default::default()
+    };
+    let files: Vec<(&'static dyn AgentAdapter, PathBuf)> = vec![
+        (claude_adapter(), claude_file),
+        (codex_adapter(), codex_file),
+    ];
+
+    let daily = compute_daily_spend(&files, &cache);
+
+    let key_a = (day_a / 86_400) as i64;
+    let key_b = (day_b / 86_400) as i64;
+    assert_eq!(daily.len(), 2);
+    // input + cache_write + output, the main-chain turn alone.
+    assert_eq!(daily[&key_a].tokens, 160);
+    assert!((daily[&key_a].usd - 1.0).abs() < 1e-9);
+    assert_eq!(daily[&key_b].tokens, 220);
+    assert!((daily[&key_b].usd - 2.0).abs() < 1e-9);
+
+    // The per-model breakdown rides the same dedup: the sidechain replay is
+    // suppressed, so Opus keeps the main-chain turn's `input + cache_write`
+    // (110) and output (50), and Codex buckets under its own model.
+    let by_model = compute_model_breakdown(&files, &cache);
+    assert_eq!(by_model.len(), 2);
+    let opus = by_model["claude-opus-4-8"];
+    assert_eq!((opus.input, opus.output, opus.tokens), (110, 50, 160));
+    assert!((opus.usd - 1.0).abs() < 1e-9);
+    let codex = by_model["gpt-5-codex"];
+    assert_eq!((codex.input, codex.output, codex.tokens), (200, 20, 220));
 }

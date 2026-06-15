@@ -62,6 +62,7 @@ struct PiSpendState {
 #[derive(Deserialize)]
 struct PiMessage {
     role: Option<String>,
+    model: Option<String>,
     usage: Option<PiUsage>,
 }
 
@@ -203,6 +204,7 @@ pub fn parse_pi_spend(path: &Path, resume: Option<&SpendCursor>) -> SpendParse {
             message_id: None,
             request_id: None,
             is_sidechain: false,
+            model: msg.model.clone(),
             origin_path: state.cwd.clone(),
         });
     }

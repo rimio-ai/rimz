@@ -305,6 +305,7 @@ pub fn parse_claude_spend(path: &Path, from_offset: u64, prices: &PriceBook) -> 
             message_id: entry.message.id.clone(),
             request_id: entry.request_id.clone(),
             is_sidechain: entry.is_sidechain == Some(true),
+            model: entry.message.model.clone(),
             origin_path: origin_path(entry.cwd.as_deref()),
         });
     }
