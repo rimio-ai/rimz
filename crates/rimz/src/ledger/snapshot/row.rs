@@ -268,6 +268,7 @@ pub struct AgentCard {
 impl AgentCard {
     /// The context gauge's value (0..=100): the statusline's authoritative
     /// `used_percentage` when it is paired with its own window, else the
+    /// statusline's token composition over that same window, else the
     /// fold-derived scalar. The pairing matters — the identity line shows
     /// `context_window_size` when present, so trusting a percentage only
     /// alongside that window keeps the bar and the window label on one
@@ -275,11 +276,18 @@ impl AgentCard {
     /// against the fold's window (the original mismatch), so it falls through to
     /// `context_pct`, which the fold derived against that same window.
     pub fn context_gauge_percent(&self) -> Option<u8> {
-        self.context
+        let sidecar_tokens = self
+            .context
             .as_ref()
             .and_then(|context| context.tokens.as_ref())
-            .filter(|tokens| tokens.context_window_size.is_some())
+            .filter(|tokens| tokens.context_window_size.is_some());
+
+        sidecar_tokens
             .and_then(|tokens| tokens.used_percentage)
+            .or_else(|| {
+                let tokens = sidecar_tokens?;
+                derive_percent(tokens.used_tokens()?, tokens.context_window_size?)
+            })
             .or(self.context_pct)
     }
 
@@ -319,6 +327,10 @@ impl AgentCard {
                 .and_then(|cost| cost.total_cost_usd)
                 .is_some_and(|cost| cost > 0.0)
     }
+}
+
+fn derive_percent(used: u64, window: u64) -> Option<u8> {
+    (window > 0).then(|| (used.saturating_mul(100) / window).min(100) as u8)
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

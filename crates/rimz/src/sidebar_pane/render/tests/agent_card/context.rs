@@ -199,6 +199,63 @@ fn codex_card_renders_the_per_call_composition() {
 }
 
 #[test]
+fn codex_card_fills_bar_from_rich_context_usage_without_reported_percentage() {
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("add tests"),
+    );
+    codex.model = Some("GPT-5.5".to_owned());
+    // This matches Codex app-server context: the sidecar carries current usage
+    // and its window, while `used_percentage` is absent. A stale rollout scalar
+    // of 0 must not make the bar look empty when the token line is filled.
+    codex.context_pct = Some(0);
+    let mut context = codex_context(fixed_now());
+    context.tokens = Some(AgentTokenUsage {
+        context_window_size: Some(258_400),
+        used_percentage: None,
+        remaining_percentage: None,
+        current_usage: Some(AgentCurrentUsage {
+            input_tokens: Some(6_700),
+            output_tokens: Some(825),
+            cache_creation_input_tokens: None,
+            cache_read_input_tokens: Some(56_900),
+        }),
+    });
+    codex.context = Some(context);
+    let snapshot = snapshot_with(Vec::new(), vec![codex]);
+    let rendered = snapshot_to_screen_with_alert_and_ui(
+        &snapshot,
+        None,
+        &UiState {
+            selected_index: 0,
+            help_visible: false,
+            animation_phase: 0,
+            line_map: Vec::new(),
+            ..Default::default()
+        },
+        44,
+        14,
+    );
+
+    let meter = rendered
+        .lines()
+        .find(|line| line.contains("24.6%"))
+        .unwrap_or_else(|| panic!("the context meter shows the precise fill:\n{rendered}"));
+    assert!(
+        meter.contains('━'),
+        "the meter has a filled run, not only an empty track:\n{meter}"
+    );
+    assert!(
+        rendered.contains("▤ 63k · ◌ 56k ↘ 6k ↗ 825"),
+        "the token line and bar read from the same rich usage:\n{rendered}"
+    );
+}
+
+#[test]
 fn pi_card_renders_cache_write_in_the_per_call_composition() {
     let mut pi = agent(
         "pi-1",

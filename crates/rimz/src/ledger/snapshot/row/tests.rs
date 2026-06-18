@@ -1,5 +1,5 @@
 use super::*;
-use crate::agents::AgentCost;
+use crate::agents::{AgentCost, AgentCurrentUsage};
 
 fn row_time() -> Timestamp {
     Timestamp::from_second(1_700_000_000).unwrap()
@@ -189,4 +189,29 @@ fn context_gauge_percent_only_trusts_a_sidecar_percentage_paired_with_a_window()
         ..AgentCard::default()
     };
     assert_eq!(tethered.context_gauge_percent(), Some(40));
+}
+
+#[test]
+fn context_gauge_percent_derives_from_sidecar_usage_when_percentage_is_absent() {
+    let derived = AgentCard {
+        context_pct: Some(0),
+        context: Some(context_with_tokens(AgentTokenUsage {
+            context_window_size: Some(258_400),
+            used_percentage: None,
+            remaining_percentage: None,
+            current_usage: Some(AgentCurrentUsage {
+                input_tokens: Some(6_700),
+                output_tokens: Some(825),
+                cache_creation_input_tokens: None,
+                cache_read_input_tokens: Some(56_900),
+            }),
+        })),
+        ..AgentCard::default()
+    };
+
+    assert_eq!(
+        derived.context_gauge_percent(),
+        Some(24),
+        "rich Codex context derives the filled bar from current usage over its own window"
+    );
 }
