@@ -83,7 +83,7 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 
 ### Worktree and placement
 
-`-w`/`--worktree` takes a value as `--worktree=docs` or space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. A worktree launch names the backend tab `⑂ <NAME>` (the worktree name behind the worktree glyph, which follows the sidebar glyph set — the Nerd Font branch glyph when `[sidebar.glyphs] set = "nerd-font"` or `style = "modern"` is active); a launch without a worktree names the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
+`-w`/`--worktree` takes a value as `--worktree=docs` or space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. A worktree launch names the backend tab `#<NAME>`, matching the channel suffix used in agent addresses; a launch without a worktree names the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
 
 Placement follows intent. Under the default `auto` policy a worktree launch, named team, or multi-cell inline spec opens its own tab, while a single non-worktree agent splits the current view beside the launching pane. `--new-tab` forces a new tab; `--same-tab` forces the split for a single agent cell — including a single worktree launch — run from inside the room, and is rejected for a multi-cell spec. The per-machine `[agents] tab` default sets the policy when neither flag is given, and `tab = "same"` likewise splits a single worktree launch ([configuration.md](../configuration.md#agent-profiles-commands-and-teams)). `--bg` keeps focus on the launching pane in either case. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
 
@@ -183,7 +183,7 @@ rimz pane detach [--session-name <NAME>]
 `list` is the room seen as panes: every pane grouped under its native tab, each row labelled with the agent-colleague that lives in it (`@kind#worktree`) or `process` for a plain pane, alongside its status and working directory. Rimz's own sidebar pane is omitted. A `●` marks the active pane in each tab.
 
 ```text
-⑂ auth-refresh
+#auth-refresh
  ●  @claude#auth-refresh   running   ~/code/qe-wt/auth-refresh   zellij:terminal_3
     @codex#auth-refresh    idle      ~/code/qe-wt/auth-refresh   zellij:terminal_4
     process                -         ~/code/qe-wt/auth-refresh   zellij:terminal_5

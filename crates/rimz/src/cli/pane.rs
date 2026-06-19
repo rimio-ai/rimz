@@ -221,7 +221,7 @@ struct TabGroup<'a> {
 }
 
 impl TabGroup<'_> {
-    /// The section header: the mux's own tab name (already `⑂ <worktree>` for a
+    /// The section header: the mux's own tab name (already `#<worktree>` for a
     /// worktree launch, `<kind>:<dir>` otherwise), falling back to the view id.
     fn label(&self) -> String {
         self.name
@@ -585,20 +585,13 @@ mod tests {
     #[test]
     fn group_by_tab_buckets_panes_in_first_seen_order() {
         let panes = vec![
-            pane(
-                "terminal_1",
-                "tab_0",
-                "⑂ auth",
-                "claude",
-                "/repo/auth",
-                true,
-            ),
+            pane("terminal_1", "tab_0", "#auth", "claude", "/repo/auth", true),
             pane("terminal_2", "tab_1", "shell", "zsh", "/repo", false),
-            pane("terminal_3", "tab_0", "⑂ auth", "zsh", "/repo/auth", false),
+            pane("terminal_3", "tab_0", "#auth", "zsh", "/repo/auth", false),
         ];
         let tabs = group_by_tab(&panes);
         assert_eq!(tabs.len(), 2);
-        assert_eq!(tabs[0].label(), "⑂ auth");
+        assert_eq!(tabs[0].label(), "#auth");
         assert_eq!(tabs[0].panes.len(), 2, "both auth panes land under one tab");
         assert_eq!(tabs[1].label(), "shell");
         assert_eq!(tabs[1].panes.len(), 1);
@@ -606,14 +599,7 @@ mod tests {
 
     #[test]
     fn pane_json_annotates_the_bound_agent_with_its_handle() {
-        let pane = pane(
-            "terminal_1",
-            "tab_0",
-            "⑂ main",
-            "claude",
-            "/repo/main",
-            true,
-        );
+        let pane = pane("terminal_1", "tab_0", "#main", "claude", "/repo/main", true);
         let agent = agent_on("terminal_1", "claude", "main");
         let peers: Vec<&AgentState> = vec![&agent];
         let json = pane_json(&pane, Some(&agent), &peers);
@@ -665,7 +651,7 @@ mod tests {
         );
 
         // The same pane still running codex binds as before.
-        let live = pane("terminal_1", "tab_0", "⑂ main", "codex", "/repo/main", true);
+        let live = pane("terminal_1", "tab_0", "#main", "codex", "/repo/main", true);
         let bound = snapshot
             .agent_bound_to_pane(&live)
             .expect("the live codex pane still binds");
