@@ -20,9 +20,9 @@ pub struct ConfigArgs {
 
 #[derive(Debug, Subcommand)]
 enum ConfigSubcmd {
-    /// Write a commented default config template.
+    /// Write the commented default config templates.
     Init(InitArgs),
-    /// Print the resolved per-machine config path.
+    /// Print the resolved core per-machine config path.
     Path,
     /// Print the effective per-machine config, or one dotted key.
     Get(GetArgs),

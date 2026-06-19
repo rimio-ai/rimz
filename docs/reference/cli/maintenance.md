@@ -16,7 +16,7 @@ rimz config set sidebar.max_cols 80
 rimz config set notifications.triggers '["waiting", "failed"]'
 ```
 
-`rimz config` reads and edits the per-machine config at `~/.config/rimz/config.toml`. The full field model lives in [configuration.md](../configuration.md).
+`rimz config` reads and edits the per-machine config set at `~/.config/rimz/`: `config.toml`, `theme.toml`, and `agents.toml`. The full field model lives in [configuration.md](../configuration.md).
 
 ```sh
 rimz config init [--force] [--print]
@@ -25,9 +25,9 @@ rimz config get [KEY] [--json]
 rimz config set <KEY> <VALUE>
 ```
 
-`init` writes the commented default template. `--print` sends that template to stdout instead of writing it, and `--force` replaces an existing config file.
+`init` writes the commented default templates. `--print` sends the three templates to stdout instead of writing them, and `--force` replaces the existing config set.
 
-`path` prints the resolved per-machine config path, which is useful in scripts and editors.
+`path` prints the resolved core `config.toml` path, which is useful in scripts and editors.
 
 `get` loads the effective config over built-in defaults. With no key it prints the whole config as TOML; with a dotted key such as `sidebar.max_cols` it prints only that value; `--json` prints JSON for the whole config or selected value.
 
