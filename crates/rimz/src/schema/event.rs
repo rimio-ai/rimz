@@ -36,6 +36,10 @@ pub struct AgentLaunchPayload {
     pub agent_id: AgentSessionId,
     pub agent_name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     #[serde(default)]
     pub state: AgentLaunchState,
@@ -177,8 +181,6 @@ impl AgentLifecyclePayload {
             observation: AgentLifecycleObservation {
                 agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
                 agent_name: optional_string(params, "agent_name"),
-                agent_profile: optional_string(params, "agent_profile"),
-                agent_role: optional_string(params, "agent_role"),
                 kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
                 agent_pid: optional_deserialize(params, "agent_pid"),
@@ -479,8 +481,6 @@ mod tests {
         AgentLifecycleObservation {
             agent_id: Some(AgentSessionId::from("sess-1")),
             agent_name: Some("amber-atlas".to_owned()),
-            agent_profile: None,
-            agent_role: Some("coder".to_owned()),
             kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
                 errored: false,
@@ -537,7 +537,6 @@ mod tests {
                 "event_name": "Stop",
                 "agent_id": "sess-1",
                 "agent_name": "amber-atlas",
-                "agent_role": "coder",
                 "kind_ordinal": 2,
                 "signal": {
                     "signal": "turn_ended",

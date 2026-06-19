@@ -283,8 +283,6 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
     let observation = rimz::agents::AgentLifecycleObservation {
         agent_id: Some("sess-stale".into()),
         agent_name: Some("lucid-atlas".to_owned()),
-        agent_profile: None,
-        agent_role: None,
         kind_ordinal: None,
         signal: rimz::agents::LifecycleSignal::Registered,
         agent_pid: Some(u32::MAX),

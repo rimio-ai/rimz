@@ -32,17 +32,6 @@ pub struct AgentLifecycleObservation {
     /// `RIMZ_AGENT_NAME`; hand-launched agents get a deterministic fallback
     /// during reduction.
     pub agent_name: Option<String>,
-    /// The `[agents.profiles]` profile this agent launched as, passed through
-    /// `RIMZ_AGENT_PROFILE`. Carried forward onto the rollup so the agent answers
-    /// to `@<profile>`; `None` for a bare-kind launch, and then omitted from the
-    /// wire so a profile-less agent adds nothing to its lifecycle events.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_profile: Option<String>,
-    /// The `[agents.teams]` role this agent launched as, passed through
-    /// `RIMZ_AGENT_ROLE`. Carried forward onto the rollup so the agent answers
-    /// to `@<role>`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub agent_role: Option<String>,
     /// Display ordinal within this kind for the current room incarnation.
     /// The reducer derives it when the event omits it.
     pub kind_ordinal: Option<u32>,
@@ -121,8 +110,6 @@ impl AgentLifecycleObservation {
         Self {
             agent_id,
             agent_name: None,
-            agent_profile: None,
-            agent_role: None,
             kind_ordinal: None,
             signal,
             agent_pid: None,

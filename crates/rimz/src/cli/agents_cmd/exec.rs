@@ -250,6 +250,8 @@ fn exec_launch_identity(args: &ExecArgs) -> Result<Option<LaunchIdentity>> {
                 kind: AgentKind::new_unchecked(args.kind.clone()),
                 agent_id: AgentSessionId::from(launch_id),
                 name: name.to_owned(),
+                profile: args.agent_profile.clone(),
+                role: args.agent_role.clone(),
                 run_id: args.run_id.clone(),
             }))
         }

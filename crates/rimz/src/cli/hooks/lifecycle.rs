@@ -95,13 +95,6 @@ fn record_lifecycle_observation(
         if observation.agent_name.is_none() {
             observation.agent_name = env_agent_name().or_else(|| proc_agent_name(&observation));
         }
-        if observation.agent_profile.is_none() {
-            observation.agent_profile =
-                env_agent_profile().or_else(|| proc_agent_profile(&observation));
-        }
-        if observation.agent_role.is_none() {
-            observation.agent_role = env_agent_role().or_else(|| proc_agent_role(&observation));
-        }
         if observation.worktree_path.is_none() {
             observation.worktree_path = Some(workspace.worktree_root.display().to_string());
         }
@@ -338,65 +331,6 @@ fn env_agent_name() -> Option<String> {
 fn proc_agent_name(observation: &AgentLifecycleObservation) -> Option<String> {
     let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_NAME)?;
     validate_agent_name_env(raw, "process")
-}
-
-fn env_agent_profile() -> Option<String> {
-    let raw = std::env::var(rimz::run::ENV_AGENT_PROFILE).ok()?;
-    validate_agent_profile_env(raw, "env")
-}
-
-fn proc_agent_profile(observation: &AgentLifecycleObservation) -> Option<String> {
-    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_PROFILE)?;
-    validate_agent_profile_env(raw, "process")
-}
-
-fn env_agent_role() -> Option<String> {
-    let raw = std::env::var(rimz::run::ENV_AGENT_ROLE).ok()?;
-    validate_agent_role_env(raw, "env")
-}
-
-fn proc_agent_role(observation: &AgentLifecycleObservation) -> Option<String> {
-    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_ROLE)?;
-    validate_agent_role_env(raw, "process")
-}
-
-/// Accept a stamped profile only if it reads as a layout cell word — the
-/// same shape `[agents.profiles]` validates at config load, so a garbled env
-/// value never becomes an addressable handle.
-fn validate_agent_profile_env(raw: String, source: &str) -> Option<String> {
-    let valid = !raw.is_empty()
-        && !raw
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == ':' || ch == '#');
-    if valid {
-        Some(raw)
-    } else {
-        warn!(
-            agent_profile = %raw,
-            source,
-            "lifecycle: ignoring invalid Rimz profile",
-        );
-        None
-    }
-}
-
-/// Accept a stamped role only if it reads as an addressable team role. A
-/// garbled env value never becomes an addressable handle.
-fn validate_agent_role_env(raw: String, source: &str) -> Option<String> {
-    let valid = !raw.is_empty()
-        && !raw
-            .chars()
-            .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == ':' || ch == '#');
-    if valid {
-        Some(raw)
-    } else {
-        warn!(
-            agent_role = %raw,
-            source,
-            "lifecycle: ignoring invalid Rimz role",
-        );
-        None
-    }
 }
 
 fn validate_agent_name_env(raw: String, source: &str) -> Option<String> {

@@ -198,6 +198,8 @@ pub struct AgentLaunchRequest {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub name: AgentLaunchName,
+    pub profile: Option<String>,
+    pub role: Option<String>,
     pub run_id: Option<RunId>,
 }
 
@@ -206,6 +208,8 @@ pub struct AgentLaunchIdentity {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub name: String,
+    pub profile: Option<String>,
+    pub role: Option<String>,
     pub run_id: Option<RunId>,
 }
 

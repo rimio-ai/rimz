@@ -36,13 +36,19 @@ impl LayoutSpec {
         }
     }
 
+    /// Every agent cell, in layout order (duplicates included).
+    pub fn agent_cells(&self) -> impl Iterator<Item = &Cell> {
+        self.columns
+            .iter()
+            .flat_map(|column| column.rows.iter())
+            .filter(|cell| matches!(cell, Cell::Agent { .. }))
+    }
+
     /// Every agent cell's kind, in layout order (duplicates included).
     pub fn agent_kinds(&self) -> impl Iterator<Item = &str> {
-        self.columns.iter().flat_map(|column| {
-            column.rows.iter().filter_map(|cell| match cell {
-                Cell::Agent { kind, .. } => Some(kind.as_str()),
-                Cell::Command { .. } => None,
-            })
+        self.agent_cells().filter_map(|cell| match cell {
+            Cell::Agent { kind, .. } => Some(kind.as_str()),
+            Cell::Command { .. } => None,
         })
     }
 
@@ -69,12 +75,15 @@ pub enum Cell {
         system_prompt_file: Option<PathBuf>,
         /// The `[agents.profiles]` name this cell launched as, when it came
         /// from a named profile (`planner`) or a kind-default override
-        /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the agent as
-        /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`; `None` for a
-        /// bare built-in kind or virtual variant without an override.
+        /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the launch
+        /// event so the agent answers to `@<profile>`; the wrapper also keeps
+        /// `RIMZ_AGENT_PROFILE` for sender attribution from that pane. `None`
+        /// for a bare built-in kind or virtual variant without an override.
         profile: Option<String>,
         /// The role this cell holds inside a named `[agents.teams]` launch. It
-        /// is stamped as `RIMZ_AGENT_ROLE` so a team member answers to `@<role>`.
+        /// is stamped onto the launch event so a team member answers to
+        /// `@<role>`; the wrapper also keeps `RIMZ_AGENT_ROLE` for sender
+        /// attribution from that pane.
         role: Option<String>,
     },
     Command {

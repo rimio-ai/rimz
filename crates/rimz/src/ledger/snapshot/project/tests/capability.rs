@@ -2,14 +2,31 @@ use super::*;
 
 #[test]
 fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: "sess-1".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            profile: Some("codex-coder".to_owned()),
+            role: Some("coder".to_owned()),
+            kind_ordinal: None,
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+        },
+    );
     // SessionStart establishes the capability and progress lines.
     let start = raw_lifecycle(
         "codex",
         serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
-            "agent_profile": "codex-coder",
-            "agent_role": "coder",
             "signal": { "signal": "registered" },
             "model": "GPT-5.5",
             "effort": "high",
@@ -36,7 +53,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
         }),
     );
 
-    let agents = reduce_agent_states(&[start, prompt]);
+    let agents = reduce_agent_states(&[launch, start, prompt]);
     assert_eq!(agents.len(), 1);
     let agent = &agents[0];
     assert_eq!(agent.status, AgentStatus::Running);

@@ -553,10 +553,20 @@ pub(super) fn launch_identity_requests(
     explicit_name: Option<&str>,
     generated_worktree_name: Option<&str>,
 ) -> Result<Vec<AgentLaunchRequest>> {
-    let agent_kinds: Vec<&str> = layout.agent_kinds().collect();
-    let mut requests = Vec::with_capacity(agent_kinds.len());
-    for (index, kind) in agent_kinds.iter().enumerate() {
-        let name = if agent_kinds.len() == 1 && index == 0 {
+    let agent_cells: Vec<&Cell> = layout.agent_cells().collect();
+    let agent_count = agent_cells.len();
+    let mut requests = Vec::with_capacity(agent_cells.len());
+    for (index, cell) in agent_cells.into_iter().enumerate() {
+        let Cell::Agent {
+            kind,
+            profile,
+            role,
+            ..
+        } = cell
+        else {
+            continue;
+        };
+        let name = if agent_count == 1 && index == 0 {
             match explicit_name {
                 Some(name) => {
                     validate_agent_name(name)?;
@@ -570,9 +580,11 @@ pub(super) fn launch_identity_requests(
             AgentLaunchName::Mint
         };
         requests.push(AgentLaunchRequest {
-            kind: AgentKind::new_unchecked((*kind).to_owned()),
+            kind: (*kind).clone(),
             agent_id: mint_launch_id(),
             name,
+            profile: profile.clone(),
+            role: role.clone(),
             run_id: None,
         });
     }
@@ -630,6 +642,8 @@ pub(super) fn append_launch_event(
         rimz::schema::event::AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
+            profile: identity.profile.clone(),
+            role: identity.role.clone(),
             kind_ordinal: None,
             state: params.state,
             run_id: identity.run_id.clone(),

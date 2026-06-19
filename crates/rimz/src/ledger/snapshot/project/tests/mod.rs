@@ -54,6 +54,8 @@ fn raw_launch(
         AgentLaunchPayload {
             agent_id: agent_id.into(),
             agent_name: agent_name.to_owned(),
+            profile: None,
+            role: None,
             kind_ordinal: None,
             state,
             run_id: None,
@@ -212,6 +214,8 @@ fn launch_event_without_prompt_creates_idle_card() {
         AgentLaunchPayload {
             agent_id: "launch_a".into(),
             agent_name: "lucid-atlas".to_owned(),
+            profile: None,
+            role: None,
             kind_ordinal: None,
             state: AgentLaunchState::Bound,
             run_id: None,
@@ -226,6 +230,44 @@ fn launch_event_without_prompt_creates_idle_card() {
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0].status, AgentStatus::Idle);
     assert_eq!(agents[0].phase, TurnPhase::Idle);
+}
+
+#[test]
+fn launch_role_and_profile_survive_roleless_lifecycle() {
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: "launch_a".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            profile: Some("codex-coder".to_owned()),
+            role: Some("coder".to_owned()),
+            kind_ordinal: None,
+            state: AgentLaunchState::Starting,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+        },
+    );
+    let lifecycle = raw_lifecycle(
+        "codex",
+        json!({
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
+    assert_eq!(agents[0].role.as_deref(), Some("coder"));
 }
 
 #[test]

@@ -983,14 +983,16 @@ pub struct AgentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
     /// The `[agents.profiles]` profile this agent launched as (`planner`,
-    /// `codex-yolo`), passed through `RIMZ_AGENT_PROFILE` and carried forward like
-    /// `name`. The agent answers to `@<profile>` and renders by it; `None` for a
-    /// bare-kind launch.
+    /// `codex-yolo`), stamped by the launch event and carried forward like
+    /// `name`. The agent answers to `@<profile>` and renders by it; `None` for
+    /// a bare-kind launch. `RIMZ_AGENT_PROFILE` remains the pane's
+    /// sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
     /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
-    /// passed through `RIMZ_AGENT_ROLE` and carried forward like `profile`. The
+    /// stamped by the launch event and carried forward like `profile`. The
     /// agent answers to `@<role>` when that role uniquely names it in scope.
+    /// `RIMZ_AGENT_ROLE` remains the pane's sender-attribution identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     pub status: AgentStatus,

@@ -440,7 +440,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     if layout_cell_count(&layout) != 1 {
         bail!("--print requires a single-cell agent layout");
     }
-    let (kind, agent_args, cell_mode, cell_profile) = agent_cells[0];
+    let (kind, agent_args, cell_mode, cell_profile, cell_role) = agent_cells[0];
     let adapter = rimz::agents::find_adapter(kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     let launch_env = full_agent_launch_env(
@@ -449,7 +449,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         None,
         None,
         cell_profile,
-        None,
+        cell_role,
     )?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(adapter, agent_args, &prompt, &launch_env)?;
@@ -539,6 +539,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
         agent_profile: cell_profile,
+        agent_role: cell_role,
         launch_id: Some(&launch_identity.agent_id),
         cwd: &launch.cwd,
         prompt: &prompt,
@@ -772,29 +773,34 @@ fn lifecycle_cell(
 }
 
 /// A launchable agent cell from a resolved layout: its kind, the profile-preset
-/// plus passthrough args, the permission posture, and the profile name (if any).
+/// plus passthrough args, the permission posture, profile, and role names.
 type AgentCell<'a> = (
     &'a str,
     &'a [String],
     Option<PermissionMode>,
     Option<&'a str>,
+    Option<&'a str>,
 );
 
 fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
     layout
-        .columns
-        .iter()
-        .flat_map(|column| {
-            column.rows.iter().filter_map(|cell| match cell {
-                Cell::Agent {
-                    kind,
-                    args,
-                    mode,
-                    profile,
-                    ..
-                } => Some((kind.as_str(), args.as_slice(), *mode, profile.as_deref())),
-                Cell::Command { .. } => None,
-            })
+        .agent_cells()
+        .filter_map(|cell| match cell {
+            Cell::Agent {
+                kind,
+                args,
+                mode,
+                profile,
+                role,
+                ..
+            } => Some((
+                kind.as_str(),
+                args.as_slice(),
+                *mode,
+                profile.as_deref(),
+                role.as_deref(),
+            )),
+            Cell::Command { .. } => None,
         })
         .collect()
 }

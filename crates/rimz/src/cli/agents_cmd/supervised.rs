@@ -79,6 +79,7 @@ pub(super) struct RunPaneCmdArgs<'a> {
     pub(super) run_id: &'a rimz::RunId,
     pub(super) agent_name: Option<&'a str>,
     pub(super) agent_profile: Option<&'a str>,
+    pub(super) agent_role: Option<&'a str>,
     pub(super) launch_id: Option<&'a rimz::ids::AgentSessionId>,
     pub(super) cwd: &'a Path,
     pub(super) prompt: &'a str,
@@ -102,6 +103,9 @@ pub(super) fn run_pane_cmd(args: RunPaneCmdArgs<'_>) -> Result<PaneCmd> {
     }
     if let Some(agent_profile) = args.agent_profile {
         argv.extend(["--agent-profile".to_owned(), agent_profile.to_owned()]);
+    }
+    if let Some(agent_role) = args.agent_role {
+        argv.extend(["--agent-role".to_owned(), agent_role.to_owned()]);
     }
     if let Some(launch_id) = args.launch_id {
         argv.extend(["--launch-id".to_owned(), launch_id.as_str().to_owned()]);

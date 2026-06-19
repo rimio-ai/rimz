@@ -506,6 +506,8 @@ fn generated_worktree_name_is_soft_agent_name_candidate() {
     let requests = launch_identity_requests(&layout, None, Some("docs")).unwrap();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].name, AgentLaunchName::Soft("docs".to_owned()));
+    assert_eq!(requests[0].profile, None);
+    assert_eq!(requests[0].role, None);
 
     let requests = launch_identity_requests(&layout, None, Some("my_feature")).unwrap();
     assert_eq!(requests.len(), 1);
@@ -513,6 +515,25 @@ fn generated_worktree_name_is_soft_agent_name_candidate() {
         requests[0].name,
         AgentLaunchName::Soft("my_feature".to_owned())
     );
+}
+
+#[test]
+fn launch_identity_requests_carry_cell_profile_and_role() {
+    let layout = LayoutSpec::single(Cell::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        args: Vec::new(),
+        mode: None,
+        system_prompt_file: None,
+        profile: Some("codex-coder".to_owned()),
+        role: Some("coder".to_owned()),
+    });
+
+    let requests = launch_identity_requests(&layout, None, None).unwrap();
+
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].kind.as_str(), "codex");
+    assert_eq!(requests[0].profile.as_deref(), Some("codex-coder"));
+    assert_eq!(requests[0].role.as_deref(), Some("coder"));
 }
 
 #[test]

@@ -626,8 +626,8 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         kind: input.kind.clone(),
         name: Some(input.card_identity.name),
         kind_ordinal: Some(input.card_identity.kind_ordinal),
-        profile: profile_projection(input.observation, input.prior),
-        role: role_projection(input.observation, input.prior),
+        profile: input.prior.and_then(|state| state.profile.clone()),
+        role: input.prior.and_then(|state| state.role.clone()),
         status: lifecycle.status,
         phase: lifecycle.phase,
         pane: pane_projection(input.observation, input.prior),
@@ -709,10 +709,14 @@ fn assemble_launch_state(
         kind: kind.clone(),
         name: Some(card_identity.name),
         kind_ordinal: Some(card_identity.kind_ordinal),
-        // A launch event carries no profile; preserve any profile a prior lifecycle
-        // event already stamped (a relaunch event for a bound session).
-        profile: prior.and_then(|state| state.profile.clone()),
-        role: prior.and_then(|state| state.role.clone()),
+        profile: payload
+            .profile
+            .clone()
+            .or_else(|| prior.and_then(|state| state.profile.clone())),
+        role: payload
+            .role
+            .clone()
+            .or_else(|| prior.and_then(|state| state.role.clone())),
         status,
         phase,
         pane,
@@ -1040,31 +1044,6 @@ fn effort_projection(
         .effort
         .clone()
         .or_else(|| prior.and_then(|p| p.effort.clone()))
-}
-
-/// The launch profile, carried forward like the other launch pins: the profile the
-/// agent was started as, set once from `RIMZ_AGENT_PROFILE` and preserved across
-/// later events that omit it.
-fn profile_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<String> {
-    observation
-        .agent_profile
-        .clone()
-        .or_else(|| prior.and_then(|p| p.profile.clone()))
-}
-
-/// The launch role, carried forward like the profile: the team role the agent was
-/// started as, set once from `RIMZ_AGENT_ROLE` and preserved across later events.
-fn role_projection(
-    observation: &AgentLifecycleObservation,
-    prior: Option<&AgentState>,
-) -> Option<String> {
-    observation
-        .agent_role
-        .clone()
-        .or_else(|| prior.and_then(|p| p.role.clone()))
 }
 
 fn pane_projection(

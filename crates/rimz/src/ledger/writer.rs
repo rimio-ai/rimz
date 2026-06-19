@@ -424,6 +424,8 @@ fn allocate_agent_launch_identities(
             kind: request.kind.clone(),
             agent_id: request.agent_id.clone(),
             name,
+            profile: request.profile.clone(),
+            role: request.role.clone(),
             run_id: request.run_id.clone(),
         });
     }
@@ -469,6 +471,8 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
         AgentLaunchPayload {
             agent_id: identity.agent_id.clone(),
             agent_name: identity.name.clone(),
+            profile: identity.profile.clone(),
+            role: identity.role.clone(),
             kind_ordinal: None,
             state: append.state,
             run_id: identity.run_id.clone(),
@@ -550,6 +554,8 @@ mod tests {
                 AgentLaunchPayload {
                     agent_id: AgentSessionId::from("launch_a"),
                     agent_name: "lucid-atlas".to_owned(),
+                    profile: None,
+                    role: None,
                     kind_ordinal: None,
                     state: crate::schema::event::AgentLaunchState::Bound,
                     run_id: None,
@@ -599,12 +605,16 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_a"),
             name: AgentLaunchName::Explicit("lucid-atlas".to_owned()),
+            profile: None,
+            role: None,
             run_id: None,
         };
         let prefix = AgentLaunchRequest {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_b"),
             name: AgentLaunchName::Explicit("prefix".to_owned()),
+            profile: None,
+            role: None,
             run_id: None,
         };
 
@@ -623,6 +633,8 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("launch_a"),
             name: AgentLaunchName::Soft("lucid-atlas".to_owned()),
+            profile: None,
+            role: None,
             run_id: None,
         };
 

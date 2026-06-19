@@ -200,12 +200,14 @@ struct ExecArgs {
     run_id: Option<rimz::RunId>,
     #[arg(long)]
     agent_name: Option<String>,
-    /// The `[agents.profiles]` profile this agent launched as, stamped into
-    /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`.
+    /// The `[agents.profiles]` profile this agent launched as. The launch
+    /// event makes the rollup answer to `@<profile>`; `RIMZ_AGENT_PROFILE`
+    /// remains the pane's sender-attribution identity.
     #[arg(long)]
     agent_profile: Option<String>,
-    /// The `[agents.teams]` role this agent launched as, stamped into
-    /// `RIMZ_AGENT_ROLE` so it answers to `@<role>`.
+    /// The `[agents.teams]` role this agent launched as. The launch event
+    /// makes the rollup answer to `@<role>`; `RIMZ_AGENT_ROLE` remains the
+    /// pane's sender-attribution identity.
     #[arg(long)]
     agent_role: Option<String>,
     #[arg(long)]

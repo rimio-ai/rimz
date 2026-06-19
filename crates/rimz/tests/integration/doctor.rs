@@ -24,8 +24,6 @@ fn inject_lifecycle(
     let obs = AgentLifecycleObservation {
         agent_id: Some(agent_id.into()),
         agent_name: None,
-        agent_profile: None,
-        agent_role: None,
         kind_ordinal: None,
         signal,
         agent_pid: None,
