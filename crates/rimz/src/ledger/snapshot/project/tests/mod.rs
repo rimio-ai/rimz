@@ -271,6 +271,48 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
 }
 
 #[test]
+fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
+    let launch = EventEnvelope::agent_launched(
+        workspace(),
+        "session",
+        &AgentKind::new_unchecked("codex"),
+        AgentLaunchPayload {
+            agent_id: "launch_a".into(),
+            agent_name: "lucid-atlas".to_owned(),
+            profile: Some("codex-coder".to_owned()),
+            role: Some("coder".to_owned()),
+            kind_ordinal: None,
+            state: AgentLaunchState::Bound,
+            run_id: None,
+            pane_id: Some(PaneId::parse("zellij:terminal_1").expect("pane id")),
+            runtime_owner: None,
+            worktree_path: Some("/tmp/x".to_owned()),
+            worktree_branch: Some("main".to_owned()),
+            prompt: None,
+        },
+    );
+    let lifecycle = raw_lifecycle(
+        "codex",
+        json!({
+            "agent_id": "sess-1",
+            "pane_id": "zellij:terminal_1",
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(agents[0].profile.as_deref(), Some("codex-coder"));
+    assert_eq!(agents[0].role.as_deref(), Some("coder"));
+    assert_eq!(
+        agents[0].pane.as_ref().map(|pane| pane.pane_id.to_string()),
+        Some("zellij:terminal_1".to_owned())
+    );
+}
+
+#[test]
 fn lifecycle_registration_merges_provisional_card_by_name() {
     let events = vec![
         raw_launch(

@@ -11,7 +11,7 @@ use tracing::debug;
 use crate::agents::AgentLifecycleObservation;
 use crate::agents::lifecycle::{self, Transition};
 use crate::feed::{AgentState, AgentStatus, PaneRef, RuntimeOwner, RuntimeOwnerKind};
-use crate::ids::{AgentKind, AgentSessionId};
+use crate::ids::{AgentKind, AgentSessionId, PaneId};
 use crate::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope, EventKind};
 
 /// How many user prompts a session's rollup keeps (`AgentState::recent_prompts`,
@@ -196,6 +196,16 @@ pub(super) fn reduce_agent_states_seeded_with_identity(
             && !map.contains_key(&key)
             && let Some(provisional_key) =
                 identity.adoptable_owner_for_name(&map, &kind, agent_name, &key)
+        {
+            provisional_prior = map.remove(&provisional_key);
+            identity.release_key(&provisional_key);
+            identity.consume_launch_key(&provisional_key);
+        }
+        if provisional_prior.is_none()
+            && !map.contains_key(&key)
+            && let Some(pane_id) = observation.pane_id.as_ref()
+            && let Some(provisional_key) =
+                identity.adoptable_owner_for_pane(&map, &kind, pane_id, &key)
         {
             provisional_prior = map.remove(&provisional_key);
             identity.release_key(&provisional_key);
@@ -397,6 +407,25 @@ impl CardIdentityAllocator {
         }
         let prior = map.get(owner)?;
         (prior.kind_ordinal.is_none() || prior.pane.is_none()).then(|| owner.clone())
+    }
+
+    fn adoptable_owner_for_pane(
+        &self,
+        map: &BTreeMap<(AgentKind, AgentSessionId), AgentState>,
+        kind: &AgentKind,
+        pane_id: &PaneId,
+        new_key: &(AgentKind, AgentSessionId),
+    ) -> Option<(AgentKind, AgentSessionId)> {
+        map.iter().find_map(|(owner, state)| {
+            if owner == new_key || owner.0 != *kind || !is_provisional_agent_id(&owner.1) {
+                return None;
+            }
+            let pane = state.pane.as_ref()?;
+            if pane.pane_id.as_str() != pane_id.as_str() {
+                return None;
+            }
+            Some(owner.clone())
+        })
     }
 
     fn release_key(&mut self, key: &(AgentKind, AgentSessionId)) {
