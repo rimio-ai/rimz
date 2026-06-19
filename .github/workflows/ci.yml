@@ -179,8 +179,47 @@ jobs:
       - name: Install tmux
         run: |
           if ! command -v tmux >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y tmux
+            if ! command -v apt-get >/dev/null 2>&1 || ! command -v dpkg-deb >/dev/null 2>&1; then
+              echo "::error::tmux is missing and this runner cannot extract the Debian package fallback"
+              exit 1
+            fi
+            tmux_root="$RUNNER_TEMP/tmux-root"
+            tmux_apt="$RUNNER_TEMP/tmux-apt"
+            mkdir -p \
+              "$tmux_root" \
+              "$tmux_apt/state/lists/partial" \
+              "$tmux_apt/cache/archives/partial" \
+              "$tmux_apt/dpkg"
+            touch "$tmux_apt/dpkg/status"
+            apt-get \
+              -o Dir::State="$tmux_apt/state" \
+              -o Dir::Cache="$tmux_apt/cache" \
+              -o Dir::State::status="$tmux_apt/dpkg/status" \
+              update
+            apt-get \
+              --yes \
+              --download-only \
+              -o Dir::State="$tmux_apt/state" \
+              -o Dir::Cache="$tmux_apt/cache" \
+              -o Dir::State::status="$tmux_apt/dpkg/status" \
+              install tmux
+            for deb in "$tmux_apt"/cache/archives/*.deb; do
+              dpkg-deb -x "$deb" "$tmux_root"
+            done
+            loader="$(find "$tmux_root" -name ld-linux-x86-64.so.2 -print -quit)"
+            if [ -z "$loader" ] || [ ! -x "$tmux_root/usr/bin/tmux" ]; then
+              echo "::error::tmux package fallback did not produce an executable tmux"
+              exit 1
+            fi
+            lib_path="$tmux_root/usr/lib/x86_64-linux-gnu:$tmux_root/lib/x86_64-linux-gnu"
+            mkdir -p "$RUNNER_TEMP/bin"
+            {
+              printf '%s\n' '#!/bin/sh'
+              printf 'exec "%s" --library-path "%s" "%s" "$@"\n' "$loader" "$lib_path" "$tmux_root/usr/bin/tmux"
+            } > "$RUNNER_TEMP/bin/tmux"
+            chmod +x "$RUNNER_TEMP/bin/tmux"
+            export PATH="$RUNNER_TEMP/bin:$PATH"
+            echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           fi
           # debian-13 ships tmux 3.5a (≥ MIN_TMUX_VERSION); fail loudly if a
           # runner image is older so the live suite never silently degrades.
