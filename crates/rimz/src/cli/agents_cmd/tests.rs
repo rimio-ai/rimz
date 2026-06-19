@@ -593,6 +593,46 @@ fn exec_subcommand_parses_a_resume_launch() {
     );
 }
 
+fn bare_exec_args() -> ExecArgs {
+    ExecArgs {
+        kind: "codex".to_owned(),
+        resume: None,
+        run_id: None,
+        agent_name: Some("lucid-atlas".to_owned()),
+        agent_profile: None,
+        agent_role: None,
+        launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
+        exit_on_run_completion: false,
+        close_pane_on_exit: false,
+        worktree_path: None,
+        prompt: None,
+        extra_args: Vec::new(),
+    }
+}
+
+#[test]
+fn unsupervised_exec_replaces_the_wrapper_with_the_agent_tui() {
+    let args = bare_exec_args();
+
+    assert_eq!(should_exec_agent_directly(&args), cfg!(unix));
+}
+
+#[test]
+fn exec_keeps_the_wrapper_when_it_owns_run_or_cleanup_work() {
+    let mut args = bare_exec_args();
+    args.run_id = Some(rimz::RunId::new());
+    assert!(!should_exec_agent_directly(&args));
+
+    let mut args = bare_exec_args();
+    args.worktree_path = Some(PathBuf::from("/tmp/rimz-worktree"));
+    assert!(!should_exec_agent_directly(&args));
+
+    let mut args = bare_exec_args();
+    args.exit_on_run_completion = true;
+    args.close_pane_on_exit = true;
+    assert!(!should_exec_agent_directly(&args));
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
     let state = tempfile::tempdir().expect("state dir");

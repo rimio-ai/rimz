@@ -42,6 +42,19 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let (program, rest) = argv
         .split_first()
         .ok_or_else(|| anyhow::anyhow!("agent `{}` produced an empty launch command", args.kind))?;
+    if should_exec_agent_directly(&args) {
+        match exec_agent_command(program, rest, &rimz_env) {
+            Ok(()) => return Ok(()),
+            Err(err) => {
+                if let Some(identity) = launch_identity.as_ref()
+                    && launch_is_still_provisional(&workspace, identity)
+                {
+                    record_launch_failed(&workspace, identity, args.prompt.as_deref());
+                }
+                return Err(err);
+            }
+        }
+    }
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&rimz_env);
@@ -82,6 +95,38 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         close_own_pane(globals, &context.session_name);
     }
     std::process::exit(outcome.status.code().unwrap_or(1));
+}
+
+pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
+    cfg!(unix)
+        && args.run_id.is_none()
+        && args.worktree_path.is_none()
+        && !args.exit_on_run_completion
+        && !args.close_pane_on_exit
+}
+
+#[cfg(unix)]
+fn exec_agent_command(
+    program: &str,
+    rest: &[String],
+    env: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    use std::os::unix::process::CommandExt;
+
+    let mut command = Command::new(program);
+    command.args(rest);
+    command.envs(env);
+    let err = command.exec();
+    Err(err).with_context(|| format!("running {program}"))
+}
+
+#[cfg(not(unix))]
+fn exec_agent_command(
+    _program: &str,
+    _rest: &[String],
+    _env: &std::collections::BTreeMap<String, String>,
+) -> Result<()> {
+    anyhow::bail!("direct agent exec is disabled on non-Unix platforms")
 }
 
 fn cleanup_worktree_via_ondisk(
