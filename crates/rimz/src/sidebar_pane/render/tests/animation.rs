@@ -105,7 +105,7 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
             Some("db migrate"),
         )],
     );
-    snapshot.sidebar.theme.mode = ThemeMode::Truecolor;
+    snapshot.theme.mode = ThemeMode::Truecolor;
     let glyph_fg = |snapshot: &SidebarSnapshot| -> vt100::Color {
         let mut bytes = Vec::new();
         let backend = CrosstermBackend::new(&mut bytes);
@@ -156,7 +156,7 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
                 Some("db migrate"),
             )],
         );
-        idle.sidebar.theme.mode = ThemeMode::Truecolor;
+        idle.theme.mode = ThemeMode::Truecolor;
         idle.sidebar.glow = glow;
         let mut waiting = snapshot.clone();
         waiting.sidebar.glow = glow;
@@ -207,10 +207,10 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         )],
     );
     assert_eq!(animation_cadence(&waiting), AnimationCadence::Breath);
-    waiting.sidebar.animations.waiting =
+    waiting.theme.animations.waiting =
         Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
     assert_eq!(animation_cadence(&waiting), AnimationCadence::None);
-    waiting.sidebar.animations.waiting = Some(
+    waiting.theme.animations.waiting = Some(
         toml::from_str::<AnimationSpec>("frames = \"?¿\"\neffect = \"static\"\n")
             .expect("animation spec"),
     );
@@ -274,15 +274,15 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
     );
     // ...unless that effect is the held `bright` crest, which is static — then
     // even the lead asks nothing of the grid.
-    lead.sidebar.animations.unread = Some(crate::config::UnreadEffect::Bright);
+    lead.theme.animations.unread = Some(crate::config::UnreadEffect::Bright);
     assert_eq!(
         animation_cadence(&lead),
         AnimationCadence::None,
         "the `bright` unread crest holds still, so even the lead leaves the grid asleep"
     );
     // ...or its role is quieted to `static`, which stills the lead's motion too.
-    lead.sidebar.animations.unread = None;
-    lead.sidebar.animations.waiting =
+    lead.theme.animations.unread = None;
+    lead.theme.animations.waiting =
         Some(toml::from_str::<AnimationSpec>("effect = \"static\"\n").expect("animation spec"));
     assert_eq!(
         animation_cadence(&lead),
@@ -302,7 +302,7 @@ fn animation_cadence_separates_fast_work_from_breath_motion() {
         )],
     );
     assert_eq!(animation_cadence(&idle), AnimationCadence::None);
-    idle.sidebar.animations.idle =
+    idle.theme.animations.idle =
         Some(toml::from_str::<AnimationSpec>("effect = \"breathe\"\n").expect("animation spec"));
     assert_eq!(animation_cadence(&idle), AnimationCadence::Breath);
 }
@@ -511,15 +511,19 @@ fn render_live_heads_follow_phase_and_turn_phase() {
 
 #[test]
 fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.thinking = Some(
+    let mut theme_config = crate::config::ThemeConfig::default();
+    theme_config.animations.thinking = Some(
         toml::from_str::<AnimationSpec>(
             "frames = \"AB\"\ncolor = 196\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("animation spec"),
     );
 
-    let lit = Theme::fixed_for_sidebar(false, &sidebar);
+    let lit = Theme::fixed_for_theme(
+        false,
+        &crate::config::SidebarConfig::default(),
+        &theme_config,
+    );
     assert_eq!(
         labels::agent_glyph(
             &lit,
@@ -551,7 +555,11 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         "the indexed breathe changes the style by weight (DIM at the trough), not color"
     );
 
-    let plain = Theme::fixed_for_sidebar(true, &sidebar);
+    let plain = Theme::fixed_for_theme(
+        true,
+        &crate::config::SidebarConfig::default(),
+        &theme_config,
+    );
     let plain_style = labels::agent_role_style_at(
         &plain,
         AgentStatus::Running,
@@ -580,7 +588,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
     );
     claude.phase = crate::agents::TurnPhase::Reasoning;
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
-    snapshot.sidebar = sidebar;
+    snapshot.theme = theme_config;
     let screen = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &ui_at_phase(1), 40, 10);
     assert!(
         screen.contains("B claude"),

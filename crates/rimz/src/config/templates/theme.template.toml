@@ -1,0 +1,290 @@
+# Rimz per-machine theme configuration.
+#
+# Save as ~/.config/rimz/theme.toml, or run `rimz config init`.
+# Every key below is optional. Defaults stay commented so an untouched file
+# keeps following defaults shipped by future Rimz versions; uncomment a line
+# only when this machine needs an override.
+
+[theme]
+## style = "modern"                   # "modern" = truecolor + Nerd Font; "default" = auto color + Unicode
+# Palette depth and scheme are optional. mode = "auto" uses truecolor when
+# COLORTERM advertises it, otherwise 256. Unset scheme uses the bundled
+# TokyoNight Night theme; set a bundled Alacritty theme name (`rimz list-themes`)
+# or a path to an Alacritty TOML file.
+## mode = "auto"
+## scheme = "TokyoNight Night"
+## scheme = "Catppuccin Mocha"
+# Slot overrides accept palette roles ("green", "cyan", "bright_blue"),
+# 256-color indexes, or "#rrggbb"; omitted slots use the selected scheme.
+## good = "green"                     # ANSI green
+## warn = "yellow"                    # ANSI yellow
+## caution = "#e0915c"                # derived amber by default
+## alarm = "red"                      # ANSI red
+## accent = "cyan"                    # ANSI cyan
+## cool = "blue"                      # ANSI blue
+## meta = "magenta"                   # ANSI magenta
+## body = "#a6a19a"                   # derived foreground ladder by default
+## muted = "#767168"
+## faint = "#45423d"
+## rule = "#343230"
+## selection = "bright_blue"          # colors.bright.blue, falling back to normal.blue
+## selection_bg = "#2a2723"           # derived from colors.selection.background
+
+[theme.animations]
+# Status-head animation roles are optional. Each role accepts frames, color,
+# effect, and speed; omitted fields keep the built-in value. Colors are semantic
+# slots, palette roles, "clay", "#rrggbb", or a 0-255 color index.
+## unread = "shimmer"
+## [theme.animations.thinking]
+## frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
+## color = "clay"
+## effect = "static"
+## speed = "fast"
+## [theme.animations.working]
+## frames = "⣾⣽⣻⢿⡿⣟⣯⣷"
+## color = "clay"
+## effect = "static"
+## speed = "fast"
+## [theme.animations.compacting]
+## frames = "▁▃▄▅▆▇▆▅▄▃"
+## color = "meta"
+## effect = "static"
+## speed = "fast"
+## [theme.animations.delegating]
+## frames = "⢄⢂⢁⡁⡈⡐⡠"
+## color = "clay"
+## effect = "static"
+## speed = "fast"
+## [theme.animations.resolving]
+## frames = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+## color = "meta"
+## effect = "static"
+## speed = "fast"
+## [theme.animations.idle]
+## frames = "○"
+## color = "good"
+## effect = "static"
+## speed = "normal"
+## [theme.animations.success]
+## frames = "✓"
+## color = "good"
+## effect = "static"
+## speed = "normal"
+## [theme.animations.paused]
+## frames = ["⏸︎"]
+## color = "caution"
+## [theme.animations.waiting]
+## frames = "?"
+## color = "warn"
+## [theme.animations.failed]
+## frames = "!"
+## color = "alarm"
+
+[theme.glyphs]
+# Glyphs are display-only and grouped the way the sidebar reads on screen. Both
+# shipped sets are active below so customizing is direct: paste a different
+# glyph over any value. Every glyph must occupy one terminal cell, or two when a
+# trailing space pads a double-width icon.
+## set = "nerd_font"
+
+[theme.glyphs.unicode.status]
+waiting = "?"
+attention = "!"
+paused = "⏸︎"
+done = "✓"
+idle = "○"
+working = "⢿"
+thinking = "⠁"
+delegating = "⢄"
+resolving = "⠙"
+compacting = "▇"
+
+[theme.glyphs.unicode.cockpit]
+workspace = "⌘"
+sessions = "◎"
+agents = "¤"
+
+[theme.glyphs.unicode.tokens]
+total = "◇"
+input = "↘"
+output = "↗"
+cache_read = "◌"
+cache_write = "◍"
+filled = "▤"
+compaction = "↻"
+
+[theme.glyphs.unicode.meter]
+context_full = "▣"
+context_empty = "▢"
+bar_filled = "━"
+bar_track = "─"
+bar_cap = "╸"
+mana_filled = "▰"
+mana_track = "▱"
+reset = "↻"
+scroll_thumb = "▐"
+scroll_track = "▕"
+
+[theme.glyphs.unicode.clock]
+q1 = "◔"
+q2 = "◑"
+q3 = "◕"
+q4 = "●"
+over = "◉"
+
+[theme.glyphs.unicode.worktree]
+branch = "⑂"
+ahead = "⇡"
+behind = "⇣"
+trunk_equal = "≡"
+trunk_clear = "✓"
+dotted = "┄"
+
+[theme.glyphs.unicode.card]
+subagents = "⧉"
+todo_done = "●"
+todo_pending = "○"
+parked_bg = "⋯"
+
+[theme.glyphs.unicode.process]
+cpu = "C"
+mem = "M"
+io = "⇅"
+
+[theme.glyphs.unicode.chrome]
+alert = "⚠"
+remote_link = "⇄"
+remote_control = "⇅"
+hairline = "─"
+tab_cap_left = "┤"
+tab_cap_right = "├"
+spine_card_left = "▌"
+spine_card_right = "▐"
+spine_lane_left = "▎"
+spine_lane_right = "🮇"
+infinity = "∞"
+
+[theme.glyphs.nerd_font.status]
+waiting = ""
+attention = ""
+paused = ""
+done = ""
+idle = ""
+working = "⢿"
+thinking = "⠁"
+delegating = "⢄"
+resolving = "⠙"
+compacting = "▇"
+
+[theme.glyphs.nerd_font.cockpit]
+workspace = ""
+sessions = ""
+agents = ""
+
+[theme.glyphs.nerd_font.tokens]
+total = ""
+input = ""
+output = ""
+cache_read = "󱥸"
+cache_write = ""
+filled = "󰿦"
+compaction = ""
+
+[theme.glyphs.nerd_font.meter]
+context_full = "󰕰"
+context_empty = "󱇙"
+bar_filled = "━"
+bar_track = "─"
+bar_cap = "╸"
+mana_filled = "▰"
+mana_track = "▱"
+reset = "󰑐"
+scroll_thumb = "▐"
+scroll_track = "▕"
+
+[theme.glyphs.nerd_font.clock]
+q1 = "◔"
+q2 = "◑"
+q3 = "◕"
+q4 = "●"
+over = "◉"
+
+[theme.glyphs.nerd_font.worktree]
+branch = ""
+ahead = "⇡"
+behind = "⇣"
+trunk_equal = "≡"
+trunk_clear = "✓"
+dotted = "┄"
+
+[theme.glyphs.nerd_font.card]
+subagents = ""
+todo_done = "●"
+todo_pending = "○"
+parked_bg = "⋯"
+
+[theme.glyphs.nerd_font.process]
+cpu = ""
+mem = ""
+io = ""
+
+[theme.glyphs.nerd_font.chrome]
+alert = "⚠"
+remote_link = ""
+remote_control = "⇅"
+hairline = "─"
+tab_cap_left = "┤"
+tab_cap_right = "├"
+spine_card_left = "▌"
+spine_card_right = "▐"
+spine_lane_left = "▎"
+spine_lane_right = "🮇"
+infinity = ""
+
+[theme.providers]
+# Provider styles are keyed by agent kind and every field is optional.
+## [theme.providers.claude]
+## product_name = "Claude Code"
+## color = "#d97757"
+## ascii_art = """
+## CLAUDE
+## """
+## [theme.providers.codex]
+## product_name = "Codex"
+## color = "blue"
+## ascii_art = "CODEX"
+## [theme.providers.pi]
+## product_name = "Pi"
+## color = "green"
+## ascii_art = "PI"
+## [theme.providers.opencode]
+## product_name = "OpenCode"
+## color = "magenta"
+## ascii_art = "OPEN"
+
+[colors.primary]
+background = "#1a1b26"
+foreground = "#c0caf5"
+
+[colors.normal]
+black = "#15161e"
+red = "#f7768e"
+green = "#9ece6a"
+yellow = "#e0af68"
+blue = "#7aa2f7"
+magenta = "#bb9af7"
+cyan = "#7dcfff"
+white = "#a9b1d6"
+
+[colors.bright]
+black = "#414868"
+red = "#f7768e"
+green = "#9ece6a"
+yellow = "#e0af68"
+blue = "#7aa2f7"
+magenta = "#bb9af7"
+cyan = "#7dcfff"
+white = "#c0caf5"
+
+[colors.selection]
+background = "#283457"

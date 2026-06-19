@@ -87,7 +87,7 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
 fn pets_enabled_keeps_provider_default_and_cycles_providers_only() {
     let ws = workspace();
     let mut snapshot = tabbed_snapshot(&ws);
-    snapshot.sidebar.pets.enabled = true;
+    snapshot.pets.enabled = true;
     let mut ui = UiState::default();
 
     assert_eq!(

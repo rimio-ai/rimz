@@ -2,7 +2,7 @@
 //! ladder, depth-aware brand emission, and capability gating.
 
 use super::*;
-use crate::config::{Semantic, SidebarAnimationsConfig, ThemeMode};
+use crate::config::{Semantic, ThemeAnimationsConfig, ThemeMode};
 
 fn indices(palette: Palette) -> [Color; 13] {
     [
@@ -33,7 +33,7 @@ fn default_const_matches_bundled_default() {
 
 #[test]
 fn default_indexed_palette_matches_expected_indices() {
-    let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+    let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
     assert_eq!(
         indices(palette),
         [
@@ -58,9 +58,9 @@ fn default_indexed_palette_matches_expected_indices() {
 fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     let theme = Theme {
         palette: Palette::resolve_fixed(
-            &SidebarThemeConfig {
+            &ThemeConfig {
                 good: Some(ThemeColor::Indexed(34)),
-                ..SidebarThemeConfig::default()
+                ..ThemeConfig::default()
             },
             ColorDepth::Indexed,
         ),
@@ -80,9 +80,9 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
 
     let theme = Theme {
         palette: Palette::resolve_fixed(
-            &SidebarThemeConfig {
+            &ThemeConfig {
                 caution: Some(ThemeColor::Indexed(214)),
-                ..SidebarThemeConfig::default()
+                ..ThemeConfig::default()
             },
             ColorDepth::Indexed,
         ),
@@ -103,28 +103,22 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
 
 #[test]
 fn rgb_overrides_follow_depth() {
-    let sidebar = SidebarConfig {
-        theme: SidebarThemeConfig {
-            mode: ThemeMode::Truecolor,
-            good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
-            ..SidebarThemeConfig::default()
-        },
-        ..SidebarConfig::default()
+    let theme_config = ThemeConfig {
+        mode: ThemeMode::Truecolor,
+        good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+        ..ThemeConfig::default()
     };
-    let truecolor = Theme::fixed_for_sidebar(false, &sidebar);
+    let truecolor = Theme::fixed_for_theme(false, &SidebarConfig::default(), &theme_config);
     assert_eq!(
         truecolor.good(Modifier::empty()).fg,
         Some(Color::Rgb(0xa3, 0xbe, 0x8c))
     );
 
-    let sidebar = SidebarConfig {
-        theme: SidebarThemeConfig {
-            good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
-            ..SidebarThemeConfig::default()
-        },
-        ..SidebarConfig::default()
+    let theme_config = ThemeConfig {
+        good: Some(ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
+        ..ThemeConfig::default()
     };
-    let indexed = Theme::fixed_for_sidebar(false, &sidebar);
+    let indexed = Theme::fixed_for_theme(false, &SidebarConfig::default(), &theme_config);
     assert_eq!(
         indexed.good(Modifier::empty()).fg,
         Some(Color::Indexed(nearest_xterm_index(0xa3, 0xbe, 0x8c)))
@@ -164,14 +158,12 @@ fn breathe_emits_color_depth_fallbacks() {
         crate::sidebar_pane::render::animation::BREATH_DEEP_AMPLITUDE,
     );
 
-    let truecolor = Theme::fixed_for_sidebar(
+    let truecolor = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                mode: ThemeMode::Truecolor,
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            ..ThemeConfig::default()
         },
     );
     let truecolor_trough = truecolor.breathe(Color::Indexed(179), trough);
@@ -211,27 +203,23 @@ fn breathe_emits_color_depth_fallbacks() {
 
 #[test]
 fn heat_tone_honors_interpolatable_overrides() {
-    let truecolor = Theme::fixed_for_sidebar(
+    let truecolor = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                mode: ThemeMode::Truecolor,
-                alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
+            ..ThemeConfig::default()
         },
     );
     assert_eq!(truecolor.heat_tone(1.0), Color::Rgb(0xff, 0x00, 0x00));
 
-    let indexed_rgb = Theme::fixed_for_sidebar(
+    let indexed_rgb = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            alarm: Some(ThemeColor::Rgb(0xff, 0x00, 0x00)),
+            ..ThemeConfig::default()
         },
     );
     assert_eq!(
@@ -239,14 +227,12 @@ fn heat_tone_honors_interpolatable_overrides() {
         Color::Indexed(nearest_xterm_index(0xff, 0x00, 0x00))
     );
 
-    let indexed_xterm = Theme::fixed_for_sidebar(
+    let indexed_xterm = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                alarm: Some(ThemeColor::Indexed(196)),
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            alarm: Some(ThemeColor::Indexed(196)),
+            ..ThemeConfig::default()
         },
     );
     assert_eq!(indexed_xterm.heat_tone(1.0), Color::Indexed(196));
@@ -254,14 +240,12 @@ fn heat_tone_honors_interpolatable_overrides() {
 
 #[test]
 fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
-    let theme = Theme::fixed_for_sidebar(
+    let theme = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                alarm: Some(ThemeColor::Indexed(1)),
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            alarm: Some(ThemeColor::Indexed(1)),
+            ..ThemeConfig::default()
         },
     );
     assert_eq!(
@@ -278,14 +262,12 @@ fn heat_tone_keeps_scheme_rgb_for_ansi_overrides() {
 
 #[test]
 fn truecolor_heat_gradient_sweeps_green_to_alarm() {
-    let theme = Theme::fixed_for_sidebar(
+    let theme = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                mode: ThemeMode::Truecolor,
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            ..ThemeConfig::default()
         },
     );
     let sample = |amount: f32| match theme.heat_tone(amount) {
@@ -308,14 +290,11 @@ fn truecolor_heat_gradient_sweeps_green_to_alarm() {
 
 #[test]
 fn bundled_scheme_resolves_by_name() {
-    let sidebar = SidebarConfig {
-        theme: SidebarThemeConfig {
-            scheme: Some("TokyoNight Night".to_owned()),
-            ..SidebarThemeConfig::default()
-        },
-        ..SidebarConfig::default()
+    let theme_config = ThemeConfig {
+        scheme: Some("TokyoNight Night".to_owned()),
+        ..ThemeConfig::default()
     };
-    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let theme = Theme::fixed_for_theme(false, &SidebarConfig::default(), &theme_config);
     let (good_r, good_g, good_b) = Semantic::DEFAULT.good;
     assert_eq!(
         theme.good(Modifier::empty()).fg,
@@ -337,20 +316,19 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
         remote_control: false,
         spending: None,
         extra_credits: None,
+        color_role: None,
         windows: Vec::new(),
     };
 
     let indexed = Theme::fixed(false);
     assert_eq!(indexed.brand_tone(&panel), Color::Indexed(173));
 
-    let truecolor = Theme::fixed_for_sidebar(
+    let truecolor = Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                mode: ThemeMode::Truecolor,
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            ..ThemeConfig::default()
         },
     );
     assert_eq!(truecolor.brand_tone(&panel), Color::Rgb(0xd9, 0x77, 0x57));
@@ -360,7 +338,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
 fn money_tone_uses_fixed_dollar_green_at_active_depth() {
     let truecolor = Theme {
         depth: ColorDepth::Truecolor,
-        palette: Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Truecolor),
+        palette: Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
     let indexed = Theme::fixed(false);
@@ -394,9 +372,9 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
 
     let themed = Theme {
         palette: Palette::resolve_fixed(
-            &SidebarThemeConfig {
+            &ThemeConfig {
                 body: Some(ThemeColor::Indexed(252)),
-                ..SidebarThemeConfig::default()
+                ..ThemeConfig::default()
             },
             ColorDepth::Indexed,
         ),
@@ -409,7 +387,7 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
 fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
     let truecolor = Theme {
         depth: ColorDepth::Truecolor,
-        palette: Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Truecolor),
+        palette: Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
     // The three shipped provider brands: clay, Codex blue, Pi green. Pi sits at
@@ -453,9 +431,9 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
     let theme = Theme {
         no_color: true,
         palette: Palette::resolve_fixed(
-            &SidebarThemeConfig {
+            &ThemeConfig {
                 alarm: Some(ThemeColor::Indexed(196)),
-                ..SidebarThemeConfig::default()
+                ..ThemeConfig::default()
             },
             ColorDepth::Indexed,
         ),
@@ -487,7 +465,7 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
 #[test]
 fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     let theme = |no_color, truecolor, glow| {
-        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Theme {
             no_color,
@@ -495,7 +473,7 @@ fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
             depth: ColorDepth::Indexed,
             glow,
             animations: ResolvedAnimations::resolve(
-                &SidebarAnimationsConfig::default(),
+                &ThemeAnimationsConfig::default(),
                 &glyphs,
                 &palette,
             ),
@@ -522,27 +500,25 @@ fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     );
 
     assert_eq!(
-        Theme::for_sidebar(&SidebarConfig::default()).glow,
+        Theme::for_sidebar(&SidebarConfig::default(), &ThemeConfig::default()).glow,
         GlowMode::Auto
     );
     let pinned_off = SidebarConfig {
         glow: GlowMode::Never,
         ..SidebarConfig::default()
     };
-    let theme = Theme::for_sidebar(&pinned_off);
+    let theme = Theme::for_sidebar(&pinned_off, &ThemeConfig::default());
     assert_eq!(theme.glow, GlowMode::Never);
     assert!(!theme.effects_enabled());
 }
 
 fn truecolor_default() -> Theme {
-    Theme::fixed_for_sidebar(
+    Theme::fixed_for_theme(
         false,
-        &SidebarConfig {
-            theme: SidebarThemeConfig {
-                mode: ThemeMode::Truecolor,
-                ..SidebarThemeConfig::default()
-            },
-            ..SidebarConfig::default()
+        &SidebarConfig::default(),
+        &ThemeConfig {
+            mode: ThemeMode::Truecolor,
+            ..ThemeConfig::default()
         },
     )
 }

@@ -58,7 +58,7 @@ impl Semantic {
     };
 }
 
-/// `[sidebar.theme] mode`: how the renderer chooses palette color depth.
+/// `[theme] mode`: how the renderer chooses palette color depth.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ThemeMode {
     #[default]
@@ -145,9 +145,57 @@ impl<'de> Deserialize<'de> for ThemeMode {
     }
 }
 
-/// A user-provided display color: either a 256-color index or an RGB hex tone.
+/// A named Alacritty palette role accepted anywhere Rimz accepts a theme color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteRole {
+    Background,
+    Foreground,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    BrightBlue,
+}
+
+impl PaletteRole {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Foreground => "foreground",
+            Self::Red => "red",
+            Self::Green => "green",
+            Self::Yellow => "yellow",
+            Self::Blue => "blue",
+            Self::Magenta => "magenta",
+            Self::Cyan => "cyan",
+            Self::BrightBlue => "bright_blue",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "background" => Some(Self::Background),
+            "foreground" => Some(Self::Foreground),
+            "red" => Some(Self::Red),
+            "green" => Some(Self::Green),
+            "yellow" => Some(Self::Yellow),
+            "blue" => Some(Self::Blue),
+            "magenta" => Some(Self::Magenta),
+            "cyan" => Some(Self::Cyan),
+            "bright_blue" => Some(Self::BrightBlue),
+            _ => None,
+        }
+    }
+}
+
+/// A user-provided display color: a palette role, a 256-color index, or an RGB
+/// hex tone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThemeColor {
+    Role(PaletteRole),
     Indexed(u8),
     Rgb(u8, u8, u8),
 }
@@ -155,6 +203,7 @@ pub enum ThemeColor {
 impl ThemeColor {
     pub fn indexed(self) -> u8 {
         match self {
+            Self::Role(_) => 7,
             Self::Indexed(index) => index,
             Self::Rgb(red, green, blue) => nearest_xterm_index(red, green, blue),
         }
@@ -167,6 +216,7 @@ impl Serialize for ThemeColor {
         S: Serializer,
     {
         match self {
+            Self::Role(role) => serializer.serialize_str(role.name()),
             Self::Indexed(index) => serializer.serialize_u8(*index),
             Self::Rgb(red, green, blue) => {
                 serializer.serialize_str(&format!("#{red:02x}{green:02x}{blue:02x}"))
@@ -186,13 +236,16 @@ impl<'de> Deserialize<'de> for ThemeColor {
             type Value = ThemeColor;
 
             fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                formatter.write_str("a 256-color index or #rrggbb hex color")
+                formatter.write_str("a palette role, 256-color index, or #rrggbb hex color")
             }
 
             fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
             where
                 E: de::Error,
             {
+                if let Some(role) = PaletteRole::parse(value) {
+                    return Ok(ThemeColor::Role(role));
+                }
                 parse_hex(value)
                     .map(|(red, green, blue)| ThemeColor::Rgb(red, green, blue))
                     .map_err(E::custom)
@@ -298,6 +351,13 @@ mod tests {
         assert_eq!(
             toml::to_string(&rgb).expect("serialize"),
             "value = \"#d97757\"\n"
+        );
+
+        let role: ColorWrap = toml::from_str("value = \"green\"").expect("role");
+        assert_eq!(role.value, ThemeColor::Role(PaletteRole::Green));
+        assert_eq!(
+            toml::to_string(&role).expect("serialize"),
+            "value = \"green\"\n"
         );
     }
 

@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use super::{AttentionConfig, LoopConfig, PetsConfig, WorktreeConfig};
 use crate::run::PermissionMode;
 
 /// Agent-launch preferences. Team entries bind role names to profiles; inline
@@ -15,6 +16,10 @@ pub struct AgentsConfig {
     /// Declared before the table fields so the section serializes as valid
     /// TOML (a scalar after a sub-table would bind to the wrong table).
     pub tab: TabPlacement,
+    pub worktree: WorktreeConfig,
+    pub r#loop: LoopConfig,
+    pub attention: AttentionConfig,
+    pub pets: PetsConfig,
     #[serde(default)]
     pub profiles: ProfilesConfig,
     #[serde(default)]
@@ -27,6 +32,10 @@ impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
             tab: TabPlacement::default(),
+            worktree: WorktreeConfig::default(),
+            r#loop: LoopConfig::default(),
+            attention: AttentionConfig::default(),
+            pets: PetsConfig::default(),
             profiles: ProfilesConfig::default(),
             commands: CommandsConfig::default(),
             teams: default_machine_teams(),

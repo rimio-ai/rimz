@@ -1,0 +1,77 @@
+# Rimz per-machine agent configuration.
+#
+# Save as ~/.config/rimz/agents.toml, or run `rimz config init`.
+# Every key below is optional. Defaults stay commented so an untouched file
+# keeps following defaults shipped by future Rimz versions; uncomment a line
+# only when this machine needs an override.
+
+[agents]
+# tab = "auto"                          # launch placement: "auto" (worktree or multi-cell → new tab, else same tab), "new", or "same"
+# `rimz agents <spec>` names a team or uses inline cells made from profiles,
+# commands, or built-ins. Built-ins include `term`, agent kinds, and
+# adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
+# `codex-yolo`. `peer` (claude,codex) is a built-in team.
+
+[agents.worktree]
+# dir = "../{repo}-worktrees"          # where Rimz-owned Git worktrees live; {repo} is the root basename
+# base = "head"                        # "head", "fresh", or any Git ref for new worktrees
+
+[agents.loop.autoping]
+# Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`
+# turn at a chosen time, so the provider's sliding budget window starts on your
+# schedule instead of whenever you first sit down. Edit entries here or with
+# `rimz autoping add`, then apply them with `rimz autoping install`.
+## [agents.loop.autoping.schedules.morning]
+## kind = "claude"                     # agent kind to prime (must support a ping turn)
+## root = "/home/you/code/app"         # absolute project root whose room hosts the ping
+## at = "07:00"                        # 24h local wall-clock firing time
+## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"
+## worktree = "main"                   # optional channel to host the transient ping pane
+## # cron = "0 7 * * 1-5"              # raw cron escape hatch (cron backend only; replaces at/days)
+
+[agents.attention]
+# stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds
+# inactive_after_secs = 3600           # a card idle this many seconds sinks below live work (the prompt-cache window)
+
+[agents.pets]
+# enabled = false                      # opt-in animated companion tab in the provider dashboard
+# pet = "codex"                        # built-in id, an https:// URL, a petdex pet name, or a path to your own .webp sheet
+# size = "medium"                      # "medium" keeps the original pet footprint; "small" fits the active provider block
+# glyphs = "auto"                      # "auto", "half", "sextant", or "octant"
+# voice = true                         # canned captions on fleet-status changes
+
+[agents.profiles]
+# Profiles are named main agents addressed as `@<profile>`. `agent` names a
+# built-in kind or another profile; the nearest profile wins for every field,
+# including `args` (replace, not append). A profile named like a kind overrides
+# bare kind cells and virtual cells such as `claude-auto` / `claude-ping`.
+## [agents.profiles.claude-slim]
+## agent = "claude"
+## effort = "low"
+## system-prompt-file = "~/.config/rimz/prompts/slim.md"
+## args = "--max-turns 4"
+
+[agents.commands]
+# Commands are shell-split raw command panes. They are not addressable agents.
+## vim = "nvim -p"
+## htop = "htop"
+
+[agents.teams]
+# Teams bind ordered role names to profiles. By default each role opens as one
+# side-by-side column in the same tab; optional `layout` uses the same
+# comma=column / plus=row grammar as inline specs, resolving role names first.
+# Each role answers to `@<role>` in that channel.
+[agents.teams.peer]
+layout = "claude,codex"
+
+## [agents.teams.review]
+## layout = "planner+reviewer,coder+term"
+## [[agents.teams.review.roles]]
+## role = "planner"
+## profile = "planner"
+## [[agents.teams.review.roles]]
+## role = "coder"
+## profile = "codex-yolo"
+## [[agents.teams.review.roles]]
+## role = "reviewer"
+## profile = "claude"

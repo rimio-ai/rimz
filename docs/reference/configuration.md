@@ -12,7 +12,7 @@ Configuration has two tiers. The per-machine tier under `~/.config/rimz/` drives
 rimz setup                         # detect this machine and offer a default config write
 rimz setup --yes                   # non-interactive default config write; no hook or trust side effects
 rimz config init --print           # print the commented field reference
-rimz config init                   # write ~/.config/rimz/config.toml
+rimz config init                   # write config.toml, theme.toml, and agents.toml
 ```
 
 Most users start with `rimz setup` or `rimz config init`, then edit only the few lines they need. The generated template is the exhaustive field reference: every persisted section and default scalar is shown as commented TOML. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
@@ -21,7 +21,9 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent profiles, command cells, teams, auto-ping schedules, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config`, `rimz autoping` |
+| `~/.config/rimz/config.toml` | per-machine | core room behavior: accounts, notifications, remote-control auto-launch, sidebar behavior, multiplexer defaults, resume, Sentry | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, semantic slots, glyphs, animations, provider brand styling | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop automation, attention windows, pets | you, `rimz setup`, `rimz config`, `rimz autoping` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -30,23 +32,42 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 Per-machine settings load leniently: a missing file is the default config, and unknown keys are ignored so an older binary can tolerate a newer file. `rimz config set` is stricter than the loader and rejects unknown dotted keys before it writes.
 
-## `config.toml` Per Machine
+## Per-machine config set
 
-Eleven sections make up the per-machine file:
+`rimz config init` writes three sibling files. The in-memory `MachineConfig` mirrors that layout: core behavior from `config.toml`, appearance from `theme.toml`, and agents-side behavior from `agents.toml`. Missing files load as defaults, and `rimz config set` routes a dotted key to the owning file.
+
+`config.toml` carries the core behavior sections:
 
 | Section | Purpose |
 | --- | --- |
-| `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[agents]` | launch profiles, command cells, and named teams for `rimz agents <spec>` |
-| `[autoping]` | scheduled window-priming pings, applied to this machine's scheduler by `rimz autoping install` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
-| `[accounts]` | provider account-usage enrichment and display-only monthly ceilings |
+| `[accounts]` | display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
-| `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, theme and glow, and display bands |
+| `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, glow, and display bands |
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding on rebirth, and opt-in auto-continue on rate-limit reset |
 | `[sentry]` | off-box error reporting target |
+
+`theme.toml` carries appearance:
+
+| Section | Purpose |
+| --- | --- |
+| `[theme]` | style preset, color depth, scheme, and semantic slot overrides |
+| `[theme.animations]` | status-head frames, tones, effects, and unread pulse |
+| `[theme.glyphs]` | active Unicode and Nerd Font glyph tables plus set selection |
+| `[theme.providers]` | provider dashboard name, emblem, and brand colors |
+| `[colors.*]` | pasteable Alacritty palette lifted into `theme.colors` |
+
+`agents.toml` carries agent-side behavior:
+
+| Section | Purpose |
+| --- | --- |
+| `[agents]` | launch placement plus profiles, command cells, and named teams for `rimz agents <spec>` |
+| `[agents.worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
+| `[agents.loop.autoping]` | scheduled window-priming pings, applied to this machine's scheduler by `rimz autoping install` |
+| `[agents.attention]` | stale-running and inactive-row timing |
+| `[agents.pets]` | provider-dashboard companion overlay |
 
 Every field, its default, and an inline note lives in the generated template:
 
@@ -59,7 +80,7 @@ The sections below explain the model and the knobs whose behavior is easy to mis
 ### Auto-ping
 
 ```toml
-[autoping.schedules.morning]
+[agents.loop.autoping.schedules.morning]
 kind = "claude"          # provider to prime; must support a ping turn
 root = "/home/you/code/app"
 at = "07:00"             # 24h local wall-clock
@@ -104,14 +125,12 @@ The sidebar's `⇅ rc` provider flag is broader than these auto-launch toggles: 
 
 ```toml
 [accounts]
-oauth_usage = true
-
 [accounts.usage_limit_usd]
 claude = 50.0
 codex = 25.0
 ```
 
-Account enrichment is local and best-effort. `oauth_usage = true` lets Rimz use provider account-usage surfaces reached from local OAuth credentials or the local Codex app-server; turning it off suppresses those provider-reported paid-usage queries and caches. It does not disable transcript-derived spending totals, and it never writes provider credential files. `RIMZ_OAUTH_USAGE_OFFLINE=1` disables the same fetches for one process tree.
+Account enrichment is local, read-only, and best-effort. Rimz uses provider account-usage surfaces reached from local OAuth credentials or the local Codex app-server when available; `RIMZ_OAUTH_USAGE_OFFLINE=1` disables those fetches for one process tree. It does not disable transcript-derived spending totals, and it never writes provider credential files.
 
 `[accounts.usage_limit_usd]` sets display-only monthly USD ceilings by provider kind. A ceiling scales the provider dashboard's `ex` or `api` bar when the provider does not report a real cap; it is not a provider-enforced spending limit and does not stop agents. Leaving a provider unset means the paid/API row reads uncapped or unknown with `∞`.
 
@@ -167,7 +186,7 @@ Set a `dsn` to report Rimz `warn!`/`error!` events and observed agent rate-limit
 ### Worktrees
 
 ```toml
-[worktree]
+[agents.worktree]
 dir = "../{repo}-worktrees"
 base = "fresh"
 ```
@@ -265,7 +284,7 @@ card_density = "auto"
 trunk = "develop"
 focus_key = "Alt+p"
 
-[sidebar.pets]
+[agents.pets]
 enabled = false
 pet = "codex"
 size = "medium"
@@ -277,7 +296,7 @@ voice = true
 
 `focus_key` is the global multiplexer chord that focuses the sidebar from any pane, and toggles — press it again to return to your last working pane. It runs `rimz sidebar focus --toggle`, which resolves and focuses the room's sidebar pane. Both backends bind it automatically at session birth: tmux as a root-table `bind-key`, and Zellij through the presence plugin, which binds the chord at runtime once you grant it Reconfigure (the bind resets when the session ends and never touches your `config.kdl`) ([multiplexers.md → Focus key](../internals/sidebar/multiplexers.md#focus-key)). The default is `Alt+p` (`Alt` survives the terminal and Zellij's locked mode, and avoids tmux's `Ctrl+B` prefix); `Ctrl+<key>` is also accepted. Set it empty or `off` to register nothing and leave every key as it was. The sidebar's `?` overlay shows the active chord, and the in-sidebar keys (`n`/`N` to walk the inbox, `m`/`M` to mark read/unread, and the rest) are in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
 
-`[sidebar.theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[sidebar.animations]` status heads and `[sidebar.providers]` brand styling, lives in [theme.md](./theme.md).
+`[theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[theme.animations]` status heads and `[theme.providers]` brand styling, lives in [theme.md](./theme.md).
 
 `card_density = "auto"` keeps the standard agent card: identity, description, context meter, context line, and subagents on the selected card. `expanded` shows every card's subagents. `compact` trims resting cards by status while the selected card opens to the standard card.
 
@@ -289,7 +308,7 @@ voice = true
 
 `trunk` is a preferred comparison target for the worktree header's git stats. A repo where that branch does not resolve falls back to the detection ladder: `main`, then `master`, then the remote's advertised default.
 
-`[sidebar.pets] enabled = true` adds a right-side pet overlay to the provider dashboard. `pet` selects one of four sources, in this order: a built-in catalog id (`codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, or `null-signal`) wins; an `http(s)://` selector is your own WebP spritesheet by URL; a path-like selector (one with a `/`, a `.`, or a leading `~`) is a local sheet or a petdex pet directory; and a bare slug is a petdex pet installed under `~/.codex/pets/<slug>/`. So `pet = "wall-e"` shows a petdex-installed pet, `pet = "~/pets/dragon.webp"` a local sheet, and `pet = "https://example.com/dragon.webp"` a remote one. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite body to the active provider block height. `glyphs` chooses `auto`, `half`, `sextant`, or `octant` cell art, and `voice` controls the canned caption line. A built-in or URL sheet is fetched over HTTPS into the per-machine cache on first use (`RIMZ_PETS_OFFLINE=1` uses the cache only); a remote URL must be `https`, while petdex and local sheets are read straight off disk with no network. A petdex pet is a directory holding a `pet.json` (whose `spritesheetPath` names the sheet) beside the WebP; any bring-your-own sheet matches the catalog geometry — a `1536×1872` WebP holding an `8×9` grid of `192×208` RGBA frames (alpha renders transparent). Pets execute no commands and stay outside the project trust hash; a configured URL widens asset egress to the host you name, while petdex and local sheets reach the network not at all. Internals, the geometry contract, and the cache contract live in [pets.md](../internals/sidebar/pets.md).
+`[agents.pets] enabled = true` adds a right-side pet overlay to the provider dashboard. `pet` selects one of four sources, in this order: a built-in catalog id (`codex`, `dewey`, `fireball`, `rocky`, `seedy`, `stacky`, `bsod`, or `null-signal`) wins; an `http(s)://` selector is your own WebP spritesheet by URL; a path-like selector (one with a `/`, a `.`, or a leading `~`) is a local sheet or a petdex pet directory; and a bare slug is a petdex pet installed under `~/.codex/pets/<slug>/`. So `pet = "wall-e"` shows a petdex-installed pet, `pet = "~/pets/dragon.webp"` a local sheet, and `pet = "https://example.com/dragon.webp"` a remote one. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite body to the active provider block height. `glyphs` chooses `auto`, `half`, `sextant`, or `octant` cell art, and `voice` controls the canned caption line. A built-in or URL sheet is fetched over HTTPS into the per-machine cache on first use (`RIMZ_PETS_OFFLINE=1` uses the cache only); a remote URL must be `https`, while petdex and local sheets are read straight off disk with no network. A petdex pet is a directory holding a `pet.json` (whose `spritesheetPath` names the sheet) beside the WebP; any bring-your-own sheet matches the catalog geometry — a `1536×1872` WebP holding an `8×9` grid of `192×208` RGBA frames (alpha renders transparent). Pets execute no commands and stay outside the project trust hash; a configured URL widens asset egress to the host you name, while petdex and local sheets reach the network not at all. Internals, the geometry contract, and the cache contract live in [pets.md](../internals/sidebar/pets.md).
 
 ### Provider Dashboard
 
@@ -302,7 +321,7 @@ max_provider_blocks = 3
 
 The dashboard shows one block per discovered provider. `provider_tabs = "auto"` stacks one or two providers and switches to tabs at three or more. `provider_list` chooses kinds and order; `"all"` expands to every remaining discovered provider at that position. Empty discovery uses today's spend to choose up to `max_provider_blocks`, then orders the retained providers stably by kind.
 
-`[sidebar.providers.<kind>]` restyles a provider's display name, ASCII art, and brand color; the fields and formats live in [theme.md](./theme.md#provider-styling). Account and budget sourcing is in [internals/agents/provider.md](../internals/agents/provider.md).
+`[theme.providers.<kind>]` restyles a provider's display name, ASCII art, and brand color; the fields and formats live in [theme.md](./theme.md#provider-styling). Account and budget sourcing is in [internals/agents/provider.md](../internals/agents/provider.md).
 
 ## Changing Values
 
@@ -312,12 +331,12 @@ rimz config get
 rimz config get sidebar.max_cols
 rimz config get sidebar --json
 rimz config set sidebar.max_cols 80
-rimz config set sidebar.theme "TokyoNight Night"
-rimz config set worktree.base fresh
+rimz config set theme "TokyoNight Night"
+rimz config set agents.worktree.base fresh
 rimz config set notifications.triggers '["waiting", "failed"]'
 ```
 
-`rimz config get` loads the effective per-machine config over built-in defaults. `rimz config set` edits one key in `config.toml`, preserves comments through `toml_edit`, rejects unknown keys, deserializes the whole result as `MachineConfig`, then writes with Rimz's temp-file-plus-rename durability primitive.
+`rimz config get` loads the effective per-machine config over built-in defaults. `rimz config set` edits one key in the owning per-machine file (`config.toml`, `theme.toml`, or `agents.toml`), preserves comments through `toml_edit`, rejects unknown keys, deserializes the whole result as `MachineConfig`, then writes with Rimz's temp-file-plus-rename durability primitive. `theme.colors.*` keys write to root `[colors.*]` in `theme.toml`, so Alacritty palettes stay paste-compatible.
 
 Bare `config set` values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings (`fresh`, `always`). For context bands, set the whole band as an inline table: `rimz config set sidebar.context.red '{ percent = 90, tokens = 400000 }'`.
 
@@ -327,7 +346,7 @@ Later layers win:
 
 1. built-in defaults,
 2. project config (`.rimz/config.toml`),
-3. per-machine config (`~/.config/rimz/config.toml`),
+3. per-machine config set (`~/.config/rimz/{config,theme,agents}.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
 This is the designed model. Today the per-machine layer is live, CLI/env overrides are applied by the commands that define them, and the project layer is read for the trust hash. Project `[profiles]` and `[agents.teams]` are live when trusted and deliberately invert the general order for launch names: trusted repo profiles and teams overlay machine config so a repository can pin the launch surface it hashes.

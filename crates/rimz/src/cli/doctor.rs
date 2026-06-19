@@ -72,7 +72,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
 /// carries; `rimz autoping list` reports each one's installed/enabled state.
 fn collect_autoping() -> model::AutoPing {
     let schedules = rimz::config::MachineConfig::load()
-        .map(|config| config.autoping.schedules.0)
+        .map(|config| config.agents.r#loop.autoping.schedules.0)
         .unwrap_or_default();
     let rows = schedules
         .into_iter()

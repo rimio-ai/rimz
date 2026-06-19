@@ -1,8 +1,6 @@
 use std::collections::BTreeMap;
 
-use crate::config::{GlyphRole, SidebarGlyphsConfig};
-
-use super::super::glyph_set;
+use crate::config::{GlyphRole, ThemeGlyphsConfig};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum GlyphSetKind {
@@ -13,8 +11,15 @@ pub(crate) enum GlyphSetKind {
 impl GlyphSetKind {
     fn from_source(source: Option<&str>) -> Self {
         match source {
-            Some("nerd-font") => Self::NerdFont,
+            Some("nerd_font") => Self::NerdFont,
             _ => Self::Unicode,
+        }
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Unicode => "unicode",
+            Self::NerdFont => "nerd_font",
         }
     }
 }
@@ -27,26 +32,21 @@ pub(crate) struct GlyphSet {
 
 impl Default for GlyphSet {
     fn default() -> Self {
-        Self::resolve(&SidebarGlyphsConfig::default())
+        Self::resolve(&ThemeGlyphsConfig::default())
     }
 }
 
 impl GlyphSet {
-    pub(crate) fn resolve(config: &SidebarGlyphsConfig) -> Self {
+    pub(crate) fn resolve(config: &ThemeGlyphsConfig) -> Self {
         Self::resolve_with_set(config.set.as_deref(), config)
     }
 
-    /// Resolve with an explicit set source, used by the `[sidebar] style` preset
-    /// to select `nerd-font` without restating it under `[sidebar.glyphs]`. An
+    /// Resolve with an explicit set source, used by the `[theme] style` preset
+    /// to select `nerd_font` without restating it under `[theme.glyphs]`. An
     /// explicit `glyphs.set` (the `config.set` the caller passes through) still
-    /// wins; the per-namespace overrides in `config` always apply last.
-    pub(crate) fn resolve_with_set(set: Option<&str>, config: &SidebarGlyphsConfig) -> Self {
-        let file_config = set.and_then(glyph_set::explicit_glyph_config);
-        let kind = file_config
-            .as_ref()
-            .and_then(|config| config.set.as_deref())
-            .map(|source| GlyphSetKind::from_source(Some(source)))
-            .unwrap_or_else(|| GlyphSetKind::from_source(set));
+    /// wins; the matching inline set overrides apply last.
+    pub(crate) fn resolve_with_set(set: Option<&str>, config: &ThemeGlyphsConfig) -> Self {
+        let kind = GlyphSetKind::from_source(set);
         let mut glyphs = GlyphRole::ALL
             .iter()
             .map(|&role| {
@@ -60,10 +60,7 @@ impl GlyphSet {
             })
             .collect::<BTreeMap<_, _>>();
 
-        if let Some(file_config) = file_config {
-            apply_overrides(&mut glyphs, &file_config);
-        }
-        apply_overrides(&mut glyphs, config);
+        apply_overrides(&mut glyphs, config, kind);
 
         Self { kind, glyphs }
     }
@@ -80,9 +77,13 @@ impl GlyphSet {
     }
 }
 
-fn apply_overrides(glyphs: &mut BTreeMap<GlyphRole, String>, config: &SidebarGlyphsConfig) {
+fn apply_overrides(
+    glyphs: &mut BTreeMap<GlyphRole, String>,
+    config: &ThemeGlyphsConfig,
+    kind: GlyphSetKind,
+) {
     for &role in GlyphRole::ALL {
-        if let Some(glyph) = config.glyph(role) {
+        if let Some(glyph) = config.glyph(kind.name(), role) {
             glyphs.insert(role, glyph.to_owned());
         }
     }
@@ -242,7 +243,6 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
 mod tests {
     use super::*;
     use crate::config::validate_single_cell;
-    use tempfile::tempdir;
 
     #[test]
     fn every_builtin_glyph_is_one_cell() {
@@ -347,9 +347,9 @@ mod tests {
 
     #[test]
     fn resolves_named_set_and_explicit_overrides() {
-        let config: SidebarGlyphsConfig = toml::from_str(
-            "set = \"nerd-font\"\n\
-             [status]\n\
+        let config: ThemeGlyphsConfig = toml::from_str(
+            "set = \"nerd_font\"\n\
+             [nerd_font.status]\n\
              working = \"⢿\"\n",
         )
         .expect("glyph config");
@@ -367,42 +367,39 @@ mod tests {
     }
 
     #[test]
-    fn custom_file_set_picks_base_before_overrides() {
-        let dir = tempdir().expect("tempdir");
-        let file = dir.path().join("glyphs.toml");
-        std::fs::write(
-            &file,
-            "set = \"nerd-font\"\n\
-             [status]\n\
-             working = \"⢿\"\n",
-        )
-        .expect("write glyph file");
-        let config = SidebarGlyphsConfig {
-            set: Some(file.display().to_string()),
-            ..SidebarGlyphsConfig::default()
-        };
+    fn template_glyph_defaults_match_presets() {
+        #[derive(serde::Deserialize)]
+        struct ThemeFile {
+            theme: crate::config::ThemeConfig,
+        }
 
-        let glyphs = GlyphSet::resolve(&config);
-
-        assert_eq!(glyphs.kind(), GlyphSetKind::NerdFont);
-        assert_eq!(glyphs.glyph(GlyphRole::StatusWorking), "⢿");
-        assert_eq!(
-            glyphs.glyph(GlyphRole::WorktreeBranch),
-            nerd_font_glyph(GlyphRole::WorktreeBranch).expect("branch icon")
-        );
-    }
-
-    #[test]
-    fn template_glyph_defaults_match_unicode_preset() {
-        let config: crate::config::MachineConfig =
-            toml::from_str(crate::config::MachineConfig::template()).expect("template parses");
-        let from_template = GlyphSet::resolve(&config.sidebar.glyphs);
+        let parsed: ThemeFile = toml::from_str(crate::config::MachineConfig::template_theme())
+            .expect("theme template parses");
+        let mut unicode_config = parsed.theme.glyphs.clone();
+        unicode_config.set = Some("unicode".to_owned());
+        let from_template = GlyphSet::resolve(&unicode_config);
         let default = GlyphSet::default();
         for &role in GlyphRole::ALL {
             assert_eq!(
                 from_template.glyph(role),
                 default.glyph(role),
                 "active template default for {} equals the Unicode preset",
+                role.namespaced_name()
+            );
+        }
+
+        let mut nerd_config = parsed.theme.glyphs;
+        nerd_config.set = Some("nerd_font".to_owned());
+        let from_template = GlyphSet::resolve(&nerd_config);
+        let expected = GlyphSet::resolve(&ThemeGlyphsConfig {
+            set: Some("nerd_font".to_owned()),
+            ..ThemeGlyphsConfig::default()
+        });
+        for &role in GlyphRole::ALL {
+            assert_eq!(
+                from_template.glyph(role),
+                expected.glyph(role),
+                "active template default for {} equals the Nerd Font preset",
                 role.namespaced_name()
             );
         }

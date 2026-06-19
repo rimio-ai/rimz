@@ -38,7 +38,7 @@ fn configured_stall_window_controls_running_attention_escalation() {
             .in_pane("%1")
             .active_ago(age_secs);
         let mut snapshot = room(Vec::new(), vec![session]);
-        snapshot.sidebar.attention.stalled_after_secs =
+        snapshot.attention.stalled_after_secs =
             std::num::NonZeroU32::new(120).expect("non-zero test window");
         snapshot.with_live_panes(vec![pane("%1", "node", "/repo/main")], None)
     };

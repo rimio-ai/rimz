@@ -94,8 +94,8 @@ impl SidebarSnapshot {
             self.root_class,
             self.now,
             AttentionWindows {
-                stalled_after_secs: self.sidebar.attention.stalled_after_secs.get(),
-                inactive_after_secs: self.sidebar.attention.inactive_after_secs.get(),
+                stalled_after_secs: self.attention.stalled_after_secs.get(),
+                inactive_after_secs: self.attention.inactive_after_secs.get(),
             },
         );
         projection.diagnostics

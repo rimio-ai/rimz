@@ -13,10 +13,10 @@ pub(in crate::sidebar_pane::render) const PAUSED_GLYPH: &str = "⏸\u{FE0E}";
 /// The still status glyph — used for the legend, the worktree tally, the
 /// attention line, the cockpit make-up buckets, and the leading cell for every
 /// non-animated state. The shape carries the status under `NO_COLOR`; color
-/// reinforces it. Each status reads its `[sidebar.glyphs.status]` shape (the
+/// reinforces it. Each status reads its `[theme.glyphs.<set>.status]` shape (the
 /// representative working `⢿`, distinct from idle `○`), so the whole make-up
 /// row is configured in one place; the per-row animated working/thinking cells
-/// live in the role-specific helpers below and ride `[sidebar.animations]`.
+/// live in the role-specific helpers below and ride `[theme.animations]`.
 pub(in crate::sidebar_pane::render) fn status_glyph(theme: &Theme, status: AgentStatus) -> String {
     theme.glyph(status_glyph_role(status)).to_owned()
 }

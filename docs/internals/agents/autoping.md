@@ -34,7 +34,7 @@ A scheduler process runs outside any pane, so it has no mux identity pin. Each e
 Schedules live in the per-machine config, outside the trust hash — the only thing an entry runs is the rimz-owned `autoping run`, never arbitrary shell:
 
 ```toml
-[autoping.schedules.morning]
+[agents.loop.autoping.schedules.morning]
 kind = "claude"        # must support a ping turn (claude, codex)
 root = "/home/you/code/app"
 at = "07:00"           # 24h local wall-clock

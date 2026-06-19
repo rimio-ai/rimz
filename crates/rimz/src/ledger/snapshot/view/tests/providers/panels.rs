@@ -85,9 +85,9 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
         Vec::new(),
         vec![agent("claude", "c1", AgentStatus::Idle, 10)],
     );
-    snapshot.sidebar.providers.insert(
+    snapshot.theme.providers.insert(
         "claude".to_owned(),
-        crate::config::SidebarProviderStyle {
+        crate::config::ThemeProviderStyle {
             color: Some(crate::config::ThemeColor::Indexed(208)),
             ..Default::default()
         },
@@ -103,9 +103,9 @@ fn provider_brand_color_carries_rgb_and_indexed_fallback() {
         Vec::new(),
         vec![agent("claude", "c1", AgentStatus::Idle, 10)],
     );
-    snapshot.sidebar.providers.insert(
+    snapshot.theme.providers.insert(
         "claude".to_owned(),
-        crate::config::SidebarProviderStyle {
+        crate::config::ThemeProviderStyle {
             color: Some(crate::config::ThemeColor::Rgb(0xa3, 0xbe, 0x8c)),
             ..Default::default()
         },

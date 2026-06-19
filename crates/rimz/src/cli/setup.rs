@@ -121,7 +121,7 @@ impl SetupReport {
             })
             .collect();
 
-        let config_path = rimz::config::MachineConfig::path();
+        let config_path = rimz::config::MachineConfig::config_path();
         let config_exists = config_path.exists();
         Self {
             mux,
@@ -134,7 +134,7 @@ impl SetupReport {
 }
 
 fn write_config(force: bool) -> Result<()> {
-    let path = rimz::config::MachineConfig::path();
+    let path = rimz::config::MachineConfig::config_path();
     if config::write_default_config(force)? {
         print_line(&format!("Wrote {}", path.display()))?;
     } else {

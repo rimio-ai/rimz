@@ -9,6 +9,14 @@ fn machine_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("config.toml")
 }
 
+fn theme_config_path(env: &Env) -> std::path::PathBuf {
+    env.config_root().join("rimz").join("theme.toml")
+}
+
+fn agents_config_path(env: &Env) -> std::path::PathBuf {
+    env.config_root().join("rimz").join("agents.toml")
+}
+
 #[test]
 fn config_init_prints_and_writes_the_template() {
     let env = Env::new();
@@ -24,7 +32,10 @@ fn config_init_prints_and_writes_the_template() {
         .args(["config", "init", "--print"])
         .assert()
         .success()
-        .stdout(contains("[worktree]"))
+        .stdout(contains("# === config.toml ==="))
+        .stdout(contains("# === theme.toml ==="))
+        .stdout(contains("# === agents.toml ==="))
+        .stdout(contains("[agents.worktree]"))
         .stdout(contains("# max_cols = 72"));
 
     env.rimz()
@@ -37,6 +48,13 @@ fn config_init_prints_and_writes_the_template() {
     let text = std::fs::read_to_string(&path).expect("read generated config");
     assert!(text.contains("[notifications]"));
     assert!(text.contains("# enabled = true"));
+    let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(theme_text.contains("[theme]"));
+    assert!(theme_text.contains("[colors.primary]"));
+    let agents_text =
+        std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
+    assert!(agents_text.contains("[agents.worktree]"));
+    assert!(agents_text.contains("[agents.loop.autoping]"));
 
     env.rimz()
         .args(["config", "init"])
@@ -84,16 +102,13 @@ fn config_get_set_round_trip_preserves_template_comments() {
     );
 
     for (key, value, expected) in [
-        ("sidebar.theme.mode", "truecolor", "truecolor\n"),
-        ("sidebar.theme.mode", "256", "256\n"),
-        (
-            "sidebar.theme.scheme",
-            "TokyoNight Night",
-            "TokyoNight Night\n",
-        ),
-        ("sidebar.theme.good", "'#a3be8c'", "#a3be8c\n"),
-        ("sidebar.theme.caution", "214", "214\n"),
-        ("sidebar.providers.claude.color", "'#D97757'", "#d97757\n"),
+        ("theme.mode", "truecolor", "truecolor\n"),
+        ("theme.mode", "256", "256\n"),
+        ("theme.scheme", "TokyoNight Night", "TokyoNight Night\n"),
+        ("theme.good", "'#a3be8c'", "#a3be8c\n"),
+        ("theme.caution", "214", "214\n"),
+        ("theme.providers.claude.color", "'#D97757'", "#d97757\n"),
+        ("theme.colors.normal.green", "'#00ff00'", "#00ff00\n"),
     ] {
         env.rimz()
             .args(["config", "set", key, value])
@@ -107,24 +122,30 @@ fn config_get_set_round_trip_preserves_template_comments() {
             .stdout(expected);
     }
 
+    let theme_text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
+    assert!(
+        theme_text.contains("[colors.normal]") && theme_text.contains("green = '#00ff00'"),
+        "theme.colors writes to root [colors] for Alacritty paste compatibility:\n{theme_text}"
+    );
+
     env.rimz()
-        .args(["config", "set", "sidebar.theme", "Catppuccin Mocha"])
+        .args(["config", "set", "theme", "Catppuccin Mocha"])
         .assert()
         .success()
-        .stdout(contains("set sidebar.theme"));
+        .stdout(contains("set theme"));
     env.rimz()
-        .args(["config", "get", "sidebar.theme.scheme"])
+        .args(["config", "get", "theme.scheme"])
         .assert()
         .success()
         .stdout("Catppuccin Mocha\n");
 
     env.rimz()
-        .args(["config", "set", "sidebar.theme", "0x96f"])
+        .args(["config", "set", "theme", "0x96f"])
         .assert()
         .success()
-        .stdout(contains("set sidebar.theme"));
+        .stdout(contains("set theme"));
     env.rimz()
-        .args(["config", "get", "sidebar.theme.scheme"])
+        .args(["config", "get", "theme.scheme"])
         .assert()
         .success()
         .stdout("0x96f\n");
@@ -147,13 +168,13 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .stderr(contains("validating `sidebar.max_cols`"));
 
     env.rimz()
-        .args(["config", "set", "sidebar.theme.scheme", "does-not-exist"])
+        .args(["config", "set", "theme.scheme", "does-not-exist"])
         .assert()
         .failure()
         .stderr(contains("unknown sidebar theme scheme `does-not-exist`"));
 
     env.rimz()
-        .args(["config", "set", "sidebar.theme", "auto"])
+        .args(["config", "set", "theme", "auto"])
         .assert()
         .failure()
         .stderr(contains("unknown sidebar theme scheme `auto`"));
@@ -165,7 +186,7 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .args([
             "config",
             "set",
-            "sidebar.theme.scheme",
+            "theme.scheme",
             bad_scheme.to_str().expect("utf-8 path"),
         ])
         .assert()
@@ -201,4 +222,6 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     let text = std::fs::read_to_string(machine_config_path(&env)).expect("read setup config");
     assert!(text.contains("[resume]"));
     assert!(text.contains("# on_rebirth = true"));
+    assert!(theme_config_path(&env).exists());
+    assert!(agents_config_path(&env).exists());
 }

@@ -1,10 +1,8 @@
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, OnceLock};
 
 use serde::Deserialize;
 
-use crate::config::{Semantic, parse_hex};
+use crate::config::{InlinePalette, Semantic, parse_hex};
 
 use super::embedded_themes;
 use super::oklab::Rgb;
@@ -12,40 +10,20 @@ use super::theme::RawPalette;
 
 #[derive(Debug, Deserialize)]
 struct AlacrittyTheme {
-    colors: Option<AlacrittyColors>,
+    colors: Option<InlinePalette>,
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct AlacrittyColors {
-    primary: Option<AlacrittyPrimaryColors>,
-    normal: Option<AlacrittyAnsiColors>,
-    bright: Option<AlacrittyAnsiColors>,
-    selection: Option<AlacrittySelectionColors>,
+pub(crate) fn explicit_raw_palette(name_or_path: &str) -> Option<RawPalette> {
+    load_explicit_raw_palette(name_or_path).ok()
 }
 
-#[derive(Debug, Default, Deserialize)]
-struct AlacrittyPrimaryColors {
-    background: Option<String>,
-    foreground: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AlacrittySelectionColors {
-    background: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize)]
-struct AlacrittyAnsiColors {
-    red: Option<String>,
-    green: Option<String>,
-    yellow: Option<String>,
-    blue: Option<String>,
-    magenta: Option<String>,
-    cyan: Option<String>,
-}
-
+#[cfg(test)]
 pub(crate) fn explicit_palette_tones(name_or_path: &str) -> Option<Semantic> {
-    cached_explicit_palette_tones(name_or_path)
+    load_explicit_palette_tones(name_or_path).ok()
+}
+
+pub(crate) fn default_raw_palette() -> RawPalette {
+    explicit_raw_palette(super::theme::DEFAULT_SCHEME).unwrap_or(RawPalette::DEFAULT)
 }
 
 pub fn validate_explicit_scheme(name_or_path: &str) -> Result<(), String> {
@@ -57,37 +35,20 @@ pub fn available_scheme_names() -> Vec<String> {
     embedded_themes::theme_names().map(str::to_owned).collect()
 }
 
-fn cached_explicit_palette_tones(name_or_path: &str) -> Option<Semantic> {
-    {
-        let cache = lock_explicit_scheme_cache();
-        if let Some(tones) = cache.get(name_or_path) {
-            return *tones;
-        }
-    }
-
-    let tones = load_explicit_palette_tones(name_or_path).ok();
-    let mut cache = lock_explicit_scheme_cache();
-    *cache.entry(name_or_path.to_owned()).or_insert(tones)
-}
-
-fn lock_explicit_scheme_cache() -> MutexGuard<'static, HashMap<String, Option<Semantic>>> {
-    static CACHED: OnceLock<Mutex<HashMap<String, Option<Semantic>>>> = OnceLock::new();
-    match CACHED.get_or_init(|| Mutex::new(HashMap::new())).lock() {
-        Ok(guard) => guard,
-        Err(poisoned) => poisoned.into_inner(),
-    }
-}
-
 fn load_explicit_palette_tones(name_or_path: &str) -> Result<Semantic, String> {
+    load_explicit_raw_palette(name_or_path).map(|raw| raw.derive_tones())
+}
+
+fn load_explicit_raw_palette(name_or_path: &str) -> Result<RawPalette, String> {
     if let Some(text) = embedded_themes::theme_toml(name_or_path) {
-        return parse_palette_tones(text).map_err(|err| {
+        return parse_raw_palette(text).map_err(|err| {
             format!("invalid bundled sidebar theme scheme `{name_or_path}`: {err}")
         });
     }
-    load_external_palette_tones(name_or_path)
+    load_external_raw_palette(name_or_path)
 }
 
-fn load_external_palette_tones(name_or_path: &str) -> Result<Semantic, String> {
+fn load_external_raw_palette(name_or_path: &str) -> Result<RawPalette, String> {
     let path = resolve_external_scheme_path(name_or_path).ok_or_else(|| {
         format!(
             "unknown sidebar theme scheme `{name_or_path}`; {}",
@@ -96,7 +57,7 @@ fn load_external_palette_tones(name_or_path: &str) -> Result<Semantic, String> {
     })?;
     let text = std::fs::read_to_string(&path)
         .map_err(|err| format!("reading sidebar theme scheme `{}`: {err}", path.display()))?;
-    parse_palette_tones(&text)
+    parse_raw_palette(&text)
         .map_err(|err| format!("invalid sidebar theme scheme `{}`: {err}", path.display()))
 }
 
@@ -127,8 +88,13 @@ fn expand_home(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
+#[cfg(test)]
 pub(crate) fn parse_palette_tones(text: &str) -> Result<Semantic, String> {
     Ok(parse_raw_palette(text)?.derive_tones())
+}
+
+pub(crate) fn inline_raw_palette(colors: &InlinePalette) -> Result<RawPalette, String> {
+    raw_palette_from_colors(colors)
 }
 
 /// Parse an Alacritty theme into the [`RawPalette`] the semantic layer derives
@@ -137,9 +103,12 @@ pub(crate) fn parse_palette_tones(text: &str) -> Result<Semantic, String> {
 fn parse_raw_palette(text: &str) -> Result<RawPalette, String> {
     let theme: AlacrittyTheme =
         toml::from_str(text).map_err(|err| format!("parsing Alacritty theme TOML: {err}"))?;
-    let colors = theme.colors.unwrap_or_default();
-    let primary = colors.primary.unwrap_or_default();
-    let normal = colors.normal.unwrap_or_default();
+    raw_palette_from_colors(&theme.colors.unwrap_or_default())
+}
+
+fn raw_palette_from_colors(colors: &InlinePalette) -> Result<RawPalette, String> {
+    let primary = colors.primary.clone().unwrap_or_default();
+    let normal = colors.normal.clone().unwrap_or_default();
 
     // Required keys are validated in a stable order — primary first, then the
     // normal hues — so a malformed scheme reports the earliest missing key.

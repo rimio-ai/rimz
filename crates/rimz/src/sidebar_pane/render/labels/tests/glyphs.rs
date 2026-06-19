@@ -4,23 +4,25 @@ use crate::sidebar_pane::render::animation::{BREATH_DEEP_AMPLITUDE, BreathSample
 use crate::sidebar_pane::render::theme::Component;
 
 fn truecolor_theme() -> Theme {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
-    Theme::fixed_for_sidebar(false, &sidebar)
+    let theme = crate::config::ThemeConfig {
+        mode: crate::config::ThemeMode::Truecolor,
+        ..crate::config::ThemeConfig::default()
+    };
+    Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme)
 }
 
-fn truecolor_theme_with(sidebar: &crate::config::SidebarConfig) -> Theme {
-    let mut sidebar = sidebar.clone();
-    sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
-    Theme::fixed_for_sidebar(false, &sidebar)
+fn truecolor_theme_with(theme: &crate::config::ThemeConfig) -> Theme {
+    let mut theme = theme.clone();
+    theme.mode = crate::config::ThemeMode::Truecolor;
+    Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme)
 }
 
 /// A sidebar config that pins the unread attention effect, so a test can drive
 /// one specific mode rather than the shipped default (`shimmer`).
-fn unread_sidebar(effect: crate::config::UnreadEffect) -> crate::config::SidebarConfig {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.unread = Some(effect);
-    sidebar
+fn unread_theme(effect: crate::config::UnreadEffect) -> crate::config::ThemeConfig {
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.animations.unread = Some(effect);
+    theme
 }
 
 #[test]
@@ -190,7 +192,7 @@ fn attention_glyph_holds_a_fixed_tone_and_never_heats() {
 
 #[test]
 fn attention_effect_and_speed_reach_the_rendered_pulse() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
+    let theme = truecolor_theme_with(&unread_theme(crate::config::UnreadEffect::Blink));
     assert_ne!(
         agent_lead_style(
             &theme,
@@ -215,7 +217,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         "the default unread actionable head blinks between its bright and normal poles"
     );
 
-    let mut quiet = unread_sidebar(crate::config::UnreadEffect::Blink);
+    let mut quiet = unread_theme(crate::config::UnreadEffect::Blink);
     quiet.animations.waiting = Some(
         toml::from_str::<crate::config::AnimationSpec>("effect = \"static\"\n")
             .expect("waiting animation spec"),
@@ -246,7 +248,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
 
     // A per-role static effect quiets the unread pulse for a result status too:
     // an explicit static success effect freezes the unread-result pulsing.
-    let mut quiet_success = crate::config::SidebarConfig::default();
+    let mut quiet_success = crate::config::ThemeConfig::default();
     quiet_success.animations.success = Some(
         toml::from_str::<crate::config::AnimationSpec>("effect = \"static\"\n")
             .expect("success animation spec"),
@@ -274,7 +276,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
         "an explicit static success effect quiets unread-result pulsing"
     );
 
-    let mut fast = unread_sidebar(crate::config::UnreadEffect::Blink);
+    let mut fast = unread_theme(crate::config::UnreadEffect::Blink);
     fast.animations.waiting = Some(
         toml::from_str::<crate::config::AnimationSpec>("speed = \"fast\"\n")
             .expect("waiting animation spec"),
@@ -307,7 +309,7 @@ fn attention_effect_and_speed_reach_the_rendered_pulse() {
 
 #[test]
 fn unread_glyph_pulses_without_losing_status_color_or_heat() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Blink));
+    let theme = truecolor_theme_with(&unread_theme(crate::config::UnreadEffect::Blink));
     let read = agent_lead_style(
         &theme,
         AgentStatus::Success,
@@ -416,7 +418,11 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     );
     assert_eq!(red_read.add_modifier, Modifier::empty());
 
-    let plain = Theme::fixed_for_sidebar(true, &unread_sidebar(crate::config::UnreadEffect::Blink));
+    let plain = Theme::fixed_for_theme(
+        true,
+        &crate::config::SidebarConfig::default(),
+        &unread_theme(crate::config::UnreadEffect::Blink),
+    );
     let read_waiting_plain = agent_lead_style(
         &plain,
         AgentStatus::Waiting,
@@ -482,7 +488,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
 
 #[test]
 fn only_the_lead_unread_row_keeps_the_configured_effect() {
-    let theme = truecolor_theme_with(&unread_sidebar(crate::config::UnreadEffect::Shimmer));
+    let theme = truecolor_theme_with(&unread_theme(crate::config::UnreadEffect::Shimmer));
     // The lead unread row keeps the configured shimmer; every other unread row
     // settles to the steady bright crest — one pane in motion, the rest still.
     assert!(matches!(
@@ -700,16 +706,16 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
         "✓"
     );
 
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.idle = Some(
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.animations.idle = Some(
         toml::from_str::<crate::config::AnimationSpec>("frames = \"AB\"\nspeed = \"fast\"\n")
             .expect("idle animation spec"),
     );
-    sidebar.animations.success = Some(
+    theme.animations.success = Some(
         toml::from_str::<crate::config::AnimationSpec>("frames = \"XY\"\nspeed = \"fast\"\n")
             .expect("success animation spec"),
     );
-    let custom = Theme::fixed_for_sidebar(false, &sidebar);
+    let custom = Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme);
     assert_eq!(
         agent_glyph(&custom, AgentStatus::Idle, TurnPhase::Idle, 1),
         "B"
@@ -721,19 +727,25 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
     assert_eq!(
         status_glyph(&custom, AgentStatus::Idle),
         "○",
-        "the still legend glyph reads [sidebar.glyphs.status], not the animation frames"
+        "the still legend glyph reads [theme.glyphs.<set>.status], not the animation frames"
     );
 
-    let shaped = crate::config::SidebarConfig {
-        glyphs: toml::from_str::<crate::config::SidebarGlyphsConfig>("[status]\nidle = \"o\"\n")
-            .expect("status glyph override"),
-        ..crate::config::SidebarConfig::default()
+    let shaped_theme = crate::config::ThemeConfig {
+        glyphs: toml::from_str::<crate::config::ThemeGlyphsConfig>(
+            "[unicode.status]\nidle = \"o\"\n",
+        )
+        .expect("status glyph override"),
+        ..crate::config::ThemeConfig::default()
     };
-    let shaped = Theme::fixed_for_sidebar(false, &shaped);
+    let shaped = Theme::fixed_for_theme(
+        false,
+        &crate::config::SidebarConfig::default(),
+        &shaped_theme,
+    );
     assert_eq!(
         status_glyph(&shaped, AgentStatus::Idle),
         "o",
-        "[sidebar.glyphs.status] drives the still legend glyph"
+        "[theme.glyphs.<set>.status] drives the still legend glyph"
     );
 }
 
@@ -769,12 +781,12 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
         "selected default idle is normal-weight terminal fg, not the Good tone"
     );
 
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.idle = Some(
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.animations.idle = Some(
         toml::from_str::<crate::config::AnimationSpec>("color = \"good\"\n")
             .expect("idle color spec"),
     );
-    let custom = Theme::fixed_for_sidebar(false, &sidebar);
+    let custom = Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme);
     assert_eq!(
         status_style(&custom, AgentStatus::Idle),
         custom.good(Modifier::empty()),

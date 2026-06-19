@@ -11,20 +11,34 @@ const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
 
 #[test]
 fn template_defaults_deserialize_to_machine_defaults() {
-    let uncommented = uncomment_default_lines(MachineConfig::template());
-    let parsed: MachineConfig = toml::from_str(&uncommented).expect("template defaults parse");
+    let dir = tempfile::tempdir().expect("tempdir");
+    std::fs::write(
+        dir.path().join("config.toml"),
+        uncomment_default_lines(MachineConfig::template_core()),
+    )
+    .expect("write config template");
+    std::fs::write(
+        dir.path().join("theme.toml"),
+        uncomment_default_lines(MachineConfig::template_theme()),
+    )
+    .expect("write theme template");
+    std::fs::write(
+        dir.path().join("agents.toml"),
+        uncomment_default_lines(MachineConfig::template_agents()),
+    )
+    .expect("write agents template");
+    let parsed =
+        MachineConfig::load_from(&dir.path().join("config.toml")).expect("template defaults parse");
 
-    // The template ships the glyph groups as active defaults (paste-to-replace),
-    // so a fresh config pins them to the Unicode preset rather than leaving them
-    // unset. Those values render identically to the default glyph set
-    // (verified in the render crate's `template_glyph_defaults_match_unicode_preset`);
-    // normalize them away before comparing the rest of the config.
+    // The template ships both glyph groups and the pasteable palette as active
+    // defaults, so normalize them away before comparing the rest of the config.
     assert!(
-        !parsed.sidebar.glyphs.is_unset(),
+        !parsed.theme.glyphs.is_unset(),
         "template ships active glyph defaults"
     );
     let mut normalized = parsed.clone();
-    normalized.sidebar.glyphs = super::SidebarGlyphsConfig::default();
+    normalized.theme.glyphs = super::ThemeGlyphsConfig::default();
+    normalized.theme.colors = None;
     assert_eq!(normalized, MachineConfig::default());
 }
 
@@ -35,7 +49,7 @@ fn template_covers_serialized_default_leaves() {
     let mut expected = BTreeSet::new();
     collect_leaf_paths("", &value, &mut expected);
 
-    let template = template_default_paths(MachineConfig::template());
+    let template = all_template_default_paths();
     for path in &expected {
         assert!(
             template.contains(path),
@@ -54,11 +68,11 @@ fn template_covers_serialized_default_leaves() {
 
 #[test]
 fn template_lists_optional_sidebar_theme_slots() {
-    let template = MachineConfig::template();
+    let template = MachineConfig::template_theme();
     for setting in ["mode", "scheme"] {
         assert!(
             template.contains(&format!("## {setting} = ")),
-            "template is missing optional sidebar theme setting {setting}"
+            "template is missing optional theme setting {setting}"
         );
     }
     for slot in [
@@ -78,9 +92,24 @@ fn template_lists_optional_sidebar_theme_slots() {
     ] {
         assert!(
             template.contains(&format!("## {slot} = ")),
-            "template is missing optional sidebar theme slot {slot}"
+            "template is missing optional theme slot {slot}"
         );
     }
+}
+
+fn all_template_default_paths() -> BTreeSet<String> {
+    let mut out = template_default_paths(MachineConfig::template_core());
+    out.extend(
+        template_default_paths(MachineConfig::template_theme())
+            .into_iter()
+            .map(|path| {
+                path.strip_prefix("colors.")
+                    .map(|rest| format!("theme.colors.{rest}"))
+                    .unwrap_or(path)
+            }),
+    );
+    out.extend(template_default_paths(MachineConfig::template_agents()));
+    out
 }
 
 fn uncomment_default_lines(template: &str) -> String {

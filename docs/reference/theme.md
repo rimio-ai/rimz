@@ -2,26 +2,26 @@
 
 > See [interface/sidebar.md](../interface/sidebar.md) for what every tone and glyph means on screen; this doc is the knobs that restyle them.
 
-The sidebar's palette, glyph set, status-head animations, and provider brand styling are per-machine display settings under `[sidebar]` in `~/.config/rimz/config.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
+The sidebar's palette, glyph set, status-head animations, and provider brand styling are per-machine display settings in `~/.config/rimz/theme.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
 
 ```sh
-rimz config set sidebar.theme "TokyoNight Night"
+rimz config set theme "TokyoNight Night"
 ```
 
 Every key below also lives as commented TOML in the generated template: `rimz config init --print`.
 
 ## Style preset
 
-`[sidebar] style` is the one-line headline that pairs color depth with the glyph set. `modern` runs truecolor with the [Nerd Font glyph set](#glyphs); `default` keeps [auto color depth](#color-depth) and the shipped Unicode glyphs. An explicit `[sidebar.theme] mode` or `[sidebar.glyphs] set` overrides the matching half of the preset, so you can take the Nerd Font icons at `256` color or pin truecolor with the Unicode glyphs.
+`[theme] style` is the one-line headline that pairs color depth with the glyph set. `modern` runs truecolor with the [Nerd Font glyph set](#glyphs); `default` keeps [auto color depth](#color-depth) and the shipped Unicode glyphs. An explicit `[theme] mode` or `[theme.glyphs] set` overrides the matching half of the preset, so you can take the Nerd Font icons at `256` color or pin truecolor with the Unicode glyphs.
 
 ```toml
-[sidebar]
+[theme]
 style = "modern"   # truecolor + Nerd Font; or "default" for auto color + Unicode
 ```
 
 ## Schemes
 
-`[sidebar.theme] scheme` picks the palette source. `rimz list-themes` prints every bundled name.
+`[theme] scheme` picks the palette source. `rimz list-themes` prints every bundled name.
 
 | `scheme` | character | source |
 | --- | --- | --- |
@@ -30,7 +30,7 @@ style = "modern"   # truecolor + Nerd Font; or "default" for auto color + Unicod
 | `/path/to/theme.toml` | theme-defined | custom Alacritty TOML |
 
 ```toml
-[sidebar.theme]
+[theme]
 scheme = "TokyoNight Night"
 ```
 
@@ -41,34 +41,53 @@ Rimz embeds the Alacritty export from [iTerm2-Color-Schemes](https://github.com/
 The checked-in catalog is refreshed with `cargo xtask theme-refresh`; its provenance and license live in [crates/rimz/themes/README.md](../../crates/rimz/themes/README.md) and [crates/rimz/themes/LICENSE](../../crates/rimz/themes/LICENSE).
 
 ```toml
-[sidebar.theme]
+[theme]
 scheme = "Catppuccin Mocha"
 # scheme = "Solarized Light"
 ```
 
 The bundled Alacritty TOML supplies `background`, `foreground`, the six normal ANSI hues, and `bright.blue` for the selection accent. Themes without `bright.blue` use `normal.blue` for that slot.
 
-### Custom Theme Paths
+### Pasteable palette and custom theme paths
+
+`theme.toml` accepts an Alacritty palette at the file root. Paste a `[colors.*]` block directly from an Alacritty theme, and Rimz lifts it into `theme.colors` before deriving semantic tones. Inline `[colors.*]` wins over `theme.scheme`; if no inline palette is present, `scheme` selects a bundled name or a file path.
+
+```toml
+[theme]
+scheme = "TokyoNight Night"
+
+[colors.primary]
+background = "#1a1b26"
+foreground = "#c0caf5"
+
+[colors.normal]
+red = "#f7768e"
+green = "#9ece6a"
+yellow = "#e0af68"
+blue = "#7aa2f7"
+magenta = "#bb9af7"
+cyan = "#7dcfff"
+```
 
 `scheme` also accepts a path to an Alacritty TOML file, with `~` expanded. A changed `scheme` value applies on the next snapshot; loaded theme files are cached for the sidebar process lifetime, so edits inside one apply after a sidebar restart.
 
 ```toml
-[sidebar.theme]
+[theme]
 scheme = "~/themes/rimz.toml"
 ```
 
 ## Color Depth
 
-`[sidebar.theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that forward `TERM` but drop `COLORTERM`; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
+`[theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that forward `TERM` but drop `COLORTERM`; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
 
 ```toml
-[sidebar.theme]
+[theme]
 mode = "auto"        # or "truecolor", "256"
 ```
 
 ## Palette Slots
 
-Thirteen semantic slots cover everything the sidebar paints. Each accepts `#rrggbb` hex or a raw 0–255 xterm index under `[sidebar.theme]`; an omitted slot keeps the selected scheme's tone (the bundled `TokyoNight Night` palette by default). Slot names follow the semantics rather than the shipped hues, so a light-terminal re-theme still reads `good`/`warn`/`alarm`.
+Thirteen semantic slots cover everything the sidebar paints. Each accepts a palette role name (`background`, `foreground`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `bright_blue`), `#rrggbb` hex, or a raw 0–255 xterm index under `[theme]`; an omitted slot keeps the selected scheme's tone (the bundled `TokyoNight Night` palette by default). Role names resolve through the active raw palette, so `good = "green"` follows a pasted `[colors.normal] green` just like a bundled scheme.
 
 The palette runs a loudness hierarchy — attention loudest, selection next, structure quiet, data coded, chrome quietest. Two rules keep it honest: `alarm` red marks danger (failures, removals, the full-context crest), and one warm `caution` amber means "hot/costly" everywhere — with the fresh-input `↘` burning a step redder than `alarm` itself, so the costliest read is the hottest marker on screen.
 
@@ -89,9 +108,10 @@ The palette runs a loudness hierarchy — attention loudest, selection next, str
 | `selection_bg` | the selected card's background band, behind every line of the card; a subdued blend of the scheme's `colors.selection.background` toward the background, else a faint background tint. The band recesses below this tone — a fine step at truecolor, one xterm cell darker at 256-color — so the selected card reads as one recessed panel |
 
 ```toml
-[sidebar.theme]
+[theme]
 good = "#a0d0a0"   # hex retunes a slot
 warn = 173         # a raw xterm index stays exact at every depth
+caution = "yellow" # palette role name tracks the active [colors] table
 ```
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
@@ -116,9 +136,9 @@ The calm card name shows the rule: at truecolor it dims its brand lightness a st
 
 The selected band and the unread wash step the same rule a different way. At truecolor the band recesses a fine sub-cell step below `selection_bg` and the wash lifts a fine step above it, so the selected card sinks into a well set off from the lighter unread surface that rises over the card. Those steps are finer than a cube cell, so at 256-color, rather than collapse onto the panel, each is sized to cross one whole xterm cell: the band steps one cell darker, the wash one cell lighter, and `selection_bg`'s own cell sits between them. The near-background panel lands on the cube's fine 24-step gray ramp, where a single cell is a small, even step — so the three-way ordering (band below panel below wash) survives the quantization the breathing lift cannot. Only `NO_COLOR` drops the surfaces, leaving the bright `▌` spine and bold weight to carry the selection and the unread bold weight to carry the unread cue.
 
-## Custom Theme Files
+## Alacritty palette shape
 
-Custom themes are Alacritty TOML files. A minimal valid theme:
+Inline `[colors.*]` and custom `scheme` files use the same Alacritty TOML shape. A minimal valid palette:
 
 ```toml
 [colors.primary]
@@ -152,22 +172,22 @@ blue = '#7aa2f7'
 | `selection` | bright blue (or normal blue when absent), lifted brighter and off the data-cool slot |
 | `selection_bg` | `colors.selection.background` subdued toward background for a faint full-card band, or a faint background-toward-blue tint when absent |
 
-Blends run in OKLab, so the derived tones stay perceptually even across themes. `[sidebar.theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
+Blends run in OKLab, so the derived tones stay perceptually even across themes. `[theme]` slot overrides win over any derived tone, so a near-miss theme needs only the one slot pinned.
 
 Brightening runs in the same space and holds hue: a lift raises OKLab lightness and eases chroma toward the gamut boundary rather than letting the RGB channels hard-clamp, so an unread row brightens toward its crest — whether the blink toggles to it, `bright` holds it, or the shimmer beam sweeps across it — without drifting toward white or a neighboring hue.
 
 ## Animations
 
-`[sidebar.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone. The static status heads (`idle`/`success`/`paused`/`waiting`/`attention`) follow `[sidebar.glyphs] set`, so `nerd-font` swaps each for its curated icon; the animated spinners (`thinking`/`working`/`delegating`/`resolving`) and the `compacting` wave keep their Unicode frames in every preset. Any explicit `frames` override wins.
+`[theme.animations]` themes the status heads the sidebar paints; what each head means in the room is in [the glyph legend](../interface/sidebar.md#reading-the-glyphs). The roles are `thinking`, `working`, `compacting`, `delegating`, `resolving`, `idle`, `success`, `paused`, `waiting`, and `failed`. Each role is optional, and each field inside a role is optional; an omitted field keeps the built-in value for that role, so a one-line `idle.effect = "breathe"` override leaves the idle glyph and neutral default tone alone. The static status heads (`idle`/`success`/`paused`/`waiting`/`attention`) follow `[theme.glyphs] set`, so `nerd_font` swaps each for its curated icon; the animated spinners (`thinking`/`working`/`delegating`/`resolving`) and the `compacting` wave keep their Unicode frames in every preset. Any explicit `frames` override wins.
 
 ```toml
-[sidebar.animations.thinking]
+[theme.animations.thinking]
 frames = "⠁⠂⠄⡀⡈⡐⡠⣀⣁⣂⣄⣌⣔⣤⣥⣦⣮⣶⣷⣿⡿⠿⢟⠟⡛⠛⠫⢋⠋⠍⡉⠉⠑⠡⢁"
 color = "clay"
 effect = "static"
 speed = "fast"
 
-[sidebar.animations.idle]
+[theme.animations.idle]
 effect = "breathe"
 ```
 
@@ -188,13 +208,13 @@ The built-in heads:
 
 `frames` accepts either a string or an array. A string splits into one frame per Unicode codepoint, which fits single-codepoint runs such as `"⠁⠂⠄⡀"`. An array keeps multi-codepoint single-cell glyphs intact, such as `["⏸︎"]`. Every frame must occupy exactly one terminal cell; empty frame lists, empty glyphs, zero-width glyphs, and multi-cell glyphs are rejected.
 
-`color` accepts the semantic palette slots `good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[sidebar.theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the [unread attention effect](#unread-attention) below, `effect = "static"` quiets it to a constant bold tone, and `speed` paces it. A literal frame blink is a frame sequence such as `frames = [" ", "!"]`.
+`color` accepts the semantic palette slots `good`, `warn`, `caution`, `alarm`, `accent`, `cool`, `meta`, `body`, `muted`, and `faint`, the brand tone `clay`, a `#rrggbb` hex color, or a raw 256-color index. Semantic slots retune through `[theme]`; hex values follow the active depth; raw indexes and `clay` pass through as explicit tones. `effect` is `static` or `breathe`; `speed` is `slow`, `normal`, or `fast` for both frame advance and effect cadence. For `waiting`, `failed`, and unread `success` row heads, an omitted `effect` keeps the [unread attention effect](#unread-attention) below, `effect = "static"` quiets it to a constant bold tone, and `speed` paces it. A literal frame blink is a frame sequence such as `frames = [" ", "!"]`.
 
 Every role uses the same model: frames, color, effect, and speed. The unread attention signal carries across the lead glyph, the card name, the description, and the make-up `?`/`!`/`✓` buckets as one group — each holding its fixed tone until the pane is focused; the cockpit count and per-bucket counts use still representative frames.
 
 ### Unread attention
 
-`[sidebar.animations] unread` picks how an unread attention row reads. The lead glyph, the card name, the description, and the cockpit `?`/`!`/`✓` make-up buckets all carry the choice as one group, so a row that needs you reads with one voice.
+`[theme.animations] unread` picks how an unread attention row reads. The lead glyph, the card name, the description, and the cockpit `?`/`!`/`✓` make-up buckets all carry the choice as one group, so a row that needs you reads with one voice.
 
 The continuous signal is reserved for the **one row that most needs you** — the oldest unread row that needs an answer (`waiting` or `failed`, the `␣` triage head). Only that lead row carries the chosen `shimmer` or `blink`, so a single pane is the only thing in motion; every other unread row, an unread `✓` result included, settles to the steady `bright` crest — unmistakable by contrast against the calm rows, but still. A transition flash already announced each row — an ask as it enters, a result as its turn lands — so the steady crest is the rest after the announcement, not a missed cue.
 
@@ -209,18 +229,18 @@ An unread card also grounds on a soft, uniform **wash** — one panel marking th
 `blink` and `bright` rise to the same gentle crest; the shimmer beam rides a brighter one, because it lights only the few cells under its moving center rather than the whole row at once, so a matching crest would read far fainter. All ride the same gamut-safe lift, holding hue as they brighten. A per-role `effect = "static"` on `waiting`, `failed`, or `success` wins over the `unread` choice, holding that role's row at a constant bold tone. At truecolor the effect rides an OKLab lightness lift; the 256-color cube and `NO_COLOR` carry it on weight — a held bold for `bright` and `blink`, a moving bold cell for `shimmer` — so the signal reads at every depth ([subtle steps and color depth](#subtle-steps-and-color-depth)).
 
 ```toml
-[sidebar.animations]
+[theme.animations]
 unread = "shimmer"   # or "bright", "blink"
 ```
 
 ## Glyphs
 
-`[sidebar.glyphs]` shapes the sidebar vocabulary, grouped the way the sidebar reads on screen. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table; this section changes the shapes that carry those meanings. `rimz config init` writes the groups as **active defaults** — every glyph on its own line with its current value — so customizing is direct: paste a different glyph over any value and it takes effect on the next render. Each glyph must occupy exactly one terminal cell.
+`[theme.glyphs]` shapes the sidebar vocabulary, grouped the way the sidebar reads on screen. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table; this section changes the shapes that carry those meanings. `rimz config init` writes both shipped sets as **active defaults** — `[theme.glyphs.unicode.*]` and `[theme.glyphs.nerd_font.*]` — so customizing is direct: paste a different glyph over any value and it takes effect on the next render. Each glyph must occupy exactly one terminal cell, or two when a trailing space pads a double-width icon.
 
 Set a whole zone in one block. The cockpit make-up row is the `status` group:
 
 ```toml
-[sidebar.glyphs.status]
+[theme.glyphs.unicode.status]
 waiting = "?"   attention = "!"   paused = "⏸︎"
 done    = "✓"   working   = "⢿"   idle   = "○"
 ```
@@ -241,52 +261,39 @@ The groups follow the on-screen reading order:
 | `process` | `cpu`, `mem`, `io` |
 | `chrome` | `alert`, `remote_link`, `remote_control`, `infinity`, the `tab_cap_*`/`spine_*` framing, and `hairline` |
 
-The `status` group sets the head **shapes**; their colour, effect, and speed stay in [`[sidebar.animations]`](#animations), and the built-in animation frames follow `[sidebar.glyphs] set`. Two `status` names read across to animation roles: `status.attention` is the animation role `failed`, and `status.done` is `success`. A single-frame head (`waiting`/`attention`/`paused`/`done`/`idle`) reads its `status` shape directly; the animated heads (`working`/`thinking`/`delegating`/`resolving`) cycle a Unicode spinner sequence in every preset, with the `status` glyph as the still representative the cockpit buckets show.
+The `status` group sets the head **shapes**; their colour, effect, and speed stay in [`[theme.animations]`](#animations), and the built-in animation frames follow `[theme.glyphs] set`. Two `status` names read across to animation roles: `status.attention` is the animation role `failed`, and `status.done` is `success`. A single-frame head (`waiting`/`attention`/`paused`/`done`/`idle`) reads its `status` shape directly; the animated heads (`working`/`thinking`/`delegating`/`resolving`) cycle a Unicode spinner sequence in every preset, with the `status` glyph as the still representative the cockpit buckets show.
 
-### The `set` fallback
+### The `set` selector
 
-`set` themes every glyph you do not pin in a group, so deleting a line falls back to it:
+`set` chooses which inline table is active:
 
 | `set` | source |
 | --- | --- |
-| unset or `unicode` | the shipped Unicode set shown in the interface legend |
-| `nerd-font` | a curated Nerd Font overlay for the status heads, cockpit identity, token and process markers, context tiles, age clocks, the worktree branch, and chrome link badges |
-| `/path/to/glyphs.toml` | a custom TOML file layered over Unicode, or over the file-local `set` when present |
+| unset or `unicode` | `[theme.glyphs.unicode.*]` |
+| `nerd_font` | `[theme.glyphs.nerd_font.*]` |
 
 Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. The drawn gauges — the context ratio bar, the provider budget (mana) bar, and the scrollbar — along with the `chrome` spines/caps/hairline, the `worktree.dotted` seal, and the `status.compacting` wave, carry their shape from the terminal grid more precisely than any icon, so they keep their box-drawing glyphs in every preset.
 
-The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling `circle_slice` series in `nerd-font`, so the icon tracks elapsed time twice as finely. Every glyph ships as a single cell, which aligns on the `Mono` Nerd Font builds — `JetBrainsMono Nerd Font Mono`, `FiraCode Nerd Font` — where each icon advances one column. A face that draws icons double-width, such as the non-`Mono` `Cascadia Code NF`, keeps its columns aligned by padding the alignment-sensitive glyphs with a trailing space in a per-glyph override under `[sidebar.glyphs.cockpit]` and `[sidebar.glyphs.chrome]`.
+The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling `circle_slice` series in `nerd_font`, so the icon tracks elapsed time twice as finely. Every glyph ships as a single cell, which aligns on the `Mono` Nerd Font builds — `JetBrainsMono Nerd Font Mono`, `FiraCode Nerd Font` — where each icon advances one column. A face that draws icons double-width, such as the non-`Mono` `Cascadia Code NF`, keeps its columns aligned by padding the alignment-sensitive glyphs with a trailing space in a per-glyph override under `[theme.glyphs.nerd_font.cockpit]` and `[theme.glyphs.nerd_font.chrome]`.
 
-A custom glyph file uses the same grouped shape without the outer `sidebar.glyphs` prefix, and may pick its own base `set` before its overrides apply:
-
-```toml
-set = "nerd-font"
-
-[status]
-working = "⢿"
-
-[worktree]
-branch = "⑂"
-```
-
-The machine config can still layer final overrides on top. `rimz config set` validates named sets, custom-file readability, known role names, and glyph width — one cell, or two when a trailing space pads a double-width icon — before it writes — for example `rimz config set sidebar.glyphs.status.waiting "?"` or `rimz config set sidebar.glyphs.set nerd-font`.
+`rimz config set` validates named sets, known role names, and glyph width before it writes — for example `rimz config set theme.glyphs.unicode.status.waiting "?"` or `rimz config set theme.glyphs.set nerd_font`.
 
 ## Provider Styling
 
-`[sidebar.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults (claude clay, codex blue, pi forest green).
+`[theme.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults (claude clay, codex blue, pi forest green).
 
 ```toml
-[sidebar.providers.claude]
+[theme.providers.claude]
 product_name = "Claude Code"
 color = "#d97757"
 ascii_art = "CLAUDE"
 ```
 
-`color` accepts either `#rrggbb` or a raw 0-255 index; RGB values carry a quantized fallback for indexed renderers. Each field is optional, so a color override can leave the shipped art intact. Block selection and ordering stay in [configuration.md](./configuration.md#provider-dashboard); account and emblem resolution is in [internals/agents/provider.md](../internals/agents/provider.md).
+`color` accepts a palette role name, `#rrggbb`, or a raw 0-255 index; RGB and role values carry a quantized fallback for indexed renderers. Each field is optional, so a color override can leave the shipped art intact. Block selection and ordering stay in [configuration.md](./configuration.md#provider-dashboard); account and emblem resolution is in [internals/agents/provider.md](../internals/agents/provider.md).
 
 ## Glow
 
-`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows `[sidebar.theme].mode` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
+`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows ``theme.mode`` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
 
 ```toml
 [sidebar]
@@ -298,15 +305,15 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 ## Changing Values
 
 ```sh
-rimz config set sidebar.theme "TokyoNight Night"
-rimz config set sidebar.theme.good '#a0d0a0'
+rimz config set theme "TokyoNight Night"
+rimz config set theme.good '#a0d0a0'
 rimz config set sidebar.glow always
-rimz config set sidebar.glyphs.set nerd-font
-rimz config set sidebar.glyphs.status.working '⢿'
-rimz config set sidebar.glyphs.tokens.total '◇'
-rimz config set sidebar.animations.unread shimmer
-rimz config set sidebar.animations.idle.effect breathe
-rimz config set sidebar.providers.codex.color 33
+rimz config set theme.glyphs.set nerd_font
+rimz config set theme.glyphs.unicode.status.working '⢿'
+rimz config set theme.glyphs.unicode.tokens.total '◇'
+rimz config set theme.animations.unread shimmer
+rimz config set theme.animations.idle.effect breathe
+rimz config set theme.providers.codex.color 33
 ```
 
-`rimz config set` validates before it writes: an unknown scheme is rejected with the bundled-catalog count and custom-file path hint, and a malformed color, Alacritty file, or frame is rejected before the file changes. Loading stays lenient, so an older or stale scheme value falls back to the default `TokyoNight Night` scheme at render time instead of taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).
+`rimz config set` validates before it writes: an unknown scheme is rejected with the bundled-catalog count and custom-file path hint, and a malformed color, Alacritty palette, glyph, or frame is rejected before the file changes. Loading stays lenient, so an older or stale scheme value falls back to the default `TokyoNight Night` scheme at render time instead of taking down the sidebar. The full `rimz config` surface is in [cli/maintenance.md](./cli/maintenance.md).

@@ -20,7 +20,7 @@ use crate::ids::{AgentKind, AgentSessionId, PaneId, RequestId, ResolverId, ViewK
 /// default inactive window below which a card sinks beneath live work.
 pub const ATTENTION_AGE_CEILING_SECS: i64 = 3_600;
 
-/// Default `[sidebar.attention] inactive_after_secs`: a row with no activity for
+/// Default `[agents.attention] inactive_after_secs`: a row with no activity for
 /// this long sinks into the inactive partition, beneath every live row.
 pub const DEFAULT_INACTIVE_AFTER_SECS: u32 = ATTENTION_AGE_CEILING_SECS as u32;
 
@@ -723,7 +723,7 @@ pub enum AgentSignal {
 }
 
 /// Default window before a `running` agent with no activity is treated as
-/// stalled. The per-machine `[sidebar.attention] stalled_after_secs` setting
+/// stalled. The per-machine `[agents.attention] stalled_after_secs` setting
 /// overrides this for the live sidebar projection.
 pub const DEFAULT_STALL_AFTER_SECS: u32 = 30 * 60;
 

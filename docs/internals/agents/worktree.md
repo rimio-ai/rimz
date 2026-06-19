@@ -8,7 +8,7 @@ Rimz acts only on worktrees it owns. A marker file inside the worktree's Git adm
 
 ## Create
 
-`rimz worktree new` creates a Git worktree under the per-machine `[worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref) ([configuration.md](../../reference/configuration.md#worktrees)). Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`. `--base` overrides the base ref, and `--branch <NAME>` names the branch independently of the worktree name.
+`rimz worktree new` creates a Git worktree under the per-machine `[agents.worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref) ([configuration.md](../../reference/configuration.md#worktrees)). Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`. `--base` overrides the base ref, and `--branch <NAME>` names the branch independently of the worktree name.
 
 The marker stores the base branch name and the resolved base commit snapshot, so cleanup measures committed work against the live base branch and keeps the snapshot as the detached or unresolved fallback.
 

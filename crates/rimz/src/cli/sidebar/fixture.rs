@@ -28,6 +28,9 @@ pub(super) fn sidebar_fixture_snapshot(
         worktree_home: None,
         root_class: rimz::workspace::RootClass::Repo,
         sidebar: rimz::config::SidebarConfig::default(),
+        theme: rimz::config::ThemeConfig::default(),
+        pets: rimz::config::PetsConfig::default(),
+        attention: rimz::config::AttentionConfig::default(),
         providers: Vec::new(),
         value_tally: None,
         workspace_value_tally: None,
@@ -35,7 +38,7 @@ pub(super) fn sidebar_fixture_snapshot(
         link: None,
         reflects_log: None,
     };
-    snapshot.sidebar.theme.scheme = Some("TokyoNight Night".to_owned());
+    snapshot.theme.scheme = Some("TokyoNight Night".to_owned());
 
     match state {
         SidebarFixtureState::Empty => {}
@@ -346,6 +349,7 @@ fn provider_panel(
             "pi" => (0x27, 0xa0, 0x77),
             _ => (color, color, color),
         }),
+        color_role: None,
         version: version.map(ToOwned::to_owned),
         plan: plan.map(ToOwned::to_owned),
         metered,

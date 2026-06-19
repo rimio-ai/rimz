@@ -1,6 +1,6 @@
 use crate::config::{
     AnimationColor, AnimationEffect as ConfigEffect, AnimationSpec, AnimationSpeed as ConfigSpeed,
-    GlyphRole, SidebarAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
+    GlyphRole, ThemeAnimationsConfig, UnreadEffect as ConfigUnreadEffect,
 };
 use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};
@@ -396,11 +396,11 @@ pub(crate) struct ResolvedAnimations {
 impl Default for ResolvedAnimations {
     fn default() -> Self {
         let palette = Palette::resolve_fixed(
-            &crate::config::SidebarThemeConfig::default(),
+            &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Indexed,
         );
         Self::resolve(
-            &SidebarAnimationsConfig::default(),
+            &ThemeAnimationsConfig::default(),
             &GlyphSet::default(),
             &palette,
         )
@@ -409,7 +409,7 @@ impl Default for ResolvedAnimations {
 
 impl ResolvedAnimations {
     pub(crate) fn resolve(
-        config: &SidebarAnimationsConfig,
+        config: &ThemeAnimationsConfig,
         glyphs: &GlyphSet,
         palette: &Palette,
     ) -> Self {
@@ -572,12 +572,12 @@ fn resolve_role(
     animation
 }
 
-/// The built-in animation for a role, before any `[sidebar.animations.<role>]`
+/// The built-in animation for a role, before any `[theme.animations.<role>]`
 /// override. The animated spinners (thinking/working/delegating/resolving) and
 /// the compacting wave keep their Unicode braille/block frame sequences here in
 /// every preset; the single-frame status heads (idle/success/paused/waiting/
 /// failed) draw their one frame from the glyph set's `status` group, so
-/// `[sidebar.glyphs.status]` is the one place the head shapes are configured
+/// `[theme.glyphs.<set>.status]` is the one place the head shapes are configured
 /// while this function keeps their colour, effect, and speed.
 fn builtin(role: AnimationRole, glyphs: &GlyphSet, palette: &Palette) -> Animation {
     let head = |role| vec![glyphs.glyph(role).to_owned()];
@@ -666,18 +666,18 @@ mod tests {
 
     fn test_palette() -> Palette {
         Palette::resolve_fixed(
-            &crate::config::SidebarThemeConfig::default(),
+            &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Indexed,
         )
     }
 
-    fn resolve_for_test(config: &SidebarAnimationsConfig, palette: &Palette) -> ResolvedAnimations {
+    fn resolve_for_test(config: &ThemeAnimationsConfig, palette: &Palette) -> ResolvedAnimations {
         ResolvedAnimations::resolve(config, &GlyphSet::default(), palette)
     }
 
     fn nerd_glyph_set() -> GlyphSet {
-        GlyphSet::resolve(&crate::config::SidebarGlyphsConfig {
-            set: Some("nerd-font".to_owned()),
+        GlyphSet::resolve(&crate::config::ThemeGlyphsConfig {
+            set: Some("nerd_font".to_owned()),
             ..Default::default()
         })
     }
@@ -711,9 +711,9 @@ mod tests {
     #[test]
     fn nerd_font_swaps_static_heads_but_keeps_unicode_spinners() {
         let palette = test_palette();
-        let unicode = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
+        let unicode = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
         let nerd = ResolvedAnimations::resolve(
-            &SidebarAnimationsConfig::default(),
+            &ThemeAnimationsConfig::default(),
             &nerd_glyph_set(),
             &palette,
         );
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn partial_override_changes_only_the_named_field() {
-        let config: SidebarAnimationsConfig =
+        let config: ThemeAnimationsConfig =
             toml::from_str("[thinking]\nframes = \"ab\"\n").expect("config");
         let palette = test_palette();
         let animations = resolve_for_test(&config, &palette);
@@ -754,14 +754,14 @@ mod tests {
 
     #[test]
     fn clay_and_semantic_colors_resolve_to_palette_tones() {
-        let config: SidebarAnimationsConfig = toml::from_str(
+        let config: ThemeAnimationsConfig = toml::from_str(
             "[working]\ncolor = \"clay\"\n\n[idle]\ncolor = \"good\"\n\n[success]\ncolor = 34\n",
         )
         .expect("config");
         let palette = Palette::resolve_fixed(
-            &crate::config::SidebarThemeConfig {
+            &crate::config::ThemeConfig {
                 good: Some(crate::config::ThemeColor::Indexed(34)),
-                ..crate::config::SidebarThemeConfig::default()
+                ..crate::config::ThemeConfig::default()
             },
             crate::config::ColorDepth::Indexed,
         );
@@ -773,7 +773,7 @@ mod tests {
         assert_eq!(
             animations.role(AnimationRole::Idle).color(),
             Color::Indexed(34),
-            "named slots retune through [sidebar.theme]"
+            "named slots retune through [theme]"
         );
         assert_eq!(
             animations.role(AnimationRole::Success).color(),
@@ -788,10 +788,10 @@ mod tests {
     #[test]
     fn default_clay_animations_follow_truecolor_depth() {
         let palette = Palette::resolve_fixed(
-            &crate::config::SidebarThemeConfig::default(),
+            &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Truecolor,
         );
-        let animations = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
+        let animations = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
         let clay = palette.animation_color(AnimationColor::Clay);
         assert_eq!(animations.role(AnimationRole::Thinking).color(), clay);
         assert_eq!(animations.role(AnimationRole::Working).color(), clay);
@@ -800,7 +800,7 @@ mod tests {
 
     #[test]
     fn effects_and_resting_motion_are_resolved() {
-        let config: SidebarAnimationsConfig =
+        let config: ThemeAnimationsConfig =
             toml::from_str("[idle]\neffect = \"breathe\"\n").expect("config");
         let palette = test_palette();
         let animations = resolve_for_test(&config, &palette);
@@ -813,7 +813,7 @@ mod tests {
 
     #[test]
     fn speed_modulates_effect_cadence() {
-        let config: SidebarAnimationsConfig = toml::from_str(
+        let config: ThemeAnimationsConfig = toml::from_str(
             "[idle]\neffect = \"breathe\"\nspeed = \"slow\"\n\n[success]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
@@ -828,7 +828,7 @@ mod tests {
 
     #[test]
     fn attention_and_paused_roles_accept_effect_and_speed() {
-        let config: SidebarAnimationsConfig = toml::from_str(
+        let config: ThemeAnimationsConfig = toml::from_str(
             "[waiting]\neffect = \"breathe\"\nspeed = \"fast\"\n\n[paused]\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("config");
@@ -846,7 +846,7 @@ mod tests {
             "a paused effect override now participates in the uniform model"
         );
 
-        let quiet: SidebarAnimationsConfig =
+        let quiet: ThemeAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
         let animations = resolve_for_test(&quiet, &palette);
         assert_eq!(
@@ -1040,7 +1040,7 @@ mod tests {
     #[test]
     fn unread_anim_picks_the_variant_and_honors_the_static_quiet() {
         let palette = test_palette();
-        let animations = resolve_for_test(&SidebarAnimationsConfig::default(), &palette);
+        let animations = resolve_for_test(&ThemeAnimationsConfig::default(), &palette);
         let waiting = animations.role(AnimationRole::Waiting);
         assert!(matches!(
             waiting.unread_anim(UnreadEffect::Blink, 0, 0),
@@ -1055,7 +1055,7 @@ mod tests {
             Some(UnreadAnim::Shimmer(_))
         ));
 
-        let quiet: SidebarAnimationsConfig =
+        let quiet: ThemeAnimationsConfig =
             toml::from_str("[waiting]\neffect = \"static\"\n").expect("config");
         let quieted = resolve_for_test(&quiet, &palette);
         assert_eq!(
@@ -1071,10 +1071,10 @@ mod tests {
     fn unread_effect_resolves_from_config_and_defaults_to_shimmer() {
         let palette = test_palette();
         assert_eq!(
-            resolve_for_test(&SidebarAnimationsConfig::default(), &palette).unread_effect(),
+            resolve_for_test(&ThemeAnimationsConfig::default(), &palette).unread_effect(),
             UnreadEffect::Shimmer,
         );
-        let config: SidebarAnimationsConfig =
+        let config: ThemeAnimationsConfig =
             toml::from_str("unread = \"bright\"\n").expect("config");
         assert_eq!(
             resolve_for_test(&config, &palette).unread_effect(),

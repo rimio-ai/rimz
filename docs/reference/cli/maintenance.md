@@ -33,7 +33,7 @@ rimz config set <KEY> <VALUE>
 
 `set` edits one dotted key, preserves comments, rejects unknown keys, validates the resulting config, and writes with Rimz's temp-file-plus-rename durability primitive. Bare values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings, so `fresh` is accepted as a string value.
 
-Dotted keys address nested TOML tables. Examples include `worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.teams.review.layout`, `agents.teams.review.roles`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `sidebar.providers.codex.color`.
+Dotted keys address nested TOML tables. Examples include `agents.worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.teams.review.layout`, `agents.teams.review.roles`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `theme.providers.codex.color`.
 
 ## List themes
 
@@ -42,7 +42,7 @@ rimz list-themes
 rimz list-themes --json
 ```
 
-`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set sidebar.theme.scheme <name>`. `--json` emits the same list as an array for scripting. The palette model and custom theme files are covered in [theme.md](../theme.md).
+`list-themes` prints the bundled Alacritty theme names, one per line, each usable verbatim as `rimz config set theme.scheme <name>`. `--json` emits the same list as an array for scripting. The palette model and custom theme files are covered in [theme.md](../theme.md).
 
 ## Workspace ledger tools
 

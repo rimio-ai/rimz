@@ -119,6 +119,7 @@ fn provider(kind: &str) -> crate::SidebarProviderPanel {
         art: Vec::new(),
         color: 7,
         color_rgb: None,
+        color_role: None,
         version: None,
         plan: None,
         metered: false,

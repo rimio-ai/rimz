@@ -456,7 +456,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
 
     let launch = crate::cli::agents_launch::resolve_cwd(
         &workspace,
-        &machine_config.worktree,
+        &machine_config.agents.worktree,
         args.worktree.as_deref(),
     )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;

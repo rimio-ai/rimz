@@ -86,14 +86,12 @@ fn gauge_bars_map_severity_and_apportion_segments() {
         theme.heat_tone(1.0)
     );
 
-    let truecolor = Theme::fixed_for_sidebar(
+    let truecolor = Theme::fixed_for_theme(
         false,
-        &crate::config::SidebarConfig {
-            theme: crate::config::SidebarThemeConfig {
-                mode: crate::config::ThemeMode::Truecolor,
-                ..crate::config::SidebarThemeConfig::default()
-            },
-            ..crate::config::SidebarConfig::default()
+        &crate::config::SidebarConfig::default(),
+        &crate::config::ThemeConfig {
+            mode: crate::config::ThemeMode::Truecolor,
+            ..crate::config::ThemeConfig::default()
         },
     );
     for (severity, percent) in [
@@ -311,14 +309,15 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
     // not the ramp, which keeps the scheme RGB for that stop. The spent track
     // wears the bar's own `mana_style` tone, so it must follow the label down the
     // ramp rather than diverging to the terminal ANSI red.
-    let sidebar = crate::config::SidebarConfig {
-        theme: crate::config::SidebarThemeConfig {
-            alarm: Some(crate::config::ThemeColor::Indexed(1)),
-            ..crate::config::SidebarThemeConfig::default()
-        },
-        ..crate::config::SidebarConfig::default()
+    let theme_config = crate::config::ThemeConfig {
+        alarm: Some(crate::config::ThemeColor::Indexed(1)),
+        ..crate::config::ThemeConfig::default()
     };
-    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let theme = Theme::fixed_for_theme(
+        false,
+        &crate::config::SidebarConfig::default(),
+        &theme_config,
+    );
     let zones = BudgetZonesConfig::default();
     let track = mana_bar_spans(&theme, 0, 10, &zones)[0].style.fg;
     assert_eq!(
@@ -526,14 +525,15 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
 
 #[test]
 fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
-    let theme = Theme::fixed_for_sidebar(
+    let theme = Theme::fixed_for_theme(
         true,
-        &crate::config::SidebarConfig {
-            glyphs: crate::config::SidebarGlyphsConfig {
-                set: Some("nerd-font".to_owned()),
-                ..crate::config::SidebarGlyphsConfig::default()
+        &crate::config::SidebarConfig::default(),
+        &crate::config::ThemeConfig {
+            glyphs: crate::config::ThemeGlyphsConfig {
+                set: Some("nerd_font".to_owned()),
+                ..crate::config::ThemeGlyphsConfig::default()
             },
-            ..crate::config::SidebarConfig::default()
+            ..crate::config::ThemeConfig::default()
         },
     );
 

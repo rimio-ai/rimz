@@ -537,40 +537,64 @@ fn ensure_card_admission_predicate(root: &Path) -> Result<()> {
 }
 
 fn ensure_config_template_sections(root: &Path) -> Result<()> {
-    let path = root.join("crates/rimz/src/config.template.toml");
-    let text =
-        std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
     let required = [
-        "[worktree]",
-        "[agents]",
-        "[agents.profiles]",
-        "[agents.commands]",
-        "[agents.teams]",
-        "[remote_control]",
-        "[accounts]",
-        "[accounts.usage_limit_usd]",
-        "[notifications]",
-        "[sidebar]",
-        "[sidebar.context]",
-        "[sidebar.budget]",
-        "[sidebar.attention]",
-        "[sidebar.theme]",
-        "[sidebar.animations]",
-        "[sidebar.glyphs]",
-        "[sidebar.providers]",
-        "[zellij]",
-        "[tmux]",
-        "[resume]",
+        (
+            root.join("crates/rimz/src/config/templates/config.template.toml"),
+            &[
+                "[remote_control]",
+                "[accounts]",
+                "[accounts.usage_limit_usd]",
+                "[notifications]",
+                "[sidebar]",
+                "[sidebar.context]",
+                "[sidebar.budget]",
+                "[zellij]",
+                "[tmux]",
+                "[resume]",
+            ][..],
+        ),
+        (
+            root.join("crates/rimz/src/config/templates/theme.template.toml"),
+            &[
+                "[theme]",
+                "[theme.animations]",
+                "[theme.glyphs]",
+                "[theme.glyphs.unicode.status]",
+                "[theme.glyphs.nerd_font.status]",
+                "[theme.providers]",
+                "[colors.primary]",
+            ][..],
+        ),
+        (
+            root.join("crates/rimz/src/config/templates/agents.template.toml"),
+            &[
+                "[agents]",
+                "[agents.worktree]",
+                "[agents.loop.autoping]",
+                "[agents.attention]",
+                "[agents.pets]",
+                "[agents.profiles]",
+                "[agents.commands]",
+                "[agents.teams]",
+            ][..],
+        ),
     ];
-    let missing: Vec<&str> = required
-        .into_iter()
-        .filter(|section| !text.contains(section))
-        .collect();
+    let mut missing = Vec::new();
+    for (path, sections) in required {
+        let text = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading {}", path.display()))?;
+        missing.extend(
+            sections
+                .iter()
+                .filter(|section| !text.contains(**section))
+                .map(|section| format!("{}: {section}", path.display())),
+        );
+    }
     if missing.is_empty() {
         return Ok(());
     }
     bail!(
-        "config template is missing required sections: {}",
+        "config templates are missing required sections: {}",
         missing.join(", ")
     );
 }

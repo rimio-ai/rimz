@@ -493,6 +493,7 @@ fn provider_panel(
         ],
         color,
         color_rgb: None,
+        color_role: None,
         version: Some("2.1.158".to_owned()),
         plan: Some("Claude Max".to_owned()),
         metered,
@@ -730,13 +731,11 @@ fn scrolled_fade(offset: usize, phase: u64) -> ScrollbarFade {
 }
 
 fn truecolor_sidebar_theme() -> Theme {
-    Theme::fixed_for_sidebar(
+    Theme::fixed_for_theme(
         false,
-        &crate::config::SidebarConfig {
-            theme: crate::config::SidebarThemeConfig {
-                mode: crate::config::ThemeMode::Truecolor,
-                ..Default::default()
-            },
+        &crate::config::SidebarConfig::default(),
+        &crate::config::ThemeConfig {
+            mode: crate::config::ThemeMode::Truecolor,
             ..Default::default()
         },
     )

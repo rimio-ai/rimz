@@ -1,8 +1,8 @@
 //! `rimz list-themes` — print the bundled sidebar theme names.
 //!
 //! The names are the keys of the embedded Alacritty catalog (sorted), each
-//! usable verbatim as `[sidebar.theme] scheme` or `rimz config set
-//! sidebar.theme.scheme <name>`. `--json` emits the same list as an array for
+//! usable verbatim as `[theme] scheme` or `rimz config set
+//! theme.scheme <name>`. `--json` emits the same list as an array for
 //! scripting.
 
 use anyhow::Result;

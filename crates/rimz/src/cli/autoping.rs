@@ -496,6 +496,8 @@ fn preflight_kind(kind: &str) -> Result<()> {
 fn load_schedules() -> Result<std::collections::BTreeMap<String, ScheduleEntry>> {
     Ok(MachineConfig::load()
         .context("loading per-machine config")?
+        .agents
+        .r#loop
         .autoping
         .schedules
         .0)
@@ -537,11 +539,11 @@ fn confirmed(yes: bool, prompt: &str) -> Result<bool> {
 // ---- config editing (toml_edit, comment-preserving) -------------------------
 
 fn config_set_entry(name: &str, entry: &ScheduleEntry) -> Result<()> {
-    let path = MachineConfig::path();
+    let path = MachineConfig::agents_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            MachineConfig::template().to_owned()
+            MachineConfig::template_agents().to_owned()
         }
         Err(err) => return Err(err).with_context(|| format!("reading {}", path.display())),
     };
@@ -568,30 +570,40 @@ fn config_set_entry(name: &str, entry: &ScheduleEntry) -> Result<()> {
 
     let rendered = doc.to_string();
     MachineConfig::parse_text(&path, &rendered)
-        .with_context(|| format!("validating `autoping.schedules.{name}`"))?;
+        .with_context(|| format!("validating `agents.loop.autoping.schedules.{name}`"))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
 fn schedules_table(doc: &mut DocumentMut) -> Result<&mut Table> {
-    let autoping = doc
+    let agents = doc
         .as_table_mut()
+        .entry("agents")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_mut()
+        .context("`agents` is not a table")?;
+    let loop_ = agents
+        .entry("loop")
+        .or_insert_with(|| Item::Table(Table::new()))
+        .as_table_mut()
+        .context("`agents.loop` is not a table")?;
+    let autoping = loop_
         .entry("autoping")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
-        .context("`autoping` is not a table")?;
+        .context("`agents.loop.autoping` is not a table")?;
     let schedules = autoping
         .entry("schedules")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
-        .context("`autoping.schedules` is not a table")?;
+        .context("`agents.loop.autoping.schedules` is not a table")?;
     schedules.set_implicit(true);
     Ok(schedules)
 }
 
 fn config_remove(name: &str) -> Result<bool> {
-    let path = MachineConfig::path();
+    let path = MachineConfig::agents_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
         return Ok(false);
     };
@@ -599,7 +611,11 @@ fn config_remove(name: &str) -> Result<bool> {
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     let removed = doc
-        .get_mut("autoping")
+        .get_mut("agents")
+        .and_then(Item::as_table_mut)
+        .and_then(|agents| agents.get_mut("loop"))
+        .and_then(Item::as_table_mut)
+        .and_then(|loop_| loop_.get_mut("autoping"))
         .and_then(Item::as_table_mut)
         .and_then(|autoping| autoping.get_mut("schedules"))
         .and_then(Item::as_table_mut)

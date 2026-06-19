@@ -9,6 +9,12 @@ fn write(dir: &tempfile::TempDir, text: &str) -> PathBuf {
     path
 }
 
+fn write_named(dir: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
+    let path = dir.path().join(name);
+    std::fs::write(&path, text).expect("write config file");
+    dir.path().join("config.toml")
+}
+
 #[test]
 fn missing_or_empty_file_is_default_off() {
     let dir = tempdir().expect("tempdir");
@@ -32,34 +38,48 @@ fn missing_or_empty_file_is_default_off() {
 #[test]
 fn worktree_config_defaults_and_parses() {
     let dir = tempdir().expect("tempdir");
-    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    assert_eq!(defaults.worktree.dir, "../{repo}-worktrees");
-    assert_eq!(defaults.worktree.base, WorktreeBase::Head);
+    let defaults_dir = tempdir().expect("tempdir");
+    let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
+    assert_eq!(defaults.agents.worktree.dir, "../{repo}-worktrees");
+    assert_eq!(defaults.agents.worktree.base, WorktreeBase::Head);
 
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[worktree]\n\
+        "agents.toml",
+        "[agents.worktree]\n\
              dir = \"../wt-{repo}\"\n\
              base = \"fresh\"\n",
     ))
     .expect("load");
-    assert_eq!(config.worktree.dir, "../wt-{repo}");
-    assert_eq!(config.worktree.base, WorktreeBase::Fresh);
+    assert_eq!(config.agents.worktree.dir, "../wt-{repo}");
+    assert_eq!(config.agents.worktree.base, WorktreeBase::Fresh);
 
-    let explicit =
-        MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"main\"\n")).expect("load");
+    let explicit = MachineConfig::load_from(&write_named(
+        &dir,
+        "agents.toml",
+        "[agents.worktree]\nbase = \"main\"\n",
+    ))
+    .expect("load");
     assert_eq!(
-        explicit.worktree.base,
+        explicit.agents.worktree.base,
         WorktreeBase::Explicit("main".to_owned())
     );
-    assert!(MachineConfig::load_from(&write(&dir, "[worktree]\nbase = \"\"\n")).is_err());
+    assert!(
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.worktree]\nbase = \"\"\n",
+        ))
+        .is_err()
+    );
 }
 
 #[test]
 fn agent_profiles_commands_and_teams_parse() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
+        "agents.toml",
         "[agents.commands]\n\
              vim = \"nvim -p\"\n\
              htop = \"htop\"\n\
@@ -124,8 +144,9 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     // points at the same file wherever the profile later launches — not at the
     // agent cwd.
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
+        "agents.toml",
         "[agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"prompts/planner.md\"\n",
@@ -140,8 +161,9 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
     };
     assert_eq!(path, &dir.path().join("prompts/planner.md"));
     // An absolute path is left untouched.
-    let absolute = MachineConfig::load_from(&write(
+    let absolute = MachineConfig::load_from(&write_named(
         &dir,
+        "agents.toml",
         "[agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/etc/rimz/planner.md\"\n",
@@ -161,12 +183,19 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
 fn autoping_schedules_parse_and_default_empty() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::default().autoping.schedules.0.is_empty(),
+        MachineConfig::default()
+            .agents
+            .r#loop
+            .autoping
+            .schedules
+            .0
+            .is_empty(),
         "no schedules ship by default",
     );
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[autoping.schedules.morning]\n\
+        "agents.toml",
+        "[agents.loop.autoping.schedules.morning]\n\
              kind = \"claude\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
@@ -175,6 +204,8 @@ fn autoping_schedules_parse_and_default_empty() {
     ))
     .expect("load");
     let entry = config
+        .agents
+        .r#loop
         .autoping
         .schedules
         .0
@@ -189,33 +220,32 @@ fn autoping_schedules_parse_and_default_empty() {
 }
 
 #[test]
-fn legacy_tab_section_hard_errors() {
+fn legacy_split_sections_hard_error() {
     let dir = tempdir().expect("tempdir");
-    let err = MachineConfig::load_from(&write(&dir, "[tab]\n")).expect_err("legacy tab");
-    assert!(matches!(err, ConfigErr::LegacyTab { .. }));
-}
-
-#[test]
-fn legacy_aliases_section_hard_errors() {
-    let dir = tempdir().expect("tempdir");
-    let err = MachineConfig::load_from(&write(&dir, "[agents.aliases]\nvim = \"nvim\"\n"))
-        .expect_err("legacy aliases");
-    assert!(matches!(err, ConfigErr::LegacyAliases { .. }));
+    let err = MachineConfig::load_from(&write(
+        &dir,
+        "[worktree]\nbase = \"fresh\"\n[sidebar.glyphs]\nset = \"unicode\"\n",
+    ))
+    .expect_err("legacy split");
+    assert!(matches!(err, ConfigErr::LegacySplit { .. }));
+    assert!(err.to_string().contains("rimz config init"));
 }
 
 #[test]
 fn profile_tables_reject_unknown_fields_and_missing_agent() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
+            "agents.toml",
             "[agents.profiles.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
         ))
         .is_err()
     );
     assert!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
+            "agents.toml",
             "[agents.profiles.missing_agent]\nmode = \"yolo\"\n",
         ))
         .is_err()
@@ -226,12 +256,17 @@ fn profile_tables_reject_unknown_fields_and_missing_agent() {
 fn profile_name_validation_runs_at_config_load() {
     let dir = tempdir().expect("tempdir");
     assert!(matches!(
-        MachineConfig::load_from(&write(&dir, "[agents.profiles.term]\nagent = \"claude\"\n",)),
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "agents.toml",
+            "[agents.profiles.term]\nagent = \"claude\"\n",
+        )),
         Err(ConfigErr::Agents { .. })
     ));
     assert!(matches!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
+            "agents.toml",
             "[agents.profiles.claude-2]\nagent = \"claude\"\n",
         )),
         Err(ConfigErr::Agents { .. })
@@ -388,25 +423,29 @@ fn attention_config_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
     assert_eq!(
-        config.sidebar.attention.stalled_after_secs.get(),
+        config.agents.attention.stalled_after_secs.get(),
         crate::feed::DEFAULT_STALL_AFTER_SECS,
         "unset uses the shipped 30-minute stall window",
     );
 
-    let tuned = MachineConfig::load_from(&write(
+    let tuned = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.attention]\nstalled_after_secs = 2700\n",
+        "agents.toml",
+        "[agents.attention]\nstalled_after_secs = 2700\n",
     ))
     .expect("load");
-    assert_eq!(tuned.sidebar.attention.stalled_after_secs.get(), 2700);
+    assert_eq!(tuned.agents.attention.stalled_after_secs.get(), 2700);
 
-    let partial = MachineConfig::load_from(&write(&dir, "[sidebar.attention]\n")).expect("load");
-    assert_eq!(partial.sidebar.attention, AttentionConfig::default());
+    let partial =
+        MachineConfig::load_from(&write_named(&dir, "agents.toml", "[agents.attention]\n"))
+            .expect("load");
+    assert_eq!(partial.agents.attention, AttentionConfig::default());
 
     assert!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
-            "[sidebar.attention]\nstalled_after_secs = 0\n",
+            "agents.toml",
+            "[agents.attention]\nstalled_after_secs = 0\n",
         ))
         .is_err()
     );
@@ -415,47 +454,50 @@ fn attention_config_defaults_parses_and_rejects_zero() {
 #[test]
 fn sidebar_theme_parses_defaults_unset_and_rejects_out_of_range() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.theme]\nmode = 256\nscheme = \"TokyoNight Night\"\ngood = 34\nselection = \"#8ab3e0\"\n",
+        "theme.toml",
+        "[theme]\nmode = 256\nscheme = \"TokyoNight Night\"\ngood = 34\nselection = \"#8ab3e0\"\n",
     ))
     .expect("load");
-    assert_eq!(config.sidebar.theme.mode, ThemeMode::Indexed);
+    assert_eq!(config.theme.mode, ThemeMode::Indexed);
+    assert_eq!(config.theme.scheme.as_deref(), Some("TokyoNight Night"));
+    assert_eq!(config.theme.good, Some(ThemeColor::Indexed(34)));
     assert_eq!(
-        config.sidebar.theme.scheme.as_deref(),
-        Some("TokyoNight Night")
-    );
-    assert_eq!(config.sidebar.theme.good, Some(ThemeColor::Indexed(34)));
-    assert_eq!(
-        config.sidebar.theme.selection,
+        config.theme.selection,
         Some(ThemeColor::Rgb(0x8a, 0xb3, 0xe0))
     );
-    assert_eq!(config.sidebar.theme.alarm, None, "unset slots stay builtin");
-    assert!(MachineConfig::default().sidebar.theme.is_unset());
-    assert!(MachineConfig::load_from(&write(&dir, "[sidebar.theme]\ngood = 300\n")).is_err());
+    assert_eq!(config.theme.alarm, None, "unset slots stay builtin");
+    assert!(MachineConfig::default().theme.is_unset());
     assert!(
-        MachineConfig::load_from(&write(&dir, "[sidebar.theme]\nselection = \"#bad\"\n")).is_err()
+        MachineConfig::load_from(&write_named(&dir, "theme.toml", "[theme]\ngood = 300\n"))
+            .is_err()
+    );
+    assert!(
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme]\nselection = \"#bad\"\n"
+        ))
+        .is_err()
     );
 }
 
 #[test]
 fn sidebar_animations_parse_as_partial_role_overrides() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.animations.thinking]\n\
+        "theme.toml",
+        "[theme.animations.thinking]\n\
              frames = \"⠁⠂\"\n\
              color = \"clay\"\n\
              speed = \"slow\"\n\
-             [sidebar.animations.idle]\n\
+             [theme.animations.idle]\n\
              effect = \"breathe\"\n",
     ))
     .expect("load");
-    let thinking = config
-        .sidebar
-        .animations
-        .thinking
-        .expect("thinking override");
+    let thinking = config.theme.animations.thinking.expect("thinking override");
     assert_eq!(
         thinking.frames.expect("frames").as_slice(),
         ["⠁".to_owned(), "⠂".to_owned()]
@@ -463,32 +505,29 @@ fn sidebar_animations_parse_as_partial_role_overrides() {
     assert_eq!(thinking.color, Some(AnimationColor::Clay));
     assert_eq!(thinking.speed, Some(AnimationSpeed::Slow));
     assert_eq!(
-        config
-            .sidebar
-            .animations
-            .idle
-            .expect("idle override")
-            .effect,
+        config.theme.animations.idle.expect("idle override").effect,
         Some(AnimationEffect::Breathe)
     );
-    assert!(MachineConfig::default().sidebar.animations.is_unset());
+    assert!(MachineConfig::default().theme.animations.is_unset());
 }
 
 #[test]
 fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
-            "[sidebar.animations.waiting]\nframes = \"?!\"\n",
+            "theme.toml",
+            "[theme.animations.waiting]\nframes = \"?!\"\n",
         ))
         .is_ok(),
         "waiting now follows the uniform frame model"
     );
     assert!(
-        MachineConfig::load_from(&write(
+        MachineConfig::load_from(&write_named(
             &dir,
-            "[sidebar.animations.idle]\nframes = [\"...\"]\n",
+            "theme.toml",
+            "[theme.animations.idle]\nframes = [\"...\"]\n",
         ))
         .is_err()
     );
@@ -497,33 +536,43 @@ fn sidebar_animations_accept_attention_frames_and_reject_bad_shapes() {
 #[test]
 fn sidebar_glyphs_parse_and_default_unicode() {
     let dir = tempdir().expect("tempdir");
-    assert!(MachineConfig::default().sidebar.glyphs.is_unset());
+    assert!(MachineConfig::default().theme.glyphs.is_unset());
 
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.glyphs]\n\
-             set = \"nerd-font\"\n\
-             [sidebar.glyphs.tokens]\n\
+        "theme.toml",
+        "[theme.glyphs]\n\
+             set = \"nerd_font\"\n\
+             [theme.glyphs.nerd_font.tokens]\n\
              total = \"◇\"\n",
     ))
     .expect("load");
-    assert_eq!(config.sidebar.glyphs.set.as_deref(), Some("nerd-font"));
+    assert_eq!(config.theme.glyphs.set.as_deref(), Some("nerd_font"));
     assert_eq!(
         config
-            .sidebar
+            .theme
             .glyphs
-            .glyph(crate::config::GlyphRole::TokensTotal),
+            .glyph("nerd_font", crate::config::GlyphRole::TokensTotal),
         Some("◇")
     );
 
     assert!(
-        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.tokens]\ntotal = \"abc\"\n",))
-            .is_err(),
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme.glyphs.unicode.tokens]\ntotal = \"abc\"\n",
+        ))
+        .is_err(),
         "glyph overrides occupy at most two terminal cells"
     );
 
     assert!(
-        MachineConfig::load_from(&write(&dir, "[sidebar.glyphs.makr]\ntotal = \"Σ\"\n",)).is_err(),
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme.glyphs.unicode.makr]\ntotal = \"Σ\"\n",
+        ))
+        .is_err(),
         "glyph namespaces must be known"
     );
 }
@@ -697,24 +746,26 @@ fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
 #[test]
 fn sidebar_pets_defaults_parse_and_round_trip() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.pets]\nenabled = true\npet = \"dewey\"\nsize = \"small\"\nglyphs = \"octant\"\nvoice = false\n",
+        "agents.toml",
+        "[agents.pets]\nenabled = true\npet = \"dewey\"\nsize = \"small\"\nglyphs = \"octant\"\nvoice = false\n",
     ))
     .expect("load");
-    assert!(config.sidebar.pets.enabled);
-    assert_eq!(config.sidebar.pets.pet, "dewey");
-    assert_eq!(config.sidebar.pets.size, PetsSize::Small);
-    assert_eq!(config.sidebar.pets.glyphs, PetsGlyphMode::Octant);
-    assert!(!config.sidebar.pets.voice);
+    assert!(config.agents.pets.enabled);
+    assert_eq!(config.agents.pets.pet, "dewey");
+    assert_eq!(config.agents.pets.size, PetsSize::Small);
+    assert_eq!(config.agents.pets.glyphs, PetsGlyphMode::Octant);
+    assert!(!config.agents.pets.voice);
 
-    let defaults = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    assert_eq!(defaults.sidebar.pets, PetsConfig::default());
-    assert_eq!(defaults.sidebar.pets.size, PetsSize::Medium);
+    let defaults_dir = tempdir().expect("tempdir");
+    let defaults = MachineConfig::load_from(&write(&defaults_dir, "")).expect("load");
+    assert_eq!(defaults.agents.pets, PetsConfig::default());
+    assert_eq!(defaults.agents.pets.size, PetsSize::Medium);
 
-    let encoded = toml::to_string(&config.sidebar.pets).expect("serialize pets");
+    let encoded = toml::to_string(&config.agents.pets).expect("serialize pets");
     let round_tripped: PetsConfig = toml::from_str(&encoded).expect("parse pets");
-    assert_eq!(round_tripped, config.sidebar.pets);
+    assert_eq!(round_tripped, config.agents.pets);
 }
 
 #[test]
@@ -790,10 +841,10 @@ fn budget_zones_default_and_parse() {
 #[test]
 fn provider_style_parses_art_and_color() {
     let dir = tempdir().expect("tempdir");
-    let text = "[sidebar.providers.claude]\ncolor = \"#D97757\"\nascii_art = \" ▐▛███▜▌\"\n";
-    let config = MachineConfig::load_from(&write(&dir, text)).expect("load");
+    let text = "[theme.providers.claude]\ncolor = \"#D97757\"\nascii_art = \" ▐▛███▜▌\"\n";
+    let config = MachineConfig::load_from(&write_named(&dir, "theme.toml", text)).expect("load");
     let claude = config
-        .sidebar
+        .theme
         .providers
         .get("claude")
         .expect("claude provider style");

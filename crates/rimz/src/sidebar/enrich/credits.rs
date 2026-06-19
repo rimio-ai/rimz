@@ -161,17 +161,13 @@ fn apply_credits_cache_with(
     for panel in &mut snapshot.providers {
         let ceiling = accounts.usage_limit(&panel.kind);
         if panel.metered {
-            panel.extra_credits = if accounts.oauth_usage {
-                cache
-                    .entries
-                    .get(&panel.kind)
-                    .filter(|entry| entry_is_displayable(entry, now_ms))
-                    .and_then(|entry| entry.extra_credits.clone())
-                    .map(|credits| credits.with_limit_if_missing(ceiling))
-                    .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))))
-            } else {
-                ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit)))
-            };
+            panel.extra_credits = cache
+                .entries
+                .get(&panel.kind)
+                .filter(|entry| entry_is_displayable(entry, now_ms))
+                .and_then(|entry| entry.extra_credits.clone())
+                .map(|credits| credits.with_limit_if_missing(ceiling))
+                .or_else(|| ceiling.map(|limit| ExtraCredits::known(None, None, Some(limit))));
             continue;
         }
 
@@ -194,6 +190,7 @@ mod tests {
             art: Vec::new(),
             color: 1,
             color_rgb: None,
+            color_role: None,
             version: None,
             plan: None,
             metered,

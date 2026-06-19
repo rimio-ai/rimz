@@ -5,8 +5,8 @@ use serde::{Deserialize, Deserializer, Serialize};
 use super::validate_glyph_cells;
 
 /// A configurable sidebar glyph role. The namespaces mirror the on-screen
-/// reading order, so `[sidebar.glyphs.<namespace>]` groups the glyphs the way
-/// the sidebar lays them out: `status` heads, the `cockpit` identity row,
+/// reading order, so `[theme.glyphs.<set>.<namespace>]` groups the glyphs the
+/// way the sidebar lays them out: `status` heads, the `cockpit` identity row,
 /// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
 /// `card`, `process` rows, and `chrome`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -304,13 +304,11 @@ impl GlyphGroup {
     }
 }
 
-/// `[sidebar.glyphs]`: the selected glyph preset and sparse user overrides,
-/// grouped by the sidebar's on-screen zones.
+/// Sparse glyph overrides for one named glyph set, grouped by the sidebar's
+/// on-screen zones.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
 #[serde(default)]
-pub struct SidebarGlyphsConfig {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub set: Option<String>,
+pub struct GlyphNamespaces {
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub status: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
@@ -331,11 +329,7 @@ pub struct SidebarGlyphsConfig {
     pub chrome: GlyphGroup,
 }
 
-impl SidebarGlyphsConfig {
-    pub fn is_unset(&self) -> bool {
-        *self == Self::default()
-    }
-
+impl GlyphNamespaces {
     pub fn glyph(&self, role: GlyphRole) -> Option<&str> {
         let group = match role.namespace() {
             "status" => &self.status,
@@ -351,17 +345,20 @@ impl SidebarGlyphsConfig {
         };
         group.get(role.name())
     }
+
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
-impl<'de> Deserialize<'de> for SidebarGlyphsConfig {
+impl<'de> Deserialize<'de> for GlyphNamespaces {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Default, Deserialize)]
         #[serde(default, deny_unknown_fields)]
-        struct RawSidebarGlyphsConfig {
-            set: Option<String>,
+        struct RawGlyphNamespaces {
             status: BTreeMap<String, String>,
             cockpit: BTreeMap<String, String>,
             tokens: BTreeMap<String, String>,
@@ -373,12 +370,11 @@ impl<'de> Deserialize<'de> for SidebarGlyphsConfig {
             chrome: BTreeMap<String, String>,
         }
 
-        let raw = RawSidebarGlyphsConfig::deserialize(deserializer)?;
+        let raw = RawGlyphNamespaces::deserialize(deserializer)?;
         let group = |namespace, values| {
             GlyphGroup::validate(namespace, values).map_err(serde::de::Error::custom)
         };
         Ok(Self {
-            set: raw.set,
             status: group("status", raw.status)?,
             cockpit: group("cockpit", raw.cockpit)?,
             tokens: group("tokens", raw.tokens)?,
@@ -392,29 +388,90 @@ impl<'de> Deserialize<'de> for SidebarGlyphsConfig {
     }
 }
 
+/// `[theme.glyphs]`: the selected glyph preset and both first-class glyph sets.
+/// The selected set starts from the built-in preset, then overlays the matching
+/// inline namespace table.
+#[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ThemeGlyphsConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub set: Option<String>,
+    #[serde(skip_serializing_if = "GlyphNamespaces::is_empty")]
+    pub unicode: GlyphNamespaces,
+    #[serde(skip_serializing_if = "GlyphNamespaces::is_empty")]
+    pub nerd_font: GlyphNamespaces,
+}
+
+impl ThemeGlyphsConfig {
+    pub fn is_unset(&self) -> bool {
+        *self == Self::default()
+    }
+
+    pub fn glyph(&self, set: &str, role: GlyphRole) -> Option<&str> {
+        match set {
+            "unicode" => self.unicode.glyph(role),
+            "nerd_font" => self.nerd_font.glyph(role),
+            _ => None,
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ThemeGlyphsConfig {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Default, Deserialize)]
+        #[serde(default, deny_unknown_fields)]
+        struct RawThemeGlyphsConfig {
+            set: Option<String>,
+            unicode: GlyphNamespaces,
+            nerd_font: GlyphNamespaces,
+        }
+
+        let raw = RawThemeGlyphsConfig::deserialize(deserializer)?;
+        if let Some(set) = raw.set.as_deref()
+            && !is_named_glyph_set(set)
+        {
+            return Err(serde::de::Error::custom(format!(
+                "unknown theme glyph set `{set}`; expected unicode or nerd_font"
+            )));
+        }
+        Ok(Self {
+            set: raw.set,
+            unicode: raw.unicode,
+            nerd_font: raw.nerd_font,
+        })
+    }
+}
+
+pub fn is_named_glyph_set(name: &str) -> bool {
+    matches!(name, "unicode" | "nerd_font")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_sparse_overrides_and_defaults_to_unset() {
-        let config: SidebarGlyphsConfig = toml::from_str(
-            "[status]\n\
+        let config: ThemeGlyphsConfig = toml::from_str(
+            "[unicode.status]\n\
              working = \"⢿\"\n\
-             [clock]\n\
+             [unicode.clock]\n\
              over = \"◉\"\n",
         )
         .expect("glyphs config");
         assert_eq!(config.set, None);
-        assert_eq!(config.glyph(GlyphRole::StatusWorking), Some("⢿"));
-        assert_eq!(config.glyph(GlyphRole::ClockOver), Some("◉"));
-        assert!(SidebarGlyphsConfig::default().is_unset());
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusWorking), Some("⢿"));
+        assert_eq!(config.glyph("unicode", GlyphRole::ClockOver), Some("◉"));
+        assert!(ThemeGlyphsConfig::default().is_unset());
     }
 
     #[test]
     fn status_group_sets_the_whole_make_up_row_at_once() {
-        let config: SidebarGlyphsConfig = toml::from_str(
-            "[status]\n\
+        let config: ThemeGlyphsConfig = toml::from_str(
+            "[unicode.status]\n\
              waiting = \"?\"\n\
              attention = \"!\"\n\
              paused = \"⏸\"\n\
@@ -423,50 +480,58 @@ mod tests {
              idle = \"○\"\n",
         )
         .expect("glyphs config");
-        assert_eq!(config.glyph(GlyphRole::StatusWaiting), Some("?"));
-        assert_eq!(config.glyph(GlyphRole::StatusAttention), Some("!"));
-        assert_eq!(config.glyph(GlyphRole::StatusPaused), Some("⏸"));
-        assert_eq!(config.glyph(GlyphRole::StatusDone), Some("✓"));
-        assert_eq!(config.glyph(GlyphRole::StatusWorking), Some("⢿"));
-        assert_eq!(config.glyph(GlyphRole::StatusIdle), Some("○"));
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusWaiting), Some("?"));
+        assert_eq!(
+            config.glyph("unicode", GlyphRole::StatusAttention),
+            Some("!")
+        );
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusPaused), Some("⏸"));
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusDone), Some("✓"));
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusWorking), Some("⢿"));
+        assert_eq!(config.glyph("unicode", GlyphRole::StatusIdle), Some("○"));
     }
 
     #[test]
     fn validates_known_roles_and_one_cell_values() {
-        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\nnope = \"x\"\n")
+        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\nnope = \"x\"\n")
             .expect_err("unknown role")
             .to_string();
         assert!(err.contains("unknown sidebar glyph role `tokens.nope`"));
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[makr]\ntotal = \"Σ\"\n")
+        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.makr]\ntotal = \"Σ\"\n")
             .expect_err("unknown namespace")
             .to_string();
         assert!(err.contains("unknown field `makr`"));
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"abc\"\n")
+        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\ntotal = \"abc\"\n")
             .expect_err("over-wide glyph")
             .to_string();
         assert!(err.contains("must occupy one or two terminal cells"));
 
         // A double-width glyph padded to two cells is accepted.
-        toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"\u{efa0} \"\n")
+        toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\ntotal = \"\u{efa0} \"\n")
             .expect("double-width glyph");
 
-        let err = toml::from_str::<SidebarGlyphsConfig>("[tokens]\ntotal = \"\"\n")
+        let err = toml::from_str::<ThemeGlyphsConfig>("[unicode.tokens]\ntotal = \"\"\n")
             .expect_err("empty glyph")
             .to_string();
         assert!(err.contains("must not contain empty glyphs"));
+
+        let err = toml::from_str::<ThemeGlyphsConfig>("set = \"nerd-font\"\n")
+            .expect_err("old set spelling")
+            .to_string();
+        assert!(err.contains("expected unicode or nerd_font"));
     }
 
     #[test]
     fn serializes_only_changed_keys() {
-        let config: SidebarGlyphsConfig =
-            toml::from_str("[tokens]\ntotal = \"◇\"\n").expect("glyphs config");
+        let config: ThemeGlyphsConfig =
+            toml::from_str("[unicode.tokens]\ntotal = \"◇\"\n").expect("glyphs config");
         let serialized = toml::to_string(&config).expect("serialize");
-        assert!(serialized.contains("[tokens]"));
+        assert!(serialized.contains("[unicode.tokens]"));
         assert!(serialized.contains("total = \"◇\""));
         assert_eq!(
-            toml::to_string(&SidebarGlyphsConfig::default()).expect("serialize"),
+            toml::to_string(&ThemeGlyphsConfig::default()).expect("serialize"),
             ""
         );
     }

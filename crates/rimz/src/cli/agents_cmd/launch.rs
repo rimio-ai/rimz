@@ -62,7 +62,7 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
     let detected_size = rimz::mux::detect_terminal_size();
     let launch = agents_launch::resolve_cwd(
         &workspace,
-        &machine_config.worktree,
+        &machine_config.agents.worktree,
         args.worktree.as_deref(),
     )?;
     let ledger = open_ledger(&workspace)?;

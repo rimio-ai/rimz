@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
@@ -67,34 +67,54 @@ pub fn run(args: ConfigArgs, _globals: &GlobalFlags) -> Result<()> {
 }
 
 pub(crate) fn write_default_config(force: bool) -> Result<bool> {
-    let path = MachineConfig::path();
-    if path.exists() && !force {
+    let files = [
+        (MachineConfig::config_path(), MachineConfig::template_core()),
+        (MachineConfig::theme_path(), MachineConfig::template_theme()),
+        (
+            MachineConfig::agents_path(),
+            MachineConfig::template_agents(),
+        ),
+    ];
+    if !force && files.iter().any(|(path, _)| path.exists()) {
         return Ok(false);
     }
-    write_bytes_atomically(&path, MachineConfig::template().as_bytes())
-        .with_context(|| format!("writing {}", path.display()))?;
+    for (path, template) in files {
+        write_bytes_atomically(&path, template.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+    }
     Ok(true)
 }
 
 fn init(args: InitArgs) -> Result<()> {
     if args.print {
-        print_text(MachineConfig::template())?;
+        print_text(&render_all_templates())?;
         return Ok(());
     }
 
-    let path = MachineConfig::path();
-    if path.exists() && !args.force {
+    let files = [
+        MachineConfig::config_path(),
+        MachineConfig::theme_path(),
+        MachineConfig::agents_path(),
+    ];
+    if !args.force && files.iter().any(|path| path.exists()) {
         bail!(
-            "{} already exists; pass --force to replace it",
-            path.display()
+            "{} already exists; pass --force to replace the per-machine config set",
+            files
+                .iter()
+                .find(|path| path.exists())
+                .expect("an existing path")
+                .display()
         );
     }
     write_default_config(args.force)?;
-    print_line(&format!("wrote {}", path.display()))
+    for path in files {
+        print_line(&format!("wrote {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn print_path() -> Result<()> {
-    print_line(&MachineConfig::path().display().to_string())
+    print_line(&MachineConfig::config_path().display().to_string())
 }
 
 fn get(args: GetArgs) -> Result<()> {
@@ -123,18 +143,19 @@ fn get(args: GetArgs) -> Result<()> {
 }
 
 fn set(args: SetArgs) -> Result<()> {
-    let path = MachineConfig::path();
     let requested_key = parse_key(&args.key)?;
     let value = parse_set_value(&requested_key, &args.value);
     let key = normalize_set_key(&requested_key, &value)?;
     validate_set_key(&key)?;
+    let (path, template) = file_for_key(&key);
+    let document_key = document_key_for_set(&key);
 
-    let text = read_config_or_template(&path)?;
+    let text = read_config_or_template(&path, template)?;
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
     validate_set_value(&key, &value)?;
-    set_document_value(&mut doc, &key, value)?;
+    set_document_value(&mut doc, &document_key, value)?;
 
     let rendered = doc.to_string();
     MachineConfig::parse_text(&path, &rendered)
@@ -144,12 +165,38 @@ fn set(args: SetArgs) -> Result<()> {
     print_line(&format!("set {}", args.key))
 }
 
-fn read_config_or_template(path: &Path) -> Result<String> {
+fn render_all_templates() -> String {
+    format!(
+        "# === config.toml ===\n{}# === theme.toml ===\n{}# === agents.toml ===\n{}",
+        MachineConfig::template_core(),
+        MachineConfig::template_theme(),
+        MachineConfig::template_agents()
+    )
+}
+
+fn file_for_key(path: &[String]) -> (PathBuf, &'static str) {
+    match path.first().map(String::as_str) {
+        Some("theme") => (MachineConfig::theme_path(), MachineConfig::template_theme()),
+        Some("agents") => (
+            MachineConfig::agents_path(),
+            MachineConfig::template_agents(),
+        ),
+        _ => (MachineConfig::config_path(), MachineConfig::template_core()),
+    }
+}
+
+fn document_key_for_set(path: &[String]) -> Vec<String> {
+    if matches!(path, [root, child, ..] if root == "theme" && child == "colors") {
+        path[1..].to_vec()
+    } else {
+        path.to_vec()
+    }
+}
+
+fn read_config_or_template(path: &Path, template: &str) -> Result<String> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(text),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            Ok(MachineConfig::template().to_owned())
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(template.to_owned()),
         Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
     }
 }
@@ -213,12 +260,14 @@ fn is_known_get_key(path: &[String]) -> bool {
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "agents")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams"))
+        || matches!(path, [root] if root == "accounts")
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams" | "worktree" | "loop" | "attention" | "pets"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || is_sidebar_glyph_get_key(path)
-        || matches!(path, [root, child] if root == "sidebar" && child == "providers")
-        || matches!(path, [root, child, _] if root == "sidebar" && child == "providers")
+        || is_theme_colors_get_key(path)
+        || matches!(path, [root, child] if root == "theme" && child == "providers")
+        || matches!(path, [root, child, _] if root == "theme" && child == "providers")
 }
 
 fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
@@ -229,6 +278,7 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
         || is_provider_style_key(path)
         || is_sidebar_animation_set_key(path)
         || is_sidebar_glyph_set_key(path)
+        || is_theme_colors_set_key(path)
 }
 
 fn is_agents_key(path: &[String]) -> bool {
@@ -244,11 +294,20 @@ fn is_agents_key(path: &[String]) -> bool {
                     && child == "profiles"
                     && matches!(leaf.as_str(), "agent" | "mode" | "model" | "effort" | "args" | "system-prompt-file")
         )
+        || matches!(
+            path,
+            [root, loop_, autoping, schedules, _, leaf]
+                if root == "agents"
+                    && loop_ == "loop"
+                    && autoping == "autoping"
+                    && schedules == "schedules"
+                    && matches!(leaf.as_str(), "kind" | "root" | "worktree" | "at" | "days" | "cron")
+        )
 }
 
 fn is_provider_style_key(path: &[String]) -> bool {
     path.len() == 4
-        && path[0] == "sidebar"
+        && path[0] == "theme"
         && path[1] == "providers"
         && matches!(path[3].as_str(), "product_name" | "ascii_art" | "color")
 }
@@ -266,15 +325,15 @@ fn is_account_usage_limit_get_key(path: &[String]) -> bool {
 }
 
 fn is_sidebar_animation_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "sidebar" && child == "animations")
-        || matches!(path, [root, child, role] if root == "sidebar" && child == "animations" && is_sidebar_animation_role(role))
+    matches!(path, [root, child] if root == "theme" && child == "animations")
+        || matches!(path, [root, child, role] if root == "theme" && child == "animations" && is_sidebar_animation_role(role))
 }
 
 fn is_sidebar_animation_set_key(path: &[String]) -> bool {
     matches!(
         path,
         [root, child, role, field]
-            if root == "sidebar"
+            if root == "theme"
                 && child == "animations"
                 && is_sidebar_animation_role(role)
                 && matches!(field.as_str(), "frames" | "color" | "effect" | "speed")
@@ -298,14 +357,16 @@ fn is_sidebar_animation_role(role: &str) -> bool {
 }
 
 fn is_sidebar_glyph_get_key(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "sidebar" && child == "glyphs")
-        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set")
-        || matches!(path, [root, child, namespace] if root == "sidebar" && child == "glyphs" && is_sidebar_glyph_namespace(namespace))
+    matches!(path, [root, child] if root == "theme" && child == "glyphs")
+        || matches!(path, [root, child, leaf] if root == "theme" && child == "glyphs" && leaf == "set")
+        || matches!(path, [root, child, set] if root == "theme" && child == "glyphs" && is_theme_glyph_set(set))
+        || matches!(path, [root, child, set, namespace] if root == "theme" && child == "glyphs" && is_theme_glyph_set(set) && is_sidebar_glyph_namespace(namespace))
         || matches!(
             path,
-            [root, child, namespace, role]
-                if root == "sidebar"
+            [root, child, set, namespace, role]
+                if root == "theme"
                     && child == "glyphs"
+                    && is_theme_glyph_set(set)
                     && GlyphRole::from_namespaced(namespace, role).is_some()
         )
 }
@@ -313,11 +374,16 @@ fn is_sidebar_glyph_get_key(path: &[String]) -> bool {
 fn is_sidebar_glyph_set_key(path: &[String]) -> bool {
     matches!(
         path,
-        [root, child, namespace, role]
-            if root == "sidebar"
+        [root, child, set, namespace, role]
+            if root == "theme"
                 && child == "glyphs"
+                && is_theme_glyph_set(set)
                 && GlyphRole::from_namespaced(namespace, role).is_some()
     )
+}
+
+fn is_theme_glyph_set(set: &str) -> bool {
+    matches!(set, "unicode" | "nerd_font")
 }
 
 fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
@@ -335,10 +401,35 @@ fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
     )
 }
 
+fn is_theme_colors_get_key(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "theme" && child == "colors")
+        || matches!(path, [root, child, table] if root == "theme" && child == "colors" && is_theme_colors_table(table))
+        || is_theme_colors_set_key(path)
+}
+
+fn is_theme_colors_set_key(path: &[String]) -> bool {
+    matches!(
+        path,
+        [root, child, table, leaf]
+            if root == "theme"
+                && child == "colors"
+                && match table.as_str() {
+                    "primary" => matches!(leaf.as_str(), "background" | "foreground"),
+                    "normal" | "bright" => matches!(leaf.as_str(), "black" | "red" | "green" | "yellow" | "blue" | "magenta" | "cyan" | "white"),
+                    "selection" => matches!(leaf.as_str(), "background" | "text"),
+                    _ => false,
+                }
+    )
+}
+
+fn is_theme_colors_table(table: &str) -> bool {
+    matches!(table, "primary" | "normal" | "bright" | "selection")
+}
+
 fn exact_set_keys() -> BTreeSet<String> {
     [
-        "worktree.dir",
-        "worktree.base",
+        "agents.worktree.dir",
+        "agents.worktree.base",
         "agents.tab",
         "resume.on_rebirth",
         "resume.max",
@@ -347,7 +438,6 @@ fn exact_set_keys() -> BTreeSet<String> {
         "resume.auto_continue_overloaded_backoff_secs",
         "resume.auto_continue_overloaded_max_retries",
         "resume.auto_continue_text",
-        "accounts.oauth_usage",
         "remote_control.claude",
         "remote_control.codex",
         "notifications.enabled",
@@ -359,7 +449,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "notifications.coalesce_ms",
         "notifications.remind_secs",
         "notifications.command",
-        "sidebar.style",
+        "theme.style",
         "sidebar.refresh_ms",
         "sidebar.max_provider_blocks",
         "sidebar.provider_tabs",
@@ -378,31 +468,52 @@ fn exact_set_keys() -> BTreeSet<String> {
         "sidebar.budget.pace.yellow",
         "sidebar.budget.pace.amber",
         "sidebar.budget.pace.red",
-        "sidebar.attention.stalled_after_secs",
-        "sidebar.attention.inactive_after_secs",
-        "sidebar.pets.enabled",
-        "sidebar.pets.pet",
-        "sidebar.pets.size",
-        "sidebar.pets.glyphs",
-        "sidebar.pets.voice",
-        "sidebar.animations.unread",
-        "sidebar.glyphs.set",
+        "agents.attention.stalled_after_secs",
+        "agents.attention.inactive_after_secs",
+        "agents.pets.enabled",
+        "agents.pets.pet",
+        "agents.pets.size",
+        "agents.pets.glyphs",
+        "agents.pets.voice",
+        "agents.loop.autoping.schedules",
+        "theme.animations.unread",
+        "theme.glyphs.set",
+        "theme.colors.primary.background",
+        "theme.colors.primary.foreground",
+        "theme.colors.normal.black",
+        "theme.colors.normal.red",
+        "theme.colors.normal.green",
+        "theme.colors.normal.yellow",
+        "theme.colors.normal.blue",
+        "theme.colors.normal.magenta",
+        "theme.colors.normal.cyan",
+        "theme.colors.normal.white",
+        "theme.colors.bright.black",
+        "theme.colors.bright.red",
+        "theme.colors.bright.green",
+        "theme.colors.bright.yellow",
+        "theme.colors.bright.blue",
+        "theme.colors.bright.magenta",
+        "theme.colors.bright.cyan",
+        "theme.colors.bright.white",
+        "theme.colors.selection.background",
+        "theme.colors.selection.text",
         "sidebar.trunk",
-        "sidebar.theme.mode",
-        "sidebar.theme.scheme",
-        "sidebar.theme.good",
-        "sidebar.theme.warn",
-        "sidebar.theme.caution",
-        "sidebar.theme.alarm",
-        "sidebar.theme.accent",
-        "sidebar.theme.cool",
-        "sidebar.theme.meta",
-        "sidebar.theme.body",
-        "sidebar.theme.muted",
-        "sidebar.theme.faint",
-        "sidebar.theme.rule",
-        "sidebar.theme.selection",
-        "sidebar.theme.selection_bg",
+        "theme.mode",
+        "theme.scheme",
+        "theme.good",
+        "theme.warn",
+        "theme.caution",
+        "theme.alarm",
+        "theme.accent",
+        "theme.cool",
+        "theme.meta",
+        "theme.body",
+        "theme.muted",
+        "theme.faint",
+        "theme.rule",
+        "theme.selection",
+        "theme.selection_bg",
         "sidebar.scrollbar",
         "sidebar.glow",
         "zellij.mouse_mode",
@@ -461,10 +572,10 @@ fn parse_string_edit_value(raw: &str) -> Value {
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     if matches!(
         path,
-        [root, child, leaf] if root == "sidebar" && child == "theme" && leaf == "scheme"
+        [root, leaf] if root == "theme" && leaf == "scheme"
     ) {
         let Some(scheme) = value.as_str() else {
-            bail!("sidebar.theme.scheme must be a string");
+            bail!("theme.scheme must be a string");
         };
         if let Err(err) = rimz::sidebar_pane::render::scheme::validate_explicit_scheme(scheme) {
             bail!("{err}");
@@ -472,22 +583,23 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
     }
     if matches!(
         path,
-        [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set"
+        [root, child, leaf] if root == "theme" && child == "glyphs" && leaf == "set"
     ) {
         let Some(source) = value.as_str() else {
-            bail!("sidebar.glyphs.set must be a string");
+            bail!("theme.glyphs.set must be a string");
         };
         if let Err(err) = rimz::sidebar_pane::render::glyph_set::validate_glyph_source(source) {
             bail!("{err}");
         }
     }
-    if let [root, child, namespace, role] = path
-        && root == "sidebar"
+    if let [root, child, set, namespace, role] = path
+        && root == "theme"
         && child == "glyphs"
+        && is_theme_glyph_set(set)
         && GlyphRole::from_namespaced(namespace, role).is_some()
     {
         let Some(glyph) = value.as_str() else {
-            bail!("sidebar.glyphs.{namespace}.{role} must be a string");
+            bail!("theme.glyphs.{set}.{namespace}.{role} must be a string");
         };
         if let Err(err) = validate_glyph_cells(glyph) {
             bail!("sidebar glyph `{namespace}.{role}` {err}");
@@ -497,31 +609,28 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
 }
 
 fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "sidebar" && child == "theme")
-        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "theme" && leaf == "scheme")
+    matches!(path, [root] if root == "theme")
+        || matches!(path, [root, leaf] if root == "theme" && leaf == "scheme")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "sidebar" && child == "glyphs")
-        || matches!(path, [root, child, leaf] if root == "sidebar" && child == "glyphs" && leaf == "set")
+    matches!(path, [root, child] if root == "theme" && child == "glyphs")
+        || matches!(path, [root, child, leaf] if root == "theme" && child == "glyphs" && leaf == "set")
         || is_sidebar_glyph_set_key(path)
 }
 
 fn normalize_set_key(path: &[String], value: &Value) -> Result<Vec<String>> {
-    if matches!(path, [root, child] if root == "sidebar" && child == "theme") {
+    if matches!(path, [root] if root == "theme") {
         if !value.is_str() {
-            bail!("sidebar.theme shorthand sets a scheme string");
+            bail!("theme shorthand sets a scheme string");
         }
-        return Ok(["sidebar", "theme", "scheme"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect());
+        return Ok(["theme", "scheme"].into_iter().map(str::to_owned).collect());
     }
-    if matches!(path, [root, child] if root == "sidebar" && child == "glyphs") {
+    if matches!(path, [root, child] if root == "theme" && child == "glyphs") {
         if !value.is_str() {
-            bail!("sidebar.glyphs shorthand sets a glyph set string");
+            bail!("theme.glyphs shorthand sets a glyph set string");
         }
-        return Ok(["sidebar", "glyphs", "set"]
+        return Ok(["theme", "glyphs", "set"]
             .into_iter()
             .map(str::to_owned)
             .collect());
@@ -569,7 +678,6 @@ mod tests {
         for key in [
             "sidebar.max_cols",
             "sidebar.budget.pace.red",
-            "accounts.oauth_usage",
             "accounts.usage_limit_usd.codex",
             "agents.teams.review.roles",
             "agents.teams.review.layout",
@@ -581,25 +689,25 @@ mod tests {
             "agents.profiles.codex-slim.args",
             "agents.profiles.codex-slim.system-prompt-file",
             "zellij.auto_layout",
-            "sidebar.providers.claude.color",
-            "sidebar.pets.enabled",
-            "sidebar.pets.pet",
-            "sidebar.pets.size",
-            "sidebar.pets.glyphs",
-            "sidebar.pets.voice",
-            "sidebar.theme.mode",
-            "sidebar.theme.scheme",
-            "sidebar.theme.caution",
+            "theme.providers.claude.color",
+            "agents.pets.enabled",
+            "agents.pets.pet",
+            "agents.pets.size",
+            "agents.pets.glyphs",
+            "agents.pets.voice",
+            "theme.mode",
+            "theme.scheme",
+            "theme.caution",
             "sidebar.focus_key",
-            "sidebar.animations.thinking.frames",
-            "sidebar.animations.working.color",
-            "sidebar.animations.idle.effect",
-            "sidebar.animations.success.speed",
-            "sidebar.animations.unread",
-            "sidebar.glyphs.set",
-            "sidebar.glyphs.status.working",
-            "sidebar.glyphs.tokens.total",
-            "sidebar.glyphs.clock.over",
+            "theme.animations.thinking.frames",
+            "theme.animations.working.color",
+            "theme.animations.idle.effect",
+            "theme.animations.success.speed",
+            "theme.animations.unread",
+            "theme.glyphs.set",
+            "theme.glyphs.unicode.status.working",
+            "theme.glyphs.unicode.tokens.total",
+            "theme.glyphs.nerd_font.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
         ] {
@@ -614,29 +722,28 @@ mod tests {
             "agents.teams.peer.shape",
             "agents.profiles.codex-slim.flags",
             "agents.commands.vim.command",
-            "sidebar.providers.claude.nope",
-            "sidebar.animations",
-            "sidebar.animations.nope.frames",
-            "sidebar.animations.thinking.nope",
-            "sidebar.animations.thinking.frames.extra",
-            "sidebar.glyphs",
-            "sidebar.glyphs.nope",
-            "sidebar.glyphs.tokens.nope",
-            "sidebar.glyphs.tokens.total.extra",
+            "theme.providers.claude.nope",
+            "theme.animations",
+            "theme.animations.nope.frames",
+            "theme.animations.thinking.nope",
+            "theme.animations.thinking.frames.extra",
+            "theme.glyphs.nope",
+            "theme.glyphs.unicode.tokens.nope",
+            "theme.glyphs.unicode.tokens.total.extra",
         ] {
             assert!(validate_set_key(&parse_key(key).unwrap()).is_err(), "{key}");
         }
 
         for (key, known) in [
-            ("sidebar.animations", true),
-            ("sidebar.animations.thinking", true),
-            ("sidebar.animations.thinking.frames", true),
-            ("sidebar.animations.unread", true),
-            ("sidebar.animations.nope", false),
-            ("sidebar.glyphs", true),
-            ("sidebar.glyphs.tokens", true),
-            ("sidebar.glyphs.tokens.total", true),
-            ("sidebar.glyphs.tokens.nope", false),
+            ("theme.animations", true),
+            ("theme.animations.thinking", true),
+            ("theme.animations.thinking.frames", true),
+            ("theme.animations.unread", true),
+            ("theme.animations.nope", false),
+            ("theme.glyphs", true),
+            ("theme.glyphs.unicode.tokens", true),
+            ("theme.glyphs.unicode.tokens.total", true),
+            ("theme.glyphs.unicode.tokens.nope", false),
             ("accounts", true),
             ("accounts.usage_limit_usd", true),
             ("accounts.usage_limit_usd.codex", true),
@@ -669,14 +776,14 @@ mod tests {
 
     #[test]
     fn theme_scheme_values_are_parsed_as_strings() {
-        let key = parse_key("sidebar.theme.scheme").expect("key");
+        let key = parse_key("theme.scheme").expect("key");
         assert_eq!(parse_set_value(&key, "0x96f").as_str(), Some("0x96f"));
         assert_eq!(
             parse_set_value(&key, "\"Catppuccin Mocha\"").as_str(),
             Some("Catppuccin Mocha")
         );
 
-        let shorthand = parse_key("sidebar.theme").expect("key");
+        let shorthand = parse_key("theme").expect("key");
         assert_eq!(parse_set_value(&shorthand, "0x96f").as_str(), Some("0x96f"));
 
         let numeric = parse_key("sidebar.max_cols").expect("key");
@@ -685,25 +792,25 @@ mod tests {
 
     #[test]
     fn glyph_values_are_parsed_as_strings() {
-        let set = parse_key("sidebar.glyphs.set").expect("key");
+        let set = parse_key("theme.glyphs.set").expect("key");
         assert_eq!(
-            parse_set_value(&set, "nerd-font").as_str(),
-            Some("nerd-font")
+            parse_set_value(&set, "nerd_font").as_str(),
+            Some("nerd_font")
         );
 
-        let shorthand = parse_key("sidebar.glyphs").expect("key");
+        let shorthand = parse_key("theme.glyphs").expect("key");
         assert_eq!(
-            parse_set_value(&shorthand, "nerd-font").as_str(),
-            Some("nerd-font")
+            parse_set_value(&shorthand, "nerd_font").as_str(),
+            Some("nerd_font")
         );
 
-        let leaf = parse_key("sidebar.glyphs.process.cpu").expect("key");
+        let leaf = parse_key("theme.glyphs.unicode.process.cpu").expect("key");
         assert_eq!(parse_set_value(&leaf, "1").as_str(), Some("1"));
     }
 
     #[test]
     fn theme_scheme_validation_accepts_bundled_names_and_rejects_auto() {
-        let key = parse_key("sidebar.theme.scheme").expect("key");
+        let key = parse_key("theme.scheme").expect("key");
 
         validate_set_value(&key, &Value::from("Afterglow")).expect("bundled theme");
         validate_set_value(&key, &Value::from("0x96f")).expect("numeric-looking bundled theme");
@@ -719,19 +826,19 @@ mod tests {
 
     #[test]
     fn glyph_validation_accepts_sets_and_rejects_bad_values() {
-        let set = parse_key("sidebar.glyphs.set").expect("key");
+        let set = parse_key("theme.glyphs.set").expect("key");
         validate_set_value(&set, &Value::from("unicode")).expect("unicode");
-        validate_set_value(&set, &Value::from("nerd-font")).expect("nerd-font");
+        validate_set_value(&set, &Value::from("nerd_font")).expect("nerd_font");
 
         let err = validate_set_value(&set, &Value::from("auto"))
             .expect_err("unknown glyph set")
             .to_string();
         assert!(
-            err.contains("unknown sidebar glyph set `auto`"),
+            err.contains("unknown theme glyph set `auto`"),
             "unexpected error: {err}"
         );
 
-        let leaf = parse_key("sidebar.glyphs.tokens.total").expect("key");
+        let leaf = parse_key("theme.glyphs.unicode.tokens.total").expect("key");
         validate_set_value(&leaf, &Value::from("◇")).expect("single-cell glyph");
         validate_set_value(&leaf, &Value::from("\u{efa0} ")).expect("double-width glyph");
         let err = validate_set_value(&leaf, &Value::from("abc"))
@@ -745,34 +852,34 @@ mod tests {
 
     #[test]
     fn sidebar_theme_set_key_is_scheme_shorthand() {
-        let key = parse_key("sidebar.theme").expect("key");
+        let key = parse_key("theme").expect("key");
         assert_eq!(
             normalize_set_key(&key, &Value::from("Afterglow")).expect("normalize"),
-            parse_key("sidebar.theme.scheme").expect("scheme key")
+            parse_key("theme.scheme").expect("scheme key")
         );
 
         let err = normalize_set_key(&key, &Value::from(256))
             .expect_err("shorthand only accepts a scheme string")
             .to_string();
         assert!(
-            err.contains("sidebar.theme shorthand sets a scheme string"),
+            err.contains("theme shorthand sets a scheme string"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
     fn sidebar_glyphs_set_key_is_set_shorthand() {
-        let key = parse_key("sidebar.glyphs").expect("key");
+        let key = parse_key("theme.glyphs").expect("key");
         assert_eq!(
-            normalize_set_key(&key, &Value::from("nerd-font")).expect("normalize"),
-            parse_key("sidebar.glyphs.set").expect("glyph set key")
+            normalize_set_key(&key, &Value::from("nerd_font")).expect("normalize"),
+            parse_key("theme.glyphs.set").expect("glyph set key")
         );
 
         let err = normalize_set_key(&key, &Value::from(256))
             .expect_err("shorthand only accepts a set string")
             .to_string();
         assert!(
-            err.contains("sidebar.glyphs shorthand sets a glyph set string"),
+            err.contains("theme.glyphs shorthand sets a glyph set string"),
             "unexpected error: {err}"
         );
     }

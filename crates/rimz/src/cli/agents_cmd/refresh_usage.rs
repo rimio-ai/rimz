@@ -15,7 +15,7 @@ use clap::Args;
 
 use rimz::ids::WorkspaceId;
 use rimz::sidebar::enrich::merge_oauth_usage_if_due;
-use rimz::{RuntimePaths, agents, config::MachineConfig};
+use rimz::{RuntimePaths, agents};
 
 use crate::cli::GlobalFlags;
 
@@ -39,8 +39,7 @@ pub(super) fn run_refresh_usage(args: RefreshUsageArgs, _globals: &GlobalFlags) 
     let runtime = RuntimePaths::for_workspace(workspace_id).context("preparing runtime paths")?;
     runtime.ensure_dirs().context("preparing runtime dirs")?;
 
-    let config = MachineConfig::load().unwrap_or_default();
-    if !config.accounts.oauth_usage || agents::credits::oauth_usage_offline() {
+    if agents::credits::oauth_usage_offline() {
         return Ok(());
     }
 

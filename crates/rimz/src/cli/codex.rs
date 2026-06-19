@@ -15,10 +15,10 @@ use clap::{Args, Subcommand};
 use jiff::Timestamp;
 
 use rimz::RuntimePaths;
+use rimz::agents;
 use rimz::agents::AgentContext;
 use rimz::agents::codex;
 use rimz::ids::WorkspaceId;
-use rimz::{agents, config::MachineConfig};
 
 use super::GlobalFlags;
 
@@ -169,8 +169,7 @@ fn refresh_context(session_id: &str, workspace_id: &str, model: Option<&str>) ->
     // Prefer this session's warm broker socket; the app-server read falls back to
     // the per-user daemon then a cold-spawn when it isn't up.
     let broker_socket = runtime.codex_app_server_socket_path();
-    let config = MachineConfig::load().unwrap_or_default();
-    let oauth_enabled = config.accounts.oauth_usage && !agents::credits::oauth_usage_offline();
+    let oauth_enabled = !agents::credits::oauth_usage_offline();
     let Some(enrichment) =
         codex::refresh_app_server_enrichment(Some(session_id), model, Some(&broker_socket))
     else {

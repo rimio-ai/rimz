@@ -111,7 +111,7 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
                 && let Some(status) = row.status()
                 && status.is_actionable()
             {
-                breath |= status_needs_motion(&snapshot.sidebar.animations, status);
+                breath |= status_needs_motion(&snapshot.theme.animations, status);
             }
         } else if row.process_is_busy() {
             return AnimationCadence::Fast;
@@ -123,7 +123,7 @@ pub fn animation_cadence(snapshot: &SidebarSnapshot) -> AnimationCadence {
     // quieted to `static`. The cockpit lead bucket pulses with it, so this one
     // condition covers both the row and its bucket.
     breath |= lead_unread_needs_motion(snapshot);
-    if breath || snapshot.sidebar.animations.has_resting_motion() {
+    if breath || snapshot.theme.animations.has_resting_motion() {
         AnimationCadence::Breath
     } else {
         AnimationCadence::None
@@ -139,8 +139,8 @@ fn lead_unread_needs_motion(snapshot: &SidebarSnapshot) -> bool {
     let Some((_, status)) = lead_unread(&snapshot.worktree_groups) else {
         return false;
     };
-    unread_effect_animates(snapshot.sidebar.animations.unread)
-        && status_needs_motion(&snapshot.sidebar.animations, status)
+    unread_effect_animates(snapshot.theme.animations.unread)
+        && status_needs_motion(&snapshot.theme.animations, status)
 }
 
 /// Whether the configured unread effect flows on the phase grid. `shimmer` and
@@ -151,7 +151,7 @@ fn unread_effect_animates(effect: Option<crate::config::UnreadEffect>) -> bool {
 }
 
 fn status_needs_motion(
-    animations: &crate::config::SidebarAnimationsConfig,
+    animations: &crate::config::ThemeAnimationsConfig,
     status: AgentStatus,
 ) -> bool {
     let spec = match status {
@@ -193,7 +193,7 @@ pub fn draw_with_ui(
     ui.scroll_offset = composed.scroll_offset;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
-    let theme = Theme::for_sidebar(&snapshot.sidebar);
+    let theme = Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme);
     // The transition garnish tier: a color-only effects pass over the buffer
     // the paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
@@ -352,7 +352,7 @@ fn dashboard_has_tab(snapshot: &SidebarSnapshot, kind: &str) -> bool {
 /// the pet overlay rides one provider block at a time; without pets, a single
 /// provider keeps the historical bare block.
 pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
-    if snapshot.sidebar.pets.enabled {
+    if snapshot.pets.enabled {
         return true;
     }
     snapshot
@@ -362,15 +362,15 @@ pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
 }
 
 pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) -> bool {
-    !alert_active && (!snapshot.providers.is_empty() || snapshot.sidebar.pets.enabled)
+    !alert_active && (!snapshot.providers.is_empty() || snapshot.pets.enabled)
 }
 
 pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
-    Theme::for_sidebar(&snapshot.sidebar).pet_body_enabled()
+    Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme).pet_body_enabled()
 }
 
 pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {
-    let animations = &snapshot.sidebar.animations;
+    let animations = &snapshot.theme.animations;
     let spec = match action {
         PetAction::Idle => animations.idle.as_ref(),
         PetAction::Thinking => animations.thinking.as_ref(),

@@ -102,13 +102,13 @@ fn rendered_group_lines_with(
     lines
 }
 
-/// A sidebar config pinning the unread effect to `blink`, so a test reads one
+/// A theme config pinning the unread effect to `blink`, so a test reads one
 /// whole-word descriptor span and the 2-pole weight toggle rather than the
 /// default per-character shimmer.
-fn blink_sidebar() -> crate::config::SidebarConfig {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.unread = Some(crate::config::UnreadEffect::Blink);
-    sidebar
+fn blink_theme() -> crate::config::ThemeConfig {
+    let mut theme = crate::config::ThemeConfig::default();
+    theme.animations.unread = Some(crate::config::UnreadEffect::Blink);
+    theme
 }
 
 fn rendered_group_lines_blink_no_color(
@@ -117,7 +117,11 @@ fn rendered_group_lines_blink_no_color(
 ) -> Vec<Line<'static>> {
     rendered_group_lines_with(
         snapshot,
-        &Theme::fixed_for_sidebar(true, &blink_sidebar()),
+        &Theme::fixed_for_theme(
+            true,
+            &crate::config::SidebarConfig::default(),
+            &blink_theme(),
+        ),
         phase,
     )
 }
@@ -142,14 +146,15 @@ fn parked_background_marker_falls_back_to_unicode() {
     );
     claude.phase = crate::agents::TurnPhase::Parked;
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
-    let theme = Theme::fixed_for_sidebar(
+    let theme = Theme::fixed_for_theme(
         true,
-        &crate::config::SidebarConfig {
-            glyphs: crate::config::SidebarGlyphsConfig {
-                set: Some("nerd-font".to_owned()),
-                ..crate::config::SidebarGlyphsConfig::default()
+        &crate::config::SidebarConfig::default(),
+        &crate::config::ThemeConfig {
+            glyphs: crate::config::ThemeGlyphsConfig {
+                set: Some("nerd_font".to_owned()),
+                ..crate::config::ThemeGlyphsConfig::default()
             },
-            ..crate::config::SidebarConfig::default()
+            ..crate::config::ThemeConfig::default()
         },
     );
     let rendered = rendered_group_lines_with(&snapshot, &theme, 0)
@@ -210,9 +215,13 @@ fn unread_descriptor_grows_bold_without_dimming() {
 
 #[test]
 fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
-    let mut sidebar = blink_sidebar();
-    sidebar.theme.mode = crate::config::ThemeMode::Truecolor;
-    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let mut theme_config = blink_theme();
+    theme_config.mode = crate::config::ThemeMode::Truecolor;
+    let theme = Theme::fixed_for_theme(
+        false,
+        &crate::config::SidebarConfig::default(),
+        &theme_config,
+    );
     // The lead unread row — the one that needs an answer — carries the continuous
     // pulse; a `failed` row is actionable, so a single one leads.
     let agent = agent(

@@ -13,7 +13,7 @@ fn cost_row(id: &str, usd: Option<f64>, registered_at: Option<Timestamp>) -> cra
 /// it through here so the consumer reads back the same hash.
 fn workspace_scope_hash(project: &Path) -> String {
     let config = crate::config::MachineConfig::load().unwrap_or_default();
-    let home = crate::worktree::worktree_parent(project, &config.worktree).ok();
+    let home = crate::worktree::worktree_parent(project, &config.agents.worktree).ok();
     crate::agents::spending::SpendScope::for_workspace(Some(project), &[], home.as_deref()).hash()
 }
 

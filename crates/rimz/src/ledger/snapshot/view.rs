@@ -169,7 +169,7 @@ pub struct SidebarSnapshot {
     /// it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_roots: Vec<PathBuf>,
-    /// The repo's durable worktree-home directory — the resolved `[worktree]
+    /// The repo's durable worktree-home directory — the resolved `[agents.worktree]
     /// dir` template (default `…/<repo>-worktrees`). It widens the cockpit
     /// spend scope alone: a session recorded under a worktree that cleanup has
     /// since removed still counts toward the room's today figure, because the
@@ -187,13 +187,21 @@ pub struct SidebarSnapshot {
     /// (the prior behavior) and the producing reads fill it from the record.
     #[serde(default = "default_root_class")]
     pub root_class: RootClass,
-    /// Per-machine sidebar display preferences (the attention-redden window and
-    /// the per-provider dashboard styling). Like `project_root`, this is machine
-    /// state the pure reducer can't read, so the reducer leaves it default and the
-    /// `rimz sidebar snapshot` CLI fills it from `MachineConfig`. The renderer — a
-    /// pure snapshot consumer — reads it to tune the cards and the dashboard.
+    /// Per-machine sidebar behavior preferences. Like `project_root`, this is
+    /// machine state the pure reducer can't read, so the reducer leaves it
+    /// default and the `rimz sidebar snapshot` CLI fills it from `MachineConfig`.
     #[serde(default)]
     pub sidebar: crate::config::SidebarConfig,
+    /// Per-machine appearance preferences: palette, glyphs, providers, and
+    /// animations. Filled beside [`Self::sidebar`] from `MachineConfig`.
+    #[serde(default)]
+    pub theme: crate::config::ThemeConfig,
+    /// Per-machine pet display preferences.
+    #[serde(default)]
+    pub pets: crate::config::PetsConfig,
+    /// Per-machine attention timing preferences.
+    #[serde(default)]
+    pub attention: crate::config::AttentionConfig,
     /// Per-provider dashboard blocks pinned to the bottom of the sidebar — the
     /// account-scoped budgets, aggregate spend/tokens, and brand emblem.
     /// One block folds every session of a kind. Built by
@@ -329,6 +337,9 @@ impl SidebarSnapshot {
             worktree_home: None,
             root_class: default_root_class(),
             sidebar: crate::config::SidebarConfig::default(),
+            theme: crate::config::ThemeConfig::default(),
+            pets: crate::config::PetsConfig::default(),
+            attention: crate::config::AttentionConfig::default(),
             providers: Vec::new(),
             value_tally: None,
             workspace_value_tally: None,
@@ -360,7 +371,7 @@ impl SidebarSnapshot {
 
     /// Record the repo's durable worktree-home directory so the cockpit spend
     /// scope counts sessions from worktrees cleanup has since removed. Filled
-    /// from `MachineConfig`'s `[worktree] dir` after construction, like
+    /// from `MachineConfig`'s `[agents.worktree] dir` after construction, like
     /// `with_worktree_roots`; the pure path leaves it `None`.
     pub fn with_worktree_home(mut self, worktree_home: Option<PathBuf>) -> Self {
         self.worktree_home = worktree_home;

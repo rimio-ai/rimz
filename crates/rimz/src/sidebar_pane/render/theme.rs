@@ -10,14 +10,14 @@
 //! controlled by `[sidebar] glow`: it runs only when glow permits it and
 //! `NO_COLOR` is off.
 //!
-//! Palette choice is data in the snapshot's `[sidebar.theme]`: `scheme`
+//! Palette choice is data in the snapshot's `[theme]`: `scheme`
 //! selects a bundled Alacritty theme or an Alacritty TOML file, defaulting to
 //! `TokyoNight Night`; per-slot overrides then win over the selected scheme. The
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, GlyphRole, Semantic, SidebarConfig, SidebarThemeConfig,
-    ThemeColor, nearest_xterm_index, xterm_rgb,
+    AnimationColor, ColorDepth, GlowMode, GlyphRole, SidebarConfig, ThemeColor, ThemeConfig,
+    nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 use std::sync::OnceLock;
@@ -128,7 +128,7 @@ const INPUT_EXPENSE_CHROMA: f32 = 1.30;
 const INPUT_EXPENSE_DEEPEN: f32 = -0.09;
 
 /// The scheme that ships as the default look, drawn from the bundled Alacritty
-/// catalog. `[sidebar.theme] scheme` left unset resolves to this. The baked-in
+/// catalog. `[theme] scheme` left unset resolves to this. The baked-in
 /// tones live in [`Semantic::DEFAULT`].
 pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 
@@ -136,6 +136,7 @@ pub(crate) const DEFAULT_SCHEME: &str = "TokyoNight Night";
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Palette {
     depth: ColorDepth,
+    raw: RawPalette,
     heat_ramp: [(u8, u8, u8); HEAT_RAMP_STOPS],
     good: Color,
     warn: Color,
@@ -158,33 +159,26 @@ pub(crate) struct Palette {
 }
 
 impl Palette {
-    pub(crate) fn resolve(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_fallback(theme, depth, default_palette_tones())
+    pub(crate) fn resolve(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
+        Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
     }
 
-    pub(crate) fn resolve_fixed(theme: &SidebarThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_fallback(theme, depth, Semantic::DEFAULT)
+    pub(crate) fn resolve_fixed(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
+        Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
     }
 
-    fn resolve_with_fallback(
-        theme: &SidebarThemeConfig,
-        depth: ColorDepth,
-        fallback: Semantic,
-    ) -> Palette {
-        let tones = match theme.scheme.as_deref() {
-            None => fallback,
-            Some(name) => selected_palette_tones(name).unwrap_or(fallback),
-        };
+    fn resolve_with_raw(theme: &ThemeConfig, depth: ColorDepth, raw: RawPalette) -> Palette {
+        let tones = raw.derive_tones();
         let slot = |override_color: Option<ThemeColor>, builtin| {
             override_color
-                .map(|color| theme_color(color, depth))
+                .map(|color| theme_color(color, depth, &raw))
                 .unwrap_or_else(|| rgb_color(builtin, depth))
         };
         let heat_ramp = [
-            derived_rgb_slot(theme.good, tones.good),
-            derived_rgb_slot(theme.warn, tones.warn),
-            derived_rgb_slot(theme.caution, tones.caution),
-            derived_rgb_slot(theme.alarm, tones.alarm),
+            derived_rgb_slot(theme.good, tones.good, &raw),
+            derived_rgb_slot(theme.warn, tones.warn, &raw),
+            derived_rgb_slot(theme.caution, tones.caution, &raw),
+            derived_rgb_slot(theme.alarm, tones.alarm, &raw),
         ];
         // `alarm` (stop 3) is the ramp's reddest tone; the input read must read
         // redder still. Take it directly, enrich its chroma in place (a rotation
@@ -199,6 +193,7 @@ impl Palette {
         );
         Palette {
             depth,
+            raw,
             heat_ramp,
             good: slot(theme.good, tones.good),
             warn: slot(theme.warn, tones.warn),
@@ -238,29 +233,40 @@ impl Palette {
             AnimationColor::Clay => self.identity(Identity::Claude),
             AnimationColor::Indexed(index) => Color::Indexed(index),
             AnimationColor::Rgb(red, green, blue) => rgb_color((red, green, blue), self.depth),
+            AnimationColor::Role(role) => rgb_color(self.raw.role_rgb(role), self.depth),
         }
     }
 }
 
-fn selected_palette_tones(name: &str) -> Option<Semantic> {
-    scheme::explicit_palette_tones(name)
+fn raw_palette_for_theme(theme: &ThemeConfig) -> RawPalette {
+    theme
+        .colors
+        .as_ref()
+        .and_then(|colors| scheme::inline_raw_palette(colors).ok())
+        .or_else(|| {
+            theme
+                .scheme
+                .as_deref()
+                .and_then(scheme::explicit_raw_palette)
+        })
+        .unwrap_or_else(scheme::default_raw_palette)
 }
 
-/// The shipped default tones: [`DEFAULT_SCHEME`] resolved from the bundled
-/// catalog, with the baked-in [`Semantic::DEFAULT`] as the backstop.
-fn default_palette_tones() -> Semantic {
-    scheme::explicit_palette_tones(DEFAULT_SCHEME).unwrap_or(Semantic::DEFAULT)
-}
-
-fn theme_color(color: ThemeColor, depth: ColorDepth) -> Color {
+fn theme_color(color: ThemeColor, depth: ColorDepth, raw: &RawPalette) -> Color {
     match color {
+        ThemeColor::Role(role) => rgb_color(raw.role_rgb(role), depth),
         ThemeColor::Indexed(index) => Color::Indexed(index),
         ThemeColor::Rgb(red, green, blue) => rgb_color((red, green, blue), depth),
     }
 }
 
-fn derived_rgb_slot(color: Option<ThemeColor>, builtin: (u8, u8, u8)) -> (u8, u8, u8) {
+fn derived_rgb_slot(
+    color: Option<ThemeColor>,
+    builtin: (u8, u8, u8),
+    raw: &RawPalette,
+) -> (u8, u8, u8) {
     match color {
+        Some(ThemeColor::Role(role)) => raw.role_rgb(role),
         Some(ThemeColor::Rgb(red, green, blue)) => (red, green, blue),
         Some(ThemeColor::Indexed(index)) if index >= 16 => xterm_rgb(index),
         Some(ThemeColor::Indexed(_)) | None => builtin,
@@ -353,7 +359,7 @@ pub(crate) struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Self {
             no_color: false,
@@ -361,7 +367,7 @@ impl Default for Theme {
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
             animations: ResolvedAnimations::resolve(
-                &crate::config::SidebarAnimationsConfig::default(),
+                &crate::config::ThemeAnimationsConfig::default(),
                 &glyphs,
                 &palette,
             ),
@@ -375,18 +381,17 @@ impl Theme {
     /// The active theme for a frame: cached `NO_COLOR` and `COLORTERM`
     /// readings plus the palette, depth, and glow mode resolved from the
     /// snapshot's `[sidebar]` config.
-    pub(crate) fn for_sidebar(sidebar: &SidebarConfig) -> Self {
+    pub(crate) fn for_sidebar(sidebar: &SidebarConfig, theme: &ThemeConfig) -> Self {
         let truecolor = truecolor_env();
-        let depth = sidebar.effective_theme_mode().depth(truecolor);
-        let palette = Palette::resolve(&sidebar.theme, depth);
-        let glyphs =
-            GlyphSet::resolve_with_set(sidebar.glyph_set_source().as_deref(), &sidebar.glyphs);
+        let depth = theme.effective_theme_mode().depth(truecolor);
+        let palette = Palette::resolve(theme, depth);
+        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
         Self {
             no_color: crate::tui::no_color(),
             truecolor,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, &glyphs, &palette),
+            animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
             glyphs,
             palette,
         }
@@ -396,7 +401,7 @@ impl Theme {
     /// unless they explicitly pass a sidebar config to [`Self::fixed_for_sidebar`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
-        let palette = Palette::resolve_fixed(&SidebarThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Self {
             no_color,
@@ -404,7 +409,7 @@ impl Theme {
             depth: ColorDepth::Indexed,
             glow: GlowMode::Auto,
             animations: ResolvedAnimations::resolve(
-                &crate::config::SidebarAnimationsConfig::default(),
+                &crate::config::ThemeAnimationsConfig::default(),
                 &glyphs,
                 &palette,
             ),
@@ -414,17 +419,20 @@ impl Theme {
     }
 
     #[cfg(test)]
-    pub(crate) fn fixed_for_sidebar(no_color: bool, sidebar: &SidebarConfig) -> Self {
-        let depth = sidebar.effective_theme_mode().depth(false);
-        let palette = Palette::resolve_fixed(&sidebar.theme, depth);
-        let glyphs =
-            GlyphSet::resolve_with_set(sidebar.glyph_set_source().as_deref(), &sidebar.glyphs);
+    pub(crate) fn fixed_for_theme(
+        no_color: bool,
+        sidebar: &SidebarConfig,
+        theme: &ThemeConfig,
+    ) -> Self {
+        let depth = theme.effective_theme_mode().depth(false);
+        let palette = Palette::resolve_fixed(theme, depth);
+        let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
         Self {
             no_color,
             truecolor: false,
             depth,
             glow: sidebar.glow,
-            animations: ResolvedAnimations::resolve(&sidebar.animations, &glyphs, &palette),
+            animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
             glyphs,
             palette,
         }
@@ -744,6 +752,9 @@ impl Theme {
     }
 
     pub(crate) fn brand_tone(&self, panel: &crate::SidebarProviderPanel) -> Color {
+        if let Some(role) = panel.color_role {
+            return rgb_color(self.palette.raw.role_rgb(role), self.depth);
+        }
         match (self.depth, panel.color_rgb) {
             (ColorDepth::Truecolor, Some((red, green, blue))) => Color::Rgb(red, green, blue),
             _ => Color::Indexed(panel.color),

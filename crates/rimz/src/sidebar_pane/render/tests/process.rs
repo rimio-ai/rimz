@@ -254,14 +254,18 @@ fn process_rows_dim_a_step_below_agent_cards() {
 
 #[test]
 fn active_process_rows_use_the_configured_working_animation_style() {
-    let mut sidebar = crate::config::SidebarConfig::default();
-    sidebar.animations.working = Some(
+    let mut theme_config = crate::config::ThemeConfig::default();
+    theme_config.animations.working = Some(
         toml::from_str::<AnimationSpec>(
             "frames = \"AB\"\ncolor = 196\neffect = \"breathe\"\nspeed = \"fast\"\n",
         )
         .expect("working animation spec"),
     );
-    let theme = Theme::fixed_for_sidebar(false, &sidebar);
+    let theme = Theme::fixed_for_theme(
+        false,
+        &crate::config::SidebarConfig::default(),
+        &theme_config,
+    );
     let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
         vec![pane("%1", "cargo build --release", "/repo/main")],
         None,

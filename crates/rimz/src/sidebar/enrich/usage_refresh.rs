@@ -36,7 +36,8 @@ pub(super) fn refresh_account_usage(
     runtime: &RuntimePaths,
     accounts: &AccountsConfig,
 ) {
-    if !accounts.oauth_usage || crate::agents::credits::oauth_usage_offline() {
+    let _ = accounts;
+    if crate::agents::credits::oauth_usage_offline() {
         return;
     }
     for panel in &snapshot.providers {

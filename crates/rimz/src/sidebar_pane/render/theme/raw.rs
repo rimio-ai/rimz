@@ -3,7 +3,7 @@
 //! scheme-supplied color; every downstream tone derives from these.
 
 use super::super::oklab::{self, Rgb};
-use crate::config::Semantic;
+use crate::config::{PaletteRole, Semantic};
 
 /// The imported terminal colors, verbatim: background, foreground, the six
 /// ANSI normal hues the renderer maps to meaning, and the selection accent.
@@ -25,6 +25,33 @@ pub(crate) struct RawPalette {
 }
 
 impl RawPalette {
+    pub(crate) const DEFAULT: Self = Self {
+        background: (0x1a, 0x1b, 0x26),
+        foreground: (0xc0, 0xca, 0xf5),
+        red: (0xf7, 0x76, 0x8e),
+        green: (0x9e, 0xce, 0x6a),
+        yellow: (0xe0, 0xaf, 0x68),
+        blue: (0x7a, 0xa2, 0xf7),
+        magenta: (0xbb, 0x9a, 0xf7),
+        cyan: (0x7d, 0xcf, 0xff),
+        bright_blue: (0x7a, 0xa2, 0xf7),
+        selection_background: Some((0x28, 0x34, 0x57)),
+    };
+
+    pub(crate) fn role_rgb(&self, role: PaletteRole) -> Rgb {
+        match role {
+            PaletteRole::Background => self.background,
+            PaletteRole::Foreground => self.foreground,
+            PaletteRole::Red => self.red,
+            PaletteRole::Green => self.green,
+            PaletteRole::Yellow => self.yellow,
+            PaletteRole::Blue => self.blue,
+            PaletteRole::Magenta => self.magenta,
+            PaletteRole::Cyan => self.cyan,
+            PaletteRole::BrightBlue => self.bright_blue,
+        }
+    }
+
     /// Derive the thirteen semantic tones ([`Semantic`], the shared palette
     /// the CLI and sidebar both read): the chromatic ANSI hues map through,
     /// `caution` blends yellow toward red to land a true amber (not a coral

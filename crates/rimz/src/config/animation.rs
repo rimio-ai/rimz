@@ -2,16 +2,16 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
 
-use super::parse_hex;
+use super::{PaletteRole, parse_hex};
 
-/// `[sidebar.animations]`: per-machine status-head animation overrides. Each
+/// `[theme.animations]`: per-machine status-head animation overrides. Each
 /// role is optional and each field inside a role is optional, so a user can
 /// change one glyph run without copying the shipped color or cadence. `unread`
 /// is the one cross-cutting knob: it picks how unread attention rows read,
 /// shared across the lead glyph, the card name, the description, and the
 /// make-up buckets.
 #[derive(Clone, Debug, Default, Serialize, PartialEq, Eq)]
-pub struct SidebarAnimationsConfig {
+pub struct ThemeAnimationsConfig {
     /// How an unread attention row carries its signal — a flowing `shimmer`
     /// (default), a constant `bright`, or the hard 2-pole `blink`. Unset keeps
     /// the default shimmer.
@@ -39,7 +39,7 @@ pub struct SidebarAnimationsConfig {
     pub failed: Option<AnimationSpec>,
 }
 
-impl SidebarAnimationsConfig {
+impl ThemeAnimationsConfig {
     /// Whether every role is unset — the serialized config omits the section.
     pub fn is_unset(&self) -> bool {
         *self == Self::default()
@@ -53,14 +53,14 @@ impl SidebarAnimationsConfig {
     }
 }
 
-impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
+impl<'de> Deserialize<'de> for ThemeAnimationsConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
         #[derive(Default, Deserialize)]
         #[serde(default)]
-        struct RawSidebarAnimationsConfig {
+        struct RawThemeAnimationsConfig {
             unread: Option<UnreadEffect>,
             thinking: Option<AnimationSpec>,
             working: Option<AnimationSpec>,
@@ -74,7 +74,7 @@ impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
             failed: Option<AnimationSpec>,
         }
 
-        let raw = RawSidebarAnimationsConfig::deserialize(deserializer)?;
+        let raw = RawThemeAnimationsConfig::deserialize(deserializer)?;
         let config = Self {
             unread: raw.unread,
             thinking: raw.thinking,
@@ -92,7 +92,7 @@ impl<'de> Deserialize<'de> for SidebarAnimationsConfig {
     }
 }
 
-/// One role override under `[sidebar.animations.<role>]`.
+/// One role override under `[theme.animations.<role>]`.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AnimationSpec {
@@ -211,6 +211,7 @@ pub enum AnimationColor {
     Muted,
     Faint,
     Clay,
+    Role(PaletteRole),
     Indexed(u8),
     Rgb(u8, u8, u8),
 }
@@ -229,6 +230,7 @@ impl AnimationColor {
             Self::Muted => Some("muted"),
             Self::Faint => Some("faint"),
             Self::Clay => Some("clay"),
+            Self::Role(role) => Some(role.name()),
             Self::Indexed(_) | Self::Rgb(_, _, _) => None,
         }
     }
@@ -246,7 +248,7 @@ impl AnimationColor {
             "muted" => Some(Self::Muted),
             "faint" => Some(Self::Faint),
             "clay" => Some(Self::Clay),
-            _ => None,
+            _ => PaletteRole::parse(value).map(Self::Role),
         }
     }
 }
@@ -297,7 +299,7 @@ impl<'de> Deserialize<'de> for AnimationColor {
                         .map_err(E::custom);
                 }
                 Err(E::custom(format!(
-                    "unknown animation color `{value}`; expected good, warn, caution, alarm, accent, cool, meta, body, muted, faint, clay, #rrggbb, or 0-255"
+                    "unknown animation color `{value}`; expected semantic slot, palette role, clay, #rrggbb, or 0-255"
                 )))
             }
 
@@ -421,7 +423,7 @@ mod tests {
 
     #[test]
     fn partial_specs_and_unset_config_round_trip() {
-        let config: SidebarAnimationsConfig =
+        let config: ThemeAnimationsConfig =
             toml::from_str("[thinking]\nframes = \"ab\"\n").expect("config");
         assert!(!config.is_unset());
         let thinking = config.thinking.expect("thinking override");
@@ -430,7 +432,7 @@ mod tests {
             ["a".to_owned(), "b".to_owned()]
         );
         assert_eq!(thinking.color, None);
-        assert!(SidebarAnimationsConfig::default().is_unset());
+        assert!(ThemeAnimationsConfig::default().is_unset());
     }
 
     #[test]
@@ -440,30 +442,30 @@ mod tests {
             ("bright", UnreadEffect::Bright),
             ("blink", UnreadEffect::Blink),
         ] {
-            let config: SidebarAnimationsConfig =
+            let config: ThemeAnimationsConfig =
                 toml::from_str(&format!("unread = \"{value}\"\n")).expect("config");
             assert_eq!(config.unread, Some(expected));
             assert!(!config.is_unset());
         }
         assert_eq!(UnreadEffect::default(), UnreadEffect::Shimmer);
-        assert_eq!(SidebarAnimationsConfig::default().unread, None);
+        assert_eq!(ThemeAnimationsConfig::default().unread, None);
     }
 
     #[test]
     fn unread_effect_rejects_unknown_value() {
-        assert!(toml::from_str::<SidebarAnimationsConfig>("unread = \"glow\"\n").is_err());
+        assert!(toml::from_str::<ThemeAnimationsConfig>("unread = \"glow\"\n").is_err());
     }
 
     #[test]
     fn unset_unread_omits_the_key_on_serialize() {
-        let toml = toml::to_string(&SidebarAnimationsConfig::default()).expect("serialize");
+        let toml = toml::to_string(&ThemeAnimationsConfig::default()).expect("serialize");
         assert!(
             !toml.contains("unread"),
             "unset unread is not written: {toml}"
         );
-        let set = SidebarAnimationsConfig {
+        let set = ThemeAnimationsConfig {
             unread: Some(UnreadEffect::Blink),
-            ..SidebarAnimationsConfig::default()
+            ..ThemeAnimationsConfig::default()
         };
         assert!(
             toml::to_string(&set)
@@ -474,16 +476,14 @@ mod tests {
 
     #[test]
     fn attention_and_paused_roles_accept_multiple_frames() {
-        assert!(toml::from_str::<SidebarAnimationsConfig>("[waiting]\nframes = \"?\"\n").is_ok());
-        assert!(toml::from_str::<SidebarAnimationsConfig>("[failed]\nframes = \"!\"\n").is_ok());
-        assert!(toml::from_str::<SidebarAnimationsConfig>("[paused]\nframes = [\"⏸︎\"]\n").is_ok());
+        assert!(toml::from_str::<ThemeAnimationsConfig>("[waiting]\nframes = \"?\"\n").is_ok());
+        assert!(toml::from_str::<ThemeAnimationsConfig>("[failed]\nframes = \"!\"\n").is_ok());
+        assert!(toml::from_str::<ThemeAnimationsConfig>("[paused]\nframes = [\"⏸︎\"]\n").is_ok());
         assert!(
-            toml::from_str::<SidebarAnimationsConfig>("[failed]\nframes = [\"!\", \"?\"]\n")
-                .is_ok()
+            toml::from_str::<ThemeAnimationsConfig>("[failed]\nframes = [\"!\", \"?\"]\n").is_ok()
         );
         assert!(
-            toml::from_str::<SidebarAnimationsConfig>("[paused]\nframes = [\"⏸︎\", \"○\"]\n")
-                .is_ok()
+            toml::from_str::<ThemeAnimationsConfig>("[paused]\nframes = [\"⏸︎\", \"○\"]\n").is_ok()
         );
     }
 

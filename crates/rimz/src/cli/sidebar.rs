@@ -562,10 +562,10 @@ fn fixture(
 ) -> Result<()> {
     let mut snapshot = sidebar_fixture_snapshot(state)?;
     if let Some(mode) = theme_mode.as_deref() {
-        snapshot.sidebar.theme.mode = parse_fixture_theme_mode(mode)?;
+        snapshot.theme.mode = parse_fixture_theme_mode(mode)?;
     }
     if let Some(scheme) = theme_scheme {
-        snapshot.sidebar.theme.scheme = Some(scheme);
+        snapshot.theme.scheme = Some(scheme);
     }
     rimz::sidebar_pane::render::render_fixed_line_ansi(io::stdout(), &snapshot, None, width, height)
         .context("rendering sidebar fixture")

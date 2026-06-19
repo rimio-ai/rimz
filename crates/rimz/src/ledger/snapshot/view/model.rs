@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::{ExtraCredits, RateLimitWindow, SpendTally};
+use crate::config::PaletteRole;
 use crate::feed::AgentStatus;
 use crate::ledger::snapshot::row::SidebarRow;
 use crate::remote::link::LinkTier;
@@ -23,6 +24,9 @@ pub struct SidebarProviderPanel {
     /// omit it; renderers fall back to `color`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color_rgb: Option<(u8, u8, u8)>,
+    /// Palette role for brand tones linked to the active theme palette.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color_role: Option<PaletteRole>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version: Option<String>,
     /// Brand plan label (`Claude Max`, `ChatGPT Pro`); `None` when unknown.

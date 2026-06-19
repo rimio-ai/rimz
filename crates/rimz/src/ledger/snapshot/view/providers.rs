@@ -21,7 +21,7 @@ impl SidebarSnapshot {
     /// `auth.json`), preferred only when the freshest context has none — and a kind
     /// whose only signal is such a login still earns a block;
     /// `remote_control` carries the per-kind `⇅ rc` flag. Styling (emblem, color,
-    /// name) resolves from `self.sidebar.providers` over the built-in defaults, so
+    /// name) resolves from `self.theme.providers` over the built-in defaults, so
     /// the renderer gets a ready-to-paint block. With no explicit
     /// `provider_list`, a *stacked* dashboard is capped to `max_provider_blocks`
     /// by today's spend; a *tabbed* dashboard (three or more providers under
@@ -112,7 +112,7 @@ impl SidebarSnapshot {
                 .map(|raw| format_plan_label(&kind, &raw));
 
             let defaults = default_provider_style(&kind);
-            let style = self.sidebar.providers.get(&kind);
+            let style = self.theme.providers.get(&kind);
             let product_name = style
                 .and_then(|style| style.product_name.clone())
                 .filter(|name| !name.is_empty())
@@ -122,12 +122,13 @@ impl SidebarSnapshot {
                 .filter(|art| !art.is_empty())
                 .map(|art| art.lines().map(ToOwned::to_owned).collect())
                 .unwrap_or(defaults.art);
-            let (color, color_rgb) = match style.and_then(|style| style.color) {
-                Some(color @ ThemeColor::Indexed(_)) => (color.indexed(), None),
+            let (color, color_rgb, color_role) = match style.and_then(|style| style.color) {
+                Some(ThemeColor::Role(role)) => (defaults.color, None, Some(role)),
+                Some(color @ ThemeColor::Indexed(_)) => (color.indexed(), None, None),
                 Some(color @ ThemeColor::Rgb(red, green, blue)) => {
-                    (color.indexed(), Some((red, green, blue)))
+                    (color.indexed(), Some((red, green, blue)), None)
                 }
-                None => (defaults.color, defaults.color_rgb),
+                None => (defaults.color, defaults.color_rgb, None),
             };
             let remote_control = remote_control.get(&kind).copied().unwrap_or(false);
             let spending = provider_spending.get(&kind).cloned();
@@ -138,6 +139,7 @@ impl SidebarSnapshot {
                 art,
                 color,
                 color_rgb,
+                color_role,
                 version,
                 plan,
                 metered,

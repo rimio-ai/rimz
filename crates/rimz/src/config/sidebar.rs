@@ -1,9 +1,7 @@
-use std::collections::BTreeMap;
-use std::num::{NonZeroU16, NonZeroU32};
+use std::num::NonZeroU16;
 
 use serde::{Deserialize, Serialize};
 
-use crate::config::{SidebarAnimationsConfig, SidebarGlyphsConfig, ThemeColor, ThemeMode};
 use crate::sidebar::timing::{DEFAULT_REFRESH_MS, MAX_REFRESH_MS, MIN_REFRESH_MS};
 
 /// `[sidebar] scrollbar`: when the agent cards overflow their viewport, how
@@ -85,100 +83,14 @@ pub enum CardDensityMode {
     Compact,
 }
 
-/// `[sidebar] style`: a headline preset bundling color depth and glyph set so
-/// one switch picks the whole look. `modern` forces truecolor and the Nerd Font
-/// glyphs; `default` keeps auto color depth and the Unicode glyphs. An explicit
-/// `[sidebar.theme] mode` or `[sidebar.glyphs] set` always wins over the preset,
-/// so the switch is a starting point, not a lock.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "lowercase")]
-pub enum SidebarStyle {
-    /// Auto color depth (truecolor when the terminal advertises it, otherwise
-    /// 256) with the default Unicode glyph vocabulary — the broad-terminal floor.
-    Default,
-    /// Truecolor depth with the Nerd Font glyph preset — assumes a Nerd Font v3+
-    /// face is active in the terminal.
-    Modern,
-}
-
-/// `[sidebar.pets] glyphs`: which Unicode block tier the pet renderer uses.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
-pub enum PetsGlyphMode {
-    /// Use the default renderer tier: sextants with the half-block floor.
-    #[default]
-    Auto,
-    /// Use half-block cells (`▀`), the broadest terminal-font floor.
-    Half,
-    /// Use Unicode sextants, the default quality/coverage tier.
-    Sextant,
-    /// Use Unicode 16 octants. Sharpest tier, intended for explicit opt-in.
-    Octant,
-}
-
-/// `[sidebar.pets] size`: how much space the provider-dashboard pet occupies.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq, Hash)]
-#[serde(rename_all = "lowercase")]
-pub enum PetsSize {
-    /// Match the original dashboard pet footprint.
-    #[default]
-    Medium,
-    /// Fit the pet to the active provider block height.
-    Small,
-}
-
-/// `[sidebar.pets]`: opt-in animated companion in the provider dashboard.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct PetsConfig {
-    /// Enable the pet dashboard tab and the best-effort CDN/cache asset load.
-    pub enabled: bool,
-    /// Which pet to show. A built-in catalog id (`codex`, `dewey`, …) wins; an
-    /// `http(s)://` selector is your own WebP sheet fetched and cached like a
-    /// built-in; a path-like selector (`/`, `.`, or leading `~`) is a local
-    /// sheet or a petdex pet directory; and a bare slug (`wall-e`) is a petdex
-    /// pet installed under `~/.codex/pets/<slug>/`.
-    pub pet: String,
-    /// Dashboard pet footprint.
-    pub size: PetsSize,
-    /// Unicode block-glyph tier.
-    pub glyphs: PetsGlyphMode,
-    /// Show canned captions on fleet-status changes.
-    pub voice: bool,
-}
-
-impl Default for PetsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            pet: "codex".to_owned(),
-            size: PetsSize::default(),
-            glyphs: PetsGlyphMode::default(),
-            voice: true,
-        }
-    }
-}
-
 /// Sidebar display preferences. A personal, machine-wide tuning of how the
 /// renderer paints; it never affects ledger correctness.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct SidebarConfig {
-    /// Headline display preset bundling color depth and glyph set: `modern`
-    /// (truecolor + Nerd Font) or `default` (auto color + Unicode). Unset leaves
-    /// each axis at its own default; an explicit `[sidebar.theme] mode` or
-    /// `[sidebar.glyphs] set` overrides the preset.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub style: Option<SidebarStyle>,
     /// Base render cadence in milliseconds. This controls animation and
     /// event-coalesced paint timing; data polling stays on `--tick-seconds`.
     pub refresh_ms: u16,
-    /// Per-provider styling for the bottom dashboard panel, keyed by agent kind
-    /// (`claude`/`codex`/`pi`/…). Any field a user omits falls back to the
-    /// built-in default for that kind, so overriding just the color leaves the
-    /// shipped emblem intact.
-    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
-    pub providers: BTreeMap<String, SidebarProviderStyle>,
     /// Most provider blocks the *stacked* dashboard shows before the rest are
     /// elided; a tabbed dashboard is height-bounded by its active block, so it
     /// shows every provider regardless of this cap. Providers are few, so the
@@ -214,10 +126,6 @@ pub struct SidebarConfig {
     /// budget shrinks. Display-only; it tunes the colour ramp, never the
     /// ledger.
     pub budget: BudgetZonesConfig,
-    /// Attention timing knobs. These decide when a silent running row becomes
-    /// an actionable `!`; the renderer's heat colours remain separate display
-    /// grammar.
-    pub attention: AttentionConfig,
     /// Preferred comparison target for the worktree header's git stats (the
     /// `+/-` diff, the `⇡`/`⇣` commit delta, and the `≡`/`✓` landed markers).
     /// Tried
@@ -227,20 +135,6 @@ pub struct SidebarConfig {
     /// detection alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub trunk: Option<String>,
-    /// Palette preferences and overrides for the renderer's semantic color
-    /// slots. Omitted slots keep the selected scheme tone; override values
-    /// accept either a 256-color index or `#rrggbb`.
-    #[serde(skip_serializing_if = "SidebarThemeConfig::is_unset")]
-    pub theme: SidebarThemeConfig,
-    /// Status-head animations for the renderer. An omitted role keeps the
-    /// built-in frames, tone, effect, and speed; an omitted field inside a
-    /// role keeps just that built-in field.
-    #[serde(skip_serializing_if = "SidebarAnimationsConfig::is_unset")]
-    pub animations: SidebarAnimationsConfig,
-    /// Glyph preset and sparse shape overrides for the renderer. Omitted keeps
-    /// the default Unicode vocabulary.
-    #[serde(skip_serializing_if = "SidebarGlyphsConfig::is_unset")]
-    pub glyphs: SidebarGlyphsConfig,
     /// How the agent-cards scrollbar shows when the cards overflow. `auto`
     /// (default) paints it only while the viewport moves and hides it once the
     /// view settles; `always` keeps it up; `never` removes it. Resolved
@@ -259,10 +153,6 @@ pub struct SidebarConfig {
     /// form. Resolved producer-side onto the snapshot like the rest of
     /// `[sidebar]`.
     pub card_density: CardDensityMode,
-    /// Opt-in animated companion in the provider dashboard. Best-effort
-    /// display enrichment: it reads the snapshot's fleet status and never
-    /// participates in ledger correctness.
-    pub pets: PetsConfig,
     /// The global multiplexer chord that focuses the sidebar from any pane — a
     /// toggle, so pressing it again returns to your last working pane. Rimz
     /// registers it room-scoped at session birth (tmux as a `bind-key`, Zellij
@@ -275,8 +165,6 @@ pub struct SidebarConfig {
 impl Default for SidebarConfig {
     fn default() -> Self {
         Self {
-            style: None,
-            providers: BTreeMap::new(),
             refresh_ms: DEFAULT_REFRESH_MS,
             max_provider_blocks: default_max_provider_blocks(),
             provider_tabs: ProviderTabsMode::default(),
@@ -284,15 +172,10 @@ impl Default for SidebarConfig {
             max_cols: default_sidebar_max_cols(),
             context: ContextSeverityConfig::default(),
             budget: BudgetZonesConfig::default(),
-            attention: AttentionConfig::default(),
             trunk: None,
-            theme: SidebarThemeConfig::default(),
-            animations: SidebarAnimationsConfig::default(),
-            glyphs: SidebarGlyphsConfig::default(),
             scrollbar: ScrollbarMode::default(),
             glow: GlowMode::default(),
             card_density: CardDensityMode::default(),
-            pets: PetsConfig::default(),
             focus_key: default_focus_key(),
         }
     }
@@ -301,31 +184,6 @@ impl Default for SidebarConfig {
 impl SidebarConfig {
     pub fn resolved_refresh_ms(&self) -> u16 {
         self.refresh_ms.clamp(MIN_REFRESH_MS, MAX_REFRESH_MS)
-    }
-
-    /// The palette depth mode after folding in the [`style`](Self::style) preset:
-    /// an explicit `[sidebar.theme] mode` wins; otherwise `modern` forces
-    /// truecolor and every other case keeps auto detection.
-    pub fn effective_theme_mode(&self) -> ThemeMode {
-        match self.theme.mode {
-            ThemeMode::Auto => match self.style {
-                Some(SidebarStyle::Modern) => ThemeMode::Truecolor,
-                _ => ThemeMode::Auto,
-            },
-            explicit => explicit,
-        }
-    }
-
-    /// The glyph-set source after folding in the [`style`](Self::style) preset:
-    /// an explicit `[sidebar.glyphs] set` (a named preset or a custom path) wins;
-    /// otherwise `modern` selects `nerd-font` and every other case keeps the
-    /// Unicode default. The per-glyph overrides under `[sidebar.glyphs]` apply on
-    /// top of whichever base this picks.
-    pub fn glyph_set_source(&self) -> Option<String> {
-        self.glyphs.set.clone().or_else(|| match self.style {
-            Some(SidebarStyle::Modern) => Some("nerd-font".to_owned()),
-            _ => None,
-        })
     }
 
     /// The focus-sidebar chord to register and display, or `None` when the user
@@ -345,107 +203,6 @@ impl SidebarConfig {
 /// Zellij's locked mode; the user can rebind or disable it.
 pub fn default_focus_key() -> String {
     "Alt+p".to_owned()
-}
-
-/// `[sidebar.theme]`: per-machine palette depth, scheme selection, and
-/// semantic slot overrides. Display-only — it tunes tones, never the glyph
-/// grammar (shape still carries every state under `NO_COLOR`), and never the
-/// ledger. Slot names follow the semantics, not the shipped hues, so a user
-/// re-theming to light terminals reads `good`/`warn`/`alarm` rather than
-/// `green`/`yellow`/`red`.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct SidebarThemeConfig {
-    /// Palette depth: `auto` follows the terminal's truecolor advertisement,
-    /// `truecolor` forces RGB, and `256` quantizes RGB tones to xterm indexes.
-    #[serde(skip_serializing_if = "is_default_theme_mode")]
-    pub mode: ThemeMode,
-    /// Palette scheme: unset uses the bundled `TokyoNight Night` theme. Bundled
-    /// Alacritty theme names (`rimz list-themes`) and paths to Alacritty TOML
-    /// theme files are accepted.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub scheme: Option<String>,
-    /// Calm/positive: running tallies, low gauges, `+` additions, cache-read tokens.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub good: Option<ThemeColor>,
-    /// Caution floor: waiting glyphs at rest, low-mid gauges.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub warn: Option<ThemeColor>,
-    /// Amber, the warm "hot/costly/parked" tier: the gauge mid-band, age heat,
-    /// the paused glyph, and the fresh-input token marker.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub caution: Option<ThemeColor>,
-    /// Alarm, reserved for danger: failed glyphs, the 100% gauge crest, `-` removals.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub alarm: Option<ThemeColor>,
-    /// Data accent: the `◎` sessions glyph and the `↗` output marker.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub accent: Option<ThemeColor>,
-    /// Cool informational: the `plan` posture pill, window tags.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub cool: Option<ThemeColor>,
-    /// Delegation/meta: the `⇅ rc` flag, the subagent `⧉` marker.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub meta: Option<ThemeColor>,
-    /// Body content text: stat figures, capability tokens, subagent lines —
-    /// a step above `muted`, just below full-strength text.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub body: Option<ThemeColor>,
-    /// Muted chrome: labels, ages, subordinate values.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub muted: Option<ThemeColor>,
-    /// Faintest chrome: bar tracks, `·` separators, dotted dividers.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub faint: Option<ThemeColor>,
-    /// The darkest chrome (the scrollbar track) — a step below `faint`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rule: Option<ThemeColor>,
-    /// The selection tone: the selected card's bright `▌` spine and the dim
-    /// `▎` lane bracket around the worktree holding it.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection: Option<ThemeColor>,
-    /// The selected card's background band, behind every line of the card.
-    /// Derived from the scheme's `colors.selection.background`, subdued toward
-    /// the background.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub selection_bg: Option<ThemeColor>,
-}
-
-impl SidebarThemeConfig {
-    /// Whether every slot is unset — the serialized config omits the section.
-    pub fn is_unset(&self) -> bool {
-        *self == Self::default()
-    }
-}
-
-fn is_default_theme_mode(mode: &ThemeMode) -> bool {
-    *mode == ThemeMode::default()
-}
-
-/// `[sidebar.attention]`: timing knobs for the attention projection. The
-/// values are per-machine display/routing preferences, never ledger truth.
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct AttentionConfig {
-    /// Seconds a `running` agent may record no completed tool or turn activity
-    /// before the sidebar projects it to the actionable `!` attention bucket.
-    pub stalled_after_secs: NonZeroU32,
-    /// Seconds a row may record no activity before the sidebar treats it as
-    /// inactive and sinks it beneath every live row, whatever its status — one
-    /// hour by default, the boundary the agent's own prompt cache crosses, so a
-    /// card that has gone cold reads as cold.
-    pub inactive_after_secs: NonZeroU32,
-}
-
-impl Default for AttentionConfig {
-    fn default() -> Self {
-        Self {
-            stalled_after_secs: NonZeroU32::new(crate::feed::DEFAULT_STALL_AFTER_SECS)
-                .expect("non-zero default stall window"),
-            inactive_after_secs: NonZeroU32::new(crate::feed::DEFAULT_INACTIVE_AFTER_SECS)
-                .expect("non-zero default inactive window"),
-        }
-    }
 }
 
 /// The context meter's severity bands: `green` is where the meter starts
@@ -568,22 +325,4 @@ fn default_sidebar_max_cols() -> NonZeroU16 {
 /// Default cap on provider blocks in the bottom dashboard.
 fn default_max_provider_blocks() -> usize {
     3
-}
-
-/// Per-provider styling: the ASCII emblem and brand color for the bottom
-/// dashboard. Every field is optional; an omitted field uses the built-in
-/// default for the provider kind, so a user overrides just the art or just the
-/// color without restating both.
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct SidebarProviderStyle {
-    /// Display name for the panel header (`Claude`, `Codex`, …).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub product_name: Option<String>,
-    /// Multi-line ASCII emblem painted at the left of the provider block.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub ascii_art: Option<String>,
-    /// Brand color for the emblem. Accepts a 256-color index or `#rrggbb`.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub color: Option<ThemeColor>,
 }

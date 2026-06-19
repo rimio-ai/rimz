@@ -749,7 +749,7 @@ impl SpendScope {
 
     /// The cockpit scope for a room: its project root, the live `git worktree
     /// list` checkout roots, and — the durable part — the repo's worktree-home
-    /// directory (the resolved `[worktree] dir` template, e.g.
+    /// directory (the resolved `[agents.worktree] dir` template, e.g.
     /// `…/<repo>-worktrees`). The home is a path prefix, so a session recorded
     /// under a worktree that has since been removed still scopes in, where the
     /// live worktree list alone would drop it the moment cleanup ran.

@@ -15,7 +15,7 @@ pub(super) fn is_animating(
 }
 
 fn pet_animating(snapshot: &SidebarSnapshot, ui: &UiState, alert_active: bool) -> bool {
-    snapshot.sidebar.pets.enabled
+    snapshot.pets.enabled
         && render::dashboard_present(snapshot, alert_active)
         && ui.pet.as_ref().is_some_and(|view| {
             view.loading
@@ -31,7 +31,7 @@ fn pet_frame_interval(
     alert_active: bool,
     refresh_ms: u16,
 ) -> Option<Duration> {
-    if !snapshot.sidebar.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
+    if !snapshot.pets.enabled || !render::dashboard_present(snapshot, alert_active) {
         return None;
     }
     let view = ui.pet.as_ref()?;

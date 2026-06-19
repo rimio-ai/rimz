@@ -338,6 +338,9 @@ pub fn enrich(
     // Attention timing is needed during pane projection, before the full config
     // fold builds provider panels and stamps context severity.
     snapshot.sidebar = machine_config.sidebar.clone();
+    snapshot.theme = machine_config.theme.clone();
+    snapshot.pets = machine_config.agents.pets.clone();
+    snapshot.attention = machine_config.agents.attention;
     fold_link_stats(&mut snapshot, runtime, crate::sidebar::cache::unix_now_ms());
 
     // The room's group roots — a repo room's worktree checkouts (so one parked
@@ -357,13 +360,13 @@ pub fn enrich(
         }
     }
     // The repo's durable worktree home, resolved purely from the project root
-    // plus the `[worktree] dir` template — independent of `git worktree list`,
+    // plus the `[agents.worktree] dir` template — independent of `git worktree list`,
     // so the cockpit spend scope still counts sessions from worktrees cleanup
     // has removed. Both modes derive it the same way, so producer and consumer
     // hash the same scope and read the same workspace-spending cache.
     if let Some(root) = snapshot.project_root.clone() {
         snapshot = snapshot.with_worktree_home(
-            crate::worktree::worktree_parent(&root, &machine_config.worktree).ok(),
+            crate::worktree::worktree_parent(&root, &machine_config.agents.worktree).ok(),
         );
     }
 

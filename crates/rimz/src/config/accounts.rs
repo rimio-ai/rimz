@@ -8,11 +8,6 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AccountsConfig {
-    /// Query provider account-usage surfaces from local OAuth credentials when
-    /// available. No provider auth files are written; failures are cached on a
-    /// short retry TTL.
-    #[serde(default = "default_true")]
-    pub oauth_usage: bool,
     /// Display-only monthly USD ceiling by provider kind. It scales the
     /// extra/API usage bar when no provider limit is available; it is not a
     /// provider-enforced spending limit.
@@ -108,14 +103,9 @@ impl Visitor<'_> for UsageLimitVisitor {
 impl Default for AccountsConfig {
     fn default() -> Self {
         Self {
-            oauth_usage: true,
             usage_limit_usd: BTreeMap::new(),
         }
     }
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[cfg(test)]
@@ -126,14 +116,12 @@ mod tests {
     fn usage_limit_keeps_cents_exactly() {
         let config: AccountsConfig = toml::from_str(
             r#"
-            oauth_usage = false
             [usage_limit_usd]
             claude = 50.25
             codex = 12
             "#,
         )
         .unwrap();
-        assert!(!config.oauth_usage);
         assert_eq!(config.usage_limit("claude"), Some(50.25));
         assert_eq!(config.usage_limit("codex"), Some(12.0));
     }

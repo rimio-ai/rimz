@@ -62,7 +62,7 @@ pub(crate) fn compose_lines(
     // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
     // config lands with the next snapshot, identically on every renderer of
     // the workspace.
-    let theme = Theme::for_sidebar(&snapshot.sidebar);
+    let theme = Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, reserving the trailing right rail —
@@ -196,10 +196,8 @@ pub(super) fn build_bottom_chrome(
     let mut tab_hits: Vec<ProviderTabHit> = Vec::new();
     let dashboard_present = dashboard_present(snapshot, active);
     let tabbed = dashboard_present && dashboard_tabbed(snapshot);
-    let dashboard_owns_ledger = dashboard_present
-        && tabbed
-        && !snapshot.providers.is_empty()
-        && snapshot.sidebar.pets.enabled;
+    let dashboard_owns_ledger =
+        dashboard_present && tabbed && !snapshot.providers.is_empty() && snapshot.pets.enabled;
     let fold_footer_into_dashboard = dashboard_owns_ledger
         && !active
         && snapshot.truth_degraded.is_none()
@@ -223,7 +221,7 @@ pub(super) fn build_bottom_chrome(
             tabbed,
             snapshot.value_tally.as_ref(),
             ui.pet.as_ref(),
-            snapshot.sidebar.pets.enabled,
+            snapshot.pets.enabled,
             folded_footer.clone(),
             inner,
             &snapshot.sidebar.budget,

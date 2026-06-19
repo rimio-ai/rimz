@@ -35,7 +35,7 @@ The **executable surface** is every project field that can cause a process to ru
 
 The per-machine `[notifications].command` lives in `~/.config/rimz/config.toml`, outside project trust. It is personal routing on this host, often with local push credentials, and a cloned repository never supplies it.
 
-The per-machine `[autoping]` schedules also live outside project trust: each entry runs only the rimz-owned `rimz autoping run`, never arbitrary shell, so a clone supplies nothing executable. The scheduled-execution surface stays visible — `rimz autoping install` previews the systemd/cron artifacts and takes consent before writing them, `rimz autoping list` shows what is installed, and `rimz doctor` carries the configured schedules.
+The per-machine `[agents.loop.autoping]` schedules also live outside project trust: each entry runs only the rimz-owned `rimz autoping run`, never arbitrary shell, so a clone supplies nothing executable. The scheduled-execution surface stays visible — `rimz autoping install` previews the systemd/cron artifacts and takes consent before writing them, `rimz autoping list` shows what is installed, and `rimz doctor` carries the configured schedules.
 
 ## Resolver trust
 
@@ -94,7 +94,7 @@ max_payload_bytes  = 8192
 
 ## Optional asset fetches
 
-Enabling `[sidebar.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
+Enabling `[agents.pets]` lets the sidebar fetch a WebP sprite sheet over HTTPS and cache it under the per-machine cache root. A built-in `pet` reaches the public Codex pets CDN; an `https://` URL reaches the host you name (plaintext `http://` is rejected); a petdex pet (`~/.codex/pets/<name>/`) or a local-path `pet` fetches nothing and reads straight off disk. `RIMZ_PETS_OFFLINE=1` makes the process tree cache-only. The fetch sends the asset URL request; prompts, transcripts, pane text, workspace paths, and provider credentials stay local. Pets execute no commands, so the setting stays outside the project trust hash.
 
 ## Off-box error reporting
 
