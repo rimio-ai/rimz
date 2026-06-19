@@ -226,11 +226,14 @@ jobs:
           tmux -V
 
       - name: Install Zellij
+        env:
+          ZELLIJ_VERSION: 0.44.3
         run: |
           mkdir -p "$RUNNER_TEMP/bin"
-          curl -L https://github.com/zellij-org/zellij/releases/latest/download/zellij-x86_64-unknown-linux-musl.tar.gz \
+          curl -L "https://github.com/zellij-org/zellij/releases/download/v${ZELLIJ_VERSION}/zellij-x86_64-unknown-linux-musl.tar.gz" \
             | tar -xz -C "$RUNNER_TEMP/bin"
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/bin/zellij" --version
 
       - name: Install cargo-nextest (prebuilt)
         env:

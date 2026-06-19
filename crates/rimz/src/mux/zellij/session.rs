@@ -36,12 +36,20 @@ impl ZellijBackend {
             if is_transient_empty(&output.stdout) {
                 continue;
             }
-            return serde_json::from_slice::<Vec<RawPane>>(&output.stdout).map_err(|e| {
+            let panes = serde_json::from_slice::<Vec<RawPane>>(&output.stdout).map_err(|e| {
                 MuxErr::Output {
                     program: "zellij".to_owned(),
                     reason: format!("parsing list-panes JSON: {e}"),
                 }
-            });
+            })?;
+            // A named live session can briefly answer `[]` while the server's
+            // screen state catches up to a background birth or a busy action
+            // tick. Treat that like empty stdout: retry before concluding the
+            // room has no panes.
+            if session.is_some() && panes.is_empty() && attempt + 1 < LIST_PANES_ATTEMPTS {
+                continue;
+            }
+            return Ok(panes);
         }
         Err(MuxErr::Output {
             program: "zellij".to_owned(),
