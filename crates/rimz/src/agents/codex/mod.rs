@@ -74,9 +74,9 @@ use super::{
     AccountUsageSnapshot, AgentAdapter, AgentErr, AgentLifecycleObservation, AgentTurnError,
     ClassifiedHook, ExtraCredits, HookInstallPreview, HookInstallReport, HookUninstallReport,
     LifecycleRefreshCtx, LocalContextRefresh, LocalContextRefreshCtx, RefreshSpawn, Result,
-    RootIdentity, SubagentIdentity, choice_is_allow, classify_agent_hook, non_empty_trimmed,
-    optional_payload_string, read_transcript_tail, resolve_root_identity,
-    resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    RootIdentity, SubagentIdentity, TranscriptMessage, TranscriptRole, choice_is_allow,
+    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
+    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
 };
 use crate::feed::{FeedItem, FeedKind, Resolution};
 use crate::run::PermissionMode;
@@ -621,8 +621,8 @@ impl AgentAdapter for CodexAdapter {
         codex_payload_turn_error(payload)
     }
 
-    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
-        stream_agent_messages(new_lines)
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        parse_messages(lines)
     }
 
     fn install_hooks(&self) -> Result<HookInstallReport> {
@@ -998,8 +998,8 @@ pub fn loaded_daemon_threads() -> Option<std::collections::BTreeSet<String>> {
     Some(ids.into_iter().collect())
 }
 
-fn stream_agent_messages(new_lines: &str) -> Vec<String> {
-    new_lines
+fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
+    lines
         .lines()
         .filter_map(|line| {
             let line = line.trim();
@@ -1011,13 +1011,23 @@ fn stream_agent_messages(new_lines: &str) -> Vec<String> {
                 return None;
             }
             let payload = value.get("payload")?;
-            if payload.get("type").and_then(Value::as_str) != Some("agent_message") {
-                return None;
-            }
+            let role = match payload.get("type").and_then(Value::as_str) {
+                Some("user_message") => TranscriptRole::User,
+                Some("agent_message") => TranscriptRole::Assistant,
+                _ => return None,
+            };
             payload
                 .get("message")
                 .and_then(Value::as_str)
                 .and_then(non_empty_trimmed)
+                .map(|text| TranscriptMessage {
+                    role,
+                    at: value
+                        .get("timestamp")
+                        .and_then(Value::as_str)
+                        .and_then(|raw| raw.parse().ok()),
+                    text,
+                })
         })
         .collect()
 }

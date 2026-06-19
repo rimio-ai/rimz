@@ -25,6 +25,8 @@ rimz agents list --all                   # include audit rollup rows
 rimz agents list --worktree auth-refresh # filter to one branch / worktree / dir
 rimz agents show swift-otter             # one card plus its newest run record
 rimz agents show swift-otter --json      # the AgentState record
+rimz transcript @codex#auth-refresh      # one member's turn history
+rimz transcript #auth-refresh            # the channel timeline
 ```
 
 **Launch a layout.** A spec is a shape; a prompt broadcasts to every agent cell.
@@ -63,11 +65,28 @@ rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
 rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
 rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <LEVEL>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
+rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] [--json]
 ```
 
 ### Listing and inspecting
 
-Bare `rimz agents` lists live root-agent cards in attention order. The lead `AGENT` column is the agent's canonical address — its role (`@coder#auth-refresh`) when a unique team role names it, then its profile (`@planner#auth-refresh`), else `@<kind>#<channel>`, growing an ordinal (`@claude-2#auth-refresh`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, and session) and its newest attached run record when present. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+Bare `rimz agents` lists live root-agent cards in attention order. The lead `AGENT` column is the agent's canonical address — its role (`@coder#auth-refresh`) when a unique team role names it, then its profile (`@planner#auth-refresh`), else `@<kind>#<channel>`, growing an ordinal (`@claude-2#auth-refresh`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, session, status, model, context, worktree, pane) and its newest attached run record when present. When the agent is waiting on a native ask, `show` adds an `ask` line with the question and options; `show --json` includes the same projection as `ask`. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+
+### Inspect transcripts
+
+`rimz transcript` reads the local transcript or rollout JSONL for a running agent and renders the conversation Rimz can inspect without joining the agent process.
+
+```sh
+rimz transcript @swift-otter
+rimz transcript @codex#cli-docs --last 4
+rimz transcript #cli-docs
+rimz transcript @all#cli-docs --details
+rimz transcript --json
+```
+
+A single-agent target prints turns: the user prompt and that turn's final assistant message. `--details` prints every normalized user and assistant message in order, and `--last <N>` keeps the last N turns. A pending ask attached to the agent prints at the bottom with its options so you can resolve the blocker before typing over it.
+
+A channel target (`#worktree`, `@all`, or no target for the current channel) fuses every root agent's messages into one timestamp-ordered timeline labelled by handle. User prompts render as `you→@handle:` and assistant messages as `@handle:`. `--details` fuses every message; the default fuses turn summaries. `--last <N>` keeps the last N timeline entries. `--json` emits `{agent, turns, ask}` for one agent and `{channel, timeline, asks}` for a channel.
 
 ### The launch spec
 

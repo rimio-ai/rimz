@@ -15,7 +15,7 @@ Everything a team needs has a primitive here, and the rest of this doc is those 
 | to leave a task for when they're free | `queue` — deliver at the next open turn | `rimz queue @codex --on done -- "…"` |
 | to add a member or open a channel | spawn — agents × layout × worktree | `rimz agents peer --worktree=feat/x` |
 | automation to drive a member | a supervised headless run | `rimz agents codex -p "…"` (cron · CI · PR) |
-| to read the room and catch up | cards, listings, captures | `agents list` / `show` / `wait`, `pane capture`, `queue list` |
+| to read the room and catch up | cards, transcripts, listings, captures | `agents list` / `show`, `transcript`, `pane capture`, `queue list` |
 
 Everything here rides primitives both backends share: the layout compiles to backend-neutral panes, placement to a tab or a split, addressing to one shared parser, and messaging to the one pane-send primitive humans and resolvers already use.
 
@@ -65,9 +65,18 @@ Reach a member that does not exist yet and create it from the address; read the 
 rimz steer @planner#feat/x --create -- "draft the API"     # opens a planner in #feat-x, this as its first prompt
 rimz agents list                        # the cards, addressed by channel
 rimz agents show @codex#deps            # one member, with live context when active
+rimz transcript #deps                   # the fused channel conversation
 ```
 
 The rest of this doc follows a member through its life: how a spawn becomes panes, the address that names it, the talk-and-queue path that reaches it, the supervised run that drives it headless, and the cleanup that reclaims its pane. The channels members work in — Rimz-owned worktrees — are [worktree.md](./worktree.md).
+
+### Inspect the room
+
+`rimz transcript` is the catch-up surface for conversation content. A single agent target reads that agent's local transcript and groups it into turns: each turn shows the user's prompt and the turn's final assistant message, while `--details` keeps every normalized user and assistant message. The tail also shows any pending native ask from the feed, using the same `pending_ask_for` authority that gates `steer` and `queue`.
+
+A channel target reads every root agent in the channel — `#channel`, `@all#channel`, or a bare invocation in a worktree — and fuses their messages into one timestamp-ordered timeline labelled by handle. Codex rollout rows that omit timestamps inherit the last timestamp seen in that session file, so sparse progress rows stay anchored to their turn; entries with no timestamp sort after clocked messages in file order. A bare directory workspace has no current channel, so a bare `rimz transcript` reads every channel in the room.
+
+The parser core is shared with supervised streaming. Each adapter implements `parse_transcript_messages` once, returning normalized `{role, timestamp, text}` messages, and the assistant-only `wait --stream` path filters that same parse. Claude filters sidechain replay and API-error transcript entries; Codex reads `user_message` and `agent_message` rollout events and continues to ignore duplicate `response_item` rows for streaming.
 
 ## Spawn the fleet
 

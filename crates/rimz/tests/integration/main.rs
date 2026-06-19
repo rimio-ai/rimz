@@ -37,6 +37,7 @@ mod sidebar_launch;
 mod sidebar_snapshot;
 mod sidebar_unread;
 mod start;
+mod transcript;
 mod transcript_watch;
 mod trust;
 mod wakeup_pipe;

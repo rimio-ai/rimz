@@ -31,6 +31,7 @@ pub mod registry;
 pub mod spending;
 #[cfg(test)]
 pub(crate) mod testkit;
+pub mod transcript;
 pub(crate) mod transcript_fs;
 pub mod version;
 
@@ -61,6 +62,7 @@ pub use observation::AgentLifecycleObservation;
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
 pub use spending::{SpendTally, SpendWindow, Spending};
+pub use transcript::{TimelineEntry, TranscriptMessage, TranscriptRole, Turn};
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
@@ -458,11 +460,24 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Parse main-thread transcript JSONL text into normalized conversation
+    /// messages, newest last. Adapters own native event shapes and keep
+    /// sidechain/subagent replay out of this stream. Defaults to no transcript
+    /// surface.
+    fn parse_transcript_messages(&self, _lines: &str) -> Vec<transcript::TranscriptMessage> {
+        Vec::new()
+    }
+
     /// Extract newly appended main-thread assistant messages from transcript
     /// JSONL text. The CLI owns the cursor and output transport; adapters own
-    /// their native transcript event shapes. Defaults to no stream surface.
-    fn stream_assistant_messages(&self, _new_lines: &str) -> Vec<String> {
-        Vec::new()
+    /// their native transcript event shapes. Defaults to filtering the
+    /// normalized transcript parser.
+    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
+        self.parse_transcript_messages(new_lines)
+            .into_iter()
+            .filter(|message| message.role == transcript::TranscriptRole::Assistant)
+            .map(|message| message.text)
+            .collect()
     }
 
     /// Harvest per-subagent enrichment from an out-of-band render payload —

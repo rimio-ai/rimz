@@ -81,6 +81,27 @@ fn stream_assistant_messages_reads_rollout_agent_messages_only() {
 }
 
 #[test]
+fn parse_transcript_messages_reads_user_assistant_and_timestamps() {
+    let messages =
+        CodexAdapter.parse_transcript_messages(include_str!("fixtures/stream-rollout.jsonl"));
+    assert_eq!(messages.len(), 3);
+    assert_eq!(messages[0].role, TranscriptRole::User);
+    assert_eq!(messages[0].text, "prompt");
+    assert_eq!(
+        messages[0].at,
+        Some(
+            "2026-06-07T16:36:00.539Z"
+                .parse::<jiff::Timestamp>()
+                .unwrap()
+        )
+    );
+    assert_eq!(messages[1].role, TranscriptRole::Assistant);
+    assert_eq!(messages[1].text, "first update");
+    assert_eq!(messages[2].role, TranscriptRole::Assistant);
+    assert_eq!(messages[2].text, "second update");
+}
+
+#[test]
 fn turn_error_detector_maps_known_error_shapes() {
     let rate_limit = json!({
         "timestamp": "2026-06-11T07:18:00.000Z",

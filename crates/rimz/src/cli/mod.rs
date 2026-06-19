@@ -35,6 +35,7 @@ mod start_notice;
 mod stats;
 mod statusline;
 mod steer;
+mod transcript;
 mod trust;
 mod workspace;
 mod worktree;
@@ -97,6 +98,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Codex(args)) => codex::run(args, &globals),
         Some(Subcmd::Config(args)) => config::run(args, &globals),
         Some(Subcmd::Trust(args)) => trust::run(args, &globals),
+        Some(Subcmd::Transcript(args)) => transcript::run(args, &globals),
         Some(Subcmd::Doctor(args)) => doctor::run(args, &globals),
         Some(Subcmd::Setup(args)) => setup::run(args, &globals),
         Some(Subcmd::Ping) => doctor::ping(),
@@ -156,6 +158,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         }
         Some(Subcmd::Config(_)) => ("config", None, None),
         Some(Subcmd::Trust(_)) => ("trust", None, None),
+        Some(Subcmd::Transcript(_)) => ("transcript", None, None),
         Some(Subcmd::Doctor(_)) => ("doctor", None, None),
         Some(Subcmd::Setup(_)) => ("setup", None, None),
         Some(Subcmd::Ping) => ("ping", None, None),
@@ -526,6 +529,8 @@ enum Subcmd {
     Config(config::ConfigArgs),
     /// Manage the project's executable-surface trust grant.
     Trust(trust::TrustArgs),
+    /// Inspect agent or channel conversation transcripts.
+    Transcript(transcript::TranscriptArgs),
     /// Environment + backend report.
     Doctor(doctor::DoctorArgs),
     /// First-run setup report and default config bootstrap.

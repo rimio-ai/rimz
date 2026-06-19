@@ -62,9 +62,10 @@ use super::pricing::PriceBook;
 use super::{
     AccountUsageSnapshot, AgentAdapter, AgentContext, AgentErr, AgentLifecycleObservation,
     AgentTurnError, ClassifiedHook, HookInstallPreview, HookInstallReport, HookUninstallReport,
-    Result, RootIdentity, SubagentIdentity, SubagentObservation, choice_is_allow,
-    classify_agent_hook, non_empty_trimmed, optional_payload_string, read_transcript_tail,
-    resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt, stop_payload_errored,
+    Result, RootIdentity, SubagentIdentity, SubagentObservation, TranscriptMessage,
+    choice_is_allow, classify_agent_hook, non_empty_trimmed, optional_payload_string,
+    read_transcript_tail, resolve_root_identity, resolve_subagent_identity, sanitize_user_prompt,
+    stop_payload_errored,
 };
 use crate::agents::TurnErrorClass;
 use crate::feed::{FeedItem, FeedKind, Resolution};
@@ -715,8 +716,8 @@ impl AgentAdapter for ClaudeAdapter {
             })
     }
 
-    fn stream_assistant_messages(&self, new_lines: &str) -> Vec<String> {
-        statusline::assistant_messages(new_lines)
+    fn parse_transcript_messages(&self, lines: &str) -> Vec<TranscriptMessage> {
+        statusline::parse_messages(lines)
     }
 
     fn observe_subagent_context(&self, payload: &Value) -> Vec<SubagentObservation> {

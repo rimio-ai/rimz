@@ -15,6 +15,7 @@ use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
     AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource,
 };
+use crate::agents::transcript::{TranscriptMessage, TranscriptRole};
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
 /// are modelled; `#[serde(default)]` on every level keeps a sparse or
@@ -286,17 +287,25 @@ pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
     None
 }
 
-pub(crate) fn assistant_messages(lines: &str) -> Vec<String> {
+pub(crate) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
     lines
         .lines()
         .filter_map(|line| {
             let value = conversation_entry(line)?;
-            if value.get("type").and_then(Value::as_str) != Some("assistant")
-                || value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true)
-            {
-                return None;
-            }
-            assistant_text(&value)
+            let role = match value.get("type").and_then(Value::as_str) {
+                Some("user") => TranscriptRole::User,
+                Some("assistant")
+                    if value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true) =>
+                {
+                    TranscriptRole::Assistant
+                }
+                _ => return None,
+            };
+            conversation_text(&value).map(|text| TranscriptMessage {
+                role,
+                at: timestamp(&value),
+                text,
+            })
         })
         .collect()
 }
@@ -331,8 +340,19 @@ fn turn_error_label(entry: &Value) -> Option<String> {
 }
 
 fn assistant_text(entry: &Value) -> Option<String> {
+    conversation_text(entry)
+}
+
+fn conversation_text(entry: &Value) -> Option<String> {
     let content = entry.get("message")?.get("content")?;
     content_text(content)
+}
+
+fn timestamp(entry: &Value) -> Option<Timestamp> {
+    entry
+        .get("timestamp")
+        .and_then(Value::as_str)
+        .and_then(|raw| raw.parse().ok())
 }
 
 fn content_text(content: &Value) -> Option<String> {
@@ -695,8 +715,36 @@ mod tests {
 
         assert!(last_assistant_message(&tail).is_none());
 
-        let messages = assistant_messages(include_str!("tests/fixtures/stream-transcript.jsonl"));
+        let messages = parse_messages(include_str!("tests/fixtures/stream-transcript.jsonl"))
+            .into_iter()
+            .filter(|message| message.role == TranscriptRole::Assistant)
+            .map(|message| message.text)
+            .collect::<Vec<_>>();
         assert_eq!(messages, vec!["first update", "second\nline"]);
+    }
+
+    #[test]
+    fn parse_messages_reads_user_assistant_and_timestamps() {
+        let lines = concat!(
+            r#"{"type":"user","timestamp":"2026-06-04T03:00:00.000Z","message":{"content":[{"type":"text","text":"fix auth"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","timestamp":"2026-06-04T03:00:01.000Z","message":{"content":[{"type":"text","text":"done"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","isApiErrorMessage":true,"timestamp":"2026-06-04T03:00:02.000Z","message":{"content":[{"type":"text","text":"API Error: Overloaded"}]}}"#,
+            "\n",
+            r#"{"type":"assistant","isSidechain":true,"timestamp":"2026-06-04T03:00:03.000Z","message":{"content":[{"type":"text","text":"child"}]}}"#,
+            "\n",
+        );
+        let messages = parse_messages(lines);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, TranscriptRole::User);
+        assert_eq!(messages[0].text, "fix auth");
+        assert_eq!(
+            messages[0].at,
+            Some("2026-06-04T03:00:00Z".parse::<Timestamp>().unwrap())
+        );
+        assert_eq!(messages[1].role, TranscriptRole::Assistant);
+        assert_eq!(messages[1].text, "done");
     }
 
     #[test]

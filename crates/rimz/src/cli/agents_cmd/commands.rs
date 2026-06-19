@@ -1,6 +1,7 @@
 use super::*;
 
 use crate::cli::render;
+use rimz::feed::pending_ask_for;
 
 pub(super) fn list_agents(
     json: bool,
@@ -159,6 +160,11 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         }
     }
     let run = newest_run_by_ref(&ledger, &reference, agent.as_ref())?;
+    let feed_items = ledger.list_feed_items()?;
+    let ask_item = agent
+        .as_ref()
+        .and_then(|agent| pending_ask_for(agent, feed_items.iter()));
+    let ask = ask_item.map(crate::cli::transcript::ask_view);
     if json {
         #[derive(serde::Serialize)]
         struct Show<'a> {
@@ -168,11 +174,14 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
             stale: bool,
             #[serde(skip_serializing_if = "Option::is_none")]
             run: Option<RunRecord>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            ask: Option<crate::cli::transcript::AskView>,
         }
         supervised::output::print_json(&Show {
             agent: agent.as_ref(),
             stale,
             run,
+            ask,
         })?;
         return Ok(());
     }
@@ -215,6 +224,12 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         render::cell(agent_status_label(agent))
             .fg(render::status::agent(agent.status, agent.phase)),
     );
+    if let Some(ask) = ask_item {
+        kv.push(
+            "ask",
+            render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::WARN),
+        );
+    }
     if stale {
         kv.push(
             "lifecycle",
