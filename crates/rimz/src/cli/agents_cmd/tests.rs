@@ -399,6 +399,26 @@ fn launch_placement_resolves_from_flags_policy_and_feasibility() {
 }
 
 #[test]
+fn in_place_launch_downgrades_when_caller_pane_must_stay_available() {
+    assert_eq!(
+        apply_in_place_downgrade(Placement::SamePane, true, true),
+        Placement::NewPane
+    );
+    assert_eq!(
+        apply_in_place_downgrade(Placement::SamePane, false, false),
+        Placement::NewPane
+    );
+    assert_eq!(
+        apply_in_place_downgrade(Placement::NewTab, false, false),
+        Placement::NewTab
+    );
+    assert_eq!(
+        apply_in_place_downgrade(Placement::NewPane, true, false),
+        Placement::NewPane
+    );
+}
+
+#[test]
 fn explicit_new_pane_fails_fast_when_infeasible() {
     let err = resolve_placement(false, true, LaunchPlacement::Auto, false, false, true)
         .expect_err("multi-cell new-pane");

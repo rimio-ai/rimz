@@ -48,19 +48,18 @@ pub(super) fn launch_layout(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
-    let mut placement = resolve_placement(
-        args.new_tab,
-        args.new_pane,
-        machine_config.agents.placement,
-        args.worktree.is_some(),
-        single_cell,
-        rimz::mux::ambient_pane_id().is_some(),
-    )?;
-    // In-place takes over the launching pane: it cannot honor --bg, and
-    // create-on-miss must never replace the caller's pane. Downgrade to a split.
-    if placement == Placement::SamePane && (args.bg || !allow_in_place) {
-        placement = Placement::NewPane;
-    }
+    let placement = apply_in_place_downgrade(
+        resolve_placement(
+            args.new_tab,
+            args.new_pane,
+            machine_config.agents.placement,
+            args.worktree.is_some(),
+            single_cell,
+            rimz::mux::ambient_pane_id().is_some(),
+        )?,
+        args.bg,
+        allow_in_place,
+    );
     let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
@@ -214,6 +213,20 @@ pub(super) fn resolve_placement(
             feasible_or_new(Placement::SamePane, single_cell, has_launching_pane)
         }
     })
+}
+
+pub(super) fn apply_in_place_downgrade(
+    placement: Placement,
+    bg: bool,
+    allow_in_place: bool,
+) -> Placement {
+    // In-place takes over the launching pane: it cannot honor --bg, and
+    // create-on-miss must never replace the caller's pane. Downgrade to a split.
+    if placement == Placement::SamePane && (bg || !allow_in_place) {
+        Placement::NewPane
+    } else {
+        placement
+    }
 }
 
 /// In-pane placement (same pane or new pane) needs a single cell and a
