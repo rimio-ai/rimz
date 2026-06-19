@@ -567,7 +567,7 @@ pub fn sender_prefix(
     let MessageSender::Agent {
         kind,
         name,
-        alias,
+        profile,
         channel,
     } = sender
     else {
@@ -583,7 +583,7 @@ pub fn sender_prefix(
         return Some(format!("{}: ", agent_handle(agent, peers, include_channel)));
     }
     let include_channel = channel.as_deref() != target_channel;
-    let mut handle = fallback_sender_handle(kind, name.as_deref(), alias.as_deref());
+    let mut handle = fallback_sender_handle(kind, name.as_deref(), profile.as_deref());
     if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
         handle.push('#');
         handle.push_str(channel);
@@ -591,10 +591,10 @@ pub fn sender_prefix(
     Some(format!("{handle}: "))
 }
 
-fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, alias: Option<&str>) -> String {
+fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, profile: Option<&str>) -> String {
     let base = name
         .filter(|value| !value.is_empty())
-        .or_else(|| alias.filter(|value| !value.is_empty()))
+        .or_else(|| profile.filter(|value| !value.is_empty()))
         .unwrap_or_else(|| kind.as_str());
     format!("@{base}")
 }

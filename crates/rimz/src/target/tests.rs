@@ -489,7 +489,7 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
     let sender = crate::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
-        alias: None,
+        profile: None,
         channel: Some("fallback".to_owned()),
     };
 
@@ -517,7 +517,7 @@ fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
     let sender = crate::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("bright-lark".to_owned()),
-        alias: None,
+        profile: None,
         channel: Some("main".to_owned()),
     };
 
@@ -533,7 +533,7 @@ fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
     let sender = crate::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("codex"),
         name: Some("lucid-atlas".to_owned()),
-        alias: Some("reviewer".to_owned()),
+        profile: Some("reviewer".to_owned()),
         channel: Some("docs".to_owned()),
     };
 
@@ -552,13 +552,13 @@ fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
     let mut snapshot = empty_snapshot();
     let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");
     other_planner.name = Some("bright-lark".to_owned());
-    other_planner.alias = Some("planner".to_owned());
+    other_planner.profile = Some("planner".to_owned());
     snapshot.agents = vec![other_planner];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
     let sender = crate::message::MessageSender::Agent {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
-        alias: Some("planner".to_owned()),
+        profile: Some("planner".to_owned()),
         channel: Some("auth".to_owned()),
     };
 

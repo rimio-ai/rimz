@@ -24,7 +24,7 @@ pub enum MessageSender {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        alias: Option<String>,
+        profile: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<String>,
     },
@@ -44,13 +44,13 @@ impl MessageSender {
             Self::Agent {
                 kind,
                 name,
-                alias,
+                profile,
                 channel,
             } => {
                 let handle = name
                     .as_deref()
                     .filter(|value| !value.is_empty())
-                    .or_else(|| alias.as_deref().filter(|value| !value.is_empty()))
+                    .or_else(|| profile.as_deref().filter(|value| !value.is_empty()))
                     .unwrap_or_else(|| kind.as_str());
                 let mut rendered = format!("@{handle}");
                 if let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
@@ -511,7 +511,7 @@ mod tests {
         let agent_sender = MessageSender::Agent {
             kind: AgentKind::new_unchecked("claude"),
             name: Some("lucid-atlas".to_owned()),
-            alias: Some("planner".to_owned()),
+            profile: Some("planner".to_owned()),
             channel: Some("main".to_owned()),
         };
         let attributed = base.with_sender(agent_sender.clone());
@@ -532,7 +532,7 @@ mod tests {
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("claude"),
                 name: Some("lucid-atlas".to_owned()),
-                alias: Some("planner".to_owned()),
+                profile: Some("planner".to_owned()),
                 channel: Some("docs".to_owned()),
             }
             .render(),
@@ -542,7 +542,7 @@ mod tests {
             MessageSender::Agent {
                 kind: AgentKind::new_unchecked("codex"),
                 name: None,
-                alias: None,
+                profile: None,
                 channel: None,
             }
             .render(),

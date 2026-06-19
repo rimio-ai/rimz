@@ -99,7 +99,7 @@ fn full_launch_env_marks_agent_kind() {
         Some("swift-otter")
     );
     assert_eq!(
-        env.get(rimz::run::ENV_AGENT_ALIAS).map(String::as_str),
+        env.get(rimz::run::ENV_AGENT_PROFILE).map(String::as_str),
         Some("planner")
     );
 }

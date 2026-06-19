@@ -384,7 +384,7 @@ mod tests {
         let sender = MessageSender::Agent {
             kind: AgentKind::new_unchecked("codex"),
             name: Some("swift-otter".to_owned()),
-            alias: None,
+            profile: None,
             channel: Some("docs".to_owned()),
         };
         let message = message(&workspace_id).with_sender(sender.clone());

@@ -83,7 +83,7 @@ pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSe
     MessageSender::Agent {
         kind: AgentKind::new_unchecked(kind),
         name: env_string(rimz::run::ENV_AGENT_NAME),
-        alias: env_string(rimz::run::ENV_AGENT_ALIAS),
+        profile: env_string(rimz::run::ENV_AGENT_PROFILE),
         channel: channel.map(ToOwned::to_owned),
     }
 }
