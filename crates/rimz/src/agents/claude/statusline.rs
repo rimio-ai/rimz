@@ -15,7 +15,10 @@ use crate::agents::context::{
     AgentContext, AgentCost, AgentCurrentUsage, AgentPullRequest, AgentRateLimits, AgentTokenUsage,
     AgentTurnError, RateLimitWindow, TurnErrorClass, WindowSource,
 };
-use crate::agents::transcript::{TranscriptMessage, TranscriptRole};
+use crate::agents::{
+    sanitize_user_prompt,
+    transcript::{TranscriptMessage, TranscriptRole},
+};
 
 /// The statusline payload Claude pipes on stdin. Only the fields Rimz projects
 /// are modelled; `#[serde(default)]` on every level keeps a sparse or
@@ -282,7 +285,7 @@ pub(crate) fn last_assistant_message(tail: &str) -> Option<String> {
         if value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true) {
             return None;
         }
-        return assistant_text(&value);
+        return conversation_text(&value);
     }
     None
 }
@@ -293,7 +296,12 @@ pub(crate) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
         .filter_map(|line| {
             let value = conversation_entry(line)?;
             let role = match value.get("type").and_then(Value::as_str) {
-                Some("user") => TranscriptRole::User,
+                Some("user") => {
+                    if value.get("isMeta").and_then(Value::as_bool) == Some(true) {
+                        return None;
+                    }
+                    TranscriptRole::User
+                }
                 Some("assistant")
                     if value.get("isApiErrorMessage").and_then(Value::as_bool) != Some(true) =>
                 {
@@ -301,7 +309,11 @@ pub(crate) fn parse_messages(lines: &str) -> Vec<TranscriptMessage> {
                 }
                 _ => return None,
             };
-            conversation_text(&value).map(|text| TranscriptMessage {
+            let text = match role {
+                TranscriptRole::User => sanitize_user_prompt(conversation_text(&value).as_deref())?,
+                TranscriptRole::Assistant => conversation_text(&value)?,
+            };
+            Some(TranscriptMessage {
                 role,
                 at: timestamp(&value),
                 text,
@@ -337,10 +349,6 @@ fn turn_error_label(entry: &Value) -> Option<String> {
         _ => return None,
     };
     cap_turn_error_label(text)
-}
-
-fn assistant_text(entry: &Value) -> Option<String> {
-    conversation_text(entry)
 }
 
 fn conversation_text(entry: &Value) -> Option<String> {
@@ -727,6 +735,10 @@ mod tests {
     fn parse_messages_reads_user_assistant_and_timestamps() {
         let lines = concat!(
             r#"{"type":"user","timestamp":"2026-06-04T03:00:00.000Z","message":{"content":[{"type":"text","text":"fix auth"}]}}"#,
+            "\n",
+            r#"{"type":"user","isMeta":true,"timestamp":"2026-06-04T03:00:00.500Z","message":{"content":"Caveat: generated context"}}"#,
+            "\n",
+            r#"{"type":"user","timestamp":"2026-06-04T03:00:00.750Z","message":{"content":"<local-command-stdout>pwd</local-command-stdout>"}}"#,
             "\n",
             r#"{"type":"assistant","timestamp":"2026-06-04T03:00:01.000Z","message":{"content":[{"type":"text","text":"done"}]}}"#,
             "\n",

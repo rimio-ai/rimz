@@ -224,7 +224,7 @@ pub(super) fn show_agent(reference: String, json: bool, globals: &GlobalFlags) -
         render::cell(agent_status_label(agent))
             .fg(render::status::agent(agent.status, agent.phase)),
     );
-    if let Some(ask) = ask_item {
+    if let Some(ask) = ask.as_ref() {
         kv.push(
             "ask",
             render::cell(crate::cli::transcript::ask_summary(ask)).fg(render::palette::WARN),

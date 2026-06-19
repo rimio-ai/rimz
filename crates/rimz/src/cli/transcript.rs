@@ -277,9 +277,9 @@ pub(crate) fn ask_view(item: &FeedItem) -> AskView {
     }
 }
 
-pub(crate) fn ask_summary(item: &FeedItem) -> String {
-    let mut text = item.title.clone();
-    if let Some(body) = item
+pub(crate) fn ask_summary(ask: &AskView) -> String {
+    let mut text = ask.title.clone();
+    if let Some(body) = ask
         .body
         .as_deref()
         .map(str::trim)
@@ -288,9 +288,9 @@ pub(crate) fn ask_summary(item: &FeedItem) -> String {
         text.push_str(": ");
         text.push_str(body);
     }
-    if !item.options.is_empty() {
+    if !ask.options.is_empty() {
         text.push_str(" [");
-        text.push_str(&item.options.join(", "));
+        text.push_str(&ask.options.join(", "));
         text.push(']');
     }
     text
@@ -353,21 +353,7 @@ fn write_message(out: &mut impl Write, prefix: &str, text: &str) -> Result<()> {
 
 fn write_ask_view(out: &mut impl Write, agent: Option<&str>, ask: &AskView) -> Result<()> {
     let prefix = agent.map_or_else(|| "ask".to_owned(), |agent| format!("ask {agent}"));
-    let mut summary = ask.title.clone();
-    if let Some(body) = ask
-        .body
-        .as_deref()
-        .map(str::trim)
-        .filter(|body| !body.is_empty())
-    {
-        summary.push_str(": ");
-        summary.push_str(body);
-    }
-    if !ask.options.is_empty() {
-        summary.push_str(" [");
-        summary.push_str(&ask.options.join(", "));
-        summary.push(']');
-    }
+    let summary = ask_summary(ask);
     writeln!(
         out,
         "{}: {}",
