@@ -45,7 +45,7 @@ fn claude_commands_and_permission_args_match_run_posture() {
 
     assert_eq!(
         ClaudeAdapter.permission_args(PermissionMode::Auto),
-        vec!["--permission-mode", "acceptEdits"]
+        vec!["--permission-mode", "auto"]
     );
     assert!(
         ClaudeAdapter

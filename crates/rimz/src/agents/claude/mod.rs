@@ -364,7 +364,7 @@ impl AgentAdapter for ClaudeAdapter {
 
     fn permission_args(&self, mode: PermissionMode) -> Vec<String> {
         match mode {
-            PermissionMode::Auto => vec!["--permission-mode".to_owned(), "acceptEdits".to_owned()],
+            PermissionMode::Auto => vec!["--permission-mode".to_owned(), "auto".to_owned()],
             PermissionMode::Ask => Vec::new(),
             PermissionMode::Yolo => vec!["--dangerously-skip-permissions".to_owned()],
             PermissionMode::Plan => vec!["--permission-mode".to_owned(), "plan".to_owned()],
