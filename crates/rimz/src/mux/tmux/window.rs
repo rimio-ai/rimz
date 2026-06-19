@@ -186,6 +186,10 @@ impl TmuxBackend {
                     if focus_window.is_none() && !window_id.is_empty() {
                         focus_window = Some(window_id.clone());
                     }
+                    // Leave tmux's window layout alone after the hook docks the
+                    // sidebar: `select-layout` retiles every pane in the window,
+                    // including the managed left sidebar. Additional agents split
+                    // the active work area and preserve the sidebar's fixed width.
                     for argv in tab.panes.iter().skip(1) {
                         if let Err(err) = self
                             .cmd()
@@ -209,15 +213,6 @@ impl TmuxBackend {
                             );
                         }
                     }
-                    let _ = self
-                        .cmd()
-                        .args([
-                            "select-layout".to_owned(),
-                            "-t".to_owned(),
-                            window_id,
-                            "tiled".to_owned(),
-                        ])
-                        .run();
                 }
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,

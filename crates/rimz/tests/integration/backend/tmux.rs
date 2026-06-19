@@ -758,6 +758,11 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         agent_panes, 3,
         "resumed window should be born sidebar | agents"
     );
+    assert_eq!(
+        left_pane_width(&server, "rimz-resume:#feature"),
+        Some(u64::from(sidebar.birth_size.cols.get())),
+        "resume seeding keeps the hook-docked sidebar at the birth width"
+    );
 
     // A re-run finds the window already present and seeds nothing new.
     server
