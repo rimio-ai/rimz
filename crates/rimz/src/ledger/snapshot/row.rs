@@ -442,6 +442,11 @@ pub struct SidebarSubAgent {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub started_at: Option<Timestamp>,
     pub last_activity: Timestamp,
+    /// The child's registration instant, copied from `AgentState.registered_at`.
+    /// This is the spawn-order sort key: present from first observation and
+    /// stable across refreshes, unlike the enrichment-fed `started_at`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registered_at: Option<Timestamp>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

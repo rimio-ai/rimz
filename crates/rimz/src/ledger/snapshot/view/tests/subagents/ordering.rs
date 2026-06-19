@@ -2,26 +2,31 @@ use super::*;
 
 #[test]
 fn sub_agents_sort_by_creation_time_ascending() {
-    // Spawn order, not activity, keys the list: the child that started
-    // first leads however fresh its siblings' activity is, so the list
-    // holds still across refreshes. A child with no reported start time
-    // sorts after the dated ones, by id.
+    // Spawn order, not sidecar start time or activity, keys the list: the
+    // child's durable `registered_at` leads, so the list holds still across
+    // refreshes. A child with no registration instant sorts after the dated
+    // ones, by id.
     let parent = agent("claude", "sess-root", AgentStatus::Running, 100);
-    // The youngest-started child is the most recently active — an
-    // activity-keyed sort would lead with it; creation order must not.
-    let mut first = child_state("sess-root", "c-late-id", AgentStatus::Idle, 40);
-    first.subagent_started_at = Some(ago(90));
-    let mut second = child_state("sess-root", "c-early-id", AgentStatus::Running, 2);
-    second.subagent_started_at = Some(ago(60));
-    let undated = child_state("sess-root", "c-undated", AgentStatus::Running, 1);
+    let mut first = child_state("sess-root", "c-first-spawn", AgentStatus::Idle, 40);
+    first.registered_at = Some(ago(90));
+    first.subagent_started_at = Some(ago(10));
+    let mut second = child_state("sess-root", "c-second-spawn", AgentStatus::Running, 2);
+    second.registered_at = Some(ago(60));
+    second.subagent_started_at = Some(ago(120));
+    let mut unregistered = child_state("sess-root", "c-unregistered", AgentStatus::Running, 1);
+    unregistered.registered_at = None;
+    unregistered.subagent_started_at = Some(ago(180));
     let mut rows = vec![row_from_agent(&parent, epoch())];
     attach_sub_agents(
         &mut rows,
-        &[parent.clone(), undated, second, first],
+        &[parent.clone(), unregistered, second, first],
         epoch(),
     );
     let ids: Vec<&str> = rows[0].sub_agents().iter().map(|s| s.id.as_str()).collect();
-    assert_eq!(ids, vec!["c-late-id", "c-early-id", "c-undated"]);
+    assert_eq!(
+        ids,
+        vec!["c-first-spawn", "c-second-spawn", "c-unregistered"]
+    );
 }
 
 #[test]

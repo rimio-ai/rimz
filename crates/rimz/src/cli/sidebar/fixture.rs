@@ -217,6 +217,7 @@ fn agent_row(
                 elapsed_secs: Some(180),
                 started_at: Some(now),
                 last_activity: now,
+                registered_at: Some(now),
             },
             rimz::SidebarSubAgent {
                 id: "child:test".to_owned(),
@@ -231,6 +232,7 @@ fn agent_row(
                 elapsed_secs: Some(260),
                 started_at: Some(now),
                 last_activity: now,
+                registered_at: Some(now),
             },
         ];
     }

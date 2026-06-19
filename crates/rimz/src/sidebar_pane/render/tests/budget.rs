@@ -32,6 +32,7 @@ fn sub_agent(parent: &str, index: usize) -> SidebarSubAgent {
         elapsed_secs: Some(90 + index as i64),
         started_at: Some(now),
         last_activity: now,
+        registered_at: Some(now),
     }
 }
 

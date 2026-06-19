@@ -91,7 +91,7 @@ pub(in crate::ledger::snapshot) fn attach_sub_agents(
             .sort_by(|a, b| a.id.cmp(&b.id).then(b.last_activity.cmp(&a.last_activity)));
         agent.sub_agents.dedup_by(|a, b| a.id == b.id);
         agent.sub_agents.sort_by(|a, b| {
-            cmp_start_asc(a.started_at, b.started_at).then_with(|| a.id.cmp(&b.id))
+            cmp_start_asc(a.registered_at, b.registered_at).then_with(|| a.id.cmp(&b.id))
         });
     }
 }
@@ -166,6 +166,7 @@ pub(in crate::ledger::snapshot) fn sub_agent_from_state(
         elapsed_secs,
         started_at: child.subagent_started_at,
         last_activity: child.last_activity,
+        registered_at: child.registered_at,
     }
 }
 

@@ -399,6 +399,7 @@ fn selected_pet_action_follows_the_focused_card() {
             elapsed_secs: None,
             started_at: None,
             last_activity: fixed_now(),
+            registered_at: Some(fixed_now()),
         });
     assert_eq!(
         selected_pet_action(&subagent, &UiState::default()),
