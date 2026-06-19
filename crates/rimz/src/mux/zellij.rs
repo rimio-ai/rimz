@@ -307,6 +307,13 @@ impl ZellijBackend {
             .map(|_| ())
     }
 
+    pub(super) fn go_to_tab_id(&self, session: &str, tab_id: u64) -> Result<()> {
+        self.zellij_action(session)
+            .args(["go-to-tab-by-id".to_owned(), tab_id.to_string()])
+            .run()
+            .map(|_| ())
+    }
+
     pub(super) fn close_pane(&self, session: &str, pane: &PaneId) -> Result<()> {
         self.zellij_action(session)
             .args([

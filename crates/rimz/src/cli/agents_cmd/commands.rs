@@ -412,6 +412,23 @@ fn close_agent_pane(workspace: &rimz::ResolvedWorkspace, agent: &AgentState) -> 
         .map_err(Into::into)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum RunPlacement {
+    Split,
+    Tab,
+}
+
+/// A supervised `-p` run hosts its agent pane in a split of the current tab so
+/// focus stays with the caller; it opens a new tab only when forced or when
+/// there is no ambient pane to split.
+pub(super) fn run_placement(force_new_tab: bool, has_ambient_pane: bool) -> RunPlacement {
+    if force_new_tab || !has_ambient_pane {
+        RunPlacement::Tab
+    } else {
+        RunPlacement::Split
+    }
+}
+
 pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     if args.json {
         bail!("on `-p`, choose output with `--output-format json` (`--json` is for `list`)");
@@ -571,16 +588,28 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         .as_ref()
         .map(|(_sock, sock_path)| SocketGuard::new(sock_path.clone()));
     rimz::run::create(ledger.paths(), &record).context("recording run")?;
-    let open_result = backend.open_tab(&TabOptions {
-        session_name: workspace.session_name.clone(),
-        title: format!("run: {}", adapter.descriptor().kind),
-        cwd: launch.cwd.clone(),
-        panes: LayoutPanes {
-            columns: vec![vec![pane]],
-        },
-        focus: false,
-        sidebar: crate::cli::build_sidebar_opts(&room, Vec::new())?,
-    });
+    let target = own_pane_id(mux);
+    let open_result = match run_placement(args.new_tab, target.is_some()) {
+        RunPlacement::Split => backend
+            .split_pane(SplitPaneOptions {
+                target_pane_id: target,
+                cwd: Some(launch.cwd.to_string_lossy().into_owned()),
+                command: Some(pane.argv.clone()),
+                env: crate::cli::agents_launch::launch_identity_env(&workspace),
+                focus: false,
+            })
+            .map_err(Into::into),
+        RunPlacement::Tab => backend.open_tab(&TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: format!("run: {}", adapter.descriptor().kind),
+            cwd: launch.cwd.clone(),
+            panes: LayoutPanes {
+                columns: vec![vec![pane]],
+            },
+            focus: false,
+            sidebar: crate::cli::build_sidebar_opts(&room, Vec::new())?,
+        }),
+    };
     if let Err(err) = open_result {
         let _ = rimz::run::fail(ledger.paths(), &run_id);
         let _ = append_launch_event(
@@ -595,7 +624,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
                 pane_id: None,
             },
         );
-        return Err(err).context("opening run tab");
+        return Err(err).context("opening run pane");
     }
     if args.detach {
         #[expect(clippy::print_stdout, reason = "command result is the agent name")]

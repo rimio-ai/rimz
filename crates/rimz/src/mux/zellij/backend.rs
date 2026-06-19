@@ -39,6 +39,32 @@ fn env_prefixed(env: &BTreeMap<String, String>, command: Vec<String>) -> Vec<Str
     wrapped
 }
 
+#[derive(Clone, Debug)]
+struct FocusRestoreTarget {
+    pane: PaneId,
+    tab_id: u64,
+}
+
+impl ZellijBackend {
+    fn focus_restore_target(&self, session_name: &str) -> Option<FocusRestoreTarget> {
+        let pane = self
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some(session_name.to_owned()),
+                command_timeout: None,
+            })
+            .ok()?
+            .pop()?;
+        let raw_id = parse_zellij_raw(&pane)?;
+        let tab_id = self
+            .list_panes_with_session(Some(session_name))
+            .ok()?
+            .into_iter()
+            .find(|candidate| candidate.is_terminal() && candidate.id == raw_id)
+            .map(|candidate| candidate.tab_id)?;
+        Some(FocusRestoreTarget { pane, tab_id })
+    }
+}
+
 impl MuxBackend for ZellijBackend {
     fn name(&self) -> MuxName {
         MuxName::Zellij
@@ -475,6 +501,13 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn open_tab(&self, opts: &TabOptions) -> Result<()> {
+        // Zellij always focuses `new-tab`; tmux gets unfocused opens from
+        // `new-window -d`. Capture the attached client's pane and tab id first
+        // and restore both after the tab exists, falling back to the lead tab
+        // only for detached sessions where there is no client focus to restore.
+        let restore = (!opts.focus)
+            .then(|| self.focus_restore_target(&opts.session_name))
+            .flatten();
         let template_sidebar_cols = self
             .new_tab_template_sidebar_cols(&opts.session_name)
             .ok()
@@ -490,15 +523,21 @@ impl MuxBackend for ZellijBackend {
             ])
             .run()?;
         drop(layout);
-        if !opts.focus
-            && let Err(err) = self.go_to_tab(&opts.session_name, 1)
-        {
-            tracing::warn!(
-                session = %opts.session_name,
-                tags.operation = "zellij.focus_tab",
-                error = &err as &dyn std::error::Error,
-                "could not return focus after opening an unfocused tab",
-            );
+        if !opts.focus {
+            let result = match &restore {
+                Some(restore) => self
+                    .go_to_tab_id(&opts.session_name, restore.tab_id)
+                    .and_then(|_| self.focus_pane(&restore.pane)),
+                None => self.go_to_tab(&opts.session_name, 1),
+            };
+            if let Err(err) = result {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    tags.operation = "zellij.focus_tab",
+                    error = &err as &dyn std::error::Error,
+                    "could not return focus after opening an unfocused tab",
+                );
+            }
         }
         Ok(())
     }

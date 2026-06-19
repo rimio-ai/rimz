@@ -399,6 +399,21 @@ fn launch_placement_resolves_from_flags_policy_and_feasibility() {
 }
 
 #[test]
+fn run_placement_splits_when_current_pane_is_available() {
+    assert_eq!(run_placement(false, true), RunPlacement::Split);
+}
+
+#[test]
+fn run_placement_opens_tab_when_forced() {
+    assert_eq!(run_placement(true, true), RunPlacement::Tab);
+}
+
+#[test]
+fn run_placement_opens_tab_without_current_pane() {
+    assert_eq!(run_placement(false, false), RunPlacement::Tab);
+}
+
+#[test]
 fn in_place_launch_downgrades_when_caller_pane_must_stay_available() {
     assert_eq!(
         apply_in_place_downgrade(Placement::SamePane, true, true),

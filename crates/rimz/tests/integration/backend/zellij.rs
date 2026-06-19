@@ -450,6 +450,98 @@ fn open_sidebar_births_native_layout_and_template() {
     }
 }
 
+#[test]
+fn open_tab_unfocused_restores_attached_client_focus() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("tabfocus");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-tabfocus")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width: SidebarWidth::default(),
+        birth_size: SidebarWidth::default().birth_size(Some(200)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    wait_for_attached_client(xdg.path(), &name);
+
+    let source_tab = "focus source";
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: source_tab.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                }]],
+            },
+            focus: true,
+            sidebar: sidebar.clone(),
+        })
+        .expect("open focused source tab");
+
+    let source_panes = wait_for_named_work_pane_count(xdg.path(), &name, source_tab, 1);
+    assert_eq!(
+        source_panes.len(),
+        1,
+        "source tab should have one work pane: {source_panes:?}",
+    );
+    let source_pane =
+        PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", source_panes[0].id));
+    let focused = wait_for_focused_client_pane(&backend, &name, &source_pane);
+    assert_eq!(
+        focused,
+        vec![source_pane.clone()],
+        "the attached client should focus the source tab before the regression step: {focused:?}",
+    );
+
+    let background_tab = "background run";
+    backend
+        .open_tab(&TabOptions {
+            session_name: name.clone(),
+            title: background_tab.to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd {
+                    argv: vec!["sleep".to_owned(), "600".to_owned()],
+                }]],
+            },
+            focus: false,
+            sidebar,
+        })
+        .expect("open unfocused background tab");
+    assert_eq!(
+        wait_for_named_work_pane_count(xdg.path(), &name, background_tab, 1).len(),
+        1,
+        "background tab should open one work pane",
+    );
+
+    let focused = wait_for_focused_client_pane(&backend, &name, &source_pane);
+    assert_eq!(
+        focused,
+        vec![source_pane],
+        "unfocused open_tab must return the attached client to the source pane: {focused:?}",
+    );
+}
+
 /// Re-running `open_sidebar` against a *live* session takes the no-op arm of the
 /// session-state branch: it neither errors nor injects a second sidebar, and the
 /// 30% layout is preserved. (The exited arm — delete then rebirth — cannot be
@@ -1851,6 +1943,26 @@ fn wait_for_focused_nonplugin_id_in_tab(
     loop {
         let focused = focused_nonplugin_id_in_tab(xdg, session, tab);
         if focused == Some(want) || Instant::now() >= deadline {
+            return focused;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_focused_client_pane(
+    backend: &ZellijBackend,
+    session: &str,
+    want: &PaneId,
+) -> Vec<PaneId> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let focused = backend
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some(session.to_owned()),
+                ..Default::default()
+            })
+            .expect("focused_client_panes");
+        if focused.iter().any(|pane| pane == want) || Instant::now() >= deadline {
             return focused;
         }
         std::thread::sleep(Duration::from_millis(50));
