@@ -321,6 +321,7 @@ struct TrustRecord {
 pub struct ProjectConfig {
     pub layout: LayoutConfig,
     pub agents: Vec<AgentConfig>,
+    pub profiles: BTreeMap<String, ProjectProfile>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
 }
@@ -359,6 +360,18 @@ pub struct AgentConfig {
 
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(default)]
+pub struct ProjectProfile {
+    pub agent: String,
+    pub mode: Option<String>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    #[serde(rename = "system-prompt-file")]
+    pub system_prompt_file: Option<String>,
+    pub args: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
 pub struct HookConfig {
     pub event: String,
     pub command: String,
@@ -373,6 +386,7 @@ struct ExecutableSurface<'a> {
     layout_initial_panes: Vec<ExecutablePane<'a>>,
     layout_tmux: ExecutableTmux<'a>,
     agents: Vec<ExecutableAgent<'a>>,
+    profiles: Vec<ExecutableProfile<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
 }
@@ -397,6 +411,17 @@ struct ExecutableAgent<'a> {
     name: &'a str,
     launch_command: Option<&'a str>,
     env: &'a BTreeMap<String, String>,
+}
+
+#[derive(Serialize)]
+struct ExecutableProfile<'a> {
+    name: &'a str,
+    agent: &'a str,
+    mode: Option<&'a str>,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+    system_prompt_file: Option<&'a str>,
+    args: Option<&'a str>,
 }
 
 #[derive(Serialize)]
@@ -431,6 +456,19 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     name: a.name.as_str(),
                     launch_command: a.launch_command.as_deref(),
                     env: &a.env,
+                })
+                .collect(),
+            profiles: config
+                .profiles
+                .iter()
+                .map(|(name, p)| ExecutableProfile {
+                    name: name.as_str(),
+                    agent: p.agent.as_str(),
+                    mode: p.mode.as_deref(),
+                    model: p.model.as_deref(),
+                    effort: p.effort.as_deref(),
+                    system_prompt_file: p.system_prompt_file.as_deref(),
+                    args: p.args.as_deref(),
                 })
                 .collect(),
             hooks: config
@@ -503,6 +541,23 @@ mod tests {
         std::fs::write(
             dir.path().join(".rimz/config.toml"),
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks codex\"\n",
+        )
+        .expect("rewrite");
+
+        let report = status_with_roots(dir.path(), config.path()).expect("status");
+        assert_eq!(report.state, TrustState::Stale);
+        assert_ne!(report.current_hash, report.granted_hash);
+    }
+
+    #[test]
+    fn editing_profile_field_demotes_to_stale() {
+        let dir = project_with("[profiles.planner]\nagent = \"claude\"\nargs = \"--safe\"\n");
+        let config = tempdir().expect("config root");
+        grant_with_roots(dir.path(), config.path()).expect("grant");
+
+        std::fs::write(
+            dir.path().join(".rimz/config.toml"),
+            "[profiles.planner]\nagent = \"codex\"\nargs = \"--safe\"\n",
         )
         .expect("rewrite");
 
@@ -627,6 +682,14 @@ mod tests {
             "[layout.tmux]\npopup_command = 'fzf-projects'\n",
             "[[agents]]\nname = \"claude\"\nlaunch_command = \"claude code\"\n",
             "[[agents]]\nname = \"claude\"\nenv = { PATH = \"/opt/llms/bin\" }\n",
+            "[profiles.x]\nagent = \"claude\"\n",
+            "[profiles.x]\nagent = \"codex\"\n",
+            "[profiles.x]\nagent = \"claude\"\nmode = \"ask\"\n",
+            "[profiles.x]\nagent = \"claude\"\nmodel = \"opus\"\n",
+            "[profiles.x]\nagent = \"claude\"\neffort = \"low\"\n",
+            "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
+            "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
+            "[profiles.y]\nagent = \"claude\"\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

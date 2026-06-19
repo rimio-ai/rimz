@@ -160,11 +160,11 @@ pub struct PaneAgent {
     pub kind_ordinal: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// The `[agents.aliases]` role the bound session launched as, copied from the
-    /// rollup so a bound agent answers to `@<alias>` through its pane. `None` for
+    /// The `[agents.profiles]` profile the bound session launched as, copied from the
+    /// rollup so a bound agent answers to `@<profile>` through its pane. `None` for
     /// a lazy pane or a bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alias: Option<String>,
+    pub profile: Option<String>,
     /// The bound session, or `None` for a lazy pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,

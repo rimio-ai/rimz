@@ -88,7 +88,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         kind: crate::ids::AgentKind::new_unchecked(kind),
         name: Some(test_agent_name(agent_id)),
         kind_ordinal: Some(test_agent_ordinal(agent_id)),
-        alias: None,
+        profile: None,
         status: AgentStatus::Running,
         phase: TurnPhase::Idle,
         pane: None,

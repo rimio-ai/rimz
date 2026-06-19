@@ -125,7 +125,7 @@ fn message_agent() -> AgentState {
         kind: AgentKind::new_unchecked("claude"),
         name: None,
         kind_ordinal: None,
-        alias: None,
+        profile: None,
         status: AgentStatus::Idle,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,
@@ -253,7 +253,7 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
-        agent_alias: None,
+        agent_profile: None,
         kind_ordinal: None,
         signal,
         agent_pid: None,

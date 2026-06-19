@@ -1,12 +1,12 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::run::PermissionMode;
 
 /// Agent-launch preferences. Layout entries are shape strings whose cells
-/// resolve through alias parsing in [`crate::agents_spec`].
+/// resolve through profile/command parsing in [`crate::agents_spec`].
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
@@ -15,7 +15,9 @@ pub struct AgentsConfig {
     /// TOML (a scalar after a sub-table would bind to the wrong table).
     pub tab: TabPlacement,
     #[serde(default)]
-    pub aliases: AliasesConfig,
+    pub profiles: ProfilesConfig,
+    #[serde(default)]
+    pub commands: CommandsConfig,
     pub layouts: LayoutsConfig,
 }
 
@@ -38,89 +40,37 @@ pub enum TabPlacement {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
-pub struct AliasesConfig(pub BTreeMap<String, Alias>);
+pub struct ProfilesConfig(pub BTreeMap<String, Profile>);
 
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(untagged)]
-pub enum Alias {
-    Command(String),
-    CommandTable {
-        command: String,
-    },
-    Agent {
-        agent: String,
-        #[serde(default)]
-        mode: Option<PermissionMode>,
-        #[serde(default)]
-        model: Option<String>,
-        #[serde(default)]
-        effort: Option<String>,
-        /// A file whose contents replace the agent's base system prompt, giving
-        /// the role its own voice. Resolved relative to the config file and
-        /// existence-checked when the alias launches.
-        #[serde(
-            default,
-            rename = "system-prompt-file",
-            skip_serializing_if = "Option::is_none"
-        )]
-        system_prompt_file: Option<PathBuf>,
-        #[serde(default)]
-        args: Option<String>,
-    },
-}
-
-impl<'de> Deserialize<'de> for Alias {
-    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        match AliasInput::deserialize(deserializer)? {
-            AliasInput::Command(command) => Ok(Self::Command(command)),
-            AliasInput::CommandTable(command) => Ok(Self::CommandTable {
-                command: command.command,
-            }),
-            AliasInput::Agent(agent) => Ok(Self::Agent {
-                agent: agent.agent,
-                mode: agent.mode,
-                model: agent.model,
-                effort: agent.effort,
-                system_prompt_file: agent.system_prompt_file,
-                args: agent.args,
-            }),
-        }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(untagged)]
-enum AliasInput {
-    Command(String),
-    CommandTable(CommandKeyword),
-    Agent(AgentKeyword),
-}
-
-#[derive(Deserialize)]
+/// A named agent profile. `agent` is a base reference: either a built-in agent
+/// kind or another profile that resolves to one.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
-struct CommandKeyword {
-    command: String,
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct AgentKeyword {
-    agent: String,
+pub struct Profile {
+    pub agent: String,
     #[serde(default)]
-    mode: Option<PermissionMode>,
+    pub mode: Option<PermissionMode>,
     #[serde(default)]
-    model: Option<String>,
+    pub model: Option<String>,
     #[serde(default)]
-    effort: Option<String>,
-    #[serde(default, rename = "system-prompt-file")]
-    system_prompt_file: Option<PathBuf>,
+    pub effort: Option<String>,
+    /// A file whose contents replace the agent's base system prompt, giving the
+    /// profile its own voice. Resolved relative to the config file and
+    /// existence-checked when the profile launches.
+    #[serde(
+        default,
+        rename = "system-prompt-file",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub system_prompt_file: Option<PathBuf>,
     #[serde(default)]
-    args: Option<String>,
+    pub args: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct LayoutsConfig(pub BTreeMap<String, String>);
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct CommandsConfig(pub BTreeMap<String, String>);

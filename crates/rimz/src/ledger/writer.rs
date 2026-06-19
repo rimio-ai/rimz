@@ -640,7 +640,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: name.map(ToOwned::to_owned),
             kind_ordinal: Some(1),
-            alias: None,
+            profile: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

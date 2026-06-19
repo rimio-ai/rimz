@@ -33,7 +33,7 @@ rimz config set <KEY> <VALUE>
 
 `set` edits one dotted key, preserves comments, rejects unknown keys, validates the resulting config, and writes with Rimz's temp-file-plus-rename durability primitive. Bare values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings, so `fresh` is accepted as a string value.
 
-Dotted keys address nested TOML tables. Examples include `worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.layouts.peer`, `agents.aliases.codex-yolo.mode`, and `sidebar.providers.codex.color`.
+Dotted keys address nested TOML tables. Examples include `worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.layouts.peer`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `sidebar.providers.codex.color`.
 
 ## List themes
 

@@ -159,7 +159,7 @@ fn agent(
         kind: crate::ids::AgentKind::new_unchecked(kind),
         name: None,
         kind_ordinal: None,
-        alias: None,
+        profile: None,
         status,
         phase: crate::agents::TurnPhase::Idle,
         pane: None,

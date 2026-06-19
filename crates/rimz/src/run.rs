@@ -18,9 +18,9 @@ pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
 /// process as a Rimz-launched agent for peer-message attribution.
 pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
 pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
-/// The `[agents.aliases]` role name an agent launched as, so it answers to
-/// `@<alias>`. Set by the launch wrapper; read into the lifecycle observation.
-pub const ENV_AGENT_ALIAS: &str = "RIMZ_AGENT_ALIAS";
+/// The `[agents.profiles]` profile name an agent launched as, so it answers to
+/// `@<profile>`. Set by the launch wrapper; read into the lifecycle observation.
+pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -752,7 +752,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,

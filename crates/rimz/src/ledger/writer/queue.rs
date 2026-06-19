@@ -422,7 +422,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

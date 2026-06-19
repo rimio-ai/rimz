@@ -1,24 +1,26 @@
-//! Backend-neutral agent layout IR and alias-aware parser.
+//! Backend-neutral agent layout IR and profile/command-aware parser.
 //!
 //! Commas split columns, plus signs stack rows within a column, and each cell is
-//! an alias. Built-ins provide `term`, every registered agent kind, and
-//! `<kind>-<mode>` permission variants; per-machine `[agents.aliases]` entries can
-//! override them.
+//! a profile, a command, or a built-in cell. Built-ins provide `term`, every
+//! registered agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants;
+//! per-machine `[agents.profiles]` entries can specialize agent cells and
+//! `[agents.commands]` entries provide raw command panes.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::config::{Alias, AliasesConfig, LayoutsConfig};
+use crate::config::{CommandsConfig, LayoutsConfig, Profile, ProfilesConfig};
 use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
-const RESERVED_ALIAS_AND_LAYOUT_NAMES: &[&str] = &[
+const RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES: &[&str] = &[
     "list", "ls", "show", "stop", "focus", "wait", "term", "exec",
 ];
+pub const MAX_PROFILE_DEPTH: usize = 16;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutSpec {
@@ -62,11 +64,12 @@ pub enum Cell {
         kind: AgentKind,
         args: Vec<String>,
         mode: Option<PermissionMode>,
-        /// The `[agents.aliases]` name this cell launched as, when it came from
-        /// a named role preset (`planner`, `codex-yolo`). Stamped onto the agent
-        /// as `RIMZ_AGENT_ALIAS` so it answers to `@<alias>`; `None` for a bare
-        /// kind or virtual variant.
-        alias: Option<String>,
+        /// The `[agents.profiles]` name this cell launched as, when it came
+        /// from a named profile (`planner`) or a kind-default override
+        /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the agent as
+        /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`; `None` for a
+        /// bare built-in kind or virtual variant without an override.
+        profile: Option<String>,
     },
     Command {
         argv: Vec<String>,
@@ -79,12 +82,36 @@ impl Cell {
             kind,
             args: Vec::new(),
             mode: None,
-            alias: None,
+            profile: None,
         }
     }
 
     pub fn shell() -> Self {
         Self::Command { argv: Vec::new() }
+    }
+}
+
+/// A profile chain flattened to the concrete adapter kind that can be executed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ResolvedProfile {
+    pub kind: AgentKind,
+    pub mode: Option<PermissionMode>,
+    pub model: Option<String>,
+    pub effort: Option<String>,
+    pub system_prompt_file: Option<PathBuf>,
+    pub args: Option<String>,
+}
+
+impl ResolvedProfile {
+    fn bare(kind: &str) -> Self {
+        Self {
+            kind: AgentKind::new_unchecked(kind),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: None,
+            args: None,
+        }
     }
 }
 
@@ -95,11 +122,11 @@ pub enum LayoutErr {
     #[error("empty layout cell in `{0}`")]
     EmptyCell(String),
     #[error(
-        "unknown layout cell `{cell}`; define it under [agents.aliases] or use one of: {valid}"
+        "unknown layout cell `{cell}`; define it under [agents.profiles] or [agents.commands], or use one of: {valid}"
     )]
     UnknownCell { cell: String, valid: String },
     #[error(
-        "unknown layout `{layout}`; define it under [agents.layouts] or pass an inline alias spec; valid layouts: {valid_layouts}; valid cells: {valid_cells}"
+        "unknown layout `{layout}`; define it under [agents.layouts] or pass an inline profile/command spec; valid layouts: {valid_layouts}; valid cells: {valid_cells}"
     )]
     UnknownLayout {
         layout: String,
@@ -107,40 +134,52 @@ pub enum LayoutErr {
         valid_cells: String,
     },
     #[error(
-        "layout name `{0}` is reserved for an inline alias cell; choose another [agents.layouts] name"
+        "layout name `{0}` is reserved for an inline profile/command cell; choose another [agents.layouts] name"
     )]
     ReservedLayoutName(String),
-    #[error("invalid alias `{alias}`: {reason}")]
-    InvalidAlias { alias: String, reason: String },
-    #[error("alias `{alias}` names unknown agent `{agent}`")]
-    UnknownAliasAgent { alias: String, agent: String },
+    #[error("invalid profile `{profile}`: {reason}")]
+    InvalidProfile { profile: String, reason: String },
+    #[error("invalid command `{command}`: {reason}")]
+    InvalidCommand { command: String, reason: String },
+    #[error("profile `{profile}` references unknown base `{base}`")]
+    UnknownProfileBase { profile: String, base: String },
+    #[error("profile inheritance cycle: {chain}")]
+    ProfileCycle { chain: String },
+    #[error("profile `{profile}` inheritance chain is deeper than {MAX_PROFILE_DEPTH}")]
+    ProfileChainTooDeep { profile: String },
     #[error(
-        "invalid alias name `{name}`; aliases cannot be empty or contain whitespace, `,`, or `+`"
+        "repo profile `{profile}` references machine-only profile `{base}`; repo profiles may inherit only repo profiles or built-in agent kinds"
     )]
-    InvalidAliasName { name: String },
-    #[error("alias name `{name}` is reserved for `rimz agents`")]
-    ReservedAliasName { name: String },
+    RepoProfileEscapesTrust { profile: String, base: String },
     #[error(
-        "alias name `{name}` clashes with the agent-address grammar ({reason}); rename it so `@{name}` is unambiguous"
+        "invalid profile name `{name}`; profiles cannot be empty or contain whitespace, `,`, or `+`"
     )]
-    AliasShadowsAddress { name: String, reason: &'static str },
+    InvalidProfileName { name: String },
+    #[error("profile name `{name}` is reserved for `rimz agents`")]
+    ReservedProfileName { name: String },
+    #[error(
+        "profile name `{name}` clashes with the agent-address grammar ({reason}); rename it so `@{name}` is unambiguous"
+    )]
+    ProfileShadowsAddress { name: String, reason: &'static str },
+    #[error(
+        "invalid command name `{name}`; commands cannot be empty or contain whitespace, `,`, or `+`"
+    )]
+    InvalidCommandName { name: String },
+    #[error("command name `{name}` is reserved for `rimz agents`")]
+    ReservedCommandName { name: String },
 }
 
 pub type Result<T> = std::result::Result<T, LayoutErr>;
 
-/// Resolve each agent role's `system-prompt-file` against `config_dir` so the
-/// path is correct wherever the role later launches: `~` expands to the home
-/// directory and a relative path roots at the config file's directory, not the
-/// agent's launch cwd. Pure — the file's existence is checked at the launch
+/// Resolve each agent profile's `system-prompt-file` against `config_dir` so
+/// the path is correct wherever the profile later launches: `~` expands to the
+/// home directory and a relative path roots at the config file's directory, not
+/// the agent's launch cwd. Pure — the file's existence is checked at the launch
 /// entry point, not here, so a moved prompt never breaks an unrelated config
 /// read.
-pub fn resolve_alias_prompt_paths(aliases: &mut AliasesConfig, config_dir: &Path) {
-    for alias in aliases.0.values_mut() {
-        if let Alias::Agent {
-            system_prompt_file: Some(path),
-            ..
-        } = alias
-        {
+pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, config_dir: &Path) {
+    for profile in profiles.0.values_mut() {
+        if let Some(path) = profile.system_prompt_file.as_mut() {
             let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
             *path = if expanded.is_absolute() {
                 expanded
@@ -151,55 +190,136 @@ pub fn resolve_alias_prompt_paths(aliases: &mut AliasesConfig, config_dir: &Path
     }
 }
 
-pub fn validate_config(aliases: &AliasesConfig, layouts: &LayoutsConfig) -> Result<()> {
-    validate_alias_names(aliases)?;
+pub fn validate_config(
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    layouts: &LayoutsConfig,
+) -> Result<()> {
+    validate_profile_names(profiles)?;
+    validate_command_names(commands)?;
     validate_layout_names(layouts)?;
-    for (name, alias) in &aliases.0 {
-        expand_alias(name, alias)?;
-    }
     for name in layouts.0.keys() {
-        if is_cell_word(name, aliases) {
+        if is_cell_word(name, profiles, commands) {
             return Err(LayoutErr::ReservedLayoutName(name.clone()));
         }
     }
     for shape in layouts.0.values() {
-        parse_layout_spec_validated(shape, aliases)?;
+        validate_layout_shape(shape, profiles, commands)?;
     }
     Ok(())
 }
 
-pub fn parse_layout_spec(raw: &str, aliases: &AliasesConfig) -> Result<LayoutSpec> {
-    validate_alias_names(aliases)?;
-    parse_layout_spec_validated(raw, aliases)
+pub fn parse_layout_spec(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<LayoutSpec> {
+    validate_profile_names(profiles)?;
+    validate_command_names(commands)?;
+    parse_layout_spec_validated(raw, profiles, commands)
 }
 
 pub fn resolve_layout(
     arg: Option<&str>,
-    aliases: &AliasesConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
     layouts: &LayoutsConfig,
 ) -> Result<LayoutSpec> {
-    validate_alias_names(aliases)?;
+    validate_profile_names(profiles)?;
+    validate_command_names(commands)?;
     validate_layout_names(layouts)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
     if let Some(shape) = layouts.0.get(raw) {
-        if is_cell_word(raw, aliases) {
+        if is_cell_word(raw, profiles, commands) {
             return Err(LayoutErr::ReservedLayoutName(raw.to_owned()));
         }
-        return parse_layout_spec_validated(shape, aliases);
+        return parse_layout_spec_validated(shape, profiles, commands);
     }
-    if is_inline_spec(raw, aliases) {
-        return parse_layout_spec_validated(raw, aliases);
+    if is_inline_spec(raw, profiles, commands) {
+        return parse_layout_spec_validated(raw, profiles, commands);
     }
     if raw == "peer" {
-        return parse_layout_spec_validated(BUILTIN_PEER, aliases);
+        return parse_layout_spec_validated(BUILTIN_PEER, profiles, commands);
     }
     Err(LayoutErr::UnknownLayout {
         layout: raw.to_owned(),
         valid_layouts: valid_layouts(layouts),
-        valid_cells: valid_cells(aliases),
+        valid_cells: valid_cells(profiles, commands),
     })
+}
+
+/// Resolve `name` through profile inheritance to a concrete built-in kind.
+pub fn resolve_profile(name: &str, profiles: &ProfilesConfig) -> Result<ResolvedProfile> {
+    let mut cur = name.to_owned();
+    let mut seen = Vec::<String>::new();
+    let mut layers = Vec::<Profile>::new();
+    let terminal_kind = loop {
+        if layers.len() >= MAX_PROFILE_DEPTH {
+            return Err(LayoutErr::ProfileChainTooDeep {
+                profile: name.to_owned(),
+            });
+        }
+        let Some(profile) = profiles.0.get(&cur) else {
+            return Err(LayoutErr::UnknownProfileBase {
+                profile: name.to_owned(),
+                base: cur,
+            });
+        };
+        seen.push(cur.clone());
+        layers.push(profile.clone());
+        let next = profile.agent.as_str();
+        if next == cur && crate::agents::find_adapter(next).is_some() {
+            break next.to_owned();
+        }
+        if profiles.0.contains_key(next) {
+            if seen.iter().any(|visited| visited == next) {
+                let mut chain = seen;
+                chain.push(next.to_owned());
+                return Err(LayoutErr::ProfileCycle {
+                    chain: chain.join(" -> "),
+                });
+            }
+            cur = next.to_owned();
+            continue;
+        }
+        if crate::agents::find_adapter(next).is_some() {
+            break next.to_owned();
+        }
+        return Err(LayoutErr::UnknownProfileBase {
+            profile: cur,
+            base: next.to_owned(),
+        });
+    };
+
+    let mut resolved = ResolvedProfile::bare(&terminal_kind);
+    for layer in &layers {
+        if resolved.mode.is_none() {
+            resolved.mode = layer.mode;
+        }
+        if resolved.model.is_none() {
+            resolved.model = layer.model.clone();
+        }
+        if resolved.effort.is_none() {
+            resolved.effort = layer.effort.clone();
+        }
+        if resolved.system_prompt_file.is_none() {
+            resolved.system_prompt_file = layer.system_prompt_file.clone();
+        }
+        if resolved.args.is_none() {
+            resolved.args = layer.args.clone();
+        }
+    }
+    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    adapter
+        .render_preset(&profile_preset(&resolved))
+        .map_err(|err| LayoutErr::InvalidProfile {
+            profile: name.to_owned(),
+            reason: err.to_string(),
+        })?;
+    Ok(resolved)
 }
 
 /// The default tab title for a launch. A worktree launch shows the worktree
@@ -219,18 +339,22 @@ pub fn default_tab_title(
     crate::resume::build_label(kind, None, cwd)
 }
 
-pub fn is_known_layout_token(raw: &str, aliases: &AliasesConfig, layouts: &LayoutsConfig) -> bool {
+pub fn is_known_layout_token(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+    layouts: &LayoutsConfig,
+) -> bool {
     let raw = raw.trim();
     !raw.is_empty()
-        && (layouts.0.contains_key(raw)
-            || raw == "peer"
-            || aliases.0.contains_key(raw)
-            || raw == "term"
-            || crate::agents::find_adapter(raw).is_some()
-            || virtual_agent_args(raw).is_some())
+        && (layouts.0.contains_key(raw) || raw == "peer" || is_cell_word(raw, profiles, commands))
 }
 
-fn parse_layout_spec_validated(raw: &str, aliases: &AliasesConfig) -> Result<LayoutSpec> {
+fn parse_layout_spec_validated(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<LayoutSpec> {
     let raw = raw.trim();
     if raw.is_empty() {
         return Err(LayoutErr::Empty);
@@ -247,28 +371,62 @@ fn parse_layout_spec_validated(raw: &str, aliases: &AliasesConfig) -> Result<Lay
             if cell_raw.is_empty() {
                 return Err(LayoutErr::EmptyCell(raw.to_owned()));
             }
-            rows.push(parse_cell(cell_raw, aliases)?);
+            rows.push(parse_cell(cell_raw, profiles, commands)?);
         }
         columns.push(Column { rows });
     }
     Ok(LayoutSpec { columns })
 }
 
-fn is_inline_spec(raw: &str, aliases: &AliasesConfig) -> bool {
-    raw.contains([',', '+']) || is_cell_word(raw, aliases)
+fn validate_layout_shape(
+    raw: &str,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(LayoutErr::Empty);
+    }
+    for column_raw in raw.split(',') {
+        if column_raw.trim().is_empty() {
+            return Err(LayoutErr::EmptyCell(raw.to_owned()));
+        }
+        for cell_raw in column_raw.split('+') {
+            let cell_raw = cell_raw.trim();
+            if cell_raw.is_empty() {
+                return Err(LayoutErr::EmptyCell(raw.to_owned()));
+            }
+            if !is_cell_word(cell_raw, profiles, commands) {
+                return Err(LayoutErr::UnknownCell {
+                    cell: cell_raw.to_owned(),
+                    valid: valid_cells(profiles, commands),
+                });
+            }
+        }
+    }
+    Ok(())
 }
 
-fn is_cell_word(raw: &str, aliases: &AliasesConfig) -> bool {
-    aliases.0.contains_key(raw)
+fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
+    raw.contains([',', '+']) || is_cell_word(raw, profiles, commands)
+}
+
+fn is_cell_word(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
+    commands.0.contains_key(raw)
+        || profiles.0.contains_key(raw)
         || raw == "term"
         || crate::agents::find_adapter(raw).is_some()
-        || virtual_agent_args(raw).is_some()
-        || virtual_ping_cell(raw).is_some()
+        || virtual_agent_shape(raw)
+        || virtual_ping_shape(raw)
 }
 
-fn parse_cell(raw: &str, aliases: &AliasesConfig) -> Result<Cell> {
-    if let Some(alias) = aliases.0.get(raw) {
-        return expand_alias(raw, alias);
+fn parse_cell(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> Result<Cell> {
+    if let Some(command) = commands.0.get(raw) {
+        return command_cell(raw, command);
+    }
+    if profiles.0.contains_key(raw) {
+        let resolved = resolve_profile(raw, profiles)?;
+        return cell_from_profile(raw, &resolved);
     }
     if raw == "term" {
         return Ok(Cell::shell());
@@ -276,89 +434,170 @@ fn parse_cell(raw: &str, aliases: &AliasesConfig) -> Result<Cell> {
     if crate::agents::find_adapter(raw).is_some() {
         return Ok(Cell::agent(AgentKind::new_unchecked(raw)));
     }
-    if let Some((kind, mode, args)) = virtual_agent_args(raw) {
-        return Ok(Cell::Agent {
-            kind: AgentKind::new_unchecked(kind),
-            args,
-            mode: Some(mode),
-            alias: None,
-        });
+    if let Some(cell) = virtual_agent_cell(raw, profiles)? {
+        return Ok(cell);
     }
-    if let Some(cell) = virtual_ping_cell(raw) {
+    if let Some(cell) = virtual_ping_cell(raw, profiles)? {
         return Ok(cell);
     }
     Err(LayoutErr::UnknownCell {
         cell: raw.to_owned(),
-        valid: valid_cells(aliases),
+        valid: valid_cells(profiles, commands),
     })
 }
 
-fn expand_alias(name: &str, alias: &Alias) -> Result<Cell> {
-    match alias {
-        Alias::Command(raw) => command_cell(name, raw),
-        Alias::CommandTable { command } => command_cell(name, command),
-        Alias::Agent {
-            agent,
-            mode,
-            model,
-            effort,
-            system_prompt_file,
-            args,
-        } => {
-            let adapter =
-                crate::agents::find_adapter(agent).ok_or_else(|| LayoutErr::UnknownAliasAgent {
-                    alias: name.to_owned(),
-                    agent: agent.to_owned(),
-                })?;
-            let mut argv = adapter
-                .render_preset(&crate::agents::LaunchPreset {
-                    model: model.clone(),
-                    effort: effort.clone(),
-                    system_prompt_file: system_prompt_file.clone(),
-                })
-                .map_err(|err| LayoutErr::InvalidAlias {
-                    alias: name.to_owned(),
-                    reason: err.to_string(),
-                })?;
-            argv.extend(
-                mode.map(|mode| adapter.permission_args(mode))
-                    .unwrap_or_default(),
-            );
-            if let Some(raw) = args.as_deref().filter(|raw| !raw.trim().is_empty()) {
-                let mut extra = shlex::split(raw).ok_or_else(|| LayoutErr::InvalidAlias {
-                    alias: name.to_owned(),
-                    reason: "check shell quoting in `args`".to_owned(),
-                })?;
-                argv.append(&mut extra);
-            }
-            Ok(Cell::Agent {
-                kind: AgentKind::new_unchecked(agent),
-                args: argv,
-                mode: *mode,
-                alias: Some(name.to_owned()),
-            })
-        }
+fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
+    Ok(Cell::Agent {
+        kind: resolved.kind.clone(),
+        args: render_profile_args(name, resolved)?,
+        mode: resolved.mode,
+        profile: Some(name.to_owned()),
+    })
+}
+
+fn render_profile_args(name: &str, resolved: &ResolvedProfile) -> Result<Vec<String>> {
+    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    let mut argv = adapter
+        .render_preset(&profile_preset(resolved))
+        .map_err(|err| LayoutErr::InvalidProfile {
+            profile: name.to_owned(),
+            reason: err.to_string(),
+        })?;
+    if let Some(mode) = resolved.mode {
+        argv.extend(adapter.permission_args(mode));
+    }
+    if let Some(raw) = resolved
+        .args
+        .as_deref()
+        .filter(|raw| !raw.trim().is_empty())
+    {
+        let mut extra = shlex::split(raw).ok_or_else(|| LayoutErr::InvalidProfile {
+            profile: name.to_owned(),
+            reason: "check shell quoting in `args`".to_owned(),
+        })?;
+        argv.append(&mut extra);
+    }
+    Ok(argv)
+}
+
+fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
+    crate::agents::LaunchPreset {
+        model: resolved.model.clone(),
+        effort: resolved.effort.clone(),
+        system_prompt_file: resolved.system_prompt_file.clone(),
     }
 }
 
 fn command_cell(name: &str, raw: &str) -> Result<Cell> {
-    let argv = shlex::split(raw).ok_or_else(|| LayoutErr::InvalidAlias {
-        alias: name.to_owned(),
+    let argv = shlex::split(raw).ok_or_else(|| LayoutErr::InvalidCommand {
+        command: name.to_owned(),
         reason: "check shell quoting in command".to_owned(),
     })?;
     if argv.is_empty() {
-        return Err(LayoutErr::InvalidAlias {
-            alias: name.to_owned(),
+        return Err(LayoutErr::InvalidCommand {
+            command: name.to_owned(),
             reason: "command expands to no argv".to_owned(),
         });
     }
     Ok(Cell::Command { argv })
 }
 
-fn virtual_agent_args(raw: &str) -> Option<(&str, PermissionMode, Vec<String>)> {
+fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell>> {
+    let Some((kind_name, mode)) = virtual_agent_parts(raw) else {
+        return Ok(None);
+    };
+    let (resolved, profile_name) = virtual_base(kind_name, profiles)?;
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    let posture = adapter.permission_args(mode);
+    if mode != PermissionMode::Ask && mode != PermissionMode::Plan && posture.is_empty() {
+        return Ok(None);
+    }
+    let mut args = match profile_name.as_deref() {
+        Some(profile) => {
+            let mut base = resolved.clone();
+            base.mode = None;
+            render_profile_args(profile, &base)?
+        }
+        None => Vec::new(),
+    };
+    args.extend(posture);
+    Ok(Some(Cell::Agent {
+        kind: resolved.kind,
+        args,
+        mode: Some(mode),
+        profile: profile_name,
+    }))
+}
+
+fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell>> {
+    let Some(kind_name) = raw.strip_suffix("-ping") else {
+        return Ok(None);
+    };
+    if crate::agents::find_adapter(kind_name).is_none() {
+        return Ok(None);
+    }
+    let (resolved, profile_name) = virtual_base(kind_name, profiles)?;
+    let Some(resolved) = resolved else {
+        return Ok(None);
+    };
+    let adapter = crate::agents::find_adapter(resolved.kind.as_str())
+        .expect("resolved profile terminal kind is known");
+    let Some(ping_args) = adapter.ping_args() else {
+        return Ok(None);
+    };
+    let mut args = match profile_name.as_deref() {
+        Some(profile) => {
+            let mut base = resolved.clone();
+            base.mode = None;
+            render_profile_args(profile, &base)?
+        }
+        None => Vec::new(),
+    };
+    args.extend(ping_args);
+    Ok(Some(Cell::Agent {
+        kind: resolved.kind,
+        args,
+        mode: None,
+        profile: profile_name,
+    }))
+}
+
+fn virtual_base(
+    kind_name: &str,
+    profiles: &ProfilesConfig,
+) -> Result<(Option<ResolvedProfile>, Option<String>)> {
+    if crate::agents::find_adapter(kind_name).is_none() {
+        return Ok((None, None));
+    }
+    if profiles.0.contains_key(kind_name) {
+        let resolved = resolve_profile(kind_name, profiles)?;
+        return Ok((Some(resolved), Some(kind_name.to_owned())));
+    }
+    Ok((Some(ResolvedProfile::bare(kind_name)), None))
+}
+
+fn virtual_agent_parts(raw: &str) -> Option<(&str, PermissionMode)> {
     let (kind, mode) = raw.rsplit_once('-')?;
     let mode = PermissionMode::from_str(mode).ok()?;
-    supported_virtual_agent_args(kind, mode).map(|args| (kind, mode, args))
+    (crate::agents::find_adapter(kind).is_some()).then_some((kind, mode))
+}
+
+fn virtual_agent_shape(raw: &str) -> bool {
+    let Some((kind, mode)) = virtual_agent_parts(raw) else {
+        return false;
+    };
+    supported_virtual_agent_args(kind, mode).is_some()
+}
+
+fn virtual_ping_shape(raw: &str) -> bool {
+    raw.strip_suffix("-ping")
+        .and_then(crate::agents::find_adapter)
+        .is_some_and(|adapter| adapter.ping_args().is_some())
 }
 
 fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<String>> {
@@ -371,37 +610,20 @@ fn supported_virtual_agent_args(kind: &str, mode: PermissionMode) -> Option<Vec<
     }
 }
 
-fn virtual_ping_cell(raw: &str) -> Option<Cell> {
-    let kind = raw.strip_suffix("-ping")?;
-    let adapter = crate::agents::find_adapter(kind)?;
-    let args = adapter.ping_args()?;
-    Some(Cell::Agent {
-        kind: AgentKind::new_unchecked(kind),
-        args,
-        mode: None,
-        alias: None,
-    })
-}
-
-fn validate_alias_names(aliases: &AliasesConfig) -> Result<()> {
-    for (name, alias) in &aliases.0 {
+fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
+    for name in profiles.0.keys() {
         if name.is_empty()
             || name
                 .chars()
                 .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+')
         {
-            return Err(LayoutErr::InvalidAliasName { name: name.clone() });
+            return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
-        if RESERVED_ALIAS_AND_LAYOUT_NAMES.contains(&name.as_str()) {
-            return Err(LayoutErr::ReservedAliasName { name: name.clone() });
+        if RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()) {
+            return Err(LayoutErr::ReservedProfileName { name: name.clone() });
         }
-        // Only an agent alias becomes an addressable role (`@<alias>`), so only it
-        // must not shadow the address grammar. A command alias never launches an
-        // agent, so it keeps its freedom to override a kind or virtual cell word.
-        if matches!(alias, Alias::Agent { .. })
-            && let Some(reason) = address_grammar_clash(name)
-        {
-            return Err(LayoutErr::AliasShadowsAddress {
+        if let Some(reason) = address_grammar_clash(name) {
+            return Err(LayoutErr::ProfileShadowsAddress {
                 name: name.clone(),
                 reason,
             });
@@ -410,16 +632,29 @@ fn validate_alias_names(aliases: &AliasesConfig) -> Result<()> {
     Ok(())
 }
 
-/// Why an agent alias name would collide with the agent-address grammar, so the
-/// rendered `@<alias>` handle could never name the role unambiguously: it shadows
-/// a kind (`@claude`), the broadcast handle (`@all`), a kind ordinal
+fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
+    for name in commands.0.keys() {
+        if name.is_empty()
+            || name
+                .chars()
+                .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+')
+        {
+            return Err(LayoutErr::InvalidCommandName { name: name.clone() });
+        }
+        if RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()) {
+            return Err(LayoutErr::ReservedCommandName { name: name.clone() });
+        }
+    }
+    Ok(())
+}
+
+/// Why an agent profile name would collide with the agent-address grammar, so
+/// the rendered `@<profile>` handle could never name the profile
+/// unambiguously: it shadows the broadcast handle (`@all`), a kind ordinal
 /// (`@claude-2`), or a pane/channel address (`zellij:%1`, `@x#chan`).
 fn address_grammar_clash(name: &str) -> Option<&'static str> {
     if name == "all" {
         return Some("`@all` is the broadcast handle");
-    }
-    if crate::agents::find_adapter(name).is_some() {
-        return Some("it is an agent kind");
     }
     if is_kind_ordinal_shape(name) {
         return Some("it reads as a kind ordinal like `@claude-2`");
@@ -443,14 +678,14 @@ fn validate_layout_names(layouts: &LayoutsConfig) -> Result<()> {
     if let Some(name) = layouts
         .0
         .keys()
-        .find(|name| RESERVED_ALIAS_AND_LAYOUT_NAMES.contains(&name.as_str()))
+        .find(|name| RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()))
     {
         return Err(LayoutErr::ReservedLayoutName(name.clone()));
     }
     Ok(())
 }
 
-fn valid_cells(aliases: &AliasesConfig) -> String {
+fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
     let mut values = BTreeSet::new();
     values.insert("term".to_owned());
     for kind in crate::agents::known_kinds() {
@@ -465,7 +700,8 @@ fn valid_cells(aliases: &AliasesConfig) -> String {
             values.insert(format!("{kind}-{PING_SUFFIX}"));
         }
     }
-    values.extend(aliases.0.keys().cloned());
+    values.extend(commands.0.keys().cloned());
+    values.extend(profiles.0.keys().cloned());
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 

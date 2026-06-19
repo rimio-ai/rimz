@@ -213,7 +213,7 @@ fn is_known_get_key(path: &[String]) -> bool {
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "agents")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "aliases" | "layouts"))
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "layouts"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || is_sidebar_glyph_get_key(path)
@@ -233,13 +233,13 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
 
 fn is_agents_key(path: &[String]) -> bool {
     matches!(path, [root, child, _] if root == "agents" && child == "layouts")
-        || matches!(path, [root, child, _] if root == "agents" && child == "aliases")
+        || matches!(path, [root, child, _] if root == "agents" && child == "commands")
         || matches!(
             path,
             [root, child, _, leaf]
                 if root == "agents"
-                    && child == "aliases"
-                    && matches!(leaf.as_str(), "command" | "agent" | "mode" | "model" | "effort" | "args")
+                    && child == "profiles"
+                    && matches!(leaf.as_str(), "agent" | "mode" | "model" | "effort" | "args" | "system-prompt-file")
         )
 }
 
@@ -569,13 +569,13 @@ mod tests {
             "accounts.oauth_usage",
             "accounts.usage_limit_usd.codex",
             "agents.layouts.review",
-            "agents.aliases.vim",
-            "agents.aliases.codex-yolo.agent",
-            "agents.aliases.codex-yolo.mode",
-            "agents.aliases.codex-yolo.model",
-            "agents.aliases.codex-yolo.effort",
-            "agents.aliases.codex-yolo.args",
-            "agents.aliases.htop.command",
+            "agents.commands.vim",
+            "agents.profiles.codex-slim.agent",
+            "agents.profiles.codex-slim.mode",
+            "agents.profiles.codex-slim.model",
+            "agents.profiles.codex-slim.effort",
+            "agents.profiles.codex-slim.args",
+            "agents.profiles.codex-slim.system-prompt-file",
             "zellij.auto_layout",
             "sidebar.providers.claude.color",
             "sidebar.pets.enabled",
@@ -608,7 +608,8 @@ mod tests {
             "accounts.usage_limit_usd",
             "accounts.usage_limit_usd.codex.extra",
             "agents.layouts.peer.shape",
-            "agents.aliases.codex-yolo.flags",
+            "agents.profiles.codex-slim.flags",
+            "agents.commands.vim.command",
             "sidebar.providers.claude.nope",
             "sidebar.animations",
             "sidebar.animations.nope.frames",

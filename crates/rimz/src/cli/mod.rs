@@ -232,8 +232,8 @@ pub(crate) fn confirm_fanout(verb: &str, target: &str, labels: &[String]) -> Res
     Ok(())
 }
 
-/// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<alias>`
-/// names a role, not "everyone", so several matches is a "pick one" error: it
+/// Refuse a plain selector that matched several agents. A bare `@<kind>`/`@<profile>`
+/// names a profile, not "everyone", so several matches is a "pick one" error: it
 /// lists the disambiguating handles to retype and names `--all` as the opt-in to
 /// reach every match. The explicit broadcast `@all` (and the `--all` flag) skip
 /// this and go through [`confirm_fanout`] instead.
@@ -350,7 +350,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
                 kind: agent.kind.clone(),
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),
-                alias: agent.alias.clone(),
+                profile: agent.profile.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
                 worktree_path: agent.worktree_path.clone(),
@@ -361,8 +361,8 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
     Ok(snapshot)
 }
 
-/// Turn a clean target miss into the launch-alias/layout hint when the ref
-/// names a launch alias or layout rather than a running agent.
+/// Turn a clean target miss into the launch-profile/command/layout hint when
+/// the ref names launch config rather than a running agent.
 fn map_resolve<T>(raw: &str, result: std::result::Result<T, rimz::TargetErr>) -> Result<T> {
     match result {
         Ok(value) => Ok(value),
@@ -383,9 +383,14 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     let without_channel = raw.split('#').next().unwrap_or(raw);
     let selector = without_channel.strip_prefix('@').unwrap_or(without_channel);
     let config = machine_config()?;
-    if config.agents.aliases.0.contains_key(selector) {
+    if config.agents.profiles.0.contains_key(selector) {
         return Ok(Some(format!(
-            "`{selector}` is a launch alias, not a running agent"
+            "`{selector}` is a launch profile, not a running agent"
+        )));
+    }
+    if config.agents.commands.0.contains_key(selector) {
+        return Ok(Some(format!(
+            "`{selector}` is a launch command, not a running agent"
         )));
     }
     if selector == "peer" || config.agents.layouts.0.contains_key(selector) {

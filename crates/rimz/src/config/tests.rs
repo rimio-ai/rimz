@@ -47,41 +47,33 @@ fn worktree_config_defaults_and_parses() {
 }
 
 #[test]
-fn agent_aliases_and_layouts_parse() {
+fn agent_profiles_commands_and_layouts_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
-        "[agents.aliases]\n\
+        "[agents.commands]\n\
              vim = \"nvim -p\"\n\
-             [agents.aliases.htop]\n\
-             command = \"htop\"\n\
-             [agents.aliases.codex-yolo]\n\
+             htop = \"htop\"\n\
+             [agents.profiles.codex-yolo]\n\
              agent = \"codex\"\n\
              mode = \"yolo\"\n\
              model = \"gpt-5-codex\"\n\
              effort = \"high\"\n\
              args = \"--model gpt-5-codex -c model_reasoning_effort=high\"\n\
-             [agents.aliases.planner]\n\
+             [agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/prompts/planner.md\"\n\
              [agents.layouts]\n\
              stacked = \"claude,codex+vim\"\n",
     ))
     .expect("load");
-    let aliases = &config.agents.aliases.0;
+    let commands = &config.agents.commands.0;
+    assert_eq!(commands.get("vim").map(String::as_str), Some("nvim -p"));
+    assert_eq!(commands.get("htop").map(String::as_str), Some("htop"));
+    let profiles = &config.agents.profiles.0;
     assert_eq!(
-        aliases.get("vim"),
-        Some(&Alias::Command("nvim -p".to_owned()))
-    );
-    assert_eq!(
-        aliases.get("htop"),
-        Some(&Alias::CommandTable {
-            command: "htop".to_owned()
-        })
-    );
-    assert_eq!(
-        aliases.get("codex-yolo"),
-        Some(&Alias::Agent {
+        profiles.get("codex-yolo"),
+        Some(&Profile {
             agent: "codex".to_owned(),
             mode: Some(PermissionMode::Yolo),
             model: Some("gpt-5-codex".to_owned()),
@@ -90,10 +82,10 @@ fn agent_aliases_and_layouts_parse() {
             args: Some("--model gpt-5-codex -c model_reasoning_effort=high".to_owned())
         })
     );
-    // A role preset carries its own system prompt under the kebab-case key.
+    // A profile carries its own system prompt under the kebab-case key.
     assert_eq!(
-        aliases.get("planner"),
-        Some(&Alias::Agent {
+        profiles.get("planner"),
+        Some(&Profile {
             agent: "claude".to_owned(),
             mode: None,
             model: None,
@@ -109,39 +101,40 @@ fn agent_aliases_and_layouts_parse() {
 }
 
 #[test]
-fn alias_system_prompt_file_resolves_against_the_config_dir() {
-    // A relative role prompt roots at the config file's directory, so it points
-    // at the same file wherever the role later launches — not at the agent cwd.
+fn profile_system_prompt_file_resolves_against_the_config_dir() {
+    // A relative profile prompt roots at the config file's directory, so it
+    // points at the same file wherever the profile later launches — not at the
+    // agent cwd.
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
-        "[agents.aliases.planner]\n\
+        "[agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"prompts/planner.md\"\n",
     ))
     .expect("load");
-    let Some(Alias::Agent {
+    let Some(Profile {
         system_prompt_file: Some(path),
         ..
-    }) = config.agents.aliases.0.get("planner")
+    }) = config.agents.profiles.0.get("planner")
     else {
-        panic!("planner role with a system prompt");
+        panic!("planner profile with a system prompt");
     };
     assert_eq!(path, &dir.path().join("prompts/planner.md"));
     // An absolute path is left untouched.
     let absolute = MachineConfig::load_from(&write(
         &dir,
-        "[agents.aliases.planner]\n\
+        "[agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/etc/rimz/planner.md\"\n",
     ))
     .expect("load");
-    let Some(Alias::Agent {
+    let Some(Profile {
         system_prompt_file: Some(path),
         ..
-    }) = absolute.agents.aliases.0.get("planner")
+    }) = absolute.agents.profiles.0.get("planner")
     else {
-        panic!("planner role with a system prompt");
+        panic!("planner profile with a system prompt");
     };
     assert_eq!(path, std::path::Path::new("/etc/rimz/planner.md"));
 }
@@ -185,35 +178,43 @@ fn legacy_tab_section_hard_errors() {
 }
 
 #[test]
-fn agent_alias_tables_reject_mixed_forms() {
+fn legacy_aliases_section_hard_errors() {
+    let dir = tempdir().expect("tempdir");
+    let err = MachineConfig::load_from(&write(&dir, "[agents.aliases]\nvim = \"nvim\"\n"))
+        .expect_err("legacy aliases");
+    assert!(matches!(err, ConfigErr::LegacyAliases { .. }));
+}
+
+#[test]
+fn profile_tables_reject_unknown_fields_and_missing_agent() {
     let dir = tempdir().expect("tempdir");
     assert!(
         MachineConfig::load_from(&write(
             &dir,
-            "[agents.aliases.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
+            "[agents.profiles.mixed]\ncommand = \"nvim\"\nagent = \"claude\"\n",
         ))
         .is_err()
     );
     assert!(
         MachineConfig::load_from(&write(
             &dir,
-            "[agents.aliases.missing_agent]\ncommand = \"codex\"\nmode = \"yolo\"\n",
+            "[agents.profiles.missing_agent]\nmode = \"yolo\"\n",
         ))
         .is_err()
     );
 }
 
 #[test]
-fn agent_alias_validation_runs_at_config_load() {
+fn profile_name_validation_runs_at_config_load() {
     let dir = tempdir().expect("tempdir");
     assert!(matches!(
-        MachineConfig::load_from(&write(&dir, "[agents.aliases.term]\ncommand = \"zsh\"\n",)),
+        MachineConfig::load_from(&write(&dir, "[agents.profiles.term]\nagent = \"claude\"\n",)),
         Err(ConfigErr::Agents { .. })
     ));
     assert!(matches!(
         MachineConfig::load_from(&write(
             &dir,
-            "[agents.aliases.pi-deep]\nagent = \"pi\"\nmodel = \"large\"\n",
+            "[agents.profiles.claude-2]\nagent = \"claude\"\n",
         )),
         Err(ConfigErr::Agents { .. })
     ));

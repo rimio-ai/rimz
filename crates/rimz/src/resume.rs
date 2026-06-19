@@ -186,8 +186,8 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
     if let Some(name) = agent.name.as_deref() {
         command.extend(["--agent-name".to_owned(), name.to_owned()]);
     }
-    if let Some(alias) = agent.alias.as_deref() {
-        command.extend(["--agent-alias".to_owned(), alias.to_owned()]);
+    if let Some(profile) = agent.profile.as_deref() {
+        command.extend(["--agent-profile".to_owned(), profile.to_owned()]);
     }
     command
 }
@@ -250,7 +250,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: Some(pane(&format!("terminal_{id}"))),
@@ -345,12 +345,12 @@ mod tests {
     }
 
     #[test]
-    fn resume_command_replays_name_and_role() {
-        // A reborn agent re-stamps its durable name and its launch role, so it
-        // answers to `@<alias>` again after a mux rebirth.
+    fn resume_command_replays_name_and_profile() {
+        // A reborn agent re-stamps its durable name and its launch profile, so it
+        // answers to `@<profile>` again after a mux rebirth.
         let mut agent = agent("claude", "a1", "/code/qe", Some("main"), 1);
         agent.name = Some("swift-otter".to_owned());
-        agent.alias = Some("planner".to_owned());
+        agent.profile = Some("planner".to_owned());
         assert_eq!(
             resume_command(Path::new("/bin/rimz"), &agent),
             vec![
@@ -362,7 +362,7 @@ mod tests {
                 "a1",
                 "--agent-name",
                 "swift-otter",
-                "--agent-alias",
+                "--agent-profile",
                 "planner",
             ]
         );

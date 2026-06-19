@@ -8,18 +8,16 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let machine_config = machine_config()?;
-    let mut layout = rimz::agents_spec::resolve_layout(
-        spec,
-        &machine_config.agents.aliases,
-        &machine_config.agents.layouts,
-    )?;
+    let profiles = effective_launch_profiles(&machine_config, &workspace)?;
+    let mut layout = resolve_launch_layout(spec, &profiles, &machine_config, &workspace)?;
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
-        &machine_config.agents.aliases,
+        &profiles,
+        &machine_config.agents.commands,
         &machine_config.agents.layouts,
     )?;
-    ensure_alias_prompt_files(&layout, &machine_config.agents.aliases)?;
+    ensure_profile_prompt_files(&layout, &profiles)?;
     if args.name.is_some() && layout.agent_kinds().count() != 1 {
         bail!("--name requires a layout with exactly one agent cell");
     }
@@ -251,7 +249,7 @@ pub(super) fn full_agent_launch_env(
     adapter: &dyn AgentAdapter,
     run_id: Option<&rimz::RunId>,
     agent_name: Option<&str>,
-    agent_alias: Option<&str>,
+    agent_profile: Option<&str>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
     let mut env = agent_launch_env(project_root, kind)?;
@@ -265,10 +263,10 @@ pub(super) fn full_agent_launch_env(
     if let Some(agent_name) = agent_name {
         env.insert(rimz::run::ENV_AGENT_NAME.to_owned(), agent_name.to_owned());
     }
-    if let Some(agent_alias) = agent_alias {
+    if let Some(agent_profile) = agent_profile {
         env.insert(
-            rimz::run::ENV_AGENT_ALIAS.to_owned(),
-            agent_alias.to_owned(),
+            rimz::run::ENV_AGENT_PROFILE.to_owned(),
+            agent_profile.to_owned(),
         );
     }
     validate_agent_launch_env(kind, &env)?;
@@ -341,33 +339,72 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
     Ok(())
 }
 
-/// Confirm every role alias the resolved layout launches has its
+pub(super) fn effective_launch_profiles(
+    machine_config: &rimz::config::MachineConfig,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<rimz::config::ProfilesConfig> {
+    rimz::config::effective::effective_profiles(
+        &machine_config.agents.profiles,
+        &workspace.project_root,
+        &rimz::ledger::paths::config_home(),
+    )
+    .map_err(Into::into)
+}
+
+pub(super) fn resolve_launch_layout(
+    spec: Option<&str>,
+    profiles: &rimz::config::ProfilesConfig,
+    machine_config: &rimz::config::MachineConfig,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Result<LayoutSpec> {
+    match rimz::agents_spec::resolve_layout(
+        spec,
+        profiles,
+        &machine_config.agents.commands,
+        &machine_config.agents.layouts,
+    ) {
+        Ok(layout) => Ok(layout),
+        Err(err @ rimz::agents_spec::LayoutErr::UnknownLayout { .. })
+        | Err(err @ rimz::agents_spec::LayoutErr::UnknownCell { .. }) => {
+            rimz::config::effective::block_untrusted_profile_reference(
+                spec,
+                profiles,
+                &machine_config.agents.commands,
+                &machine_config.agents.layouts,
+                &workspace.project_root,
+                &rimz::ledger::paths::config_home(),
+            )?;
+            Err(err.into())
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
+/// Confirm every profile the resolved layout launches has its
 /// `system-prompt-file` present, so a missing prompt fails here — at the launch
 /// entry point, with the absolute path to fix — rather than reaching the agent.
-/// This mirrors the explicit `--system-prompt-file` check; the alias paths are
+/// This mirrors the explicit `--system-prompt-file` check; the profile paths are
 /// already resolved against the config file at load, so unrelated config reads
 /// stay IO-free.
-pub(super) fn ensure_alias_prompt_files(
+pub(super) fn ensure_profile_prompt_files(
     layout: &LayoutSpec,
-    aliases: &rimz::config::AliasesConfig,
+    profiles: &rimz::config::ProfilesConfig,
 ) -> Result<()> {
     for cell in layout.columns.iter().flat_map(|column| &column.rows) {
         let Cell::Agent {
-            alias: Some(name), ..
+            profile: Some(name),
+            ..
         } = cell
         else {
             continue;
         };
-        let Some(rimz::config::Alias::Agent {
-            system_prompt_file: Some(path),
-            ..
-        }) = aliases.0.get(name)
-        else {
+        let resolved = rimz::agents_spec::resolve_profile(name, profiles)?;
+        let Some(path) = resolved.system_prompt_file else {
             continue;
         };
         if !path.is_file() {
             bail!(
-                "role `{name}` system-prompt-file `{}` not found; create it or fix [agents.aliases.{name}].system-prompt-file",
+                "profile `{name}` system-prompt-file `{}` not found; create it or fix [agents.profiles.{name}].system-prompt-file",
                 path.display()
             );
         }
@@ -410,7 +447,8 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
 pub(super) fn reject_prompt_that_looks_like_spec(
     spec: Option<&str>,
     prompt: Option<&str>,
-    aliases: &rimz::config::AliasesConfig,
+    profiles: &rimz::config::ProfilesConfig,
+    commands: &rimz::config::CommandsConfig,
     layouts: &rimz::config::LayoutsConfig,
 ) -> Result<()> {
     let Some(spec) = spec.map(str::trim).filter(|spec| !spec.is_empty()) else {
@@ -419,7 +457,7 @@ pub(super) fn reject_prompt_that_looks_like_spec(
     let Some(prompt) = prompt.map(str::trim).filter(|prompt| !prompt.is_empty()) else {
         return Ok(());
     };
-    if rimz::agents_spec::is_known_layout_token(prompt, aliases, layouts) {
+    if rimz::agents_spec::is_known_layout_token(prompt, profiles, commands, layouts) {
         bail!(
             "prompt `{prompt}` looks like another layout cell; did you mean `rimz agents {spec},{prompt}`?"
         );
@@ -439,7 +477,7 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 kind,
                 args,
                 mode: cell_mode,
-                alias: _,
+                profile: _,
             } = cell
             else {
                 continue;
@@ -642,7 +680,10 @@ pub(super) fn pane_cmd_with_name(
         }
         Cell::Command { argv } => argv.clone(),
         Cell::Agent {
-            kind, args, alias, ..
+            kind,
+            args,
+            profile,
+            ..
         } => {
             let mut argv = vec![
                 rimz_bin.to_string_lossy().into_owned(),
@@ -650,8 +691,8 @@ pub(super) fn pane_cmd_with_name(
                 "exec".to_owned(),
                 kind.as_str().to_owned(),
             ];
-            if let Some(alias) = alias {
-                argv.extend(["--agent-alias".to_owned(), alias.clone()]);
+            if let Some(profile) = profile {
+                argv.extend(["--agent-profile".to_owned(), profile.clone()]);
             }
             if let Some(launch) = launch {
                 validate_agent_name(&launch.name)?;

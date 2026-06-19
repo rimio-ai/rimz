@@ -200,10 +200,10 @@ struct ExecArgs {
     run_id: Option<rimz::RunId>,
     #[arg(long)]
     agent_name: Option<String>,
-    /// The `[agents.aliases]` role this agent launched as, stamped into
-    /// `RIMZ_AGENT_ALIAS` so it answers to `@<alias>`.
+    /// The `[agents.profiles]` profile this agent launched as, stamped into
+    /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`.
     #[arg(long)]
-    agent_alias: Option<String>,
+    agent_profile: Option<String>,
     #[arg(long)]
     launch_id: Option<String>,
     #[arg(long, hide = true)]
@@ -267,7 +267,7 @@ fn exit_print_usage_error(err: anyhow::Error) -> ! {
 
 impl AgentsArgs {
     /// A minimal single-agent launch for create-on-miss: the resolved kind or
-    /// role `spec`, the message as the first `prompt`, and the channel
+    /// profile `spec`, the message as the first `prompt`, and the channel
     /// `worktree`. Everything else defaults so the launch lands where the
     /// address pointed, under the per-machine tab policy.
     fn for_create(spec: String, prompt: Option<String>, worktree: Option<String>) -> Self {
@@ -340,7 +340,7 @@ pub(crate) fn run_blocking_ping(
 }
 
 /// Launch a missing agent for `steer`/`queue --create`. A *type* handle — a kind
-/// (`@codex`) or an `[agents.aliases]` role (`@planner`) — opens a fresh agent in
+/// (`@codex`) or an `[agents.profiles]` profile (`@planner`) — opens a fresh agent in
 /// the addressed channel with the message as its first prompt; the channel names
 /// (or creates) a worktree when it differs from the current one. An instance
 /// handle (pet name, ordinal, session id) or a pane/`@all` address refuses,
@@ -354,13 +354,24 @@ pub(crate) fn create_on_miss(
 ) -> Result<()> {
     let Some(create) = rimz::target::create_mention(target, worktree_flag, current_channel)? else {
         bail!(
-            "`{target}` cannot create an agent; address a kind or role like `@codex` or `@planner`"
+            "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
         );
     };
     let machine_config = crate::cli::machine_config()?;
-    if !is_launchable_type(&create.selector, &machine_config.agents.aliases) {
+    let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
+        .context("resolving current workspace")?;
+    let profiles = effective_launch_profiles(&machine_config, &workspace)?;
+    if !is_launchable_type(&create.selector, &profiles) {
+        rimz::config::effective::block_untrusted_profile_reference(
+            Some(&create.selector),
+            &profiles,
+            &machine_config.agents.commands,
+            &machine_config.agents.layouts,
+            &workspace.project_root,
+            &rimz::ledger::paths::config_home(),
+        )?;
         bail!(
-            "`{target}` names a specific agent that is not running; create one with `@<kind>` or a role from [agents.aliases]"
+            "`{target}` names a specific agent that is not running; create one with `@<kind>` or a profile from [agents.profiles]"
         );
     }
     // A channel other than the current one names (or creates) its worktree; the
@@ -376,16 +387,12 @@ pub(crate) fn create_on_miss(
 }
 
 /// Whether `selector` names a launchable *type* handle: a known agent kind
-/// (`@codex`) or an `[agents.aliases]` *agent* role (`@planner`). A command
-/// alias names a raw pane, not an addressable agent, and carries no kind to
+/// (`@codex`) or an `[agents.profiles]` profile (`@planner`). A command
+/// name names a raw pane, not an addressable agent, and carries no kind to
 /// staff a channel — so `--create` refuses it, the same as a pet name or
 /// ordinal that must already exist.
-fn is_launchable_type(selector: &str, aliases: &rimz::config::AliasesConfig) -> bool {
-    rimz::agents::find_adapter(selector).is_some()
-        || matches!(
-            aliases.0.get(selector),
-            Some(rimz::config::Alias::Agent { .. })
-        )
+fn is_launchable_type(selector: &str, profiles: &rimz::config::ProfilesConfig) -> bool {
+    rimz::agents::find_adapter(selector).is_some() || profiles.0.contains_key(selector)
 }
 
 #[cfg(test)]

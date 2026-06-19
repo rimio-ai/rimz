@@ -29,7 +29,7 @@ pub(crate) struct SendFlags {
     /// matches more than one agent is an error that lists the handles to pick one.
     #[arg(long)]
     pub(crate) all: bool,
-    /// Launch the agent if the address matches none: a kind (`@codex`) or a role
+    /// Launch the agent if the address matches none: a kind (`@codex`) or a profile
     /// (`@planner`) opens a fresh agent in the channel with this text as its first
     /// prompt. An instance handle (pet name, ordinal) cannot create.
     #[arg(long)]

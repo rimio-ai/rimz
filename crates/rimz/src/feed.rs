@@ -176,7 +176,7 @@ pub enum FeedKind {
 impl FeedKind {
     /// Parse a CLI-friendly `--kind` argument.
     ///
-    /// Accepts both canonical names (`permission`) and friendlier aliases
+    /// Accepts both canonical names (`permission`) and friendlier profilees
     /// (`permission_request`).
     pub fn from_cli(value: &str) -> Self {
         match value {
@@ -982,12 +982,12 @@ pub struct AgentState {
     pub name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind_ordinal: Option<u32>,
-    /// The `[agents.aliases]` role this agent launched as (`planner`,
-    /// `codex-yolo`), passed through `RIMZ_AGENT_ALIAS` and carried forward like
-    /// `name`. The agent answers to `@<alias>` and renders by it; `None` for a
+    /// The `[agents.profiles]` profile this agent launched as (`planner`,
+    /// `codex-yolo`), passed through `RIMZ_AGENT_PROFILE` and carried forward like
+    /// `name`. The agent answers to `@<profile>` and renders by it; `None` for a
     /// bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub alias: Option<String>,
+    pub profile: Option<String>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -1303,7 +1303,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: None,

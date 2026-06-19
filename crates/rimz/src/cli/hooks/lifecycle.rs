@@ -95,8 +95,9 @@ fn record_lifecycle_observation(
         if observation.agent_name.is_none() {
             observation.agent_name = env_agent_name().or_else(|| proc_agent_name(&observation));
         }
-        if observation.agent_alias.is_none() {
-            observation.agent_alias = env_agent_alias().or_else(|| proc_agent_alias(&observation));
+        if observation.agent_profile.is_none() {
+            observation.agent_profile =
+                env_agent_profile().or_else(|| proc_agent_profile(&observation));
         }
         if observation.worktree_path.is_none() {
             observation.worktree_path = Some(workspace.worktree_root.display().to_string());
@@ -336,20 +337,20 @@ fn proc_agent_name(observation: &AgentLifecycleObservation) -> Option<String> {
     validate_agent_name_env(raw, "process")
 }
 
-fn env_agent_alias() -> Option<String> {
-    let raw = std::env::var(rimz::run::ENV_AGENT_ALIAS).ok()?;
-    validate_agent_alias_env(raw, "env")
+fn env_agent_profile() -> Option<String> {
+    let raw = std::env::var(rimz::run::ENV_AGENT_PROFILE).ok()?;
+    validate_agent_profile_env(raw, "env")
 }
 
-fn proc_agent_alias(observation: &AgentLifecycleObservation) -> Option<String> {
-    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_ALIAS)?;
-    validate_agent_alias_env(raw, "process")
+fn proc_agent_profile(observation: &AgentLifecycleObservation) -> Option<String> {
+    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_PROFILE)?;
+    validate_agent_profile_env(raw, "process")
 }
 
-/// Accept a stamped role alias only if it reads as a layout cell word — the
-/// same shape `[agents.aliases]` validates at config load, so a garbled env
+/// Accept a stamped profile only if it reads as a layout cell word — the
+/// same shape `[agents.profiles]` validates at config load, so a garbled env
 /// value never becomes an addressable handle.
-fn validate_agent_alias_env(raw: String, source: &str) -> Option<String> {
+fn validate_agent_profile_env(raw: String, source: &str) -> Option<String> {
     let valid = !raw.is_empty()
         && !raw
             .chars()
@@ -358,9 +359,9 @@ fn validate_agent_alias_env(raw: String, source: &str) -> Option<String> {
         Some(raw)
     } else {
         warn!(
-            agent_alias = %raw,
+            agent_profile = %raw,
             source,
-            "lifecycle: ignoring invalid Rimz agent alias",
+            "lifecycle: ignoring invalid Rimz profile",
         );
         None
     }

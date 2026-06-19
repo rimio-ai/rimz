@@ -22,6 +22,7 @@ mod agents;
 mod animation;
 mod autoping;
 mod color;
+pub mod effective;
 mod glyphs;
 mod mux;
 mod notifications;
@@ -32,7 +33,9 @@ mod sidebar;
 mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
-pub use agents::{AgentsConfig, Alias, AliasesConfig, LayoutsConfig, TabPlacement};
+pub use agents::{
+    AgentsConfig, CommandsConfig, LayoutsConfig, Profile, ProfilesConfig, TabPlacement,
+};
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
     SidebarAnimationsConfig, UnreadEffect, validate_glyph_cells, validate_single_cell,
@@ -77,9 +80,13 @@ pub enum ConfigErr {
         source: toml::de::Error,
     },
     #[error(
-        "per-machine config at {path} uses [tab]; rename it to [agents] with [agents.aliases] and [agents.layouts]"
+        "per-machine config at {path} uses [tab]; rename it to [agents] with [agents.profiles], [agents.commands], and [agents.layouts]"
     )]
     LegacyTab { path: PathBuf },
+    #[error(
+        "per-machine config at {path} uses [agents.aliases]; rename `[agents.aliases]`: agent definitions move to `[agents.profiles]`, raw command cells to `[agents.commands]`"
+    )]
+    LegacyAliases { path: PathBuf },
     #[error("invalid per-machine agents config at {path}: {source}")]
     Agents {
         path: PathBuf,
@@ -153,17 +160,30 @@ impl MachineConfig {
                 path: path.to_path_buf(),
             });
         }
+        if value
+            .get("agents")
+            .and_then(toml::Value::as_table)
+            .is_some_and(|agents| agents.contains_key("aliases"))
+        {
+            return Err(ConfigErr::LegacyAliases {
+                path: path.to_path_buf(),
+            });
+        }
         let mut config: Self = toml::from_str(text).map_err(|source| ConfigErr::Parse {
             path: path.to_path_buf(),
             source,
         })?;
         let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
-        crate::agents_spec::resolve_alias_prompt_paths(&mut config.agents.aliases, config_dir);
-        crate::agents_spec::validate_config(&config.agents.aliases, &config.agents.layouts)
-            .map_err(|source| ConfigErr::Agents {
-                path: path.to_path_buf(),
-                source,
-            })?;
+        crate::agents_spec::resolve_profile_prompt_paths(&mut config.agents.profiles, config_dir);
+        crate::agents_spec::validate_config(
+            &config.agents.profiles,
+            &config.agents.commands,
+            &config.agents.layouts,
+        )
+        .map_err(|source| ConfigErr::Agents {
+            path: path.to_path_buf(),
+            source,
+        })?;
         Ok(config)
     }
 }

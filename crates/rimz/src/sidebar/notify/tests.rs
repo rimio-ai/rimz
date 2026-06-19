@@ -122,7 +122,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         kind: AgentKind::new_unchecked("claude"),
         name: None,
         kind_ordinal: None,
-        alias: None,
+        profile: None,
         status,
         phase: TurnPhase::Idle,
         pane: Some(PaneRef {

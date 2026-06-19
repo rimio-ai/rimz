@@ -372,19 +372,19 @@ fn channelless_handle_falls_back_to_session_without_a_petname() {
 }
 
 #[test]
-fn alias_resolves_as_a_role_handle_and_renders_first() {
+fn profile_resolves_as_a_profile_handle_and_renders_first() {
     let mut snapshot = empty_snapshot();
     let mut planner = agent("claude", "session-planner", Some("auth"), "terminal_1");
-    planner.alias = Some("planner".to_owned());
+    planner.profile = Some("planner".to_owned());
     planner.kind_ordinal = Some(1);
     let mut explorer = agent("claude", "session-explorer", Some("auth"), "terminal_2");
-    explorer.alias = Some("explorer".to_owned());
+    explorer.profile = Some("explorer".to_owned());
     explorer.kind_ordinal = Some(2);
     snapshot.agents = vec![planner, explorer];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
 
-    // The role names exactly its agent; the shared kind names both, so it is
-    // an explicit ambiguity — `@claude` matches the aliased claudes too.
+    // The profile names exactly its agent; the shared kind names both, so it is
+    // an explicit ambiguity — `@claude` matches the profileed claudes too.
     assert_eq!(
         resolve_one(&snapshot, "@planner", None, None)
             .unwrap()
@@ -396,7 +396,7 @@ fn alias_resolves_as_a_role_handle_and_renders_first() {
         resolve_one(&snapshot, "@claude", None, None),
         Err(TargetErr::Ambiguous { .. })
     ));
-    // The handle prefers the role and round-trips back to its own agent.
+    // The handle prefers the profile and round-trips back to its own agent.
     assert_eq!(agent_handle(peers[0], &peers, true), "@planner#auth");
     assert_eq!(agent_handle(peers[1], &peers, true), "@explorer#auth");
     for &one in &peers {
@@ -412,15 +412,41 @@ fn alias_resolves_as_a_role_handle_and_renders_first() {
 }
 
 #[test]
-fn shared_alias_degrades_to_the_kind_ordinal_handle() {
+fn kind_name_profile_handle_uses_round_tripping_disambiguator() {
     let mut snapshot = empty_snapshot();
-    // Two `planner`s share one channel: the role is no longer unique, so the
+    let mut bare = agent("claude", "session-bare", Some("main"), "terminal_1");
+    bare.kind_ordinal = Some(1);
+    let mut profiled = agent("claude", "session-profile", Some("main"), "terminal_2");
+    profiled.profile = Some("claude".to_owned());
+    profiled.kind_ordinal = Some(2);
+    snapshot.agents = vec![bare, profiled];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    assert!(matches!(
+        resolve_one(&snapshot, "@claude#main", None, None),
+        Err(TargetErr::Ambiguous { .. })
+    ));
+    let handle = agent_handle(peers[1], &peers, true);
+    assert_eq!(handle, "@claude-2#main");
+    assert_eq!(
+        resolve_one(&snapshot, &handle, None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-profile"
+    );
+}
+
+#[test]
+fn shared_profile_degrades_to_the_kind_ordinal_handle() {
+    let mut snapshot = empty_snapshot();
+    // Two `planner`s share one channel: the profile is no longer unique, so the
     // handle falls back to the disambiguating kind ordinal.
     let mut a = agent("claude", "session-a", Some("auth"), "terminal_1");
-    a.alias = Some("planner".to_owned());
+    a.profile = Some("planner".to_owned());
     a.kind_ordinal = Some(1);
     let mut b = agent("claude", "session-b", Some("auth"), "terminal_2");
-    b.alias = Some("planner".to_owned());
+    b.profile = Some("planner".to_owned());
     b.kind_ordinal = Some(2);
     snapshot.agents = vec![a, b];
     let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
@@ -554,7 +580,7 @@ fn is_broadcast_only_for_at_all() {
 
 #[test]
 fn create_mention_extracts_type_handles_but_not_panes_or_broadcast() {
-    // A kind/role mention yields its selector and resolved channel.
+    // A kind/profile mention yields its selector and resolved channel.
     let create = create_mention("@planner#auth", None, None)
         .unwrap()
         .expect("creatable mention");
@@ -567,7 +593,7 @@ fn create_mention_extracts_type_handles_but_not_panes_or_broadcast() {
     assert_eq!(create.selector, "codex");
     assert_eq!(create.channel.as_deref(), Some("main"));
     // An instance handle still returns its selector — the CLI refuses it by
-    // recognising it is neither a kind nor an alias.
+    // recognising it is neither a kind nor an profile.
     let create = create_mention("@claude-2", None, Some("main"))
         .unwrap()
         .expect("mention");
@@ -597,7 +623,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         kind: AgentKind::new_unchecked(kind),
         name: None,
         kind_ordinal: None,
-        alias: None,
+        profile: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,
         pane: Some(PaneRef::from_id(PaneId::from_parts(
@@ -644,7 +670,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: None,
         name: None,
-        alias: None,
+        profile: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(worktree_path.to_owned()),
@@ -666,7 +692,7 @@ fn bound_pane(
         kind: AgentKind::new_unchecked(kind),
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),
-        alias: None,
+        profile: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(format!("/repo/{branch}")),

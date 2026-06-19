@@ -53,7 +53,7 @@ Running a fleet locally, you might have four Claude Code or Codex sessions in fl
 
 Between questions, you steer. `rimz steer @claude -- "focus on the failing parser test"` types into the agent's pane immediately, and holds off when a pending ask owns the next keystroke. `rimz queue @codex --on done -- "open a PR summary"` parks the next instruction durably and delivers it the moment the agent finishes its turn, so you hand off follow-up work without watching for the turn boundary.
 
-Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a role you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar lives in [the harness reference](../internals/agents/harness.md#the-address); the delivery gates are in [the agent-control reference](../reference/cli/agents.md#steer-live-agents).
+Targets read like Slack: `@<who>` names the agent — `@codex` (a kind), `@planner` (a profile you defined), `@swift-otter` (one specific agent), or `@all` for everyone — and `#<channel>` names the worktree, defaulting to the one you are in. Reaching several at once takes an explicit `--all`, and `--create` launches the agent straight from its address when it isn't running yet. The full address grammar lives in [the harness reference](../internals/agents/harness.md#the-address); the delivery gates are in [the agent-control reference](../reference/cli/agents.md#steer-live-agents).
 
 ## Run it on a server
 
@@ -98,7 +98,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 `rimz agents peer --worktree=feat/great` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements while the other reviews, both in the same files, isolated from your checkout.
 
-`peer` is a built-in layout, and inline specs compose any grid — `rimz agents 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[agents.aliases]` lets named layouts in `[agents.layouts]` compose agent variants and raw commands.
+`peer` is a built-in layout, and inline specs compose any grid — `rimz agents 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[agents.profiles]` and `[agents.commands]` let named layouts in `[agents.layouts]` compose agent variants and raw commands.
 
 `rimz agents claude "take one approach" --worktree` and a second `rimz agents claude "take another approach" --worktree` launch parallel attempts, each in its own fresh worktree ([agent-control reference](../reference/cli/agents.md#agents)).
 

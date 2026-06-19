@@ -11,33 +11,37 @@
 
 [agents]
 # tab = "auto"                          # launch placement: "auto" (worktree or multi-cell → new tab, else same tab), "new", or "same"
-# `rimz agents <spec>` cells are aliases. Built-ins include `term`, agent kinds,
-# and adapter-supported `<kind>-<mode>` variants such as `claude-auto` or
-# `codex-yolo`; user aliases below may shadow agent kinds. `peer` (claude,codex) is
-# a built-in layout.
+# `rimz agents <spec>` cells are profiles, commands, or built-ins. Built-ins
+# include `term`, agent kinds, and adapter-supported `<kind>-<mode>` variants
+# such as `claude-auto` or `codex-yolo`. `peer` (claude,codex) is a built-in
+# layout.
 
-[agents.aliases]
-# Bare strings are shell-split raw commands. Agent alias tables use `agent`
-# plus optional `mode` ("auto", "ask", "plan", "yolo"), `model`, `effort`,
-# `system-prompt-file`, and extra shell-split `args`. An agent alias is a named
-# role the agent answers to as `@<alias>`, so its name must not be a kind,
-# `all`, or an ordinal like `claude-2`. Built-in virtual cells include
-# `claude-plan`, `claude-ping`, `codex-plan`, and `codex-ping`.
+[agents.profiles]
+# Profiles are named main agents addressed as `@<profile>`. `agent` names a
+# built-in kind or another profile; the nearest profile wins for every field,
+# including `args` (replace, not append). A profile named like a kind overrides
+# bare kind cells and virtual cells such as `claude-auto` / `claude-ping`.
+## [agents.profiles.claude-slim]
+## agent = "claude"
+## effort = "low"
+## system-prompt-file = "~/.config/rimz/prompts/slim.md"
+## args = "--max-turns 4"
+## [agents.profiles.planner]
+## agent = "claude-slim"
+## system-prompt-file = "~/.config/rimz/prompts/planner.md"
+## [agents.profiles.claude]                 # kind-default override for bare `claude` and `claude-auto`
+## agent = "claude"
+## args = "--append-system-prompt 'Prefer concise plans.'"
+
+[agents.commands]
+# Commands are shell-split raw command panes. They are not addressable agents.
 ## vim = "nvim -p"
 ## htop = "htop"
-## [agents.aliases.codex-yolo]
-## agent = "codex"
-## mode = "yolo"
-## model = "gpt-5-codex"
-## effort = "high"
-## [agents.aliases.planner]                # a role with its own system prompt; address it as @planner
-## agent = "claude"
-## system-prompt-file = "~/.config/rimz/prompts/planner.md"
-## effort = "high"
 
 [agents.layouts]
-# Layouts are shape strings that compose aliases with `,` columns and `+` rows.
-## review = "claude-plan,codex+vim"
+# Layouts are shape strings that compose profiles, commands, and built-ins with
+# `,` columns and `+` rows.
+## review = "planner,codex+vim"
 ## debug = "pi,htop+term"
 
 [autoping]

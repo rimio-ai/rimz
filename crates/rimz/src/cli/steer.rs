@@ -75,7 +75,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         channel.as_deref(),
     ) {
         Ok(targets) => targets,
-        // Create-on-miss: a kind/role address with --create launches a fresh
+        // Create-on-miss: a kind/profile address with --create launches a fresh
         // agent with this text as its first prompt, so no separate steer follows.
         Err(_) if create => {
             return super::agents_cmd::create_on_miss(

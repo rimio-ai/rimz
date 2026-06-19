@@ -344,10 +344,17 @@ fn explicit_same_tab_fails_fast_when_infeasible() {
 
 #[test]
 fn prompt_that_looks_like_another_spec_errors() {
-    let aliases = rimz::config::AliasesConfig::default();
+    let profiles = rimz::config::ProfilesConfig::default();
+    let commands = rimz::config::CommandsConfig::default();
     let layouts = rimz::config::LayoutsConfig::default();
-    let err = reject_prompt_that_looks_like_spec(Some("claude"), Some("codex"), &aliases, &layouts)
-        .expect_err("reject fan-out");
+    let err = reject_prompt_that_looks_like_spec(
+        Some("claude"),
+        Some("codex"),
+        &profiles,
+        &commands,
+        &layouts,
+    )
+    .expect_err("reject fan-out");
     assert!(
         err.to_string()
             .contains("did you mean `rimz agents claude,codex`"),
@@ -374,12 +381,12 @@ fn interactive_launch_without_mode_keeps_native_agent_permissions() {
 }
 
 #[test]
-fn explicit_interactive_mode_applies_even_when_alias_added_args() {
+fn explicit_interactive_mode_applies_even_when_profile_added_args() {
     let mut layout = LayoutSpec::single(Cell::Agent {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "gpt-5-codex".to_owned()],
         mode: None,
-        alias: None,
+        profile: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -400,7 +407,7 @@ fn explicit_interactive_mode_applies_even_when_alias_added_args() {
 }
 
 #[test]
-fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
+fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
     let yolo_args = rimz::agents::find_adapter("codex")
         .expect("codex")
         .permission_args(PermissionMode::Yolo);
@@ -408,7 +415,7 @@ fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
         kind: AgentKind::new_unchecked("codex"),
         args: yolo_args.clone(),
         mode: Some(PermissionMode::Yolo),
-        alias: None,
+        profile: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -427,7 +434,7 @@ fn supervised_default_mode_skips_cells_with_virtual_or_alias_mode() {
 }
 
 #[test]
-fn explicit_mode_skips_cells_with_virtual_or_alias_mode() {
+fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
     let auto_args = rimz::agents::find_adapter("claude")
         .expect("claude")
         .permission_args(PermissionMode::Auto);
@@ -435,7 +442,7 @@ fn explicit_mode_skips_cells_with_virtual_or_alias_mode() {
         kind: AgentKind::new_unchecked("claude"),
         args: auto_args.clone(),
         mode: Some(PermissionMode::Auto),
-        alias: None,
+        profile: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -586,11 +593,11 @@ async fn child_exit_marks_nonterminal_run_failed_and_wakes_waiter() {
     assert_eq!(outcome, RunWakeOutcome::Completed(RunStatus::Failed));
 }
 
-fn agent_role(prompt_file: Option<&std::path::Path>) -> rimz::config::AliasesConfig {
-    let mut aliases = rimz::config::AliasesConfig::default();
-    aliases.0.insert(
+fn agent_profile(prompt_file: Option<&std::path::Path>) -> rimz::config::ProfilesConfig {
+    let mut profiles = rimz::config::ProfilesConfig::default();
+    profiles.0.insert(
         "planner".to_owned(),
-        rimz::config::Alias::Agent {
+        rimz::config::Profile {
             agent: "claude".to_owned(),
             mode: None,
             model: None,
@@ -599,44 +606,42 @@ fn agent_role(prompt_file: Option<&std::path::Path>) -> rimz::config::AliasesCon
             args: None,
         },
     );
-    aliases
+    profiles
 }
 
 #[test]
-fn create_on_miss_launches_kinds_and_agent_roles_but_not_command_aliases() {
-    // A kind and an agent role carry a kind to staff a channel; a command alias
-    // and a pet name do not, so `--create` refuses them.
-    let mut aliases = agent_role(None);
-    aliases.0.insert(
-        "vim".to_owned(),
-        rimz::config::Alias::Command("nvim -p".to_owned()),
-    );
+fn create_on_miss_launches_kinds_and_agent_profiles_but_not_commands() {
+    // A kind and an agent profile carry a kind to staff a channel; a command
+    // name and a pet name do not, so `--create` refuses them.
+    let profiles = agent_profile(None);
 
-    assert!(is_launchable_type("codex", &aliases));
-    assert!(is_launchable_type("planner", &aliases));
-    assert!(!is_launchable_type("vim", &aliases));
-    assert!(!is_launchable_type("swift-otter", &aliases));
+    assert!(is_launchable_type("codex", &profiles));
+    assert!(is_launchable_type("planner", &profiles));
+    assert!(!is_launchable_type("vim", &profiles));
+    assert!(!is_launchable_type("swift-otter", &profiles));
 }
 
 #[test]
-fn alias_launch_requires_its_system_prompt_file() {
+fn profile_launch_requires_its_system_prompt_file() {
     let dir = tempfile::tempdir().expect("temp dir");
     let present = dir.path().join("planner.md");
     std::fs::write(&present, "be terse").expect("write prompt");
 
+    let profiles = agent_profile(Some(&present));
     let layout = rimz::agents_spec::resolve_layout(
         Some("planner"),
-        &agent_role(Some(&present)),
+        &profiles,
+        &rimz::config::CommandsConfig::default(),
         &rimz::config::LayoutsConfig::default(),
     )
-    .expect("resolve planner role");
+    .expect("resolve planner profile");
 
-    // The cell names the role; a present prompt file passes the launch gate.
-    ensure_alias_prompt_files(&layout, &agent_role(Some(&present))).expect("present prompt passes");
+    // The cell names the profile; a present prompt file passes the launch gate.
+    ensure_profile_prompt_files(&layout, &profiles).expect("present prompt passes");
 
     // A missing prompt file fails the launch with the path to fix.
     let missing = dir.path().join("absent.md");
-    let err = ensure_alias_prompt_files(&layout, &agent_role(Some(&missing)))
+    let err = ensure_profile_prompt_files(&layout, &agent_profile(Some(&missing)))
         .expect_err("missing prompt fails the launch");
     assert!(err.to_string().contains("system-prompt-file"));
 }

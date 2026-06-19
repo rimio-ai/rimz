@@ -134,7 +134,7 @@ mod tests {
             kind: crate::ids::AgentKind::new_unchecked("claude"),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

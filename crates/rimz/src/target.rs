@@ -1,14 +1,15 @@
 //! The agent-address grammar: `@<handle>#<channel>`, parsed, resolved, and
 //! rendered here (the canonical handle is the inverse of the parser).
 //!
-//! Handles read like Slack. A *type handle* names a role to fill — `@<kind>`
-//! (`@codex`) or `@<alias>` (`@planner`) — and matches every such agent in the
+//! Handles read like Slack. A *type handle* names a profile to fill — `@<kind>`
+//! (`@codex`) or `@<profile>` (`@planner`) — and matches every such agent in the
 //! channel; the same handles can also create one (see [`create_mention`]). An
 //! *instance handle* names exactly one running agent — `@<kind>-<n>`,
 //! `@<petname>`, or a session-id prefix. `@all` is the broadcast handle, and a
 //! pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, sigil-free,
-//! channel-agnostic address. The renderer prefers the role, then the kind, then
-//! an ordinal, then the petname, so a handle always round-trips to its agent.
+//! channel-agnostic address. The renderer prefers a non-kind profile, then the
+//! kind, then an ordinal, then the petname, so a handle always round-trips to its
+//! agent.
 //!
 //! The channel is the workspace segment the room groups by — a worktree branch,
 //! else a directory basename. Callers pass the *current* channel; an explicit
@@ -83,10 +84,10 @@ trait Candidate<'a>: Copy {
     fn kind(self) -> &'a str;
     fn kind_ordinal(self) -> Option<u32>;
     fn name(self) -> Option<&'a str>;
-    /// The `[agents.aliases]` role this agent launched as, when it has one. An
-    /// alias is a *type* handle — `@planner` may name several agents — so the
-    /// name/alias matcher returns every alias match and lets arity decide.
-    fn alias(self) -> Option<&'a str>;
+    /// The `[agents.profiles]` profile this agent launched as, when it has one. A
+    /// profile is a *type* handle — `@planner` may name several agents — so the
+    /// name/profile matcher returns every profile match and lets arity decide.
+    fn profile(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
@@ -123,8 +124,8 @@ impl<'a> Candidate<'a> for &'a AgentState {
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
     }
-    fn alias(self) -> Option<&'a str> {
-        self.alias.as_deref()
+    fn profile(self) -> Option<&'a str> {
+        self.profile.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         Some(self.agent_id.as_str())
@@ -150,8 +151,8 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     fn name(self) -> Option<&'a str> {
         self.name.as_deref()
     }
-    fn alias(self) -> Option<&'a str> {
-        self.alias.as_deref()
+    fn profile(self) -> Option<&'a str> {
+        self.profile.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -292,7 +293,7 @@ pub fn is_broadcast(raw: &str) -> bool {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CreateMention {
     /// The bare handle (`codex`, `planner`, `swift-otter`, `claude-2`). The
-    /// caller decides whether it names a launchable *type* (a kind or an alias)
+    /// caller decides whether it names a launchable *type* (a kind or an profile)
     /// or a specific instance that must already exist.
     pub selector: String,
     /// The channel to launch into: an inline `#name`, the `--worktree` flag, or
@@ -381,17 +382,19 @@ fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> V
             })
             .collect(),
         AgentSelector::NameOrSession(selector) => {
-            // A role alias is a type handle: it can name several agents, and
-            // arity (one vs many) is decided downstream. It comes first so
-            // `@planner` reads as the role, then the globally-unique pet name,
-            // then a session-id prefix.
-            let by_alias: Vec<C> = candidates
+            // A profile is a type handle: it can name several agents, and
+            // arity (one vs many) is decided downstream. It comes first for
+            // non-kind names so `@planner` reads as the profile, then the
+            // globally-unique pet name, then a session-id prefix. A profile
+            // named like a built-in kind is intentionally left to the Kind arm:
+            // `@claude` remains the kind handle.
+            let by_profile: Vec<C> = candidates
                 .iter()
                 .copied()
-                .filter(|candidate| candidate.alias() == Some(selector.as_str()))
+                .filter(|candidate| candidate.profile() == Some(selector.as_str()))
                 .collect();
-            if !by_alias.is_empty() {
-                return by_alias;
+            if !by_profile.is_empty() {
+                return by_profile;
             }
             let by_name: Vec<C> = candidates
                 .iter()
@@ -598,17 +601,19 @@ fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, alias: Option<&s
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent_channel(agent);
-    // The role alias is the most informative handle, so prefer it whenever it
-    // still names exactly this agent in scope. A shared role (two `planner`s in
-    // one channel) is not unique, so it falls through to the kind/ordinal ladder.
-    if let Some(alias) = agent.alias.as_deref() {
-        let alias_rivals = peers
+    // The profile is the most informative handle, so prefer it whenever it
+    // still names exactly this agent in scope. A shared profile (two `planner`s in
+    // one channel) is not unique, and a profile named like a built-in kind
+    // resolves through the Kind selector, so both fall through to the
+    // kind/ordinal ladder.
+    if let Some(profile) = agent.profile.as_deref() {
+        let profile_rivals = peers
             .iter()
-            .filter(|peer| peer.alias.as_deref() == Some(alias))
+            .filter(|peer| peer.profile.as_deref() == Some(profile))
             .filter(|peer| !scoped || agent_channel(peer) == channel)
             .count();
-        if alias_rivals <= 1 {
-            return format!("@{alias}");
+        if profile_rivals <= 1 && !is_known_kind(profile) {
+            return format!("@{profile}");
         }
     }
     // The same-kind agents this handle must out-name. With channel context only
@@ -632,6 +637,10 @@ fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> Strin
         Some(name) => format!("@{name}"),
         None => format!("@{}", agent.agent_id),
     }
+}
+
+fn is_known_kind(name: &str) -> bool {
+    crate::agents::known_kinds().any(|kind| kind == name)
 }
 
 /// A deduplicated, quoted list of the channels a selector matches.

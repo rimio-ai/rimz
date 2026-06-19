@@ -126,7 +126,7 @@ impl LaunchPreset {
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PresetErr {
     #[error(
-        "agent `{agent}` does not support alias field `{field}`; remove it or put provider-specific flags in `args`"
+        "agent `{agent}` does not support profile field `{field}`; remove it or put provider-specific flags in `args`"
     )]
     UnsupportedField {
         agent: &'static str,
@@ -633,7 +633,7 @@ pub trait AgentAdapter: Send + Sync {
         Vec::new()
     }
 
-    /// Extra launch argv for the built-in `-ping` virtual alias: lowest
+    /// Extra launch argv for the built-in `-ping` virtual profile: lowest
     /// effort setting plus the word `"ping"` as the initial prompt. Returns
     /// `None` when the adapter does not support ping.
     fn ping_args(&self) -> Option<Vec<String>> {
@@ -649,7 +649,7 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
-    /// Render typed per-machine launch alias presets into provider-native argv.
+    /// Render typed launch profile presets into provider-native argv.
     /// Unsupported fields fail at launch so config cannot silently drop intent.
     fn render_preset(&self, preset: &LaunchPreset) -> std::result::Result<Vec<String>, PresetErr> {
         if preset

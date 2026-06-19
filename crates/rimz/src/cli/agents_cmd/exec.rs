@@ -35,7 +35,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         adapter,
         args.run_id.as_ref(),
         args.agent_name.as_deref(),
-        args.agent_alias.as_deref(),
+        args.agent_profile.as_deref(),
     )?;
     let argv = rimz::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv

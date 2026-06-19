@@ -100,7 +100,7 @@ rimz remote connect dev        # the room rebuilds, every agent where you left i
 **Multi agents in same worktree** Open multiple agents to work side by side on same worktree, you can have claude planning and codex writing the code, peer programming between the agents.
 
 ```sh
-rimz agents peer --worktree=feat/x                # save you layout as alias
+rimz agents peer --worktree=feat/x                # launch a saved layout in a worktree
 rimz agents 'vim,codex+term' --worktree=feat/y    # or gen dynamically
 ```
 

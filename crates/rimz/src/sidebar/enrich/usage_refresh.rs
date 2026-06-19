@@ -338,7 +338,7 @@ mod tests {
             kind: AgentKind::new_unchecked(kind),
             name: None,
             kind_ordinal: None,
-            alias: None,
+            profile: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: Some(pane()),

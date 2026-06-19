@@ -543,7 +543,8 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
     let required = [
         "[worktree]",
         "[agents]",
-        "[agents.aliases]",
+        "[agents.profiles]",
+        "[agents.commands]",
         "[agents.layouts]",
         "[remote_control]",
         "[accounts]",
