@@ -439,9 +439,15 @@ fn gc_sweeps_merge_landed_worktree() {
     );
     commit_file(&env.project_root, "trunk.txt", "trunk\n", "trunk");
     git(&path, &["merge", "--no-ff", "main", "-m", "merge main"]);
+    commit_file(&env.project_root, "after.txt", "after\n", "after merge");
     let marker = rimz::worktree::read_marker_for_worktree(&path)
         .expect("read marker")
         .expect("marker");
+    assert_ne!(
+        git_stdout(&env.project_root, &["rev-parse", "main^{tree}"]),
+        git_stdout(&path, &["rev-parse", "HEAD^{tree}"]),
+        "main advanced after the merge-back, so the fixture reaches the merge-tree scan"
+    );
     assert_eq!(
         rimz::worktree::status(&path, &marker)
             .expect("status")
