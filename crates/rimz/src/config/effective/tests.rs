@@ -233,6 +233,7 @@ fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
         "review".to_owned(),
         Team {
             roles: vec![role("local", "local-profile")],
+            layout: None,
         },
     )]));
 
@@ -267,6 +268,36 @@ fn untrusted_repo_team_reference_is_blocked() {
             &ProfilesConfig::default(),
             &CommandsConfig::default(),
             &TeamsConfig::default(),
+            project.path(),
+            config.path(),
+        ),
+        Err(EffectiveConfigErr::Blocked {
+            state: "untrusted",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn untrusted_repo_profile_inside_machine_team_layout_is_blocked() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(&project, "[profiles.planner]\nagent = \"claude\"\n");
+    let machine_profiles = profiles([("local", profile("codex", None))]);
+    let machine_teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        Team {
+            roles: vec![role("coder", "local")],
+            layout: Some("coder,planner".to_owned()),
+        },
+    )]));
+
+    assert!(matches!(
+        block_untrusted_profile_reference(
+            Some("review"),
+            &machine_profiles,
+            &CommandsConfig::default(),
+            &machine_teams,
             project.path(),
             config.path(),
         ),

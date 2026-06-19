@@ -232,8 +232,11 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
 }
 
 fn is_agents_key(path: &[String]) -> bool {
-    matches!(path, [root, child, _, leaf] if root == "agents" && child == "teams" && leaf == "roles")
-        || matches!(path, [root, child, _] if root == "agents" && child == "commands")
+    matches!(
+        path,
+        [root, child, _, leaf]
+            if root == "agents" && child == "teams" && matches!(leaf.as_str(), "roles" | "layout")
+    ) || matches!(path, [root, child, _] if root == "agents" && child == "commands")
         || matches!(
             path,
             [root, child, _, leaf]
@@ -569,6 +572,7 @@ mod tests {
             "accounts.oauth_usage",
             "accounts.usage_limit_usd.codex",
             "agents.teams.review.roles",
+            "agents.teams.review.layout",
             "agents.commands.vim",
             "agents.profiles.codex-slim.agent",
             "agents.profiles.codex-slim.mode",
@@ -779,6 +783,9 @@ mod tests {
                 leaf.strip_prefix(key)
                     .is_some_and(|rest| rest.starts_with('.'))
             })
+            || parse_key(leaf)
+                .ok()
+                .is_some_and(|key| validate_set_key(&key).is_ok())
     }
 
     fn collect_leaf_paths(prefix: &str, value: &toml::Value, out: &mut BTreeSet<String>) {

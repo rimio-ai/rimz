@@ -17,6 +17,15 @@ fn missing_or_empty_file_is_default_off() {
         assert_eq!(config, MachineConfig::default());
         assert!(!config.remote_control.claude);
         assert!(!config.remote_control.codex);
+        assert_eq!(
+            config
+                .agents
+                .teams
+                .0
+                .get("peer")
+                .and_then(|team| team.layout.as_deref()),
+            Some("claude,codex")
+        );
     }
 }
 
@@ -63,6 +72,8 @@ fn agent_profiles_commands_and_teams_parse() {
              [agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/prompts/planner.md\"\n\
+             [agents.teams.stacked]\n\
+             layout = \"planner+coder\"\n\
              [[agents.teams.stacked.roles]]\n\
              role = \"planner\"\n\
              profile = \"planner\"\n\
@@ -98,7 +109,9 @@ fn agent_profiles_commands_and_teams_parse() {
             args: None,
         })
     );
-    let roles = &config.agents.teams.0.get("stacked").expect("team").roles;
+    let team = config.agents.teams.0.get("stacked").expect("team");
+    assert_eq!(team.layout.as_deref(), Some("planner+coder"));
+    let roles = &team.roles;
     assert_eq!(roles[0].role, "planner");
     assert_eq!(roles[0].profile, "planner");
     assert_eq!(roles[1].role, "coder");

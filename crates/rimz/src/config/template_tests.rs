@@ -126,6 +126,10 @@ fn template_default_paths(template: &str) -> BTreeSet<String> {
         let value = parsed.get("value").expect("template value key");
         collect_leaf_paths(&path.join("."), value, &mut paths);
     }
+    if template.contains("[agents.teams.peer]") && template.contains("layout = \"claude,codex\"") {
+        paths.insert("agents.teams.peer.layout".to_owned());
+        paths.insert("agents.teams.peer.roles".to_owned());
+    }
     paths
 }
 

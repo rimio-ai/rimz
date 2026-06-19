@@ -263,10 +263,19 @@ fn spec_references_repo_profile(
     teams: &TeamsConfig,
 ) -> bool {
     if let Some(team) = teams.0.get(spec) {
-        return team
+        let role_refs_repo_profile = team
             .roles
             .iter()
             .any(|binding| repo_profiles.contains(&binding.profile));
+        let layout_refs_repo_profile = team.layout.as_deref().is_some_and(|layout| {
+            layout_tokens(layout).any(|token| {
+                let is_declared_role = team.roles.iter().any(|binding| binding.role == token);
+                !is_declared_role
+                    && repo_profiles.contains(token)
+                    && !machine_cell_word(token, profiles, commands)
+            })
+        });
+        return role_refs_repo_profile || layout_refs_repo_profile;
     }
     layout_tokens(spec)
         .any(|token| repo_profiles.contains(token) && !machine_cell_word(token, profiles, commands))

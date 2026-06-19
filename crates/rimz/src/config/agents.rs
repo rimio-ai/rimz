@@ -8,7 +8,7 @@ use crate::run::PermissionMode;
 /// Agent-launch preferences. Team entries bind role names to profiles; inline
 /// launch specs still resolve through profile/command parsing in
 /// [`crate::agents_spec`].
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
     /// Where a launch lands: a new backend tab/window or the current view.
@@ -19,7 +19,29 @@ pub struct AgentsConfig {
     pub profiles: ProfilesConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
+    #[serde(default = "default_machine_teams")]
     pub teams: TeamsConfig,
+}
+
+impl Default for AgentsConfig {
+    fn default() -> Self {
+        Self {
+            tab: TabPlacement::default(),
+            profiles: ProfilesConfig::default(),
+            commands: CommandsConfig::default(),
+            teams: default_machine_teams(),
+        }
+    }
+}
+
+fn default_machine_teams() -> TeamsConfig {
+    TeamsConfig(BTreeMap::from([(
+        "peer".to_owned(),
+        Team {
+            roles: Vec::new(),
+            layout: Some("claude,codex".to_owned()),
+        },
+    )]))
 }
 
 /// Default tab placement for `rimz agents <spec>` launches; the per-launch
@@ -77,6 +99,8 @@ pub struct TeamsConfig(pub BTreeMap<String, Team>);
 pub struct Team {
     #[serde(default)]
     pub roles: Vec<RoleBinding>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

@@ -40,15 +40,24 @@
 ## htop = "htop"
 
 [agents.teams]
-# Teams bind ordered role names to profiles. Each role opens as one side-by-side
-# column in the same tab and answers to `@<role>` in that channel. Inline specs
-# such as `claude,codex+term` keep the ad-hoc column/row grammar.
+# Teams bind ordered role names to profiles. By default each role opens as one
+# side-by-side column in the same tab; optional `layout` uses the same
+# comma=column / plus=row grammar as inline specs, resolving role names first.
+# Each role answers to `@<role>` in that channel.
+[agents.teams.peer]
+layout = "claude,codex"
+
+## [agents.teams.review]
+## layout = "planner+reviewer,coder+term"
 ## [[agents.teams.review.roles]]
 ## role = "planner"
 ## profile = "planner"
 ## [[agents.teams.review.roles]]
 ## role = "coder"
 ## profile = "codex-yolo"
+## [[agents.teams.review.roles]]
+## role = "reviewer"
+## profile = "claude"
 
 [autoping]
 # Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`

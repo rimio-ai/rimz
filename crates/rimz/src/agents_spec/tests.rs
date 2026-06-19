@@ -43,6 +43,20 @@ fn role(role: &str, profile: &str) -> RoleBinding {
     }
 }
 
+fn team(roles: Vec<RoleBinding>) -> Team {
+    Team {
+        roles,
+        layout: None,
+    }
+}
+
+fn team_with_layout(roles: Vec<RoleBinding>, layout: &str) -> Team {
+    Team {
+        roles,
+        layout: Some(layout.to_owned()),
+    }
+}
+
 fn no_profiles() -> ProfilesConfig {
     ProfilesConfig::default()
 }
@@ -83,9 +97,10 @@ fn resolves_default_inline_builtin_and_named_teams() {
     let mut teams = TeamsConfig::default();
     teams.0.insert(
         "stacked".to_owned(),
-        Team {
-            roles: vec![role("planner", "planner"), role("reviewer", "reviewer")],
-        },
+        team(vec![
+            role("planner", "planner"),
+            role("reviewer", "reviewer"),
+        ]),
     );
 
     assert_eq!(
@@ -96,12 +111,9 @@ fn resolves_default_inline_builtin_and_named_teams() {
         resolve_spec(Some("claude"), &profiles, &commands, &teams).expect("inline"),
         LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")))
     );
-    teams.0.insert(
-        "claude".to_owned(),
-        Team {
-            roles: vec![role("lead", "planner")],
-        },
-    );
+    teams
+        .0
+        .insert("claude".to_owned(), team(vec![role("lead", "planner")]));
     assert_eq!(
         resolve_spec(Some("claude"), &profiles, &commands, &teams),
         Err(LayoutErr::ReservedTeamName("claude".to_owned()))
@@ -568,9 +580,7 @@ fn kind_override_does_not_make_unsupported_virtual_cells_valid() {
 
     let layouts = TeamsConfig(BTreeMap::from([(
         "bad".to_owned(),
-        Team {
-            roles: vec![role("bad", "missing")],
-        },
+        team(vec![role("bad", "missing")]),
     )]));
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &layouts),
@@ -647,9 +657,10 @@ fn named_teams_resolve_roles_to_one_column_each() {
     let commands = commands([("vim", "nvim")]);
     let teams = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        Team {
-            roles: vec![role("planner", "claude-plan"), role("reviewer", "reviewer")],
-        },
+        team(vec![
+            role("planner", "claude-plan"),
+            role("reviewer", "reviewer"),
+        ]),
     )]));
 
     let spec = resolve_spec(Some("review"), &profiles, &commands, &teams).expect("team");
@@ -694,17 +705,15 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     )]);
     let teams = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        Team {
-            roles: vec![RoleBinding {
-                role: "coder".to_owned(),
-                profile: "coder-base".to_owned(),
-                mode: Some(PermissionMode::Ask),
-                model: Some("role-model".to_owned()),
-                effort: Some("high".to_owned()),
-                system_prompt_file: Some("/prompts/coder.md".into()),
-                args: Some("--role".to_owned()),
-            }],
-        },
+        team(vec![RoleBinding {
+            role: "coder".to_owned(),
+            profile: "coder-base".to_owned(),
+            mode: Some(PermissionMode::Ask),
+            model: Some("role-model".to_owned()),
+            effort: Some("high".to_owned()),
+            system_prompt_file: Some("/prompts/coder.md".into()),
+            args: Some("--role".to_owned()),
+        }]),
     )]));
 
     let Cell::Agent {
@@ -740,13 +749,88 @@ fn team_role_overrides_profile_fields_and_args_replace() {
 }
 
 #[test]
+fn team_layout_places_roles_first_and_allows_roleless_extras() {
+    let profiles = profiles([
+        ("planner-profile", profile("claude")),
+        ("coder-profile", profile("codex")),
+        ("reviewer-profile", profile("claude")),
+    ]);
+    let commands = commands([("logs", "tail -f rimz.log")]);
+    let teams = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![
+                role("planner", "planner-profile"),
+                role("coder", "coder-profile"),
+                role("reviewer", "reviewer-profile"),
+            ],
+            "planner+reviewer,coder+term+logs",
+        ),
+    )]));
+
+    let spec = resolve_spec(Some("review"), &profiles, &commands, &teams).expect("team");
+
+    assert_eq!(spec.columns.len(), 2);
+    assert!(matches!(
+        &spec.columns[0].rows[0],
+        Cell::Agent { role, profile, .. }
+            if role.as_deref() == Some("planner") && profile.as_deref() == Some("planner-profile")
+    ));
+    assert!(matches!(
+        &spec.columns[0].rows[1],
+        Cell::Agent { role, profile, .. }
+            if role.as_deref() == Some("reviewer") && profile.as_deref() == Some("reviewer-profile")
+    ));
+    assert!(matches!(
+        &spec.columns[1].rows[0],
+        Cell::Agent { role, profile, .. }
+            if role.as_deref() == Some("coder") && profile.as_deref() == Some("coder-profile")
+    ));
+    assert_eq!(spec.columns[1].rows[1], Cell::shell());
+    assert_eq!(
+        spec.columns[1].rows[2],
+        Cell::Command {
+            argv: vec!["tail".to_owned(), "-f".to_owned(), "rimz.log".to_owned()]
+        }
+    );
+}
+
+#[test]
+fn roleless_team_layout_resolves_builtin_cells() {
+    let teams = TeamsConfig(BTreeMap::from([(
+        "peer".to_owned(),
+        team_with_layout(Vec::new(), "claude,codex"),
+    )]));
+
+    let spec = resolve_spec(Some("peer"), &no_profiles(), &no_commands(), &teams).expect("peer");
+
+    assert_eq!(
+        spec,
+        LayoutSpec {
+            columns: vec![
+                Column {
+                    rows: vec![Cell::agent(AgentKind::new_unchecked("claude"))],
+                },
+                Column {
+                    rows: vec![Cell::agent(AgentKind::new_unchecked("codex"))],
+                },
+            ],
+        }
+    );
+}
+
+#[test]
 fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
     let profiles = profiles([("planner", profile("claude"))]);
+    let empty = TeamsConfig(BTreeMap::from([("review".to_owned(), team(Vec::new()))]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &empty),
+        Err(LayoutErr::EmptyTeam { team }) if team == "review"
+    ));
+
     let duplicate = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        Team {
-            roles: vec![role("planner", "planner"), role("planner", "planner")],
-        },
+        team(vec![role("planner", "planner"), role("planner", "planner")]),
     )]));
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &duplicate),
@@ -755,24 +839,70 @@ fn team_validation_rejects_bad_role_names_duplicates_and_unknown_profiles() {
 
     let bad_name = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        Team {
-            roles: vec![role("bad role", "planner")],
-        },
+        team(vec![role("bad role", "planner")]),
     )]));
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &bad_name),
         Err(LayoutErr::InvalidRoleName { name, .. }) if name == "bad role"
     ));
 
+    let kind_name = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team(vec![role("claude", "planner")]),
+    )]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &kind_name),
+        Err(LayoutErr::RoleShadowsAddress { name, .. }) if name == "claude"
+    ));
+
     let missing_profile = TeamsConfig(BTreeMap::from([(
         "review".to_owned(),
-        Team {
-            roles: vec![role("coder", "missing")],
-        },
+        team(vec![role("coder", "missing")]),
     )]));
     assert!(matches!(
         validate_config(&profiles, &no_commands(), &missing_profile),
         Err(LayoutErr::UnknownRoleProfile { profile, .. }) if profile == "missing"
+    ));
+}
+
+#[test]
+fn team_layout_validation_requires_each_role_exactly_once() {
+    let profiles = profiles([("planner", profile("claude")), ("coder", profile("codex"))]);
+
+    let missing = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![role("planner", "planner"), role("coder", "coder")],
+            "planner+term",
+        ),
+    )]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &missing),
+        Err(LayoutErr::RoleNotPlaced { role, .. }) if role == "coder"
+    ));
+
+    let duplicate = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![role("planner", "planner"), role("coder", "coder")],
+            "planner+planner,coder",
+        ),
+    )]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &duplicate),
+        Err(LayoutErr::DuplicateRoleInLayout { role, .. }) if role == "planner"
+    ));
+
+    let unknown = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        team_with_layout(
+            vec![role("planner", "planner"), role("coder", "coder")],
+            "planner,coder+ghost",
+        ),
+    )]));
+    assert!(matches!(
+        validate_config(&profiles, &no_commands(), &unknown),
+        Err(LayoutErr::UnknownRoleInLayout { role, .. }) if role == "ghost"
     ));
 }
 

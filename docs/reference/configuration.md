@@ -204,6 +204,9 @@ mode = "yolo"
 model = "gpt-5-codex"
 effort = "high"
 
+[agents.teams.review]
+layout = "planner+reviewer,coder+term"
+
 [[agents.teams.review.roles]]
 role = "planner"
 profile = "planner"
@@ -218,7 +221,7 @@ profile = "planner"
 mode = "plan"
 ```
 
-Named teams feed `rimz agents <name>`. A team is an ordered `roles` list; each role binds a role name to a profile and may override `mode`, `model`, `effort`, `system-prompt-file`, or `args`. The role list opens left to right as one side-by-side column per role in one tab, and each member answers to `@<role>` in that channel. Inline specs such as `rimz agents "claude,codex+term"` keep the ad-hoc shape grammar: commas split columns, plus signs stack rows, and each cell is a command, profile, or built-in cell. Inline cells resolve in this order: `[agents.commands]`, `[agents.profiles]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variants such as `claude-auto`, `codex-ask`, `codex-yolo`, and `claude-ping`. The built-in `peer` team remains `claude,codex` and is roleless. Profile, command, and team names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. Commands may shadow cell words such as `claude` to set local command defaults; profiles and roles become addressable handles, so they must not shadow `@all`, kind ordinals such as `@claude-2`, or pane/channel sigils (`:`, `#`). A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, profiles that say `agent = "claude"`, and virtual cells such as `claude-auto` and `claude-ping`.
+Named teams feed `rimz agents <name>`. A team is an ordered `roles` list; each role binds a role name to a profile and may override `mode`, `model`, `effort`, `system-prompt-file`, or `args`. The default placement opens the role list left to right as one side-by-side column per role in one tab; optional `layout` uses the same comma=column / plus=row shape grammar as inline specs, resolves declared role names first, and then falls back to roleless cells such as `term`, commands, profiles, kinds, or virtual cells. Each member answers to `@<role>` in that channel. Inline specs such as `rimz agents "claude,codex+term"` keep the ad-hoc shape grammar: commas split columns, plus signs stack rows, and each cell is a command, profile, or built-in cell. Inline cells resolve in this order: `[agents.commands]`, `[agents.profiles]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variants such as `claude-auto`, `codex-ask`, `codex-yolo`, and `claude-ping`. The built-in `peer` team remains `claude,codex` and is roleless. Profile, command, and team names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. Commands may shadow cell words such as `claude` to set local command defaults; profiles and roles become addressable handles, so they must not shadow `@all`, agent kinds such as `@claude`, kind ordinals such as `@claude-2`, or pane/channel sigils (`:`, `#`). A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, profiles that say `agent = "claude"`, and virtual cells such as `claude-auto` and `claude-ping`.
 
 `tab` sets where a launch lands when neither `--same-tab` nor `--new-tab` is passed. `"auto"` (the default) opens a new tab for a worktree launch or a multi-cell layout and splits the current view for a single non-worktree agent; `"new"` always opens a new tab; `"same"` splits the current view whenever the launch is a single agent cell, falling back to a new tab otherwise.
 

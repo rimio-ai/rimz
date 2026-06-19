@@ -469,6 +469,7 @@ struct ExecutableProfile<'a> {
 #[derive(Serialize)]
 struct ExecutableTeam<'a> {
     name: &'a str,
+    layout: Option<&'a str>,
     roles: Vec<ExecutableRole<'a>>,
 }
 
@@ -544,6 +545,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 .iter()
                 .map(|(name, team)| ExecutableTeam {
                     name: name.as_str(),
+                    layout: team.layout.as_deref(),
                     roles: team
                         .roles
                         .iter()
@@ -781,6 +783,7 @@ mod tests {
             "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
             "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
             "[profiles.y]\nagent = \"claude\"\n",
+            "[agents.teams.review]\nlayout = \"planner,coder\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
             "[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
             "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"y\"\n",

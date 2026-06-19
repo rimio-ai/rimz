@@ -73,7 +73,7 @@ The rest of this doc follows a member through its life: how a spawn becomes pane
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL. A named team is an ordered role list; each role binds `role` to an `[agents.profiles]` profile, may override that profile's launch fields, and opens as one side-by-side column in one tab. Inline specs keep the compact pane grammar: commas split columns, plus signs stack rows within a column, and each cell is a profile, command, or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variant such as `claude-auto` or `codex-yolo`, an `[agents.profiles]` entry, or an `[agents.commands]` entry ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)).
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL. A named team is an ordered role list; each role binds `role` to an `[agents.profiles]` profile, may override that profile's launch fields, and opens as one side-by-side column in one tab unless the team declares `layout`. Team `layout` uses the same comma=column / plus=row pane grammar, resolves declared role names first, and then falls back to roleless cells so a team can mix role panes with `term`, command panes, profiles, kinds, or virtual cells. Inline specs keep the compact pane grammar: commas split columns, plus signs stack rows within a column, and each cell is a profile, command, or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variant such as `claude-auto` or `codex-yolo`, an `[agents.profiles]` entry, or an `[agents.commands]` entry ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)).
 
 ```text
 claude,codex+term
@@ -105,7 +105,7 @@ The channel is the workspace segment the room already groups by: a worktree bran
 
 Handles come in three kinds. A **role handle** names a member inside a team:
 
-- `@<role>` — `@coder`, the role stamped by `[agents.teams.<team>.roles]`. Matches every agent launched under that role in the channel.
+- `@<role>` — `@coder`, the role stamped by `[agents.teams.<team>.roles]`. Matches every agent launched under that role in the channel. Role names reserve built-in kind handles such as `@claude` so kind addresses keep round-tripping.
 
 A **type handle** names a profile or kind to fill and carries enough to launch one:
 

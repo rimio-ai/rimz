@@ -2,16 +2,17 @@
 //!
 //! Commas split columns, plus signs stack rows within a column, and each cell is
 //! a profile, a command, or a built-in cell. Named teams compile to one column
-//! per role, while inline specs keep this ad-hoc grammar. Built-ins provide `term`, every
-//! registered agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants;
-//! per-machine `[agents.profiles]` entries can specialize agent cells and
-//! `[agents.commands]` entries provide raw command panes.
+//! per role unless they declare an explicit role-first layout shape. Built-ins
+//! provide `term`, every registered agent kind, and `<kind>-<mode>` /
+//! `<kind>-ping` virtual variants; per-machine `[agents.profiles]` entries can
+//! specialize agent cells and `[agents.commands]` entries provide raw command
+//! panes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, TeamsConfig};
+use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
 use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
@@ -144,6 +145,8 @@ pub enum LayoutErr {
         "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
     )]
     ReservedTeamName(String),
+    #[error("team `{team}` must declare at least one role")]
+    EmptyTeam { team: String },
     #[error("team `{team}` role `{role}` references unknown profile `{profile}`")]
     UnknownRoleProfile {
         team: String,
@@ -156,6 +159,12 @@ pub enum LayoutErr {
     InvalidRoleName { team: String, name: String },
     #[error("duplicate role `{role}` in team `{team}`")]
     DuplicateRole { team: String, role: String },
+    #[error("team `{team}` layout token `{role}` is not a declared role or valid roleless cell")]
+    UnknownRoleInLayout { team: String, role: String },
+    #[error("team `{team}` layout does not place role `{role}`")]
+    RoleNotPlaced { team: String, role: String },
+    #[error("team `{team}` layout places role `{role}` more than once")]
+    DuplicateRoleInLayout { team: String, role: String },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
     #[error("invalid command `{command}`: {reason}")]
@@ -245,7 +254,7 @@ pub fn validate_config(
         }
     }
     for name in teams.0.keys() {
-        validate_team(name, teams, profiles)?;
+        validate_team(name, teams, profiles, commands)?;
     }
     Ok(())
 }
@@ -276,7 +285,7 @@ pub fn resolve_spec(
         if is_cell_word(raw, profiles, commands) {
             return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
         }
-        return resolve_team(raw, teams, profiles);
+        return resolve_team(raw, teams, profiles, commands);
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands);
@@ -295,37 +304,135 @@ pub fn resolve_team(
     name: &str,
     teams: &TeamsConfig,
     profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
 ) -> Result<LayoutSpec> {
-    validate_team(name, teams, profiles)?;
+    validate_team(name, teams, profiles, commands)?;
     let team = teams
         .0
         .get(name)
         .expect("validated team name exists in teams config");
-    let mut columns = Vec::with_capacity(team.roles.len());
-    for binding in &team.roles {
-        let mut resolved =
-            resolve_profile(&binding.profile, profiles).map_err(|err| match err {
-                LayoutErr::UnknownProfileBase { profile, base } if profile == binding.profile => {
-                    LayoutErr::UnknownRoleProfile {
-                        team: name.to_owned(),
-                        role: binding.role.clone(),
-                        profile: base,
-                    }
-                }
-                other => other,
-            })?;
-        apply_role_overrides(&mut resolved, binding);
-        columns.push(Column {
-            rows: vec![Cell::Agent {
-                kind: resolved.kind.clone(),
-                args: render_profile_args(&binding.profile, &resolved)?,
-                mode: resolved.mode,
-                system_prompt_file: resolved.system_prompt_file.clone(),
-                profile: Some(binding.profile.clone()),
-                role: Some(binding.role.clone()),
-            }],
-        });
+    let role_cells = team_role_cells(name, team, profiles)?;
+    if let Some(layout) = team.layout.as_deref() {
+        return parse_team_layout(name, layout, &role_cells, profiles, commands);
     }
+    let columns = team
+        .roles
+        .iter()
+        .map(|binding| Column {
+            rows: vec![
+                role_cells
+                    .get(&binding.role)
+                    .expect("validated role cell exists")
+                    .clone(),
+            ],
+        })
+        .collect();
+    Ok(LayoutSpec { columns })
+}
+
+fn team_role_cells(
+    team_name: &str,
+    team: &Team,
+    profiles: &ProfilesConfig,
+) -> Result<BTreeMap<String, Cell>> {
+    let mut cells = BTreeMap::new();
+    for binding in &team.roles {
+        cells.insert(
+            binding.role.clone(),
+            role_cell(team_name, binding, profiles)?,
+        );
+    }
+    Ok(cells)
+}
+
+fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) -> Result<Cell> {
+    let mut resolved = resolve_profile(&binding.profile, profiles).map_err(|err| match err {
+        LayoutErr::UnknownProfileBase { profile, base } if profile == binding.profile => {
+            LayoutErr::UnknownRoleProfile {
+                team: team_name.to_owned(),
+                role: binding.role.clone(),
+                profile: base,
+            }
+        }
+        other => other,
+    })?;
+    apply_role_overrides(&mut resolved, binding);
+    Ok(Cell::Agent {
+        kind: resolved.kind.clone(),
+        args: render_profile_args(&binding.profile, &resolved)?,
+        mode: resolved.mode,
+        system_prompt_file: resolved.system_prompt_file.clone(),
+        profile: Some(binding.profile.clone()),
+        role: Some(binding.role.clone()),
+    })
+}
+
+fn parse_team_layout(
+    team_name: &str,
+    raw: &str,
+    role_cells: &BTreeMap<String, Cell>,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<LayoutSpec> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err(LayoutErr::Empty);
+    }
+
+    let mut placements: BTreeMap<String, usize> = role_cells
+        .keys()
+        .map(|role| (role.clone(), 0usize))
+        .collect();
+    let mut columns = Vec::new();
+    for column_raw in raw.split(',') {
+        if column_raw.trim().is_empty() {
+            return Err(LayoutErr::EmptyCell(raw.to_owned()));
+        }
+        let mut rows = Vec::new();
+        for cell_raw in column_raw.split('+') {
+            let cell_raw = cell_raw.trim();
+            if cell_raw.is_empty() {
+                return Err(LayoutErr::EmptyCell(raw.to_owned()));
+            }
+            if let Some(cell) = role_cells.get(cell_raw) {
+                *placements
+                    .get_mut(cell_raw)
+                    .expect("placement map mirrors role cells") += 1;
+                rows.push(cell.clone());
+                continue;
+            }
+            match parse_cell(cell_raw, profiles, commands) {
+                Ok(cell) => rows.push(cell),
+                Err(LayoutErr::UnknownCell { .. }) => {
+                    return Err(LayoutErr::UnknownRoleInLayout {
+                        team: team_name.to_owned(),
+                        role: cell_raw.to_owned(),
+                    });
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        columns.push(Column { rows });
+    }
+
+    for (role, count) in placements {
+        match count {
+            0 => {
+                return Err(LayoutErr::RoleNotPlaced {
+                    team: team_name.to_owned(),
+                    role,
+                });
+            }
+            1 => {}
+            _ => {
+                return Err(LayoutErr::DuplicateRoleInLayout {
+                    team: team_name.to_owned(),
+                    role,
+                });
+            }
+        }
+    }
+
     Ok(LayoutSpec { columns })
 }
 
@@ -759,11 +866,21 @@ fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
     Ok(())
 }
 
-fn validate_team(name: &str, teams: &TeamsConfig, profiles: &ProfilesConfig) -> Result<()> {
+fn validate_team(
+    name: &str,
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+    commands: &CommandsConfig,
+) -> Result<()> {
     let team = teams
         .0
         .get(name)
         .expect("team validation called with a known team name");
+    if team.roles.is_empty() && team.layout.is_none() {
+        return Err(LayoutErr::EmptyTeam {
+            team: name.to_owned(),
+        });
+    }
     let mut seen = BTreeSet::new();
     for binding in &team.roles {
         if invalid_role_name(&binding.role) {
@@ -777,6 +894,13 @@ fn validate_team(name: &str, teams: &TeamsConfig, profiles: &ProfilesConfig) -> 
                 team: name.to_owned(),
                 name: binding.role.clone(),
                 reason,
+            });
+        }
+        if crate::agents::find_adapter(&binding.role).is_some() {
+            return Err(LayoutErr::RoleShadowsAddress {
+                team: name.to_owned(),
+                name: binding.role.clone(),
+                reason: "it is a built-in kind handle like `@claude`",
             });
         }
         if !seen.insert(binding.role.clone()) {
@@ -795,6 +919,10 @@ fn validate_team(name: &str, teams: &TeamsConfig, profiles: &ProfilesConfig) -> 
         let mut resolved = resolve_profile(&binding.profile, profiles)?;
         apply_role_overrides(&mut resolved, binding);
         render_profile_args(&binding.profile, &resolved)?;
+    }
+    if let Some(layout) = team.layout.as_deref() {
+        let role_cells = team_role_cells(name, team, profiles)?;
+        parse_team_layout(name, layout, &role_cells, profiles, commands)?;
     }
     Ok(())
 }
