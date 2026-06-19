@@ -458,6 +458,7 @@ mod tests {
                 prompt: None,
                 model: None,
                 effort: None,
+                handle: None,
                 context_pct: None,
                 context_window: None,
                 total_tokens: None,

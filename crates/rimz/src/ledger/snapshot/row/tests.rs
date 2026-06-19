@@ -84,6 +84,41 @@ fn serde_keeps_cards_flat_with_row_kind_key() {
 }
 
 #[test]
+fn display_name_prefers_agent_handle_and_falls_back_to_row_name() {
+    let mut agent = SidebarRow {
+        id: "agent:s1".to_owned(),
+        name: "claude".to_owned(),
+        pane: None,
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: Some("main".to_owned()),
+        unread: false,
+        inactive: false,
+        last_activity: row_time(),
+        card: RowCard::Agent(Box::new(AgentCard {
+            handle: Some("planner".to_owned()),
+            ..AgentCard::default()
+        })),
+    };
+    assert_eq!(agent.display_name(), "planner");
+
+    agent.as_agent_mut().unwrap().handle = None;
+    assert_eq!(agent.display_name(), "claude");
+
+    let process = SidebarRow {
+        id: "process:%1".to_owned(),
+        name: "cargo".to_owned(),
+        pane: None,
+        worktree_path: Some("/repo/main".to_owned()),
+        worktree_branch: None,
+        unread: false,
+        inactive: false,
+        last_activity: row_time(),
+        card: RowCard::Process(ProcessCard::default()),
+    };
+    assert_eq!(process.display_name(), "cargo");
+}
+
+#[test]
 fn agent_card_session_history_requires_positive_evidence() {
     assert!(!AgentCard::default().has_session_history());
     assert!(

@@ -326,7 +326,7 @@ pub fn row_label(row: &SidebarRow) -> String {
         .or_else(|| row.as_agent().and_then(|agent| agent.prompt.as_deref()))
         .filter(|value| !value.trim().is_empty())
         .map(trim_label)
-        .unwrap_or_else(|| format!("{} {}", row.name, short_id(&row.id)))
+        .unwrap_or_else(|| format!("{} {}", row.display_name(), short_id(&row.id)))
 }
 
 fn row_worktree(row: &SidebarRow) -> Option<String> {
@@ -543,6 +543,14 @@ mod tests {
         assert_eq!(out.cleared.len(), 1);
         assert_eq!(out.cleared[0].cause, UnreadClearCause::RowGone);
         assert!(out.cleared[0].agent_id.is_none());
+    }
+
+    #[test]
+    fn row_label_fallback_uses_agent_handle() {
+        let mut row = row("abcdefghi", AgentStatus::Waiting, 1_000);
+        row.as_agent_mut().unwrap().handle = Some("planner".to_owned());
+
+        assert_eq!(row_label(&row), "planner abcdefgh");
     }
 
     #[test]

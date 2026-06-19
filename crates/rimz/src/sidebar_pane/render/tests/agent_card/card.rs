@@ -77,6 +77,34 @@ fn render_agent_capability_and_window() {
         "the identity line carries the capability and hook-derived window token:\n{rendered}"
     );
 }
+
+#[test]
+fn render_agent_handle_as_card_identity() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Idle,
+        Some("/repo/main"),
+        Some("main"),
+        Some("plan the change"),
+    );
+    claude.role = Some("planner".to_owned());
+    claude.model = Some("Opus".to_owned());
+    let snapshot = snapshot_with(Vec::new(), vec![claude]);
+
+    let rendered = snapshot_to_screen(&snapshot, 34, 12);
+
+    assert!(
+        rendered.contains("○ planner"),
+        "the card renders the team role as the identity text:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("○ claude"),
+        "the provider kind stays off the identity text when a handle exists:\n{rendered}"
+    );
+    assert_snapshot("agent_handle_identity", rendered);
+}
+
 #[test]
 fn render_enriched_selected_agent_card() {
     let mut claude = agent(

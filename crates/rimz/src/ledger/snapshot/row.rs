@@ -71,6 +71,15 @@ impl SidebarRow {
         }
     }
 
+    /// The name to display on the card and in notifications: the agent's handle
+    /// (role/profile) when set, else `name` — the kind for an agent row, the
+    /// command for a process row.
+    pub fn display_name(&self) -> &str {
+        self.as_agent()
+            .and_then(|card| card.handle.as_deref())
+            .unwrap_or(&self.name)
+    }
+
     pub fn status(&self) -> Option<AgentStatus> {
         self.as_agent().and_then(|agent| agent.status)
     }
@@ -233,6 +242,14 @@ pub struct AgentCard {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The agent's display handle — the team role it launched as (`planner`,
+    /// `coder`), else its profile, copied from the rollup. The card and
+    /// notification labels render this in the provider brand color instead of
+    /// the bare kind; `None` (a bare-kind launch) falls back to the kind. The
+    /// kind stays on `SidebarRow::name` for brand lookup, spend attribution, and
+    /// subagent nesting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handle: Option<String>,
     /// Context-window % gauge value (0..=100).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub context_pct: Option<u8>,

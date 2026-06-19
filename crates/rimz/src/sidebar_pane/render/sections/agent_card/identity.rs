@@ -1,16 +1,17 @@
 use super::*;
 
-/// The agent name's spans under the row's card emphasis, sharing the unread
+/// The agent handle's spans under the row's card emphasis, sharing the unread
 /// treatment with the lead glyph and description so the three move as one group:
-/// the normal tier wears the matching provider brand color, tying the card to
-/// the provider dashboard; the soft tier keeps that brand hue muted to the body
-/// tier, so a calm unselected card still reads as its provider; an unread row
-/// carries the chosen unread effect — a single styled span for blink/bright, one
-/// span per character for the flowing shimmer. Unknown providers fall back to
-/// mid-gray chrome.
+/// the normal tier wears the matching provider brand color, resolved from the
+/// agent kind, tying the card to the provider dashboard; the soft tier keeps
+/// that brand hue muted to the body tier, so a calm unselected card still reads
+/// as its provider; an unread row carries the chosen unread effect — a single
+/// styled span for blink/bright, one span per character for the flowing shimmer.
+/// Unknown providers fall back to mid-gray chrome.
 pub(super) fn attention_name_spans(
     theme: &Theme,
     providers: &[SidebarProviderPanel],
+    display: &str,
     kind: &str,
     attention: CardAttention,
 ) -> Vec<Span<'static>> {
@@ -19,7 +20,7 @@ pub(super) fn attention_name_spans(
         .find(|panel| panel.kind == kind)
         .map(|panel| theme.brand_tone(panel))
         .unwrap_or_else(|| theme.component(Component::UnknownBrand));
-    let text = clip(kind, NAME_MAX);
+    let text = clip(display, NAME_MAX);
     match attention.emphasis {
         CardEmphasis::Blink => unread_run_spans(theme, Some(brand), attention.anim, &text),
         _ => vec![Span::styled(
@@ -63,7 +64,7 @@ pub(super) fn identity_line(ctx: IdentityLineContext<'_>, row: &SidebarRow) -> L
                 resolver_glyph(ctx.theme, ctx.animation_phase),
                 resolver_style(ctx.theme, ctx.animation_phase),
             ),
-            &row.name,
+            row.display_name(),
             &format!("{resolver_name} {remaining}"),
             row.last_activity,
             ctx.now,
@@ -175,14 +176,20 @@ pub(super) fn agent_identity_line(
     // Left cluster: glyph + name + the capability tokens at the dim chrome —
     // metadata, a step under the soft stat figures — over `·` seams of the
     // same weight. The glyph holds its fixed status tone; the unread attention
-    // effect supplies any motion. The kind name reads at normal weight in the
-    // provider's brand color (or mid-gray chrome for unknown kinds); the bright
-    // slot is saved for the task below.
+    // effect supplies any motion. The display handle reads at normal weight in
+    // the provider's brand color (or mid-gray chrome for unknown kinds); the
+    // bright slot is saved for the task below.
     let mut left: Vec<Span<'static>> = vec![
         agent_lead_cell(theme, row, status, attention, animation_phase),
         Span::raw(" "),
     ];
-    left.extend(attention_name_spans(theme, providers, &row.name, attention));
+    left.extend(attention_name_spans(
+        theme,
+        providers,
+        row.display_name(),
+        &row.name,
+        attention,
+    ));
     if tier != Tier::L0 {
         if let Some(model) = display_model(row) {
             left.push(Span::styled(" · ", theme.muted()));

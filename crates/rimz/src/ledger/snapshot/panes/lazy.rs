@@ -358,6 +358,7 @@ fn idle_agent_row(
             prompt: None,
             model: default_model.map(ToOwned::to_owned),
             effort: None,
+            handle: None,
             // Agent rows draw the started-session gauge at `Some(0)` — matching
             // a freshly-bound session.
             context_pct: Some(0),

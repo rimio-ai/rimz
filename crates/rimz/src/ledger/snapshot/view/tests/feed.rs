@@ -97,6 +97,33 @@ fn multiple_pending_asks_for_one_session_render_one_row() {
     assert_eq!(agent_rows[0].status(), Some(AgentStatus::Waiting));
 }
 
+#[test]
+fn row_from_agent_projects_role_then_profile_as_display_handle() {
+    let mut role = agent("claude", "sess-role", AgentStatus::Idle, 1_000);
+    role.role = Some("planner".to_owned());
+    role.profile = Some("claude-planner".to_owned());
+    let row = row_from_agent(&role, epoch());
+    assert_eq!(row.name, "claude");
+    assert_eq!(row.as_agent().unwrap().handle.as_deref(), Some("planner"));
+    assert_eq!(row.display_name(), "planner");
+
+    let mut profile = agent("claude", "sess-profile", AgentStatus::Idle, 1_000);
+    profile.profile = Some("claude-planner".to_owned());
+    let row = row_from_agent(&profile, epoch());
+    assert_eq!(row.name, "claude");
+    assert_eq!(
+        row.as_agent().unwrap().handle.as_deref(),
+        Some("claude-planner")
+    );
+    assert_eq!(row.display_name(), "claude-planner");
+
+    let bare = agent("claude", "sess-bare", AgentStatus::Idle, 1_000);
+    let row = row_from_agent(&bare, epoch());
+    assert_eq!(row.name, "claude");
+    assert_eq!(row.as_agent().unwrap().handle, None);
+    assert_eq!(row.display_name(), "claude");
+}
+
 // ── Activity heartbeat fold ─────────────────────────────────────────────────
 
 #[test]

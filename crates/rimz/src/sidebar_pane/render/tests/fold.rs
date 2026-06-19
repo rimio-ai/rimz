@@ -511,16 +511,16 @@ fn consecutive_cards_stack_without_a_blank_separator() {
         rendered.join("\n")
     );
 }
-/// The agent name uses the provider brand color in the card's normal tier. At
+/// The agent handle uses the provider brand color in the card's normal tier. At
 /// truecolor a calm unselected card softens it a lightness step; the 256-color
 /// cube is too coarse for that subtle step, so an indexed render (this test)
 /// keeps the full brand and leaves the calm cue to the selection bar and
 /// description. Read the expected index off the snapshot's own panel so the test
 /// follows config overrides.
 #[test]
-fn agent_name_follows_card_emphasis() {
+fn agent_handle_follows_card_emphasis() {
     let theme = Theme::fixed(false); // indexed depth, color on, so the brand tone survives
-    let state = agent(
+    let mut state = agent(
         "claude-1",
         "claude",
         AgentStatus::Running,
@@ -528,6 +528,7 @@ fn agent_name_follows_card_emphasis() {
         Some("main"),
         Some("db migrate"),
     );
+    state.role = Some("planner".to_owned());
     let mut snapshot = snapshot_with(Vec::new(), vec![state]);
     // Provider panels are producer-only (`with_provider_aggregates`), so the
     // reducer-built snapshot carries none — set one as the producer would.
@@ -545,31 +546,31 @@ fn agent_name_follows_card_emphasis() {
         group_lines(&snapshot, &theme, selected_index)
             .into_iter()
             .flat_map(|line| line.spans)
-            .find(|span| span.content == "claude")
-            .expect("the agent name span")
+            .find(|span| span.content == "planner")
+            .expect("the agent handle span")
             .style
     };
     let selected = name_style(0);
     assert_eq!(
         selected.fg,
         Some(Color::Indexed(expected)),
-        "the selected agent name wears the full provider color"
+        "the selected agent handle wears the full provider color"
     );
     let calm = name_style(usize::MAX);
     assert_eq!(
         calm,
         theme.body_brand(Color::Indexed(expected)),
-        "a calm unselected agent name takes the calm brand style"
+        "a calm unselected agent handle takes the calm brand style"
     );
     assert_eq!(
         calm.fg, selected.fg,
-        "at indexed depth the calm name keeps the same full-brand tone — the cube \
+        "at indexed depth the calm handle keeps the same full-brand tone — the cube \
          can't render a subtle dim, so the selection band, bar, and description \
          carry the selected/calm distinction"
     );
     assert_ne!(
         calm.fg,
         theme.body().fg,
-        "the calm name keeps its brand hue, not the flat soft gray"
+        "the calm handle keeps its brand hue, not the flat soft gray"
     );
 }
