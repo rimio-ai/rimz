@@ -34,6 +34,9 @@ pub(crate) struct PiHookPayload {
     /// (rounded on the wire); `agent_end` overrides with the last assistant
     /// message's `usage.totalTokens` when present.
     pub total_tokens: Option<u64>,
+    /// Every event after the first turn: cumulative session cost the extension
+    /// accumulates from `usage.cost.total`; best-effort and reset on `/resume`.
+    pub total_cost_usd: Option<f64>,
     /// Latest provider call: fresh input, excluding cache reads and cache writes.
     pub input_tokens: Option<u64>,
     /// Latest provider call: generated output.
@@ -84,9 +87,16 @@ mod tests {
     fn tolerant_parse_degrades_to_the_empty_default() {
         let parsed = parse_payload(&json!("not an object"));
         assert!(parsed.prompt.is_none());
+        let priced = parse_payload(&json!({ "total_cost_usd": 0.125 }));
+        assert_eq!(priced.total_cost_usd, Some(0.125));
         // A type mismatch anywhere degrades the whole payload to default
         // rather than erroring — enrichment, never correctness.
-        let typed = parse_payload(&json!({ "total_tokens": "not a number", "prompt": "p" }));
+        let typed = parse_payload(&json!({
+            "total_cost_usd": "not a number",
+            "total_tokens": 10,
+            "prompt": "p"
+        }));
+        assert!(typed.total_cost_usd.is_none());
         assert!(typed.total_tokens.is_none());
         assert!(typed.prompt.is_none());
     }

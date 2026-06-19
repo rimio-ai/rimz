@@ -174,45 +174,127 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
 }
 
 #[test]
-fn pi_observes_live_rate_limit_context() {
-    let context = PiAdapter
-        .observe_context(
-            "pi",
-            &json!({
-                "rate_limits": [
-                    {
-                        "used_percentage": 72,
-                        "resets_at": 1_700_018_000i64,
-                        "duration_mins": 300,
-                        "observed_at": 1_700_000_000i64
-                    },
-                    {
-                        "used_percentage": 35,
-                        "resets_at": 1_700_604_800i64,
-                        "duration_mins": 10_080,
-                        "observed_at": 1_700_000_000i64
-                    }
-                ],
-                "input_tokens": 10
-            }),
-        )
-        .expect("rate-limit context");
-    assert_eq!(context.source, "pi");
-    assert!(context.tokens.is_none());
-    let windows = context.rate_limits.expect("windows").windows;
-    assert_eq!(windows.len(), 2);
-    assert_eq!(windows[0].used_percentage, Some(72));
-    assert_eq!(windows[0].duration_mins, Some(300));
+fn pi_observes_rich_context_from_the_extension_envelope() {
+    let context = normalized_context(json!({
+        "model": "gpt-5.5",
+        "effort": "high",
+        "context_pct": 42,
+        "context_window": 272_000,
+        "total_tokens": 114_000,
+        "total_cost_usd": 0.125,
+        "input_tokens": 10,
+        "cache_write_input_tokens": 4,
+        "cache_read_input_tokens": 30,
+        "output_tokens": 2,
+        "rate_limits": [
+            {
+                "used_percentage": 72,
+                "resets_at": 1_700_018_000i64,
+                "duration_mins": 300,
+                "observed_at": 1_700_000_000i64
+            },
+            {
+                "used_percentage": 35,
+                "resets_at": 1_700_604_800i64,
+                "duration_mins": 10_080,
+                "observed_at": 1_700_000_000i64
+            }
+        ]
+    }))
+    .expect("rich context");
+    insta::assert_json_snapshot!(context, @r###"
+        {
+          "source": "pi",
+          "model_id": "gpt-5.5",
+          "effort": "high",
+          "cost": {
+            "total_cost_usd": 0.125
+          },
+          "tokens": {
+            "context_window_size": 272000,
+            "used_percentage": 42,
+            "current_usage": {
+              "input_tokens": 10,
+              "output_tokens": 2,
+              "cache_creation_input_tokens": 4,
+              "cache_read_input_tokens": 30
+            }
+          },
+          "rate_limits": {
+            "windows": [
+              {
+                "used_percentage": 72,
+                "resets_at": "2023-11-15T03:13:20Z",
+                "duration_mins": 300,
+                "observed_at": "2023-11-14T22:13:20Z"
+              },
+              {
+                "used_percentage": 35,
+                "resets_at": "2023-11-21T22:13:20Z",
+                "duration_mins": 10080,
+                "observed_at": "2023-11-14T22:13:20Z"
+              }
+            ]
+          },
+          "observed_at": "2023-11-14T22:13:20Z"
+        }
+        "###);
+
+    let without_cost = normalized_context(json!({
+        "context_pct": 7,
+        "context_window": 128_000,
+        "input_tokens": 9
+    }))
+    .expect("context without cost");
+    assert!(without_cost.cost.is_none());
     assert_eq!(
-        windows[0].resets_at,
-        Some(jiff::Timestamp::from_second(1_700_018_000).unwrap())
+        without_cost.tokens.as_ref().unwrap().used_percentage,
+        Some(7)
     );
+
+    let without_rate_limits = normalized_context(json!({
+        "context_pct": 12,
+        "context_window": 128_000,
+        "input_tokens": 6,
+        "output_tokens": 1
+    }))
+    .expect("context without windows");
+    assert!(without_rate_limits.rate_limits.is_none());
     assert_eq!(
-        windows[0].observed_at,
-        Some(jiff::Timestamp::from_second(1_700_000_000).unwrap())
+        without_rate_limits
+            .tokens
+            .as_ref()
+            .and_then(|tokens| tokens.current_usage.as_ref())
+            .and_then(|usage| usage.input_tokens),
+        Some(6)
     );
-    assert_eq!(windows[0].source, WindowSource::BestEffort);
-    assert_eq!(windows[1].duration_mins, Some(10_080));
+
+    let zero_split = normalized_context(json!({
+        "context_pct": 0,
+        "context_window": 128_000,
+        "input_tokens": 0,
+        "cache_write_input_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "output_tokens": 0
+    }))
+    .expect("zero split still carries the window");
+    assert!(
+        zero_split.tokens.as_ref().unwrap().current_usage.is_none(),
+        "all-zero token split drops the per-call breakdown"
+    );
+
+    assert!(
+        PiAdapter
+            .observe_context("pi", &json!({ "context_window": "not a number" }))
+            .is_none(),
+        "malformed context payloads degrade to no enrichment"
+    );
+}
+
+fn normalized_context(payload: serde_json::Value) -> Option<AgentContext> {
+    let mut context = PiAdapter.observe_context("pi", &payload)?;
+    context.observed_at = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+    Some(context)
 }
 
 #[test]
@@ -415,10 +497,16 @@ fn extension_source_wires_every_event() {
     assert!(EXTENSION_SOURCE.contains("RIMZ_BIN"));
     assert!(EXTENSION_SOURCE.contains("getContextUsage"));
     assert!(EXTENSION_SOURCE.contains("Math.round"));
+    assert!(EXTENSION_SOURCE.contains("costBySession"));
+    assert!(EXTENSION_SOURCE.contains("total_cost_usd"));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("turn_end""#));
     assert!(EXTENSION_SOURCE.contains(r#"pi.on("after_provider_response""#));
     assert!(EXTENSION_SOURCE.contains("cache_write_input_tokens"));
     assert!(EXTENSION_SOURCE.contains("rate_limits"));
+    assert!(
+        !EXTENSION_SOURCE.contains("addSessionCost(sessionId(ctx), last?.usage"),
+        "agent_end's last message is the final turn_end usage and must not add cost again"
+    );
     for event in WIRED_EVENTS {
         assert!(
             EXTENSION_SOURCE.contains(&format!("pi.on(\"{event}\"")),
@@ -427,4 +515,126 @@ fn extension_source_wires_every_event() {
     }
     assert!(EXTENSION_SOURCE.contains("block: true"));
     assert!(EXTENSION_SOURCE.contains(r#"ev?.reason === "reload""#));
+}
+
+#[test]
+#[cfg(unix)]
+fn extension_accumulates_cost_only_on_turn_end_and_clears_on_shutdown() {
+    if std::process::Command::new("node")
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        return;
+    }
+
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let dir = tempfile::tempdir().unwrap();
+    let extension_path = dir.path().join("rimz.mjs");
+    let capture_path = dir.path().join("capture.jsonl");
+    let stub_path = dir.path().join("rimz-capture");
+    std::fs::write(&extension_path, EXTENSION_SOURCE).unwrap();
+    std::fs::write(
+        &stub_path,
+        "#!/bin/sh\npayload=$(cat)\nprintf '%s\\n' \"$payload\" >> \"$RIMZ_CAPTURE\"\n",
+    )
+    .unwrap();
+    let mut permissions = std::fs::metadata(&stub_path).unwrap().permissions();
+    permissions.set_mode(0o755);
+    std::fs::set_permissions(&stub_path, permissions).unwrap();
+
+    let harness = dir.path().join("harness.mjs");
+    std::fs::write(
+        &harness,
+        format!(
+            r#"
+import fs from "node:fs/promises";
+
+process.env.RIMZ_BIN = {};
+process.env.RIMZ_CAPTURE = {};
+
+const {{ default: rimz }} = await import({});
+const handlers = new Map();
+const pi = {{
+  on: (event, handler) => handlers.set(event, handler),
+  getThinkingLevel: () => "medium",
+}};
+const ctx = {{
+  sessionManager: {{
+    getSessionId: () => "sess-1",
+    getCwd: () => "/repo",
+  }},
+  getContextUsage: () => ({{ percent: 45, contextWindow: 1000, tokens: 450 }}),
+  model: {{ id: "gpt-5" }},
+}};
+rimz(pi);
+
+handlers.get("turn_end")({{
+  usage: {{
+    input: 10,
+    output: 5,
+    cacheRead: 3,
+    cacheWrite: 2,
+    totalTokens: 20,
+    cost: {{ total: 0.25 }},
+  }},
+}}, ctx);
+handlers.get("agent_end")({{
+  messages: [{{
+    role: "assistant",
+    model: "gpt-5.5",
+    stopReason: "stop",
+    usage: {{ totalTokens: 20, cost: {{ total: 0.25 }} }},
+  }}],
+}}, ctx);
+handlers.get("session_shutdown")({{ reason: "quit" }}, ctx);
+
+const readPayloads = async () => {{
+  try {{
+    const text = await fs.readFile({}, "utf8");
+    return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
+  }} catch {{
+    return [];
+  }}
+}};
+
+let payloads = [];
+for (let i = 0; i < 50; i += 1) {{
+  payloads = await readPayloads();
+  if (payloads.length >= 2) break;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+}}
+if (payloads.length < 2) {{
+  throw new Error(`expected 2 forwarded payloads, got ${{payloads.length}}`);
+}}
+const byEvent = Object.fromEntries(payloads.map((payload) => [payload.hook_event_name, payload]));
+if (byEvent.agent_end.total_cost_usd !== 0.25) {{
+  throw new Error(`agent_end cost was ${{byEvent.agent_end.total_cost_usd}}`);
+}}
+if (byEvent.agent_end.input_tokens !== 10 || byEvent.agent_end.cache_write_input_tokens !== 2) {{
+  throw new Error(`agent_end lost turn_end token split: ${{JSON.stringify(byEvent.agent_end)}}`);
+}}
+if ("total_cost_usd" in byEvent.session_shutdown) {{
+  throw new Error(`shutdown kept cost: ${{JSON.stringify(byEvent.session_shutdown)}}`);
+}}
+"#,
+            serde_json::to_string(stub_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
+            serde_json::to_string(&format!("file://{}", extension_path.display())).unwrap(),
+            serde_json::to_string(capture_path.to_str().unwrap()).unwrap(),
+        ),
+    )
+    .unwrap();
+
+    let output = std::process::Command::new("node")
+        .arg(&harness)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "node harness failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }

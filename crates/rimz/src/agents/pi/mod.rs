@@ -7,9 +7,10 @@
 //! as fire-and-forget children, inverting the Claude/Codex child direction
 //! (pi runs Rimz, not the other way around); the wire it posts is the typed
 //! shape in [`payloads`], with the model, effort, and context gauge
-//! (`context_pct` / `context_window` / `total_tokens`) stamped on every
-//! envelope from the in-process `ctx.getContextUsage()` — payload-first, so
-//! the sidebar's bar stays current with no transcript tail read here.
+//! (`context_pct` / `context_window` / `total_tokens`) and cumulative cost
+//! stamped on every envelope from the in-process extension — payload-first, so
+//! the sidebar's bar and dollar line stay current with the turn-end spend walk
+//! reconciling the final total.
 //! Lifecycle maps per docs/internals/agents/adapter/pi.md: `session_start`
 //! registers, `before_agent_start` starts the
 //! turn with the prompt, `agent_end` ends it carrying the in-band error bit,
@@ -40,7 +41,10 @@ use std::time::Duration;
 use jiff::Timestamp;
 use serde_json::{Value, json};
 
-use super::context::{AgentContext, AgentRateLimits, RateLimitWindow, WindowSource};
+use super::context::{
+    AgentContext, AgentCost, AgentCurrentUsage, AgentRateLimits, AgentTokenUsage, RateLimitWindow,
+    WindowSource,
+};
 use super::descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, IntegrationConcern, PlanLabel,
     RemoteControlCapability, ThreadKey, ToolClassification,
@@ -190,14 +194,14 @@ const PI_COVERAGE: &[(IntegrationConcern, ConcernCoverage)] = &[
     (
         IntegrationConcern::ContextUsage,
         ConcernCoverage::Wired {
-            via: "extension context usage",
+            via: "extension context usage (row gauge + AgentContext.tokens)",
         },
     ),
     (
         IntegrationConcern::RealtimeCost,
         ConcernCoverage::Partial {
-            via: "session transcript spend sum",
-            gap: "reconstructed on turn-end, not a provider-pushed realtime figure",
+            via: "extension cumulative-cost push + turn-end session-transcript spend sum",
+            gap: "in-process accumulator is best-effort and resets on resume; the turn-end walk reconciles to the authoritative session total",
         },
     ),
     (
@@ -456,7 +460,7 @@ impl AgentAdapter for PiAdapter {
     }
 
     fn observe_context(&self, source: &str, payload: &Value) -> Option<AgentContext> {
-        pi_rate_limits_context(source, payload)
+        pi_observed_context(source, payload)
     }
 
     fn ends_session(&self, event_name: &str) -> bool {
@@ -561,37 +565,75 @@ impl AgentAdapter for PiAdapter {
     }
 }
 
-fn pi_rate_limits_context(source: &str, payload: &Value) -> Option<AgentContext> {
+fn pi_observed_context(source: &str, payload: &Value) -> Option<AgentContext> {
+    let parsed = payloads::parse_payload(payload);
+    let current_usage = pi_current_usage(&parsed);
+    let tokens = {
+        let usage = AgentTokenUsage {
+            context_window_size: parsed.context_window,
+            used_percentage: payload_context_pct(payload, None),
+            remaining_percentage: None,
+            current_usage,
+        };
+        (usage.context_window_size.is_some()
+            || usage.used_percentage.is_some()
+            || usage.current_usage.is_some())
+        .then_some(usage)
+    };
+    let cost = parsed
+        .total_cost_usd
+        .filter(|cost| *cost > 0.0)
+        .map(|total_cost_usd| AgentCost {
+            total_cost_usd: Some(total_cost_usd),
+            ..AgentCost::default()
+        });
     let windows: Vec<RateLimitWindow> = payload
-        .get("rate_limits")?
-        .as_array()?
-        .iter()
+        .get("rate_limits")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
         .filter_map(parse_rate_limit_window)
         .collect();
-    if windows.is_empty() {
+    let rate_limits = (!windows.is_empty()).then_some(AgentRateLimits { windows });
+    if parsed.model.is_none()
+        && parsed.effort.is_none()
+        && tokens.is_none()
+        && cost.is_none()
+        && rate_limits.is_none()
+    {
         return None;
     }
     Some(AgentContext {
         source: source.to_owned(),
         session_name: None,
         session_preview: None,
-        model_id: None,
+        model_id: parsed.model,
         model_display_name: None,
-        effort: None,
+        effort: parsed.effort,
         thinking_enabled: None,
         output_style: None,
         vim_mode: None,
         agent_version: None,
         exceeds_200k_tokens: None,
-        cost: None,
-        tokens: None,
-        rate_limits: Some(AgentRateLimits { windows }),
+        cost,
+        tokens,
+        rate_limits,
         pr: None,
         account: None,
         turn_error: None,
         turn_complete: None,
         observed_at: Timestamp::now(),
     })
+}
+
+fn pi_current_usage(parsed: &payloads::PiHookPayload) -> Option<AgentCurrentUsage> {
+    let usage = AgentCurrentUsage {
+        input_tokens: parsed.input_tokens,
+        output_tokens: parsed.output_tokens,
+        cache_creation_input_tokens: parsed.cache_write_input_tokens,
+        cache_read_input_tokens: parsed.cache_read_input_tokens,
+    };
+    (!usage.is_zero()).then_some(usage)
 }
 
 fn parse_rate_limit_window(value: &Value) -> Option<RateLimitWindow> {

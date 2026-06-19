@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 
 const RIMZ = process.env.RIMZ_BIN || "rimz";
 const usageBySession = new Map();
+const costBySession = new Map();
 let latestWindows = [];
 
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -35,6 +36,13 @@ const recordUsage = (id, usage) => {
   };
   if (Object.values(gauge).some((value) => value != null)) {
     usageBySession.set(id, gauge);
+  }
+};
+
+const addSessionCost = (id, usage) => {
+  const cost = numberMaybe(usage?.cost?.total);
+  if (id && cost != null && cost > 0) {
+    costBySession.set(id, (costBySession.get(id) ?? 0) + cost);
   }
 };
 
@@ -125,6 +133,7 @@ export default function rimz(pi) {
       context_pct: usage?.percent == null ? undefined : Math.round(usage.percent),
       context_window: usage?.contextWindow,
       total_tokens: usage?.tokens == null ? undefined : Math.round(usage.tokens),
+      total_cost_usd: costBySession.get(id),
       ...usageFields(id),
       rate_limits: latestWindows.length > 0 ? latestWindows : undefined,
       ...fields,
@@ -172,7 +181,10 @@ export default function rimz(pi) {
   pi.on("turn_end", (ev, ctx) => {
     const messages = Array.isArray(ev?.messages) ? ev.messages : [];
     const last = messages.filter((m) => m?.role === "assistant").at(-1);
-    recordUsage(sessionId(ctx), ev?.usage ?? last?.usage ?? ev?.message?.usage);
+    const usage = ev?.usage ?? last?.usage ?? ev?.message?.usage;
+    const id = sessionId(ctx);
+    recordUsage(id, usage);
+    addSessionCost(id, usage);
   });
   pi.on("after_provider_response", (ev) => updateWindows(ev?.headers));
   pi.on("tool_execution_end", (ev, ctx) =>
@@ -190,7 +202,9 @@ export default function rimz(pi) {
     // extension's session_start re-registers in place. quit/new/resume/fork
     // genuinely end this session.
     if (ev?.reason === "reload") return;
-    usageBySession.delete(sessionId(ctx));
+    const id = sessionId(ctx);
+    usageBySession.delete(id);
+    costBySession.delete(id);
     latestWindows = [];
     feed("session_shutdown", ctx, { reason: ev?.reason });
   });
