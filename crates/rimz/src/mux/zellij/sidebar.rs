@@ -4,7 +4,7 @@ use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
 use super::layout::{TempLayoutFile, render_session_layout, render_sidebar_layout};
-use super::parse::{new_tab_template_sidebar_cols, strip_ansi};
+use super::parse::{new_tab_template_sidebar_cols, parse_focused_client_panes, strip_ansi};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
     sidebar_dock_verdict, sidebar_width_off_spec, stackable_nested_work_pane_ids, tab_extent_cols,
@@ -20,6 +20,7 @@ use crate::mux::{DaemonView, MuxBackend, MuxErr, Result, SidebarPaneOptions, Sid
 
 const ADD_DOCK_ATTEMPTS: u32 = 2;
 const DOCK_VERIFY_SETTLE: Duration = Duration::from_millis(100);
+const CLIENT_PROBE_SETTLE: Duration = Duration::from_millis(100);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum DockOutcome {
@@ -461,20 +462,25 @@ impl ZellijBackend {
         }
     }
 
-    /// Whether `session` has at least one attached client. `list-clients`
-    /// prints a header line plus one row per client, so header-only output
-    /// reads detached. An unanswerable probe also reads detached — deferring
-    /// an add for one run is recoverable, a leaked serve pair is not.
+    /// Whether `session` has a stable attached terminal client. `list-clients`
+    /// can briefly include action/create-background clients, and plugin-focused
+    /// rows do not prove a terminal screen can mount an in-place pane. Require
+    /// a focused terminal pane across two probes; an unanswerable or ambiguous
+    /// probe reads detached because deferring one run is recoverable, a leaked
+    /// serve pair is not.
     pub(super) fn session_has_attached_client(&self, session: &str) -> bool {
+        if !self.session_has_focused_terminal_client(session) {
+            return false;
+        }
+        std::thread::sleep(CLIENT_PROBE_SETTLE);
+        self.session_has_focused_terminal_client(session)
+    }
+
+    fn session_has_focused_terminal_client(&self, session: &str) -> bool {
         self.zellij_action(session)
             .arg("list-clients")
             .run()
-            .map(|output| {
-                String::from_utf8_lossy(&output.stdout)
-                    .lines()
-                    .skip(1)
-                    .any(|line| !line.trim().is_empty())
-            })
+            .map(|output| !parse_focused_client_panes(&output.stdout).is_empty())
             .unwrap_or(false)
     }
 
