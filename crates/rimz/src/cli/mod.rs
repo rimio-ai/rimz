@@ -520,7 +520,7 @@ enum Subcmd {
     Workspace(workspace::WorkspaceArgs),
     /// Show known workspaces and which mux is currently running them.
     List(list::ListArgs),
-    /// Token-activity heatmap, model breakdown, and usage insights, account-global.
+    /// Token-activity heatmap, model/agent breakdowns, and usage insights.
     Stats(stats::StatsArgs),
     /// List the bundled sidebar theme names.
     ListThemes(list_themes::ListThemesArgs),

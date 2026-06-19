@@ -1,16 +1,17 @@
-//! `rimz stats` — the wordmark, the token-usage heatmap, and the account-global
-//! activity insights as a standalone command. The lobby embeds the same panel;
-//! here it stands alone so the figures read from inside a room, where the lobby
-//! never appears.
+//! `rimz stats` — the wordmark, the token-usage heatmap, per-model and
+//! per-agent breakdowns, and the account-global activity insights as a
+//! standalone command. The lobby embeds the same panel; here it stands alone so
+//! the figures read from inside a room, where the lobby never appears.
 //!
 //! Account-global: it reads the producer's published provider aggregate when
 //! available. A standalone first launch takes the same shared spending election
 //! as the sidebar producer, publishes the same provider-spending rollups, and
 //! then subsequent runs return from the cache.
 //!
-//! Windows: the heatmap and the model breakdown read the full available history
-//! (the cache spans the trailing year); "Active days" reports the trailing four
-//! weeks; the Week/Month/Year totals are the trailing 7/30/365 days.
+//! Windows: the heatmap, model breakdown, and agent breakdown read the full
+//! available history (the cache spans the trailing year); "Active days" reports
+//! the trailing four weeks; the Week/Month/Year totals are the trailing 7/30/365
+//! days. `--refresh` holds the panel open and redraws it every minute.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{IsTerminal, Write};
@@ -29,8 +30,8 @@ use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
 use rimz::agents::spending::{
-    DaySpend, ModelSpend, ProviderSpendingCache, SpendProgress, SpendTally, compute_daily_spend,
-    compute_model_breakdown, compute_spending, compute_spending_with_progress,
+    DaySpend, ModelSpend, ProviderSpendingCache, SpendProgress, SpendTally, Spending,
+    compute_daily_spend, compute_model_breakdown, compute_spending, compute_spending_with_progress,
     discover_spending_files, read_provider_spending_cache, read_spending_cache,
     recorded_unknown_models, unix_secs_now, utc_date, write_provider_spending_cache_with_rollups,
     write_spending_cache,
@@ -61,6 +62,7 @@ const PROGRESS_BAR_WIDTH: usize = 20;
 const SPINNER_CLEAR_COLS: usize = 120;
 const SPENDING_WAIT_STEP: Duration = Duration::from_millis(20);
 const SPENDING_WAIT_STEPS: u32 = 15;
+const REFRESH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// The wordmark, spaced for a monospace terminal (the README carries a variant
 /// retuned for proportional HTML rendering).
@@ -80,9 +82,15 @@ pub struct StatsArgs {
     /// Emit the stats as JSON instead of the panel.
     #[arg(long)]
     pub json: bool,
+    /// Hold the panel open and redraw it every 60s; exit with Ctrl-C.
+    #[arg(long, conflicts_with = "json")]
+    pub refresh: bool,
 }
 
 pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
+    if args.refresh {
+        return run_refresh(args.dollars);
+    }
     let loaded = load_stats(!args.json)?;
     let today_day = unix_secs_now() as i64 / DAY_SECS;
     if args.json {
@@ -96,16 +104,39 @@ pub fn run(args: StatsArgs, _globals: &GlobalFlags) -> Result<()> {
     )
 }
 
+fn run_refresh(dollars: bool) -> Result<()> {
+    loop {
+        let loaded = load_stats(true)?;
+        let today_day = unix_secs_now() as i64 / DAY_SECS;
+        clear_screen()?;
+        render_panel(&loaded.stats, today_day, dollars, true)?;
+        thread::sleep(REFRESH_INTERVAL);
+    }
+}
+
+fn clear_screen() -> Result<()> {
+    use ratatui::crossterm::{
+        cursor::MoveTo,
+        execute,
+        terminal::{Clear, ClearType},
+    };
+
+    let mut stdout = std::io::stdout();
+    execute!(stdout, Clear(ClearType::All), MoveTo(0, 0))?;
+    Ok(())
+}
+
 struct LoadedStats {
     stats: Stats,
     header_printed: bool,
 }
 
 /// The deduplicated account-global history `rimz stats` renders: per-day buckets,
-/// the per-model breakdown, and producer-priced trailing windows.
+/// the per-model and per-agent breakdowns, and producer-priced trailing windows.
 struct Stats {
     by_day: BTreeMap<i64, DaySpend>,
     by_model: BTreeMap<String, ModelSpend>,
+    by_agent: BTreeMap<String, SpendTally>,
     total: SpendTally,
 }
 
@@ -117,10 +148,12 @@ impl Stats {
             spending,
             ..
         } = cache;
+        let Spending { total, by_provider } = spending;
         Stats {
             by_day: days,
             by_model: models,
-            total: spending.total,
+            by_agent: by_provider,
+            total,
         }
     }
 }
@@ -226,10 +259,12 @@ fn compute_stats_from_files(
             &by_model,
         );
     }
+    let Spending { total, by_provider } = spending;
     Stats {
         by_day,
         by_model,
-        total: spending.total,
+        by_agent: by_provider,
+        total,
     }
 }
 
@@ -497,6 +532,11 @@ fn render_panel(stats: &Stats, today_day: i64, dollars: bool, include_header: bo
         lines.push(String::new());
         models_lines(&mut lines, stats, geometry.panel_width);
     }
+    let mut agent_lines = Vec::new();
+    if agents_lines(&mut agent_lines, stats) {
+        lines.push(String::new());
+        lines.extend(agent_lines);
+    }
     lines.push(String::new());
     insights_lines(&mut lines, stats, today_day, geometry.panel_width);
 
@@ -691,6 +731,68 @@ fn model_cell(name: &str, spend: &ModelSpend, total: u64) -> (String, String) {
         ),
     );
     (name_line, io_line)
+}
+
+struct AgentYearBreakdown<'a> {
+    kind: &'a str,
+    name: String,
+    tally: &'a SpendTally,
+    share: f64,
+}
+
+fn agent_year_breakdown(stats: &Stats) -> Vec<AgentYearBreakdown<'_>> {
+    let total: u64 = stats.by_agent.values().map(|tally| tally.year.tokens).sum();
+    if total == 0 {
+        return Vec::new();
+    }
+
+    let mut agents: Vec<_> = stats
+        .by_agent
+        .iter()
+        .filter(|(_, tally)| tally.year.tokens > 0)
+        .map(|(kind, tally)| AgentYearBreakdown {
+            kind: kind.as_str(),
+            name: agent_display_name(kind),
+            tally,
+            share: tally.year.tokens as f64 / total as f64,
+        })
+        .collect();
+    agents.sort_by_key(|agent| std::cmp::Reverse(agent.tally.year.tokens));
+    agents
+}
+
+fn agents_lines(lines: &mut Vec<String>, stats: &Stats) -> bool {
+    let agents = agent_year_breakdown(stats);
+    if agents.is_empty() {
+        return false;
+    }
+
+    let label_width = agents
+        .iter()
+        .map(|agent| agent.name.chars().count() + 2)
+        .max()
+        .unwrap_or(0);
+    lines.push(format!("  {}", render::paint(meta(), "Agents")));
+    for agent in agents {
+        let label = format!("● {}", agent.name);
+        let label = format!("{label:<width$}", width = label_width);
+        let tokens = format!("◇ {}", fmt_tokens(agent.tally.year.tokens));
+        lines.push(format!(
+            "  {}  {}  {}  {}  {}",
+            render::paint(cool(), &label),
+            render::paint(cool(), &format!("{tokens:<8}")),
+            render::paint(muted(), "·"),
+            fmt_usd(agent.tally.year.usd),
+            render::paint(muted(), &format!("({:.1}%)", agent.share * 100.0)),
+        ));
+    }
+    true
+}
+
+fn agent_display_name(kind: &str) -> String {
+    rimz::agents::descriptor_by_kind(kind)
+        .map(|descriptor| descriptor.display_name.to_owned())
+        .unwrap_or_else(|| capitalize(kind))
 }
 
 /// Sessions, active-day ratio, most active day, and longest / current streak.
@@ -1029,6 +1131,7 @@ struct StatsJson {
     most_active_day: Option<String>,
     windows: WindowsJson,
     models: Vec<ModelJson>,
+    agents: Vec<AgentJson>,
     days: Vec<DayJson>,
 }
 
@@ -1053,6 +1156,16 @@ struct ModelJson {
     input: u64,
     output: u64,
     usd: f64,
+    share: f64,
+}
+
+#[derive(Serialize)]
+struct AgentJson {
+    kind: String,
+    name: String,
+    tokens: u64,
+    usd: f64,
+    sessions: u32,
     share: f64,
 }
 
@@ -1090,6 +1203,18 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
         .collect();
     models.sort_by_key(|model| std::cmp::Reverse(model.tokens));
 
+    let agents = agent_year_breakdown(stats)
+        .into_iter()
+        .map(|agent| AgentJson {
+            kind: agent.kind.to_owned(),
+            name: agent.name,
+            tokens: agent.tally.year.tokens,
+            usd: agent.tally.year.usd,
+            sessions: agent.tally.year.sessions,
+            share: agent.share,
+        })
+        .collect();
+
     let days = stats
         .by_day
         .iter()
@@ -1124,6 +1249,7 @@ fn emit_json(stats: &Stats, today_day: i64, dollars: bool) -> Result<()> {
             },
         },
         models,
+        agents,
         days,
     };
     let rendered = serde_json::to_string_pretty(&doc).expect("StatsJson serializes");
@@ -1141,6 +1267,14 @@ mod tests {
 
     fn day(tokens: u64, usd: f64) -> DaySpend {
         DaySpend { tokens, usd }
+    }
+
+    fn tally(tokens: u64, usd: f64, sessions: u32) -> SpendTally {
+        let mut tally = SpendTally::default();
+        tally.year.tokens = tokens;
+        tally.year.usd = usd;
+        tally.year.sessions = sessions;
+        tally
     }
 
     fn write_jsonl(dir: &Path, filename: &str, lines: &[&str]) -> PathBuf {
@@ -1218,6 +1352,9 @@ mod tests {
         spending.total.year.tokens = 365;
         spending.total.year.usd = 36.5;
         spending.total.year.sessions = 9;
+        spending
+            .by_provider
+            .insert("claude".to_owned(), tally(120, 12.0, 3));
         rimz::agents::spending::write_provider_spending_cache_with_rollups(
             &runtime.shared_provider_spending_path(),
             123,
@@ -1233,6 +1370,8 @@ mod tests {
         assert_eq!(stats.total.week.tokens, 7);
         assert_eq!(stats.total.month.usd, 3.0);
         assert_eq!(stats.total.year.sessions, 9);
+        assert_eq!(stats.by_agent["claude"].year.tokens, 120);
+        assert_eq!(stats.by_agent["claude"].year.sessions, 3);
     }
 
     #[test]
@@ -1265,6 +1404,7 @@ mod tests {
             published.spending.total.month.tokens,
             stats.total.month.tokens
         );
+        assert_eq!(published.spending.by_provider, stats.by_agent);
         assert!(
             cursor
                 .files
@@ -1327,6 +1467,53 @@ mod tests {
     fn ramp_key_keeps_less_and_more_together() {
         let key = ramp_key(&ramp_styles());
         assert_eq!(visible_len(&key), "Less · ░ ▒ ▓ █ More".chars().count());
+    }
+
+    #[test]
+    fn agent_display_name_uses_descriptor_and_kind_fallback() {
+        assert_eq!(agent_display_name("claude"), "Claude");
+        assert_eq!(agent_display_name("mystery"), "Mystery");
+    }
+
+    #[test]
+    fn agents_lines_rank_by_year_tokens_and_skip_empty_agents() {
+        let stats = Stats {
+            by_day: BTreeMap::new(),
+            by_model: BTreeMap::new(),
+            by_agent: BTreeMap::from([
+                ("claude".to_owned(), tally(100, 3.0, 2)),
+                ("codex".to_owned(), tally(300, 9.0, 4)),
+            ]),
+            total: SpendTally::default(),
+        };
+        let mut lines = Vec::new();
+
+        assert!(agents_lines(&mut lines, &stats));
+
+        assert!(lines[0].contains("Agents"));
+        let codex = lines
+            .iter()
+            .position(|line| line.contains("Codex"))
+            .expect("codex row");
+        let claude = lines
+            .iter()
+            .position(|line| line.contains("Claude"))
+            .expect("claude row");
+        assert!(codex < claude, "larger trailing-year token count leads");
+        assert!(lines[codex].contains("◇ 300"));
+        assert!(lines[codex].contains("$9"));
+        assert!(lines[codex].contains("(75.0%)"));
+        assert!(lines[claude].contains("(25.0%)"));
+
+        let empty = Stats {
+            by_day: BTreeMap::new(),
+            by_model: BTreeMap::new(),
+            by_agent: BTreeMap::from([("codex".to_owned(), tally(0, 9.0, 1))]),
+            total: SpendTally::default(),
+        };
+        let mut empty_lines = Vec::new();
+        assert!(!agents_lines(&mut empty_lines, &empty));
+        assert!(empty_lines.is_empty());
     }
 
     #[test]

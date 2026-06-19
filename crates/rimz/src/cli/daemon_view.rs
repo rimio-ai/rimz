@@ -91,8 +91,9 @@ pub(super) fn maybe_launch_remote_control(
 /// display order (the first takes focus) — split out pure for testing. The Claude
 /// remote-control host leads when its toggle is on *and* `claude` is on PATH (the
 /// interactive host); the local Codex app-server broker follows whenever `codex`
-/// is on PATH (ungated — it links no account, only reads). Empty when neither
-/// applies, so the caller opens no view.
+/// is on PATH (ungated — it links no account, only reads). A trailing live stats
+/// pane rides that existing host gate, so the caller still opens no view when no
+/// host applies.
 #[allow(clippy::too_many_arguments)]
 fn background_view_hosts(
     config: &rimz::config::RemoteControlConfig,
@@ -126,6 +127,16 @@ fn background_view_hosts(
             cwd: worktree_root.to_path_buf(),
         });
     }
+    if !hosts.is_empty() {
+        hosts.push(HostPane {
+            argv: vec![
+                rimz_bin.to_string_lossy().into_owned(),
+                "stats".to_owned(),
+                "--refresh".to_owned(),
+            ],
+            cwd: worktree_root.to_path_buf(),
+        });
+    }
     hosts
 }
 
@@ -154,14 +165,26 @@ mod tests {
                 worktree,
             )
         };
+        let assert_stats_pane = |pane: &HostPane| {
+            assert_eq!(
+                pane.argv,
+                vec![
+                    rimz_bin.to_string_lossy().into_owned(),
+                    "stats".to_owned(),
+                    "--refresh".to_owned(),
+                ]
+            );
+            assert_eq!(pane.cwd.as_path(), worktree);
+        };
 
         assert!(hosts(&RemoteControlConfig::default(), true, false).is_empty());
 
         let codex = hosts(&RemoteControlConfig::default(), false, true);
-        assert_eq!(codex.len(), 1);
+        assert_eq!(codex.len(), 2);
         assert_eq!(codex[0].argv[0], "/usr/bin/rimz");
         assert!(codex[0].argv.iter().any(|arg| arg == "app-server"));
         assert_eq!(codex[0].cwd.as_path(), worktree);
+        assert_stats_pane(&codex[1]);
 
         let claude_only = RemoteControlConfig {
             claude: true,
@@ -169,7 +192,7 @@ mod tests {
         };
         assert!(hosts(&claude_only, false, false).is_empty());
         let claude = hosts(&claude_only, true, false);
-        assert_eq!(claude.len(), 1);
+        assert_eq!(claude.len(), 2);
         assert_eq!(claude[0].argv[0], "env");
         assert_eq!(
             claude[0].argv,
@@ -177,15 +200,17 @@ mod tests {
             "the daemon host unsets the pane-only Claude agent-view pin"
         );
         assert_eq!(claude[0].cwd.as_path(), project);
+        assert_stats_pane(&claude[1]);
 
         let both = RemoteControlConfig {
             claude: true,
             codex: true,
         };
         let pair = hosts(&both, true, true);
-        assert_eq!(pair.len(), 2);
+        assert_eq!(pair.len(), 3);
         assert_eq!(pair[0].argv[0], "env");
         assert_eq!(pair[1].argv[0], "/usr/bin/rimz");
         assert!(pair[1].argv.iter().any(|arg| arg == "app-server"));
+        assert_stats_pane(&pair[2]);
     }
 }

@@ -133,6 +133,10 @@ This is the same surface the dead-end reaches, so the moment that used to print 
   ● Fable 5 (4.8%)                  ● Opus 4.7 (2.9%)
     In: 4.8m · Out: 12.9m             In: 1.8m · Out: 8.7m
 
+  Agents
+  ● Claude  ◇ 48B     ·  $82,100  (78.7%)
+  ● Codex   ◇ 13B     ·  $21,440  (21.3%)
+
   Sessions: 697
   Active days: 27/28                Longest streak: 27 days
   Most active day: May 29           Current streak: 27 days
@@ -140,9 +144,9 @@ This is the same surface the dead-end reaches, so the moment that used to print 
 
 The heatmap is the one the lobby embeds: the same five-step `· ░ ▒ ▓ █` ramp, the same per-graph scale, the same account-global aggregate described under [your pace](#your-pace--the-token-heatmap) above — one renderer with two homes. It reads in or out of a workspace because the pace is keyed to the provider account rather than any one room.
 
-Beneath it the panel adds the figures the heatmap implies. The **Week / Month / Year** totals are the trailing 7/30/365 days, tokens (`◇`) and dollars side by side. The **Models** breakdown shares each model's slice of your `◇` token total over the full history, with its input and output split, friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`). The **insights** close it: total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model breakdown so the model layer never depends on a priced model — an unpriced model still attributes its tokens.
+Beneath it the panel adds the figures the heatmap implies. The **Week / Month / Year** totals are the trailing 7/30/365 days, tokens (`◇`) and dollars side by side. The **Models** breakdown shares each model's slice of your `◇` token total over the full history, with its input and output split, friendliest-name first (`claude-opus-4-8` reads as `Opus 4.8`). The **Agents** breakdown shares the same trailing-year token total by adapter kind — Claude, Codex, Pi, Open Code, and any future kind with recorded spend — with dollars and share beside each row. The **insights** close it: total sessions and the heaviest single day over the history, the trailing-four-week active ratio, and your longest and current active-day streaks. Tokens carry the per-model and per-agent breakdowns, so attribution is independent of pricing coverage — an unpriced model still attributes its tokens.
 
-`rimz stats` prints the panel and returns to the shell, so it pipes and scrolls like any report rather than holding a TUI it has nothing to dispatch from. `--dollars` scales the heatmap by spend instead of tokens — the spend view the lobby's `t` toggles to — and `--json` emits the per-day buckets, the trailing windows, the model breakdown, and the insights for scripts. The fast path is one read of the current `provider-spending.json`, matching the sidebar history read; a missing or old-shape cache takes `spending.lock`, uses the same pricing refresh path as the sidebar producer, writes `spending.json` plus `provider-spending.json`, and falls back to local in-memory computation only when another producer never publishes in time.
+`rimz stats` prints the panel and returns to the shell by default, so it pipes and scrolls like any report. `--refresh` holds the panel open, clears and redraws it every 60 seconds, and exits with the pane or Ctrl-C; the `rimzd` daemon view carries that live `rimz stats --refresh` pane alongside its remote-control hosts. `--dollars` scales the heatmap by spend instead of tokens — the spend view the lobby's `t` toggles to — and `--json` emits the per-day buckets, the trailing windows, the model and agent breakdowns, and the insights for scripts. `--refresh` conflicts with `--json` because the live panel is a screen, not a report. The fast path is one read of the current `provider-spending.json`, matching the sidebar history read; a missing or old-shape cache takes `spending.lock`, uses the same pricing refresh path as the sidebar producer, writes `spending.json` plus `provider-spending.json`, and falls back to local in-memory computation only when another producer never publishes in time.
 
 ## The remote lobby
 
@@ -201,7 +205,7 @@ The lobby is a foreground client, not the pane-resident producer. It owns the te
 - **Remote enumeration reuses the JSON contract.** Browsing a host runs the existing `rimz list --json` over a guarded `ssh` command built from `remote::RemoteTarget` and the link-probe's PATH-repair snippet; the rows parse from the documented `--json` schema (`workspace_id`, `project_root`, `session_name`, `running_on`, `last_activity`).
 - **Cross-backend parity.** `list_sessions` already answers for tmux and Zellij; `x` calls a `MuxBackend` kill that both implement; entering dispatches to `rimz attach` / `start` / `remote connect`, which already pick the backend. No lobby behaviour depends on a backend-only feature.
 
-The lobby has no command of its own: it is reached from the entry path — the `rimz start` dead-end at a roomless directory and `rimz remote connect <host>` — and its TUI lives in `src/welcome/` as a sibling of `sidebar_pane/`, split into render, input, and state the way the sidebar pane is. `rimz stats` is a one-shot render in `cli/stats.rs` that prints the wordmark and the pace panel and exits; the pace-panel renderer lives in `src/welcome/`, so the lobby and `rimz stats` draw one heatmap implementation.
+The lobby has no command of its own: it is reached from the entry path — the `rimz start` dead-end at a roomless directory and `rimz remote connect <host>` — and its TUI lives in `src/welcome/` as a sibling of `sidebar_pane/`, split into render, input, and state the way the sidebar pane is. `rimz stats` renders in `cli/stats.rs`: the default path prints the wordmark and pace panel once, and `--refresh` keeps that same panel alive for a daemon-view dashboard pane.
 
 ## Keeping these frames honest
 
