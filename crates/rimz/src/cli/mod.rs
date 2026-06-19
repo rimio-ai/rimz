@@ -218,9 +218,6 @@ fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
             "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
         );
     }
-    if path == Path::new("autoping") {
-        anyhow::bail!("`rimz autoping` has moved to `rimz loop`; use `rimz loop --help`");
-    }
     Ok(())
 }
 
@@ -1128,7 +1125,6 @@ mod tests {
     fn removed_command_tokens_do_not_fall_through_to_path_start() {
         assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
         assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
-        assert!(reject_removed_agent_command_path(Path::new("autoping")).is_err());
         assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
     }
 
