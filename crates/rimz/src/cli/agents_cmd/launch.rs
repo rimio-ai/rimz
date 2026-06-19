@@ -258,6 +258,7 @@ pub(super) fn full_agent_launch_env(
     for (key, value) in adapter.launch_env() {
         env.insert(key.to_owned(), value.to_owned());
     }
+    env.insert(rimz::run::ENV_AGENT_KIND.to_owned(), kind.to_owned());
     if let Some(run_id) = run_id {
         env.insert(rimz::run::ENV_RUN_ID.to_owned(), run_id.as_str().to_owned());
     }

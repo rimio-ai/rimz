@@ -444,6 +444,105 @@ fn shared_alias_degrades_to_the_kind_ordinal_handle() {
 }
 
 #[test]
+fn sender_prefix_skips_human_messages() {
+    let peers: Vec<&AgentState> = Vec::new();
+    assert_eq!(
+        sender_prefix(&crate::message::MessageSender::Human, &peers, None),
+        None
+    );
+}
+
+#[test]
+fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
+    let mut snapshot = empty_snapshot();
+    let mut sender = agent("claude", "session-sender", Some("docs"), "terminal_1");
+    sender.name = Some("lucid-atlas".to_owned());
+    let target = agent("codex", "session-target", Some("docs"), "terminal_2");
+    snapshot.agents = vec![sender, target];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+    let sender = crate::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("lucid-atlas".to_owned()),
+        alias: None,
+        channel: Some("fallback".to_owned()),
+    };
+
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
+        "@claude: "
+    );
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("main")).unwrap(),
+        "@claude#docs: "
+    );
+}
+
+#[test]
+fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
+    let mut snapshot = empty_snapshot();
+    let mut one = agent("claude", "session-a", Some("main"), "terminal_1");
+    one.name = Some("calm-fox".to_owned());
+    one.kind_ordinal = Some(1);
+    let mut two = agent("claude", "session-b", Some("main"), "terminal_2");
+    two.name = Some("bright-lark".to_owned());
+    two.kind_ordinal = Some(2);
+    snapshot.agents = vec![one, two];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+    let sender = crate::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("bright-lark".to_owned()),
+        alias: None,
+        channel: Some("main".to_owned()),
+    };
+
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("main")).unwrap(),
+        "@claude-2: "
+    );
+}
+
+#[test]
+fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
+    let peers: Vec<&AgentState> = Vec::new();
+    let sender = crate::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        name: Some("lucid-atlas".to_owned()),
+        alias: Some("reviewer".to_owned()),
+        channel: Some("docs".to_owned()),
+    };
+
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("main")).unwrap(),
+        "@lucid-atlas#docs: "
+    );
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("docs")).unwrap(),
+        "@lucid-atlas: "
+    );
+}
+
+#[test]
+fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
+    let mut snapshot = empty_snapshot();
+    let mut other_planner = agent("claude", "session-other", Some("auth"), "terminal_2");
+    other_planner.name = Some("bright-lark".to_owned());
+    other_planner.alias = Some("planner".to_owned());
+    snapshot.agents = vec![other_planner];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+    let sender = crate::message::MessageSender::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        name: Some("calm-fox".to_owned()),
+        alias: Some("planner".to_owned()),
+        channel: Some("auth".to_owned()),
+    };
+
+    assert_eq!(
+        sender_prefix(&sender, &peers, Some("auth")).unwrap(),
+        "@calm-fox: "
+    );
+}
+
+#[test]
 fn is_broadcast_only_for_at_all() {
     assert!(is_broadcast("@all"));
     assert!(is_broadcast("@all#main"));

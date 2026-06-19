@@ -5,7 +5,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand};
 
-use super::send::{SendFlags, resolve_message};
+use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use crate::cli::render;
 use rimz::feed::{AgentState, pending_ask_for};
@@ -110,6 +110,7 @@ fn queue_add(
         yes,
         auto_compact,
         file,
+        no_from,
     } = send;
     let text = resolve_message(&text, file.as_deref())?;
     add_message(
@@ -121,6 +122,7 @@ fn queue_add(
             gate,
             force,
             auto_compact,
+            no_from,
         },
         FanoutFlags { all, create, yes },
         globals,
@@ -141,6 +143,7 @@ struct MessageSpec {
     gate: DeliveryGate,
     force: bool,
     auto_compact: Option<AutoCompact>,
+    no_from: bool,
 }
 
 fn add_message(
@@ -156,6 +159,7 @@ fn add_message(
     let ledger = open_ledger(&workspace)?;
     let snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
     let channel = current_channel(&workspace);
+    let sender = send::sender_from_env(channel.as_deref(), spec.no_from);
     // queue records are durable and keyed on a session id, so they address bound
     // agents. A match that is only a live, sessionless pane has no key — point it
     // at steer, which reaches the pane directly.
@@ -221,6 +225,7 @@ fn add_message(
             spec.gate,
         )
         .with_force(spec.force)
+        .with_sender(sender.clone())
         .with_auto_compact(spec.auto_compact);
         let message_id = message.message_id.clone();
         ledger.queue_message(&message, &workspace.session_name)?;
@@ -260,7 +265,7 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
             .filter(|agent| agent.parent_agent_id.is_none())
             .collect();
         let mut table =
-            render::Table::new(["ID", "STATUS", "TARGET", "ATTEMPTS", "TEXT"]).right(&[3]);
+            render::Table::new(["ID", "STATUS", "TARGET", "FROM", "ATTEMPTS", "TEXT"]).right(&[4]);
         for message in messages {
             let target = agents
                 .iter()
@@ -272,6 +277,7 @@ fn list_messages(json: bool, target: Option<String>, globals: &GlobalFlags) -> R
                 render::cell(message.message_id.to_string()).fg(render::palette::ACCENT),
                 render::cell(message.status.as_str()).fg(render::status::message(message.status)),
                 render::cell(target).fg(render::palette::META),
+                render::cell(message.sender.render()).fg(render::palette::META),
                 render::cell(message.attempts.to_string()),
                 render::cell(preview(&message.text)),
             ]);
@@ -342,10 +348,14 @@ fn deliver_one(
         if let Some(command) = candidate.compact {
             super::pane::send_command(backend.as_ref(), &candidate.pane_id, command)?;
         }
+        let payload = match candidate.sender_prefix.as_deref() {
+            Some(prefix) => format!("{prefix}{}", message.text),
+            None => message.text.clone(),
+        };
         super::pane::submit_message(
             backend.as_ref(),
             &candidate.pane_id,
-            &message.text,
+            &payload,
             message.enter,
         )
     })();
@@ -377,6 +387,7 @@ struct DeliveryCandidate {
     /// threshold is met at this delivery boundary. `None` leaves delivery as a
     /// plain message send.
     compact: Option<&'static str>,
+    sender_prefix: Option<String>,
 }
 
 fn delivery_candidate(
@@ -439,12 +450,23 @@ fn delivery_candidate(
     let Some(pane) = agent.pane.as_ref() else {
         return Ok(None);
     };
+    let peers: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .collect();
+    let sender_prefix = rimz::target::sender_prefix(
+        &message.sender,
+        &peers,
+        rimz::target::agent_channel(agent).as_deref(),
+    );
     let compact = compact_command_if_full(&message, agent);
     let pane_id = pane.pane_id.clone();
     Ok(Some(DeliveryCandidate {
         message,
         pane_id,
         compact,
+        sender_prefix,
     }))
 }
 

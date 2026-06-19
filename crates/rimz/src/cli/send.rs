@@ -10,7 +10,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
-use rimz::message::AutoCompact;
+use rimz::ids::AgentKind;
+use rimz::message::{AutoCompact, MessageSender};
 
 /// The flags `steer` and `queue` share, flattened into each command's args.
 #[derive(Debug, Args)]
@@ -47,6 +48,10 @@ pub(crate) struct SendFlags {
     /// with no `\n`/`\\` interpretation. Conflicts with inline `-- text`.
     #[arg(long, value_name = "PATH")]
     pub(crate) file: Option<PathBuf>,
+    /// Deliver the text verbatim with no `@sender:` prefix, even for an agent
+    /// caller. No effect for a human caller, which is already verbatim.
+    #[arg(long)]
+    pub(crate) no_from: bool,
 }
 
 /// Resolve the prompt a `steer`/`queue` invocation carries from its two sources:
@@ -63,6 +68,28 @@ pub(crate) fn resolve_message(parts: &[String], file: Option<&Path>) -> Result<S
         }
         None => message_text(parts),
     }
+}
+
+/// The caller identity for `steer`/`queue`. Rimz-launched agents carry
+/// `RIMZ_AGENT_KIND`; ordinary room shells carry `RIMZ` identity vars without it,
+/// so they stay human-authored unless an agent kind is present.
+pub(crate) fn sender_from_env(channel: Option<&str>, no_from: bool) -> MessageSender {
+    if no_from {
+        return MessageSender::Human;
+    }
+    let Some(kind) = env_string(rimz::run::ENV_AGENT_KIND) else {
+        return MessageSender::Human;
+    };
+    MessageSender::Agent {
+        kind: AgentKind::new_unchecked(kind),
+        name: env_string(rimz::run::ENV_AGENT_NAME),
+        alias: env_string(rimz::run::ENV_AGENT_ALIAS),
+        channel: channel.map(ToOwned::to_owned),
+    }
+}
+
+fn env_string(key: &str) -> Option<String> {
+    std::env::var(key).ok().filter(|value| !value.is_empty())
 }
 
 /// Read a prompt file as-is, trimming only the trailing newline an editor adds so

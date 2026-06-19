@@ -14,6 +14,55 @@ pub const SETTLE_ENV: &str = "RIMZ_QUEUE_SETTLE_MS";
 pub const MAX_DELIVERY_ATTEMPTS: u32 = 5;
 pub const CLAIM_TTL: Duration = Duration::from_secs(15);
 
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "origin")]
+pub enum MessageSender {
+    #[default]
+    Human,
+    Agent {
+        kind: AgentKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        alias: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        channel: Option<String>,
+    },
+}
+
+impl MessageSender {
+    pub fn attributed(&self) -> Option<Self> {
+        match self {
+            Self::Human => None,
+            Self::Agent { .. } => Some(self.clone()),
+        }
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Self::Human => "you".to_owned(),
+            Self::Agent {
+                kind,
+                name,
+                alias,
+                channel,
+            } => {
+                let handle = name
+                    .as_deref()
+                    .filter(|value| !value.is_empty())
+                    .or_else(|| alias.as_deref().filter(|value| !value.is_empty()))
+                    .unwrap_or_else(|| kind.as_str());
+                let mut rendered = format!("@{handle}");
+                if let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
+                    rendered.push('#');
+                    rendered.push_str(channel);
+                }
+                rendered
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DeliveryGate {
@@ -146,6 +195,8 @@ pub struct MessageRecord {
     pub agent_id: AgentSessionId,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    #[serde(default)]
+    pub sender: MessageSender,
     pub text: String,
     pub enter: bool,
     pub gate: DeliveryGate,
@@ -187,6 +238,7 @@ impl MessageRecord {
             kind: agent.kind.clone(),
             agent_id: agent.agent_id.clone(),
             agent_name: agent.name.clone(),
+            sender: MessageSender::Human,
             text,
             enter,
             gate,
@@ -214,6 +266,13 @@ impl MessageRecord {
     #[must_use]
     pub fn with_force(mut self, force: bool) -> Self {
         self.force = force;
+        self
+    }
+
+    /// Record who queued the message without duplicating the message body.
+    #[must_use]
+    pub fn with_sender(mut self, sender: MessageSender) -> Self {
+        self.sender = sender;
         self
     }
 
@@ -437,6 +496,58 @@ mod tests {
         let legacy = json.replace(",\"force\":true", "");
         let back: MessageRecord = serde_json::from_str(&legacy).unwrap();
         assert!(!back.force);
+    }
+
+    #[test]
+    fn sender_defaults_to_human_and_agent_round_trips() {
+        let base = MessageRecord::new(
+            WorkspaceId::from_project_root(std::path::Path::new("/tmp/rimz-message")),
+            &agent("s1", None),
+            "next".to_owned(),
+            true,
+            DeliveryGate::Done,
+        );
+        assert_eq!(base.sender, MessageSender::Human);
+        let agent_sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("claude"),
+            name: Some("lucid-atlas".to_owned()),
+            alias: Some("planner".to_owned()),
+            channel: Some("main".to_owned()),
+        };
+        let attributed = base.with_sender(agent_sender.clone());
+        let json = serde_json::to_string(&attributed).unwrap();
+        let back: MessageRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.sender, agent_sender);
+        // A record written before sender attribution reads as human-authored.
+        let mut legacy = serde_json::to_value(&attributed).unwrap();
+        legacy.as_object_mut().unwrap().remove("sender");
+        let back: MessageRecord = serde_json::from_value(legacy).unwrap();
+        assert_eq!(back.sender, MessageSender::Human);
+    }
+
+    #[test]
+    fn sender_render_names_human_and_agent_address() {
+        assert_eq!(MessageSender::Human.render(), "you");
+        assert_eq!(
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("claude"),
+                name: Some("lucid-atlas".to_owned()),
+                alias: Some("planner".to_owned()),
+                channel: Some("docs".to_owned()),
+            }
+            .render(),
+            "@lucid-atlas#docs"
+        );
+        assert_eq!(
+            MessageSender::Agent {
+                kind: AgentKind::new_unchecked("codex"),
+                name: None,
+                alias: None,
+                channel: None,
+            }
+            .render(),
+            "@codex"
+        );
     }
 
     #[test]

@@ -90,15 +90,15 @@ rimz agents <spec> [prompt] -p|--print [--system-prompt-file <path>] [--effort <
 Use `steer` for immediate text into a live agent pane, and `queue` for durable delivery after the agent reaches a safe gate.
 
 ```sh
-rimz steer <target> [--worktree <name>] [--no-enter] [--force] [--yes] -- <text>
-rimz queue <target> [--worktree <name>] [--on done|any] [--no-enter] [--yes] -- <text>
-rimz queue add <target> [--worktree <name>] [--on done|any] [--no-enter] [--yes] -- <text>
+rimz steer <target> [--worktree <name>] [--no-enter] [--force] [--no-from] [--yes] -- <text>
+rimz queue <target> [--worktree <name>] [--on done|any] [--no-enter] [--force] [--no-from] [--yes] -- <text>
+rimz queue add <target> [--worktree <name>] [--on done|any] [--no-enter] [--force] [--no-from] [--yes] -- <text>
 rimz queue list [--json] [target]
 rimz queue remove <message-id>
 rimz queue clear [--worktree <name>] <target>
 ```
 
-`TARGET` is an `@`-mention or a pane id (`tmux:%1`, `zellij:terminal_3`). `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (an agent kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`, both narrowing by branch, worktree name, or path. A fan-out past one agent confirms first (`--yes` skips the prompt). `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment. A bare `@<kind>` or `@all` from `steer` also reaches a codex started in a fresh pane before its first turn — it addresses the pane directly — while `queue` needs a bound session and points such a pane back at `steer`.
+`TARGET` is an `@`-mention or a pane id (`tmux:%1`, `zellij:terminal_3`). `@swift-otter` (pet name), `@claude-2` (kind ordinal), and a session-id prefix name one agent; `@codex` (an agent kind) and `@all` fan out to every match in the channel. The channel is the current worktree unless you append `#<worktree>` or pass `--worktree`, both narrowing by branch, worktree name, or path. A fan-out past one agent confirms first (`--yes` skips the prompt). Agent-authored sends arrive as `@sender: text`, with `#channel` added across channels; `--no-from` sends byte-for-byte. `steer` refuses to type over a pending ask unless `--force` is explicit; `queue` waits for hooks to report a safe delivery moment. A bare `@<kind>` or `@all` from `steer` also reaches a codex started in a fresh pane before its first turn — it addresses the pane directly — while `queue` needs a bound session and points such a pane back at `steer`.
 
 Full agent, pane, and worktree examples live in [Agent control](./cli/agents.md).
 

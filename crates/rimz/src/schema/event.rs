@@ -11,7 +11,7 @@ use crate::feed::RuntimeOwner;
 use crate::ids::{
     AgentKind, AgentSessionId, EventId, MessageId, MuxName, PaneId, RunId, WorkspaceId,
 };
-use crate::message::{DeliveryGate, MessageRecord, MessageStatus};
+use crate::message::{DeliveryGate, MessageRecord, MessageSender, MessageStatus};
 use crate::schema::EVENT_SCHEMA_VERSION;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -63,6 +63,8 @@ pub struct AgentSteeredPayload {
     pub agent_id: Option<AgentSessionId>,
     pub pane_id: PaneId,
     pub forced: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<MessageSender>,
     pub text_len: usize,
 }
 
@@ -72,6 +74,7 @@ impl AgentSteeredPayload {
         agent_id: Option<AgentSessionId>,
         pane_id: PaneId,
         forced: bool,
+        sender: Option<MessageSender>,
         text_len: usize,
     ) -> Self {
         Self {
@@ -79,6 +82,7 @@ impl AgentSteeredPayload {
             agent_id,
             pane_id,
             forced,
+            sender,
             text_len,
         }
     }
@@ -133,6 +137,8 @@ pub struct MessageEventPayload {
     pub text_len: usize,
     pub enter: bool,
     pub attempts: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<MessageSender>,
     #[serde(default)]
     pub reason: Option<String>,
 }
@@ -148,6 +154,7 @@ impl MessageEventPayload {
             text_len: message.text.len(),
             enter: message.enter,
             attempts: message.attempts,
+            sender: message.sender.attributed(),
             reason: reason.map(ToOwned::to_owned),
         }
     }
@@ -655,6 +662,7 @@ mod tests {
             Some(AgentSessionId::from("sess-1")),
             PaneId::from_parts(MuxName::Tmux, "%1"),
             true,
+            None,
             8,
         );
         let typed = EventEnvelope::agent_steered(workspace.clone(), "session", payload.clone());
@@ -686,6 +694,38 @@ mod tests {
     }
 
     #[test]
+    fn agent_steered_records_agent_sender_without_message_body() {
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some("swift-otter".to_owned()),
+            alias: None,
+            channel: Some("docs".to_owned()),
+        };
+        let payload = AgentSteeredPayload::new(
+            AgentKind::new_unchecked("claude"),
+            Some(AgentSessionId::from("sess-1")),
+            PaneId::from_parts(MuxName::Tmux, "%1"),
+            false,
+            Some(sender.clone()),
+            17,
+        );
+        let event = EventEnvelope::agent_steered(workspace(), "session", payload.clone());
+
+        assert_eq!(event.params["sender"]["origin"], "agent");
+        assert_eq!(event.params["sender"]["kind"], "codex");
+        assert_eq!(event.params["sender"]["name"], "swift-otter");
+        assert!(
+            !serde_json::to_string(&event.params)
+                .unwrap()
+                .contains("secret prompt body")
+        );
+        let EventKind::AgentSteered(decoded) = event.kind() else {
+            panic!("agent.steered decodes to its typed kind");
+        };
+        assert_eq!(decoded.sender, Some(sender));
+    }
+
+    #[test]
     fn agent_steered_without_session_omits_the_agent_id() {
         // Steering a bare agent pane before its first turn has no session id; the
         // audit record drops the field rather than carrying an empty placeholder.
@@ -694,6 +734,7 @@ mod tests {
             None,
             PaneId::from_parts(MuxName::Zellij, "terminal_7"),
             false,
+            None,
             4,
         );
         let value = serde_json::to_value(&payload).unwrap();
@@ -739,6 +780,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             agent_id: AgentSessionId::from("sess-1"),
             agent_name: Some("lucid-atlas".to_owned()),
+            sender: MessageSender::Human,
             text: "secret prompt body".to_owned(),
             enter: true,
             gate: DeliveryGate::Done,
@@ -791,6 +833,27 @@ mod tests {
         assert_eq!(payload.message_id, message.message_id);
         assert_eq!(payload.text_len, "secret prompt body".len());
         assert_eq!(payload.reason, None);
+
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some("swift-otter".to_owned()),
+            alias: None,
+            channel: Some("docs".to_owned()),
+        };
+        let attributed = message.with_sender(sender.clone());
+        let event =
+            EventEnvelope::message_event(&attributed, "session", MessageEventMethod::Queued, None);
+
+        assert_eq!(event.params["sender"]["kind"], "codex");
+        assert!(
+            !serde_json::to_string(&event.params)
+                .unwrap()
+                .contains("secret prompt body")
+        );
+        let EventKind::Message { payload, .. } = event.kind() else {
+            panic!("message.queued decodes to its typed kind");
+        };
+        assert_eq!(payload.sender, Some(sender));
     }
 
     #[test]

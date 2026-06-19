@@ -3,10 +3,10 @@
 use anyhow::{Result, bail};
 use clap::Args;
 
-use super::send::{SendFlags, resolve_message};
+use super::send::{self, SendFlags, resolve_message};
 use super::{GlobalFlags, current_channel, open_ledger};
 use rimz::feed::{AgentState, pending_ask_for};
-use rimz::message::AutoCompact;
+use rimz::message::{AutoCompact, MessageSender};
 use rimz::mux::MuxBackend;
 use rimz::schema::event::{AgentSteeredPayload, EventEnvelope};
 use rimz::workspace::{ResolvedWorkspace, WorkspaceResolver};
@@ -39,6 +39,7 @@ struct SteerSend {
     force: bool,
     enter: bool,
     auto_compact: Option<AutoCompact>,
+    sender: MessageSender,
 }
 
 pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
@@ -52,6 +53,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         yes,
         auto_compact,
         file,
+        no_from,
     } = args.send;
     let text = resolve_message(&args.text, file.as_deref())?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
@@ -65,6 +67,7 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         snapshot = snapshot.with_agent_context(rimz::ledger::agent_context::read_all(&runtime));
     }
     let channel = current_channel(&workspace);
+    let sender = send::sender_from_env(channel.as_deref(), no_from);
     let targets = match super::resolve_pane_targets(
         &snapshot,
         &args.target,
@@ -100,11 +103,17 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         force,
         enter: !no_enter,
         auto_compact,
+        sender,
     };
+    let peers: Vec<&AgentState> = snapshot
+        .agents
+        .iter()
+        .filter(|agent| agent.parent_agent_id.is_none())
+        .collect();
     let mut outcomes = Vec::with_capacity(targets.len());
     for target in &targets {
         outcomes.push(steer_one(
-            &workspace, &ledger, &snapshot, target, &text, &send,
+            &workspace, &ledger, &snapshot, target, &text, &send, &peers,
         )?);
     }
 
@@ -121,6 +130,7 @@ fn steer_one(
     target: &PaneAgent,
     text: &str,
     send: &SteerSend,
+    peers: &[&AgentState],
 ) -> Result<Outcome> {
     let label = target.label();
     // A pending ask reserves the next input — but only a bound session can hold
@@ -143,7 +153,12 @@ fn steer_one(
     let pane_id = &target.pane_id;
     let backend = rimz::mux::backend_for(pane_id.mux());
     let compacted = compact_if_full(backend.as_ref(), snapshot, target, send.auto_compact)?;
-    super::pane::paste_text(backend.as_ref(), pane_id, text)?;
+    let payload =
+        match rimz::target::sender_prefix(&send.sender, peers, target.channel().as_deref()) {
+            Some(prefix) => format!("{prefix}{text}"),
+            None => text.to_owned(),
+        };
+    super::pane::paste_text(backend.as_ref(), pane_id, &payload)?;
     // Record the steer once the text lands and before the submit keystroke, so a
     // submitted steer is always preceded by its audit event. A failed Enter then
     // returns an error over text that is already accounted for, never untracked.
@@ -156,6 +171,7 @@ fn steer_one(
             target.agent_id.clone(),
             pane_id.clone(),
             send.force,
+            send.sender.attributed(),
             text.len(),
         ),
     );

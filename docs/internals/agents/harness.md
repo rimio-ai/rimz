@@ -133,7 +133,7 @@ When a type handle matches several agents, the address resolves to an ambiguity 
 
 ## Talk and queue
 
-Rimz delivers human-authored text to a live member now (`rimz steer`) or at its next open delivery point (`rimz queue`). Both ride the same pane-send primitive humans and resolvers share, address agents through the [address grammar](#the-address) above, and take state decisions from the ledger snapshot and the hook lifecycle. The two mirror each other — the same address, fan-out, `--force`, `--no-enter`, `--auto-compact`, and `--file` surface, and the same `\n` soft-newline text — and diverge only on timing: `queue` adds `--on`, the gate that picks the boundary to deliver at.
+Rimz delivers text to a live member now (`rimz steer`) or at its next open delivery point (`rimz queue`). Both ride the same pane-send primitive humans and resolvers share, address agents through the [address grammar](#the-address) above, and take state decisions from the ledger snapshot and the hook lifecycle. The two mirror each other — the same address, fan-out, `--force`, `--no-enter`, `--auto-compact`, `--file`, and `--no-from` surface, and the same `\n` soft-newline text — and diverge only on timing: `queue` adds `--on`, the gate that picks the boundary to deliver at.
 
 ### Targets
 
@@ -147,7 +147,7 @@ Fan-out and `--create` follow the [address rules](#the-address) above: more than
 
 ### Steer
 
-`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit) and then presses Enter as a discrete keystroke outside the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. The CLI interprets the two-character `\n` escape in `<text>` (and `\\` for a literal backslash; every other escape keeps its backslash, so a regex or path survives), so a newline can be typed inline without shell quoting. `--file <PATH>` reads the prompt from a file in place of `<text>` and sends it verbatim — no `\n`/`\\` interpretation, since a file already holds real newlines and literal backslashes — refusing both an inline `<text>` alongside it and an empty or unreadable file. `--no-enter` types the text and holds the Enter. A pending feed ask attached to a bound agent skips that agent; `--force` records the override and sends anyway. The `agent.steered` event records kind, pane id, force flag, and text length per send, plus the session id when one is bound — an unbound pane records only kind and pane. Message content stays out of the event log.
+`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit) and then presses Enter as a discrete keystroke outside the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. The CLI interprets the two-character `\n` escape in `<text>` (and `\\` for a literal backslash; every other escape keeps its backslash, so a regex or path survives), so a newline can be typed inline without shell quoting. `--file <PATH>` reads the prompt from a file in place of `<text>` and sends it verbatim — no `\n`/`\\` interpretation, since a file already holds real newlines and literal backslashes — refusing both an inline `<text>` alongside it and an empty or unreadable file. A Rimz-launched agent sends with `@sender: ` prepended; a cross-channel send prepends `@sender#channel: `. `--no-from` keeps the delivered text exact. `--no-enter` types the text and holds the Enter. A pending feed ask attached to a bound agent skips that agent; `--force` records the override and sends anyway. The `agent.steered` event records kind, pane id, force flag, sender address when present, and text length per send, plus the session id when one is bound — an unbound pane records only kind and pane. Message content stays out of the event log.
 
 ### Bracketed-paste submit
 
@@ -161,7 +161,7 @@ The compaction is the agent's own slash command, owned by the adapter (`AgentAda
 
 ### Queue: leave a task for later
 
-A queued message waits for the member to be free and delivers itself at the next open turn. `rimz queue <target> -- <text>` enqueues one; `rimz queue list` shows pending and terminal records by canonical handle; `rimz queue remove <msg-id>` drops one pending message and `rimz queue clear <target>` drops every pending message for a member.
+A queued message waits for the member to be free and delivers itself at the next open turn. `rimz queue <target> -- <text>` enqueues one; `rimz queue list` shows pending and terminal records by canonical handle and sender; `rimz queue remove <msg-id>` drops one pending message and `rimz queue clear <target>` drops every pending message for a member.
 
 Queued messages live under the workspace state root:
 
@@ -172,7 +172,7 @@ queue/terminal/<msg_id>.json
 
 `msg_` ids are UUIDv7, so filename order is FIFO order. Pending scans read only `queue/*.json`; claimed and final records move atomically into `queue/terminal/`. The directory is created lazily, so a workspace with no queued messages costs the hook path one missing-dir stat.
 
-Each record stores the workspace id, agent kind, agent session id, text, Enter flag, delivery gate, force flag, status, enqueue/update timestamps, attempt count, last attempt timestamp, last error, and delivered timestamp. Status values are `pending`, `claimed`, `delivered`, `removed`, and `abandoned`.
+Each record stores the workspace id, agent kind, agent session id, sender identity, text, Enter flag, delivery gate, force flag, status, enqueue/update timestamps, attempt count, last attempt timestamp, last error, and delivered timestamp. Status values are `pending`, `claimed`, `delivered`, `removed`, and `abandoned`.
 
 ### Gates
 
@@ -184,13 +184,13 @@ The queue requires installed and trusted hooks for the target agent. Hooks are t
 
 Only unparked root turn ends trigger delivery. `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver --message-id <id>` helper with nulled stdio for the FIFO head.
 
-The helper waits `400ms` by default (`RIMZ_QUEUE_SETTLE_MS` overrides this for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped when the record is `--force`), and the bound pane, then claims the head under the workspace lock immediately before sending. State misses leave the message pending for a later transition. The claim moves the record to `claimed`, outside the pending scan, and increments the attempt count. A successful send moves the record to `delivered`; a send failure records `last_error` and returns it to `pending`, and after five attempts the record becomes `abandoned`. The claim timestamp throttles retries after a send failure. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered on a later turn end.
+The helper waits `400ms` by default (`RIMZ_QUEUE_SETTLE_MS` overrides this for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped when the record is `--force`), and the bound pane, computes the sender prefix against the target's current channel, then claims the head under the workspace lock immediately before sending. State misses leave the message pending for a later transition. The claim moves the record to `claimed`, outside the pending scan, and increments the attempt count. A successful send moves the record to `delivered`; a send failure records `last_error` and returns it to `pending`, and after five attempts the record becomes `abandoned`. The claim timestamp throttles retries after a send failure. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered on a later turn end.
 
 Delivery is FIFO per agent, and one message is attempted per unparked root turn end.
 
 ### Audit events
 
-Queue writes append `message.queued`, `message.delivered`, `message.removed`, and `message.abandoned` events — `remove` and `clear` both append `message.removed`. Events include message id, kind, agent id, gate, status, text length, Enter flag, attempt count, and reason. They never include message text.
+Queue writes append `message.queued`, `message.delivered`, `message.removed`, and `message.abandoned` events — `remove` and `clear` both append `message.removed`. Events include message id, kind, agent id, sender address when present, gate, status, text length, Enter flag, attempt count, and reason. They never include message text.
 
 `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the current rollup. This is maintenance, not delivery; normal state misses stay pending.
 

@@ -186,6 +186,17 @@ impl PaneAgent {
             },
         }
     }
+
+    /// The channel this pane participates in: branch, else worktree directory
+    /// basename. `None` means the pane is outside a known worktree.
+    pub fn channel(&self) -> Option<String> {
+        self.worktree_branch.clone().or_else(|| {
+            self.worktree_path
+                .as_deref()
+                .and_then(|path| path.rsplit('/').next())
+                .map(ToOwned::to_owned)
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -14,6 +14,9 @@ use crate::ledger::run_store::{self, RunStoreErr};
 use crate::ledger::{SidebarSnapshot, StatePaths};
 
 pub const ENV_RUN_ID: &str = "RIMZ_RUN_ID";
+/// The launched adapter kind (`claude`, `codex`, ...). Its presence marks the
+/// process as a Rimz-launched agent for peer-message attribution.
+pub const ENV_AGENT_KIND: &str = "RIMZ_AGENT_KIND";
 pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
 /// The `[agents.aliases]` role name an agent launched as, so it answers to
 /// `@<alias>`. Set by the launch wrapper; read into the lifecycle observation.

@@ -266,7 +266,7 @@ mod tests {
     use crate::agents::lifecycle::LifecycleSignal;
     use crate::feed::{AgentState, AgentStatus};
     use crate::ids::WorkspaceId;
-    use crate::message::DeliveryGate;
+    use crate::message::{DeliveryGate, MessageSender};
     use crate::{RuntimePaths, StatePaths};
 
     #[test]
@@ -376,6 +376,23 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+
+    #[test]
+    fn queued_message_persists_sender() {
+        let (_dir, ledger, workspace_id) = ledger();
+        let sender = MessageSender::Agent {
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some("swift-otter".to_owned()),
+            alias: None,
+            channel: Some("docs".to_owned()),
+        };
+        let message = message(&workspace_id).with_sender(sender.clone());
+        ledger.queue_message(&message, "session").unwrap();
+
+        let messages = ledger.list_messages().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].sender, sender);
     }
 
     fn ledger() -> (tempfile::TempDir, Ledger, WorkspaceId) {

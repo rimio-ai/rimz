@@ -18,8 +18,9 @@
 //! agent.
 
 use crate::feed::AgentState;
-use crate::ids::PaneId;
+use crate::ids::{AgentKind, PaneId};
 use crate::ledger::snapshot::{PaneAgent, SidebarSnapshot};
+use crate::message::MessageSender;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum TargetErr {
@@ -550,6 +551,49 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
         Some(channel) if suffix => format!("{base}#{channel}"),
         _ => base,
     }
+}
+
+/// The optional `@sender: ` prefix for a peer-authored message. Human-authored
+/// text stays verbatim; agent-authored text uses the shortest live handle when the
+/// sender is visible in the snapshot and falls back to the launch env identity.
+pub fn sender_prefix(
+    sender: &MessageSender,
+    peers: &[&AgentState],
+    target_channel: Option<&str>,
+) -> Option<String> {
+    let MessageSender::Agent {
+        kind,
+        name,
+        alias,
+        channel,
+    } = sender
+    else {
+        return None;
+    };
+    if let Some(sender_name) = name.as_deref()
+        && let Some(agent) = peers
+            .iter()
+            .copied()
+            .find(|agent| agent.name.as_deref() == Some(sender_name))
+    {
+        let include_channel = agent_channel(agent).as_deref() != target_channel;
+        return Some(format!("{}: ", agent_handle(agent, peers, include_channel)));
+    }
+    let include_channel = channel.as_deref() != target_channel;
+    let mut handle = fallback_sender_handle(kind, name.as_deref(), alias.as_deref());
+    if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
+        handle.push('#');
+        handle.push_str(channel);
+    }
+    Some(format!("{handle}: "))
+}
+
+fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, alias: Option<&str>) -> String {
+    let base = name
+        .filter(|value| !value.is_empty())
+        .or_else(|| alias.filter(|value| !value.is_empty()))
+        .unwrap_or_else(|| kind.as_str());
+    format!("@{base}")
 }
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {

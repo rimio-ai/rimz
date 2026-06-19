@@ -78,6 +78,33 @@ fn agents_bare_json_parses_as_list_flag() {
 }
 
 #[test]
+fn full_launch_env_marks_agent_kind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let adapter = rimz::agents::find_adapter("claude").expect("claude adapter");
+    let env = full_agent_launch_env(
+        dir.path(),
+        adapter,
+        None,
+        Some("swift-otter"),
+        Some("planner"),
+    )
+    .expect("launch env");
+
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_KIND).map(String::as_str),
+        Some("claude")
+    );
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_NAME).map(String::as_str),
+        Some("swift-otter")
+    );
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_ALIAS).map(String::as_str),
+        Some("planner")
+    );
+}
+
+#[test]
 fn agents_print_cluster_accepts_json_with_print_flag() {
     let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "hi", "--json"])
         .expect("parse agents launch json");

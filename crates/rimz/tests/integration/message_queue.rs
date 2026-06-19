@@ -300,6 +300,60 @@ fn steer_sends_a_file_as_the_prompt() {
     assert_text_then_enter(&trace_log, "keep \\n literal\nand a real break");
 }
 
+#[test]
+fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
+    let env = Env::new();
+    register_running_agent(
+        &env,
+        "sess-from-steer",
+        "feature-from-steer",
+        &[("ZELLIJ_PANE_ID", "3")],
+    );
+
+    let trace_log = env.project_root.join("zellij-from-steer-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["steer", "@claude", "--", "ping"])
+        .output()
+        .expect("steer from agent");
+    assert!(
+        out.status.success(),
+        "steer failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "@swift-otter: ping");
+    let steered = env
+        .read_events()
+        .into_iter()
+        .find(|event| event.method == "agent.steered")
+        .expect("steered event");
+    assert_eq!(steered.params["sender"]["origin"], "agent");
+    assert_eq!(steered.params["sender"]["kind"], "codex");
+    assert_eq!(steered.params["sender"]["name"], "swift-otter");
+    assert_eq!(steered.params["text_len"], "ping".len());
+
+    let trace_log = env.project_root.join("zellij-from-steer-no-from-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["steer", "@claude", "--no-from", "--", "exact"])
+        .output()
+        .expect("steer --no-from from agent");
+    assert!(
+        out.status.success(),
+        "steer --no-from failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "exact");
+}
+
 /// Queue delivery routes through the same send path: a message delivered at an
 /// open gate presses Enter as a discrete key, not a literal carriage return.
 /// Bringing the agent to an idle turn boundary with a bound pane lets the queue
@@ -341,6 +395,74 @@ fn queue_delivery_presses_enter_as_discrete_key() {
         "an idle agent with a bound pane should deliver the queued message inline"
     );
     assert_text_then_enter(&trace_log, "go");
+}
+
+#[test]
+fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
+    let env = Env::new();
+    env.install_agent_hooks("claude");
+    let pane_env: &[(&str, &str)] = &[("ZELLIJ_PANE_ID", "3")];
+    register_running_agent(&env, "sess-from-queue", "feature-from-queue", pane_env);
+    run_hook(
+        &env,
+        json!({
+            "hook_event_name": "Stop",
+            "session_id": "sess-from-queue",
+            "worktree_branch": "feature-from-queue",
+        }),
+        pane_env,
+    );
+
+    let trace_log = env.project_root.join("zellij-from-queue-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["queue", "@claude", "--", "later"])
+        .output()
+        .expect("queue add from agent");
+    assert!(
+        out.status.success(),
+        "queue add failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "@swift-otter: later");
+
+    let listed = env
+        .rimz()
+        .args(["queue", "list", "--json"])
+        .output()
+        .expect("queue list");
+    assert!(
+        listed.status.success(),
+        "queue list failed: {}",
+        String::from_utf8_lossy(&listed.stderr)
+    );
+    let messages: serde_json::Value = serde_json::from_slice(&listed.stdout).expect("json");
+    assert_eq!(messages[0]["sender"]["origin"], "agent");
+    assert_eq!(messages[0]["sender"]["kind"], "codex");
+    assert_eq!(messages[0]["sender"]["name"], "swift-otter");
+
+    let trace_log = env.project_root.join("zellij-from-queue-no-from-trace.log");
+    let out = env
+        .rimz()
+        .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
+        .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
+        .env("RIMZ_QUEUE_SETTLE_MS", "0")
+        .env("RIMZ_AGENT_KIND", "codex")
+        .env("RIMZ_AGENT_NAME", "swift-otter")
+        .args(["queue", "@claude", "--no-from", "--", "exact"])
+        .output()
+        .expect("queue add --no-from from agent");
+    assert!(
+        out.status.success(),
+        "queue add --no-from failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_text_then_enter(&trace_log, "exact");
 }
 
 /// `steer --auto-compact 70%` against a window past the threshold types `/compact`
