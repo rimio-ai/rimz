@@ -117,12 +117,17 @@ Account enrichment is local and best-effort. `oauth_usage = true` lets Rimz use 
 
 ### Multiplexer Room Options
 
-Rimz applies room-scoped defaults when it creates or reattaches a session, so the room gets the mouse, clipboard, rich-key, and scrollback behavior agents need without editing your global Zellij or tmux files.
+Rimz applies room-scoped settings when it creates or reattaches a session, so the room gets the mux behaviour agents need without editing your global Zellij or tmux files.
 
 ```toml
 [zellij]
+mouse_click_through = true
+focus_follows_mouse = false
 session_serialization = false
 auto_layout = true
+
+# Optional overrides. Left unset, your ~/.config/zellij/config.kdl or Zellij's defaults win.
+pane_frames = true
 copy_clipboard = "system"
 
 [tmux]
@@ -130,7 +135,7 @@ set_clipboard = "on"
 extended_keys_format = "csi-u"
 ```
 
-Zellij receives its settings as `zellij attach ... options ...` on room birth and attach, and Rimz adds locked mode so ordinary typing reaches the focused pane. tmux receives session, window, and server-scoped options as required by tmux itself; clipboard and rich-key handling are server-scoped in tmux. The backend mapping is in [internals/sidebar/multiplexers.md](../internals/sidebar/multiplexers.md).
+Zellij receives settings as `zellij attach ... options ...` on room birth and attach. Rimz always applies the room invariants it owns: locked mode, click-through on supported Zellij versions, focus-follows-mouse off, session serialization off, and auto-layout on. Every other `[zellij]` key is an override: set it in `config.toml` to pass the matching Zellij `options` flag, or leave it unset to use `~/.config/zellij/config.kdl` and Zellij's defaults. Work panes keep Zellij's default frames unless you configure otherwise; the sidebar pane is explicitly borderless so its hit-testing stays stable. tmux receives session, window, and server-scoped options as required by tmux itself; clipboard and rich-key handling are server-scoped in tmux. The backend mapping is in [internals/sidebar/multiplexers.md](../internals/sidebar/multiplexers.md).
 
 ### Resume
 

@@ -531,20 +531,20 @@ fn sidebar_glow_parses_and_defaults_auto() {
 fn zellij_room_defaults_are_agent_friendly() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    assert!(config.zellij.mouse_mode);
+    assert_eq!(config.zellij.mouse_mode, None);
     assert!(config.zellij.mouse_click_through);
-    assert!(!config.zellij.advanced_mouse_actions);
-    assert!(!config.zellij.mouse_hover_effects);
+    assert_eq!(config.zellij.advanced_mouse_actions, None);
+    assert_eq!(config.zellij.mouse_hover_effects, None);
     assert!(!config.zellij.focus_follows_mouse);
-    assert!(!config.zellij.pane_frames);
-    assert_eq!(config.zellij.on_force_close, ZellijForceClose::Detach);
-    assert_eq!(config.zellij.scroll_buffer_size, 100_000);
-    assert!(!config.zellij.show_startup_tips);
-    assert!(!config.zellij.show_release_notes);
-    assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::System);
-    assert!(config.zellij.copy_on_select);
-    assert!(config.zellij.support_kitty_keyboard_protocol);
-    assert!(config.zellij.osc8_hyperlinks);
+    assert_eq!(config.zellij.pane_frames, None);
+    assert_eq!(config.zellij.on_force_close, None);
+    assert_eq!(config.zellij.scroll_buffer_size, None);
+    assert_eq!(config.zellij.show_startup_tips, None);
+    assert_eq!(config.zellij.show_release_notes, None);
+    assert_eq!(config.zellij.copy_clipboard, None);
+    assert_eq!(config.zellij.copy_on_select, None);
+    assert_eq!(config.zellij.support_kitty_keyboard_protocol, None);
+    assert_eq!(config.zellij.osc8_hyperlinks, None);
     assert!(config.zellij.auto_layout);
     assert!(!config.zellij.session_serialization);
 }
@@ -556,20 +556,34 @@ fn zellij_room_options_parse() {
         &dir,
         "[zellij]\n\
              pane_frames = true\n\
+             mouse_mode = false\n\
              advanced_mouse_actions = true\n\
              mouse_hover_effects = true\n\
              focus_follows_mouse = false\n\
              copy_clipboard = \"primary\"\n\
+             copy_on_select = false\n\
+             support_kitty_keyboard_protocol = false\n\
+             osc8_hyperlinks = false\n\
+             scroll_buffer_size = 200000\n\
+             show_startup_tips = true\n\
+             show_release_notes = true\n\
              on_force_close = \"quit\"\n\
              auto_layout = false\n",
     ))
     .expect("load");
-    assert!(config.zellij.pane_frames);
-    assert!(config.zellij.advanced_mouse_actions);
-    assert!(config.zellij.mouse_hover_effects);
+    assert_eq!(config.zellij.pane_frames, Some(true));
+    assert_eq!(config.zellij.mouse_mode, Some(false));
+    assert_eq!(config.zellij.advanced_mouse_actions, Some(true));
+    assert_eq!(config.zellij.mouse_hover_effects, Some(true));
     assert!(!config.zellij.focus_follows_mouse);
-    assert_eq!(config.zellij.copy_clipboard, ZellijClipboard::Primary);
-    assert_eq!(config.zellij.on_force_close, ZellijForceClose::Quit);
+    assert_eq!(config.zellij.copy_clipboard, Some(ZellijClipboard::Primary));
+    assert_eq!(config.zellij.copy_on_select, Some(false));
+    assert_eq!(config.zellij.support_kitty_keyboard_protocol, Some(false));
+    assert_eq!(config.zellij.osc8_hyperlinks, Some(false));
+    assert_eq!(config.zellij.scroll_buffer_size, Some(200_000));
+    assert_eq!(config.zellij.show_startup_tips, Some(true));
+    assert_eq!(config.zellij.show_release_notes, Some(true));
+    assert_eq!(config.zellij.on_force_close, Some(ZellijForceClose::Quit));
     assert!(!config.zellij.auto_layout);
 }
 

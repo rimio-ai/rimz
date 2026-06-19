@@ -298,22 +298,28 @@ io = "⇅"
 ## ascii_art = "CLAUDE"
 
 [zellij]
-# mouse_mode = true
-# mouse_click_through = true
-# advanced_mouse_actions = false
-# mouse_hover_effects = false
-# focus_follows_mouse = false
-# pane_frames = false
-# on_force_close = "detach"           # "detach" or "quit"
-# scroll_buffer_size = 100000
-# show_startup_tips = false
-# show_release_notes = false
-# copy_clipboard = "system"           # "system" or "primary"
-# copy_on_select = true
-# support_kitty_keyboard_protocol = true
-# osc8_hyperlinks = true
-# auto_layout = true                  # use Rimz's swap layout for no-direction new panes
-# session_serialization = false       # Rimz owns rebirth instead of Zellij resurrection
+# default_mode is always "locked" so ordinary typing reaches the focused agent
+# pane (Rimz invariant; enter a Zellij mode deliberately for multiplexer keys).
+# Critical room invariants Rimz always applies:
+mouse_click_through = true       # single click on a card jumps to the agent (Zellij >= 0.44.0)
+focus_follows_mouse = false      # required for the first click to pass through
+session_serialization = false    # Rimz owns rebirth instead of Zellij resurrection
+auto_layout = true               # Rimz's sidebar/compact-bar-pinning swap layout
+
+# Optional: uncomment to override your ~/.config/zellij/config.kdl. Left unset,
+# Rimz leaves these to your Zellij config or Zellij's defaults.
+## pane_frames = true
+## mouse_mode = true
+## advanced_mouse_actions = true
+## mouse_hover_effects = false
+## on_force_close = "detach"           # "detach" or "quit"
+## scroll_buffer_size = 100000
+## show_startup_tips = false
+## show_release_notes = false
+## copy_clipboard = "system"           # "system" or "primary"
+## copy_on_select = true
+## support_kitty_keyboard_protocol = true
+## osc8_hyperlinks = true
 
 [tmux]
 # mouse = true

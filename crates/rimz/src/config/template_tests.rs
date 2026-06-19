@@ -2,6 +2,13 @@ use std::collections::BTreeSet;
 
 use super::*;
 
+const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
+    "mouse_click_through",
+    "focus_follows_mouse",
+    "session_serialization",
+    "auto_layout",
+];
+
 #[test]
 fn template_defaults_deserialize_to_machine_defaults() {
     let uncommented = uncomment_default_lines(MachineConfig::template());
@@ -101,7 +108,15 @@ fn template_default_paths(template: &str) -> BTreeSet<String> {
             section = raw.split('.').map(ToOwned::to_owned).collect();
             continue;
         }
-        let Some((key, value)) = commented_default_assignment(line) else {
+        let assignment = commented_default_assignment(line).or_else(|| {
+            if section.len() == 1 && section[0] == "zellij" {
+                active_default_assignment(line)
+                    .filter(|(key, _)| ACTIVE_ZELLIJ_DEFAULTS.contains(key))
+            } else {
+                None
+            }
+        });
+        let Some((key, value)) = assignment else {
             continue;
         };
         let mut path = section.clone();
@@ -120,6 +135,18 @@ fn commented_default_key(line: &str) -> Option<&str> {
 
 fn commented_default_assignment(line: &str) -> Option<(&str, &str)> {
     let rest = line.trim_start().strip_prefix("# ")?;
+    default_assignment(rest)
+}
+
+fn active_default_assignment(line: &str) -> Option<(&str, &str)> {
+    let rest = line.trim_start();
+    if rest.starts_with('#') {
+        return None;
+    }
+    default_assignment(rest)
+}
+
+fn default_assignment(rest: &str) -> Option<(&str, &str)> {
     let (key, value) = rest.split_once(" = ")?;
     if !key
         .chars()

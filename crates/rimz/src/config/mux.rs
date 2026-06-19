@@ -19,26 +19,38 @@ impl From<&MachineConfig> for MultiplexerConfig {
     }
 }
 
-/// Rimz-owned Zellij room defaults. These are passed as `zellij attach …
-/// options …` when a Rimz session is born or reattached, so they do not require
-/// editing `~/.config/zellij/config.kdl`.
+/// Zellij room options. Critical Rimz invariants are passed on every birth and
+/// attach; optional fields are passed only when the user sets them here, so the
+/// user's `~/.config/zellij/config.kdl` remains authoritative otherwise.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ZellijConfig {
-    pub mouse_mode: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_mode: Option<bool>,
     pub mouse_click_through: bool,
-    pub advanced_mouse_actions: bool,
-    pub mouse_hover_effects: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub advanced_mouse_actions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mouse_hover_effects: Option<bool>,
     pub focus_follows_mouse: bool,
-    pub pane_frames: bool,
-    pub on_force_close: ZellijForceClose,
-    pub scroll_buffer_size: u32,
-    pub show_startup_tips: bool,
-    pub show_release_notes: bool,
-    pub copy_clipboard: ZellijClipboard,
-    pub copy_on_select: bool,
-    pub support_kitty_keyboard_protocol: bool,
-    pub osc8_hyperlinks: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pane_frames: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub on_force_close: Option<ZellijForceClose>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scroll_buffer_size: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_startup_tips: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_release_notes: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy_clipboard: Option<ZellijClipboard>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub copy_on_select: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub support_kitty_keyboard_protocol: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub osc8_hyperlinks: Option<bool>,
     /// Whether Zellij applies swap layouts when panes open or close. Rimz keeps
     /// it on because explicit Rimz-opened agent layouts carry a swap layout that
     /// pins the fixed sidebar and rebalances the work area on no-direction
@@ -56,20 +68,20 @@ pub struct ZellijConfig {
 impl Default for ZellijConfig {
     fn default() -> Self {
         Self {
-            mouse_mode: true,
+            mouse_mode: None,
             mouse_click_through: true,
-            advanced_mouse_actions: false,
-            mouse_hover_effects: false,
+            advanced_mouse_actions: None,
+            mouse_hover_effects: None,
             focus_follows_mouse: false,
-            pane_frames: false,
-            on_force_close: ZellijForceClose::Detach,
-            scroll_buffer_size: 100_000,
-            show_startup_tips: false,
-            show_release_notes: false,
-            copy_clipboard: ZellijClipboard::System,
-            copy_on_select: true,
-            support_kitty_keyboard_protocol: true,
-            osc8_hyperlinks: true,
+            pane_frames: None,
+            on_force_close: None,
+            scroll_buffer_size: None,
+            show_startup_tips: None,
+            show_release_notes: None,
+            copy_clipboard: None,
+            copy_on_select: None,
+            support_kitty_keyboard_protocol: None,
+            osc8_hyperlinks: None,
             auto_layout: true,
             session_serialization: false,
         }

@@ -81,6 +81,12 @@ esac
         !log.contains("close-pane --pane-id terminal_7"),
         "stdout-only hint for a pre-existing work pane must not be closed:\n{log}",
     );
+    assert!(
+        log.contains(
+            "action new-pane --direction right --tab-id 1 --name rimz-sidebar --borderless true"
+        ),
+        "repair-created sidebar panes must be explicitly borderless:\n{log}",
+    );
 }
 
 #[test]
@@ -120,7 +126,12 @@ fn option_flags_gate_by_version() {
     let expected = vec!["--mouse-click-through".to_owned(), "true".to_owned()];
     assert_eq!(mouse_click_through_args(true, Some((0, 44, 0))), expected);
 
-    let args = zellij_options_args(&ZellijConfig::default(), Some((0, 42, 9)));
+    let mouse_config = ZellijConfig {
+        advanced_mouse_actions: Some(true),
+        mouse_hover_effects: Some(false),
+        ..ZellijConfig::default()
+    };
+    let args = zellij_options_args(&mouse_config, Some((0, 42, 9)));
     assert!(
         !args.iter().any(|arg| arg == "--advanced-mouse-actions"),
         "Zellij before 0.43 rejects advanced mouse action options"
@@ -130,13 +141,21 @@ fn option_flags_gate_by_version() {
         "Zellij before 0.44 rejects mouse hover effect options"
     );
 
-    let args = zellij_options_args(&ZellijConfig::default(), Some((0, 43, 0)));
+    let args = zellij_options_args(&mouse_config, Some((0, 43, 0)));
     let has = |flag: &str, value: &str| {
         args.windows(2)
             .any(|pair| pair[0] == flag && pair[1] == value)
     };
-    assert!(has("--advanced-mouse-actions", "false"));
+    assert!(has("--advanced-mouse-actions", "true"));
     assert!(!args.iter().any(|arg| arg == "--mouse-hover-effects"));
+
+    let args = zellij_options_args(&mouse_config, Some((0, 44, 0)));
+    let has = |flag: &str, value: &str| {
+        args.windows(2)
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    };
+    assert!(has("--advanced-mouse-actions", "true"));
+    assert!(has("--mouse-hover-effects", "false"));
 }
 
 #[test]
@@ -152,14 +171,22 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
     );
     assert!(has("--default-mode", "locked"));
     assert!(has("--mouse-click-through", "true"));
-    assert!(has("--advanced-mouse-actions", "false"));
-    assert!(has("--mouse-hover-effects", "false"));
     assert!(has("--focus-follows-mouse", "false"));
-    assert!(has("--pane-frames", "false"));
-    assert!(has("--copy-clipboard", "system"));
-    assert!(has("--support-kitty-keyboard-protocol", "true"));
     assert!(has("--auto-layout", "true"));
     assert!(has("--session-serialization", "false"));
+    for flag in [
+        "--advanced-mouse-actions",
+        "--mouse-hover-effects",
+        "--pane-frames",
+        "--copy-clipboard",
+        "--support-kitty-keyboard-protocol",
+        "--osc8-hyperlinks",
+    ] {
+        assert!(
+            !args.iter().any(|arg| arg == flag),
+            "unset optional {flag} must defer to Zellij config: {args:?}",
+        );
+    }
 
     let unknown = zellij_options_args(&ZellijConfig::default(), None);
     let has_unknown = |flag: &str, value: &str| {
@@ -175,16 +202,35 @@ fn zellij_options_render_defaults_and_unknown_version_floor() {
 }
 
 #[test]
-fn zellij_options_render_mouse_opt_out() {
+fn zellij_options_render_configured_optionals() {
     let config = ZellijConfig {
-        mouse_mode: false,
+        mouse_mode: Some(false),
+        pane_frames: Some(true),
+        on_force_close: Some(crate::config::ZellijForceClose::Quit),
+        scroll_buffer_size: Some(200_000),
+        show_startup_tips: Some(true),
+        show_release_notes: Some(true),
+        copy_clipboard: Some(crate::config::ZellijClipboard::Primary),
+        copy_on_select: Some(false),
+        support_kitty_keyboard_protocol: Some(false),
+        osc8_hyperlinks: Some(false),
         ..ZellijConfig::default()
     };
     let args = zellij_options_args(&config, Some((0, 44, 3)));
-    assert!(
+    let has = |flag: &str, value: &str| {
         args.windows(2)
-            .any(|pair| pair[0] == "--mouse-mode" && pair[1] == "false")
-    );
+            .any(|pair| pair[0] == flag && pair[1] == value)
+    };
+    assert!(has("--mouse-mode", "false"));
+    assert!(has("--pane-frames", "true"));
+    assert!(has("--on-force-close", "quit"));
+    assert!(has("--scroll-buffer-size", "200000"));
+    assert!(has("--show-startup-tips", "true"));
+    assert!(has("--show-release-notes", "true"));
+    assert!(has("--copy-clipboard", "primary"));
+    assert!(has("--copy-on-select", "false"));
+    assert!(has("--support-kitty-keyboard-protocol", "false"));
+    assert!(has("--osc8-hyperlinks", "false"));
 }
 
 #[test]

@@ -258,7 +258,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
 | Group | Verbs |
 | --- | --- |
 | Query | `list-panes [--tab] [--command] [--state] [--geometry] [--all] [--json/-j]` · `list-tabs [--state] [--dimensions] [--panes] [--layout] [--all] [--json]` · `list-clients` · `current-tab-info [--json]` · `query-tab-names` · `dump-layout` · `dump-screen [--path f] [--full] [--ansi] [--pane-id]` |
-| Panes | `new-pane [--direction right\|down] [--floating] [--in-place] [--cwd] [--name] [--close-on-exit] [--start-suspended] [--stacked] [--tab-id] [--near-current-pane] [--borderless] [--plugin url] [--blocking \| --block-until-exit[-success\|-failure]] [-- cmd…]` · `close-pane [--pane-id]` · `rename-pane` / `undo-rename-pane` · `move-pane [dir]` / `move-pane-backwards` · `resize [dir\|+\|-]` · `clear` · `toggle-fullscreen` · `stack-panes -- id…` |
+| Panes | `new-pane [--direction right\|down] [--floating] [--in-place] [--cwd] [--name] [--close-on-exit] [--start-suspended] [--stacked] [--tab-id] [--near-current-pane] [--borderless true\|false] [--plugin url] [--blocking \| --block-until-exit[-success\|-failure]] [-- cmd…]` · `close-pane [--pane-id]` · `rename-pane` / `undo-rename-pane` · `move-pane [dir]` / `move-pane-backwards` · `resize [dir\|+\|-]` · `clear` · `toggle-fullscreen` · `stack-panes -- id…` |
 | Floating | `toggle-floating-panes` · `show-/hide-floating-panes [--tab-id]` · `are-floating-panes-visible` (exit code) · `toggle-pane-embed-or-floating` · `toggle-pane-pinned` · `change-floating-pane-coordinates --pane-id [--x --y --width --height --pinned --borderless]` |
 | Style | `set-pane-color [--pane-id] [--fg c] [--bg c] [--reset]` · `toggle-pane-borderless` / `set-pane-borderless` · `toggle-pane-frames` |
 | Focus | `focus-pane-id <id>` (implicitly switches to the holding tab) · `focus-next-pane` / `focus-previous-pane` · `move-focus [dir]` / `move-focus-or-tab [dir]` |
@@ -277,7 +277,7 @@ zellij attach [OPTIONS] [SESSION_NAME] [options …]
 
 ### `run` / `edit` / `plugin`
 
-`zellij run [flags] -- <cmd…>` opens a **command pane**: it survives command exit showing the status on the frame, `ENTER` re-runs, `Ctrl-c` closes. Flags: `-d/--direction` (splits **right/down only**), `-f/--floating` with `--width/--height/--x/--y` (int or `%`; **ignored for tiled panes** — a sized left pane requires a layout), `-i/--in-place [--close-replaced-pane]`, `-c/--close-on-exit`, `-s/--start-suspended`, `-n/--name`, `--cwd`, `-b/--borderless`, `--near-current-pane`, `--pinned`, `--stacked`, plus the block flags. Shell aliases upstream suggests: `zr`, `zrf`, `ze`.
+`zellij run [flags] -- <cmd…>` opens a **command pane**: it survives command exit showing the status on the frame, `ENTER` re-runs, `Ctrl-c` closes. Flags: `-d/--direction` (splits **right/down only**), `-f/--floating` with `--width/--height/--x/--y` (int or `%`; **ignored for tiled panes** — a sized left pane requires a layout), `-i/--in-place [--close-replaced-pane]`, `-c/--close-on-exit`, `-s/--start-suspended`, `-n/--name`, `--cwd`, `-b/--borderless <true|false>`, `--near-current-pane`, `--pinned`, `--stacked`, plus the block flags. Shell aliases upstream suggests: `zr`, `zrf`, `ze`.
 
 `zellij edit <file>` opens `$EDITOR`/`$VISUAL` (or `scrollback_editor`) in a pane; same geometry flags plus `-l/--line-number`.
 
@@ -354,6 +354,18 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `web_sharing` | `"off"` \| `"on"` \| `"disabled"` | `disabled` cannot be re-enabled at runtime |
 
 Plus the `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `load_plugins { "file:/path.wasm" }` starts background plugins at session start — config-level only; **a layout-level `load_plugins` does not exist** (verified live, 0.44.3), so a layout cannot be a plugin-load channel.
+
+### Mouse handling and reconfigure (0.44.3)
+
+The tab mouse handler gathers `focus_follows_mouse` and `mouse_click_through` from tab state, then `determine_mouse_action` returns `FocusPaneAndClickThrough` for a plain left press on an inactive pane only when click-through is enabled and focus-follows-mouse is disabled; otherwise the press focuses the pane and the user needs a later click to reach the terminal/application ([`mouse_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L396-L401), [`determine_mouse_action`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1196-L1441)).
+
+`advanced_mouse_actions` participates in hover chrome, grouping, and resize branches; the click-through branch reads only `mouse_click_through` and `focus_follows_mouse` ([hover branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1086-L1089), [click-through branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1357-L1362)).
+
+Runtime reconfigure applies changed options to all tabs through per-field defaults: `pane_frames` defaults to `true`, `auto_layout` to `true`, `advanced_mouse_actions` to `true`, `mouse_hover_effects` to `true`, `focus_follows_mouse` to `false`, and `mouse_click_through` to `false`. An absent `options` flag during reconfigure therefore resets that field to Zellij's default for live tabs ([`propagate_configuration_changes`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/lib.rs#L363-L435)).
+
+The client input handler enables mouse reporting from `mouse_mode`, converts terminal mouse events, and forwards them as `Action::MouseEvent` to the server; the mode-specific key handling sits on the keyboard path, so locked mode still forwards mouse events ([`input_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-client/src/input_handler.rs#L149-L180), [mouse forwarding](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-client/src/input_handler.rs#L326-L330)).
+
+Per-pane frameless rendering has two surfaces: `zellij action new-pane --borderless <true|false>` on the CLI and `borderless=true` on layout `pane` nodes. Both avoid changing global `pane_frames` ([CLI action definition](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/cli.rs#L1607-L1620), [layout parser](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/kdl_layout_parser.rs#L90-L91), [pane parse](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-utils/src/kdl/kdl_layout_parser.rs#L523-L533)).
 
 ### Plugin aliases
 

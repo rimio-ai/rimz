@@ -166,48 +166,64 @@ fn zellij_options_args(
         "locked".to_owned(),
         "--focus-follows-mouse".to_owned(),
         bool_value(config.focus_follows_mouse),
-        "--pane-frames".to_owned(),
-        bool_value(config.pane_frames),
-        "--on-force-close".to_owned(),
-        config.on_force_close.as_str().to_owned(),
-        "--scroll-buffer-size".to_owned(),
-        config.scroll_buffer_size.to_string(),
-        "--show-startup-tips".to_owned(),
-        bool_value(config.show_startup_tips),
-        "--show-release-notes".to_owned(),
-        bool_value(config.show_release_notes),
-        "--copy-clipboard".to_owned(),
-        config.copy_clipboard.as_str().to_owned(),
-        "--copy-on-select".to_owned(),
-        bool_value(config.copy_on_select),
-        "--support-kitty-keyboard-protocol".to_owned(),
-        bool_value(config.support_kitty_keyboard_protocol),
-        "--osc8-hyperlinks".to_owned(),
-        bool_value(config.osc8_hyperlinks),
-        "--auto-layout".to_owned(),
-        bool_value(config.auto_layout),
         "--session-serialization".to_owned(),
         bool_value(config.session_serialization),
+        "--auto-layout".to_owned(),
+        bool_value(config.auto_layout),
     ];
-    if !config.mouse_mode {
-        args.extend(["--mouse-mode".to_owned(), "false".to_owned()]);
-    }
     args.extend(mouse_click_through_args(
         config.mouse_click_through,
         parsed_version,
     ));
-    args.extend(versioned_bool_arg(
-        "--advanced-mouse-actions",
-        config.advanced_mouse_actions,
-        parsed_version,
-        MIN_ADVANCED_MOUSE_ACTIONS_VERSION,
-    ));
-    args.extend(versioned_bool_arg(
-        "--mouse-hover-effects",
-        config.mouse_hover_effects,
-        parsed_version,
-        MIN_MOUSE_HOVER_EFFECTS_VERSION,
-    ));
+    if let Some(value) = config.pane_frames {
+        args.extend(["--pane-frames".to_owned(), bool_value(value)]);
+    }
+    if let Some(value) = config.mouse_mode {
+        args.extend(["--mouse-mode".to_owned(), bool_value(value)]);
+    }
+    if let Some(value) = config.advanced_mouse_actions {
+        args.extend(versioned_bool_arg(
+            "--advanced-mouse-actions",
+            value,
+            parsed_version,
+            MIN_ADVANCED_MOUSE_ACTIONS_VERSION,
+        ));
+    }
+    if let Some(value) = config.mouse_hover_effects {
+        args.extend(versioned_bool_arg(
+            "--mouse-hover-effects",
+            value,
+            parsed_version,
+            MIN_MOUSE_HOVER_EFFECTS_VERSION,
+        ));
+    }
+    if let Some(value) = config.on_force_close {
+        args.extend(["--on-force-close".to_owned(), value.as_str().to_owned()]);
+    }
+    if let Some(value) = config.scroll_buffer_size {
+        args.extend(["--scroll-buffer-size".to_owned(), value.to_string()]);
+    }
+    if let Some(value) = config.show_startup_tips {
+        args.extend(["--show-startup-tips".to_owned(), bool_value(value)]);
+    }
+    if let Some(value) = config.show_release_notes {
+        args.extend(["--show-release-notes".to_owned(), bool_value(value)]);
+    }
+    if let Some(value) = config.copy_clipboard {
+        args.extend(["--copy-clipboard".to_owned(), value.as_str().to_owned()]);
+    }
+    if let Some(value) = config.copy_on_select {
+        args.extend(["--copy-on-select".to_owned(), bool_value(value)]);
+    }
+    if let Some(value) = config.support_kitty_keyboard_protocol {
+        args.extend([
+            "--support-kitty-keyboard-protocol".to_owned(),
+            bool_value(value),
+        ]);
+    }
+    if let Some(value) = config.osc8_hyperlinks {
+        args.extend(["--osc8-hyperlinks".to_owned(), bool_value(value)]);
+    }
     args
 }
 

@@ -496,6 +496,8 @@ impl ZellijBackend {
             tab_id.to_string(),
             "--name".to_owned(),
             SIDEBAR_PANE_NAME.to_owned(),
+            "--borderless".to_owned(),
+            "true".to_owned(),
             "--close-on-exit".to_owned(),
             "--cwd".to_owned(),
             opts.cwd.to_string_lossy().into_owned(),

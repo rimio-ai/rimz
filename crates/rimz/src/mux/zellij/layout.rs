@@ -93,7 +93,7 @@ fn sidebar_pane_kdl(
         .map(|ms| format!(r#" "--refresh-ms" "{ms}""#))
         .unwrap_or_default();
     Ok(format!(
-        r#"pane size={size} name={pane_name}{cwd_attr} {{
+        r#"pane size={size} name={pane_name} borderless=true{cwd_attr} {{
             command {rimz_bin}
             args "sidebar" "serve" "--mux" "zellij" "--workspace-id" {workspace_id} "--session-name" {session_name}{refresh_args}
             start_suspended false
@@ -527,24 +527,24 @@ mod tests {
         let opts = sidebar_opts("rimz-width", None, Some(120));
         let layout = render_sidebar_layout(&opts).expect("render layout");
         assert!(
-            layout.contains(r#"pane size="30%" name="rimz-sidebar""#),
+            layout.contains(r#"pane size="30%" name="rimz-sidebar" borderless=true"#),
             "the default_tab_template births detached, so the verdict is its \
              percentage share:\n{layout}",
         );
         assert!(
-            layout.contains(r#"pane size=36 name="rimz-sidebar""#),
+            layout.contains(r#"pane size=36 name="rimz-sidebar" borderless=true"#),
             "the new_tab_template instantiates attached, so it pins the fixed \
              verdict:\n{layout}",
         );
         let capped = sidebar_opts("rimz-width", None, Some(340));
         let layout = render_sidebar_layout(&capped).expect("render layout");
         assert!(
-            layout.contains(r#"pane size="21%" name="rimz-sidebar""#),
+            layout.contains(r#"pane size="21%" name="rimz-sidebar" borderless=true"#),
             "the default_tab_template births detached, so a capped width is \
              its derived percentage:\n{layout}",
         );
         assert!(
-            layout.contains(r#"pane size=72 name="rimz-sidebar""#),
+            layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
             "the new_tab_template instantiates attached, so a capped width is \
              the fixed `max_cols` cap:\n{layout}",
         );
@@ -585,7 +585,10 @@ mod tests {
         assert_eq!(layout.matches("focus=true").count(), 1, "{layout}");
         assert!(layout.contains("start_suspended false"), "{layout}");
         assert!(layout.contains("close_on_exit true"), "{layout}");
-        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(
+            layout.contains(r#"name="rimz-sidebar" borderless=true"#),
+            "{layout}"
+        );
         assert!(layout.contains(r#""sidebar" "serve""#), "{layout}");
         assert!(layout.contains("compact-bar"), "{layout}");
         assert!(
@@ -638,7 +641,7 @@ mod tests {
         };
         let layout = render_tab_layout(&opts, None).expect("render tab layout");
         assert!(
-            layout.contains(r#"pane size=72 name="rimz-sidebar""#),
+            layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
             "custom tab layouts instantiate from a live client, so the \
              sidebar must pin the fixed max-cols verdict instead of \
              re-evaluating a percentage against wide terminals:\n{layout}",
@@ -676,7 +679,7 @@ mod tests {
 
         let layout = render_tab_layout(&opts, NonZeroU16::new(60)).expect("render tab layout");
         assert!(
-            layout.contains(r#"pane size=60 name="rimz-sidebar""#),
+            layout.contains(r#"pane size=60 name="rimz-sidebar" borderless=true"#),
             "custom tab layouts must be able to mirror the live \
              new_tab_template instead of this command's pane-width probe:\n{layout}",
         );
@@ -752,7 +755,10 @@ mod tests {
             layout.contains(r#"args "codex" "app-server" "serve""#),
             "{layout}",
         );
-        assert!(layout.contains(r#"name="rimz-sidebar""#), "{layout}");
+        assert!(
+            layout.contains(r#"name="rimz-sidebar" borderless=true"#),
+            "{layout}"
+        );
         assert!(layout.contains("compact-bar"), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
