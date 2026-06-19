@@ -52,7 +52,7 @@ pub struct ZellijConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub osc8_hyperlinks: Option<bool>,
     /// Whether Zellij applies swap layouts when panes open or close. Rimz keeps
-    /// it on because explicit Rimz-opened agent layouts carry a swap layout that
+    /// it on because every Rimz birth and tab layout carries a swap layout that
     /// pins the fixed sidebar and rebalances the work area on no-direction
     /// `NewPane`.
     pub auto_layout: bool,

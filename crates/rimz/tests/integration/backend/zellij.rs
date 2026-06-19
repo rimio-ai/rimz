@@ -13,7 +13,7 @@
 
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1609,6 +1609,131 @@ fn wait_for_named_work_pane_count(
     wait_for_named_work_pane_state(xdg, session, tab_name, want, |_| true)
 }
 
+fn spawn_sleep_pane(xdg: &Path, session: &str, cwd: &Path) {
+    let spawned = scoped_zellij(xdg)
+        .args(["--session", session, "action", "new-pane", "--cwd"])
+        .arg(cwd)
+        .args(["--", "sleep", "600"])
+        .bounded_output()
+        .expect("new-pane");
+    assert!(
+        spawned.status.success(),
+        "new-pane failed: {}",
+        String::from_utf8_lossy(&spawned.stderr),
+    );
+}
+
+fn assert_work_panes_reopen_evenly_after_closing_first(
+    xdg: &Path,
+    session: &str,
+    tab_name: &str,
+    cwd: &Path,
+    client_columns: u16,
+    client_rows: u16,
+) {
+    let work = wait_for_named_work_pane_count(xdg, session, tab_name, 2);
+    assert_eq!(
+        work.len(),
+        2,
+        "tab should start with two work panes: {work:?}",
+    );
+    let close = format!("terminal_{}", work[0].id);
+    let closed = scoped_zellij(xdg)
+        .args([
+            "--session",
+            session,
+            "action",
+            "close-pane",
+            "--pane-id",
+            &close,
+        ])
+        .bounded_output()
+        .expect("close-pane");
+    assert!(
+        closed.status.success(),
+        "close-pane failed: {}",
+        String::from_utf8_lossy(&closed.stderr),
+    );
+
+    let sidebar_after_close =
+        wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab keeps its sidebar");
+    assert_eq!(
+        sidebar_after_close.x, 0,
+        "sidebar should stay docked left after close: {sidebar_after_close:?}",
+    );
+    let expected_work_columns =
+        u64::from(client_columns).saturating_sub(sidebar_after_close.columns);
+    let survivor = wait_for_named_work_pane_state(xdg, session, tab_name, 1, |work| {
+        work[0].columns.abs_diff(expected_work_columns) <= 5
+    });
+    assert_eq!(
+        survivor.len(),
+        1,
+        "closing one work pane should leave one survivor: {survivor:?}",
+    );
+    let survivor_diff = survivor[0].columns.abs_diff(expected_work_columns);
+    assert!(
+        survivor_diff <= 5,
+        "surviving work pane should fill the work area after close; expected \
+         about {expected_work_columns} cols, got {survivor:?}",
+    );
+    let focus = scoped_zellij(xdg)
+        .args([
+            "--session",
+            session,
+            "action",
+            "focus-pane-id",
+            &format!("terminal_{}", survivor[0].id),
+        ])
+        .bounded_output()
+        .expect("focus-pane-id");
+    assert!(
+        focus.status.success(),
+        "focus-pane-id failed: {}",
+        String::from_utf8_lossy(&focus.stderr),
+    );
+
+    spawn_sleep_pane(xdg, session, cwd);
+
+    let split = wait_for_named_work_pane_state(xdg, session, tab_name, 2, |work| {
+        work[0].columns.abs_diff(work[1].columns) <= 5
+    });
+    assert_eq!(
+        split.len(),
+        2,
+        "new terminal should land in the same work tab: {split:?}",
+    );
+    let diff = split[0].columns.abs_diff(split[1].columns);
+    assert!(
+        diff <= 5,
+        "work panes should split evenly after reopening from one pane, got {split:?}",
+    );
+    let sidebar =
+        wait_for_named_sidebar_pane(xdg, session, tab_name).expect("work tab keeps its sidebar");
+    assert_eq!(sidebar.x, 0, "sidebar should stay docked left: {sidebar:?}");
+    assert!(
+        (68..=76).contains(&sidebar.columns),
+        "sidebar should stay near the 72-column cap: {sidebar:?}",
+    );
+    let bar = wait_for_named_compact_bar_pane(xdg, session, tab_name)
+        .expect("work tab keeps its compact-bar");
+    assert_eq!(
+        bar.x, 0,
+        "compact bar should span from the left edge: {bar:?}"
+    );
+    assert_eq!(
+        bar.columns,
+        u64::from(client_columns),
+        "compact bar should span the whole tab width: {bar:?}",
+    );
+    assert_eq!(bar.rows, 1, "compact bar should stay one row tall: {bar:?}");
+    assert_eq!(
+        bar.y + bar.rows,
+        u64::from(client_rows),
+        "compact bar should stay docked at the bottom: {bar:?}",
+    );
+}
+
 fn assert_sidebars_not_held(xdg: &Path, session: &str, context: &str) {
     let panes = list_panes_json(xdg, session);
     let sidebars: Vec<&serde_json::Value> = panes
@@ -1739,6 +1864,35 @@ fn wait_for_tab_count(xdg: &Path, session: &str, want: usize) -> Vec<u64> {
         let ids = tab_ids(xdg, session);
         if ids.len() >= want || Instant::now() >= deadline {
             return ids;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Name of the first tab that appears after `before`, from the live pane list.
+fn wait_for_new_tab_name(xdg: &Path, session: &str, before: &[u64]) -> Option<String> {
+    let before: BTreeSet<u64> = before.iter().copied().collect();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let panes = list_panes_json(xdg, session);
+        let name = panes.as_array().and_then(|panes| {
+            panes
+                .iter()
+                .filter(|pane| {
+                    pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                })
+                .find_map(|pane| {
+                    let tab_id = pane.get("tab_id")?.as_u64()?;
+                    if before.contains(&tab_id) {
+                        return None;
+                    }
+                    pane.get("tab_name")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_owned)
+                })
+        });
+        if name.is_some() || Instant::now() >= deadline {
+            return name;
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -2010,112 +2164,85 @@ fn tab_layout_reopens_work_panes_evenly_after_closing_to_one() {
         })
         .expect("open tab layout");
 
-    let work = wait_for_named_work_pane_count(xdg.path(), &name, tab_name, 2);
-    assert_eq!(
-        work.len(),
-        2,
-        "tab should start with two work panes: {work:?}"
+    assert_work_panes_reopen_evenly_after_closing_first(
+        xdg.path(),
+        &name,
+        tab_name,
+        cwd.path(),
+        client_columns,
+        client_rows,
     );
-    let close = format!("terminal_{}", work[0].id);
-    let closed = scoped_zellij(xdg.path())
-        .args([
-            "--session",
-            &name,
-            "action",
-            "close-pane",
-            "--pane-id",
-            &close,
-        ])
-        .bounded_output()
-        .expect("close-pane");
-    assert!(
-        closed.status.success(),
-        "close-pane failed: {}",
-        String::from_utf8_lossy(&closed.stderr),
-    );
+}
 
-    let sidebar_after_close = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
-        .expect("work tab keeps its sidebar after close");
-    let expected_work_columns =
-        u64::from(client_columns).saturating_sub(sidebar_after_close.columns);
-    let survivor = wait_for_named_work_pane_state(xdg.path(), &name, tab_name, 1, |work| {
-        work[0].columns.abs_diff(expected_work_columns) <= 5
-    });
-    assert_eq!(
-        survivor.len(),
-        1,
-        "closing one work pane should leave one survivor: {survivor:?}",
-    );
-    let survivor_diff = survivor[0].columns.abs_diff(expected_work_columns);
-    assert!(
-        survivor_diff <= 5,
-        "surviving work pane should fill the work area after close; expected \
-         about {expected_work_columns} cols, got {survivor:?}",
-    );
-    let focus = scoped_zellij(xdg.path())
-        .args([
-            "--session",
-            &name,
-            "action",
-            "focus-pane-id",
-            &format!("terminal_{}", survivor[0].id),
-        ])
-        .bounded_output()
-        .expect("focus-pane-id");
-    assert!(
-        focus.status.success(),
-        "focus-pane-id failed: {}",
-        String::from_utf8_lossy(&focus.stderr),
-    );
+/// The session birth layout carries the same work-area swap layout as explicit
+/// tab layouts. A native Zellij `NewTab` followed by a close-first +
+/// no-direction `NewPane` flow should rebalance the work area instead of
+/// inheriting Zellij's stale 75/25 split.
+#[test]
+fn native_new_tab_reopens_work_panes_evenly_after_closing_to_one() {
+    require_zellij!();
 
-    let spawned = scoped_zellij(xdg.path())
-        .args(["--session", &name, "action", "new-pane", "--cwd"])
-        .arg(cwd.path())
-        .args(["--", "sleep", "600"])
-        .bounded_output()
-        .expect("new-pane");
-    assert!(
-        spawned.status.success(),
-        "new-pane failed: {}",
-        String::from_utf8_lossy(&spawned.stderr),
-    );
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("nativesplit");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
 
-    let split = wait_for_named_work_pane_state(xdg.path(), &name, tab_name, 2, |work| {
+    let (_stub_dir, stub) = sidebar_stub_alive_for(600);
+    let width = SidebarWidth::default();
+    let sidebar = SidebarPaneOptions {
+        session_name: name.clone(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-native-worksplit")),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(298)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend.open_sidebar(&sidebar, None).expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let client_columns: u16 = 380;
+    let client_rows: u16 = 46;
+    let _client = AttachedClient::attach(xdg.path(), &name, client_columns, client_rows);
+    wait_for_attached_client(xdg.path(), &name);
+
+    let before_tabs = tab_ids(xdg.path(), &name);
+    open_new_tab(xdg.path(), &name);
+    let tab_name = wait_for_new_tab_name(xdg.path(), &name, &before_tabs)
+        .expect("native new-tab should report a tab name");
+    wait_for_named_sidebar_pane(xdg.path(), &name, &tab_name)
+        .expect("native tab should carry a sidebar");
+
+    spawn_sleep_pane(xdg.path(), &name, cwd.path());
+    let split = wait_for_named_work_pane_state(xdg.path(), &name, &tab_name, 2, |work| {
         work[0].columns.abs_diff(work[1].columns) <= 5
     });
     assert_eq!(
         split.len(),
         2,
-        "new terminal should land in the same work tab: {split:?}",
+        "native tab should split into two work panes: {split:?}",
     );
     let diff = split[0].columns.abs_diff(split[1].columns);
     assert!(
         diff <= 5,
-        "work panes should split evenly after reopening from one pane, got {split:?}",
+        "native tab's first no-direction split should be even, got {split:?}",
     );
-    let sidebar = wait_for_named_sidebar_pane(xdg.path(), &name, tab_name)
-        .expect("work tab keeps its sidebar");
-    assert_eq!(sidebar.x, 0, "sidebar should stay docked left: {sidebar:?}");
-    assert!(
-        (68..=76).contains(&sidebar.columns),
-        "sidebar should stay near the 72-column cap: {sidebar:?}",
-    );
-    let bar = wait_for_named_compact_bar_pane(xdg.path(), &name, tab_name)
-        .expect("work tab keeps its compact-bar");
-    assert_eq!(
-        bar.x, 0,
-        "compact bar should span from the left edge: {bar:?}"
-    );
-    assert_eq!(
-        bar.columns,
-        u64::from(client_columns),
-        "compact bar should span the whole tab width: {bar:?}",
-    );
-    assert_eq!(bar.rows, 1, "compact bar should stay one row tall: {bar:?}");
-    assert_eq!(
-        bar.y + bar.rows,
-        u64::from(client_rows),
-        "compact bar should stay docked at the bottom: {bar:?}",
+
+    assert_work_panes_reopen_evenly_after_closing_first(
+        xdg.path(),
+        &name,
+        &tab_name,
+        cwd.path(),
+        client_columns,
+        client_rows,
     );
 }
 

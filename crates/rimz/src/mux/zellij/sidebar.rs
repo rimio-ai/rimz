@@ -3,7 +3,7 @@
 use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
-use super::layout::{TempLayoutFile, render_session_layout, render_sidebar_layout};
+use super::layout::{TempLayoutFile, render_session_layout};
 use super::parse::{new_tab_template_sidebar_cols, parse_focused_client_panes, strip_ansi};
 use super::raw_pane::{
     SidebarDock, is_sidebar_pane, mounted_sidebar_pane, parse_new_pane_id, parse_terminal_id,
@@ -30,8 +30,8 @@ pub(super) enum DockOutcome {
 
 impl ZellijBackend {
     /// Create the background session from a layout that puts the `rimz-sidebar`
-    /// pane on the left and focuses the user's terminal on the right. The layout
-    /// doubles as the default tab template, so new tabs are born with a sidebar
+    /// pane on the left and focuses the user's terminal on the right. The
+    /// layout carries the new-tab template, so new tabs are born with a sidebar
     /// too. The sidebar pane is `close_on_exit`, so when its own process exits
     /// the pane closes — see the self-close loop in `sidebar_pane::app`.
     ///
@@ -46,14 +46,10 @@ impl ZellijBackend {
     ) -> Result<()> {
         // A daemon view leads only if it is born first, and resumed agents only
         // come back as command panes the birth layout spells out: Zellij can't
-        // reorder tabs or add command panes after birth. So a room that leads
-        // with a daemon and/or re-seeds prior agents is born from an explicit
-        // multi-tab layout; a plain room uses the single working-tab template.
-        let body = if daemon.is_some() || !opts.resume_tabs.is_empty() {
-            render_session_layout(opts, daemon, &opts.resume_tabs)?
-        } else {
-            render_sidebar_layout(opts)?
-        };
+        // reorder tabs or add command panes after birth. The same birth layout
+        // handles a plain room as `None, &[]`, so every session carries the same
+        // new-tab template and work-area swap layout.
+        let body = render_session_layout(opts, daemon, &opts.resume_tabs)?;
         let layout = TempLayoutFile::new(body)?;
         let mut option_args = vec![
             "attach".to_owned(),

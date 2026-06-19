@@ -102,43 +102,6 @@ fn sidebar_pane_kdl(
     ))
 }
 
-pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String> {
-    let sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Detached, None)?;
-    let new_tab_sidebar = sidebar_pane_kdl(opts, None, BirthGeometry::Attached, None)?;
-    // Every tab carries the same shape — the sidebar on the left and a focused
-    // work area on the right — in the spelling that fits where it instantiates:
-    // the `default_tab_template` wraps the explicit birth tab on the detached
-    // session, and the `new_tab_template` sizes each tab the user opens from an
-    // attached client ([`BirthGeometry`]). The bare `tab` node is load-bearing:
-    // on Zellij 0.44.3 a layout carrying a `new_tab_template` but no tab node
-    // kills the background session instead of creating the implicit first tab.
-    // The working cwd comes from the session's `--default-cwd`, so panes need
-    // no `cwd`.
-    //
-    // The terminal is an explicit `pane focus=true`, not Zellij's `children`
-    // placeholder. A nested `children` template has version-sensitive behavior:
-    // on Zellij 0.44.3 it creates the right terminal but leaves focus stranded
-    // on the sidebar in newly-created tabs. Spelling out the terminal makes the
-    // product contract explicit and pins focus on the user's working pane.
-    let work_pane = render_plain_terminal_pane(16);
-    let birth_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
-    let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &work_pane, 8);
-    Ok(format!(
-        r#"layout {{
-    default_tab_template {{
-{birth_body}
-        {COMPACT_BAR_KDL}
-    }}
-    new_tab_template {{
-{new_tab_body}
-        {COMPACT_BAR_KDL}
-    }}
-    tab focus=true
-}}
-"#,
-    ))
-}
-
 /// The session-birth layout for a room that leads with a daemon view and/or
 /// re-seeds prior agents. Zellij can't reorder tabs or add command panes after
 /// birth, so the order and content are fixed here: the daemon tab
@@ -147,12 +110,18 @@ pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String>
 /// (`sidebar | terminal`). Focus lands on the most-recently-active resumed
 /// channel when there is one, else on the working terminal — so attach drops
 /// the user straight onto a restored agent.
-/// A `new_tab_template` — distinct from `default_tab_template`, applying only to
-/// tabs the user opens *later* — carries the `sidebar | terminal` shape so future
-/// tabs keep their sidebar and terminal focus without the `children`
-/// focus-strand bug ([`render_sidebar_layout`] explains why `children` is
-/// avoided). All panes inherit the session's `--default-cwd` except the daemon
-/// hosts and resumed agents, which carry their own worktree cwd.
+///
+/// The same renderer also births the plain room (`None`, empty resume set). The
+/// bare `tab` nodes are load-bearing: on Zellij 0.44.3 a layout carrying a
+/// `new_tab_template` but no tab node kills the background session instead of
+/// creating the implicit first tab. The terminal in the template is an explicit
+/// `pane focus=true`, not Zellij's `children` placeholder; nested `children`
+/// creates the right terminal on 0.44.3 but leaves focus stranded on the
+/// sidebar in newly-created tabs. The root `rimz-work-area` swap layout applies
+/// to every birth and user-opened tab, pinning the sidebar and compact bar while
+/// no-direction pane opens rebalance the work area. All panes inherit the
+/// session's `--default-cwd` except the daemon hosts and resumed agents, which
+/// carry their own worktree cwd.
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
@@ -218,12 +187,14 @@ pub(super) fn render_session_layout(
     let work_body = render_sidebar_work_area(&sidebar, &work_pane, 8);
     let new_tab_pane = render_plain_terminal_pane(16);
     let new_tab_body = render_sidebar_work_area(&new_tab_sidebar, &new_tab_pane, 8);
+    let swap_layout = rimz_swap_layout_kdl(opts.birth_size.cols.get());
     Ok(format!(
         r#"layout {{
     new_tab_template {{
 {new_tab_body}
         {COMPACT_BAR_KDL}
     }}
+{swap_layout}
 {daemon_tab}{agent_tabs}    tab{work_focus} {{
 {work_body}
         {COMPACT_BAR_KDL}
@@ -242,11 +213,11 @@ fn kdl_string(value: &str) -> Result<String> {
 
 /// A tab layout born `sidebar | hosts…`: the global sidebar docked on the left,
 /// the view's hosts side by side to its right (the first focused), and the
-/// compact-bar below — mirroring the session's working-tab template
-/// ([`render_sidebar_layout`]). Supplying this as `new-tab --layout` overrides
-/// that template, so the sidebar is spelled out here rather than inherited. The
-/// sidebar runs from its own worktree cwd and each host from its own `cwd`. Every
-/// host closes with its process (`close_on_exit true`): an exit means it is gone.
+/// compact-bar below — mirroring the session's working-tab shape. Supplying
+/// this as `new-tab --layout` overrides the session template, so the sidebar is
+/// spelled out here rather than inherited. The sidebar runs from its own
+/// worktree cwd and each host from its own `cwd`. Every host closes with its
+/// process (`close_on_exit true`): an exit means it is gone.
 pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Result<String> {
     if opts.hosts.is_empty() {
         return Err(MuxErr::Output {
@@ -515,30 +486,42 @@ mod tests {
     }
 
     #[test]
-    fn sidebar_layout_renders_terminal_template_bar_and_runtime_args() {
-        let layout = render_sidebar_layout(&sidebar_opts("rimz-contract", Some(50), None)).unwrap();
+    fn session_layout_renders_terminal_template_bar_swap_and_runtime_args() {
+        let layout =
+            render_session_layout(&sidebar_opts("rimz-contract", Some(50), None), None, &[])
+                .unwrap();
         assert!(layout.contains("compact-bar"), "{layout}");
         assert!(
-            !layout.contains("swap_tiled_layout"),
-            "session templates avoid swap layouts because Zellij then requires \
-             a `children` placeholder, which regresses new-tab focus:\n{layout}",
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}",
         );
+        assert!(layout.contains("tab max_panes=3"), "{layout}");
+        assert!(layout.contains("tab max_panes=4"), "{layout}");
         assert!(layout.contains("pane focus=true"), "{layout}");
         assert!(layout.contains("tab focus=true"), "{layout}");
         assert!(!layout.contains("children"), "{layout}");
+        assert!(!layout.contains("default_tab_template"), "{layout}");
         assert!(layout.contains("start_suspended false"), "{layout}");
         assert!(!layout.contains("start_suspended true"), "{layout}");
         assert!(layout.contains(r#""--refresh-ms" "50""#), "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            4,
+            "the new-tab template, the explicit birth tab, and both swap \
+             templates must carry the compact-bar plugin:\n{layout}",
+        );
     }
 
     #[test]
-    fn sidebar_layout_pins_fixed_cols_attached_and_percent_detached() {
+    fn session_layout_pins_fixed_cols_attached_and_percent_detached() {
         let opts = sidebar_opts("rimz-width", None, Some(120));
-        let layout = render_sidebar_layout(&opts).expect("render layout");
+        let layout = render_session_layout(&opts, None, &[]).expect("render layout");
         assert!(
             layout.contains(r#"pane size="30%" name="rimz-sidebar" borderless=true"#),
-            "the default_tab_template births detached, so the verdict is its \
-             percentage share:\n{layout}",
+            "the explicit birth tab instantiates detached, so the verdict is \
+             its percentage share:\n{layout}",
         );
         assert!(
             layout.contains(r#"pane size=36 name="rimz-sidebar" borderless=true"#),
@@ -546,11 +529,11 @@ mod tests {
              verdict:\n{layout}",
         );
         let capped = sidebar_opts("rimz-width", None, Some(340));
-        let layout = render_sidebar_layout(&capped).expect("render layout");
+        let layout = render_session_layout(&capped, None, &[]).expect("render layout");
         assert!(
             layout.contains(r#"pane size="21%" name="rimz-sidebar" borderless=true"#),
-            "the default_tab_template births detached, so a capped width is \
-             its derived percentage:\n{layout}",
+            "the explicit birth tab instantiates detached, so a capped width \
+             is its derived percentage:\n{layout}",
         );
         assert!(
             layout.contains(r#"pane size=72 name="rimz-sidebar" borderless=true"#),
@@ -560,10 +543,19 @@ mod tests {
         let new_tab_template = layout
             .split("new_tab_template")
             .nth(1)
+            .and_then(|section| section.split("    swap_tiled_layout").next())
             .expect("layout carries a new_tab_template");
         assert!(
             !new_tab_template.contains('%'),
             "the new_tab_template carries no percentage:\n{layout}",
+        );
+        let birth_tab = layout
+            .split("    tab focus=true")
+            .nth(1)
+            .expect("layout carries an explicit birth tab");
+        assert!(
+            !birth_tab.contains("pane size=72 name=\"rimz-sidebar\""),
+            "the explicit birth tab carries no fixed sidebar size:\n{layout}",
         );
     }
 
@@ -735,10 +727,28 @@ mod tests {
             "a bare working terminal tab remains:\n{layout}",
         );
         assert!(layout.contains("new_tab_template"), "{layout}");
+        assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}",
+        );
+        assert!(layout.contains("tab max_panes=3"), "{layout}");
+        assert!(layout.contains("tab max_panes=4"), "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            6,
+            "the new-tab template, three explicit birth tabs, and both swap \
+             templates must carry the compact-bar plugin:\n{layout}",
+        );
         assert!(!layout.contains("children"), "{layout}");
 
         let layout = render_session_layout(&opts, None, &[]).expect("render layout");
         assert!(layout.contains("tab focus=true"), "{layout}");
+        assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}",
+        );
         assert!(
             !layout.contains("tab name="),
             "no daemon or agent tabs without a daemon or resume set:\n{layout}",
@@ -774,6 +784,20 @@ mod tests {
             "{layout}"
         );
         assert!(layout.contains("compact-bar"), "{layout}");
+        assert!(
+            layout.contains(r#"swap_tiled_layout name="rimz-work-area""#),
+            "{layout}",
+        );
+        assert!(layout.contains("tab max_panes=3"), "{layout}");
+        assert!(layout.contains("tab max_panes=4"), "{layout}");
+        assert_eq!(
+            layout
+                .matches(r#"plugin location="zellij:compact-bar""#)
+                .count(),
+            5,
+            "the new-tab template, daemon tab, working tab, and both swap \
+             templates must carry the compact-bar plugin:\n{layout}",
+        );
         assert!(layout.contains(r#"cwd="/proj/root""#), "{layout}");
 
         assert!(
