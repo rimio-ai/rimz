@@ -590,15 +590,13 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     rimz::run::create(ledger.paths(), &record).context("recording run")?;
     let target = own_pane_id(mux);
     let open_result = match run_placement(args.new_tab, target.is_some()) {
-        RunPlacement::Split => backend
-            .split_pane(SplitPaneOptions {
-                target_pane_id: target,
-                cwd: Some(launch.cwd.to_string_lossy().into_owned()),
-                command: Some(pane.argv.clone()),
-                env: crate::cli::agents_launch::launch_identity_env(&workspace),
-                focus: false,
-            })
-            .map_err(Into::into),
+        RunPlacement::Split => backend.split_pane(SplitPaneOptions {
+            target_pane_id: target,
+            cwd: Some(launch.cwd.to_string_lossy().into_owned()),
+            command: Some(pane.argv.clone()),
+            env: crate::cli::agents_launch::launch_identity_env(&workspace),
+            focus: false,
+        }),
         RunPlacement::Tab => backend.open_tab(&TabOptions {
             session_name: workspace.session_name.clone(),
             title: format!("run: {}", adapter.descriptor().kind),
