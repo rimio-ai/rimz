@@ -178,6 +178,7 @@ impl AgentLifecyclePayload {
                 agent_id: optional_string(params, "agent_id").map(AgentSessionId::from),
                 agent_name: optional_string(params, "agent_name"),
                 agent_profile: optional_string(params, "agent_profile"),
+                agent_role: optional_string(params, "agent_role"),
                 kind_ordinal: optional_u64(params, "kind_ordinal").map(clamp_u32),
                 signal,
                 agent_pid: optional_deserialize(params, "agent_pid"),
@@ -479,6 +480,7 @@ mod tests {
             agent_id: Some(AgentSessionId::from("sess-1")),
             agent_name: Some("amber-atlas".to_owned()),
             agent_profile: None,
+            agent_role: Some("coder".to_owned()),
             kind_ordinal: Some(2),
             signal: LifecycleSignal::TurnEnded {
                 errored: false,
@@ -535,6 +537,7 @@ mod tests {
                 "event_name": "Stop",
                 "agent_id": "sess-1",
                 "agent_name": "amber-atlas",
+                "agent_role": "coder",
                 "kind_ordinal": 2,
                 "signal": {
                     "signal": "turn_ended",
@@ -699,6 +702,7 @@ mod tests {
             kind: AgentKind::new_unchecked("codex"),
             name: Some("swift-otter".to_owned()),
             profile: None,
+            role: None,
             channel: Some("docs".to_owned()),
         };
         let payload = AgentSteeredPayload::new(
@@ -838,6 +842,7 @@ mod tests {
             kind: AgentKind::new_unchecked("codex"),
             name: Some("swift-otter".to_owned()),
             profile: None,
+            role: None,
             channel: Some("docs".to_owned()),
         };
         let attributed = message.with_sender(sender.clone());

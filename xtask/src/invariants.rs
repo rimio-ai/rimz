@@ -545,7 +545,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
         "[agents]",
         "[agents.profiles]",
         "[agents.commands]",
-        "[agents.layouts]",
+        "[agents.teams]",
         "[remote_control]",
         "[accounts]",
         "[accounts.usage_limit_usd]",

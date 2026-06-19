@@ -8,6 +8,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
         serde_json::json!({
             "event_name": "SessionStart",
             "agent_id": "sess-1",
+            "agent_profile": "codex-coder",
+            "agent_role": "coder",
             "signal": { "signal": "registered" },
             "model": "GPT-5.5",
             "effort": "high",
@@ -53,6 +55,8 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
     assert_eq!(agent.output_tokens, Some(800));
     assert_eq!(agent.todo_done, Some(3));
     assert_eq!(agent.todo_total, Some(5));
+    assert_eq!(agent.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(agent.role.as_deref(), Some("coder"));
     assert_eq!(agent.worktree_branch.as_deref(), Some("main"));
 }
 

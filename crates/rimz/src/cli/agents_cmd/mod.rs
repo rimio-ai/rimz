@@ -58,7 +58,7 @@ struct LaunchEventParams<'a> {
 pub struct AgentsArgs {
     #[command(subcommand)]
     command: Option<AgentsSubcmd>,
-    /// Layout spec or named layout (`claude,codex+term`).
+    /// Inline spec or named team (`claude,codex+term`).
     #[arg(value_name = "SPEC")]
     spec: Option<String>,
     /// Prompt broadcast to every launched agent cell.
@@ -204,6 +204,10 @@ struct ExecArgs {
     /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`.
     #[arg(long)]
     agent_profile: Option<String>,
+    /// The `[agents.teams]` role this agent launched as, stamped into
+    /// `RIMZ_AGENT_ROLE` so it answers to `@<role>`.
+    #[arg(long)]
+    agent_role: Option<String>,
     #[arg(long)]
     launch_id: Option<String>,
     #[arg(long, hide = true)]
@@ -361,12 +365,13 @@ pub(crate) fn create_on_miss(
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
+    let teams = effective_launch_teams(&machine_config, &workspace)?;
     if !is_launchable_type(&create.selector, &profiles) {
         rimz::config::effective::block_untrusted_profile_reference(
             Some(&create.selector),
             &profiles,
             &machine_config.agents.commands,
-            &machine_config.agents.layouts,
+            &teams,
             &workspace.project_root,
             &rimz::ledger::paths::config_home(),
         )?;

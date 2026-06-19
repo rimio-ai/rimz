@@ -339,6 +339,7 @@ fn agent_state(kind: &str, id: &str, status: AgentStatus) -> AgentState {
         name: None,
         kind_ordinal: None,
         profile: None,
+        role: None,
         status,
         phase: rimz::agents::TurnPhase::Idle,
         pane: None,

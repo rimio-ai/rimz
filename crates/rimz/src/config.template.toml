@@ -11,10 +11,11 @@
 
 [agents]
 # tab = "auto"                          # launch placement: "auto" (worktree or multi-cell → new tab, else same tab), "new", or "same"
-# `rimz agents <spec>` cells are profiles, commands, or built-ins. Built-ins
+# `rimz agents <spec>` names a team or uses inline cells made from profiles,
+# commands, or built-ins. Built-ins
 # include `term`, agent kinds, and adapter-supported `<kind>-<mode>` variants
 # such as `claude-auto` or `codex-yolo`. `peer` (claude,codex) is a built-in
-# layout.
+# team.
 
 [agents.profiles]
 # Profiles are named main agents addressed as `@<profile>`. `agent` names a
@@ -38,11 +39,16 @@
 ## vim = "nvim -p"
 ## htop = "htop"
 
-[agents.layouts]
-# Layouts are shape strings that compose profiles, commands, and built-ins with
-# `,` columns and `+` rows.
-## review = "planner,codex+vim"
-## debug = "pi,htop+term"
+[agents.teams]
+# Teams bind ordered role names to profiles. Each role opens as one side-by-side
+# column in the same tab and answers to `@<role>` in that channel. Inline specs
+# such as `claude,codex+term` keep the ad-hoc column/row grammar.
+## [[agents.teams.review.roles]]
+## role = "planner"
+## profile = "planner"
+## [[agents.teams.review.roles]]
+## role = "coder"
+## profile = "codex-yolo"
 
 [autoping]
 # Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`

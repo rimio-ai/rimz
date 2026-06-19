@@ -21,6 +21,9 @@ pub const ENV_AGENT_NAME: &str = "RIMZ_AGENT_NAME";
 /// The `[agents.profiles]` profile name an agent launched as, so it answers to
 /// `@<profile>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
+/// The `[agents.teams]` role name an agent launched as, so it answers to
+/// `@<role>`. Set by the launch wrapper; read into the lifecycle observation.
+pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -753,6 +756,7 @@ mod tests {
             name: None,
             kind_ordinal: None,
             profile: None,
+            role: None,
             status,
             phase: TurnPhase::Idle,
             pane: None,

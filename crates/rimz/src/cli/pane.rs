@@ -542,6 +542,7 @@ mod tests {
             name: None,
             kind_ordinal: Some(1),
             profile: None,
+            role: None,
             status: AgentStatus::Running,
             phase: rimz::agents::TurnPhase::Reasoning,
             pane: Some(PaneRef::from_id(PaneId::from_parts(

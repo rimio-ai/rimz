@@ -385,6 +385,7 @@ mod tests {
             kind: AgentKind::new_unchecked("codex"),
             name: Some("swift-otter".to_owned()),
             profile: None,
+            role: None,
             channel: Some("docs".to_owned()),
         };
         let message = message(&workspace_id).with_sender(sender.clone());
@@ -423,6 +424,7 @@ mod tests {
             name: None,
             kind_ordinal: None,
             profile: None,
+            role: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

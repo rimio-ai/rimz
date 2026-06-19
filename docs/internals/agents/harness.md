@@ -73,7 +73,7 @@ The rest of this doc follows a member through its life: how a spawn becomes pane
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.layouts]` entry or an inline DSL. Commas split columns, plus signs stack rows within a column, and each cell is a profile, command, or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variant such as `claude-auto` or `codex-yolo`, an `[agents.profiles]` entry, or an `[agents.commands]` entry ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-layouts)).
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL. A named team is an ordered role list; each role binds `role` to an `[agents.profiles]` profile, may override that profile's launch fields, and opens as one side-by-side column in one tab. Inline specs keep the compact pane grammar: commas split columns, plus signs stack rows within a column, and each cell is a profile, command, or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variant such as `claude-auto` or `codex-yolo`, an `[agents.profiles]` entry, or an `[agents.commands]` entry ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)).
 
 ```text
 claude,codex+term
@@ -81,9 +81,9 @@ vim,htop+zsh
 claude-auto,codex-yolo
 ```
 
-The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user commands. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` layout is `claude,codex`; bare `rimz agents` lists cards, while the hidden layout default remains one `term` cell for internal callers.
+The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user commands. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` team is the roleless `claude,codex`; bare `rimz agents` lists cards, while the hidden default remains one `term` cell for internal callers.
 
-The CLI converts cells to backend-neutral `LayoutPanes`: an agent cell runs the hidden `rimz agents exec <kind>` wrapper with optional `--prompt`, optional `--worktree-path`, optional `--agent-profile`, and `-- <args>` from its profile; a command cell runs its raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees — the wrapper does. It runs the agent command in the pane and inherits the pane's TTY, launching the agent through the user's default shell startup path when that shell and `/usr/bin/env` are available (re-applying Rimz launch env after shell rc/profile files) and falling back to direct exec for unsupported or missing shells. The wrapper is the seam the supervised-run and cleanup paths below hang off.
+The CLI converts cells to backend-neutral `LayoutPanes`: an agent cell runs the hidden `rimz agents exec <kind>` wrapper with optional `--prompt`, optional `--worktree-path`, optional `--agent-profile`, optional `--agent-role`, and `-- <args>` from its profile and role; a command cell runs its raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees — the wrapper does. It runs the agent command in the pane and inherits the pane's TTY, launching the agent through the user's default shell startup path when that shell and `/usr/bin/env` are available (re-applying Rimz launch env after shell rc/profile files) and falling back to direct exec for unsupported or missing shells. The wrapper is the seam the supervised-run and cleanup paths below hang off.
 
 ### Backend shape and placement
 
@@ -95,7 +95,7 @@ Zellij renders a temporary KDL layout for `new-tab --layout`: the global sidebar
 
 Both backends receive the same `TabOptions`: session, title, cwd, focus flag, sidebar options, and the pre-built pane argv. A worktree launch names the tab `⑂ <NAME>` (the worktree name behind the worktree glyph); a launch without a worktree names the tab `<kind>:<dir>`. `--bg` keeps focus on the launching pane where the backend can do so.
 
-Placement follows intent. A single non-worktree launch can land in the current view instead of a fresh tab: the CLI then calls `split_pane` with the one cell's argv rather than `open_tab`, reusing the launching pane's sidebar and pinning the new pane to the room through the shared launch-identity env. The per-machine `[agents] tab` default and the per-launch `--same-tab` / `--new-tab` flags choose between the two paths ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-layouts)). Under the `auto` default a worktree launch or a multi-cell layout opens its own tab, while a single non-worktree agent splits the current view; an explicit `--same-tab` (or `tab = "same"`) also splits a single worktree launch into the current view, while a multi-cell layout always opens its own tab. Placement resolves before the launch touches the ledger or creates a worktree, so a rejected `--same-tab` leaves no provisional rows or worktree behind. `split_pane` carries the launch-identity env on both backends — tmux through `-e`, Zellij through an `env` command prefix — and honors the same focus flag, with tmux dropping `-d` to land in the new pane and Zellij returning focus to the launching pane when `--bg` holds it back.
+Placement follows intent. A single non-worktree launch can land in the current view instead of a fresh tab: the CLI then calls `split_pane` with the one cell's argv rather than `open_tab`, reusing the launching pane's sidebar and pinning the new pane to the room through the shared launch-identity env. The per-machine `[agents] tab` default and the per-launch `--same-tab` / `--new-tab` flags choose between the two paths ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Under the `auto` default a worktree launch or a multi-cell layout opens its own tab, while a single non-worktree agent splits the current view; an explicit `--same-tab` (or `tab = "same"`) also splits a single worktree launch into the current view, while a multi-cell layout always opens its own tab. Placement resolves before the launch touches the ledger or creates a worktree, so a rejected `--same-tab` leaves no provisional rows or worktree behind. `split_pane` carries the launch-identity env on both backends — tmux through `-e`, Zellij through an `env` command prefix — and honors the same focus flag, with tmux dropping `-d` to land in the new pane and Zellij returning focus to the launching pane when `--bg` holds it back.
 
 ## The address
 
@@ -103,10 +103,14 @@ Every member in a room has an address you type like an @-mention in a channel: `
 
 The channel is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself — the grouping the sidebar shows ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, or full path, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel, so an address there reaches every channel rather than silently narrowing to one. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
 
-Handles come in two kinds. A **type handle** names a profile or kind to fill and carries enough to launch one:
+Handles come in three kinds. A **role handle** names a member inside a team:
+
+- `@<role>` — `@coder`, the role stamped by `[agents.teams.<team>.roles]`. Matches every agent launched under that role in the channel.
+
+A **type handle** names a profile or kind to fill and carries enough to launch one:
 
 - `@<kind>` — `@codex`, the agent kind. Matches every agent of that kind in the channel, including those launched under a profile.
-- `@<profile>` — `@planner`, an `[agents.profiles]` profile ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-layouts)). Matches every agent launched under that profile.
+- `@<profile>` — `@planner`, an `[agents.profiles]` profile ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Matches every agent launched under that profile.
 
 An **instance handle** names one running agent and only ever addresses what already exists:
 
@@ -117,7 +121,7 @@ An **instance handle** names one running agent and only ever addresses what alre
 
 `@all` is the broadcast handle: every agent in the channel.
 
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it profile-first — the profile when it is unique in scope, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows the handle you could type back. A handle appears only when typing it reaches that one agent, so two `planner`s in a channel each render as their kind ordinal — `@claude-1` / `@claude-2` — and every handle you see resolves to exactly one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing (`agents list`, `agents show`, `queue list`, the channel headers); [target.rs](../../../crates/rimz/src/target.rs) owns it.
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when it is unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows the handle you could type back. A handle appears only when typing it reaches that one agent, so two `planner` roles in a channel fall through to profile or kind ordinal handles, and every handle you see resolves to exactly one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing (`agents list`, `agents show`, `queue list`, the channel headers); [target.rs](../../../crates/rimz/src/target.rs) owns it.
 
 An address resolves to zero, one, or many agents, and arity decides the outcome:
 

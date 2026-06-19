@@ -410,16 +410,22 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let workspace = supervised::resolve_run_workspace(globals)?;
     let machine_config = crate::cli::machine_config()?;
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
-    let mut layout =
-        resolve_launch_layout(args.spec.as_deref(), &profiles, &machine_config, &workspace)?;
+    let teams = effective_launch_teams(&machine_config, &workspace)?;
+    let mut layout = resolve_launch_layout(
+        args.spec.as_deref(),
+        &profiles,
+        &teams,
+        &machine_config,
+        &workspace,
+    )?;
     reject_prompt_that_looks_like_spec(
         args.spec.as_deref(),
         args.prompt.as_deref(),
         &profiles,
         &machine_config.agents.commands,
-        &machine_config.agents.layouts,
+        &teams,
     )?;
-    ensure_profile_prompt_files(&layout, &profiles)?;
+    ensure_profile_prompt_files(&layout)?;
     let mode_application = supervised_permission_mode_from_flags(args.ask, args.yolo)?;
     apply_launch_mode_and_passthrough(
         &mut layout,
@@ -437,8 +443,14 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let (kind, agent_args, cell_mode, cell_profile) = agent_cells[0];
     let adapter = rimz::agents::find_adapter(kind)
         .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
-    let launch_env =
-        full_agent_launch_env(&workspace.project_root, adapter, None, None, cell_profile)?;
+    let launch_env = full_agent_launch_env(
+        &workspace.project_root,
+        adapter,
+        None,
+        None,
+        cell_profile,
+        None,
+    )?;
     supervised::preflight_agent(adapter)?;
     supervised::preflight_program(adapter, agent_args, &prompt, &launch_env)?;
 
@@ -779,6 +791,7 @@ fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
                     args,
                     mode,
                     profile,
+                    ..
                 } => Some((kind.as_str(), args.as_slice(), *mode, profile.as_deref())),
                 Cell::Command { .. } => None,
             })

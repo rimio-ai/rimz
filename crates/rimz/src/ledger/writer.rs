@@ -641,6 +641,7 @@ mod tests {
             name: name.map(ToOwned::to_owned),
             kind_ordinal: Some(1),
             profile: None,
+            role: None,
             status: AgentStatus::Idle,
             phase: TurnPhase::Idle,
             pane: None,

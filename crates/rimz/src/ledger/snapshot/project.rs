@@ -627,6 +627,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         name: Some(input.card_identity.name),
         kind_ordinal: Some(input.card_identity.kind_ordinal),
         profile: profile_projection(input.observation, input.prior),
+        role: role_projection(input.observation, input.prior),
         status: lifecycle.status,
         phase: lifecycle.phase,
         pane: pane_projection(input.observation, input.prior),
@@ -711,6 +712,7 @@ fn assemble_launch_state(
         // A launch event carries no profile; preserve any profile a prior lifecycle
         // event already stamped (a relaunch event for a bound session).
         profile: prior.and_then(|state| state.profile.clone()),
+        role: prior.and_then(|state| state.role.clone()),
         status,
         phase,
         pane,
@@ -1051,6 +1053,18 @@ fn profile_projection(
         .agent_profile
         .clone()
         .or_else(|| prior.and_then(|p| p.profile.clone()))
+}
+
+/// The launch role, carried forward like the profile: the team role the agent was
+/// started as, set once from `RIMZ_AGENT_ROLE` and preserved across later events.
+fn role_projection(
+    observation: &AgentLifecycleObservation,
+    prior: Option<&AgentState>,
+) -> Option<String> {
+    observation
+        .agent_role
+        .clone()
+        .or_else(|| prior.and_then(|p| p.role.clone()))
 }
 
 fn pane_projection(

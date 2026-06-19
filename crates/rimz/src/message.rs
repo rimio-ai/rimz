@@ -26,6 +26,8 @@ pub enum MessageSender {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         profile: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        role: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         channel: Option<String>,
     },
 }
@@ -45,11 +47,13 @@ impl MessageSender {
                 kind,
                 name,
                 profile,
+                role,
                 channel,
             } => {
-                let handle = name
+                let handle = role
                     .as_deref()
                     .filter(|value| !value.is_empty())
+                    .or_else(|| name.as_deref().filter(|value| !value.is_empty()))
                     .or_else(|| profile.as_deref().filter(|value| !value.is_empty()))
                     .unwrap_or_else(|| kind.as_str());
                 let mut rendered = format!("@{handle}");
@@ -512,6 +516,7 @@ mod tests {
             kind: AgentKind::new_unchecked("claude"),
             name: Some("lucid-atlas".to_owned()),
             profile: Some("planner".to_owned()),
+            role: None,
             channel: Some("main".to_owned()),
         };
         let attributed = base.with_sender(agent_sender.clone());
@@ -533,6 +538,7 @@ mod tests {
                 kind: AgentKind::new_unchecked("claude"),
                 name: Some("lucid-atlas".to_owned()),
                 profile: Some("planner".to_owned()),
+                role: None,
                 channel: Some("docs".to_owned()),
             }
             .render(),
@@ -543,6 +549,7 @@ mod tests {
                 kind: AgentKind::new_unchecked("codex"),
                 name: None,
                 profile: None,
+                role: None,
                 channel: None,
             }
             .render(),
@@ -617,6 +624,7 @@ mod tests {
             name: name.map(ToOwned::to_owned),
             kind_ordinal: Some(1),
             profile: None,
+            role: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

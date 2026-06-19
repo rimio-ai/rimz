@@ -204,6 +204,7 @@ mod tests {
             name: None,
             kind_ordinal: None,
             profile: None,
+            role: None,
             status: AgentStatus::Idle,
             phase: crate::agents::TurnPhase::Idle,
             pane: None,

@@ -175,7 +175,7 @@ fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
     }
     if path == Path::new("tab") {
         anyhow::bail!(
-            "`rimz tab` has moved to `rimz agents <spec> [prompt]`; layouts now come from `[agents.layouts]`"
+            "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
         );
     }
     Ok(())
@@ -351,6 +351,7 @@ fn rollup_resolution_snapshot(ledger: &Ledger) -> Result<rimz::SidebarSnapshot> 
                 kind_ordinal: agent.kind_ordinal,
                 name: agent.name.clone(),
                 profile: agent.profile.clone(),
+                role: agent.role.clone(),
                 agent_id: Some(agent.agent_id.clone()),
                 pane_id: pane.pane_id.clone(),
                 worktree_path: agent.worktree_path.clone(),
@@ -393,9 +394,9 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
             "`{selector}` is a launch command, not a running agent"
         )));
     }
-    if selector == "peer" || config.agents.layouts.0.contains_key(selector) {
+    if selector == "peer" || config.agents.teams.0.contains_key(selector) {
         return Ok(Some(format!(
-            "`{selector}` is a launch layout, not a running agent"
+            "`{selector}` is a launch team, not a running agent"
         )));
     }
     Ok(None)

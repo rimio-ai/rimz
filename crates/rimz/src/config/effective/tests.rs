@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{CommandsConfig, LayoutsConfig, Profile, ProfilesConfig};
+use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, Team, TeamsConfig};
 use crate::run::PermissionMode;
 use std::collections::BTreeMap;
 use tempfile::tempdir;
@@ -28,6 +28,18 @@ fn write_project_config(dir: &tempfile::TempDir, text: &str) {
     let config_dir = dir.path().join(".rimz");
     std::fs::create_dir_all(&config_dir).expect("mkdir .rimz");
     std::fs::write(config_dir.join("config.toml"), text).expect("write config");
+}
+
+fn role(role: &str, profile: &str) -> RoleBinding {
+    RoleBinding {
+        role: role.to_owned(),
+        profile: profile.to_owned(),
+        mode: None,
+        model: None,
+        effort: None,
+        system_prompt_file: None,
+        args: None,
+    }
 }
 
 #[test]
@@ -66,7 +78,7 @@ fn untrusted_repo_profiles_are_inert_until_referenced() {
         Some("local"),
         &effective,
         &CommandsConfig::default(),
-        &LayoutsConfig::default(),
+        &TeamsConfig::default(),
         project.path(),
         config.path(),
     )
@@ -77,7 +89,7 @@ fn untrusted_repo_profiles_are_inert_until_referenced() {
             Some("planner"),
             &effective,
             &CommandsConfig::default(),
-            &LayoutsConfig::default(),
+            &TeamsConfig::default(),
             project.path(),
             config.path(),
         ),
@@ -98,17 +110,14 @@ fn untrusted_repo_profile_reference_is_detected_inside_requested_shape() {
     );
     let profiles = ProfilesConfig::default();
     let commands = CommandsConfig::default();
-    let layouts = LayoutsConfig(BTreeMap::from([(
-        "review".to_owned(),
-        "planner,codex".to_owned(),
-    )]));
+    let teams = TeamsConfig::default();
 
     assert!(matches!(
         block_untrusted_profile_reference(
-            Some("review"),
+            Some("planner,codex"),
             &profiles,
             &commands,
-            &layouts,
+            &teams,
             project.path(),
             config.path(),
         ),
@@ -121,7 +130,7 @@ fn untrusted_repo_profile_reference_is_detected_inside_requested_shape() {
         Some("claude"),
         &profiles,
         &commands,
-        &layouts,
+        &teams,
         project.path(),
         config.path(),
     )
@@ -140,7 +149,7 @@ fn repo_profile_cannot_inherit_machine_profile() {
 
     assert!(matches!(
         err,
-        EffectiveConfigErr::Profiles {
+        EffectiveConfigErr::Agents {
             source: crate::agents_spec::LayoutErr::RepoProfileEscapesTrust { profile, base },
             ..
         } if profile == "child" && base == "machine-base"
@@ -159,7 +168,7 @@ fn repo_profile_typo_reports_unknown_base_not_machine_escape() {
 
     assert!(matches!(
         err,
-        EffectiveConfigErr::Profiles {
+        EffectiveConfigErr::Agents {
             source: crate::agents_spec::LayoutErr::UnknownProfileBase { profile, base },
             ..
         } if profile == "child" && base == "typoo"
@@ -209,4 +218,61 @@ fn repo_prompt_file_paths_resolve_against_rimz_dir() {
             .and_then(|profile| profile.system_prompt_file.as_ref()),
         Some(&project.path().join(".rimz/prompts/planner.md"))
     );
+}
+
+#[test]
+fn trusted_repo_team_overlays_machine_team_and_resolves_prompt_paths() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[profiles.planner]\nagent = \"claude\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+    );
+    crate::trust::grant_with_roots(project.path(), config.path()).expect("grant");
+    let machine = TeamsConfig(BTreeMap::from([(
+        "review".to_owned(),
+        Team {
+            roles: vec![role("local", "local-profile")],
+        },
+    )]));
+
+    let effective = effective_teams(&machine, project.path(), config.path()).expect("effective");
+
+    let role = &effective.0.get("review").expect("repo team").roles[0];
+    assert_eq!(role.role, "planner");
+    assert_eq!(role.profile, "planner");
+    assert_eq!(
+        role.system_prompt_file.as_ref(),
+        Some(&project.path().join(".rimz/prompts/planner.md"))
+    );
+}
+
+#[test]
+fn untrusted_repo_team_reference_is_blocked() {
+    let project = tempdir().expect("project");
+    let config = tempdir().expect("config");
+    write_project_config(
+        &project,
+        "[profiles.planner]\nagent = \"claude\"\n\n[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"planner\"\n",
+    );
+
+    assert_eq!(
+        effective_teams(&TeamsConfig::default(), project.path(), config.path())
+            .expect("untrusted effective teams"),
+        TeamsConfig::default()
+    );
+    assert!(matches!(
+        block_untrusted_profile_reference(
+            Some("review"),
+            &ProfilesConfig::default(),
+            &CommandsConfig::default(),
+            &TeamsConfig::default(),
+            project.path(),
+            config.path(),
+        ),
+        Err(EffectiveConfigErr::Blocked {
+            state: "untrusted",
+            ..
+        })
+    ));
 }

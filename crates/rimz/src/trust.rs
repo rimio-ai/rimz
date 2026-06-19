@@ -17,9 +17,11 @@ use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+use crate::config::Team;
 use crate::ids::WorkspaceId;
 use crate::ledger::atomic::{self, write_bytes_atomically};
 use crate::ledger::paths::config_home;
+use crate::run::PermissionMode;
 
 const CONFIG_REL: &str = ".rimz/config.toml";
 const PROJECTS_SUBDIR: [&str; 2] = ["rimz", "projects"];
@@ -223,7 +225,11 @@ pub fn agent_env_with_roots(
         return Ok(AgentEnv::Unconfigured);
     };
     let mut env = BTreeMap::new();
-    for agent in config.agents.iter().filter(|agent| agent.name == kind) {
+    for agent in config
+        .agent_entries()
+        .iter()
+        .filter(|agent| agent.name == kind)
+    {
         env.extend(
             agent
                 .env
@@ -320,10 +326,45 @@ struct TrustRecord {
 #[serde(default)]
 pub struct ProjectConfig {
     pub layout: LayoutConfig,
-    pub agents: Vec<AgentConfig>,
+    pub agents: ProjectAgents,
     pub profiles: BTreeMap<String, ProjectProfile>,
     pub hooks: Vec<HookConfig>,
     pub env: BTreeMap<String, String>,
+}
+
+impl ProjectConfig {
+    fn agent_entries(&self) -> &[AgentConfig] {
+        match &self.agents {
+            ProjectAgents::Entries(entries) => entries,
+            ProjectAgents::Table(_) | ProjectAgents::Empty => &[],
+        }
+    }
+
+    fn teams(&self) -> &BTreeMap<String, Team> {
+        match &self.agents {
+            ProjectAgents::Entries(_) | ProjectAgents::Empty => {
+                static EMPTY: std::sync::LazyLock<BTreeMap<String, Team>> =
+                    std::sync::LazyLock::new(BTreeMap::new);
+                &EMPTY
+            }
+            ProjectAgents::Table(table) => &table.teams,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(untagged)]
+pub enum ProjectAgents {
+    Entries(Vec<AgentConfig>),
+    Table(ProjectAgentsTable),
+    #[default]
+    Empty,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(default)]
+pub struct ProjectAgentsTable {
+    pub teams: BTreeMap<String, Team>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -387,6 +428,7 @@ struct ExecutableSurface<'a> {
     layout_tmux: ExecutableTmux<'a>,
     agents: Vec<ExecutableAgent<'a>>,
     profiles: Vec<ExecutableProfile<'a>>,
+    teams: Vec<ExecutableTeam<'a>>,
     hooks: Vec<ExecutableHook<'a>>,
     env: &'a BTreeMap<String, String>,
 }
@@ -425,9 +467,35 @@ struct ExecutableProfile<'a> {
 }
 
 #[derive(Serialize)]
+struct ExecutableTeam<'a> {
+    name: &'a str,
+    roles: Vec<ExecutableRole<'a>>,
+}
+
+#[derive(Serialize)]
+struct ExecutableRole<'a> {
+    role: &'a str,
+    profile: &'a str,
+    mode: Option<&'static str>,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+    system_prompt_file: Option<String>,
+    args: Option<&'a str>,
+}
+
+#[derive(Serialize)]
 struct ExecutableHook<'a> {
     event: &'a str,
     command: &'a str,
+}
+
+fn permission_mode_name(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Auto => "auto",
+        PermissionMode::Ask => "ask",
+        PermissionMode::Yolo => "yolo",
+        PermissionMode::Plan => "plan",
+    }
 }
 
 impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
@@ -450,7 +518,7 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                 popup_command: config.layout.tmux.popup_command.as_deref(),
             },
             agents: config
-                .agents
+                .agent_entries()
                 .iter()
                 .map(|a| ExecutableAgent {
                     name: a.name.as_str(),
@@ -469,6 +537,29 @@ impl<'a> From<&'a ProjectConfig> for ExecutableSurface<'a> {
                     effort: p.effort.as_deref(),
                     system_prompt_file: p.system_prompt_file.as_deref(),
                     args: p.args.as_deref(),
+                })
+                .collect(),
+            teams: config
+                .teams()
+                .iter()
+                .map(|(name, team)| ExecutableTeam {
+                    name: name.as_str(),
+                    roles: team
+                        .roles
+                        .iter()
+                        .map(|role| ExecutableRole {
+                            role: role.role.as_str(),
+                            profile: role.profile.as_str(),
+                            mode: role.mode.map(permission_mode_name),
+                            model: role.model.as_deref(),
+                            effort: role.effort.as_deref(),
+                            system_prompt_file: role
+                                .system_prompt_file
+                                .as_ref()
+                                .map(|path| path.to_string_lossy().into_owned()),
+                            args: role.args.as_deref(),
+                        })
+                        .collect(),
                 })
                 .collect(),
             hooks: config
@@ -690,6 +781,14 @@ mod tests {
             "[profiles.x]\nagent = \"claude\"\nsystem-prompt-file = \"prompts/x.md\"\n",
             "[profiles.x]\nagent = \"claude\"\nargs = \"--profile x\"\n",
             "[profiles.y]\nagent = \"claude\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"coder\"\nprofile = \"x\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"y\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmode = \"ask\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nmodel = \"opus\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\neffort = \"low\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nsystem-prompt-file = \"prompts/planner.md\"\n",
+            "[[agents.teams.review.roles]]\nrole = \"planner\"\nprofile = \"x\"\nargs = \"--role planner\"\n",
             "[[hooks]]\nevent = \"PreToolUse\"\ncommand = \"rimz hooks claude\"\n",
             "[env]\nPATH_PREPEND = \"/opt/rimz/bin\"\n",
         ];

@@ -1,14 +1,15 @@
 //! The agent-address grammar: `@<handle>#<channel>`, parsed, resolved, and
 //! rendered here (the canonical handle is the inverse of the parser).
 //!
-//! Handles read like Slack. A *type handle* names a profile to fill — `@<kind>`
-//! (`@codex`) or `@<profile>` (`@planner`) — and matches every such agent in the
-//! channel; the same handles can also create one (see [`create_mention`]). An
+//! Handles read like Slack. A role handle names a team member (`@coder`). A
+//! *type handle* names a profile to fill — `@<kind>` (`@codex`) or `@<profile>`
+//! (`@planner`) — and matches every such agent in the channel; the same handles
+//! can also create one (see [`create_mention`]). An
 //! *instance handle* names exactly one running agent — `@<kind>-<n>`,
 //! `@<petname>`, or a session-id prefix. `@all` is the broadcast handle, and a
 //! pane id (`tmux:%1`, `zellij:terminal_3`) is a precise, sigil-free,
-//! channel-agnostic address. The renderer prefers a non-kind profile, then the
-//! kind, then an ordinal, then the petname, so a handle always round-trips to its
+//! channel-agnostic address. The renderer prefers a unique role, then a non-kind
+//! profile, then the kind, then an ordinal, then the petname, so a handle always round-trips to its
 //! agent.
 //!
 //! The channel is the workspace segment the room groups by — a worktree branch,
@@ -88,6 +89,7 @@ trait Candidate<'a>: Copy {
     /// profile is a *type* handle — `@planner` may name several agents — so the
     /// name/profile matcher returns every profile match and lets arity decide.
     fn profile(self) -> Option<&'a str>;
+    fn role(self) -> Option<&'a str>;
     fn session_id(self) -> Option<&'a str>;
     fn worktree_branch(self) -> Option<&'a str>;
     fn worktree_path(self) -> Option<&'a str>;
@@ -127,6 +129,9 @@ impl<'a> Candidate<'a> for &'a AgentState {
     fn profile(self) -> Option<&'a str> {
         self.profile.as_deref()
     }
+    fn role(self) -> Option<&'a str> {
+        self.role.as_deref()
+    }
     fn session_id(self) -> Option<&'a str> {
         Some(self.agent_id.as_str())
     }
@@ -153,6 +158,9 @@ impl<'a> Candidate<'a> for &'a PaneAgent {
     }
     fn profile(self) -> Option<&'a str> {
         self.profile.as_deref()
+    }
+    fn role(self) -> Option<&'a str> {
+        self.role.as_deref()
     }
     fn session_id(self) -> Option<&'a str> {
         self.agent_id.as_ref().map(|id| id.as_str())
@@ -365,13 +373,26 @@ fn classify_selector(selector: &str) -> AgentSelector {
 }
 
 fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> Vec<C> {
-    match selector {
-        AgentSelector::All => candidates.to_vec(),
-        AgentSelector::Kind(kind) => candidates
+    let role_matches = |selector: &str| {
+        candidates
             .iter()
             .copied()
-            .filter(|candidate| candidate.kind() == kind)
-            .collect(),
+            .filter(|candidate| candidate.role() == Some(selector))
+            .collect::<Vec<_>>()
+    };
+    match selector {
+        AgentSelector::All => candidates.to_vec(),
+        AgentSelector::Kind(kind) => {
+            let by_role = role_matches(kind.as_str());
+            if !by_role.is_empty() {
+                return by_role;
+            }
+            candidates
+                .iter()
+                .copied()
+                .filter(|candidate| candidate.kind() == kind)
+                .collect()
+        }
         // An ordinal, pet name, or session prefix names a bound session; a lazy
         // pane carries none, so the `None` accessors drop it from those arms.
         AgentSelector::KindOrdinal(kind, ordinal) => candidates
@@ -382,12 +403,14 @@ fn select<'a, C: Candidate<'a>>(selector: &AgentSelector, candidates: &[C]) -> V
             })
             .collect(),
         AgentSelector::NameOrSession(selector) => {
-            // A profile is a type handle: it can name several agents, and
-            // arity (one vs many) is decided downstream. It comes first for
-            // non-kind names so `@planner` reads as the profile, then the
-            // globally-unique pet name, then a session-id prefix. A profile
-            // named like a built-in kind is intentionally left to the Kind arm:
-            // `@claude` remains the kind handle.
+            // A role is the most specific team handle. A profile is a type
+            // handle: either can name several agents, and arity is decided
+            // downstream. Role/profile come before the globally-unique pet
+            // name, then a session-id prefix.
+            let by_role = role_matches(selector.as_str());
+            if !by_role.is_empty() {
+                return by_role;
+            }
             let by_profile: Vec<C> = candidates
                 .iter()
                 .copied()
@@ -568,6 +591,7 @@ pub fn sender_prefix(
         kind,
         name,
         profile,
+        role,
         channel,
     } = sender
     else {
@@ -583,7 +607,8 @@ pub fn sender_prefix(
         return Some(format!("{}: ", agent_handle(agent, peers, include_channel)));
     }
     let include_channel = channel.as_deref() != target_channel;
-    let mut handle = fallback_sender_handle(kind, name.as_deref(), profile.as_deref());
+    let mut handle =
+        fallback_sender_handle(kind, name.as_deref(), profile.as_deref(), role.as_deref());
     if include_channel && let Some(channel) = channel.as_deref().filter(|value| !value.is_empty()) {
         handle.push('#');
         handle.push_str(channel);
@@ -591,9 +616,15 @@ pub fn sender_prefix(
     Some(format!("{handle}: "))
 }
 
-fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, profile: Option<&str>) -> String {
-    let base = name
+fn fallback_sender_handle(
+    kind: &AgentKind,
+    name: Option<&str>,
+    profile: Option<&str>,
+    role: Option<&str>,
+) -> String {
+    let base = role
         .filter(|value| !value.is_empty())
+        .or_else(|| name.filter(|value| !value.is_empty()))
         .or_else(|| profile.filter(|value| !value.is_empty()))
         .unwrap_or_else(|| kind.as_str());
     format!("@{base}")
@@ -601,11 +632,22 @@ fn fallback_sender_handle(kind: &AgentKind, name: Option<&str>, profile: Option<
 
 fn handle_base(agent: &AgentState, peers: &[&AgentState], scoped: bool) -> String {
     let channel = agent_channel(agent);
-    // The profile is the most informative handle, so prefer it whenever it
-    // still names exactly this agent in scope. A shared profile (two `planner`s in
-    // one channel) is not unique, and a profile named like a built-in kind
-    // resolves through the Kind selector, so both fall through to the
-    // kind/ordinal ladder.
+    // The role is the most informative handle, so prefer it whenever it still
+    // names exactly this agent in scope. A shared role in one channel is not
+    // unique, so it falls through to the profile/kind/ordinal ladder.
+    if let Some(role) = agent.role.as_deref() {
+        let role_rivals = peers
+            .iter()
+            .filter(|peer| peer.role.as_deref() == Some(role))
+            .filter(|peer| !scoped || agent_channel(peer) == channel)
+            .count();
+        if role_rivals <= 1 {
+            return format!("@{role}");
+        }
+    }
+    // A unique profile is next. A shared profile (two `planner`s in one channel)
+    // is not unique, and a profile named like a built-in kind resolves through
+    // the Kind selector, so both fall through to the kind/ordinal ladder.
     if let Some(profile) = agent.profile.as_deref() {
         let profile_rivals = peers
             .iter()

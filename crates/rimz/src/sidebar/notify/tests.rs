@@ -123,6 +123,7 @@ fn agent(id: &str, status: AgentStatus, focused: bool) -> AgentState {
         name: None,
         kind_ordinal: None,
         profile: None,
+        role: None,
         status,
         phase: TurnPhase::Idle,
         pane: Some(PaneRef {

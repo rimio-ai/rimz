@@ -315,6 +315,7 @@ mod tests {
             agent_id: Some(AgentSessionId::from(agent_id)),
             agent_name: None,
             agent_profile: None,
+            agent_role: None,
             kind_ordinal: None,
             signal: LifecycleSignal::Registered,
             agent_pid,

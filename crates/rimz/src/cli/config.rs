@@ -213,7 +213,7 @@ fn is_known_get_key(path: &[String]) -> bool {
     let prefix = format!("{joined}.");
     exact_set_keys().iter().any(|key| key.starts_with(&prefix))
         || matches!(path, [root] if root == "agents")
-        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "layouts"))
+        || matches!(path, [root, child] if root == "agents" && matches!(child.as_str(), "profiles" | "commands" | "teams"))
         || is_account_usage_limit_get_key(path)
         || is_sidebar_animation_get_key(path)
         || is_sidebar_glyph_get_key(path)
@@ -232,7 +232,7 @@ fn is_exact_or_dynamic_set_key(path: &[String]) -> bool {
 }
 
 fn is_agents_key(path: &[String]) -> bool {
-    matches!(path, [root, child, _] if root == "agents" && child == "layouts")
+    matches!(path, [root, child, _, leaf] if root == "agents" && child == "teams" && leaf == "roles")
         || matches!(path, [root, child, _] if root == "agents" && child == "commands")
         || matches!(
             path,
@@ -568,7 +568,7 @@ mod tests {
             "sidebar.budget.pace.red",
             "accounts.oauth_usage",
             "accounts.usage_limit_usd.codex",
-            "agents.layouts.review",
+            "agents.teams.review.roles",
             "agents.commands.vim",
             "agents.profiles.codex-slim.agent",
             "agents.profiles.codex-slim.mode",
@@ -607,7 +607,7 @@ mod tests {
             "accounts.nope",
             "accounts.usage_limit_usd",
             "accounts.usage_limit_usd.codex.extra",
-            "agents.layouts.peer.shape",
+            "agents.teams.peer.shape",
             "agents.profiles.codex-slim.flags",
             "agents.commands.vim.command",
             "sidebar.providers.claude.nope",

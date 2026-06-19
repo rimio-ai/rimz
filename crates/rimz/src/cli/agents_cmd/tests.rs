@@ -87,6 +87,7 @@ fn full_launch_env_marks_agent_kind() {
         None,
         Some("swift-otter"),
         Some("planner"),
+        Some("coder"),
     )
     .expect("launch env");
 
@@ -101,6 +102,46 @@ fn full_launch_env_marks_agent_kind() {
     assert_eq!(
         env.get(rimz::run::ENV_AGENT_PROFILE).map(String::as_str),
         Some("planner")
+    );
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_ROLE).map(String::as_str),
+        Some("coder")
+    );
+}
+
+#[test]
+fn pane_command_stamps_agent_role() {
+    let cell = Cell::Agent {
+        kind: AgentKind::new_unchecked("claude"),
+        args: Vec::new(),
+        mode: None,
+        system_prompt_file: None,
+        profile: Some("claude-planner".to_owned()),
+        role: Some("planner".to_owned()),
+    };
+
+    let pane = pane_cmd_with_name(
+        &cell,
+        Path::new("/usr/bin/rimz"),
+        Path::new("/tmp/project"),
+        None,
+        false,
+        None,
+    )
+    .expect("pane command");
+
+    assert_eq!(
+        pane.argv,
+        [
+            "/usr/bin/rimz",
+            "agents",
+            "exec",
+            "claude",
+            "--agent-profile",
+            "claude-planner",
+            "--agent-role",
+            "planner",
+        ]
     );
 }
 
@@ -164,10 +205,7 @@ fn effort_and_system_prompt_file_parse_and_require_spec() {
     let parsed = AgentsHarness::try_parse_from(["rimz", "--effort", "high"])
         .expect("parse effort without spec");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject effort");
-    assert!(
-        err.to_string().contains("require an agent layout spec"),
-        "{err:#}"
-    );
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
 }
 
 #[test]
@@ -247,15 +285,12 @@ fn launch_flags_require_a_spec() {
     let parsed = AgentsHarness::try_parse_from(["rimz", "--", "term"])
         .expect("parse passthrough without spec");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject passthrough");
-    assert!(err.to_string().contains("missing agent layout spec"));
+    assert!(err.to_string().contains("missing agent spec"));
 
     let parsed =
         AgentsHarness::try_parse_from(["rimz", "--same-tab"]).expect("parse same-tab without spec");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject same-tab");
-    assert!(
-        err.to_string().contains("require an agent layout spec"),
-        "{err:#}"
-    );
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
 }
 
 #[test]
@@ -346,7 +381,7 @@ fn explicit_same_tab_fails_fast_when_infeasible() {
 fn prompt_that_looks_like_another_spec_errors() {
     let profiles = rimz::config::ProfilesConfig::default();
     let commands = rimz::config::CommandsConfig::default();
-    let layouts = rimz::config::LayoutsConfig::default();
+    let layouts = rimz::config::TeamsConfig::default();
     let err = reject_prompt_that_looks_like_spec(
         Some("claude"),
         Some("codex"),
@@ -386,7 +421,9 @@ fn explicit_interactive_mode_applies_even_when_profile_added_args() {
         kind: AgentKind::new_unchecked("codex"),
         args: vec!["--model".to_owned(), "gpt-5-codex".to_owned()],
         mode: None,
+        system_prompt_file: None,
         profile: None,
+        role: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -415,7 +452,9 @@ fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
         kind: AgentKind::new_unchecked("codex"),
         args: yolo_args.clone(),
         mode: Some(PermissionMode::Yolo),
+        system_prompt_file: None,
         profile: None,
+        role: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -442,7 +481,9 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
         kind: AgentKind::new_unchecked("claude"),
         args: auto_args.clone(),
         mode: Some(PermissionMode::Auto),
+        system_prompt_file: None,
         profile: None,
+        role: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -496,6 +537,8 @@ fn exec_subcommand_captures_agent_args_after_separator() {
         "run_0123456789abcdef0123456789abcdef",
         "--agent-name",
         "lucid-atlas",
+        "--agent-role",
+        "coder",
         "--launch-id",
         "launch_0123456789abcdef0123456789abcdef",
         "--exit-on-run-completion",
@@ -519,6 +562,7 @@ fn exec_subcommand_captures_agent_args_after_separator() {
         Some("run_0123456789abcdef0123456789abcdef")
     );
     assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
+    assert_eq!(args.agent_role.as_deref(), Some("coder"));
     assert_eq!(
         args.launch_id.as_deref(),
         Some("launch_0123456789abcdef0123456789abcdef")
@@ -628,21 +672,27 @@ fn profile_launch_requires_its_system_prompt_file() {
     std::fs::write(&present, "be terse").expect("write prompt");
 
     let profiles = agent_profile(Some(&present));
-    let layout = rimz::agents_spec::resolve_layout(
+    let layout = rimz::agents_spec::resolve_spec(
         Some("planner"),
         &profiles,
         &rimz::config::CommandsConfig::default(),
-        &rimz::config::LayoutsConfig::default(),
+        &rimz::config::TeamsConfig::default(),
     )
     .expect("resolve planner profile");
 
     // The cell names the profile; a present prompt file passes the launch gate.
-    ensure_profile_prompt_files(&layout, &profiles).expect("present prompt passes");
+    ensure_profile_prompt_files(&layout).expect("present prompt passes");
 
     // A missing prompt file fails the launch with the path to fix.
     let missing = dir.path().join("absent.md");
-    let err = ensure_profile_prompt_files(&layout, &agent_profile(Some(&missing)))
-        .expect_err("missing prompt fails the launch");
+    let missing_layout = rimz::agents_spec::resolve_spec(
+        Some("planner"),
+        &agent_profile(Some(&missing)),
+        &rimz::config::CommandsConfig::default(),
+        &rimz::config::TeamsConfig::default(),
+    )
+    .expect("resolve missing planner profile");
+    let err = ensure_profile_prompt_files(&missing_layout).expect_err("missing prompt fails");
     assert!(err.to_string().contains("system-prompt-file"));
 }
 

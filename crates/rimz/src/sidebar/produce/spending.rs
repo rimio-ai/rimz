@@ -635,6 +635,7 @@ mod tests {
             name: None,
             kind_ordinal: None,
             profile: None,
+            role: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Idle,
             pane: None,

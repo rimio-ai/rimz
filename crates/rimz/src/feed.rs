@@ -988,6 +988,11 @@ pub struct AgentState {
     /// bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The `[agents.teams]` role this agent launched as (`planner`, `coder`),
+    /// passed through `RIMZ_AGENT_ROLE` and carried forward like `profile`. The
+    /// agent answers to `@<role>` when that role uniquely names it in scope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     pub status: AgentStatus,
     /// The running turn's shape (reasoning / acting / parked on background
     /// work), written verbatim from the lifecycle machine's output. Always
@@ -1304,6 +1309,7 @@ mod tests {
             name: None,
             kind_ordinal: None,
             profile: None,
+            role: None,
             status: AgentStatus::Running,
             phase: TurnPhase::Reasoning,
             pane: None,

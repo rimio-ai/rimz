@@ -35,6 +35,7 @@ fn registered(
         agent_id: Some(agent_id.into()),
         agent_name: Some(name.to_owned()),
         agent_profile: None,
+        agent_role: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,
         agent_pid: None,

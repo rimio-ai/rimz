@@ -165,6 +165,11 @@ pub struct PaneAgent {
     /// a lazy pane or a bare-kind launch.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub profile: Option<String>,
+    /// The `[agents.teams]` role the bound session launched as, copied from the
+    /// rollup so a bound agent answers to `@<role>` through its pane. `None` for
+    /// a lazy pane or a roleless launch.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
     /// The bound session, or `None` for a lazy pane with no session yet.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<AgentSessionId>,

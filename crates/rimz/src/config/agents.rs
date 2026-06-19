@@ -5,8 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::run::PermissionMode;
 
-/// Agent-launch preferences. Layout entries are shape strings whose cells
-/// resolve through profile/command parsing in [`crate::agents_spec`].
+/// Agent-launch preferences. Team entries bind role names to profiles; inline
+/// launch specs still resolve through profile/command parsing in
+/// [`crate::agents_spec`].
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
@@ -18,7 +19,7 @@ pub struct AgentsConfig {
     pub profiles: ProfilesConfig,
     #[serde(default)]
     pub commands: CommandsConfig,
-    pub layouts: LayoutsConfig,
+    pub teams: TeamsConfig,
 }
 
 /// Default tab placement for `rimz agents <spec>` launches; the per-launch
@@ -69,7 +70,35 @@ pub struct Profile {
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]
-pub struct LayoutsConfig(pub BTreeMap<String, String>);
+pub struct TeamsConfig(pub BTreeMap<String, Team>);
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Team {
+    #[serde(default)]
+    pub roles: Vec<RoleBinding>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RoleBinding {
+    pub role: String,
+    pub profile: String,
+    #[serde(default)]
+    pub mode: Option<PermissionMode>,
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub effort: Option<String>,
+    #[serde(
+        default,
+        rename = "system-prompt-file",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub system_prompt_file: Option<PathBuf>,
+    #[serde(default)]
+    pub args: Option<String>,
+}
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(transparent)]

@@ -1,7 +1,8 @@
-//! Backend-neutral agent layout IR and profile/command-aware parser.
+//! Backend-neutral agent layout IR plus team/profile/command resolution.
 //!
 //! Commas split columns, plus signs stack rows within a column, and each cell is
-//! a profile, a command, or a built-in cell. Built-ins provide `term`, every
+//! a profile, a command, or a built-in cell. Named teams compile to one column
+//! per role, while inline specs keep this ad-hoc grammar. Built-ins provide `term`, every
 //! registered agent kind, and `<kind>-<mode>` / `<kind>-ping` virtual variants;
 //! per-machine `[agents.profiles]` entries can specialize agent cells and
 //! `[agents.commands]` entries provide raw command panes.
@@ -10,14 +11,14 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 
-use crate::config::{CommandsConfig, LayoutsConfig, Profile, ProfilesConfig};
+use crate::config::{CommandsConfig, Profile, ProfilesConfig, RoleBinding, TeamsConfig};
 use crate::ids::AgentKind;
 use crate::run::PermissionMode;
 
 const BUILTIN_PEER: &str = "claude,codex";
 const PERMISSION_MODE_NAMES: &[&str] = &["auto", "ask", "yolo", "plan"];
 const PING_SUFFIX: &str = "ping";
-const RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES: &[&str] = &[
+const RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES: &[&str] = &[
     "list", "ls", "show", "stop", "focus", "wait", "term", "exec",
 ];
 pub const MAX_PROFILE_DEPTH: usize = 16;
@@ -64,12 +65,16 @@ pub enum Cell {
         kind: AgentKind,
         args: Vec<String>,
         mode: Option<PermissionMode>,
+        system_prompt_file: Option<PathBuf>,
         /// The `[agents.profiles]` name this cell launched as, when it came
         /// from a named profile (`planner`) or a kind-default override
         /// (`claude`, `claude-auto`, `claude-ping`). Stamped onto the agent as
         /// `RIMZ_AGENT_PROFILE` so it answers to `@<profile>`; `None` for a
         /// bare built-in kind or virtual variant without an override.
         profile: Option<String>,
+        /// The role this cell holds inside a named `[agents.teams]` launch. It
+        /// is stamped as `RIMZ_AGENT_ROLE` so a team member answers to `@<role>`.
+        role: Option<String>,
     },
     Command {
         argv: Vec<String>,
@@ -82,7 +87,9 @@ impl Cell {
             kind,
             args: Vec::new(),
             mode: None,
+            system_prompt_file: None,
             profile: None,
+            role: None,
         }
     }
 
@@ -126,17 +133,29 @@ pub enum LayoutErr {
     )]
     UnknownCell { cell: String, valid: String },
     #[error(
-        "unknown layout `{layout}`; define it under [agents.layouts] or pass an inline profile/command spec; valid layouts: {valid_layouts}; valid cells: {valid_cells}"
+        "unknown team `{team}`; define it under [agents.teams] or pass an inline profile/command spec; valid teams: {valid_teams}; valid cells: {valid_cells}"
     )]
-    UnknownLayout {
-        layout: String,
-        valid_layouts: String,
+    UnknownTeam {
+        team: String,
+        valid_teams: String,
         valid_cells: String,
     },
     #[error(
-        "layout name `{0}` is reserved for an inline profile/command cell; choose another [agents.layouts] name"
+        "team name `{0}` is reserved for an inline profile/command cell; choose another [agents.teams] name"
     )]
-    ReservedLayoutName(String),
+    ReservedTeamName(String),
+    #[error("team `{team}` role `{role}` references unknown profile `{profile}`")]
+    UnknownRoleProfile {
+        team: String,
+        role: String,
+        profile: String,
+    },
+    #[error(
+        "invalid role name `{name}` in team `{team}`; roles cannot be empty or contain whitespace, `,`, `+`, `:`, or `#`"
+    )]
+    InvalidRoleName { team: String, name: String },
+    #[error("duplicate role `{role}` in team `{team}`")]
+    DuplicateRole { team: String, role: String },
     #[error("invalid profile `{profile}`: {reason}")]
     InvalidProfile { profile: String, reason: String },
     #[error("invalid command `{command}`: {reason}")]
@@ -162,6 +181,14 @@ pub enum LayoutErr {
     )]
     ProfileShadowsAddress { name: String, reason: &'static str },
     #[error(
+        "role name `{name}` in team `{team}` clashes with the agent-address grammar ({reason}); rename it so `@{name}` is unambiguous"
+    )]
+    RoleShadowsAddress {
+        team: String,
+        name: String,
+        reason: &'static str,
+    },
+    #[error(
         "invalid command name `{name}`; commands cannot be empty or contain whitespace, `,`, or `+`"
     )]
     InvalidCommandName { name: String },
@@ -180,31 +207,45 @@ pub type Result<T> = std::result::Result<T, LayoutErr>;
 pub fn resolve_profile_prompt_paths(profiles: &mut ProfilesConfig, config_dir: &Path) {
     for profile in profiles.0.values_mut() {
         if let Some(path) = profile.system_prompt_file.as_mut() {
-            let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
-            *path = if expanded.is_absolute() {
-                expanded
-            } else {
-                config_dir.join(expanded)
-            };
+            *path = resolve_prompt_path(path, config_dir);
         }
+    }
+}
+
+pub fn resolve_team_prompt_paths(teams: &mut TeamsConfig, config_dir: &Path) {
+    for team in teams.0.values_mut() {
+        for binding in &mut team.roles {
+            if let Some(path) = binding.system_prompt_file.as_mut() {
+                *path = resolve_prompt_path(path, config_dir);
+            }
+        }
+    }
+}
+
+fn resolve_prompt_path(path: &Path, config_dir: &Path) -> PathBuf {
+    let expanded = crate::agents::transcript_fs::expand_tilde(&path.to_string_lossy());
+    if expanded.is_absolute() {
+        expanded
+    } else {
+        config_dir.join(expanded)
     }
 }
 
 pub fn validate_config(
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    layouts: &LayoutsConfig,
+    teams: &TeamsConfig,
 ) -> Result<()> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
-    validate_layout_names(layouts)?;
-    for name in layouts.0.keys() {
+    validate_team_names(teams)?;
+    for name in teams.0.keys() {
         if is_cell_word(name, profiles, commands) {
-            return Err(LayoutErr::ReservedLayoutName(name.clone()));
+            return Err(LayoutErr::ReservedTeamName(name.clone()));
         }
     }
-    for shape in layouts.0.values() {
-        validate_layout_shape(shape, profiles, commands)?;
+    for name in teams.0.keys() {
+        validate_team(name, teams, profiles)?;
     }
     Ok(())
 }
@@ -219,23 +260,23 @@ pub fn parse_layout_spec(
     parse_layout_spec_validated(raw, profiles, commands)
 }
 
-pub fn resolve_layout(
+pub fn resolve_spec(
     arg: Option<&str>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    layouts: &LayoutsConfig,
+    teams: &TeamsConfig,
 ) -> Result<LayoutSpec> {
     validate_profile_names(profiles)?;
     validate_command_names(commands)?;
-    validate_layout_names(layouts)?;
+    validate_team_names(teams)?;
     let Some(raw) = arg.map(str::trim).filter(|value| !value.is_empty()) else {
         return Ok(LayoutSpec::single(Cell::shell()));
     };
-    if let Some(shape) = layouts.0.get(raw) {
+    if teams.0.contains_key(raw) {
         if is_cell_word(raw, profiles, commands) {
-            return Err(LayoutErr::ReservedLayoutName(raw.to_owned()));
+            return Err(LayoutErr::ReservedTeamName(raw.to_owned()));
         }
-        return parse_layout_spec_validated(shape, profiles, commands);
+        return resolve_team(raw, teams, profiles);
     }
     if is_inline_spec(raw, profiles, commands) {
         return parse_layout_spec_validated(raw, profiles, commands);
@@ -243,11 +284,67 @@ pub fn resolve_layout(
     if raw == "peer" {
         return parse_layout_spec_validated(BUILTIN_PEER, profiles, commands);
     }
-    Err(LayoutErr::UnknownLayout {
-        layout: raw.to_owned(),
-        valid_layouts: valid_layouts(layouts),
+    Err(LayoutErr::UnknownTeam {
+        team: raw.to_owned(),
+        valid_teams: valid_teams(teams),
         valid_cells: valid_cells(profiles, commands),
     })
+}
+
+pub fn resolve_team(
+    name: &str,
+    teams: &TeamsConfig,
+    profiles: &ProfilesConfig,
+) -> Result<LayoutSpec> {
+    validate_team(name, teams, profiles)?;
+    let team = teams
+        .0
+        .get(name)
+        .expect("validated team name exists in teams config");
+    let mut columns = Vec::with_capacity(team.roles.len());
+    for binding in &team.roles {
+        let mut resolved =
+            resolve_profile(&binding.profile, profiles).map_err(|err| match err {
+                LayoutErr::UnknownProfileBase { profile, base } if profile == binding.profile => {
+                    LayoutErr::UnknownRoleProfile {
+                        team: name.to_owned(),
+                        role: binding.role.clone(),
+                        profile: base,
+                    }
+                }
+                other => other,
+            })?;
+        apply_role_overrides(&mut resolved, binding);
+        columns.push(Column {
+            rows: vec![Cell::Agent {
+                kind: resolved.kind.clone(),
+                args: render_profile_args(&binding.profile, &resolved)?,
+                mode: resolved.mode,
+                system_prompt_file: resolved.system_prompt_file.clone(),
+                profile: Some(binding.profile.clone()),
+                role: Some(binding.role.clone()),
+            }],
+        });
+    }
+    Ok(LayoutSpec { columns })
+}
+
+fn apply_role_overrides(resolved: &mut ResolvedProfile, binding: &RoleBinding) {
+    if let Some(mode) = binding.mode {
+        resolved.mode = Some(mode);
+    }
+    if let Some(model) = binding.model.as_ref() {
+        resolved.model = Some(model.clone());
+    }
+    if let Some(effort) = binding.effort.as_ref() {
+        resolved.effort = Some(effort.clone());
+    }
+    if let Some(path) = binding.system_prompt_file.as_ref() {
+        resolved.system_prompt_file = Some(path.clone());
+    }
+    if let Some(args) = binding.args.as_ref() {
+        resolved.args = Some(args.clone());
+    }
 }
 
 /// Resolve `name` through profile inheritance to a concrete built-in kind.
@@ -339,15 +436,15 @@ pub fn default_tab_title(
     crate::resume::build_label(kind, None, cwd)
 }
 
-pub fn is_known_layout_token(
+pub fn is_known_spec_token(
     raw: &str,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    layouts: &LayoutsConfig,
+    teams: &TeamsConfig,
 ) -> bool {
     let raw = raw.trim();
     !raw.is_empty()
-        && (layouts.0.contains_key(raw) || raw == "peer" || is_cell_word(raw, profiles, commands))
+        && (teams.0.contains_key(raw) || raw == "peer" || is_cell_word(raw, profiles, commands))
 }
 
 fn parse_layout_spec_validated(
@@ -376,35 +473,6 @@ fn parse_layout_spec_validated(
         columns.push(Column { rows });
     }
     Ok(LayoutSpec { columns })
-}
-
-fn validate_layout_shape(
-    raw: &str,
-    profiles: &ProfilesConfig,
-    commands: &CommandsConfig,
-) -> Result<()> {
-    let raw = raw.trim();
-    if raw.is_empty() {
-        return Err(LayoutErr::Empty);
-    }
-    for column_raw in raw.split(',') {
-        if column_raw.trim().is_empty() {
-            return Err(LayoutErr::EmptyCell(raw.to_owned()));
-        }
-        for cell_raw in column_raw.split('+') {
-            let cell_raw = cell_raw.trim();
-            if cell_raw.is_empty() {
-                return Err(LayoutErr::EmptyCell(raw.to_owned()));
-            }
-            if !is_cell_word(cell_raw, profiles, commands) {
-                return Err(LayoutErr::UnknownCell {
-                    cell: cell_raw.to_owned(),
-                    valid: valid_cells(profiles, commands),
-                });
-            }
-        }
-    }
-    Ok(())
 }
 
 fn is_inline_spec(raw: &str, profiles: &ProfilesConfig, commands: &CommandsConfig) -> bool {
@@ -451,7 +519,9 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
         kind: resolved.kind.clone(),
         args: render_profile_args(name, resolved)?,
         mode: resolved.mode,
+        system_prompt_file: resolved.system_prompt_file.clone(),
         profile: Some(name.to_owned()),
+        role: None,
     })
 }
 
@@ -530,7 +600,9 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
         kind: resolved.kind,
         args,
         mode: Some(mode),
+        system_prompt_file: resolved.system_prompt_file,
         profile: profile_name,
+        role: None,
     }))
 }
 
@@ -563,7 +635,9 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
         kind: resolved.kind,
         args,
         mode: None,
+        system_prompt_file: resolved.system_prompt_file,
         profile: profile_name,
+        role: None,
     }))
 }
 
@@ -619,7 +693,7 @@ fn validate_profile_names(profiles: &ProfilesConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidProfileName { name: name.clone() });
         }
-        if RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()) {
+        if RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedProfileName { name: name.clone() });
         }
         if let Some(reason) = address_grammar_clash(name) {
@@ -641,7 +715,7 @@ fn validate_command_names(commands: &CommandsConfig) -> Result<()> {
         {
             return Err(LayoutErr::InvalidCommandName { name: name.clone() });
         }
-        if RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()) {
+        if RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()) {
             return Err(LayoutErr::ReservedCommandName { name: name.clone() });
         }
     }
@@ -674,15 +748,62 @@ fn is_kind_ordinal_shape(name: &str) -> bool {
     crate::agents::find_adapter(kind).is_some() && ordinal.parse::<u32>().is_ok_and(|n| n > 0)
 }
 
-fn validate_layout_names(layouts: &LayoutsConfig) -> Result<()> {
-    if let Some(name) = layouts
+fn validate_team_names(teams: &TeamsConfig) -> Result<()> {
+    if let Some(name) = teams
         .0
         .keys()
-        .find(|name| RESERVED_PROFILE_COMMAND_AND_LAYOUT_NAMES.contains(&name.as_str()))
+        .find(|name| RESERVED_PROFILE_COMMAND_AND_TEAM_NAMES.contains(&name.as_str()))
     {
-        return Err(LayoutErr::ReservedLayoutName(name.clone()));
+        return Err(LayoutErr::ReservedTeamName(name.clone()));
     }
     Ok(())
+}
+
+fn validate_team(name: &str, teams: &TeamsConfig, profiles: &ProfilesConfig) -> Result<()> {
+    let team = teams
+        .0
+        .get(name)
+        .expect("team validation called with a known team name");
+    let mut seen = BTreeSet::new();
+    for binding in &team.roles {
+        if invalid_role_name(&binding.role) {
+            return Err(LayoutErr::InvalidRoleName {
+                team: name.to_owned(),
+                name: binding.role.clone(),
+            });
+        }
+        if let Some(reason) = address_grammar_clash(&binding.role) {
+            return Err(LayoutErr::RoleShadowsAddress {
+                team: name.to_owned(),
+                name: binding.role.clone(),
+                reason,
+            });
+        }
+        if !seen.insert(binding.role.clone()) {
+            return Err(LayoutErr::DuplicateRole {
+                team: name.to_owned(),
+                role: binding.role.clone(),
+            });
+        }
+        if !profiles.0.contains_key(&binding.profile) {
+            return Err(LayoutErr::UnknownRoleProfile {
+                team: name.to_owned(),
+                role: binding.role.clone(),
+                profile: binding.profile.clone(),
+            });
+        }
+        let mut resolved = resolve_profile(&binding.profile, profiles)?;
+        apply_role_overrides(&mut resolved, binding);
+        render_profile_args(&binding.profile, &resolved)?;
+    }
+    Ok(())
+}
+
+fn invalid_role_name(name: &str) -> bool {
+    name.is_empty()
+        || name
+            .chars()
+            .any(|ch| ch.is_whitespace() || ch == ',' || ch == '+' || ch == ':' || ch == '#')
 }
 
 fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
@@ -705,9 +826,9 @@ fn valid_cells(profiles: &ProfilesConfig, commands: &CommandsConfig) -> String {
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 
-fn valid_layouts(layouts: &LayoutsConfig) -> String {
+fn valid_teams(teams: &TeamsConfig) -> String {
     let mut values = BTreeSet::from(["peer".to_owned()]);
-    values.extend(layouts.0.keys().cloned());
+    values.extend(teams.0.keys().cloned());
     values.into_iter().collect::<Vec<_>>().join(", ")
 }
 

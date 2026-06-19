@@ -47,7 +47,7 @@ fn worktree_config_defaults_and_parses() {
 }
 
 #[test]
-fn agent_profiles_commands_and_layouts_parse() {
+fn agent_profiles_commands_and_teams_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(
         &dir,
@@ -63,8 +63,12 @@ fn agent_profiles_commands_and_layouts_parse() {
              [agents.profiles.planner]\n\
              agent = \"claude\"\n\
              system-prompt-file = \"/prompts/planner.md\"\n\
-             [agents.layouts]\n\
-             stacked = \"claude,codex+vim\"\n",
+             [[agents.teams.stacked.roles]]\n\
+             role = \"planner\"\n\
+             profile = \"planner\"\n\
+             [[agents.teams.stacked.roles]]\n\
+             role = \"coder\"\n\
+             profile = \"codex-yolo\"\n",
     ))
     .expect("load");
     let commands = &config.agents.commands.0;
@@ -94,10 +98,11 @@ fn agent_profiles_commands_and_layouts_parse() {
             args: None,
         })
     );
-    assert_eq!(
-        config.agents.layouts.0.get("stacked").map(String::as_str),
-        Some("claude,codex+vim")
-    );
+    let roles = &config.agents.teams.0.get("stacked").expect("team").roles;
+    assert_eq!(roles[0].role, "planner");
+    assert_eq!(roles[0].profile, "planner");
+    assert_eq!(roles[1].role, "coder");
+    assert_eq!(roles[1].profile, "codex-yolo");
 }
 
 #[test]

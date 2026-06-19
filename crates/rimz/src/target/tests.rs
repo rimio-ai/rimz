@@ -470,6 +470,59 @@ fn shared_profile_degrades_to_the_kind_ordinal_handle() {
 }
 
 #[test]
+fn role_resolves_before_profile_and_renders_first_when_unique() {
+    let mut snapshot = empty_snapshot();
+    let mut planner = agent("claude", "session-planner", Some("auth"), "terminal_1");
+    planner.profile = Some("claude-planner".to_owned());
+    planner.role = Some("planner".to_owned());
+    planner.kind_ordinal = Some(1);
+    let mut coder = agent("codex", "session-coder", Some("auth"), "terminal_2");
+    coder.profile = Some("codex-coder".to_owned());
+    coder.role = Some("coder".to_owned());
+    coder.kind_ordinal = Some(1);
+    snapshot.agents = vec![planner, coder];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    assert_eq!(
+        resolve_one(&snapshot, "@coder#auth", None, None)
+            .unwrap()
+            .agent_id
+            .as_str(),
+        "session-coder"
+    );
+    assert_eq!(agent_handle(peers[0], &peers, true), "@planner#auth");
+    assert_eq!(agent_handle(peers[1], &peers, true), "@coder#auth");
+}
+
+#[test]
+fn shared_role_requires_fanout_and_degrades_to_profile_or_ordinal() {
+    let mut snapshot = empty_snapshot();
+    let mut a = agent("claude", "session-a", Some("auth"), "terminal_1");
+    a.profile = Some("planner-a".to_owned());
+    a.role = Some("planner".to_owned());
+    a.kind_ordinal = Some(1);
+    let mut b = agent("claude", "session-b", Some("auth"), "terminal_2");
+    b.profile = Some("planner-b".to_owned());
+    b.role = Some("planner".to_owned());
+    b.kind_ordinal = Some(2);
+    snapshot.agents = vec![a, b];
+    let peers: Vec<&AgentState> = snapshot.agents.iter().collect();
+
+    assert_eq!(
+        resolve_many(&snapshot, "@planner", None, Some("auth"))
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(matches!(
+        resolve_one(&snapshot, "@planner", None, Some("auth")),
+        Err(TargetErr::Ambiguous { .. })
+    ));
+    assert_eq!(agent_handle(peers[0], &peers, true), "@planner-a#auth");
+    assert_eq!(agent_handle(peers[1], &peers, true), "@planner-b#auth");
+}
+
+#[test]
 fn sender_prefix_skips_human_messages() {
     let peers: Vec<&AgentState> = Vec::new();
     assert_eq!(
@@ -490,6 +543,7 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("lucid-atlas".to_owned()),
         profile: None,
+        role: None,
         channel: Some("fallback".to_owned()),
     };
 
@@ -518,6 +572,7 @@ fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("bright-lark".to_owned()),
         profile: None,
+        role: None,
         channel: Some("main".to_owned()),
     };
 
@@ -534,6 +589,7 @@ fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
         kind: AgentKind::new_unchecked("codex"),
         name: Some("lucid-atlas".to_owned()),
         profile: Some("reviewer".to_owned()),
+        role: None,
         channel: Some("docs".to_owned()),
     };
 
@@ -559,6 +615,7 @@ fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
         kind: AgentKind::new_unchecked("claude"),
         name: Some("calm-fox".to_owned()),
         profile: Some("planner".to_owned()),
+        role: None,
         channel: Some("auth".to_owned()),
     };
 
@@ -624,6 +681,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         name: None,
         kind_ordinal: None,
         profile: None,
+        role: None,
         status: AgentStatus::Idle,
         phase: crate::agents::TurnPhase::Idle,
         pane: Some(PaneRef::from_id(PaneId::from_parts(
@@ -671,6 +729,7 @@ fn lazy_pane(kind: &str, worktree_path: &str, raw_pane: &str) -> PaneAgent {
         kind_ordinal: None,
         name: None,
         profile: None,
+        role: None,
         agent_id: None,
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(worktree_path.to_owned()),
@@ -693,6 +752,7 @@ fn bound_pane(
         kind_ordinal: Some(ordinal),
         name: Some(name.to_owned()),
         profile: None,
+        role: None,
         agent_id: Some(AgentSessionId::from(session)),
         pane_id: PaneId::from_parts(MuxName::Zellij, raw_pane),
         worktree_path: Some(format!("/repo/{branch}")),

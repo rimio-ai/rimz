@@ -21,7 +21,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent profiles, command cells, layouts, auto-ping schedules, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config`, `rimz autoping` |
+| `~/.config/rimz/config.toml` | per-machine | worktree defaults, agent profiles, command cells, teams, auto-ping schedules, room options, sidebar display, notifications, remote-control auto-launch | you, `rimz setup`, `rimz config`, `rimz autoping` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -37,7 +37,7 @@ Eleven sections make up the per-machine file:
 | Section | Purpose |
 | --- | --- |
 | `[worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[agents]` | launch profiles, command cells, and named layouts for `rimz agents <spec>` |
+| `[agents]` | launch profiles, command cells, and named teams for `rimz agents <spec>` |
 | `[autoping]` | scheduled window-priming pings, applied to this machine's scheduler by `rimz autoping install` |
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[accounts]` | provider account-usage enrichment and display-only monthly ceilings |
@@ -174,7 +174,7 @@ base = "fresh"
 
 `rimz worktree` and `rimz agents --worktree` use this section when creating Rimz-owned Git worktrees. Relative `dir` values resolve from the repository root, and `{repo}` expands to the root directory basename. `base = "head"` branches from local `HEAD`, `base = "fresh"` branches from `origin/HEAD`, and any other string is passed to Git as the base ref. A committed `<root>/.worktreeinclude` lists glob patterns for untracked files to copy from the checkout into each new worktree. Seeding and cleanup state live in [internals/agents/worktree.md](../internals/agents/worktree.md).
 
-### Agent Profiles, Commands, And Layouts
+### Agent Profiles, Commands, And Teams
 
 ```toml
 [agents]
@@ -204,18 +204,27 @@ mode = "yolo"
 model = "gpt-5-codex"
 effort = "high"
 
-[agents.layouts]
-review = "planner,codex-yolo+vim"
-debug = "pi,htop+term"
+[[agents.teams.review.roles]]
+role = "planner"
+profile = "planner"
+
+[[agents.teams.review.roles]]
+role = "coder"
+profile = "codex-yolo"
+
+[[agents.teams.review.roles]]
+role = "reviewer"
+profile = "planner"
+mode = "plan"
 ```
 
-Named layouts feed `rimz agents <name>`, and inline specs such as `rimz agents "claude,codex+term"` use the same cell resolver. A layout is a shape string: commas split columns, plus signs stack rows in a column, and each cell is a command, profile, or built-in cell. Cells resolve in this order: `[agents.commands]`, `[agents.profiles]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variants such as `claude-auto`, `codex-ask`, `codex-yolo`, and `claude-ping`. The built-in `peer = "claude,codex"` exists even when unset, and `[agents.layouts.peer]` overrides it for this machine. Profile, command, and layout names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. Commands may shadow cell words such as `claude` to set local command defaults; profiles become addressable handles (`@<profile>`), so profile names must not shadow `@all`, kind ordinals such as `@claude-2`, or pane/channel sigils (`:`, `#`). A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, profiles that say `agent = "claude"`, and virtual cells such as `claude-auto` and `claude-ping`.
+Named teams feed `rimz agents <name>`. A team is an ordered `roles` list; each role binds a role name to a profile and may override `mode`, `model`, `effort`, `system-prompt-file`, or `args`. The role list opens left to right as one side-by-side column per role in one tab, and each member answers to `@<role>` in that channel. Inline specs such as `rimz agents "claude,codex+term"` keep the ad-hoc shape grammar: commas split columns, plus signs stack rows, and each cell is a command, profile, or built-in cell. Inline cells resolve in this order: `[agents.commands]`, `[agents.profiles]`, built-in `term`, registered agent kinds, and adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variants such as `claude-auto`, `codex-ask`, `codex-yolo`, and `claude-ping`. The built-in `peer` team remains `claude,codex` and is roleless. Profile, command, and team names reserve `list`, `ls`, `show`, `stop`, `focus`, `wait`, `term`, and `exec`. Commands may shadow cell words such as `claude` to set local command defaults; profiles and roles become addressable handles, so they must not shadow `@all`, kind ordinals such as `@claude-2`, or pane/channel sigils (`:`, `#`). A profile may be named like a kind: `[agents.profiles.claude]` overrides the base for bare `claude`, profiles that say `agent = "claude"`, and virtual cells such as `claude-auto` and `claude-ping`.
 
 `tab` sets where a launch lands when neither `--same-tab` nor `--new-tab` is passed. `"auto"` (the default) opens a new tab for a worktree launch or a multi-cell layout and splits the current view for a single non-worktree agent; `"new"` always opens a new tab; `"same"` splits the current view whenever the launch is a single agent cell, falling back to a new tab otherwise.
 
-Commands under `[agents.commands]` are bare strings shell-split as raw command panes. Profiles under `[agents.profiles.<name>]` require `agent`, which names a built-in kind or another profile. The inheritance chain flattens at launch to one concrete adapter kind; each field takes the nearest set value, including `args`, so a child profile that sets `args` replaces the base `args` entirely. `model`, `effort`, and `system-prompt-file` render through the resolved adapter, `mode = "auto" | "ask" | "plan" | "yolo"` adds that adapter's permission argv, then `args` is shell-split and appended. `system-prompt-file` gives the profile its own voice; `~` expands to the home directory and a relative path roots at the config file's directory, so the prompt points at the same file wherever the profile launches, and the file must exist when the profile launches — a missing one fails the launch with the path to fix. Unsupported typed fields fail at launch with the profile name and the field to remove. Per-machine configs with `[tab]`, `[tab.keywords]`, `[tab.layouts]`, or `[agents.aliases]` hard-error; rename them to `[agents]`, `[agents.profiles]`, `[agents.commands]`, and `[agents.layouts]`.
+Commands under `[agents.commands]` are bare strings shell-split as raw command panes. Profiles under `[agents.profiles.<name>]` require `agent`, which names a built-in kind or another profile. The inheritance chain flattens at launch to one concrete adapter kind; each field takes the nearest set value, including `args`, so a child profile that sets `args` replaces the base `args` entirely. Team role overrides layer over the referenced profile the same way, with `args` replacing rather than appending. `model`, `effort`, and `system-prompt-file` render through the resolved adapter, `mode = "auto" | "ask" | "plan" | "yolo"` adds that adapter's permission argv, then `args` is shell-split and appended. `system-prompt-file` gives the profile or role its own voice; `~` expands to the home directory and a relative path roots at the config file's directory, so the prompt points at the same file wherever the profile launches, and the file must exist when the profile launches — a missing one fails the launch with the path to fix. Unsupported typed fields fail at launch with the profile name and the field to remove. Per-machine configs with `[tab]`, `[tab.keywords]`, `[tab.layouts]`, or `[agents.aliases]` hard-error; rename them to `[agents]`, `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]`.
 
-Trusted project config may also declare top-level `[profiles]` in `<root>/.rimz/config.toml`. Repo profiles are inert until the workspace is trusted, enter the project executable-surface hash, and win on name collision with machine profiles. A repo profile may inherit only another repo profile or a built-in kind; inheriting a machine profile fails with `RepoProfileEscapesTrust`, keeping the hashed surface closed and machine-independent.
+Trusted project config may also declare top-level `[profiles]` and `[agents.teams]` in `<root>/.rimz/config.toml`. Repo profiles and teams are inert until the workspace is trusted, enter the project executable-surface hash, and win on name collision with machine config. A repo profile may inherit only another repo profile or a built-in kind, and a repo team role may bind only a repo profile, keeping the hashed surface closed and machine-independent.
 
 ### Sidebar Bands
 
@@ -318,11 +327,11 @@ Later layers win:
 3. per-machine config (`~/.config/rimz/config.toml`),
 4. CLI flags and `RIMZ_*` environment variables.
 
-This is the designed model. Today the per-machine layer is live, CLI/env overrides are applied by the commands that define them, and the project layer is read for the trust hash. Project `[profiles]` are live when trusted and deliberately invert the general order for profile names: trusted repo profiles overlay machine profiles so a repository can pin the launch profiles it hashes.
+This is the designed model. Today the per-machine layer is live, CLI/env overrides are applied by the commands that define them, and the project layer is read for the trust hash. Project `[profiles]` and `[agents.teams]` are live when trusted and deliberately invert the general order for launch names: trusted repo profiles and teams overlay machine config so a repository can pin the launch surface it hashes.
 
 ## Project Config
 
-The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz computes the executable-surface trust hash from it, and on a trusted workspace injects each `[[agents]]` `env` table into that agent's process at launch and applies top-level `[profiles]` to `rimz agents` layouts. Launch-time application of the declared layout, hooks, agent `launch_command`, and top-level `[env]` is planned project-config behaviour.
+The committed `<root>/.rimz/config.toml` declares the workspace shape a team wants to share. Rimz computes the executable-surface trust hash from it, and on a trusted workspace injects each `[[agents]]` `env` table into that agent's process at launch and applies top-level `[profiles]` plus `[agents.teams]` to `rimz agents` launches. Use one `agents` shape per project config: `[[agents]]` for env entries or `[agents.teams]` for shared teams. Launch-time application of the declared layout, hooks, agent `launch_command`, and top-level `[env]` is planned project-config behaviour.
 
 ```toml
 [[layout.initial_panes]]

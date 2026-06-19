@@ -4,10 +4,8 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
-
 use crate::agents_spec::{self, LayoutErr};
-use crate::config::{CommandsConfig, LayoutsConfig, ProfilesConfig};
+use crate::config::{CommandsConfig, ProfilesConfig, TeamsConfig};
 use crate::trust::{self, TrustState};
 
 const PROJECT_CONFIG_REL: &str = ".rimz/config.toml";
@@ -28,8 +26,8 @@ pub enum EffectiveConfigErr {
         #[source]
         source: toml::de::Error,
     },
-    #[error("invalid project profiles at {path}: {source}")]
-    Profiles {
+    #[error("invalid project agents config at {path}: {source}")]
+    Agents {
         path: PathBuf,
         #[source]
         source: LayoutErr,
@@ -44,10 +42,10 @@ pub enum EffectiveConfigErr {
 
 pub type Result<T> = std::result::Result<T, EffectiveConfigErr>;
 
-#[derive(Default, Deserialize)]
-#[serde(default)]
+#[derive(Default)]
 struct RepoConfig {
     profiles: ProfilesConfig,
+    teams: TeamsConfig,
 }
 
 /// Effective profiles for launch: machine profiles overlaid by trusted repo
@@ -73,9 +71,9 @@ pub fn effective_profiles(
     agents_spec::validate_config(
         &repo.profiles,
         &CommandsConfig::default(),
-        &LayoutsConfig::default(),
+        &TeamsConfig::default(),
     )
-    .map_err(|source| EffectiveConfigErr::Profiles {
+    .map_err(|source| EffectiveConfigErr::Agents {
         path: config_path.clone(),
         source,
     })?;
@@ -89,7 +87,7 @@ pub fn effective_profiles(
                 }
                 other => other,
             };
-            EffectiveConfigErr::Profiles {
+            EffectiveConfigErr::Agents {
                 path: config_path.clone(),
                 source,
             }
@@ -101,6 +99,38 @@ pub fn effective_profiles(
     Ok(merged)
 }
 
+/// Effective teams for launch: machine teams overlaid by trusted repo teams.
+/// Repo teams may bind only repo profiles, keeping shared launch shapes inside
+/// the trusted executable surface.
+pub fn effective_teams(
+    machine: &TeamsConfig,
+    project_root: &Path,
+    config_root: &Path,
+) -> Result<TeamsConfig> {
+    let report = trust::status_with_roots(project_root, config_root)?;
+    let config_path = project_root.join(PROJECT_CONFIG_REL);
+    if report.state != TrustState::Trusted {
+        return Ok(machine.clone());
+    }
+
+    let Some(mut repo) = read_repo_config(&config_path)? else {
+        return Ok(machine.clone());
+    };
+    let config_dir = config_path.parent().unwrap_or(project_root);
+    agents_spec::resolve_profile_prompt_paths(&mut repo.profiles, config_dir);
+    agents_spec::resolve_team_prompt_paths(&mut repo.teams, config_dir);
+    agents_spec::validate_config(&repo.profiles, &CommandsConfig::default(), &repo.teams).map_err(
+        |source| EffectiveConfigErr::Agents {
+            path: config_path.clone(),
+            source,
+        },
+    )?;
+
+    let mut merged = machine.clone();
+    merged.0.extend(repo.teams.0);
+    Ok(merged)
+}
+
 /// Return a trust error only when a requested launch spec would consume a repo
 /// profile while the project is not trusted. Repo profiles are otherwise inert:
 /// machine profiles, machine commands, and built-in cells keep launching in an
@@ -109,7 +139,7 @@ pub fn block_untrusted_profile_reference(
     spec: Option<&str>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    layouts: &LayoutsConfig,
+    teams: &TeamsConfig,
     project_root: &Path,
     config_root: &Path,
 ) -> Result<()> {
@@ -122,8 +152,10 @@ pub fn block_untrusted_profile_reference(
     }
     let config_path = project_root.join(PROJECT_CONFIG_REL);
     let repo_profiles = repo_profile_names(&config_path)?;
-    if repo_profiles.is_empty()
-        || !spec_references_repo_profile(spec, &repo_profiles, profiles, commands, layouts)
+    let repo_teams = repo_team_names(&config_path)?;
+    if (repo_profiles.is_empty()
+        || !spec_references_repo_profile(spec, &repo_profiles, profiles, commands, teams))
+        && !repo_teams.contains(spec)
     {
         return Ok(());
     }
@@ -142,7 +174,49 @@ pub fn block_untrusted_profile_reference(
 
 fn read_repo_config(path: &Path) -> Result<Option<RepoConfig>> {
     match std::fs::read_to_string(path) {
-        Ok(text) => toml::from_str::<RepoConfig>(&text)
+        Ok(text) => {
+            let value = toml::from_str::<toml::Value>(&text).map_err(|source| {
+                EffectiveConfigErr::Parse {
+                    path: path.to_path_buf(),
+                    source,
+                }
+            })?;
+            repo_config_from_value(&value)
+                .map(Some)
+                .map_err(|source| EffectiveConfigErr::Parse {
+                    path: path.to_path_buf(),
+                    source,
+                })
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(EffectiveConfigErr::Io {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+fn repo_config_from_value(value: &toml::Value) -> std::result::Result<RepoConfig, toml::de::Error> {
+    let profiles = value
+        .get("profiles")
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()?
+        .unwrap_or_default();
+    let teams = value
+        .get("agents")
+        .and_then(toml::Value::as_table)
+        .and_then(|agents| agents.get("teams"))
+        .cloned()
+        .map(toml::Value::try_into)
+        .transpose()?
+        .unwrap_or_default();
+    Ok(RepoConfig { profiles, teams })
+}
+
+fn repo_value(path: &Path) -> Result<Option<toml::Value>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => toml::from_str::<toml::Value>(&text)
             .map(Some)
             .map_err(|source| EffectiveConfigErr::Parse {
                 path: path.to_path_buf(),
@@ -157,27 +231,28 @@ fn read_repo_config(path: &Path) -> Result<Option<RepoConfig>> {
 }
 
 fn repo_profile_names(path: &Path) -> Result<BTreeSet<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => {
-            let value = toml::from_str::<toml::Value>(&text).map_err(|source| {
-                EffectiveConfigErr::Parse {
-                    path: path.to_path_buf(),
-                    source,
-                }
-            })?;
-            Ok(value
-                .as_table()
-                .and_then(|table| table.get("profiles"))
-                .and_then(toml::Value::as_table)
-                .map(|profiles| profiles.keys().cloned().collect())
-                .unwrap_or_default())
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(BTreeSet::new()),
-        Err(source) => Err(EffectiveConfigErr::Io {
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
+    let Some(value) = repo_value(path)? else {
+        return Ok(BTreeSet::new());
+    };
+    Ok(value
+        .as_table()
+        .and_then(|table| table.get("profiles"))
+        .and_then(toml::Value::as_table)
+        .map(|profiles| profiles.keys().cloned().collect())
+        .unwrap_or_default())
+}
+
+fn repo_team_names(path: &Path) -> Result<BTreeSet<String>> {
+    let Some(value) = repo_value(path)? else {
+        return Ok(BTreeSet::new());
+    };
+    Ok(value
+        .get("agents")
+        .and_then(toml::Value::as_table)
+        .and_then(|agents| agents.get("teams"))
+        .and_then(toml::Value::as_table)
+        .map(|teams| teams.keys().cloned().collect())
+        .unwrap_or_default())
 }
 
 fn spec_references_repo_profile(
@@ -185,14 +260,15 @@ fn spec_references_repo_profile(
     repo_profiles: &BTreeSet<String>,
     profiles: &ProfilesConfig,
     commands: &CommandsConfig,
-    layouts: &LayoutsConfig,
+    teams: &TeamsConfig,
 ) -> bool {
-    let shape = if !machine_cell_word(spec, profiles, commands) {
-        layouts.0.get(spec).map(String::as_str).unwrap_or(spec)
-    } else {
-        spec
-    };
-    layout_tokens(shape)
+    if let Some(team) = teams.0.get(spec) {
+        return team
+            .roles
+            .iter()
+            .any(|binding| repo_profiles.contains(&binding.profile));
+    }
+    layout_tokens(spec)
         .any(|token| repo_profiles.contains(token) && !machine_cell_word(token, profiles, commands))
 }
 

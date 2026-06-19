@@ -98,7 +98,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 `rimz agents peer --worktree=feat/great` opens Claude and Codex side by side in a fresh worktree on its own branch: one plans and implements while the other reviews, both in the same files, isolated from your checkout.
 
-`peer` is a built-in layout, and inline specs compose any grid — `rimz agents 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[agents.profiles]` and `[agents.commands]` let named layouts in `[agents.layouts]` compose agent variants and raw commands.
+`peer` is a built-in team, and inline specs compose any grid — `rimz agents 'claude,codex+term'` opens a Claude column beside a stacked Codex and shell — while `[agents.profiles]` and `[agents.teams]` let named teams bind roles such as `planner` and `coder` to agent variants.
 
 `rimz agents claude "take one approach" --worktree` and a second `rimz agents claude "take another approach" --worktree` launch parallel attempts, each in its own fresh worktree ([agent-control reference](../reference/cli/agents.md#agents)).
 

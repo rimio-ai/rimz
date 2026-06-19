@@ -34,7 +34,8 @@ mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
 pub use agents::{
-    AgentsConfig, CommandsConfig, LayoutsConfig, Profile, ProfilesConfig, TabPlacement,
+    AgentsConfig, CommandsConfig, Profile, ProfilesConfig, RoleBinding, TabPlacement, Team,
+    TeamsConfig,
 };
 pub use animation::{
     AnimationColor, AnimationEffect, AnimationFrames, AnimationSpec, AnimationSpeed,
@@ -80,7 +81,7 @@ pub enum ConfigErr {
         source: toml::de::Error,
     },
     #[error(
-        "per-machine config at {path} uses [tab]; rename it to [agents] with [agents.profiles], [agents.commands], and [agents.layouts]"
+        "per-machine config at {path} uses [tab]; rename it to [agents] with [agents.profiles], [agents.commands], and [agents.teams]"
     )]
     LegacyTab { path: PathBuf },
     #[error(
@@ -175,10 +176,11 @@ impl MachineConfig {
         })?;
         let config_dir = path.parent().unwrap_or_else(|| Path::new("."));
         crate::agents_spec::resolve_profile_prompt_paths(&mut config.agents.profiles, config_dir);
+        crate::agents_spec::resolve_team_prompt_paths(&mut config.agents.teams, config_dir);
         crate::agents_spec::validate_config(
             &config.agents.profiles,
             &config.agents.commands,
-            &config.agents.layouts,
+            &config.agents.teams,
         )
         .map_err(|source| ConfigErr::Agents {
             path: path.to_path_buf(),
