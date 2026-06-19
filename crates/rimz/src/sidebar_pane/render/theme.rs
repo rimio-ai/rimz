@@ -163,10 +163,6 @@ impl Palette {
         Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
     }
 
-    pub(crate) fn resolve_fixed(theme: &ThemeConfig, depth: ColorDepth) -> Palette {
-        Self::resolve_with_raw(theme, depth, raw_palette_for_theme(theme))
-    }
-
     fn resolve_with_raw(theme: &ThemeConfig, depth: ColorDepth, raw: RawPalette) -> Palette {
         let tones = raw.derive_tones();
         let slot = |override_color: Option<ThemeColor>, builtin| {
@@ -359,7 +355,7 @@ pub(crate) struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Self {
             no_color: false,
@@ -401,7 +397,7 @@ impl Theme {
     /// unless they explicitly pass a sidebar config to [`Self::fixed_for_sidebar`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
-        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Self {
             no_color,
@@ -425,7 +421,7 @@ impl Theme {
         theme: &ThemeConfig,
     ) -> Self {
         let depth = theme.effective_theme_mode().depth(false);
-        let palette = Palette::resolve_fixed(theme, depth);
+        let palette = Palette::resolve(theme, depth);
         let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
         Self {
             no_color,

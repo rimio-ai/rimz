@@ -395,7 +395,7 @@ pub(crate) struct ResolvedAnimations {
 
 impl Default for ResolvedAnimations {
     fn default() -> Self {
-        let palette = Palette::resolve_fixed(
+        let palette = Palette::resolve(
             &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Indexed,
         );
@@ -665,7 +665,7 @@ mod tests {
     use crate::config::validate_single_cell;
 
     fn test_palette() -> Palette {
-        Palette::resolve_fixed(
+        Palette::resolve(
             &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Indexed,
         )
@@ -758,7 +758,7 @@ mod tests {
             "[working]\ncolor = \"clay\"\n\n[idle]\ncolor = \"good\"\n\n[success]\ncolor = 34\n",
         )
         .expect("config");
-        let palette = Palette::resolve_fixed(
+        let palette = Palette::resolve(
             &crate::config::ThemeConfig {
                 good: Some(crate::config::ThemeColor::Indexed(34)),
                 ..crate::config::ThemeConfig::default()
@@ -787,7 +787,7 @@ mod tests {
 
     #[test]
     fn default_clay_animations_follow_truecolor_depth() {
-        let palette = Palette::resolve_fixed(
+        let palette = Palette::resolve(
             &crate::config::ThemeConfig::default(),
             crate::config::ColorDepth::Truecolor,
         );

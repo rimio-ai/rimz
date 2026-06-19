@@ -608,7 +608,7 @@ fn fold_machine_config_producing(
     // next turn boundary to repaint. The uniform driver then refreshes every
     // metered provider's idle account usage (codex included, while idle).
     refresh_codex_sessions(&snapshot, runtime);
-    refresh_account_usage(&snapshot, runtime, &accounts_config);
+    refresh_account_usage(&snapshot, runtime);
     // Opt-in: nudge a parked agent when its resume condition is due, so a turn
     // that stopped on a budget limit or overload picks itself back up while you
     // are away.

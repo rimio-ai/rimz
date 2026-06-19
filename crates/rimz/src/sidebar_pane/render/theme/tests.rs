@@ -33,7 +33,7 @@ fn default_const_matches_bundled_default() {
 
 #[test]
 fn default_indexed_palette_matches_expected_indices() {
-    let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
+    let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
     assert_eq!(
         indices(palette),
         [
@@ -57,7 +57,7 @@ fn default_indexed_palette_matches_expected_indices() {
 #[test]
 fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     let theme = Theme {
-        palette: Palette::resolve_fixed(
+        palette: Palette::resolve(
             &ThemeConfig {
                 good: Some(ThemeColor::Indexed(34)),
                 ..ThemeConfig::default()
@@ -79,7 +79,7 @@ fn palette_overrides_map_semantic_colors_without_remapping_brand_indices() {
     );
 
     let theme = Theme {
-        palette: Palette::resolve_fixed(
+        palette: Palette::resolve(
             &ThemeConfig {
                 caution: Some(ThemeColor::Indexed(214)),
                 ..ThemeConfig::default()
@@ -338,7 +338,7 @@ fn provider_brand_tone_uses_rgb_only_at_truecolor_depth() {
 fn money_tone_uses_fixed_dollar_green_at_active_depth() {
     let truecolor = Theme {
         depth: ColorDepth::Truecolor,
-        palette: Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Truecolor),
+        palette: Palette::resolve(&ThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
     let indexed = Theme::fixed(false);
@@ -371,7 +371,7 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
     }
 
     let themed = Theme {
-        palette: Palette::resolve_fixed(
+        palette: Palette::resolve(
             &ThemeConfig {
                 body: Some(ThemeColor::Indexed(252)),
                 ..ThemeConfig::default()
@@ -387,7 +387,7 @@ fn gray_ladder_is_plain_when_lit_and_a_dim_weight_under_no_color() {
 fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
     let truecolor = Theme {
         depth: ColorDepth::Truecolor,
-        palette: Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Truecolor),
+        palette: Palette::resolve(&ThemeConfig::default(), ColorDepth::Truecolor),
         ..Theme::default()
     };
     // The three shipped provider brands: clay, Codex blue, Pi green. Pi sits at
@@ -430,7 +430,7 @@ fn soft_brand_dims_every_built_in_brand_keeping_its_hue() {
 fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
     let theme = Theme {
         no_color: true,
-        palette: Palette::resolve_fixed(
+        palette: Palette::resolve(
             &ThemeConfig {
                 alarm: Some(ThemeColor::Indexed(196)),
                 ..ThemeConfig::default()
@@ -465,7 +465,7 @@ fn no_color_strips_colors_from_styles_and_chips_but_keeps_modifiers() {
 #[test]
 fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     let theme = |no_color, truecolor, glow| {
-        let palette = Palette::resolve_fixed(&ThemeConfig::default(), ColorDepth::Indexed);
+        let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
         let glyphs = GlyphSet::default();
         Theme {
             no_color,

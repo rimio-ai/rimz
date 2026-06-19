@@ -5,7 +5,7 @@ use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// Provider-account enrichment preferences.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AccountsConfig {
     /// Display-only monthly USD ceiling by provider kind. It scales the
@@ -97,14 +97,6 @@ impl Visitor<'_> for UsageLimitVisitor {
         Ok(UsageLimitUsd {
             cents: (value * 100.0).round() as u64,
         })
-    }
-}
-
-impl Default for AccountsConfig {
-    fn default() -> Self {
-        Self {
-            usage_limit_usd: BTreeMap::new(),
-        }
     }
 }
 
