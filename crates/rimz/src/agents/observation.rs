@@ -106,7 +106,7 @@ pub struct AgentLifecycleObservation {
 }
 
 impl AgentLifecycleObservation {
-    pub(crate) fn new(agent_id: Option<AgentSessionId>, signal: LifecycleSignal) -> Self {
+    pub fn new(agent_id: Option<AgentSessionId>, signal: LifecycleSignal) -> Self {
         Self {
             agent_id,
             agent_name: None,

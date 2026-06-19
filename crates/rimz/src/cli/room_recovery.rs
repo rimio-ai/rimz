@@ -4,9 +4,9 @@ fn ensure_clean_room(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
-    resume_panes: &[rimz::mux::ResumePane],
+    resume_tabs: &[rimz::mux::ResumeTab],
 ) -> Result<SessionHealth> {
-    let opts = match build_sidebar_opts(target, resume_panes.to_vec()) {
+    let opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(error = %err, "session health gate skipped; attaching as-is");
@@ -33,10 +33,10 @@ pub(super) fn gate_room_before_attach(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
-    resume_panes: &[rimz::mux::ResumePane],
+    resume_tabs: &[rimz::mux::ResumeTab],
 ) -> Result<()> {
-    if let SessionHealth::Stuck = ensure_clean_room(backend, target, daemon, resume_panes)? {
-        recover_stuck_room(backend, target, daemon, resume_panes)?;
+    if let SessionHealth::Stuck = ensure_clean_room(backend, target, daemon, resume_tabs)? {
+        recover_stuck_room(backend, target, daemon, resume_tabs)?;
     }
     Ok(())
 }
@@ -48,7 +48,7 @@ fn recover_stuck_room(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
-    resume_panes: &[rimz::mux::ResumePane],
+    resume_tabs: &[rimz::mux::ResumeTab],
 ) -> Result<()> {
     if !std::io::stdin().is_terminal() {
         return Err(ResetRequired {
@@ -68,7 +68,7 @@ fn recover_stuck_room(
     );
     let records = reset_room_records(target.workspace_id, target.session_name, false)?;
     print_reset_report(&report, Some(&records))?;
-    match ensure_clean_room(backend, target, daemon, resume_panes)? {
+    match ensure_clean_room(backend, target, daemon, resume_tabs)? {
         SessionHealth::Stuck => {
             anyhow::bail!("the room is still stuck after a reset; inspect with `rimz doctor`")
         }
@@ -89,18 +89,18 @@ fn confirm_reset(session: &str) -> Result<bool> {
 /// Rebuild and attach the room from scratch — the rebirth half of `rimz reset`,
 /// run after teardown so the session comes up clean and running.
 pub(crate) fn rebirth_room(path: PathBuf, globals: &GlobalFlags) -> Result<()> {
-    start(
-        StartArgs {
-            attach: AttachFlags::default(),
-            path,
-            // A reset fixes the room; the agents are ledger truth, so the rebirth
-            // still resumes them. `rimz reset --hard` clears the ledger resume
-            // seed before this rebirth; reset itself does not force one.
-            no_resume: false,
-            refresh_ms: None,
-        },
-        globals,
-    )
+    start(reset_rebirth_start_args(path), globals)
+}
+
+fn reset_rebirth_start_args(path: PathBuf) -> StartArgs {
+    StartArgs {
+        attach: AttachFlags::default(),
+        path,
+        // A manual reset is a deliberate fresh start. Ledger carryover stays
+        // available for audit, but it does not re-seed the reborn room.
+        no_resume: true,
+        refresh_ms: None,
+    }
 }
 
 /// Report what a teardown removed, to stderr (diagnostic, not stdout output).
@@ -233,3 +233,14 @@ impl std::fmt::Display for ResetRequired {
 }
 
 impl std::error::Error for ResetRequired {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_rebirth_disables_resume() {
+        let args = reset_rebirth_start_args(PathBuf::from("/tmp/rimz-reset"));
+        assert!(args.no_resume);
+    }
+}

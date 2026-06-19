@@ -21,7 +21,7 @@ fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundView
             rimz_bin: stub.to_path_buf(),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
+            resume_tabs: Vec::new(),
             refresh_ms: None,
         },
     }
@@ -91,7 +91,7 @@ fn open_sidebar_with_a_daemon_leads_with_the_daemon_tab() {
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
+                resume_tabs: Vec::new(),
                 refresh_ms: None,
             },
             Some(&daemon),

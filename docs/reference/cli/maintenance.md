@@ -97,7 +97,7 @@ rimz gc [--older-than <DURATION>]
 
 `--no-start` stops after teardown and prints the rerun hint instead of rebuilding. Use it when a script wants a clean stop boundary.
 
-`--hard` archives the current room records without seeding prior agents on rebirth. A reset without `--hard` keeps the agent carryover so the reborn room can resume remembered agents.
+`--hard` also removes the agent carryover. A reset without `--hard` keeps carryover for history and audit, but the rebuilt room still starts empty.
 
 `gc` removes stale runtime state older than `--older-than`, abandons pending feed items whose owner process has exited, abandons queued messages for missing agent sessions, repairs a corrupt event-log tail when needed, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed and have no live user pane inside them.
 

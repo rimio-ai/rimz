@@ -15,13 +15,14 @@ pub const DEFAULT_OVERLOAD_BACKOFF_SECS: &[u64] = &[60, 120, 180];
 /// leaves the row parked.
 pub const DEFAULT_OVERLOAD_MAX_RETRIES: u32 = 10;
 
-/// Resume behavior, in two tenses. On a session *rebirth* — reboot, multiplexer
-/// crash, or a Rimz-initiated rebirth of a stuck room — Rimz re-seeds the prior
-/// agents from the durable rollup so the room comes up where the user left off
-/// instead of empty. While the room is *live*, opt-in auto-continue picks a
-/// parked agent's turn back up after a rate-limit window resets or an overloaded
-/// retry backoff elapses. Backend-neutral product behavior the cli and producer
-/// read directly, not a multiplexer preference.
+/// Resume behavior, in two tenses. On an involuntary session *rebirth* —
+/// reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room —
+/// Rimz re-seeds the prior agents from the durable rollup so the room comes up
+/// where the user left off instead of empty; manual `rimz reset` starts fresh.
+/// While the room is *live*, opt-in auto-continue picks a parked agent's turn
+/// back up after a rate-limit window resets or an overloaded retry backoff
+/// elapses. Backend-neutral product behavior the cli and producer read
+/// directly, not a multiplexer preference.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ResumeConfig {

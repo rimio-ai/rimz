@@ -39,7 +39,7 @@ fn open_tab_rejects_an_empty_layout() {
         rimz_bin: PathBuf::from("/bin/true"),
         replace_existing: false,
         config: crate::config::MultiplexerConfig::default(),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     let tab = |columns: Vec<Vec<PaneCmd>>| TabOptions {

@@ -3,10 +3,6 @@ use super::*;
 use crate::cli::{open_ledger, worktree};
 
 pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
-    if args.worktree_path.is_some() {
-        reset_cleanup_signal_flag();
-        install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
-    }
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving the agent launch workspace")?;
     let run_context = run_exec_context(&args, &workspace)?;
@@ -55,6 +51,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             }
         }
     }
+    reset_cleanup_signal_flag();
+    reset_term_signal_flag();
+    install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&rimz_env);
@@ -89,10 +88,15 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if args.close_pane_on_exit
-        && let Some(context) = run_context.as_ref()
-    {
-        close_own_pane(globals, &context.session_name);
+    if should_record_end_trace(&args, term_signal_received()) {
+        record_own_agent_end_trace(&workspace, &args);
+    }
+    if args.close_pane_on_exit {
+        let session_name = run_context
+            .as_ref()
+            .map(|context| context.session_name.as_str())
+            .unwrap_or(&workspace.session_name);
+        close_own_pane(globals, session_name);
     }
     std::process::exit(outcome.status.code().unwrap_or(1));
 }
@@ -103,6 +107,10 @@ pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
         && args.worktree_path.is_none()
         && !args.exit_on_run_completion
         && !args.close_pane_on_exit
+}
+
+pub(super) fn should_record_end_trace(args: &ExecArgs, term_seen: bool) -> bool {
+    !args.exit_on_run_completion && !term_seen
 }
 
 #[cfg(unix)]
@@ -333,6 +341,73 @@ fn record_launch_failed(
     }
 }
 
+fn record_own_agent_end_trace(workspace: &rimz::ResolvedWorkspace, args: &ExecArgs) {
+    match resolve_own_agent_end_trace(workspace, args) {
+        Ok(Some((kind, agent_id))) => append_agent_end_trace(workspace, kind, agent_id),
+        Ok(None) => tracing::debug!("agent exit produced no pane binding to tombstone"),
+        Err(err) => tracing::debug!(
+            error = %err,
+            "could not resolve agent exit tombstone",
+        ),
+    }
+}
+
+fn resolve_own_agent_end_trace(
+    workspace: &rimz::ResolvedWorkspace,
+    args: &ExecArgs,
+) -> Result<Option<(AgentKind, AgentSessionId)>> {
+    if let Some(pane_id) = rimz::mux::ambient_pane_id() {
+        let ledger = open_ledger(workspace).context("opening ledger for agent exit tombstone")?;
+        let projection = ledger
+            .runtime_projection(rimz::RuntimeScope::Audit)
+            .context("reading audit projection for agent exit tombstone")?;
+        let pane = rimz::feed::PaneRef::from_id(pane_id);
+        if let Some(agent) =
+            rimz::ledger::snapshot::stamped_agent_for_pane(&pane, &projection.agents)
+            && !agent.agent_id.is_empty()
+        {
+            return Ok(Some((agent.kind.clone(), agent.agent_id.clone())));
+        }
+    }
+    Ok(args.resume.as_ref().map(|session_id| {
+        (
+            AgentKind::new_unchecked(args.kind.clone()),
+            AgentSessionId::from(session_id.as_str()),
+        )
+    }))
+}
+
+fn append_agent_end_trace(
+    workspace: &rimz::ResolvedWorkspace,
+    kind: AgentKind,
+    agent_id: AgentSessionId,
+) {
+    let appended = (|| -> Result<()> {
+        let ledger = open_ledger(workspace).context("opening ledger for agent exit tombstone")?;
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            rimz::agents::LifecycleSignal::Ended,
+        );
+        let event = rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            kind.as_str(),
+            "rimz.agent-ended",
+            &observation,
+        );
+        ledger.append_event(&event)?;
+        Ok(())
+    })();
+    if let Err(err) = appended {
+        tracing::warn!(
+            kind = %kind,
+            agent_id = %agent_id,
+            error = %err,
+            "could not record agent exit tombstone",
+        );
+    }
+}
+
 fn launch_is_still_provisional(
     workspace: &rimz::ResolvedWorkspace,
     identity: &LaunchIdentity,
@@ -461,12 +536,24 @@ fn reset_cleanup_signal_flag() {
     cleanup_signal_flag().store(false, Ordering::SeqCst);
 }
 
+fn reset_term_signal_flag() {
+    term_signal_flag().store(false, Ordering::SeqCst);
+}
+
 fn cleanup_signal_received() -> bool {
     cleanup_signal_flag().load(Ordering::SeqCst)
 }
 
+fn term_signal_received() -> bool {
+    term_signal_flag().load(Ordering::SeqCst)
+}
+
 fn cleanup_signal_flag() -> &'static Arc<AtomicBool> {
     CLEANUP_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
+}
+
+fn term_signal_flag() -> &'static Arc<AtomicBool> {
+    TERM_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
 #[cfg(unix)]
@@ -476,6 +563,7 @@ fn install_cleanup_signal_handlers() -> Result<()> {
     for signal in [SIGHUP, SIGTERM] {
         signal_hook::flag::register(signal, cleanup_signal_flag().clone())?;
     }
+    signal_hook::flag::register(SIGTERM, term_signal_flag().clone())?;
     Ok(())
 }
 

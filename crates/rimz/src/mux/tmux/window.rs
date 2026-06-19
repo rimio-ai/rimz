@@ -115,20 +115,20 @@ impl TmuxBackend {
         }
     }
 
-    /// Re-seed the reborn session's prior agents, one window each, born
-    /// `sidebar | agent` via the `after-new-window` hook. Idempotent on the
-    /// window name so a re-run (a heal that re-adds the sidebar) never doubles an
-    /// agent window; the freshest agent (the first in the plan) is selected so
-    /// attach lands on it, mirroring the Zellij layout's focus. Best-effort:
-    /// a failed window is logged and skipped — the room is still usable.
+    /// Re-seed the reborn session's prior agents, one `#channel` window per
+    /// worktree, born `sidebar | agents…` via the `after-new-window` hook.
+    /// Idempotent on the window name so a re-run (a heal that re-adds the
+    /// sidebar) never doubles a channel window; the freshest channel (the first
+    /// in the plan) is selected so attach lands on it, mirroring the Zellij
+    /// layout's focus. Best-effort: a failed window is logged and skipped — the
+    /// room is still usable.
     pub(super) fn seed_resume_windows(&self, opts: &SidebarPaneOptions) {
-        if opts.resume_panes.is_empty() {
+        if opts.resume_tabs.is_empty() {
             return;
         }
-        // One `list-windows` probe covers every pane's idempotency check —
-        // this replaces a probe fork per resumed agent. A failed probe means
-        // re-seeding cannot be made idempotent, so every agent is left out
-        // (the same degradation the per-agent probe had, once instead of N).
+        // One `list-windows` probe covers every tab's idempotency check. A
+        // failed probe means re-seeding cannot be made idempotent, so every
+        // channel is left out.
         let existing = match self.window_names(&opts.session_name) {
             Ok(names) => names,
             Err(err) => {
@@ -141,15 +141,28 @@ impl TmuxBackend {
                 return;
             }
         };
+        let mut seeded = existing
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>();
         let mut focus_window: Option<String> = None;
-        for pane in &opts.resume_panes {
-            if existing.iter().any(|window| window == &pane.label) {
+        for tab in &opts.resume_tabs {
+            if !seeded.insert(tab.label.clone()) {
                 continue; // already seeded by an earlier birth
             }
+            let Some(first) = tab.panes.first() else {
+                tracing::warn!(
+                    session = %opts.session_name,
+                    tab = %tab.label,
+                    tags.operation = "tmux.resume.empty_tab",
+                    "resume: channel tab has no panes; leaving it out",
+                );
+                continue;
+            };
             // `-d` keeps the user on the working window; `-P -F` prints the new
-            // window id so we can land focus on the freshest agent without the
-            // `session:name` colon ambiguity a label can carry. The agent argv
-            // follows directly, run via execvp (no shell), so it needs no quoting.
+            // window id so we can land focus on the freshest channel without
+            // the `session:name` colon ambiguity a label can carry. The agent
+            // argv follows directly, run via execvp (no shell), so it needs no
+            // quoting.
             let launched = self
                 .cmd()
                 .args([
@@ -161,25 +174,57 @@ impl TmuxBackend {
                     "-t".to_owned(),
                     opts.session_name.clone(),
                     "-n".to_owned(),
-                    pane.label.clone(),
+                    tab.label.clone(),
                     "-c".to_owned(),
-                    pane.cwd.to_string_lossy().into_owned(),
+                    tab.cwd.to_string_lossy().into_owned(),
                 ])
-                .args(pane.command.clone())
+                .args(first.clone())
                 .run();
             match launched {
                 Ok(output) => {
                     let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
                     if focus_window.is_none() && !window_id.is_empty() {
-                        focus_window = Some(window_id);
+                        focus_window = Some(window_id.clone());
                     }
+                    for argv in tab.panes.iter().skip(1) {
+                        if let Err(err) = self
+                            .cmd()
+                            .args([
+                                "split-window".to_owned(),
+                                "-d".to_owned(),
+                                "-t".to_owned(),
+                                window_id.clone(),
+                                "-c".to_owned(),
+                                tab.cwd.to_string_lossy().into_owned(),
+                            ])
+                            .args(argv.clone())
+                            .run()
+                        {
+                            tracing::warn!(
+                                session = %opts.session_name,
+                                tab = %tab.label,
+                                tags.operation = "tmux.resume.split_window",
+                                error = &err as &dyn std::error::Error,
+                                "resume: launching an agent pane failed; leaving it out",
+                            );
+                        }
+                    }
+                    let _ = self
+                        .cmd()
+                        .args([
+                            "select-layout".to_owned(),
+                            "-t".to_owned(),
+                            window_id,
+                            "tiled".to_owned(),
+                        ])
+                        .run();
                 }
                 Err(err) => tracing::warn!(
                     session = %opts.session_name,
-                    agent = %pane.label,
+                    tab = %tab.label,
                     tags.operation = "tmux.resume.launch_window",
                     error = &err as &dyn std::error::Error,
-                    "resume: launching the agent window failed; leaving it out",
+                    "resume: launching the channel window failed; leaving it out",
                 ),
             }
         }

@@ -78,6 +78,20 @@ fn plan_from_rollup(h: &Harness) -> rimz::resume::ResumePlan {
     )
 }
 
+fn resume_argv(kind: &str, id: &str, name: &str) -> Vec<String> {
+    vec![
+        "/bin/rimz".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        kind.to_owned(),
+        "--resume".to_owned(),
+        id.to_owned(),
+        "--close-pane-on-exit".to_owned(),
+        "--agent-name".to_owned(),
+        name.to_owned(),
+    ]
+}
+
 fn lifecycle(
     h: &Harness,
     kind: &str,
@@ -105,24 +119,15 @@ fn resumes_an_agent_stamped_in_the_real_rollup() {
 
     let plan = plan_from_rollup(&h);
     assert_eq!(
-        plan.panes.len(),
+        plan.tabs.len(),
         1,
         "the stamped agent is resumed from the real fold"
     );
     assert_eq!(
-        plan.panes[0].command,
-        vec![
-            "/bin/rimz",
-            "agents",
-            "exec",
-            "claude",
-            "--resume",
-            "sess-claude",
-            "--agent-name",
-            "warm-drift"
-        ]
+        plan.tabs[0].panes,
+        vec![resume_argv("claude", "sess-claude", "warm-drift")]
     );
-    assert_eq!(plan.panes[0].label, "claude:feature");
+    assert_eq!(plan.tabs[0].label, "#feature");
 }
 
 #[test]
@@ -143,10 +148,12 @@ fn two_same_kind_agents_in_one_worktree_each_resume_their_own_pane() {
 
     let plan = plan_from_rollup(&h);
     assert_eq!(
-        plan.panes.len(),
-        2,
-        "two concurrent same-kind agents on distinct panes both resume"
+        plan.tabs.len(),
+        1,
+        "two concurrent same-kind agents in one worktree share one resume tab"
     );
+    assert_eq!(plan.tabs[0].label, "#main");
+    assert_eq!(plan.tabs[0].panes.len(), 2);
 }
 
 #[test]
@@ -166,7 +173,7 @@ fn a_relaunch_reusing_one_pane_resumes_only_the_newest() {
 
     let plan = plan_from_rollup(&h);
     assert_eq!(
-        plan.panes.len(),
+        plan.tabs.len(),
         1,
         "a relaunch sharing a pane resumes a single seed, not a ghost double"
     );
@@ -231,18 +238,79 @@ fn a_stamp_after_the_rebirth_boundary_survives_and_is_resumed() {
         .expect("append post-boundary");
 
     let plan = plan_from_rollup(&h);
-    assert_eq!(plan.panes.len(), 1, "the post-boundary re-stamp is resumed");
+    assert_eq!(plan.tabs.len(), 1, "the post-boundary re-stamp is resumed");
     assert_eq!(
-        plan.panes[0].command,
-        vec![
-            "/bin/rimz",
-            "agents",
-            "exec",
-            "codex",
-            "--resume",
-            "sess-codex",
-            "--agent-name",
-            "calm-harbor"
-        ]
+        plan.tabs[0].panes,
+        vec![resume_argv("codex", "sess-codex", "calm-harbor")]
+    );
+}
+
+#[test]
+fn an_agent_ended_trace_is_not_resumed() {
+    let h = Harness::new();
+    let obs = registered(
+        "sess-claude",
+        "warm-drift",
+        "terminal_3",
+        "/repo/work",
+        "work",
+    );
+    h.ledger
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
+        .expect("append start");
+    let ended = AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Ended);
+    h.ledger
+        .append_event(&lifecycle(&h, "claude", "rimz.agent-ended", &ended))
+        .expect("append ended");
+
+    let plan = plan_from_rollup(&h);
+    assert!(
+        plan.is_empty(),
+        "ended agents leave the resume candidate set"
+    );
+}
+
+#[test]
+fn missing_worktree_candidate_is_tombstoned_not_reported() {
+    let h = Harness::new();
+    let obs = registered(
+        "sess-claude",
+        "warm-drift",
+        "terminal_3",
+        "/repo/gone",
+        "gone",
+    );
+    h.ledger
+        .append_event(&lifecycle(&h, "claude", "SessionStart", &obs))
+        .expect("append start");
+    let projection = h
+        .ledger
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+    let plan = rimz::resume::plan_resume(
+        &projection.agents,
+        &ended,
+        rimz::resume::DEFAULT_RESUME_MAX,
+        |_| false,
+        Path::new("/bin/rimz"),
+    );
+    assert!(plan.tabs.is_empty());
+    assert!(plan.skipped.is_empty());
+    assert_eq!(
+        plan.tombstone,
+        vec![(
+            rimz::ids::AgentKind::new_unchecked("claude"),
+            "sess-claude".into()
+        )]
+    );
+
+    let ended = AgentLifecycleObservation::new(Some("sess-claude".into()), LifecycleSignal::Ended);
+    h.ledger
+        .append_event(&lifecycle(&h, "claude", "rimz.worktree-gone", &ended))
+        .expect("append tombstone");
+    assert!(
+        plan_from_rollup(&h).is_empty(),
+        "a follow-up plan sees the durable tombstone"
     );
 }

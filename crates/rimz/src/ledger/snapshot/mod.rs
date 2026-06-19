@@ -37,7 +37,7 @@ pub(crate) use fold::{
 pub(crate) use panes::{
     LazyAgentPairingDiagnostic, LazyAgentPairingResult, compute_lazy_agent_pairings,
 };
-pub use panes::{SidebarOwnView, pane_start_allows_bind};
+pub use panes::{SidebarOwnView, pane_start_allows_bind, stamped_agent_for_pane};
 pub use process::{command_agent_kind, pane_agent_kind};
 pub(crate) use process::{
     command_agent_kind_with_comm, command_is_sidebar_chrome, process_is_active, program_label,

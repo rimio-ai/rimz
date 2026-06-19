@@ -126,7 +126,7 @@ mod tests {
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
+            resume_tabs: Vec::new(),
             refresh_ms,
         }
     }

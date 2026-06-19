@@ -137,6 +137,7 @@ fn pane_command_stamps_agent_role() {
             "agents",
             "exec",
             "claude",
+            "--close-pane-on-exit",
             "--agent-profile",
             "claude-planner",
             "--agent-role",
@@ -652,6 +653,17 @@ fn exec_keeps_the_wrapper_when_it_owns_run_or_cleanup_work() {
     args.exit_on_run_completion = true;
     args.close_pane_on_exit = true;
     assert!(!should_exec_agent_directly(&args));
+}
+
+#[test]
+fn exec_records_end_trace_for_interactive_non_term_exits() {
+    let args = bare_exec_args();
+    assert!(should_record_end_trace(&args, false));
+    assert!(!should_record_end_trace(&args, true));
+
+    let mut args = bare_exec_args();
+    args.exit_on_run_completion = true;
+    assert!(!should_record_end_trace(&args, false));
 }
 
 #[tokio::test(flavor = "current_thread")]

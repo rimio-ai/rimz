@@ -102,7 +102,7 @@ impl SidebarHarness {
             rimz_bin: PathBuf::from("rimz"),
             replace_existing: false,
             config: rimz::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
+            resume_tabs: Vec::new(),
             refresh_ms: None,
         }
     }

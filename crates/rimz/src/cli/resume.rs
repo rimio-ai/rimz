@@ -19,6 +19,7 @@ pub(super) fn session_is_healthy_live(backend: &dyn MuxBackend, session_name: &s
 /// an empty plan (the birth comes up bare) and never blocks the launch.
 pub(super) fn plan_room_resume(
     workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
     resume_cfg: &rimz::config::ResumeConfig,
     disabled: bool,
 ) -> rimz::resume::ResumePlan {
@@ -32,13 +33,15 @@ pub(super) fn plan_room_resume(
         let projection = ledger.runtime_projection(rimz::RuntimeScope::Audit)?;
         let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
         let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
-        Ok(rimz::resume::plan_resume(
+        let plan = rimz::resume::plan_resume(
             &projection.agents,
             &ended,
             resume_cfg.max,
             |path| path.is_dir(),
             &rimz_bin,
-        ))
+        );
+        record_worktree_gone_tombstones(&ledger, workspace_id, session_name, &plan);
+        Ok(plan)
     })();
     planned.unwrap_or_else(|err| {
         tracing::warn!(workspace = %workspace_id, error = %err, "resume planning skipped");
@@ -72,18 +75,19 @@ pub(super) fn record_rebirth_boundary(workspace_id: &rimz::WorkspaceId, session_
 /// could not — to stderr, so the attach command on stdout stays clean for
 /// scripting. Silent when there is nothing to resume.
 pub(super) fn report_resume(plan: &rimz::resume::ResumePlan) {
-    if !plan.panes.is_empty() {
+    if !plan.tabs.is_empty() {
+        let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
         let labels = plan
-            .panes
+            .tabs
             .iter()
-            .map(|pane| pane.label.as_str())
+            .map(|tab| tab.label.as_str())
             .collect::<Vec<_>>()
             .join(", ");
         let _ = writeln!(
             std::io::stderr(),
             "resumed {} agent{}: {labels}",
-            plan.panes.len(),
-            if plan.panes.len() == 1 { "" } else { "s" },
+            agents,
+            if agents == 1 { "" } else { "s" },
         );
     }
     if !plan.skipped.is_empty() {
@@ -100,7 +104,36 @@ pub(super) fn report_resume(plan: &rimz::resume::ResumePlan) {
 fn resume_skip_reason(reason: rimz::resume::ResumeSkipReason) -> &'static str {
     match reason {
         rimz::resume::ResumeSkipReason::NoResumeSupport => "no resume CLI",
-        rimz::resume::ResumeSkipReason::WorktreeMissing => "worktree gone",
         rimz::resume::ResumeSkipReason::OverCap => "over the resume cap",
+    }
+}
+
+fn record_worktree_gone_tombstones(
+    ledger: &Ledger,
+    workspace_id: &rimz::WorkspaceId,
+    session_name: &str,
+    plan: &rimz::resume::ResumePlan,
+) {
+    for (kind, agent_id) in &plan.tombstone {
+        let observation = rimz::agents::AgentLifecycleObservation::new(
+            Some(agent_id.clone()),
+            rimz::agents::LifecycleSignal::Ended,
+        );
+        let event = rimz::EventEnvelope::agent_lifecycle(
+            workspace_id.clone(),
+            session_name,
+            kind.as_str(),
+            "rimz.worktree-gone",
+            &observation,
+        );
+        if let Err(err) = ledger.append_event(&event) {
+            tracing::warn!(
+                workspace = %workspace_id,
+                kind = %kind,
+                agent_id = %agent_id,
+                error = %err,
+                "resume: could not tombstone missing-worktree agent",
+            );
+        }
     }
 }

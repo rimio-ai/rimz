@@ -245,7 +245,7 @@ fn reconcile_live(
         rimz_bin: rimz_bin.to_path_buf(),
         replace_existing: false,
         config: MultiplexerConfig::from(machine_config),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     let mut liveness = liveness;

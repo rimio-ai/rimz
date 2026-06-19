@@ -45,7 +45,7 @@ pub(super) fn build_daemon_view(
             rimz_bin,
             replace_existing: false,
             config: mux_config.clone(),
-            resume_panes: Vec::new(),
+            resume_tabs: Vec::new(),
             refresh_ms: room.refresh_ms,
         },
     })

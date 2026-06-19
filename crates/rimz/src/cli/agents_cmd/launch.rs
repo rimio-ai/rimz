@@ -719,6 +719,9 @@ pub(super) fn pane_cmd_with_name(
                 "exec".to_owned(),
                 kind.as_str().to_owned(),
             ];
+            if !cleanup_worktree {
+                argv.push("--close-pane-on-exit".to_owned());
+            }
             if let Some(profile) = profile {
                 argv.extend(["--agent-profile".to_owned(), profile.clone()]);
             }

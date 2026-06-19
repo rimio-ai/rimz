@@ -282,6 +282,7 @@ impl AttachedTmuxClient {
         // command captures the spawning env; scrub the session vars so the
         // attach lands on the test's private socket alone.
         cmd.scrub_session_env();
+        cmd.env("TERM", "xterm-256color");
         cmd.args([
             "-S",
             socket.to_str().expect("utf8 socket"),
@@ -486,7 +487,7 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
                 rimz_bin: stub,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
+                resume_tabs: Vec::new(),
                 refresh_ms: None,
             },
             None,
@@ -628,7 +629,7 @@ fn open_background_view_creates_named_window_idempotently() {
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     // Install the `after-new-window` sidebar hook the way `rimz start` does
@@ -696,9 +697,9 @@ fn open_background_view_creates_named_window_idempotently() {
 }
 
 /// `open_sidebar` re-seeds the reborn session's prior agents: each
-/// `resume_panes` entry becomes its own window, born `sidebar | agent` via the
-/// `after-new-window` hook. Idempotent on the window name, so a re-run never
-/// doubles an agent window.
+/// `resume_tabs` entry becomes its own `#channel` window, born
+/// `sidebar | agents…` via the `after-new-window` hook. Idempotent on the
+/// window name, so a re-run never doubles an agent window.
 #[test]
 fn open_sidebar_seeds_resume_windows_idempotently() {
     require_tmux!();
@@ -718,10 +719,13 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         config: rimz::config::MultiplexerConfig::default(),
         // A harmless stand-in for the agent CLIs (`claude`/`codex` aren't on a CI
         // PATH); the seeding contract is the window, not what runs in it.
-        resume_panes: vec![rimz::mux::ResumePane {
-            command: vec!["sleep".to_owned(), "120".to_owned()],
+        resume_tabs: vec![rimz::mux::ResumeTab {
+            label: "#feature".to_owned(),
             cwd: std::env::temp_dir(),
-            label: "claude:feature".to_owned(),
+            panes: vec![
+                vec!["sleep".to_owned(), "120".to_owned()],
+                vec!["sleep".to_owned(), "120".to_owned()],
+            ],
         }],
         refresh_ms: None,
     };
@@ -734,11 +738,11 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         server
             .window_names("rimz-resume")
             .iter()
-            .any(|name| name == "claude:feature"),
-        "expected a resumed agent window, got {:?}",
+            .any(|name| name == "#feature"),
+        "expected a resumed channel window, got {:?}",
         server.window_names("rimz-resume"),
     );
-    // Born `sidebar | agent`: the hook-docked sidebar beside the agent pane.
+    // Born `sidebar | agents…`: the hook-docked sidebar beside the agent panes.
     let agent_panes = server
         .backend
         .list_panes(rimz::mux::PaneListOptions {
@@ -748,11 +752,11 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
         .expect("list panes")
         .panes
         .into_iter()
-        .filter(|pane| pane.view_name.as_deref() == Some("claude:feature"))
+        .filter(|pane| pane.view_name.as_deref() == Some("#feature"))
         .count();
     assert_eq!(
-        agent_panes, 2,
-        "resumed window should be born sidebar | agent"
+        agent_panes, 3,
+        "resumed window should be born sidebar | agents"
     );
 
     // A re-run finds the window already present and seeds nothing new.
@@ -763,7 +767,7 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     let resumed = server
         .window_names("rimz-resume")
         .into_iter()
-        .filter(|name| name == "claude:feature")
+        .filter(|name| name == "#feature")
         .count();
     assert_eq!(
         resumed, 1,
@@ -810,7 +814,7 @@ fn open_tab_builds_multi_column_layout() {
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     // Installs the `after-new-window` hook so the new tab is born with a sidebar.
@@ -934,7 +938,7 @@ fn open_tab_single_pane_layout_docks_one_work_pane_beside_the_sidebar() {
         rimz_bin: stub,
         replace_existing: false,
         config: rimz::config::MultiplexerConfig::default(),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
     server
@@ -1237,7 +1241,7 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
                 rimz_bin,
                 replace_existing: false,
                 config: rimz::config::MultiplexerConfig::default(),
-                resume_panes: Vec::new(),
+                resume_tabs: Vec::new(),
                 refresh_ms: None,
             },
             // No live sidebars known: the orphan's pane is unclaimed, so it closes.

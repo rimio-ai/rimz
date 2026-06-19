@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use super::SIDEBAR_PANE_NAME;
 use crate::mux::{
-    BackgroundViewOptions, DaemonView, HostPane, MuxErr, PaneCmd, Result, ResumePane,
+    BackgroundViewOptions, DaemonView, HostPane, MuxErr, PaneCmd, Result, ResumeTab,
     SidebarPaneOptions, TabOptions,
 };
 
@@ -142,10 +142,11 @@ pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String>
 /// The session-birth layout for a room that leads with a daemon view and/or
 /// re-seeds prior agents. Zellij can't reorder tabs or add command panes after
 /// birth, so the order and content are fixed here: the daemon tab
-/// (`sidebar | hosts…`, first, when present), then one tab per resumed agent
-/// (`sidebar | agent`), then the working tab (`sidebar | terminal`). Focus lands
-/// on the most-recently-active resumed agent when there is one, else on the
-/// working terminal — so attach drops the user straight onto a restored agent.
+/// (`sidebar | hosts…`, first, when present), then one `#channel` tab per
+/// resumed worktree (`sidebar | agents…`), then the working tab
+/// (`sidebar | terminal`). Focus lands on the most-recently-active resumed
+/// channel when there is one, else on the working terminal — so attach drops
+/// the user straight onto a restored agent.
 /// A `new_tab_template` — distinct from `default_tab_template`, applying only to
 /// tabs the user opens *later* — carries the `sidebar | terminal` shape so future
 /// tabs keep their sidebar and terminal focus without the `children`
@@ -155,7 +156,7 @@ pub(super) fn render_sidebar_layout(opts: &SidebarPaneOptions) -> Result<String>
 pub(super) fn render_session_layout(
     opts: &SidebarPaneOptions,
     daemon: Option<&DaemonView>,
-    resume: &[ResumePane],
+    resume: &[ResumeTab],
 ) -> Result<String> {
     // The explicit tabs instantiate on the detached background session at
     // birth; only the `new_tab_template` waits for an attached client.
@@ -190,12 +191,17 @@ pub(super) fn render_session_layout(
         None => String::new(),
     };
 
-    // One tab per resumed agent, focusing the first (most-recently-active).
+    // One tab per resumed channel, focusing the first (most-recently-active).
     let mut agent_tabs = String::new();
-    for (index, pane) in resume.iter().enumerate() {
-        let tab_name = kdl_string(&pane.label)?;
-        let agent_pane = render_command_pane(&pane.command, &pane.cwd, true, 16)?;
-        let body = render_sidebar_work_area(&sidebar, &agent_pane, 8);
+    for (index, tab) in resume.iter().enumerate() {
+        let tab_name = kdl_string(&tab.label)?;
+        let agent_panes = tab
+            .panes
+            .iter()
+            .enumerate()
+            .map(|(pane_index, argv)| render_command_pane(argv, &tab.cwd, pane_index == 0, 16))
+            .collect::<Result<String>>()?;
+        let body = render_sidebar_work_area(&sidebar, &agent_panes, 8);
         let focus_attr = if index == 0 { " focus=true" } else { "" };
         agent_tabs.push_str(&format!(
             r#"    tab name={tab_name}{focus_attr} {{
@@ -470,7 +476,7 @@ mod tests {
             rimz_bin: PathBuf::from("/usr/bin/rimz"),
             replace_existing: false,
             config: crate::config::MultiplexerConfig::default(),
-            resume_panes: Vec::new(),
+            resume_tabs: Vec::new(),
             refresh_ms,
         }
     }
@@ -497,11 +503,14 @@ mod tests {
         }
     }
 
-    fn resume_pane(label: &str, argv: &[&str], cwd: &str) -> ResumePane {
-        ResumePane {
-            command: argv.iter().map(|arg| arg.to_string()).collect(),
-            cwd: PathBuf::from(cwd),
+    fn resume_tab(label: &str, panes: &[&[&str]], cwd: &str) -> ResumeTab {
+        ResumeTab {
             label: label.to_owned(),
+            cwd: PathBuf::from(cwd),
+            panes: panes
+                .iter()
+                .map(|argv| argv.iter().map(|arg| arg.to_string()).collect())
+                .collect(),
         }
     }
 
@@ -693,27 +702,32 @@ mod tests {
     fn session_layout_seeds_resumed_agents_and_focuses_working_when_empty() {
         let opts = background_view_opts(vec![]).sidebar;
         let resume = vec![
-            resume_pane(
-                "claude:feature",
-                &["claude", "--resume", "sess-1"],
+            resume_tab(
+                "#feature",
+                &[
+                    &["claude", "--resume", "sess-1"],
+                    &["codex", "resume", "sess-2"],
+                ],
                 "/proj/feature",
             ),
-            resume_pane("codex:main", &["codex", "resume", "sess-2"], "/proj/main"),
+            resume_tab("#main", &[&["pi", "resume", "sess-3"]], "/proj/main"),
         ];
         let layout = render_session_layout(&opts, None, &resume).expect("render resume layout");
         assert!(layout.contains(r#"command "claude""#), "{layout}");
         assert!(layout.contains(r#"args "--resume" "sess-1""#), "{layout}");
         assert!(layout.contains(r#"command "codex""#), "{layout}");
         assert!(layout.contains(r#"args "resume" "sess-2""#), "{layout}");
+        assert!(layout.contains(r#"command "pi""#), "{layout}");
+        assert!(layout.contains(r#"args "resume" "sess-3""#), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/feature""#), "{layout}");
         assert!(layout.contains(r#"cwd="/proj/main""#), "{layout}");
         assert!(layout.contains("start_suspended false"), "{layout}");
         assert!(
-            layout.contains(r#"tab name="claude:feature" focus=true"#),
-            "the freshest resumed agent leads:\n{layout}",
+            layout.contains(r##"tab name="#feature" focus=true"##),
+            "the freshest resumed channel leads:\n{layout}",
         );
         assert!(
-            !layout.contains(r#"tab name="codex:main" focus=true"#),
+            !layout.contains(r##"tab name="#main" focus=true"##),
             "only the first resumed tab is focused:\n{layout}",
         );
         assert!(

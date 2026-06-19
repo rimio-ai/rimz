@@ -67,7 +67,7 @@ esac
         rimz_bin: std::path::PathBuf::from("rimz"),
         replace_existing: false,
         config: MultiplexerConfig::default(),
-        resume_panes: Vec::new(),
+        resume_tabs: Vec::new(),
         refresh_ms: None,
     };
 

@@ -1,17 +1,17 @@
-//! Resume-on-rebirth planning: turn the durable agent rollup into the panes a
+//! Resume-on-rebirth planning: turn the durable agent rollup into the tabs a
 //! reborn session re-seeds.
 //!
 //! When a multiplexer session dies — reboot, server crash, or a Rimz-initiated
 //! rebirth of a stuck room — the agents' processes are gone, but the ledger
 //! remembers them. This module reads that memory (the audit rollup, which keeps
 //! the dead-process agents the runtime projection would expel) and plans one
-//! resume pane per prior root agent, so the next birth comes up where the user
-//! left off instead of empty.
+//! `#channel` tab per worktree, with one resume pane per prior root agent, so
+//! the next birth comes up where the user left off instead of empty.
 //!
 //! Pure over its inputs: the caller supplies the rollup, the set of cleanly
 //! ended sessions, and a worktree-exists predicate, so every filtering rule is
 //! unit-tested without a multiplexer or the filesystem. The launcher
-//! ([`crate::mux::MuxBackend`]) seeds the resulting [`ResumePane`]s at birth and
+//! ([`crate::mux::MuxBackend`]) seeds the resulting [`ResumeTab`]s at birth and
 //! stays ignorant of agents and the ledger.
 
 use std::collections::{BTreeSet, HashSet};
@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use crate::agents::find_adapter;
 use crate::feed::AgentState;
 use crate::ids::{AgentKind, AgentSessionId, PaneId};
-use crate::mux::ResumePane;
+use crate::mux::ResumeTab;
 
 /// The default ceiling on agents auto-resumed into one reborn session, so a
 /// long-lived workspace cannot fork-bomb a fleet of agent processes on birth.
@@ -33,8 +33,6 @@ pub const DEFAULT_RESUME_MAX: usize = 8;
 pub enum ResumeSkipReason {
     /// The agent's kind has no resume CLI ([`crate::agents::AgentAdapter::resume_command`]).
     NoResumeSupport,
-    /// The agent's worktree no longer exists on disk, so its pane has nowhere to run.
-    WorktreeMissing,
     /// Dropped to stay within the resume cap.
     OverCap,
 }
@@ -49,18 +47,21 @@ pub struct ResumeSkip {
 /// What a reborn session should re-seed, and what it deliberately left out.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ResumePlan {
-    /// The panes to seed, most-recently-active first (the lead is the focus
-    /// target).
-    pub panes: Vec<ResumePane>,
+    /// The tabs to seed, ordered by their freshest pane activity (the lead is
+    /// the focus target). Panes inside each tab are freshest-first.
+    pub tabs: Vec<ResumeTab>,
     /// Candidates not resumed, each with its reason — the start report names them.
     pub skipped: Vec<ResumeSkip>,
+    /// Candidates whose worktree disappeared; the caller records these as
+    /// durable end traces so they leave the next resume candidate set.
+    pub tombstone: Vec<(AgentKind, AgentSessionId)>,
 }
 
 impl ResumePlan {
     /// Whether there is nothing to seed — the birth is exactly the bare working
     /// room.
     pub fn is_empty(&self) -> bool {
-        self.panes.is_empty()
+        self.tabs.is_empty()
     }
 }
 
@@ -83,7 +84,7 @@ impl ResumePlan {
 /// agent: a relaunch that re-used a pane id collapses to its newest stamp —
 /// the same rule the live sidebar binds by (`stamped_agent_for_pane`, in
 /// `ledger::snapshot::panes`) — so resume never doubles a pane, while two
-/// concurrent agents in one worktree (distinct panes) each keep their own.
+/// concurrent agents in one worktree (distinct panes) share one `#channel` tab.
 pub fn plan_resume(
     agents: &[AgentState],
     ended: &BTreeSet<(AgentKind, AgentSessionId)>,
@@ -139,10 +140,8 @@ pub fn plan_resume(
         let cwd = PathBuf::from(&worktree);
         let label = build_label(&agent.kind, agent.worktree_branch.as_deref(), &cwd);
         if !worktree_exists(&cwd) {
-            plan.skipped.push(ResumeSkip {
-                label,
-                reason: ResumeSkipReason::WorktreeMissing,
-            });
+            plan.tombstone
+                .push((agent.kind.clone(), agent.agent_id.clone()));
             continue;
         }
         let supports_resume = find_adapter(&agent.kind)
@@ -154,7 +153,8 @@ pub fn plan_resume(
             });
             continue;
         }
-        if plan.panes.len() >= max {
+        let seeded = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+        if seeded >= max {
             plan.skipped.push(ResumeSkip {
                 label,
                 reason: ResumeSkipReason::OverCap,
@@ -165,11 +165,16 @@ pub fn plan_resume(
         // directly: every agent launch funnels through `rimz agents exec`,
         // which applies trusted `[[agents]]` env and the adapter's launch
         // pins before spawning the resume argv.
-        plan.panes.push(ResumePane {
-            command: resume_command(rimz_bin, agent),
-            cwd,
-            label,
-        });
+        let command = resume_command(rimz_bin, agent);
+        if let Some(tab) = plan.tabs.iter_mut().find(|tab| tab.cwd == cwd) {
+            tab.panes.push(command);
+        } else {
+            plan.tabs.push(ResumeTab {
+                label: channel_label(agent.worktree_branch.as_deref(), &cwd),
+                cwd,
+                panes: vec![command],
+            });
+        }
     }
     plan
 }
@@ -182,6 +187,7 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
         agent.kind.as_str().to_owned(),
         "--resume".to_owned(),
         agent.agent_id.as_str().to_owned(),
+        "--close-pane-on-exit".to_owned(),
     ];
     if let Some(name) = agent.name.as_deref() {
         command.extend(["--agent-name".to_owned(), name.to_owned()]);
@@ -193,10 +199,16 @@ fn resume_command(rimz_bin: &Path, agent: &AgentState) -> Vec<String> {
 }
 
 /// A short, view-safe label for a resumed agent: `kind:branch`, falling back to
-/// the worktree directory name, then `kind:agent`. Doubles as the Zellij tab /
-/// tmux window name and the seed's idempotency key.
+/// the worktree directory name, then `kind:agent`. Used in skip reports and
+/// legacy per-agent tab title fallbacks.
 pub fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String {
-    let short = branch
+    format!("{kind}:{}", channel_short(branch, worktree))
+}
+
+/// A short, view-safe channel name: branch, then worktree directory, then
+/// `agent`.
+pub fn channel_short(branch: Option<&str>, worktree: &Path) -> String {
+    branch
         .filter(|branch| !branch.is_empty())
         .map(ToOwned::to_owned)
         .or_else(|| {
@@ -204,8 +216,12 @@ pub fn build_label(kind: &str, branch: Option<&str>, worktree: &Path) -> String 
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
         })
-        .unwrap_or_else(|| "agent".to_owned());
-    format!("{kind}:{short}")
+        .unwrap_or_else(|| "agent".to_owned())
+}
+
+/// A channel tab label, matching live worktree-launch tabs.
+pub fn channel_label(branch: Option<&str>, worktree: &Path) -> String {
+    format!("#{}", channel_short(branch, worktree))
 }
 
 #[cfg(test)]
@@ -308,6 +324,18 @@ mod tests {
         BTreeSet::new()
     }
 
+    fn exec_resume(kind: &str, id: &str) -> Vec<String> {
+        vec![
+            "/bin/rimz".to_owned(),
+            "agents".to_owned(),
+            "exec".to_owned(),
+            kind.to_owned(),
+            "--resume".to_owned(),
+            id.to_owned(),
+            "--close-pane-on-exit".to_owned(),
+        ]
+    }
+
     #[test]
     fn resumes_root_agents_most_recent_first() {
         let agents = vec![
@@ -328,21 +356,15 @@ mod tests {
             Path::new("/bin/rimz"),
         );
         assert!(plan.skipped.is_empty());
-        assert_eq!(plan.panes.len(), 2);
+        assert_eq!(plan.tabs.len(), 2);
         // Most-recently-active leads (the focus target).
-        assert_eq!(plan.panes[0].label, "claude:feature-migration");
+        assert_eq!(plan.tabs[0].label, "#feature-migration");
         // Wrapper argv: the pane funnels through `rimz agents exec`, which
         // injects launch env before spawning the adapter's resume argv.
-        assert_eq!(
-            plan.panes[0].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
-        );
-        assert_eq!(plan.panes[0].cwd, PathBuf::from("/code/qe-feature"));
-        assert_eq!(plan.panes[1].label, "codex:main");
-        assert_eq!(
-            plan.panes[1].command,
-            vec!["/bin/rimz", "agents", "exec", "codex", "--resume", "c1"]
-        );
+        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
+        assert_eq!(plan.tabs[0].cwd, PathBuf::from("/code/qe-feature"));
+        assert_eq!(plan.tabs[1].label, "#main");
+        assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
     }
 
     #[test]
@@ -361,6 +383,7 @@ mod tests {
                 "claude",
                 "--resume",
                 "a1",
+                "--close-pane-on-exit",
                 "--agent-name",
                 "swift-otter",
                 "--agent-profile",
@@ -419,7 +442,7 @@ mod tests {
     }
 
     #[test]
-    fn reports_a_missing_worktree() {
+    fn tombstones_a_missing_worktree() {
         let agents = vec![agent("claude", "a1", "/code/gone", Some("dead-branch"), 1)];
         let plan = plan_resume(
             &agents,
@@ -428,13 +451,11 @@ mod tests {
             |_| false,
             Path::new("/bin/rimz"),
         );
-        assert!(plan.panes.is_empty());
+        assert!(plan.tabs.is_empty());
+        assert!(plan.skipped.is_empty());
         assert_eq!(
-            plan.skipped,
-            vec![ResumeSkip {
-                label: "claude:dead-branch".to_owned(),
-                reason: ResumeSkipReason::WorktreeMissing,
-            }]
+            plan.tombstone,
+            vec![(AgentKind::new_unchecked("claude"), "a1".into())]
         );
     }
 
@@ -467,11 +488,8 @@ mod tests {
             |_| true,
             Path::new("/bin/rimz"),
         );
-        assert_eq!(plan.panes.len(), 1);
-        assert_eq!(
-            plan.panes[0].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "new"]
-        );
+        assert_eq!(plan.tabs.len(), 1);
+        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
         // The superseded relaunch is dropped silently, not reported as a skip.
         assert!(plan.skipped.is_empty());
     }
@@ -506,11 +524,8 @@ mod tests {
             |_| true,
             Path::new("/bin/rimz"),
         );
-        assert_eq!(plan.panes.len(), 1);
-        assert_eq!(
-            plan.panes[0].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "new"]
-        );
+        assert_eq!(plan.tabs.len(), 1);
+        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "new")]);
     }
 
     #[test]
@@ -526,7 +541,9 @@ mod tests {
             |_| true,
             Path::new("/bin/rimz"),
         );
-        assert_eq!(plan.panes.len(), 2);
+        assert_eq!(plan.tabs.len(), 1);
+        assert_eq!(plan.tabs[0].label, "#main");
+        assert_eq!(plan.tabs[0].panes.len(), 2);
     }
 
     #[test]
@@ -559,15 +576,11 @@ mod tests {
             |_| true,
             Path::new("/bin/rimz"),
         );
-        assert_eq!(plan.panes.len(), 2);
-        // Freshest leads (the focus target); both sessions are resumed.
+        assert_eq!(plan.tabs.len(), 1);
+        // Freshest leads within the tab; both sessions are resumed.
         assert_eq!(
-            plan.panes[0].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
-        );
-        assert_eq!(
-            plan.panes[1].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a2"]
+            plan.tabs[0].panes,
+            vec![exec_resume("claude", "a1"), exec_resume("claude", "a2")]
         );
     }
 
@@ -578,12 +591,9 @@ mod tests {
             agent("claude", "a2", "/code/wt-2", Some("b2"), 10),
         ];
         let plan = plan_resume(&agents, &no_ended(), 1, |_| true, Path::new("/bin/rimz"));
-        assert_eq!(plan.panes.len(), 1);
+        assert_eq!(plan.tabs.len(), 1);
         // The freshest survives the cap; the older overflows.
-        assert_eq!(
-            plan.panes[0].command,
-            vec!["/bin/rimz", "agents", "exec", "claude", "--resume", "a1"]
-        );
+        assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
         assert_eq!(plan.skipped.len(), 1);
         assert_eq!(plan.skipped[0].reason, ResumeSkipReason::OverCap);
     }
@@ -611,6 +621,10 @@ mod tests {
             |_| true,
             Path::new("/bin/rimz"),
         );
-        assert_eq!(plan.panes[0].label, "codex:query-engine");
+        assert_eq!(plan.tabs[0].label, "#query-engine");
+        assert_eq!(
+            build_label("codex", None, Path::new("/code/query-engine")),
+            "codex:query-engine"
+        );
     }
 }

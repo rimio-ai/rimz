@@ -703,13 +703,14 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     } else {
         let plan = plan_room_resume(
             &workspace.workspace_id,
+            &workspace.session_name,
             &machine_config.resume,
             args.no_resume,
         );
         record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
         plan
     };
-    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes);
+    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs);
     maybe_launch_remote_control(
         backend.as_ref(),
         &workspace,
@@ -719,8 +720,8 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // Authoritative gate before the resurrecting `attach --create`: rebirth an
     // inspected stale/serialized room, and on one that cannot self-heal or
     // cannot be inspected, offer a reset (interactive) or fail fast with the fix
-    // (non-interactive). The reborn room is seeded with the resume panes.
-    gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.panes)?;
+    // (non-interactive). The reborn room is seeded with the resume tabs.
+    gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs)?;
     report_resume(&resume_plan);
     ensure_presence_plugin(
         backend.as_ref(),
@@ -836,7 +837,12 @@ fn attach_cwd(
     let resume_plan = if was_live {
         rimz::resume::ResumePlan::default()
     } else {
-        let plan = plan_room_resume(&workspace.workspace_id, &machine_config.resume, no_resume);
+        let plan = plan_room_resume(
+            &workspace.workspace_id,
+            &workspace.session_name,
+            &machine_config.resume,
+            no_resume,
+        );
         record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
         plan
     };
@@ -850,8 +856,8 @@ fn attach_cwd(
         detected_size,
         refresh_ms,
     };
-    launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
-    gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
+    launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.tabs);
+    gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.tabs)?;
     report_resume(&resume_plan);
     ensure_presence_plugin(
         backend.as_ref(),
@@ -902,8 +908,12 @@ fn attach_named(
             let resume_plan = if was_live {
                 rimz::resume::ResumePlan::default()
             } else {
-                let plan =
-                    plan_room_resume(&record.workspace_id, &machine_config.resume, no_resume);
+                let plan = plan_room_resume(
+                    &record.workspace_id,
+                    &record.session_name,
+                    &machine_config.resume,
+                    no_resume,
+                );
                 record_rebirth_boundary(&record.workspace_id, &record.session_name);
                 plan
             };
@@ -917,10 +927,10 @@ fn attach_named(
                 detected_size,
                 refresh_ms,
             };
-            launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.panes);
+            launch_sidebar_for_workspace(backend.as_ref(), &room, None, &resume_plan.tabs);
             // Only a session Rimz owns (a matching record) is force-reset; a bare
             // external session by this name is never torn down.
-            gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.panes)?;
+            gate_room_before_attach(backend.as_ref(), &room, None, &resume_plan.tabs)?;
             report_resume(&resume_plan);
             ensure_presence_plugin(
                 backend.as_ref(),
@@ -979,7 +989,7 @@ impl RoomTarget<'_> {
 
 fn build_sidebar_opts(
     target: &RoomTarget<'_>,
-    resume_panes: Vec<rimz::mux::ResumePane>,
+    resume_tabs: Vec<rimz::mux::ResumeTab>,
 ) -> Result<SidebarPaneOptions> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
     Ok(SidebarPaneOptions {
@@ -992,7 +1002,7 @@ fn build_sidebar_opts(
         rimz_bin,
         replace_existing: false,
         config: target.mux_config.clone(),
-        resume_panes,
+        resume_tabs,
         refresh_ms: target.refresh_ms,
     })
 }
@@ -1001,7 +1011,7 @@ fn launch_sidebar_for_workspace(
     backend: &dyn MuxBackend,
     target: &RoomTarget<'_>,
     daemon: Option<&DaemonView>,
-    resume_panes: &[rimz::mux::ResumePane],
+    resume_tabs: &[rimz::mux::ResumeTab],
 ) -> rimz::sidebar::SidebarLaunchOutcome {
     let runtime = match RuntimePaths::for_workspace(target.workspace_id.clone()) {
         Ok(runtime) => runtime,
@@ -1014,7 +1024,7 @@ fn launch_sidebar_for_workspace(
             return rimz::sidebar::SidebarLaunchOutcome::Failed;
         }
     };
-    let opts = match build_sidebar_opts(target, resume_panes.to_vec()) {
+    let opts = match build_sidebar_opts(target, resume_tabs.to_vec()) {
         Ok(opts) => opts,
         Err(err) => {
             tracing::warn!(

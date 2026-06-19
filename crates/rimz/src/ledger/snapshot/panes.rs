@@ -123,7 +123,7 @@ pub(super) fn agent_for_pane<'a>(
 
 /// The root agent stamped on this exact live pane id, regardless of whether
 /// another row already bound it.
-pub(super) fn stamped_agent_for_pane<'a>(
+pub fn stamped_agent_for_pane<'a>(
     pane: &PaneRef,
     agents: &'a [AgentState],
 ) -> Option<&'a AgentState> {
