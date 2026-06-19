@@ -1,31 +1,31 @@
-//! `rimz autoping` — schedule window-priming pings on this machine's OS scheduler.
+//! `rimz loop` — schedule supervised agent turns on this machine's OS scheduler.
 //!
-//! Provider budget windows are sliding: the clock starts on the first billable
-//! token. A scheduled ping consumes one token at a time you choose, so the window
-//! starts (and resets) on your schedule. Rimz keeps no daemon — the OS scheduler
-//! keeps time and fires `rimz autoping run <name>`, which drives a lowest-effort
-//! `ping`→`pong` supervised turn through the existing agent harness, bringing the
-//! room up if it is closed and clearing the transient card when it finishes.
+//! Rimz keeps no daemon: the OS scheduler keeps time and fires
+//! `rimz loop run <name>`, which drives one configured prompt through the
+//! existing supervised `agents -p` seam. A `<kind>-ping` virtual cell is the
+//! window-priming special case and gets the budget-window skip optimization.
 //!
 //! This handler parses, edits the per-machine config, and installs/uninstalls the
 //! OS scheduler entry with a consent preview. The pure schedule parsing and
-//! artifact rendering live in [`rimz::autoping`]; the supervised-run path is the
+//! artifact rendering live in [`rimz::schedule`]; the supervised-run path is the
 //! shared `agents -p` seam.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::{Args, Subcommand, ValueEnum};
-use jiff::Timestamp;
+use jiff::{Timestamp, Zoned};
 use toml_edit::{DocumentMut, Item, Table, value};
 
 use rimz::agents::{find_adapter, hook_trust_fix};
-use rimz::autoping::{self, Schedule, Scheduler};
-use rimz::config::{MachineConfig, ScheduleEntry};
+use rimz::agents_spec::{self, Cell, LayoutSpec};
+use rimz::config::{MachineConfig, TaskEntry};
 use rimz::ledger::atomic::write_bytes_atomically;
 use rimz::ledger::paths::{RuntimePaths, config_home, runtime_home};
+use rimz::schedule::{self, Schedule, Scheduler};
 use rimz::sidebar::enrich::shortest_window_running;
 use rimz::workspace::WorkspaceResolver;
 
@@ -33,24 +33,24 @@ use super::GlobalFlags;
 use super::render as ui;
 
 #[derive(Debug, Args)]
-pub struct AutoPingArgs {
+pub struct LoopArgs {
     #[command(subcommand)]
-    command: AutoPingSubcmd,
+    command: LoopSubcmd,
 }
 
 #[derive(Debug, Subcommand)]
-enum AutoPingSubcmd {
-    /// Add or replace a schedule in the per-machine config.
-    Add(AddArgs),
-    /// Remove a schedule from the config (and uninstall its scheduler entry).
+enum LoopSubcmd {
+    /// Add or replace a task in the per-machine config.
+    Add(Box<AddArgs>),
+    /// Remove a task from the config (and uninstall its scheduler entry).
     Remove(NameArgs),
-    /// List configured schedules and whether each is installed.
+    /// List configured tasks and whether each is installed.
     List,
-    /// Install configured schedules onto this machine's OS scheduler.
+    /// Install configured tasks onto this machine's OS scheduler.
     Install(SelectArgs),
     /// Remove installed scheduler entries, keeping the config.
     Uninstall(SelectArgs),
-    /// Run one schedule's ping now. The OS scheduler calls this; humans rarely do.
+    /// Run one task now. The OS scheduler calls this; humans rarely do.
     #[command(hide = true)]
     Run(NameArgs),
 }
@@ -59,24 +59,51 @@ enum AutoPingSubcmd {
 struct AddArgs {
     /// Schedule name (letters, digits, `-`, `_`).
     name: String,
-    /// Agent kind to prime; must support a ping turn (e.g. `claude`, `codex`).
+    /// Single agent cell to drive: a kind, profile, or virtual cell.
     #[arg(long)]
-    kind: String,
+    spec: String,
+    /// Inline prompt for the scheduled turn.
+    #[arg(long, conflicts_with = "prompt_file")]
+    prompt: Option<String>,
+    /// File whose contents are used as the scheduled prompt.
+    #[arg(long = "prompt-file", value_name = "PATH")]
+    prompt_file: Option<PathBuf>,
     /// Daily firing time, 24-hour `HH:MM` local wall-clock.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     at: Option<String>,
     /// Day mask: `daily`, `weekdays`, `weekends`, a range `mon-fri`, or a list `mon,wed,fri`.
-    #[arg(long)]
+    #[arg(long, conflicts_with_all = ["every", "cron", "in_after"])]
     days: Option<String>,
+    /// Interval such as `15m`, `2h`, or `1d`.
+    #[arg(long, conflicts_with_all = ["at", "days", "cron"])]
+    every: Option<String>,
     /// Raw 5-field cron expression (cron backend only; replaces `--at`/`--days`).
-    #[arg(long, conflicts_with_all = ["at", "days"])]
+    #[arg(long, conflicts_with_all = ["at", "days", "every", "in_after"])]
     cron: Option<String>,
-    /// Project root whose room hosts the ping; resolved to an absolute root.
+    /// Remove the task after a successful scheduler fire.
+    #[arg(long)]
+    once: bool,
+    /// Fire once after a duration such as `30m`; resolves to a concrete local time.
+    #[arg(long = "in", value_name = "DUR", conflicts_with_all = ["at", "days", "every", "cron"])]
+    in_after: Option<String>,
+    /// Project root whose room hosts the task; resolved to an absolute root.
     #[arg(long, default_value = ".")]
     root: PathBuf,
-    /// Optional channel/worktree to host the transient ping pane.
+    /// Optional channel/worktree to host the transient task pane.
     #[arg(long)]
     worktree: Option<String>,
+    /// Permission posture for the supervised turn: auto, ask, or yolo.
+    #[arg(long)]
+    mode: Option<String>,
+    /// Reasoning effort for the launched agent.
+    #[arg(long)]
+    effort: Option<String>,
+    /// Replace the agent's base system prompt with a file's contents.
+    #[arg(long = "system-prompt-file", value_name = "PATH")]
+    system_prompt_file: Option<PathBuf>,
+    /// Wait cap for the supervised turn.
+    #[arg(long)]
+    timeout: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -86,7 +113,7 @@ struct NameArgs {
 
 #[derive(Debug, Args)]
 struct SelectArgs {
-    /// One schedule name; omit to act on every configured schedule.
+    /// One task name; omit to act on every configured task.
     name: Option<String>,
     /// Which OS scheduler to target.
     #[arg(long, value_enum, default_value_t = SchedulerArg::Auto)]
@@ -103,48 +130,76 @@ enum SchedulerArg {
     Cron,
 }
 
-pub fn run(args: AutoPingArgs, globals: &GlobalFlags) -> Result<()> {
+pub fn run(args: LoopArgs, globals: &GlobalFlags) -> Result<()> {
     match args.command {
-        AutoPingSubcmd::Add(args) => add(args),
-        AutoPingSubcmd::Remove(args) => remove(&args.name),
-        AutoPingSubcmd::List => list(),
-        AutoPingSubcmd::Install(args) => install(args),
-        AutoPingSubcmd::Uninstall(args) => uninstall(args),
-        AutoPingSubcmd::Run(args) => run_one(&args.name, globals),
+        LoopSubcmd::Add(args) => add(*args),
+        LoopSubcmd::Remove(args) => remove(&args.name),
+        LoopSubcmd::List => list(),
+        LoopSubcmd::Install(args) => install(args),
+        LoopSubcmd::Uninstall(args) => uninstall(args),
+        LoopSubcmd::Run(args) => run_one(&args.name, globals),
     }
 }
 
 // ---- add / remove -----------------------------------------------------------
 
 fn add(args: AddArgs) -> Result<()> {
-    autoping::validate_name(&args.name)?;
-    ping_kind_supported(&args.kind)?;
+    schedule::validate_name(&args.name)?;
     let workspace = WorkspaceResolver::resolve(&args.root, None)
         .with_context(|| format!("resolving project root at {}", args.root.display()))?;
-    let entry = ScheduleEntry {
-        kind: args.kind,
+    let resolved = resolve_task_spec(&args.spec, &workspace)?;
+    let is_ping = agents_spec::virtual_ping_shape(&args.spec);
+    if is_ping {
+        ping_kind_supported(&resolved.kind)?;
+    }
+    let mode = args.mode.as_deref().map(parse_mode).transpose()?;
+    if let Some(timeout) = args.timeout.as_deref() {
+        parse_task_timeout(timeout).map_err(|err| anyhow::anyhow!("{err}"))?;
+    }
+    let (at, days, once) = resolve_add_timing(&args)?;
+    let prompt = if is_ping && args.prompt.is_none() && args.prompt_file.is_none() {
+        Some("ping".to_owned())
+    } else {
+        args.prompt
+    };
+    if prompt.is_none() && args.prompt_file.is_none() {
+        bail!(
+            "loop task `{}` needs a prompt; pass --prompt or --prompt-file",
+            args.name
+        );
+    }
+    let entry = TaskEntry {
+        spec: args.spec,
+        prompt,
+        prompt_file: args.prompt_file,
         root: workspace.project_root,
         worktree: args.worktree,
-        at: args.at,
-        days: args.days,
+        mode,
+        effort: args.effort,
+        system_prompt_file: args.system_prompt_file,
+        timeout: args.timeout,
+        at,
+        days,
+        every: args.every,
         cron: args.cron,
+        once,
     };
     // Validate the firing time before writing, so a bad `--at`/`--days` fails here.
-    let schedule = autoping::parse_schedule(&args.name, &entry)?;
+    let parsed = schedule::parse_schedule(&args.name, &entry)?;
     config_set_entry(&args.name, &entry)?;
 
     let mut out = ui::out();
     writeln!(
         out,
-        "added autoping `{}`: {} {} in {}",
+        "added loop task `{}`: {} {} in {}",
         args.name,
-        entry.kind,
-        schedule.describe(),
+        entry.spec,
+        parsed.describe(),
         entry.root.display()
     )?;
     writeln!(
         out,
-        "install it on this machine's scheduler with `rimz autoping install {}`",
+        "install it on this machine's scheduler with `rimz loop install {}`",
         args.name
     )?;
     Ok(())
@@ -159,9 +214,9 @@ fn remove(name: &str) -> Result<()> {
     let removed = config_remove(name)?;
     let mut out = ui::out();
     if removed {
-        writeln!(out, "removed autoping `{name}`")?;
+        writeln!(out, "removed loop task `{name}`")?;
     } else {
-        writeln!(out, "no autoping schedule named `{name}`")?;
+        writeln!(out, "no loop task named `{name}`")?;
     }
     Ok(())
 }
@@ -169,13 +224,10 @@ fn remove(name: &str) -> Result<()> {
 // ---- list -------------------------------------------------------------------
 
 fn list() -> Result<()> {
-    let schedules = load_schedules()?;
+    let tasks = load_tasks()?;
     let mut out = ui::out();
-    if schedules.is_empty() {
-        writeln!(
-            out,
-            "no autoping schedules; add one with `rimz autoping add`"
-        )?;
+    if tasks.is_empty() {
+        writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
         return Ok(());
     }
     let scheduler = detect_scheduler(SchedulerArg::Auto).ok();
@@ -183,8 +235,8 @@ fn list() -> Result<()> {
         Some(scheduler) => writeln!(out, "scheduler: {}", scheduler.label())?,
         None => writeln!(out, "scheduler: none available (systemd --user or crontab)")?,
     }
-    for (name, entry) in &schedules {
-        let when = match autoping::parse_schedule(name, entry) {
+    for (name, entry) in &tasks {
+        let when = match schedule::parse_schedule(name, entry) {
             Ok(schedule) => schedule.describe(),
             Err(err) => format!("invalid: {err}"),
         };
@@ -194,7 +246,7 @@ fn list() -> Result<()> {
         writeln!(
             out,
             "  {name:<16} {} {when:<24} [{state}] {}",
-            entry.kind,
+            entry.spec,
             entry.root.display()
         )?;
     }
@@ -209,7 +261,7 @@ fn status_label(scheduler: Scheduler, name: &str) -> String {
         },
         Scheduler::Cron => {
             let crontab = read_crontab().unwrap_or_default();
-            if autoping::list_crontab(&crontab)
+            if schedule::list_crontab(&crontab)
                 .iter()
                 .any(|entry| entry.name == name)
             {
@@ -232,27 +284,24 @@ fn install(args: SelectArgs) -> Result<()> {
     let mut plans = Vec::new();
     for name in &names {
         let entry = load_entry(name)?;
-        preflight_kind(&entry.kind)?;
-        let schedule = autoping::parse_schedule(name, &entry)?;
+        preflight_task(&entry)?;
+        let parsed = schedule::parse_schedule(name, &entry)?;
         plans.push((
             name.clone(),
             entry,
-            build_plan(scheduler, name, &schedule, &rimz_bin, &shell)?,
+            build_plan(scheduler, name, &parsed.schedule, &rimz_bin, &shell)?,
         ));
     }
 
     preview_plans(scheduler, &plans)?;
-    if !confirmed(
-        args.yes,
-        &format!("install {} autoping schedule(s)", plans.len()),
-    )? {
+    if !confirmed(args.yes, &format!("install {} loop task(s)", plans.len()))? {
         bail!("aborted");
     }
 
     let mut out = ui::out();
     for (name, _entry, plan) in &plans {
         apply_install(name, plan)?;
-        writeln!(out, "installed autoping `{name}` ({})", scheduler.label())?;
+        writeln!(out, "installed loop `{name}` ({})", scheduler.label())?;
     }
     if scheduler == Scheduler::SystemdUser && linger_disabled() {
         writeln!(
@@ -270,12 +319,12 @@ fn uninstall(args: SelectArgs) -> Result<()> {
     let mut out = ui::out();
     for name in &names {
         uninstall_one(scheduler, name)?;
-        writeln!(out, "uninstalled autoping `{name}` ({})", scheduler.label())?;
+        writeln!(out, "uninstalled loop `{name}` ({})", scheduler.label())?;
     }
     Ok(())
 }
 
-/// The rendered scheduler artifacts for one schedule, ready to preview and write.
+/// The rendered scheduler artifacts for one task, ready to preview and write.
 enum Plan {
     Systemd {
         service_path: PathBuf,
@@ -295,34 +344,34 @@ fn build_plan(
     rimz_bin: &Path,
     shell: &str,
 ) -> Result<Plan> {
-    let command = autoping::run_command(rimz_bin, shell, name);
+    let command = schedule::run_command(rimz_bin, shell, name);
     match scheduler {
         Scheduler::SystemdUser => {
-            let oncalendar = autoping::systemd_oncalendar(name, schedule)?;
-            let description = autoping::description(name);
+            let trigger = schedule::systemd_trigger(name, schedule)?;
+            let description = schedule::description(name);
             let dir = config_home().join("systemd").join("user");
-            let stem = autoping::unit_stem(name);
+            let stem = schedule::unit_stem(name);
             Ok(Plan::Systemd {
                 service_path: dir.join(format!("{stem}.service")),
                 timer_path: dir.join(format!("{stem}.timer")),
-                service: autoping::render_systemd_service(&command, &description),
-                timer: autoping::render_systemd_timer(&oncalendar, &description),
+                service: schedule::render_systemd_service(&command, &description),
+                timer: schedule::render_systemd_timer(&trigger, &description),
             })
         }
         Scheduler::Cron => Ok(Plan::Cron {
-            line: format!("{} {}", autoping::cron_expr(schedule), command),
+            line: format!("{} {}", schedule::cron_expr(schedule), command),
         }),
     }
 }
 
-fn preview_plans(scheduler: Scheduler, plans: &[(String, ScheduleEntry, Plan)]) -> Result<()> {
+fn preview_plans(scheduler: Scheduler, plans: &[(String, TaskEntry, Plan)]) -> Result<()> {
     let mut out = ui::out();
-    writeln!(out, "rimz autoping install ({})", scheduler.label())?;
+    writeln!(out, "rimz loop install ({})", scheduler.label())?;
     for (name, entry, plan) in plans {
         writeln!(
             out,
             "\n  {name}: {} in {}",
-            entry.kind,
+            entry.spec,
             entry.root.display()
         )?;
         match plan {
@@ -339,7 +388,7 @@ fn preview_plans(scheduler: Scheduler, plans: &[(String, ScheduleEntry, Plan)]) 
                 writeln!(
                     out,
                     "  then: systemctl --user enable --now {}.timer",
-                    autoping::unit_stem(name)
+                    schedule::unit_stem(name)
                 )?;
             }
             Plan::Cron { line } => {
@@ -348,7 +397,7 @@ fn preview_plans(scheduler: Scheduler, plans: &[(String, ScheduleEntry, Plan)]) 
             }
         }
     }
-    writeln!(out, "\nundo with `rimz autoping uninstall`")?;
+    writeln!(out, "\nundo with `rimz loop uninstall`")?;
     Ok(())
 }
 
@@ -375,13 +424,13 @@ fn apply_install(name: &str, plan: &Plan) -> Result<()> {
             run_systemctl(&[
                 "enable",
                 "--now",
-                &format!("{}.timer", autoping::unit_stem(name)),
+                &format!("{}.timer", schedule::unit_stem(name)),
             ])?;
             Ok(())
         }
         Plan::Cron { line } => {
             let existing = read_crontab().unwrap_or_default();
-            let updated = autoping::splice_crontab(&existing, name, line);
+            let updated = schedule::splice_crontab(&existing, name, line);
             write_crontab(&updated)
         }
     }
@@ -390,10 +439,10 @@ fn apply_install(name: &str, plan: &Plan) -> Result<()> {
 fn uninstall_one(scheduler: Scheduler, name: &str) -> Result<()> {
     match scheduler {
         Scheduler::SystemdUser => {
-            let stem = autoping::unit_stem(name);
+            let stem = schedule::unit_stem(name);
             let dir = config_home().join("systemd").join("user");
             let timer = dir.join(format!("{stem}.timer"));
-            // Only disable a timer that exists, so removing an absent schedule
+            // Only disable a timer that exists, so removing an absent task
             // stays quiet instead of erroring on a missing unit.
             if timer.exists() {
                 run_systemctl_quiet(&["disable", "--now", &format!("{stem}.timer")]);
@@ -414,7 +463,7 @@ fn uninstall_one(scheduler: Scheduler, name: &str) -> Result<()> {
         }
         Scheduler::Cron => {
             let existing = read_crontab().unwrap_or_default();
-            let updated = autoping::reclaim_crontab(&existing, Some(name));
+            let updated = schedule::reclaim_crontab(&existing, Some(name));
             if updated != existing {
                 write_crontab(&updated)?;
             }
@@ -427,37 +476,128 @@ fn uninstall_one(scheduler: Scheduler, name: &str) -> Result<()> {
 
 fn run_one(name: &str, globals: &GlobalFlags) -> Result<()> {
     let entry = load_entry(name)?;
-    preflight_kind(&entry.kind)?;
+    let resolved = preflight_task(&entry)?;
+    let is_ping = agents_spec::virtual_ping_shape(&entry.spec);
     // The ping exists only to *start* a sliding budget window, so a token spent on
     // one already counting down buys nothing — skip it. Best-effort: an unknown or
     // cold reading falls through to the ping.
-    if window_already_running(&entry)? {
+    if is_ping && window_already_running(&entry, &resolved.kind)? {
         writeln!(
             ui::out(),
-            "autoping `{name}`: {} budget window already active; skipping ping",
-            entry.kind
+            "loop `{name}`: {} budget window already active; skipping ping",
+            resolved.kind
         )?;
         return Ok(());
     }
+    let prompt = resolve_task_prompt(&entry)?;
+    let system_prompt_file = entry
+        .system_prompt_file
+        .as_deref()
+        .map(resolve_config_path)
+        .transpose()?;
+    let (ask, yolo) = mode_flags(entry.mode.as_deref())?;
+    let timeout = entry
+        .timeout
+        .as_deref()
+        .map(parse_task_timeout)
+        .transpose()
+        .map_err(|err| anyhow::anyhow!("{err}"))?;
     let mut run_globals = globals.clone();
     run_globals.root = Some(entry.root.clone());
+    if entry.once {
+        // `run_blocking_task` exits with the supervised run status, so one-shot
+        // cleanup happens before the terminal run. A one-shot removed pre-fire
+        // that then fails to launch is not retried.
+        if let Ok(scheduler) = detect_scheduler(SchedulerArg::Auto) {
+            let _ = uninstall_one(scheduler, name);
+        }
+        let _ = config_remove(name)?;
+    }
+    let effort = entry
+        .effort
+        .clone()
+        .or_else(|| is_ping.then(|| "low".to_owned()));
+    let args = super::agents_cmd::AgentsArgs::for_task(super::agents_cmd::TaskRunArgs {
+        spec: entry.spec,
+        prompt: Some(prompt),
+        worktree: entry.worktree,
+        ask,
+        yolo,
+        effort,
+        system_prompt_file,
+        timeout,
+    });
     // Drives the shared `agents -p` path; on success it exits with the run's
     // status code and never returns here.
-    super::agents_cmd::run_blocking_ping(&entry.kind, entry.worktree.as_deref(), &run_globals)
+    super::agents_cmd::run_blocking_task(args, &run_globals)
 }
 
 /// Whether `entry`'s provider already has a budget window counting down, read
 /// from the shared account-scoped cache. The window state is account-scoped, so
 /// the entry's workspace is resolved only to reach this user's runtime root.
-fn window_already_running(entry: &ScheduleEntry) -> Result<bool> {
+fn window_already_running(entry: &TaskEntry, kind: &str) -> Result<bool> {
     let workspace = WorkspaceResolver::resolve(&entry.root, None)
         .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
     let runtime = RuntimePaths::under(workspace.workspace_id, &runtime_home())
         .context("locating the runtime root")?;
-    Ok(shortest_window_running(&runtime, &entry.kind, Timestamp::now()) == Some(true))
+    Ok(shortest_window_running(&runtime, kind, Timestamp::now()) == Some(true))
 }
 
 // ---- shared helpers ---------------------------------------------------------
+
+struct ResolvedTaskSpec {
+    kind: String,
+}
+
+fn resolve_task_spec(spec: &str, workspace: &rimz::ResolvedWorkspace) -> Result<ResolvedTaskSpec> {
+    let machine_config = super::machine_config()?;
+    let profiles = rimz::config::effective::effective_profiles(
+        &machine_config.agents.profiles,
+        &workspace.project_root,
+        &config_home(),
+    )?;
+    let teams = rimz::config::effective::effective_teams(
+        &machine_config.agents.teams,
+        &workspace.project_root,
+        &config_home(),
+    )?;
+    let layout = match agents_spec::resolve_spec(
+        Some(spec),
+        &profiles,
+        &machine_config.agents.commands,
+        &teams,
+    ) {
+        Ok(layout) => layout,
+        Err(err @ agents_spec::LayoutErr::UnknownTeam { .. })
+        | Err(err @ agents_spec::LayoutErr::UnknownCell { .. }) => {
+            rimz::config::effective::block_untrusted_profile_reference(
+                Some(spec),
+                &profiles,
+                &machine_config.agents.commands,
+                &teams,
+                &workspace.project_root,
+                &config_home(),
+            )?;
+            return Err(err.into());
+        }
+        Err(err) => return Err(err.into()),
+    };
+    single_agent_cell(spec, &layout)
+}
+
+fn single_agent_cell(spec: &str, layout: &LayoutSpec) -> Result<ResolvedTaskSpec> {
+    let cell_count: usize = layout.columns.iter().map(|column| column.rows.len()).sum();
+    if cell_count != 1 {
+        bail!("loop task `{spec}` must resolve to one agent; use a kind, profile, or virtual cell");
+    }
+    let cell = &layout.columns[0].rows[0];
+    let Cell::Agent { kind, .. } = cell else {
+        bail!("loop task `{spec}` must resolve to one agent; command cells are not supported");
+    };
+    Ok(ResolvedTaskSpec {
+        kind: kind.as_str().to_owned(),
+    })
+}
 
 /// Validate that a kind can be pinged at all — enforced at add time, before the
 /// hooks/trust preconditions a fired ping needs.
@@ -470,16 +610,25 @@ fn ping_kind_supported(kind: &str) -> Result<()> {
     Ok(())
 }
 
-/// The full precondition a fired ping needs: ping support, plus installed and
-/// trusted hooks so the supervised turn can report completion. Enforced at
-/// install time (fail fast, with the fix) and again at run time.
+/// The full precondition a fired task needs: installed and trusted hooks so the
+/// supervised turn can report completion. Ping tasks also require ping support.
+fn preflight_task(entry: &TaskEntry) -> Result<ResolvedTaskSpec> {
+    let workspace = WorkspaceResolver::resolve(&entry.root, None)
+        .with_context(|| format!("resolving project root at {}", entry.root.display()))?;
+    let resolved = resolve_task_spec(&entry.spec, &workspace)?;
+    if agents_spec::virtual_ping_shape(&entry.spec) {
+        ping_kind_supported(&resolved.kind)?;
+    }
+    preflight_kind(&resolved.kind)?;
+    Ok(resolved)
+}
+
 fn preflight_kind(kind: &str) -> Result<()> {
-    ping_kind_supported(kind)?;
     let adapter =
         find_adapter(kind).ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
     if !adapter.hooks_installed() {
         bail!(
-            "{kind} hooks are not installed, so the ping cannot report completion; run `rimz hooks install {kind}`"
+            "{kind} hooks are not installed, so the task cannot report completion; run `rimz hooks install {kind}`"
         );
     }
     let untrusted = adapter.untrusted_installed_hooks();
@@ -493,20 +642,19 @@ fn preflight_kind(kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_schedules() -> Result<std::collections::BTreeMap<String, ScheduleEntry>> {
+fn load_tasks() -> Result<std::collections::BTreeMap<String, TaskEntry>> {
     Ok(MachineConfig::load()
         .context("loading per-machine config")?
         .agents
         .r#loop
-        .autoping
-        .schedules
+        .tasks
         .0)
 }
 
-fn load_entry(name: &str) -> Result<ScheduleEntry> {
-    load_schedules()?.remove(name).ok_or_else(|| {
-        anyhow::anyhow!("no autoping schedule named `{name}`; see `rimz autoping list`")
-    })
+fn load_entry(name: &str) -> Result<TaskEntry> {
+    load_tasks()?
+        .remove(name)
+        .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))
 }
 
 fn selected_names(name: Option<&str>) -> Result<Vec<String>> {
@@ -517,9 +665,9 @@ fn selected_names(name: Option<&str>) -> Result<Vec<String>> {
             Ok(vec![name.to_owned()])
         }
         None => {
-            let names: Vec<String> = load_schedules()?.into_keys().collect();
+            let names: Vec<String> = load_tasks()?.into_keys().collect();
             if names.is_empty() {
-                bail!("no autoping schedules; add one with `rimz autoping add`");
+                bail!("no loop tasks; add one with `rimz loop add`");
             }
             Ok(names)
         }
@@ -536,9 +684,111 @@ fn confirmed(yes: bool, prompt: &str) -> Result<bool> {
     super::confirm(&format!("{prompt}?"))
 }
 
+fn resolve_add_timing(args: &AddArgs) -> Result<(Option<String>, Option<String>, bool)> {
+    let Some(raw) = args.in_after.as_deref() else {
+        return Ok((args.at.clone(), args.days.clone(), args.once));
+    };
+    let duration = parse_task_timeout(raw).map_err(|err| anyhow::anyhow!("{err}"))?;
+    if duration.is_zero() {
+        bail!("--in must be greater than zero");
+    }
+    let target = Zoned::now()
+        .checked_add(duration)
+        .context("resolving --in against the local clock")?;
+    Ok((
+        Some(format!("{:02}:{:02}", target.hour(), target.minute())),
+        Some(weekday_name(target.weekday()).to_owned()),
+        true,
+    ))
+}
+
+fn weekday_name(day: jiff::civil::Weekday) -> &'static str {
+    match day {
+        jiff::civil::Weekday::Monday => "mon",
+        jiff::civil::Weekday::Tuesday => "tue",
+        jiff::civil::Weekday::Wednesday => "wed",
+        jiff::civil::Weekday::Thursday => "thu",
+        jiff::civil::Weekday::Friday => "fri",
+        jiff::civil::Weekday::Saturday => "sat",
+        jiff::civil::Weekday::Sunday => "sun",
+    }
+}
+
+fn parse_mode(raw: &str) -> Result<String> {
+    match raw.trim() {
+        "auto" => Ok("auto".to_owned()),
+        "ask" => Ok("ask".to_owned()),
+        "yolo" => Ok("yolo".to_owned()),
+        other => bail!("unknown loop mode `{other}`; use auto, ask, or yolo"),
+    }
+}
+
+fn mode_flags(raw: Option<&str>) -> Result<(bool, bool)> {
+    match raw.map(str::trim).filter(|mode| !mode.is_empty()) {
+        None | Some("auto") => Ok((false, false)),
+        Some("ask") => Ok((true, false)),
+        Some("yolo") => Ok((false, true)),
+        Some(other) => bail!("unknown loop mode `{other}`; use auto, ask, or yolo"),
+    }
+}
+
+fn parse_task_timeout(raw: &str) -> std::result::Result<Duration, String> {
+    super::parse::parse_duration_units(raw, &[("s", 1), ("m", 60), ("h", 3600), ("d", 86_400)])
+}
+
+fn resolve_task_prompt(entry: &TaskEntry) -> Result<String> {
+    if let Some(prompt) = entry
+        .prompt
+        .as_deref()
+        .filter(|prompt| !prompt.trim().is_empty())
+    {
+        return Ok(prompt.to_owned());
+    }
+    let Some(path) = entry.prompt_file.as_deref() else {
+        bail!(
+            "loop task `{}` has no prompt; set `prompt` or `prompt-file`",
+            entry.spec
+        );
+    };
+    let path = resolve_config_path(path)?;
+    let prompt = std::fs::read_to_string(&path)
+        .with_context(|| format!("reading prompt-file `{}`", path.display()))?;
+    if prompt.trim().is_empty() {
+        bail!("prompt-file `{}` is empty", path.display());
+    }
+    Ok(prompt)
+}
+
+fn resolve_config_path(path: &Path) -> Result<PathBuf> {
+    let expanded = expand_tilde(path);
+    if expanded.is_absolute() {
+        return Ok(expanded);
+    }
+    let agents_path = MachineConfig::agents_path();
+    let config_dir = agents_path.parent().unwrap_or_else(|| Path::new("."));
+    Ok(config_dir.join(expanded))
+}
+
+fn expand_tilde(path: &Path) -> PathBuf {
+    let raw = path.to_string_lossy();
+    if raw == "~" {
+        return home_dir();
+    }
+    if let Some(rest) = raw.strip_prefix("~/") {
+        return home_dir().join(rest);
+    }
+    path.to_path_buf()
+}
+
+fn home_dir() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("/"))
+}
+
 // ---- config editing (toml_edit, comment-preserving) -------------------------
 
-fn config_set_entry(name: &str, entry: &ScheduleEntry) -> Result<()> {
+fn config_set_entry(name: &str, entry: &TaskEntry) -> Result<()> {
     let path = MachineConfig::agents_path();
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
@@ -552,10 +802,28 @@ fn config_set_entry(name: &str, entry: &ScheduleEntry) -> Result<()> {
         .with_context(|| format!("parsing {}", path.display()))?;
 
     let mut table = Table::new();
-    table["kind"] = value(&entry.kind);
+    table["spec"] = value(&entry.spec);
+    if let Some(prompt) = &entry.prompt {
+        table["prompt"] = value(prompt);
+    }
+    if let Some(prompt_file) = &entry.prompt_file {
+        table["prompt-file"] = value(prompt_file.to_string_lossy().into_owned());
+    }
     table["root"] = value(entry.root.to_string_lossy().into_owned());
     if let Some(worktree) = &entry.worktree {
         table["worktree"] = value(worktree);
+    }
+    if let Some(mode) = &entry.mode {
+        table["mode"] = value(mode);
+    }
+    if let Some(effort) = &entry.effort {
+        table["effort"] = value(effort);
+    }
+    if let Some(path) = &entry.system_prompt_file {
+        table["system-prompt-file"] = value(path.to_string_lossy().into_owned());
+    }
+    if let Some(timeout) = &entry.timeout {
+        table["timeout"] = value(timeout);
     }
     if let Some(at) = &entry.at {
         table["at"] = value(at);
@@ -563,20 +831,26 @@ fn config_set_entry(name: &str, entry: &ScheduleEntry) -> Result<()> {
     if let Some(days) = &entry.days {
         table["days"] = value(days);
     }
+    if let Some(every) = &entry.every {
+        table["every"] = value(every);
+    }
     if let Some(cron) = &entry.cron {
         table["cron"] = value(cron);
     }
-    schedules_table(&mut doc)?.insert(name, Item::Table(table));
+    if entry.once {
+        table["once"] = value(true);
+    }
+    tasks_table(&mut doc)?.insert(name, Item::Table(table));
 
     let rendered = doc.to_string();
     MachineConfig::parse_text(&path, &rendered)
-        .with_context(|| format!("validating `agents.loop.autoping.schedules.{name}`"))?;
+        .with_context(|| format!("validating `agents.loop.tasks.{name}`"))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
-fn schedules_table(doc: &mut DocumentMut) -> Result<&mut Table> {
+fn tasks_table(doc: &mut DocumentMut) -> Result<&mut Table> {
     let agents = doc
         .as_table_mut()
         .entry("agents")
@@ -588,18 +862,13 @@ fn schedules_table(doc: &mut DocumentMut) -> Result<&mut Table> {
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
         .context("`agents.loop` is not a table")?;
-    let autoping = loop_
-        .entry("autoping")
+    let tasks = loop_
+        .entry("tasks")
         .or_insert_with(|| Item::Table(Table::new()))
         .as_table_mut()
-        .context("`agents.loop.autoping` is not a table")?;
-    let schedules = autoping
-        .entry("schedules")
-        .or_insert_with(|| Item::Table(Table::new()))
-        .as_table_mut()
-        .context("`agents.loop.autoping.schedules` is not a table")?;
-    schedules.set_implicit(true);
-    Ok(schedules)
+        .context("`agents.loop.tasks` is not a table")?;
+    tasks.set_implicit(true);
+    Ok(tasks)
 }
 
 fn config_remove(name: &str) -> Result<bool> {
@@ -615,11 +884,9 @@ fn config_remove(name: &str) -> Result<bool> {
         .and_then(Item::as_table_mut)
         .and_then(|agents| agents.get_mut("loop"))
         .and_then(Item::as_table_mut)
-        .and_then(|loop_| loop_.get_mut("autoping"))
+        .and_then(|loop_| loop_.get_mut("tasks"))
         .and_then(Item::as_table_mut)
-        .and_then(|autoping| autoping.get_mut("schedules"))
-        .and_then(Item::as_table_mut)
-        .map(|schedules| schedules.remove(name).is_some())
+        .map(|tasks| tasks.remove(name).is_some())
         .unwrap_or(false);
     if removed {
         let rendered = doc.to_string();
@@ -688,7 +955,7 @@ fn run_systemctl_quiet(args: &[&str]) {
 }
 
 fn systemctl_is_enabled(name: &str) -> Option<String> {
-    let unit = format!("{}.timer", autoping::unit_stem(name));
+    let unit = format!("{}.timer", schedule::unit_stem(name));
     let out = Command::new("systemctl")
         .args(["--user", "is-enabled", &unit])
         .output()
@@ -737,7 +1004,7 @@ fn write_crontab(content: &str) -> Result<()> {
         .context("writing crontab")?;
     let status = child.wait().context("waiting for `crontab -`")?;
     if !status.success() {
-        bail!("`crontab -` failed to install the schedule");
+        bail!("`crontab -` failed to install the task");
     }
     Ok(())
 }

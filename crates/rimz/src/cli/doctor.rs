@@ -56,7 +56,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         sidebar_renderer: "built into rimz",
         hooks: agents::collect_hooks(),
         coverage: agents::collect_coverage(),
-        autoping: collect_autoping(),
+        loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
         rooms: runtime::collect_rooms(ws),
         protocols: ws.map(protocol::collect_protocols),
@@ -67,30 +67,30 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
     }
 }
 
-/// The configured auto-ping schedules from the per-machine config. Read-only and
+/// The configured loop tasks from the per-machine config. Read-only and
 /// workspace-independent: it surfaces the scheduled-execution surface this box
-/// carries; `rimz autoping list` reports each one's installed/enabled state.
-fn collect_autoping() -> model::AutoPing {
-    let schedules = rimz::config::MachineConfig::load()
-        .map(|config| config.agents.r#loop.autoping.schedules.0)
+/// carries; `rimz loop list` reports each one's installed/enabled state.
+fn collect_loop() -> model::LoopTasks {
+    let tasks = rimz::config::MachineConfig::load()
+        .map(|config| config.agents.r#loop.tasks.0)
         .unwrap_or_default();
-    let rows = schedules
+    let rows = tasks
         .into_iter()
         .map(|(name, entry)| {
-            let (when, valid) = match rimz::autoping::parse_schedule(&name, &entry) {
+            let (when, valid) = match rimz::schedule::parse_schedule(&name, &entry) {
                 Ok(schedule) => (schedule.describe(), true),
                 Err(err) => (format!("invalid: {err}"), false),
             };
-            model::AutoPingRow {
+            model::LoopTaskRow {
                 name,
-                kind: entry.kind,
+                spec: entry.spec,
                 when,
                 root: entry.root.display().to_string(),
                 valid,
             }
         })
         .collect();
-    model::AutoPing { schedules: rows }
+    model::LoopTasks { tasks: rows }
 }
 
 fn workspace_view(ws: &rimz::ResolvedWorkspace) -> model::Workspace {

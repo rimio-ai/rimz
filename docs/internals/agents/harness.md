@@ -223,7 +223,7 @@ When a cron job, a CI gate, a PR hook, or a script needs to drive one member and
 
 Supervised `-p` runs require installed and trusted hooks, because hooks provide the completion signal ([agent.md → Hook install](./agent.md#hook-install--the-visible-security-step)).
 
-Auto-ping rides this path: a scheduled `rimz autoping run` drives one lowest-effort `ping`→`pong` supervised turn to start a provider's budget window on your schedule ([autoping.md](./autoping.md)).
+Loop tasks ride this path: a scheduled `rimz loop run` drives one configured supervised turn, with `<kind>-ping` tasks starting a provider's budget window on your schedule ([loop.md](./loop.md)).
 
 **The wakeup socket.** The blocking CLI binds `sock/run.<short_id>.sock` before opening the pane. When a hook, timeout, or operator stop writes the first terminal run record it sends a `run_completed` wakeup frame to that socket; the record on disk remains truth, and the datagram only cuts latency. If the wait cap expires, the CLI reloads the record once to catch a just-written terminal result, otherwise writes `timed_out` and exits `124`.
 

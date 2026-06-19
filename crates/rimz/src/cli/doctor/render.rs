@@ -14,8 +14,8 @@ use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
-    AgentCoverage, AgentRollup, AutoPing, Capabilities, Diagnostics, DoctorReport, HookStatus, Mux,
-    Presence, Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
+    AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, LoopTasks,
+    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -78,7 +78,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
 
     render_hooks(w, report)?;
     render_coverage(w, report)?;
-    render_autoping(w, &report.autoping)?;
+    render_loop(w, &report.loop_tasks)?;
     render_remote_control(w, &report.remote_control)?;
     render_rooms(w, &report.rooms)?;
 
@@ -432,13 +432,13 @@ fn render_concern_list(w: &mut impl Write, items: &[String]) -> io::Result<()> {
     Ok(())
 }
 
-fn render_autoping(w: &mut impl Write, autoping: &AutoPing) -> io::Result<()> {
-    section(w, "AUTOPING")?;
-    if autoping.schedules.is_empty() {
+fn render_loop(w: &mut impl Write, loop_tasks: &LoopTasks) -> io::Result<()> {
+    section(w, "LOOP TASKS")?;
+    if loop_tasks.tasks.is_empty() {
         return writeln!(w, "  {}", paint(palette::FAINT, "none configured"));
     }
-    let mut table = Table::new(["", "NAME", "KIND", "WHEN", "ROOT"]);
-    for row in &autoping.schedules {
+    let mut table = Table::new(["", "NAME", "SPEC", "WHEN", "ROOT"]);
+    for row in &loop_tasks.tasks {
         let health = if row.valid {
             Health::Info
         } else {
@@ -447,17 +447,13 @@ fn render_autoping(w: &mut impl Write, autoping: &AutoPing) -> io::Result<()> {
         table.row([
             badge(health),
             cell(row.name.as_str()).fg(palette::ACCENT),
-            cell(row.kind.as_str()),
+            cell(row.spec.as_str()),
             cell(row.when.as_str()).fg(style_of(health)),
             cell(home_relative(&row.root)).fg(palette::BODY),
         ]);
     }
     table.render(w)?;
-    note(
-        w,
-        Health::Neutral,
-        "`rimz autoping list` shows installed state",
-    )
+    note(w, Health::Neutral, "`rimz loop list` shows installed state")
 }
 
 fn render_remote_control(w: &mut impl Write, remote: &RemoteControl) -> io::Result<()> {
@@ -744,7 +740,7 @@ fn age_label(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        AgentCoverage, AutoPingRow, HookRow, PartialConcern, RemoteAgent, UnsupportedConcern,
+        AgentCoverage, HookRow, LoopTaskRow, PartialConcern, RemoteAgent, UnsupportedConcern,
     };
 
     fn strip(
@@ -778,9 +774,7 @@ mod tests {
                 },
             ],
             coverage: Vec::new(),
-            autoping: AutoPing {
-                schedules: Vec::new(),
-            },
+            loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
                 recorded: 0,
@@ -832,9 +826,7 @@ mod tests {
                     reason: "no plan-approval gate".to_owned(),
                 }],
             }],
-            autoping: AutoPing {
-                schedules: Vec::new(),
-            },
+            loop_tasks: LoopTasks { tasks: Vec::new() },
             remote_control: RemoteControl::Off,
             rooms: Probe::Ready(Rooms {
                 recorded: 0,
@@ -868,27 +860,27 @@ mod tests {
     }
 
     #[test]
-    fn autoping_section_lists_schedules_and_flags_invalid_ones() {
-        let autoping = AutoPing {
-            schedules: vec![
-                AutoPingRow {
+    fn loop_section_lists_tasks_and_flags_invalid_ones() {
+        let loop_tasks = LoopTasks {
+            tasks: vec![
+                LoopTaskRow {
                     name: "morning".to_owned(),
-                    kind: "claude".to_owned(),
+                    spec: "claude".to_owned(),
                     when: "07:00 on weekdays".to_owned(),
                     root: "/home/you/code/app".to_owned(),
                     valid: true,
                 },
-                AutoPingRow {
+                LoopTaskRow {
                     name: "broken".to_owned(),
-                    kind: "codex".to_owned(),
+                    spec: "codex".to_owned(),
                     when: "invalid: bad time".to_owned(),
                     root: "/home/you/code/other".to_owned(),
                     valid: false,
                 },
             ],
         };
-        let out = strip(|w| render_autoping(w, &autoping));
-        assert!(out.contains("AUTOPING"), "section title:\n{out}");
+        let out = strip(|w| render_loop(w, &loop_tasks));
+        assert!(out.contains("LOOP TASKS"), "section title:\n{out}");
         assert!(
             out.contains("morning") && out.contains("07:00 on weekdays"),
             "{out}"
@@ -902,22 +894,15 @@ mod tests {
             "an invalid schedule carries a cross:\n{out}"
         );
         assert!(
-            out.contains("rimz autoping list"),
+            out.contains("rimz loop list"),
             "the installed-state hint is present:\n{out}"
         );
     }
 
     #[test]
-    fn autoping_section_reads_empty_when_unconfigured() {
-        let out = strip(|w| {
-            render_autoping(
-                w,
-                &AutoPing {
-                    schedules: Vec::new(),
-                },
-            )
-        });
-        assert!(out.contains("AUTOPING"), "{out}");
+    fn loop_section_reads_empty_when_unconfigured() {
+        let out = strip(|w| render_loop(w, &LoopTasks { tasks: Vec::new() }));
+        assert!(out.contains("LOOP TASKS"), "{out}");
         assert!(out.contains("none configured"), "{out}");
     }
 

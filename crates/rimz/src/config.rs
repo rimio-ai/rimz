@@ -22,7 +22,6 @@ mod accounts;
 mod agents;
 mod animation;
 mod attention;
-mod autoping;
 mod color;
 pub mod effective;
 mod glyphs;
@@ -47,13 +46,12 @@ pub use animation::{
     ThemeAnimationsConfig, UnreadEffect, validate_glyph_cells, validate_single_cell,
 };
 pub use attention::AttentionConfig;
-pub use autoping::{AutoPingConfig, ScheduleEntry, Schedules};
 pub(crate) use color::xterm_rgb;
 pub use color::{
     ColorDepth, PaletteRole, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex,
 };
 pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
-pub use loop_::LoopConfig;
+pub use loop_::{LoopConfig, TaskEntry, Tasks};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
     TmuxPaneBorderStatus, TmuxSetClipboard, ZellijClipboard, ZellijConfig, ZellijForceClose,
@@ -314,7 +312,7 @@ fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> 
 fn legacy_split_sections(value: &toml::Value) -> Option<Vec<&'static str>> {
     let table = value.as_table()?;
     let mut sections = Vec::new();
-    for key in ["worktree", "autoping", "agents"] {
+    for key in ["worktree", "agents"] {
         if table.contains_key(key) {
             sections.push(key);
         }

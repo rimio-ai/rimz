@@ -180,43 +180,69 @@ fn profile_system_prompt_file_resolves_against_the_config_dir() {
 }
 
 #[test]
-fn autoping_schedules_parse_and_default_empty() {
+fn loop_tasks_parse_and_default_empty() {
     let dir = tempdir().expect("tempdir");
     assert!(
-        MachineConfig::default()
-            .agents
-            .r#loop
-            .autoping
-            .schedules
-            .0
-            .is_empty(),
-        "no schedules ship by default",
+        MachineConfig::default().agents.r#loop.tasks.0.is_empty(),
+        "no loop tasks ship by default",
     );
     let config = MachineConfig::load_from(&write_named(
         &dir,
         "agents.toml",
-        "[agents.loop.autoping.schedules.morning]\n\
-             kind = \"claude\"\n\
+        "[agents.loop.tasks.morning]\n\
+             spec = \"claude-ping\"\n\
+             prompt = \"ping\"\n\
              root = \"/home/me/app\"\n\
              at = \"07:00\"\n\
              days = \"weekdays\"\n\
-             worktree = \"main\"\n",
+             worktree = \"main\"\n\
+             mode = \"auto\"\n\
+             effort = \"low\"\n\
+             system-prompt-file = \"/prompts/primer.md\"\n\
+             timeout = \"5m\"\n\
+             once = true\n\
+             [agents.loop.tasks.pr_watch]\n\
+             spec = \"codex\"\n\
+             prompt-file = \"prompts/pr-watch.md\"\n\
+             root = \"/home/me/app\"\n\
+             every = \"15m\"\n",
     ))
     .expect("load");
     let entry = config
         .agents
         .r#loop
-        .autoping
-        .schedules
+        .tasks
         .0
         .get("morning")
-        .expect("morning schedule");
-    assert_eq!(entry.kind, "claude");
+        .expect("morning task");
+    assert_eq!(entry.spec, "claude-ping");
+    assert_eq!(entry.prompt.as_deref(), Some("ping"));
     assert_eq!(entry.root, std::path::Path::new("/home/me/app"));
     assert_eq!(entry.at.as_deref(), Some("07:00"));
     assert_eq!(entry.days.as_deref(), Some("weekdays"));
     assert_eq!(entry.worktree.as_deref(), Some("main"));
+    assert_eq!(entry.mode.as_deref(), Some("auto"));
+    assert_eq!(entry.effort.as_deref(), Some("low"));
+    assert_eq!(
+        entry.system_prompt_file.as_deref(),
+        Some(std::path::Path::new("/prompts/primer.md"))
+    );
+    assert_eq!(entry.timeout.as_deref(), Some("5m"));
     assert_eq!(entry.cron, None);
+    assert!(entry.once);
+    let general = config
+        .agents
+        .r#loop
+        .tasks
+        .0
+        .get("pr_watch")
+        .expect("general task");
+    assert_eq!(general.spec, "codex");
+    assert_eq!(
+        general.prompt_file.as_deref(),
+        Some(std::path::Path::new("prompts/pr-watch.md"))
+    );
+    assert_eq!(general.every.as_deref(), Some("15m"));
 }
 
 #[test]

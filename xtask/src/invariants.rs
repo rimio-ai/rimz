@@ -570,7 +570,7 @@ fn ensure_config_template_sections(root: &Path) -> Result<()> {
             &[
                 "[agents]",
                 "[agents.worktree]",
-                "[agents.loop.autoping]",
+                "[agents.loop.tasks]",
                 "[agents.attention]",
                 "[agents.pets]",
                 "[agents.profiles]",

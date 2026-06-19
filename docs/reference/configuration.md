@@ -23,7 +23,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 | --- | --- | --- | --- |
 | `~/.config/rimz/config.toml` | per-machine | core room behavior: accounts, notifications, remote-control auto-launch, sidebar behavior, multiplexer defaults, resume, Sentry | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, semantic slots, glyphs, animations, provider brand styling | you, `rimz setup`, `rimz config` |
-| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop automation, attention windows, pets | you, `rimz setup`, `rimz config`, `rimz autoping` |
+| `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop automation, attention windows, pets | you, `rimz setup`, `rimz config`, `rimz loop` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -66,7 +66,7 @@ Per-machine settings load leniently: a missing file is the default config, and u
 | --- | --- |
 | `[agents]` | launch placement plus profiles, command cells, and named teams for `rimz agents <spec>` |
 | `[agents.worktree]` | where Rimz-owned Git worktrees live and which base ref new ones branch from |
-| `[agents.loop.autoping]` | scheduled window-priming pings, applied to this machine's scheduler by `rimz autoping install` |
+| `[agents.loop.tasks]` | scheduled supervised agent turns, applied to this machine's scheduler by `rimz loop install` |
 | `[agents.attention]` | stale-running and inactive-row timing |
 | `[agents.pets]` | provider-dashboard companion overlay |
 
@@ -78,18 +78,25 @@ rimz config init --print
 
 The sections below explain the model and the knobs whose behavior is easy to misread.
 
-### Auto-ping
+### Loop tasks
 
 ```toml
-[agents.loop.autoping.schedules.morning]
-kind = "claude"          # provider to prime; must support a ping turn
+[agents.loop.tasks.morning]
+spec = "claude-ping"     # `<kind>-ping` primes a provider window
+prompt = "ping"
 root = "/home/you/code/app"
 at = "07:00"             # 24h local wall-clock
 days = "weekdays"        # daily | weekdays | weekends | mon-fri | mon,wed,fri
-# cron = "0 7 * * 1-5"   # raw cron escape hatch (cron backend only; replaces at/days)
+
+[agents.loop.tasks.pr_watch]
+spec = "codex"
+prompt = "check CI on the release PR"
+root = "/home/you/code/app"
+every = "15m"
+mode = "auto"
 ```
 
-Each schedule fires a lowest-effort `ping`→`pong` turn at a chosen time, so the provider's sliding budget window starts on your schedule instead of whenever you first sit down. The config records the intent; `rimz autoping install` applies it to this machine's OS scheduler (a systemd user timer or the crontab) after a consent preview. The full model — the supervised-run path, the installer, and why each entry carries an absolute `root` — is [autoping.md](../internals/agents/autoping.md).
+Each task drives one supervised turn for a single agent spec on a calendar, interval, raw cron, or one-shot schedule. A `<kind>-ping` spec is the window-priming special case: it defaults the prompt to `ping` and skips when that provider's budget window is already counting down. The config records the intent; `rimz loop install` applies it to this machine's OS scheduler after a consent preview. The full model — the supervised-run path, installer, one-shot cleanup, and why each entry carries an absolute `root` — is [loop.md](../internals/agents/loop.md).
 
 ### Notifications
 

@@ -114,6 +114,29 @@ Placement follows intent. Under the default `auto` policy a worktree launch, nam
 
 Supervised `-p` runs require installed and trusted hooks, because hooks provide the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/agents/harness.md#supervised-runs).
 
+### Loop tasks
+
+`rimz loop` schedules one supervised turn on this machine's OS scheduler. A task's `--spec` must resolve to one agent cell: a kind, profile, or virtual cell. Teams, multi-cell layouts, and command cells are rejected because the scheduled run owns one transient supervised pane.
+
+```sh
+rimz loop add morning --spec claude-ping --at 07:00 --days weekdays
+rimz loop add pr-watch --spec codex --prompt "check CI on the release PR" --every 15m --mode auto --root .
+rimz loop list
+rimz loop install pr-watch --scheduler cron
+rimz loop uninstall pr-watch
+rimz loop remove pr-watch
+```
+
+```sh
+rimz loop add <NAME> --spec <SPEC> [--prompt <TEXT>|--prompt-file <PATH>] [--at <HH:MM> [--days <MASK>]|--every <DURATION>|--cron <EXPR>|--in <DURATION>] [--once] [--root <PATH>] [--worktree <NAME>] [--mode <auto|ask|yolo>] [--effort <LEVEL>] [--system-prompt-file <PATH>] [--timeout <DURATION>]
+rimz loop list
+rimz loop install [NAME] [--scheduler <auto|systemd|cron>] [-y|--yes]
+rimz loop uninstall [NAME] [--scheduler <auto|systemd|cron>] [-y|--yes]
+rimz loop remove <NAME>
+```
+
+Schedule forms are calendar (`--at` plus optional `--days`), interval (`--every 15m`), raw cron (`--cron`), and one-shot (`--once`, or `--in 30m`). A `<kind>-ping` spec is the window-primer: `add` defaults the prompt to `ping`, `run` checks the provider's account window and skips when it is already counting down, and install/run preflight still requires installed and trusted hooks. Scheduler artifacts and config shape are in [loop.md](../../internals/agents/loop.md).
+
 ### Focus, wait, and stop
 
 `focus` jumps to an agent's pane. `wait` waits for a supervised run by run id or pet name, or for an interactive agent to reach an idle/success gate; `--stream` tails the transcript (`--from-start` replays from the top). `stop` cancels a supervised run when the ref names one, otherwise it closes the agent pane.

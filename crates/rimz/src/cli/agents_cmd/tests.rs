@@ -821,12 +821,21 @@ fn profile_launch_requires_its_system_prompt_file() {
 }
 
 #[test]
-fn for_ping_builds_a_blocking_lowest_effort_ping_turn() {
-    let args = AgentsArgs::for_ping("claude", Some("main"));
+fn for_task_builds_a_blocking_supervised_turn() {
+    let args = AgentsArgs::for_task(TaskRunArgs {
+        spec: "claude-ping".to_owned(),
+        prompt: Some("ping".to_owned()),
+        worktree: Some("main".to_owned()),
+        ask: false,
+        yolo: false,
+        effort: Some("low".to_owned()),
+        system_prompt_file: None,
+        timeout: None,
+    });
     assert_eq!(
         args.spec.as_deref(),
-        Some("claude"),
-        "the spec is the bare kind"
+        Some("claude-ping"),
+        "the spec is carried exactly"
     );
     assert_eq!(args.prompt.as_deref(), Some("ping"), "the prompt is `ping`");
     assert_eq!(
@@ -847,5 +856,18 @@ fn for_ping_builds_a_blocking_lowest_effort_ping_turn() {
     );
 
     // No channel keeps the worktree unset, hosting the ping in the room itself.
-    assert_eq!(AgentsArgs::for_ping("codex", None).worktree, None);
+    assert_eq!(
+        AgentsArgs::for_task(TaskRunArgs {
+            spec: "codex".to_owned(),
+            prompt: Some("check status".to_owned()),
+            worktree: None,
+            ask: false,
+            yolo: false,
+            effort: None,
+            system_prompt_file: None,
+            timeout: None,
+        })
+        .worktree,
+        None
+    );
 }

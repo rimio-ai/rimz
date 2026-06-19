@@ -54,7 +54,7 @@ fn config_init_prints_and_writes_the_template() {
     let agents_text =
         std::fs::read_to_string(agents_config_path(&env)).expect("read agents config");
     assert!(agents_text.contains("[agents.worktree]"));
-    assert!(agents_text.contains("[agents.loop.autoping]"));
+    assert!(agents_text.contains("[agents.loop.tasks]"));
 
     env.rimz()
         .args(["config", "init"])

@@ -296,12 +296,27 @@ fn is_agents_key(path: &[String]) -> bool {
         )
         || matches!(
             path,
-            [root, loop_, autoping, schedules, _, leaf]
+            [root, loop_, tasks, _, leaf]
                 if root == "agents"
                     && loop_ == "loop"
-                    && autoping == "autoping"
-                    && schedules == "schedules"
-                    && matches!(leaf.as_str(), "kind" | "root" | "worktree" | "at" | "days" | "cron")
+                    && tasks == "tasks"
+                    && matches!(
+                        leaf.as_str(),
+                        "spec"
+                            | "prompt"
+                            | "prompt-file"
+                            | "root"
+                            | "worktree"
+                            | "mode"
+                            | "effort"
+                            | "system-prompt-file"
+                            | "timeout"
+                            | "at"
+                            | "days"
+                            | "every"
+                            | "cron"
+                            | "once"
+                    )
         )
 }
 
@@ -475,7 +490,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.pets.size",
         "agents.pets.glyphs",
         "agents.pets.voice",
-        "agents.loop.autoping.schedules",
+        "agents.loop.tasks",
         "theme.animations.unread",
         "theme.glyphs.set",
         "theme.colors.primary.background",

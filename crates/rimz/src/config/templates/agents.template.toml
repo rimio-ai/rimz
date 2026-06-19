@@ -17,18 +17,24 @@
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
 # Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 
-[agents.loop.autoping]
-# Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`
-# turn at a chosen time, so the provider's sliding budget window starts on your
-# schedule instead of whenever you first sit down. Edit entries here or with
-# `rimz autoping add`, then apply them with `rimz autoping install`.
-## [agents.loop.autoping.schedules.morning]
-## kind = "claude"                     # agent kind to prime (must support a ping turn)
-## root = "/home/you/code/app"         # absolute project root whose room hosts the ping
+[agents.loop]
+# Scheduled loop tasks. Each entry drives one supervised agent turn through
+# `rimz loop run <name>`, with the OS scheduler keeping time. Edit entries here
+# or with `rimz loop add`, then apply them with `rimz loop install`.
+# [agents.loop.tasks]
+## [agents.loop.tasks.morning]
+## spec = "claude-ping"                # `<kind>-ping` primes the provider window
+## root = "/home/you/code/app"         # absolute project root whose room hosts the turn
 ## at = "07:00"                        # 24h local wall-clock firing time
 ## days = "weekdays"                   # "daily", "weekdays", "weekends", or "mon,wed,fri"
-## worktree = "main"                   # optional channel to host the transient ping pane
-## # cron = "0 7 * * 1-5"              # raw cron escape hatch (cron backend only; replaces at/days)
+## worktree = "main"                   # optional channel to host the transient pane
+##
+## [agents.loop.tasks.pr_watch]
+## spec = "codex"                      # kind, profile, or virtual single-agent cell
+## prompt = "check CI on the release PR"
+## root = "/home/you/code/app"
+## every = "15m"                       # interval; `cron = "*/15 * * * *"` is cron-only
+## mode = "auto"                       # auto, ask, or yolo
 
 [agents.attention]
 # stalled_after_secs = 1800            # silent running agent becomes actionable after this many seconds

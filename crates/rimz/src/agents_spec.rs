@@ -778,7 +778,7 @@ fn virtual_agent_shape(raw: &str) -> bool {
     supported_virtual_agent_args(kind, mode).is_some()
 }
 
-fn virtual_ping_shape(raw: &str) -> bool {
+pub fn virtual_ping_shape(raw: &str) -> bool {
     raw.strip_suffix("-ping")
         .and_then(crate::agents::find_adapter)
         .is_some_and(|adapter| adapter.ping_args().is_some())

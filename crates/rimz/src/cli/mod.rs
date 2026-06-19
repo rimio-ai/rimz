@@ -4,7 +4,6 @@
 mod agents_cmd;
 mod agents_launch;
 mod attach_exec;
-mod autoping;
 mod codex;
 mod config;
 mod daemon_view;
@@ -17,6 +16,7 @@ mod hook_install;
 mod hooks;
 mod list;
 mod list_themes;
+mod loop_cmd;
 mod pane;
 mod parse;
 mod queue;
@@ -39,6 +39,7 @@ mod transcript;
 mod trust;
 mod workspace;
 mod worktree;
+use std::ffi::{OsStr, OsString};
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -71,6 +72,7 @@ pub(crate) use room_recovery::{print_reset_report, rebirth_room};
 pub(crate) use start_notice::live_session_names;
 /// Entry point used by `main.rs`.
 pub fn dispatch() -> Result<()> {
+    reject_removed_top_level_tokens()?;
     let cli = Cli::parse();
     let globals = cli.global;
     globals.color.write_global();
@@ -85,7 +87,7 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Gc(args)) => gc::run(args, &globals),
         Some(Subcmd::Worktree(args)) => worktree::run(args, &globals),
         Some(Subcmd::Agents(args)) => agents_cmd::run(*args, &globals),
-        Some(Subcmd::AutoPing(args)) => autoping::run(args, &globals),
+        Some(Subcmd::Loop(args)) => loop_cmd::run(args, &globals),
         Some(Subcmd::Reload(args)) => reload::run(args, &globals),
         Some(Subcmd::Reset(args)) => reset::run(args, &globals),
         Some(Subcmd::Pane(args)) => pane::run(args, &globals),
@@ -121,6 +123,41 @@ pub fn dispatch() -> Result<()> {
     }
 }
 
+fn reject_removed_top_level_tokens() -> Result<()> {
+    reject_removed_top_level_tokens_from(std::env::args_os().skip(1))
+}
+
+fn reject_removed_top_level_tokens_from<I>(args: I) -> Result<()>
+where
+    I: IntoIterator<Item = OsString>,
+{
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        if matches!(
+            arg.to_str(),
+            Some("--mux" | "--root" | "--color" | "--refresh-ms")
+        ) {
+            let _ = args.next();
+            continue;
+        }
+        if arg.to_str().is_some_and(|arg| {
+            arg.starts_with("--mux=")
+                || arg.starts_with("--root=")
+                || arg.starts_with("--color=")
+                || arg.starts_with("--refresh-ms=")
+        }) {
+            continue;
+        }
+        if arg.as_os_str() == OsStr::new("autoping") {
+            anyhow::bail!("`rimz autoping` has moved to `rimz loop`; use `rimz loop --help`");
+        }
+        if !arg.to_string_lossy().starts_with('-') {
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// Low-cardinality Sentry scope facts for the resolved command: the command
 /// label every event in this process inherits, plus the agent kind and session
 /// when the command serves exactly one. The label is the command verb only,
@@ -139,7 +176,7 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         Some(Subcmd::Gc(_)) => ("gc", None, None),
         Some(Subcmd::Worktree(_)) => ("worktree", None, None),
         Some(Subcmd::Agents(_)) => ("agents", None, None),
-        Some(Subcmd::AutoPing(_)) => ("autoping", None, None),
+        Some(Subcmd::Loop(_)) => ("loop", None, None),
         Some(Subcmd::Reload(_)) => ("reload", None, None),
         Some(Subcmd::Reset(_)) => ("reset", None, None),
         Some(Subcmd::Pane(_)) => ("pane", None, None),
@@ -180,6 +217,9 @@ fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
         anyhow::bail!(
             "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
         );
+    }
+    if path == Path::new("autoping") {
+        anyhow::bail!("`rimz autoping` has moved to `rimz loop`; use `rimz loop --help`");
     }
     Ok(())
 }
@@ -497,9 +537,9 @@ enum Subcmd {
     Worktree(worktree::WorktreeArgs),
     /// Launch agent tabs, optionally in Rimz-owned worktrees.
     Agents(Box<agents_cmd::AgentsArgs>),
-    /// Schedule window-priming pings on this machine's OS scheduler.
-    #[command(name = "autoping")]
-    AutoPing(autoping::AutoPingArgs),
+    /// Schedule supervised agent turns on this machine's OS scheduler.
+    #[command(name = "loop")]
+    Loop(loop_cmd::LoopArgs),
     /// Reload running sidebars in place (pick up a freshly-installed build).
     Reload(reload::ReloadArgs),
     /// Force a clean rebirth of this workspace's room, destroying a stuck or
@@ -1085,9 +1125,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removed_run_and_tab_tokens_do_not_fall_through_to_path_start() {
+    fn removed_command_tokens_do_not_fall_through_to_path_start() {
         assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
         assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
+        assert!(reject_removed_agent_command_path(Path::new("autoping")).is_err());
         assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
+    }
+
+    #[test]
+    fn removed_top_level_command_rejects_before_global_help() {
+        assert!(
+            reject_removed_top_level_tokens_from([
+                OsString::from("autoping"),
+                OsString::from("--help")
+            ])
+            .is_err()
+        );
+        assert!(
+            reject_removed_top_level_tokens_from([
+                OsString::from("--root"),
+                OsString::from("."),
+                OsString::from("autoping"),
+                OsString::from("--help"),
+            ])
+            .is_err()
+        );
+        assert!(
+            reject_removed_top_level_tokens_from([
+                OsString::from("--refresh-ms"),
+                OsString::from("100"),
+                OsString::from("autoping"),
+            ])
+            .is_err()
+        );
+        assert!(
+            reject_removed_top_level_tokens_from([
+                OsString::from("docs"),
+                OsString::from("autoping"),
+            ])
+            .is_ok()
+        );
     }
 }

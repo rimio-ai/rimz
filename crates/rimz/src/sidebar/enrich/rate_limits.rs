@@ -76,7 +76,7 @@ pub(crate) fn read_rate_limits_cache(path: &Path) -> RateLimitsCache {
 }
 
 /// Whether `kind`'s shortest account-scoped budget window is currently running
-/// its clock. Window-priming callers (autoping) read this to skip a ping when
+/// its clock. Window-priming callers (`rimz loop` ping tasks) read this to skip a ping when
 /// the window has already started — the token is then spent only to *start* a
 /// window, never on one already counting down.
 ///

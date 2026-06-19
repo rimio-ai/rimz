@@ -302,27 +302,26 @@ impl AgentsArgs {
         }
     }
 
-    /// A blocking lowest-effort `ping`→`pong` supervised run for auto-ping: the
-    /// plain `kind`, `"ping"` as the prompt, and `--effort low` (mapped to each
-    /// provider's own flag in [`rimz::agents::AgentAdapter::render_preset`]). This
-    /// matches the `<kind>-ping` virtual cell but in supervised mode, so the
-    /// transient card appears, pongs, and self-clears.
-    fn for_ping(kind: &str, worktree: Option<&str>) -> Self {
+    /// A blocking supervised run for a scheduled loop task. It routes through
+    /// the same `-p` path as an interactive print run, while the loop handler
+    /// owns task validation, prompt-file reads, ping skipping, and one-shot
+    /// cleanup.
+    pub(crate) fn for_task(task: TaskRunArgs) -> Self {
         Self {
             command: None,
-            spec: Some(kind.to_owned()),
-            prompt: Some("ping".to_owned()),
-            worktree: worktree.map(ToOwned::to_owned),
+            spec: Some(task.spec),
+            prompt: task.prompt,
+            worktree: task.worktree,
             name: None,
             bg: false,
             new_pane: false,
             new_tab: false,
-            ask: false,
-            yolo: false,
-            system_prompt_file: None,
-            effort: Some("low".to_owned()),
+            ask: task.ask,
+            yolo: task.yolo,
+            system_prompt_file: task.system_prompt_file,
+            effort: task.effort,
             print: true,
-            timeout: None,
+            timeout: task.timeout,
             keep: false,
             detach: false,
             json: false,
@@ -333,17 +332,23 @@ impl AgentsArgs {
     }
 }
 
-/// Drive one blocking window-priming ping for `rimz autoping run`. Routes through
-/// the same supervised `-p` path an interactive `rimz agents <kind> -p` uses:
-/// it brings the room up if it is down, spawns the transient ping pane, waits for
-/// the turn, closes the pane, and exits with the run's status code. `globals`
-/// carries the schedule's `--root`, so the workspace resolves with no mux pin.
-pub(crate) fn run_blocking_ping(
-    kind: &str,
-    worktree: Option<&str>,
-    globals: &GlobalFlags,
-) -> Result<()> {
-    run_print(AgentsArgs::for_ping(kind, worktree), globals)
+pub(crate) struct TaskRunArgs {
+    pub(crate) spec: String,
+    pub(crate) prompt: Option<String>,
+    pub(crate) worktree: Option<String>,
+    pub(crate) ask: bool,
+    pub(crate) yolo: bool,
+    pub(crate) effort: Option<String>,
+    pub(crate) system_prompt_file: Option<PathBuf>,
+    pub(crate) timeout: Option<Duration>,
+}
+
+/// Drive one blocking scheduled loop task for `rimz loop run`. Routes through
+/// the same supervised `-p` path an interactive `rimz agents <spec> -p` uses.
+/// `globals` carries the task's `root`, so the workspace resolves with no mux
+/// pin.
+pub(crate) fn run_blocking_task(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
+    run_print(args, globals)
 }
 
 /// Launch a missing agent for `steer`/`queue --create`. A *type* handle — a kind
