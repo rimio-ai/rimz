@@ -99,7 +99,7 @@ jobs:
       - name: Install CI gate plugins
         if: ${{ github.event_name != 'workflow_run' }}
         env:
-          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
         run: |
           set -euo pipefail
           install_action_dir="$(mktemp -d)"
@@ -116,6 +116,26 @@ jobs:
             RUNNER_ARCH=X64 \
             RUNNER_OS=Linux \
             bash --noprofile --norc "$install_action_dir/main.sh"
+
+      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
+      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
+      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
+      # crates.io release (cached) to keep CI and contributors on one version.
+      - name: Cache cargo-vet
+        if: ${{ github.event_name != 'workflow_run' }}
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-vet
+          key: cargo-vet-0.10.2-linux-amd64
+      - name: Install cargo-vet (pinned 0.10.2)
+        if: ${{ github.event_name != 'workflow_run' }}
+        run: |
+          set -euo pipefail
+          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
+            echo 'cargo-vet 0.10.2 already installed'
+          else
+            cargo install --locked cargo-vet@0.10.2
+          fi
 
       - name: Install release packaging tools
         env:

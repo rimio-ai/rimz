@@ -82,7 +82,7 @@ jobs:
       # script directly with GitHub-compatible runner env values.
       - name: Install cargo plugins
         env:
-          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-vet,cargo-llvm-cov,cargo-semver-checks
+          INPUT_TOOL: cargo-nextest,cargo-deny,cargo-machete,cargo-llvm-cov,cargo-semver-checks
         run: |
           install_action_dir="$(mktemp -d)"
           trap 'rm -rf "$install_action_dir"' EXIT
@@ -98,6 +98,24 @@ jobs:
             RUNNER_ARCH=X64 \
             RUNNER_OS=Linux \
             bash --noprofile --norc "$install_action_dir/main.sh"
+
+      # cargo-vet 0.10.1+ adds Trusted Publishing support, and the imported
+      # audits now carry `trusted-publisher` entries that 0.10.0 cannot parse.
+      # Upstream ships no prebuilt binary past 0.10.0, so build the pinned
+      # crates.io release (cached) to keep CI and contributors on one version.
+      - name: Cache cargo-vet
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/cargo-vet
+          key: cargo-vet-0.10.2-linux-amd64
+      - name: Install cargo-vet (pinned 0.10.2)
+        run: |
+          set -euo pipefail
+          if cargo vet --version 2>/dev/null | grep -qx 'cargo-vet 0.10.2'; then
+            echo 'cargo-vet 0.10.2 already installed'
+          else
+            cargo install --locked cargo-vet@0.10.2
+          fi
 
       - name: cargo xtask ci
         run: cargo xtask ci
