@@ -965,24 +965,28 @@ pub(crate) fn stop_payload_errored(payload: &Value) -> bool {
         )
 }
 
-/// Tags the Claude/Codex harness injects as synthetic "user" turns — a
-/// completed background task, a system reminder, a slash-command echo. Their
-/// text is not user-authored, so it must never become an agent's description
-/// line (the `<task-notification>…` leak). Presence of any of these rejects the
-/// whole string.
-const CONTROL_TAG_PREFIXES: &[&str] = &[
+/// Tags an agent harness injects as synthetic "user" turns — a completed
+/// background task, a system reminder, a slash-command echo, or an expanded
+/// skill block. Their text is not user-authored, so it must never become an
+/// agent's description line (the `<task-notification>…` or `<skill name=…`
+/// leak). Presence of any of these rejects the whole string. The renderer
+/// backstop in `sidebar_pane::render::sections::agent_card::description` shares
+/// this list so producer and presentation guards cannot drift.
+pub(crate) const CONTROL_TAG_PREFIXES: &[&str] = &[
     "<task-notification>",
     "<system-reminder>",
     "<command-message>",
     "<command-name>",
     "<local-command-stdout>",
+    "<skill name=",
 ];
 
 /// Sanitize a raw prompt/task string before it can label a sidebar row. Trims;
 /// returns `None` for an empty string, or for any text carrying a harness
 /// control tag (a synthetic, non-user-authored turn). KISS: a single substring
 /// scan, no partial parsing — a control tag anywhere means the whole string is
-/// rejected, so a raw `<task-notification>…` can never reach the description.
+/// rejected, so a raw `<task-notification>…` or `<skill name=…>` can never
+/// reach the description.
 pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
     let trimmed = raw.map(str::trim).filter(|value| !value.is_empty())?;
     if CONTROL_TAG_PREFIXES.iter().any(|tag| trimmed.contains(tag)) {
@@ -1098,6 +1102,12 @@ mod tests {
         }
         assert_eq!(
             sanitize_user_prompt(Some("please fix <system-reminder>noise</system-reminder>")),
+            None,
+        );
+        assert_eq!(
+            sanitize_user_prompt(Some(
+                "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">body</skill>",
+            )),
             None,
         );
         assert_eq!(

@@ -150,17 +150,11 @@ pub(super) fn shows_loading_dots(row: &SidebarRow) -> bool {
 /// Whether a description candidate is a harness-injected control turn rather
 /// than human-authored text — it leads with one of the synthetic-turn tags. A
 /// renderer backstop only; the real guard is `sanitize_user_prompt` in the
-/// producer.
+/// producer, and the producer-owned tag list is shared here so the two guards
+/// cannot drift.
 pub(super) fn looks_like_control_text(value: &str) -> bool {
-    const CONTROL_TAG_PREFIXES: &[&str] = &[
-        "<task-notification>",
-        "<system-reminder>",
-        "<command-message>",
-        "<command-name>",
-        "<local-command-stdout>",
-    ];
     let trimmed = value.trim_start();
-    CONTROL_TAG_PREFIXES
+    crate::agents::CONTROL_TAG_PREFIXES
         .iter()
         .any(|tag| trimmed.starts_with(tag))
 }

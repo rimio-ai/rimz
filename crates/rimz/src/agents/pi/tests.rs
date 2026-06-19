@@ -125,6 +125,18 @@ fn pi_observes_lifecycle_enrichment_and_error_bits() {
     assert_eq!(injected.prompt, None);
     assert_eq!(injected.task, None);
 
+    let skill = PiAdapter
+        .observe_lifecycle(
+            "before_agent_start",
+            &json!({
+                "session_id": "sess-1",
+                "prompt": "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">\nmerge the branch\n</skill>"
+            }),
+        )
+        .expect("observation");
+    assert_eq!(skill.prompt, None);
+    assert_eq!(skill.task, None);
+
     let clean = PiAdapter
         .observe_lifecycle(
             "agent_end",

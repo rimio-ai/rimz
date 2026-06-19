@@ -43,6 +43,27 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
 }
 
 #[test]
+fn line_two_rejects_skill_blocks_at_renderer_backstop() {
+    let codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some(
+            "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">body</skill>",
+        ),
+    );
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![codex]), 44, 12);
+
+    assert!(!rendered.contains("<skill"));
+    assert!(
+        rendered.contains("—"),
+        "the rejected control block falls through to the empty description:\n{rendered}"
+    );
+}
+
+#[test]
 fn line_two_control_characters_collapse_before_framing() {
     let mut codex = agent(
         "codex-1",
