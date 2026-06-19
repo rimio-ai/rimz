@@ -149,17 +149,17 @@ fn missing_shell_path_falls_back_to_direct_exec() {
     );
 }
 
-/// An invalid explicit `--same-tab` (here a multi-cell layout) refuses the
+/// An invalid explicit `--new-pane` (here a multi-cell layout) refuses the
 /// whole launch before any side effect, so it leaves no provisional ledger rows
 /// and never creates the requested worktree. Resolution runs ahead of the
 /// live-session probe, so the rejection needs neither a running room nor a mux.
 #[cfg(unix)]
 #[test]
-fn invalid_same_tab_refuses_an_agents_launch_before_side_effects() {
+fn invalid_new_pane_refuses_an_agents_launch_before_side_effects() {
     let env = Env::new();
 
     env.rimz()
-        .args(["agents", "claude,codex", "--worktree=wt-a", "--same-tab"])
+        .args(["agents", "claude,codex", "--worktree=wt-a", "--new-pane"])
         .assert()
         .failure()
         .stderr(contains("single agent cell"));
@@ -169,11 +169,11 @@ fn invalid_same_tab_refuses_an_agents_launch_before_side_effects() {
             .join("project-worktrees")
             .join("wt-a")
             .exists(),
-        "a rejected --same-tab must not create the worktree",
+        "a rejected --new-pane must not create the worktree",
     );
     assert!(
         !env.state_path_for(&env.project_root).events_log.exists(),
-        "a rejected --same-tab must not append launch events",
+        "a rejected --new-pane must not append launch events",
     );
 }
 

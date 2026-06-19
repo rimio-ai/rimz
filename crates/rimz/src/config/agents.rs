@@ -12,10 +12,11 @@ use crate::run::PermissionMode;
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct AgentsConfig {
-    /// Where a launch lands: a new backend tab/window or the current view.
+    /// Where a launch lands: the current pane, a new pane, or a new backend
+    /// tab/window.
     /// Declared before the table fields so the section serializes as valid
     /// TOML (a scalar after a sub-table would bind to the wrong table).
-    pub tab: TabPlacement,
+    pub placement: LaunchPlacement,
     pub worktree: WorktreeConfig,
     pub r#loop: LoopConfig,
     pub attention: AttentionConfig,
@@ -31,7 +32,7 @@ pub struct AgentsConfig {
 impl Default for AgentsConfig {
     fn default() -> Self {
         Self {
-            tab: TabPlacement::default(),
+            placement: LaunchPlacement::default(),
             worktree: WorktreeConfig::default(),
             r#loop: LoopConfig::default(),
             attention: AttentionConfig::default(),
@@ -53,21 +54,20 @@ fn default_machine_teams() -> TeamsConfig {
     )]))
 }
 
-/// Default tab placement for `rimz agents <spec>` launches; the per-launch
-/// `--same-tab` / `--new-tab` flags override it.
+/// Default launch placement for `rimz agents <spec>` launches; the per-launch
+/// `--new-pane` / `--new-tab` flags override it.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
-pub enum TabPlacement {
-    /// A worktree or multi-cell layout opens a new tab; a single non-worktree
-    /// agent splits the current view.
+pub enum LaunchPlacement {
+    /// A single non-worktree agent runs in the current pane; a team, multi-cell
+    /// layout, or worktree launch opens a new tab.
     #[default]
     Auto,
+    /// A single non-worktree agent splits a new pane in the current tab; a team
+    /// or worktree opens a new tab.
+    Pane,
     /// Always open a new tab/window.
-    New,
-    /// Split the current view when a launch is a single agent cell, falling
-    /// back to a new tab when it cannot (a multi-cell layout, or no launching
-    /// pane).
-    Same,
+    Tab,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]

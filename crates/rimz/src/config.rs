@@ -39,7 +39,7 @@ mod worktree;
 
 pub use accounts::{AccountsConfig, UsageLimitUsd};
 pub use agents::{
-    AgentsConfig, CommandsConfig, Profile, ProfilesConfig, RoleBinding, TabPlacement, Team,
+    AgentsConfig, CommandsConfig, LaunchPlacement, Profile, ProfilesConfig, RoleBinding, Team,
     TeamsConfig,
 };
 pub use animation::{

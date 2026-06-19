@@ -87,7 +87,7 @@ The CLI converts cells to backend-neutral `LayoutPanes`: an agent cell runs the 
 
 ### Backend shape and placement
 
-Each backend renders the same compiled layout into a tab, and a single-cell launch can split the current view instead.
+Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead.
 
 tmux opens a window with `new-window -d -P`, lets the session's `after-new-window` hook dock the sidebar once, and adds the remaining layout cells with `split-window`. Columns use horizontal splits; rows use vertical splits anchored inside their column.
 
@@ -95,7 +95,7 @@ Zellij renders a temporary KDL layout for `new-tab --layout`: the global sidebar
 
 Both backends receive the same `TabOptions`: session, title, cwd, focus flag, sidebar options, and the pre-built pane argv. A worktree launch names the tab `#<NAME>`, matching the channel suffix used in agent addresses; a launch without a worktree names the tab `<kind>:<dir>`. `--bg` keeps focus on the launching pane where the backend can do so.
 
-Placement follows intent. A single non-worktree launch can land in the current view instead of a fresh tab: the CLI then calls `split_pane` with the one cell's argv rather than `open_tab`, reusing the launching pane's sidebar and pinning the new pane to the room through the shared launch-identity env. The per-machine `[agents] tab` default and the per-launch `--same-tab` / `--new-tab` flags choose between the two paths ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Under the `auto` default a worktree launch or a multi-cell layout opens its own tab, while a single non-worktree agent splits the current view; an explicit `--same-tab` (or `tab = "same"`) also splits a single worktree launch into the current view, while a multi-cell layout always opens its own tab. Placement resolves before the launch touches the ledger or creates a worktree, so a rejected `--same-tab` leaves no provisional rows or worktree behind. `split_pane` carries the launch-identity env on both backends — tmux through `-e`, Zellij through an `env` command prefix — and honors the same focus flag, with tmux dropping `-d` to land in the new pane and Zellij returning focus to the launching pane when `--bg` holds it back.
+Placement follows intent. Under the `auto` default, a single non-worktree agent launches in the current pane: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to the shell on agent exit with liveness resolved from the pane rather than an end trace. A team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits a single agent cell into the current tab, `--new-tab` opens a tab, and the per-machine `[agents] placement` default chooses `auto`, `pane`, or `tab` when no flag is given ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Placement resolves before the launch touches the ledger or creates a worktree, so a rejected `--new-pane` leaves no provisional rows or worktree behind. `--bg` and create-on-miss downgrade in-place placement to a split, because the caller's pane stays available; `split_pane` carries the launch-identity env on both backends — tmux through `-e`, Zellij through an `env` command prefix — and honors the same focus flag, with tmux dropping `-d` to land in the new pane and Zellij returning focus to the launching pane when `--bg` holds it back.
 
 ## The address
 

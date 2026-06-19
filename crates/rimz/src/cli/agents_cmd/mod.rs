@@ -22,7 +22,7 @@ use super::{GlobalFlags, RoomTarget};
 use rimz::agents::AgentAdapter;
 use rimz::agents_spec::{Cell, LayoutSpec};
 use rimz::bridge::{self, ExpectedRunFrame, SocketGuard};
-use rimz::config::TabPlacement;
+use rimz::config::LaunchPlacement;
 use rimz::feed::AgentState;
 use rimz::ids::{AgentKind, AgentSessionId, EventId};
 use rimz::ledger::{AgentLaunchAppend, AgentLaunchIdentity, AgentLaunchName, AgentLaunchRequest};
@@ -74,12 +74,12 @@ pub struct AgentsArgs {
     /// Launch in the background, leaving focus on the launching pane.
     #[arg(long)]
     bg: bool,
-    /// Split the agent into the current view instead of a new tab. Single
-    /// agent cell only; rejected for a multi-cell layout.
+    /// Split the agent into a new pane in the current tab instead of taking
+    /// over the current pane. Single agent cell only.
     #[arg(long)]
-    same_tab: bool,
+    new_pane: bool,
     /// Open the launch in a new tab/window instead of the current view.
-    #[arg(long, conflicts_with = "same_tab")]
+    #[arg(long, conflicts_with = "new_pane")]
     new_tab: bool,
     /// Let the agent ask before tool use where supported.
     #[arg(long, conflicts_with = "yolo")]
@@ -264,7 +264,7 @@ pub fn run(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             "--json is only supported with `rimz agents` and `rimz agents list`; on `-p`, choose output with `--output-format json`"
         );
     }
-    launch_layout(args, globals)
+    launch_layout(args, globals, true)
 }
 
 fn exit_print_usage_error(err: anyhow::Error) -> ! {
@@ -285,7 +285,7 @@ impl AgentsArgs {
             worktree,
             name: None,
             bg: false,
-            same_tab: false,
+            new_pane: false,
             new_tab: false,
             ask: false,
             yolo: false,
@@ -315,7 +315,7 @@ impl AgentsArgs {
             worktree: worktree.map(ToOwned::to_owned),
             name: None,
             bg: false,
-            same_tab: false,
+            new_pane: false,
             new_tab: false,
             ask: false,
             yolo: false,
@@ -383,7 +383,7 @@ pub(crate) fn create_on_miss(
         );
     }
     // A channel other than the current one names (or creates) its worktree; the
-    // current channel launches in place.
+    // current channel uses the caller's tab.
     let worktree = create
         .channel
         .filter(|channel| Some(channel.as_str()) != current_channel);
@@ -391,6 +391,7 @@ pub(crate) fn create_on_miss(
     launch_layout(
         AgentsArgs::for_create(create.selector, prompt, worktree),
         globals,
+        false,
     )
 }
 

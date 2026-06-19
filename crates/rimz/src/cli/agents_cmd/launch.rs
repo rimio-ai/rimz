@@ -3,7 +3,11 @@ use crate::cli::{
     agents_launch, build_sidebar_opts, machine_config, open_ledger, record_workspace,
 };
 
-pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
+pub(super) fn launch_layout(
+    args: AgentsArgs,
+    globals: &GlobalFlags,
+    allow_in_place: bool,
+) -> Result<()> {
     let spec = args.spec.as_deref();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
@@ -34,24 +38,30 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
     }
     // Resolve where the launch lands before any side effect — the live-session
     // probe, worktree creation, the ledger append, the sidebar build — so an
-    // invalid `--same-tab` (a multi-cell layout, or run outside a room) refuses
+    // invalid `--new-pane` (a multi-cell layout, or run outside a room) refuses
     // cleanly and leaves no provisional rows or worktree behind. Feasibility
     // reads the ambient pane; the split target is re-derived for the resolved
     // backend below.
-    let single_pane = layout
+    let single_cell = layout
         .columns
         .iter()
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
-    let placement = resolve_tab_placement(
+    let mut placement = resolve_placement(
         args.new_tab,
-        args.same_tab,
-        machine_config.agents.tab,
+        args.new_pane,
+        machine_config.agents.placement,
         args.worktree.is_some(),
-        single_pane,
+        single_cell,
         rimz::mux::ambient_pane_id().is_some(),
     )?;
+    // In-place takes over the launching pane: it cannot honor --bg, and
+    // create-on-miss must never replace the caller's pane. Downgrade to a split.
+    if placement == Placement::SamePane && (args.bg || !allow_in_place) {
+        placement = Placement::NewPane;
+    }
+    let in_place = placement == Placement::SamePane;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     agents_launch::ensure_live_session(backend.as_ref(), &workspace.session_name)?;
@@ -102,30 +112,43 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
         &cwd,
         args.prompt.as_deref(),
         args.worktree.is_some(),
+        in_place,
         &launch_identities,
     )?;
-    let (open_result, what) = match placement {
-        TabTarget::NewTab => (
-            backend.open_tab(&TabOptions {
-                session_name: workspace.session_name.clone(),
-                title,
-                cwd: cwd.clone(),
-                panes,
-                focus: !args.bg,
-                sidebar,
-            }),
+    let (open_result, what): (Result<()>, &str) = match placement {
+        Placement::NewTab => (
+            backend
+                .open_tab(&TabOptions {
+                    session_name: workspace.session_name.clone(),
+                    title,
+                    cwd: cwd.clone(),
+                    panes,
+                    focus: !args.bg,
+                    sidebar,
+                })
+                .map_err(Into::into),
             "opening agent tab",
         ),
-        TabTarget::SameTab => (
-            backend.split_pane(SplitPaneOptions {
-                target_pane_id: own_pane_id(mux),
-                cwd: Some(cwd.to_string_lossy().into_owned()),
-                command: Some(single_pane_argv(&panes)?),
-                env: agents_launch::launch_identity_env(&workspace),
-                focus: !args.bg,
-            }),
-            "splitting the agent into the current view",
+        Placement::NewPane => (
+            backend
+                .split_pane(SplitPaneOptions {
+                    target_pane_id: own_pane_id(mux),
+                    cwd: Some(cwd.to_string_lossy().into_owned()),
+                    command: Some(single_pane_argv(&panes)?),
+                    env: agents_launch::launch_identity_env(&workspace),
+                    focus: !args.bg,
+                })
+                .map_err(Into::into),
+            "splitting the agent into a new pane",
         ),
+        Placement::SamePane => {
+            // exec replaces this process with the wrapper, which binds the pane
+            // and direct-execs the agent in place; returns only on failure.
+            let argv = single_pane_argv(&panes)?;
+            let err =
+                exec_wrapper_in_place(&argv, agents_launch::launch_identity_env(&workspace), &cwd);
+            (Err(err), "running the agent in the current pane")
+        }
     };
     if let Err(err) = open_result {
         let _ = append_launch_events(
@@ -143,62 +166,67 @@ pub(super) fn launch_layout(args: AgentsArgs, globals: &GlobalFlags) -> Result<(
 }
 
 /// Where a launch lands. The resolver derives it from the per-launch flags, the
-/// `[agents] tab` default, and whether a same-tab split is feasible here.
+/// `[agents] placement` default, and whether in-pane placement is feasible here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum TabTarget {
+pub(super) enum Placement {
+    SamePane,
+    NewPane,
     NewTab,
-    SameTab,
 }
 
 /// Resolve launch placement. Explicit flags win; otherwise the config policy
-/// decides, with `auto` opening a new tab for a worktree or multi-cell layout
-/// and splitting the current view for a single non-worktree agent. A same-tab
-/// outcome needs a single cell and a launching pane to split — an explicit
-/// `--same-tab` that cannot be honored fails fast; a defaulted one falls back
-/// to a new tab.
-pub(super) fn resolve_tab_placement(
+/// decides, with `auto` running a single non-worktree agent in the current pane
+/// and opening a new tab for a worktree or multi-cell layout. In-pane placement
+/// needs a single cell and a launching pane; an explicit `--new-pane` that
+/// cannot be honored fails fast, while a defaulted one falls back to a new tab.
+pub(super) fn resolve_placement(
     new_tab: bool,
-    same_tab: bool,
-    policy: TabPlacement,
+    new_pane: bool,
+    policy: LaunchPlacement,
     is_worktree: bool,
-    single_pane: bool,
+    single_cell: bool,
     has_launching_pane: bool,
-) -> Result<TabTarget> {
+) -> Result<Placement> {
     if new_tab {
-        return Ok(TabTarget::NewTab);
+        return Ok(Placement::NewTab);
     }
-    if same_tab {
-        if !single_pane {
+    if new_pane {
+        if !single_cell {
             bail!(
-                "--same-tab opens a single agent cell; a multi-cell layout opens a new tab — drop --same-tab or pass --new-tab"
+                "--new-pane opens a single agent cell; a multi-cell layout opens a new tab — drop --new-pane or pass --new-tab"
             );
         }
         if !has_launching_pane {
             bail!(
-                "--same-tab splits the current pane, so run it from inside the room; drop it to open a new tab"
+                "--new-pane splits the current pane, so run it from inside the room; drop it to open a new tab"
             );
         }
-        return Ok(TabTarget::SameTab);
+        return Ok(Placement::NewPane);
     }
     Ok(match policy {
-        TabPlacement::New => TabTarget::NewTab,
-        TabPlacement::Same => same_tab_or_new(single_pane, has_launching_pane),
-        TabPlacement::Auto if is_worktree => TabTarget::NewTab,
-        TabPlacement::Auto => same_tab_or_new(single_pane, has_launching_pane),
+        LaunchPlacement::Tab => Placement::NewTab,
+        LaunchPlacement::Pane if is_worktree => Placement::NewTab,
+        LaunchPlacement::Pane => {
+            feasible_or_new(Placement::NewPane, single_cell, has_launching_pane)
+        }
+        LaunchPlacement::Auto if is_worktree => Placement::NewTab,
+        LaunchPlacement::Auto => {
+            feasible_or_new(Placement::SamePane, single_cell, has_launching_pane)
+        }
     })
 }
 
-/// Split the current view when feasible, else fall back to a new tab. The
-/// fallback path for a defaulted same-tab outcome — never for an explicit flag.
-fn same_tab_or_new(single_pane: bool, has_launching_pane: bool) -> TabTarget {
-    if single_pane && has_launching_pane {
-        TabTarget::SameTab
+/// In-pane placement (same pane or new pane) needs a single cell and a
+/// launching pane to take over or split; otherwise fall back to a new tab.
+fn feasible_or_new(target: Placement, single_cell: bool, has_launching_pane: bool) -> Placement {
+    if single_cell && has_launching_pane {
+        target
     } else {
-        TabTarget::NewTab
+        Placement::NewTab
     }
 }
 
-/// The one pane command of a same-tab launch (the resolver guarantees a single
+/// The one pane command of an in-pane launch (the resolver guarantees a single
 /// cell before this is reached).
 fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
     panes
@@ -206,7 +234,32 @@ fn single_pane_argv(panes: &LayoutPanes) -> Result<Vec<String>> {
         .first()
         .and_then(|column| column.first())
         .map(|pane| pane.argv.clone())
-        .context("same-tab launch produced no pane command")
+        .context("in-pane launch produced no pane command")
+}
+
+#[cfg(unix)]
+fn exec_wrapper_in_place(
+    argv: &[String],
+    env: BTreeMap<String, String>,
+    cwd: &Path,
+) -> anyhow::Error {
+    use std::os::unix::process::CommandExt;
+
+    let Some((program, rest)) = argv.split_first() else {
+        return anyhow::anyhow!("in-place launch produced no command");
+    };
+    let mut command = Command::new(program);
+    command.args(rest).envs(&env).current_dir(cwd);
+    command.exec().into()
+}
+
+#[cfg(not(unix))]
+fn exec_wrapper_in_place(
+    _argv: &[String],
+    _env: BTreeMap<String, String>,
+    _cwd: &Path,
+) -> anyhow::Error {
+    anyhow::anyhow!("in-place launch is only supported on Unix")
 }
 
 /// Trust-gated `[[agents]]` env for an agent launch, ready to inject into the
@@ -325,7 +378,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
     }
     if args.name.is_some()
         || args.bg
-        || args.same_tab
+        || args.new_pane
         || args.new_tab
         || args.ask
         || args.yolo
@@ -666,6 +719,7 @@ pub(super) fn layout_panes_with_names(
     cwd: &Path,
     prompt: Option<&str>,
     cleanup_worktree: bool,
+    in_place: bool,
     launch_identities: &[LaunchIdentity],
 ) -> Result<LayoutPanes> {
     let rimz_bin = std::env::current_exe().context("locating the rimz executable")?;
@@ -685,7 +739,15 @@ pub(super) fn layout_panes_with_names(
                     } else {
                         None
                     };
-                    pane_cmd_with_name(cell, &rimz_bin, cwd, prompt, cleanup_worktree, launch)
+                    pane_cmd_with_name(
+                        cell,
+                        &rimz_bin,
+                        cwd,
+                        prompt,
+                        cleanup_worktree,
+                        in_place,
+                        launch,
+                    )
                 })
                 .collect::<Result<Vec<_>>>()
         })
@@ -699,6 +761,7 @@ pub(super) fn pane_cmd_with_name(
     cwd: &Path,
     prompt: Option<&str>,
     cleanup_worktree: bool,
+    in_place: bool,
     launch: Option<&LaunchIdentity>,
 ) -> Result<PaneCmd> {
     let argv = match cell {
@@ -719,7 +782,7 @@ pub(super) fn pane_cmd_with_name(
                 "exec".to_owned(),
                 kind.as_str().to_owned(),
             ];
-            if !cleanup_worktree {
+            if !cleanup_worktree && !in_place {
                 argv.push("--close-pane-on-exit".to_owned());
             }
             if let Some(profile) = profile {

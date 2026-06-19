@@ -3,7 +3,7 @@ use super::launch::*;
 use super::*;
 use clap::Parser;
 use rimz::bridge::{ExpectedRunFrame, RunWakeOutcome};
-use rimz::config::TabPlacement;
+use rimz::config::LaunchPlacement;
 use rimz::ids::{AgentKind, WorkspaceId};
 use rimz::run::{PermissionMode, RunRecord, RunStatus};
 
@@ -126,6 +126,7 @@ fn pane_command_stamps_agent_role() {
         Path::new("/tmp/project"),
         None,
         false,
+        false,
         None,
     )
     .expect("pane command");
@@ -144,6 +145,31 @@ fn pane_command_stamps_agent_role() {
             "planner",
         ]
     );
+}
+
+#[test]
+fn in_place_pane_command_leaves_user_pane_open() {
+    let cell = Cell::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        args: Vec::new(),
+        mode: None,
+        system_prompt_file: None,
+        profile: None,
+        role: None,
+    };
+
+    let pane = pane_cmd_with_name(
+        &cell,
+        Path::new("/usr/bin/rimz"),
+        Path::new("/tmp/project"),
+        None,
+        false,
+        true,
+        None,
+    )
+    .expect("pane command");
+
+    assert_eq!(pane.argv, ["/usr/bin/rimz", "agents", "exec", "codex"]);
 }
 
 #[test]
@@ -289,16 +315,16 @@ fn launch_flags_require_a_spec() {
     assert!(err.to_string().contains("missing agent spec"));
 
     let parsed =
-        AgentsHarness::try_parse_from(["rimz", "--same-tab"]).expect("parse same-tab without spec");
-    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject same-tab");
+        AgentsHarness::try_parse_from(["rimz", "--new-pane"]).expect("parse new-pane without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject new-pane");
     assert!(err.to_string().contains("require an agent spec"), "{err:#}");
 }
 
 #[test]
-fn tab_placement_flags_parse_and_conflict() {
+fn launch_placement_flags_parse_and_conflict() {
     let parsed =
-        AgentsHarness::try_parse_from(["rimz", "claude", "--same-tab"]).expect("parse same-tab");
-    assert!(parsed.args.same_tab);
+        AgentsHarness::try_parse_from(["rimz", "claude", "--new-pane"]).expect("parse new-pane");
+    assert!(parsed.args.new_pane);
     assert!(!parsed.args.new_tab);
 
     let parsed =
@@ -306,75 +332,80 @@ fn tab_placement_flags_parse_and_conflict() {
     assert!(parsed.args.new_tab);
 
     assert!(
-        AgentsHarness::try_parse_from(["rimz", "claude", "--same-tab", "--new-tab"]).is_err(),
-        "--same-tab and --new-tab are mutually exclusive"
+        AgentsHarness::try_parse_from(["rimz", "claude", "--new-pane", "--new-tab"]).is_err(),
+        "--new-pane and --new-tab are mutually exclusive"
     );
 }
 
 #[test]
-fn tab_placement_resolves_from_flags_policy_and_feasibility() {
-    use TabTarget::{NewTab, SameTab};
+fn launch_placement_resolves_from_flags_policy_and_feasibility() {
+    use Placement::{NewPane, NewTab, SamePane};
 
-    // auto default: a single non-worktree agent with a launching pane → same tab.
+    // auto default: a single non-worktree agent with a launching pane → current pane.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Auto, false, true, true).unwrap(),
-        SameTab
+        resolve_placement(false, false, LaunchPlacement::Auto, false, true, true).unwrap(),
+        SamePane
     );
     // auto: a worktree launch always opens a new tab.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Auto, true, true, true).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Auto, true, true, true).unwrap(),
         NewTab
     );
     // auto: a multi-cell layout opens a new tab.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Auto, false, false, true).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Auto, false, false, true).unwrap(),
         NewTab
     );
     // auto: no launching pane (run from outside the room) falls back to a new tab.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Auto, false, true, false).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Auto, false, true, false).unwrap(),
         NewTab
     );
     // --new-tab forces a new tab even for a single non-worktree agent.
     assert_eq!(
-        resolve_tab_placement(true, false, TabPlacement::Auto, false, true, true).unwrap(),
+        resolve_placement(true, false, LaunchPlacement::Auto, false, true, true).unwrap(),
         NewTab
     );
-    // --same-tab forces a same-tab split for a single agent (worktree included).
+    // --new-pane forces a split for a single agent (worktree included).
     assert_eq!(
-        resolve_tab_placement(false, true, TabPlacement::Auto, true, true, true).unwrap(),
-        SameTab
+        resolve_placement(false, true, LaunchPlacement::Auto, true, true, true).unwrap(),
+        NewPane
     );
-    // config "new" overrides the auto same-tab default.
+    // placement "pane" splits a single non-worktree agent.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::New, false, true, true).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Pane, false, true, true).unwrap(),
+        NewPane
+    );
+    // placement "pane" keeps a worktree launch in a new tab.
+    assert_eq!(
+        resolve_placement(false, false, LaunchPlacement::Pane, true, true, true).unwrap(),
         NewTab
     );
-    // config "same" splits a single agent (ignoring the worktree default, like the flag).
+    // placement "pane" falls back to a new tab for a multi-cell layout.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Same, true, true, true).unwrap(),
-        SameTab
-    );
-    // config "same" falls back to a new tab for a multi-cell layout.
-    assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Same, false, false, true).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Pane, false, false, true).unwrap(),
         NewTab
     );
-    // config "same" falls back when there is no launching pane.
+    // placement "pane" falls back when there is no launching pane.
     assert_eq!(
-        resolve_tab_placement(false, false, TabPlacement::Same, false, true, false).unwrap(),
+        resolve_placement(false, false, LaunchPlacement::Pane, false, true, false).unwrap(),
+        NewTab
+    );
+    // placement "tab" overrides the auto current-pane default.
+    assert_eq!(
+        resolve_placement(false, false, LaunchPlacement::Tab, false, true, true).unwrap(),
         NewTab
     );
 }
 
 #[test]
-fn explicit_same_tab_fails_fast_when_infeasible() {
-    let err = resolve_tab_placement(false, true, TabPlacement::Auto, false, false, true)
-        .expect_err("multi-cell same-tab");
+fn explicit_new_pane_fails_fast_when_infeasible() {
+    let err = resolve_placement(false, true, LaunchPlacement::Auto, false, false, true)
+        .expect_err("multi-cell new-pane");
     assert!(err.to_string().contains("single agent cell"), "{err:#}");
 
-    let err = resolve_tab_placement(false, true, TabPlacement::Auto, false, true, false)
-        .expect_err("paneless same-tab");
+    let err = resolve_placement(false, true, LaunchPlacement::Auto, false, true, false)
+        .expect_err("paneless new-pane");
     assert!(err.to_string().contains("inside the room"), "{err:#}");
 }
 

@@ -430,7 +430,7 @@ fn exact_set_keys() -> BTreeSet<String> {
     [
         "agents.worktree.dir",
         "agents.worktree.base",
-        "agents.tab",
+        "agents.placement",
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
