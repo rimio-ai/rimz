@@ -265,6 +265,7 @@ fn inactive_groups_sink_below_process_groups() {
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     });
     snapshot.sort_groups_for_presentation();
 

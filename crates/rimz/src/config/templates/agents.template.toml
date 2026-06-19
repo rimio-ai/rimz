@@ -15,6 +15,7 @@
 [agents.worktree]
 # dir = "../{repo}-worktrees"          # where Rimz-owned Git worktrees live; {repo} is the root basename
 # base = "head"                        # "head", "fresh", or any Git ref for new worktrees
+# Project files .worktreeinclude and .worktreelink seed copied files and shared symlink dirs.
 
 [agents.loop.autoping]
 # Scheduled window-priming pings. Each entry fires a lowest-effort `<kind>-ping`

@@ -100,6 +100,7 @@ fn row_snapshot_at(
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }];
     if focused {
         snap.own_view = Some(crate::SidebarOwnView {

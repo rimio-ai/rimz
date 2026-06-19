@@ -205,7 +205,7 @@ Pane capture is untrusted terminal text. Scripts and resolvers match bounded pat
 rimz worktree new cli-docs --base head                          # branch cli-docs from HEAD
 rimz worktree new experiment --base fresh --branch spike/experiment
 rimz worktree list --json
-rimz worktree remove cli-docs                                   # refuses if dirty or unmerged
+rimz worktree remove cli-docs                                   # refuses if dirty or not landed
 rimz worktree remove experiment --force                         # remove anyway
 ```
 
@@ -217,6 +217,6 @@ rimz worktree remove <NAME> [--force]
 
 `new` creates a marked worktree under the configured worktree directory. `--base head` branches from the current `HEAD`, `--base fresh` branches from the configured fresh base, and any other value is used as a git ref. `--branch <NAME>` creates that branch instead of using the worktree name.
 
-`list` shows Rimz-owned worktrees for the current repo as the channels they are: each row carries the worktree name, branch, the `@kind` handles of the agent-colleagues working there, a dirty marker, the unmerged-count signal, and the path; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees with commits not proven merged into their base; `--force` removes anyway and keeps an unmerged branch when needed.
+`list` shows Rimz-owned worktrees for the current repo as the channels they are: each row carries the worktree name, branch, the `@kind` handles of the agent-colleagues working there, a dirty marker, the content-landed signal, and the path; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees whose content is not proven landed on their base; `--force` removes anyway and keeps a branch when Git still rejects safe deletion.
 
-`rimz worktree` requires a git repository. Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary user checkouts. The marker, `.worktreeinclude` seeding, the cleanup decision, and the `rimz gc` sweep are in [worktree.md](../../internals/agents/worktree.md).
+`rimz worktree` requires a git repository. Rimz marks only worktrees it creates, so it manages agent workspaces without claiming arbitrary user checkouts. The marker, `.worktreeinclude` seeding, `.worktreelink` symlinks, the cleanup decision, and the `rimz gc` sweep are in [worktree.md](../../internals/agents/worktree.md).

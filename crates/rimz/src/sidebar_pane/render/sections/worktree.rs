@@ -134,12 +134,12 @@ fn group_header(
     // here as a bold neutral heading — no inline `▌`, the spine carries the lane.
     // The header builds to the content width left after the gutter cell.
     let cw = content_width(width);
-    // The worktree's git story pins right: a landed marker when a non-trunk
-    // branch holds no work of its own (`≡ <trunk>` at the tip, `✓ <trunk>`
-    // once the trunk moved on), else the `⇡/⇣` commit delta ahead of the
-    // `+/-` churn, zero components omitted. The per-worktree status tally is
-    // gone: the cockpit owns the fleet make-up and each row carries its own
-    // status glyph, so repeating it here was noise. The label clips to
+    // The worktree's git story pins right: a content-landed marker when a
+    // non-trunk branch is proven safe to remove (`≡ <trunk>` at the tip,
+    // `✓ <trunk>` once the trunk moved on), else the `⇡/⇣` commit delta ahead
+    // of the `+/-` churn, zero components omitted. The per-worktree status
+    // tally is gone: the cockpit owns the fleet make-up and each row carries
+    // its own status glyph, so repeating it here was noise. The label clips to
     // whatever's left after the stats claim their width, always leaving a
     // cell so the header never shrinks to zero on extreme narrowness.
     //
@@ -195,24 +195,18 @@ fn group_header(
     Line::from(spans)
 }
 
-/// The header's right-pinned git cluster. A worktree holding no work of its
-/// own — zero commits ahead, a zero diff against the fork point, and a proven
-/// clean working tree, untracked included (every read `Some`, a probe that
-/// found nothing, never an unprobed `None`) — collapses the cluster to a
-/// landed marker: `≡ <trunk>` when it sits exactly at the trunk tip (zero
-/// behind), `✓ <trunk>` once the trunk has moved on — done, safe to remove.
-/// The trunk worktree itself (live branch == trunk) is exempt — it is
-/// trivially "landed on itself," so the marker would be noise there, and it
-/// keeps the plain delta/churn cluster instead. Otherwise the `⇡/⇣` commit
-/// delta leads the `+/-` churn (untracked line counts folded in by the
-/// producer), zero components omitted. Empty when no git read reached this
-/// group.
+/// The header's right-pinned git cluster. A clean worktree whose committed
+/// content is proven landed on the trunk collapses the cluster to a landed
+/// marker: `≡ <trunk>` when it sits exactly at the trunk tip (zero behind),
+/// `✓ <trunk>` once the trunk has moved on — done, safe to remove. The trunk
+/// worktree itself (live branch == trunk) is exempt — it is trivially "landed
+/// on itself," so the marker would be noise there, and it keeps the plain
+/// delta/churn cluster instead. Otherwise the `⇡/⇣` commit delta leads the
+/// `+/-` churn (untracked line counts folded in by the producer), zero
+/// components omitted. Empty when no git read reached this group.
 fn group_git_spans(theme: &Theme, group: &SidebarWorktreeGroup) -> Vec<Span<'static>> {
-    let no_pending = group.commits_ahead == Some(0)
-        && group.diff_added == Some(0)
-        && group.diff_removed == Some(0)
-        && group.clean == Some(true);
-    if no_pending
+    let landed = group.clean == Some(true) && group.landed == Some(true);
+    if landed
         && let Some(trunk) = group.trunk.as_deref()
         && group.label != trunk
     {

@@ -84,6 +84,7 @@ fn clickable_block_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }];
     snapshot
 }
@@ -203,6 +204,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             commits_behind: None,
             trunk: None,
             clean: None,
+            landed: None,
         },
         crate::SidebarWorktreeGroup {
             key: "/repo/feature".to_owned(),
@@ -227,6 +229,7 @@ fn filterable_snapshot(ws: &WorkspaceId) -> SidebarSnapshot {
             commits_behind: None,
             trunk: None,
             clean: None,
+            landed: None,
         },
     ];
     snapshot

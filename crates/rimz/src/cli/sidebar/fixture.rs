@@ -137,6 +137,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_behind: Some(1),
             trunk: Some("main".to_owned()),
             clean: Some(false),
+            landed: Some(false),
         },
         rimz::SidebarWorktreeGroup {
             key: "/srv/code/query-engine/.rimz/worktrees/mux".to_owned(),
@@ -151,6 +152,7 @@ fn add_fleet_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp)
             commits_behind: Some(0),
             trunk: Some("main".to_owned()),
             clean: Some(false),
+            landed: Some(false),
         },
     ];
     snapshot.value_tally = Some(spend_tally(9.42, 712_000, 8));

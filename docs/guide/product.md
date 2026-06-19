@@ -104,7 +104,7 @@ Both are starting points you copy and edit. The chain mechanics, the heartbeat p
 
 Rimz groups panes by worktree, so a fleet spread across `../query-engine` (main), `../query-engine-feature-migration`, and `../query-engine-feature-frontend` renders as three groups inside one room. Agents in the same worktree share file space; sibling worktrees keep their own, and the sidebar shows you which worktree each agent is in. Running two write-capable agents in sibling worktrees is the recommended pattern; two in the same worktree trigger a one-time advisory.
 
-Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty or unmerged is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktree.md](../internals/agents/worktree.md#cleanup)).
+Cleanup is supervised. When a worktree's agent exits, Rimz inspects the tree: work proven landed on the base branch is swept away with its branch, and anything dirty, pending, or unknown is kept, with a keep/remove/shell prompt when you're watching. `rimz gc` sweeps the leftovers later, under the same proof ([worktree.md](../internals/agents/worktree.md#cleanup)).
 
 ## Many repos, one room
 

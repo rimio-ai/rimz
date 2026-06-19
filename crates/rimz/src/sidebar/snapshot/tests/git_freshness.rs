@@ -4,7 +4,17 @@ use super::*;
 
 #[test]
 fn git_cache_freshness_boundaries_are_inclusive() {
-    let entry = DiffStatsCacheEntry::new(1_000, None, None, None, None, None, None);
+    let entry = DiffStatsCacheEntry {
+        refreshed_at_ms: 1_000,
+        added: None,
+        removed: None,
+        commits: None,
+        behind: None,
+        trunk: None,
+        branch: None,
+        clean: None,
+        landed: None,
+    };
     let fast = DIFF_STATS_TTL.as_millis() as u64;
     let idle = DIFF_STATS_IDLE_TTL.as_millis() as u64;
 
@@ -17,19 +27,18 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert!(entry.is_fresh_for(1_001 + fast, DIFF_STATS_IDLE_TTL));
 
     // `is_fresh` is the hot-tier convenience over `is_fresh_for`, and the
-    // populated fields round-trip through the constructor.
-    let populated = DiffStatsCacheEntry::new(
-        1_000,
-        Some(DiffStats {
-            added: 2,
-            removed: 1,
-        }),
-        Some(4),
-        Some(2),
-        Some("main".to_owned()),
-        Some("feature-migration".to_owned()),
-        Some(true),
-    );
+    // populated fields round-trip through the cache entry.
+    let populated = DiffStatsCacheEntry {
+        refreshed_at_ms: 1_000,
+        added: Some(2),
+        removed: Some(1),
+        commits: Some(4),
+        behind: Some(2),
+        trunk: Some("main".to_owned()),
+        branch: Some("feature-migration".to_owned()),
+        clean: Some(true),
+        landed: Some(true),
+    };
     assert!(populated.is_fresh(1_000 + fast));
     assert!(!populated.is_fresh(1_001 + fast));
     assert_eq!(
@@ -44,8 +53,9 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     assert_eq!(populated.trunk.as_deref(), Some("main"));
     assert_eq!(populated.branch.as_deref(), Some("feature-migration"));
     assert_eq!(populated.clean, Some(true));
+    assert_eq!(populated.landed, Some(true));
 
-    // An old producer's cache entry predates the `clean` column; the serde
+    // An old producer's cache entry predates the `clean` and `landed` columns; the serde
     // default reads it back as "not probed" (`None`), never a landed marker it
     // can't prove.
     let legacy: DiffStatsCacheEntry = serde_json::from_str(
@@ -53,6 +63,7 @@ fn git_cache_freshness_boundaries_are_inclusive() {
     )
     .unwrap();
     assert_eq!(legacy.clean, None);
+    assert_eq!(legacy.landed, None);
     assert_eq!(legacy.stats(), Some(DiffStats::default()));
 
     let cache = WorktreeRootsCache {

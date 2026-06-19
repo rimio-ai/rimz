@@ -194,5 +194,6 @@ fn worktree_group(path: &Path, rows: Vec<crate::SidebarRow>) -> crate::SidebarWo
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }
 }

@@ -119,6 +119,7 @@ fn render_worktree_equal_to_trunk() {
     snapshot.worktree_groups[0].commits_behind = Some(0);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
+    snapshot.worktree_groups[0].landed = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -130,9 +131,9 @@ fn render_worktree_equal_to_trunk() {
 }
 #[test]
 fn render_worktree_clear_safe_to_remove() {
-    // A worktree holding no work of its own — zero ahead, zero diff, clean
-    // status — whose trunk has moved on collapses to `✓ <trunk>`: done, safe
-    // to remove. Behind picks the marker, never paints a `⇣` of its own.
+    // A content-landed worktree with a clean status whose trunk has moved on
+    // collapses to `✓ <trunk>`: done, safe to remove. Behind picks the marker,
+    // never paints a `⇣` of its own.
     let mut codex = agent(
         "codex-1",
         "codex",
@@ -149,6 +150,7 @@ fn render_worktree_clear_safe_to_remove() {
     snapshot.worktree_groups[0].commits_behind = Some(5);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
+    snapshot.worktree_groups[0].landed = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -162,6 +164,40 @@ fn render_worktree_clear_safe_to_remove() {
         "behind stays out of the clear header"
     );
 }
+
+#[test]
+fn render_content_landed_worktree_uses_marker_over_ancestry_delta() {
+    // Content, not raw ancestry, drives the landed marker: a clean branch can
+    // still be commits ahead of the trunk by ancestry after squash/rebase/merge
+    // landings, and the header should call it removable instead of showing the
+    // delta cluster.
+    let mut codex = agent(
+        "codex-1",
+        "codex",
+        AgentStatus::Idle,
+        Some("/home/me/query-engine-wt/feature-migration"),
+        Some("feature-migration"),
+        None,
+    );
+    codex.last_activity = fixed_now() - Duration::from_secs(30);
+    let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
+    snapshot.worktree_groups[0].diff_added = Some(14);
+    snapshot.worktree_groups[0].diff_removed = Some(3);
+    snapshot.worktree_groups[0].commits_ahead = Some(2);
+    snapshot.worktree_groups[0].commits_behind = Some(5);
+    snapshot.worktree_groups[0].trunk = Some("main".to_owned());
+    snapshot.worktree_groups[0].clean = Some(true);
+    snapshot.worktree_groups[0].landed = Some(true);
+
+    let rendered = snapshot_to_screen(&snapshot, 38, 14);
+
+    assert!(rendered.contains("✓ main"), "header:\n{rendered}");
+    assert!(
+        !rendered.contains('⇡') && !rendered.contains("+14"),
+        "the marker replaces ancestry and diff clusters:\n{rendered}"
+    );
+}
+
 #[test]
 fn render_worktree_dirty_tree_keeps_the_cluster() {
     // A dirty tree — here an untracked binary the line count can't see, so
@@ -184,6 +220,7 @@ fn render_worktree_dirty_tree_keeps_the_cluster() {
     snapshot.worktree_groups[0].commits_behind = Some(5);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(false);
+    snapshot.worktree_groups[0].landed = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 
@@ -215,6 +252,7 @@ fn render_trunk_worktree_skips_the_landed_marker() {
     snapshot.worktree_groups[0].commits_behind = Some(0);
     snapshot.worktree_groups[0].trunk = Some("main".to_owned());
     snapshot.worktree_groups[0].clean = Some(true);
+    snapshot.worktree_groups[0].landed = Some(true);
 
     let rendered = snapshot_to_screen(&snapshot, 38, 14);
 

@@ -60,7 +60,7 @@ fn worktree_new_list_and_remove_round_trip() {
     let parsed: Value = serde_json::from_slice(&out.stdout).expect("json");
     assert_eq!(parsed.as_array().expect("array").len(), 1);
     assert_eq!(parsed[0]["name"], "demo");
-    assert_eq!(parsed[0]["commits_unmerged"], 0);
+    assert_eq!(parsed[0]["landed"], true);
 
     env.rimz()
         .args(["worktree", "remove", "demo"])
@@ -136,6 +136,60 @@ fn worktree_new_without_include_seeds_nothing() {
     );
 }
 
+#[cfg(unix)]
+#[test]
+fn worktree_new_symlinks_dirs_from_worktreelink_without_dirtying_checkout() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    std::fs::create_dir_all(env.project_root.join("node_modules/pkg")).expect("node_modules");
+    std::fs::write(
+        env.project_root.join("node_modules/pkg/index.js"),
+        "module.exports = 1\n",
+    )
+    .expect("write module");
+    std::fs::write(env.project_root.join(".worktreelink"), "node_modules\n")
+        .expect("write worktreelink");
+
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success()
+        .stdout(contains("linked : 1 dir(s) from .worktreelink"));
+
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let linked = path.join("node_modules");
+    assert!(
+        std::fs::symlink_metadata(&linked)
+            .expect("link metadata")
+            .is_symlink(),
+        "linked dir is a symlink"
+    );
+    assert_eq!(
+        linked.canonicalize().expect("linked canonical"),
+        env.project_root
+            .join("node_modules")
+            .canonicalize()
+            .expect("source canonical")
+    );
+    assert_eq!(
+        git_stdout(&path, &["status", "--porcelain"]),
+        "",
+        ".worktreelink symlink is registered in git info/exclude"
+    );
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .safe_to_remove(),
+        "the linked dir does not block cleanup"
+    );
+}
+
 #[test]
 fn worktree_remove_refuses_dirty_without_force() {
     if git_missing() {
@@ -164,7 +218,7 @@ fn worktree_remove_refuses_dirty_without_force() {
 }
 
 #[test]
-fn worktree_new_with_at_base_keeps_unmerged_commits() {
+fn worktree_new_with_at_base_keeps_pending_commits() {
     if git_missing() {
         return;
     }
@@ -188,9 +242,9 @@ fn worktree_new_with_at_base_keeps_unmerged_commits() {
     assert_eq!(
         rimz::worktree::status(&path, &marker)
             .expect("status")
-            .commits_unmerged,
-        Some(1),
-        "the clean commit is still unmerged into main"
+            .landed,
+        rimz::worktree::LandedVerdict::Pending,
+        "the clean commit is still pending on main"
     );
 
     env.rimz()
@@ -199,10 +253,10 @@ fn worktree_new_with_at_base_keeps_unmerged_commits() {
         .failure()
         .stderr(contains("--force"));
 
-    assert!(path.exists(), "unmerged @-based worktree is kept");
+    assert!(path.exists(), "pending @-based worktree is kept");
     assert!(
         branch_exists(&env.project_root, "demo"),
-        "unmerged @-based branch is kept"
+        "pending @-based branch is kept"
     );
 }
 
@@ -243,7 +297,7 @@ fn agents_exec_sighup_removes_clean_worktree() {
 
 #[cfg(unix)]
 #[test]
-fn agents_exec_sighup_keeps_dirty_and_unmerged_worktrees() {
+fn agents_exec_sighup_keeps_dirty_and_pending_worktrees() {
     assert_sighup_keeps_worktree("dirty", |_, path| {
         std::fs::write(path.join("dirty.txt"), "dirty\n").expect("dirty file");
     });
@@ -255,9 +309,9 @@ fn agents_exec_sighup_keeps_dirty_and_unmerged_worktrees() {
         assert_eq!(
             rimz::worktree::status(path, &marker)
                 .expect("status")
-                .commits_unmerged,
-            Some(1),
-            "clean local commit is unmerged until it lands on the base"
+                .landed,
+            rimz::worktree::LandedVerdict::Pending,
+            "clean local commit is pending until it lands on the base"
         );
     });
 }
@@ -320,8 +374,8 @@ fn worktree_remove_split_landed_succeeds_without_force() {
     assert_eq!(
         rimz::worktree::status(&path, &marker)
             .expect("status")
-            .commits_unmerged,
-        Some(0),
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
         "identical trees count as landed even when one branch commit landed as multiple base commits"
     );
 
@@ -366,6 +420,54 @@ fn gc_sweeps_merged_worktree() {
     );
 }
 
+#[test]
+fn gc_sweeps_merge_landed_worktree() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    commit_file(&path, "feature.txt", "feature\n", "feature");
+    git(
+        &env.project_root,
+        &["merge", "--no-ff", "demo", "-m", "merge demo"],
+    );
+    commit_file(&env.project_root, "trunk.txt", "trunk\n", "trunk");
+    git(&path, &["merge", "--no-ff", "main", "-m", "merge main"]);
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
+        "leftover merge commits are landed when their tree already exists on main"
+    );
+    assert_ne!(
+        git_stdout(&path, &["rev-list", "--count", "main..HEAD"]),
+        "0",
+        "the fixture remains ahead by ancestry"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees swept: 1"));
+
+    assert!(!path.exists(), "gc swept merge-landed worktree");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "gc force-deleted content-landed branch"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
@@ -389,8 +491,8 @@ fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
     assert_eq!(
         rimz::worktree::status(&path, &marker)
             .expect("status")
-            .commits_unmerged,
-        Some(0),
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
         "feature is landed on explicit base even though main lacks it"
     );
 

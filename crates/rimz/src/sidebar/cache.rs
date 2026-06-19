@@ -313,36 +313,19 @@ pub struct DiffStatsCacheEntry {
     #[serde(default)]
     pub branch: Option<String>,
     /// Whether the working tree is clean — `git status --porcelain` emptiness,
-    /// untracked files included — the safe-to-remove verdict both landed
+    /// untracked files included — the safe-to-remove verdict both content-landed
     /// markers (`≡` at the trunk tip, `✓` behind it) require. `None` on an old
     /// cache entry or a failed status read, which the renderer treats as not
     /// proven clean.
     #[serde(default)]
     pub clean: Option<bool>,
+    /// Whether committed content is proven landed on the resolved trunk.
+    /// `None` means unknown or an old cache entry.
+    #[serde(default)]
+    pub landed: Option<bool>,
 }
 
 impl DiffStatsCacheEntry {
-    pub fn new(
-        refreshed_at_ms: u64,
-        stats: Option<DiffStats>,
-        commits: Option<u32>,
-        behind: Option<u32>,
-        trunk: Option<String>,
-        branch: Option<String>,
-        clean: Option<bool>,
-    ) -> Self {
-        Self {
-            refreshed_at_ms,
-            added: stats.map(|stats| stats.added),
-            removed: stats.map(|stats| stats.removed),
-            commits,
-            behind,
-            trunk,
-            branch,
-            clean,
-        }
-    }
-
     /// Freshness under the caller's tier: [`DIFF_STATS_TTL`] for a hot
     /// worktree, [`DIFF_STATS_IDLE_TTL`] for the rest. Saturating, so a clock
     /// that ran backwards reads fresh rather than re-forking every tick.

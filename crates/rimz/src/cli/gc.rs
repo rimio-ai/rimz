@@ -111,7 +111,7 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
             .iter()
             .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
             || entry.dirty
-            || entry.commits_unmerged != Some(0)
+            || entry.landed != Some(true)
         {
             continue;
         }
@@ -133,7 +133,7 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
                     tracing::debug!(
                         path = %entry.path.display(),
                         branch = %marker.branch,
-                        "worktree gc removed checkout but kept unmerged branch",
+                        "worktree gc removed checkout but kept branch not proven landed",
                     );
                 }
             }

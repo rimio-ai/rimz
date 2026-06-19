@@ -106,6 +106,7 @@ pub(super) fn build_worktree_groups_from_rows(
                 commits_behind: None,
                 trunk: None,
                 clean: None,
+                landed: None,
             }
         })
         .collect::<Vec<_>>();

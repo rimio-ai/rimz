@@ -195,6 +195,7 @@ fn config_fold_stamps_agent_context_severity() {
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }];
 
     stamp_context_severity(

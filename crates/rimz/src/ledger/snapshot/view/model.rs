@@ -95,6 +95,9 @@ pub struct SidebarWorktreeGroup {
     /// Whether the working tree is clean.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clean: Option<bool>,
+    /// Whether committed content is proven landed on the resolved trunk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub landed: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

@@ -16,7 +16,7 @@ The marker stores the base branch name and the resolved base commit snapshot, so
 
 The checkout stays clean of Rimz metadata. Ownership lives in `rimz-worktree.json` inside the worktree's Git admin directory (`git rev-parse --git-dir` for that worktree), recording the name, branch, base branch name, base commit, repo root, worktree path, and marker version. Cleanup, `remove`, and `gc` act only when that marker is present; a missing marker reads as user-owned, even if the path matches the configured directory template.
 
-## Seeded files
+## Seeded files and linked directories
 
 A new worktree starts ready to run: the project's `.worktreeinclude` lists the untracked files an agent needs — `.env`, local config, caches — as glob patterns, one per line, and Rimz copies each pattern's matches from the checkout into the worktree right after `git worktree add`, preserving the path relative to the repo root. Lines use conventional shell-glob semantics (`*` within a path component, `**` across directories); blank lines and `#` comments are skipped. Matched directories copy recursively.
 
@@ -24,23 +24,29 @@ Seeding stays inside the project root: absolute patterns and patterns reaching o
 
 Seeding is best-effort enrichment layered over creation: a missing `.worktreeinclude` is a silent no-op, and a pattern that matches nothing or a file that fails to copy warns on the launch path and is skipped — the worktree and its agent still launch. A reused worktree is never re-seeded. `rimz worktree new` reports the count of seeded files.
 
+`.worktreelink` lists directories to symlink into each new worktree, one relative path per line with the same blank-line and `#` comment rules. Use it for heavy machine-local directories such as `node_modules`, `target`, or `.venv` that agents should share rather than copy. Rimz confines each source to the project root, requires it to be a directory, never clobbers an existing destination, creates an absolute symlink in the worktree, and reports the count of linked directories.
+
+Linked directories are registered in the worktree's effective `git info/exclude` as anchored `/<path>` patterns, written with temp-file plus rename and deduped across repeated creates. For linked Git worktrees this exclude file is commonly the repo's shared common `.git/info/exclude`, so the pattern also excludes the same build directory in the main checkout and sibling worktrees; build and dependency directories are the intended use.
+
 ## Cleanup
 
 A worktree is reclaimed once its work has landed. Cleanup runs through the on-disk `rimz worktree cleanup <path>` helper: the agent wrapper spawns it when an agent launched with `--worktree-path` exits ([harness.md → Cleanup](./harness.md#cleanup)), resolving past the kernel's trailing ` (deleted)` annotation after an atomic install so long-lived panes pick up the freshest cleanup logic; if the helper cannot be resolved or spawned, the wrapper falls back to the same cleanup implementation in process. `rimz worktree remove <name>` runs the same decision on demand.
 
-Cleanup re-reads the marker, checks `git status --porcelain`, checks commits not yet landed on the live base with `git rev-list --count <base>..HEAD`, treats identical base/head trees as landed only when the branch tree differs from its fork point, applies a bounded patch-equivalence check for rebased, cherry-picked, or squash-merged work, and asks the mux for live pane cwd values. If the live base branch is unavailable, cleanup tries `main`, `master`, `origin/HEAD`, then the creation snapshot; if the unmerged count cannot be computed, cleanup treats the worktree as not clean and keeps it.
+Cleanup re-reads the marker, checks `git status --porcelain`, asks the mux for live pane cwd values, and computes the same content-landed verdict the sidebar and `rimz gc` use. The comparison ref ladder tries the marker's live base branch, then `main`, `master`, `origin/HEAD`, then the creation snapshot. The verdict is conservative: a missing ref or git error is `unknown` and keeps the worktree; a pending patch keeps it; only a clean working tree with a landed verdict is removable.
+
+The content-landed verdict first accepts a branch with no commits beyond the comparison ref, then accepts identical base/head trees. Otherwise it asks Git for branch-side non-merge commits whose patch is not present on the comparison side (`git log --right-only --cherry-pick --no-merges`) and treats any result as pending. If only merge commits remain, their tree IDs must already appear in the comparison ref's recent history, bounded to 500 commits; a missing tree is pending. That covers rebased, cherry-picked, squash/split-landed, and merge-back shapes without treating sidebar wakeups or ancestry counts as truth.
 
 The cleanup decision is pure:
 
 | Marker | Status | Other live user pane inside path | Decision |
 | --- | --- | --- | --- |
 | absent | any | any | skip |
-| present | clean with no unmerged commits | no | remove worktree and delete the branch after proving its work landed |
-| present | dirty or carrying unmerged commits | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
+| present | clean and content-landed | no | remove worktree and delete the branch after proving its work landed |
+| present | dirty, pending, or unknown | no | prompt `keep / remove / shell` on a TTY; keep on EOF or non-TTY |
 | present | any | yes | skip |
 
 The automatic path deletes a branch only after proving its work landed on the live base: it tries `git branch -d`, escalates to `git branch -D` only after the same landed-work check succeeds, and keeps the branch otherwise. The interactive dirty `remove` choice and `rimz worktree remove --force` use Git's force removal path because the human explicitly chose destruction. Rimz sidebar panes are chrome: they inherit the tab cwd for launch, and worktree liveness reads user panes only.
 
 ## `rimz gc`
 
-`rimz gc` sweeps clean, marked worktrees whose work has landed on their base in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.
+`rimz gc` sweeps clean, marked, content-landed worktrees in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.

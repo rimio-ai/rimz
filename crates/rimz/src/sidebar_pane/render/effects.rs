@@ -505,6 +505,7 @@ mod tests {
                 commits_behind: None,
                 trunk: None,
                 clean: None,
+                landed: None,
             }],
             needs_attention: Vec::new(),
             resolver_working: Vec::new(),

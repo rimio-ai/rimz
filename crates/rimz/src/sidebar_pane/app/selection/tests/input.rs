@@ -491,6 +491,7 @@ fn the_unread_snap_overrides_selection_follow_to_the_top() {
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }];
 
     // Selecting the last row scrolls the short viewport down, off the lead.

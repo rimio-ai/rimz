@@ -46,6 +46,7 @@ pub mod tui;
 pub mod workspace;
 pub mod worktree;
 pub(crate) mod worktree_include;
+pub(crate) mod worktree_link;
 
 pub use crate::agents::{AccountUsageSnapshot, ExtraCredits, SpendTally, SpendWindow};
 pub use crate::bridge::{BridgeErr, BridgeOutcome, ExpectedFrame};

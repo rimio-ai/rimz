@@ -72,6 +72,7 @@ fn frame_interval_uses_breath_for_pulse_and_fast_for_work() {
         commits_behind: None,
         trunk: None,
         clean: None,
+        landed: None,
     }];
 
     assert_eq!(
@@ -343,6 +344,7 @@ fn bell_rings_only_for_unread_owned_panes_off_daemon_views() {
             commits_behind: None,
             trunk: None,
             clean: None,
+            landed: None,
         }];
         snap
     };

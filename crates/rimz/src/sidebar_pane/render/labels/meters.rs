@@ -675,12 +675,12 @@ pub(in crate::sidebar_pane::render) fn branch_delta_spans(
     spans
 }
 
-/// `≡ main` — the worktree IS the trunk tip: zero commits ahead and behind,
-/// a zero diff, and a clean working tree (untracked included). Dim green, the
-/// calm-positive tone an idle/done agent wears — quiet enough to stay chrome
-/// yet scannable when hunting removable worktrees; the `≡` shape carries the
-/// verdict under `NO_COLOR`. The trunk worktree itself never wears it — the
-/// caller gates on the group's live branch.
+/// `≡ main` — the worktree's content is landed and it sits at the trunk tip
+/// with a clean working tree (untracked included). Dim green, the calm-positive
+/// tone an idle/done agent wears — quiet enough to stay chrome yet scannable
+/// when hunting removable worktrees; the `≡` shape carries the verdict under
+/// `NO_COLOR`. The trunk worktree itself never wears it — the caller gates on
+/// the group's live branch.
 pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
     theme: &Theme,
     trunk: &str,
@@ -691,12 +691,12 @@ pub(in crate::sidebar_pane::render) fn trunk_equal_spans(
     )]
 }
 
-/// `✓ main` — the worktree holds no work of its own (zero ahead, zero diff,
-/// clean tree untracked included) but the trunk has moved on, so it is done
-/// and safe to remove. The same dim green as the `≡` equal marker — one
+/// `✓ main` — the worktree's content is landed with a clean tree (untracked
+/// included) but the trunk has moved on or ancestry still differs, so it is
+/// done and safe to remove. The same dim green as the `≡` equal marker — one
 /// calm-positive family, told apart by shape under `NO_COLOR`: `≡` "this is
-/// the trunk", `✓` "finished, removable". The trunk worktree itself never
-/// wears it — the caller gates on the group's live branch.
+/// the trunk", `✓` "finished, removable". The trunk worktree itself never wears
+/// it — the caller gates on the group's live branch.
 pub(in crate::sidebar_pane::render) fn trunk_clear_spans(
     theme: &Theme,
     trunk: &str,

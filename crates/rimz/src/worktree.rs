@@ -4,7 +4,7 @@
 //! admin directory, not in the checkout. The checkout remains pristine, and
 //! cleanup only ever removes marked worktrees.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -16,7 +16,7 @@ use crate::config::{WorktreeBase, WorktreeConfig};
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 3;
-const PATCH_EQUIVALENCE_UPSTREAM_COMMIT_CAP: u32 = 500;
+const LANDED_BASE_SCAN_CAP: u32 = 500;
 const AUTO_ADJECTIVES: &[&str] = &[
     "brisk", "calm", "clear", "daring", "fleet", "fresh", "keen", "lively", "nimble", "quiet",
     "rapid", "ready", "sharp", "steady", "swift", "vivid",
@@ -36,7 +36,9 @@ pub enum WorktreeErr {
     Exists { name: String, path: PathBuf },
     #[error("worktree `{name}` is not a Rimz-managed worktree at {path}")]
     Unmarked { name: String, path: PathBuf },
-    #[error("worktree `{name}` has local changes or unmerged commits; use --force to remove it")]
+    #[error(
+        "worktree `{name}` has local changes or work not proven landed; use --force to remove it"
+    )]
     Dirty { name: String },
     #[error("git command failed in {cwd}: git {args}: {stderr}")]
     Git {
@@ -80,6 +82,9 @@ pub struct CreatedWorktree {
     /// Files copied into the worktree from the project's `.worktreeinclude`.
     /// Zero for a reused worktree, which is never re-seeded.
     pub included: usize,
+    /// Directories symlinked into the worktree from the project's `.worktreelink`.
+    /// Zero for a reused worktree, which is never re-seeded.
+    pub linked: usize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -89,7 +94,7 @@ pub struct WorktreeListEntry {
     pub branch: Option<String>,
     pub base_ref: String,
     pub dirty: bool,
-    pub commits_unmerged: Option<u32>,
+    pub landed: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -101,28 +106,41 @@ pub struct WorktreeRow {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WorktreeStatus {
     pub dirty: bool,
-    pub commits_unmerged: Option<u32>,
+    pub landed: LandedVerdict,
 }
 
 impl Default for WorktreeStatus {
     fn default() -> Self {
         Self {
             dirty: false,
-            commits_unmerged: Some(0),
+            landed: LandedVerdict::Landed,
         }
     }
 }
 
 impl WorktreeStatus {
-    pub const fn clean(self) -> bool {
-        !self.dirty && matches!(self.commits_unmerged, Some(0))
+    pub const fn safe_to_remove(self) -> bool {
+        !self.dirty && self.landed.is_landed()
     }
 
     pub const fn unknown() -> Self {
         Self {
             dirty: false,
-            commits_unmerged: None,
+            landed: LandedVerdict::Unknown,
         }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LandedVerdict {
+    Landed,
+    Pending,
+    Unknown,
+}
+
+impl LandedVerdict {
+    pub const fn is_landed(self) -> bool {
+        matches!(self, Self::Landed)
     }
 }
 
@@ -170,6 +188,7 @@ pub fn create(
                 base_ref: marker.base_ref,
                 reused: true,
                 included: 0,
+                linked: 0,
             });
         }
         return Err(WorktreeErr::Exists { name, path });
@@ -214,6 +233,7 @@ pub fn create(
     };
     write_marker(&path, &marker)?;
     let included = crate::worktree_include::copy_includes(repo_root, &path);
+    let linked = crate::worktree_link::link_dirs(repo_root, &path);
     Ok(CreatedWorktree {
         name,
         path,
@@ -222,6 +242,7 @@ pub fn create(
         base_ref,
         reused: false,
         included,
+        linked,
     })
 }
 
@@ -239,7 +260,7 @@ pub fn remove(
         path: path.clone(),
     })?;
     let status = status(&path, &marker)?;
-    if !force && !status.clean() {
+    if !force && !status.safe_to_remove() {
         return Err(WorktreeErr::Dirty {
             name: name.to_owned(),
         });
@@ -279,7 +300,7 @@ pub fn list(repo_root: &Path) -> Result<Vec<WorktreeListEntry>> {
             branch: row.branch,
             base_ref: marker.base_ref,
             dirty: status.dirty,
-            commits_unmerged: status.commits_unmerged,
+            landed: landed_json(status.landed),
         });
     }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
@@ -293,10 +314,12 @@ pub fn prune(repo_root: &Path) -> Result<()> {
 
 pub fn status(worktree: &Path, marker: &WorktreeMarker) -> Result<WorktreeStatus> {
     let porcelain = git_stdout(worktree, ["status", "--porcelain"])?;
-    let unmerged = commits_unmerged(worktree, marker);
+    let landed = comparison_ref(worktree, marker)
+        .map(|comparison| content_landed(worktree, &comparison, "HEAD"))
+        .unwrap_or(LandedVerdict::Unknown);
     Ok(WorktreeStatus {
         dirty: !porcelain.trim().is_empty(),
-        commits_unmerged: unmerged,
+        landed,
     })
 }
 
@@ -308,7 +331,7 @@ pub fn cleanup_decision(
     if !marker_present || other_pane_inside {
         return CleanupDecision::Skip;
     }
-    if status.clean() {
+    if status.safe_to_remove() {
         CleanupDecision::RemoveClean
     } else {
         CleanupDecision::PromptDirty
@@ -324,7 +347,11 @@ pub fn sweepable_worktrees(
     rows.iter()
         .filter(|row| marked.contains(&row.path))
         .filter(|row| !live_cwds.iter().any(|cwd| path_inside(cwd, &row.path)))
-        .filter(|row| statuses.get(&row.path).is_some_and(|status| status.clean()))
+        .filter(|row| {
+            statuses
+                .get(&row.path)
+                .is_some_and(|status| status.safe_to_remove())
+        })
         .map(|row| row.path.clone())
         .collect()
 }
@@ -446,11 +473,6 @@ fn origin_head(repo_root: &Path) -> Option<String> {
     .ok()
 }
 
-fn commits_unmerged(worktree: &Path, marker: &WorktreeMarker) -> Option<u32> {
-    let comparison = comparison_ref(worktree, marker)?;
-    commits_unmerged_against(worktree, &comparison, "HEAD")
-}
-
 fn comparison_ref(cwd: &Path, marker: &WorktreeMarker) -> Option<String> {
     if let Some(base_branch) = marker.base_branch.as_deref()
         && ref_resolves(cwd, base_branch)
@@ -473,6 +495,14 @@ fn comparison_ref(cwd: &Path, marker: &WorktreeMarker) -> Option<String> {
     None
 }
 
+fn landed_json(verdict: LandedVerdict) -> Option<bool> {
+    match verdict {
+        LandedVerdict::Landed => Some(true),
+        LandedVerdict::Pending => Some(false),
+        LandedVerdict::Unknown => None,
+    }
+}
+
 fn ref_resolves(cwd: &Path, name: &str) -> bool {
     let commitish = format!("{name}^{{commit}}");
     git_run(
@@ -482,89 +512,85 @@ fn ref_resolves(cwd: &Path, name: &str) -> bool {
     .is_ok()
 }
 
-fn commits_unmerged_against(cwd: &Path, comparison_ref: &str, head_ref: &str) -> Option<u32> {
-    let ancestry_count = rev_list_count(cwd, &format!("{comparison_ref}..{head_ref}"))?;
+pub fn content_landed(cwd: &Path, comparison_ref: &str, head_ref: &str) -> LandedVerdict {
+    let Some(ancestry_count) = rev_list_count(cwd, &format!("{comparison_ref}..{head_ref}")) else {
+        return LandedVerdict::Unknown;
+    };
     if ancestry_count == 0 {
-        return Some(0);
+        return LandedVerdict::Landed;
     }
-    let Some(merge_base) = git_stdout(cwd, ["merge-base", comparison_ref, head_ref]).ok() else {
-        return Some(ancestry_count);
-    };
-    if final_tree_matches_after_branch_change(cwd, comparison_ref, head_ref, &merge_base) {
-        return Some(0);
-    }
-    let upstream_count = rev_list_count(cwd, &format!("{merge_base}..{comparison_ref}"))
-        .unwrap_or(PATCH_EQUIVALENCE_UPSTREAM_COMMIT_CAP.saturating_add(1));
-    if upstream_count > PATCH_EQUIVALENCE_UPSTREAM_COMMIT_CAP {
-        return Some(ancestry_count);
-    }
-    let cherry = match git_stdout(cwd, ["cherry", comparison_ref, head_ref]) {
-        Ok(output) => output,
-        Err(_) => return Some(ancestry_count),
-    };
-    let patch_unmerged = cherry
-        .lines()
-        .filter(|line| line.starts_with("+ "))
-        .count()
-        .min(u32::MAX as usize) as u32;
-    if patch_unmerged == 0
-        || (ancestry_count > 1
-            && branch_squash_equivalent(cwd, comparison_ref, head_ref, &merge_base))
-    {
-        Some(0)
-    } else {
-        Some(patch_unmerged)
-    }
-}
 
-fn final_tree_matches_after_branch_change(
-    cwd: &Path,
-    comparison_ref: &str,
-    head_ref: &str,
-    merge_base: &str,
-) -> bool {
-    let Some(comparison_tree) = tree_id(cwd, comparison_ref) else {
-        return false;
+    if tree_id(cwd, comparison_ref)
+        .zip(tree_id(cwd, head_ref))
+        .is_some_and(|(comparison, head)| comparison == head)
+    {
+        return LandedVerdict::Landed;
+    }
+
+    let range = format!("{comparison_ref}...{head_ref}");
+    let non_merge = match git_stdout(
+        cwd,
+        [
+            "log",
+            "--right-only",
+            "--cherry-pick",
+            "--no-merges",
+            "--format=%H",
+            range.as_str(),
+        ],
+    ) {
+        Ok(output) => output,
+        Err(_) => return LandedVerdict::Unknown,
     };
-    let Some(head_tree) = tree_id(cwd, head_ref) else {
-        return false;
+    if non_merge.lines().any(|line| !line.trim().is_empty()) {
+        return LandedVerdict::Pending;
+    }
+
+    let merge_trees = match git_stdout(
+        cwd,
+        [
+            "log",
+            "--right-only",
+            "--merges",
+            "--format=%T",
+            range.as_str(),
+        ],
+    ) {
+        Ok(output) => output,
+        Err(_) => return LandedVerdict::Unknown,
     };
-    let Some(merge_base_tree) = tree_id(cwd, merge_base) else {
-        return false;
+    let merge_trees: Vec<&str> = merge_trees
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if merge_trees.is_empty() {
+        return LandedVerdict::Landed;
+    }
+
+    let cap = LANDED_BASE_SCAN_CAP.to_string();
+    let base_trees = match git_stdout(
+        cwd,
+        ["log", "--format=%T", "-n", cap.as_str(), comparison_ref],
+    ) {
+        Ok(output) => output,
+        Err(_) => return LandedVerdict::Unknown,
     };
-    comparison_tree == head_tree && merge_base_tree != head_tree
+    let base_trees: HashSet<&str> = base_trees
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    if merge_trees.iter().all(|tree| base_trees.contains(tree)) {
+        LandedVerdict::Landed
+    } else {
+        LandedVerdict::Pending
+    }
 }
 
 fn tree_id(cwd: &Path, ref_name: &str) -> Option<String> {
     let tree_ref = format!("{ref_name}^{{tree}}");
     git_stdout(cwd, ["rev-parse", tree_ref.as_str()]).ok()
-}
-
-fn branch_squash_equivalent(
-    cwd: &Path,
-    comparison_ref: &str,
-    head_ref: &str,
-    merge_base: &str,
-) -> bool {
-    let tree = format!("{head_ref}^{{tree}}");
-    // The synthetic commit is unreachable; normal Git gc collects it after the
-    // human-scale cleanup/gc probe uses it.
-    let Ok(synthetic) = git_stdout(
-        cwd,
-        [
-            "commit-tree",
-            tree.as_str(),
-            "-p",
-            merge_base,
-            "-m",
-            "rimz-squash-probe",
-        ],
-    ) else {
-        return false;
-    };
-    git_stdout(cwd, ["cherry", comparison_ref, synthetic.as_str()])
-        .ok()
-        .is_some_and(|output| output.lines().any(|line| line.starts_with("- ")))
 }
 
 fn rev_list_count(cwd: &Path, range: &str) -> Option<u32> {
@@ -660,7 +686,7 @@ fn branch_landed(repo_root: &Path, marker: &WorktreeMarker) -> bool {
     let Some(comparison) = comparison_ref(repo_root, marker) else {
         return false;
     };
-    commits_unmerged_against(repo_root, &comparison, &marker.branch) == Some(0)
+    content_landed(repo_root, &comparison, &marker.branch) == LandedVerdict::Landed
 }
 
 fn force_delete_branch(repo_root: &Path, branch: &str) -> Result<BranchDeletion> {
@@ -731,11 +757,35 @@ mod tests {
     }
 
     #[test]
+    fn landed_verdict_and_status_constructors() {
+        assert!(LandedVerdict::Landed.is_landed());
+        assert!(!LandedVerdict::Pending.is_landed());
+        assert!(!LandedVerdict::Unknown.is_landed());
+
+        assert_eq!(
+            WorktreeStatus::default(),
+            WorktreeStatus {
+                dirty: false,
+                landed: LandedVerdict::Landed,
+            }
+        );
+        assert!(WorktreeStatus::default().safe_to_remove());
+        assert_eq!(
+            WorktreeStatus::unknown(),
+            WorktreeStatus {
+                dirty: false,
+                landed: LandedVerdict::Unknown,
+            }
+        );
+        assert!(!WorktreeStatus::unknown().safe_to_remove());
+    }
+
+    #[test]
     fn cleanup_decision_table() {
         let clean = WorktreeStatus::default();
         let dirty = WorktreeStatus {
             dirty: true,
-            commits_unmerged: Some(0),
+            landed: LandedVerdict::Landed,
         };
         assert_eq!(
             cleanup_decision(clean, true, false),
@@ -820,7 +870,7 @@ branch refs/heads/swift-otter
                 b,
                 WorktreeStatus {
                     dirty: false,
-                    commits_unmerged: Some(1),
+                    landed: LandedVerdict::Pending,
                 },
             ),
         ]);

@@ -44,7 +44,7 @@ enum WorktreeSubcmd {
     /// Remove a Rimz-owned worktree.
     Remove {
         name: String,
-        /// Remove even when the worktree is dirty or has unmerged commits.
+        /// Remove even when the worktree is dirty or has work not proven landed.
         #[arg(long)]
         force: bool,
     },
@@ -101,6 +101,9 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                         created.included
                     );
                 }
+                if created.linked > 0 {
+                    println!("  linked : {} dir(s) from .worktreelink", created.linked);
+                }
             }
             Ok(())
         }
@@ -127,10 +130,8 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                             .collect()
                     })
                     .unwrap_or_default();
-                let mut table = render::Table::new([
-                    "WORKTREE", "BRANCH", "AGENTS", "DIRTY", "UNMERGED", "PATH",
-                ])
-                .right(&[4]);
+                let mut table =
+                    render::Table::new(["WORKTREE", "BRANCH", "AGENTS", "DIRTY", "MERGED", "PATH"]);
                 for entry in entries {
                     let path_str = entry.path.to_string_lossy().into_owned();
                     let here: Vec<&AgentState> = agents
@@ -149,9 +150,11 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                             .collect::<Vec<_>>()
                             .join(" ")
                     };
-                    let unmerged = entry
-                        .commits_unmerged
-                        .map_or_else(|| "?".to_owned(), |count| count.to_string());
+                    let merged = match entry.landed {
+                        Some(true) => render::cell("yes"),
+                        Some(false) => render::cell("pending").fg(render::palette::WARN),
+                        None => render::cell("?"),
+                    };
                     let branch = entry.branch.clone().unwrap_or_else(|| "-".to_owned());
                     let dirty_cell = if entry.dirty {
                         render::cell("dirty").fg(render::palette::WARN)
@@ -164,7 +167,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
                         render::cell(branch).dash(),
                         render::cell(chips).fg(render::palette::ACCENT).dash(),
                         dirty_cell,
-                        render::cell(unmerged),
+                        merged,
                         render::cell(path_display).dash(),
                     ]);
                 }
@@ -308,7 +311,7 @@ fn dirty_choice(path: &Path) -> Result<DirtyChoice> {
     let mut stderr = std::io::stderr().lock();
     writeln!(
         stderr,
-        "rimz: worktree {} has local changes or unmerged commits.",
+        "rimz: worktree {} has local changes or work not proven landed.",
         path.display()
     )?;
     write!(stderr, "Choose keep/remove/shell [keep]: ")?;

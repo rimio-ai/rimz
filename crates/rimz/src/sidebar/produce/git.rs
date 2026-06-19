@@ -1,7 +1,7 @@
 //! The per-worktree git facts: the activity-tiered, single-flighted diff-stats
-//! refresh (trunk ref → merge-base → numstat + rev-list ×2 + status → branch),
-//! the group-root enumeration (worktree checkouts / child repos), and their
-//! parsers.
+//! refresh (trunk ref → merge-base → numstat + rev-list ×2 + status → landed
+//! verdict → branch), the group-root enumeration (worktree checkouts / child
+//! repos), and their parsers.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -15,6 +15,7 @@ use crate::sidebar::cache::{
     read_diff_stats_cache, unix_now_ms,
 };
 use crate::sidebar::enrich::{hot_worktree_paths, needed_worktree_paths, project_diff_stats};
+use crate::worktree::{self, LandedVerdict};
 
 /// How a non-producing sidebar waits for the elected producer's diff-stats
 /// write before refreshing locally. ~300ms total (15 × 20ms) — wider than the
@@ -155,9 +156,9 @@ const MAX_PARALLEL_GIT: usize = 8;
 /// Refresh several worktrees' diff-stats concurrently, returning each path's
 /// fresh entry. Independent worktrees run in parallel — bounded to
 /// [`MAX_PARALLEL_GIT`] live `git` chains at a time — while each path's own
-/// `trunk ref → merge-base → numstat + rev-list ×2 + status → branch` chain
-/// stays sequential. Runs on the diff-stats producer (the fetch worker), never
-/// the render thread.
+/// `trunk ref → merge-base → numstat + rev-list ×2 + status → landed verdict
+/// → branch` chain stays sequential. Runs on the diff-stats producer (the
+/// fetch worker), never the render thread.
 fn refresh_entries(
     paths: &[String],
     now_ms: u64,
@@ -186,9 +187,10 @@ fn refresh_entries(
 
 /// Produce a fresh diff-stats entry for one worktree path: the sequential `git`
 /// forks behind the columns (trunk ref → merge-base, then numstat and the two
-/// commit counts off that one base, then the status read) plus the live branch
-/// label. The trunk and merge-base are resolved once and shared by the diff and
-/// both commit counts, so each extra column costs one fork, not a full chain.
+/// commit counts off that one base, then the status read and content-landed
+/// verdict) plus the live branch label. The trunk and merge-base are resolved
+/// once and shared by the diff and both commit counts, so each extra column
+/// costs one fork, not a full chain.
 fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> DiffStatsCacheEntry {
     let worktree = Path::new(path);
     let trunk = trunk_ref(worktree, configured_trunk);
@@ -206,6 +208,18 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         .zip(trunk.as_deref())
         .and_then(|(base, trunk)| worktree_commits_behind(worktree, base, trunk));
     let status = worktree_status(worktree);
+    let clean = status.as_ref().map(|status| status.clean);
+    let landed = match (commits, clean, trunk.as_deref()) {
+        (Some(0), _, _) => Some(true),
+        (Some(_), Some(true), Some(trunk)) => {
+            match worktree::content_landed(worktree, trunk, "HEAD") {
+                LandedVerdict::Landed => Some(true),
+                LandedVerdict::Pending => Some(false),
+                LandedVerdict::Unknown => None,
+            }
+        }
+        _ => None,
+    };
     // Untracked content is change the diff is blind to: fold its line count
     // into the `+` churn so an untracked-only worktree reads as carrying work,
     // never as landed.
@@ -216,15 +230,17 @@ fn refresh_entry(path: &str, now_ms: u64, configured_trunk: Option<&str>) -> Dif
         }),
         (stats, _) => stats,
     };
-    DiffStatsCacheEntry::new(
-        now_ms,
-        stats,
+    DiffStatsCacheEntry {
+        refreshed_at_ms: now_ms,
+        added: stats.map(|stats| stats.added),
+        removed: stats.map(|stats| stats.removed),
         commits,
         behind,
         trunk,
-        worktree_branch(worktree),
-        status.map(|status| status.clean),
-    )
+        branch: worktree_branch(worktree),
+        clean,
+        landed,
+    }
 }
 
 fn worktree_branch(worktree: &Path) -> Option<String> {
@@ -267,16 +283,15 @@ fn worktree_commits_ahead(worktree: &Path, base: &str) -> Option<u32> {
 /// The commits the trunk has advanced past the worktree's fork point — `git
 /// rev-list --count <base>..<trunk>`, the work a rebase would pick up. The
 /// mirror of [`worktree_commits_ahead`], off the same merge-base. This column
-/// splits the header's two landed markers: a clean worktree with nothing of its
-/// own is the trunk tip itself at zero behind (`≡`) and a removable leftover
-/// the trunk moved past otherwise (`✓`) — safe to remove either way.
+/// splits the header's two content-landed markers: zero behind gets `≡`, and
+/// any trunk movement past the worktree gets `✓` — safe to remove either way.
 fn worktree_commits_behind(worktree: &Path, base: &str, trunk: &str) -> Option<u32> {
     rev_list_count(worktree, &format!("{base}..{trunk}"))
 }
 
 /// One worktree's `git status` verdict: whether the working tree is clean — no
-/// staged, unstaged, or untracked change, the safe-to-remove test behind the
-/// header's `≡`/`✓` markers — plus the added lines its untracked files carry,
+/// staged, unstaged, or untracked change, which the header's content-landed
+/// `≡`/`✓` markers require — plus the added lines its untracked files carry,
 /// folded into the header's `+` churn.
 struct WorktreeStatus {
     clean: bool,

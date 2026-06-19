@@ -71,18 +71,17 @@ fn read_published_snapshot_folds_caches_without_forking() {
     let mut diff = DiffStatsCache::default();
     diff.entries.insert(
         wt.clone(),
-        DiffStatsCacheEntry::new(
-            unix_now_ms(),
-            Some(DiffStats {
-                added: 7,
-                removed: 2,
-            }),
-            Some(3),
-            Some(1),
-            Some("origin/main".to_owned()),
-            Some("feat".to_owned()),
-            Some(false),
-        ),
+        DiffStatsCacheEntry {
+            refreshed_at_ms: unix_now_ms(),
+            added: Some(7),
+            removed: Some(2),
+            commits: Some(3),
+            behind: Some(1),
+            trunk: Some("origin/main".to_owned()),
+            branch: Some("feat".to_owned()),
+            clean: Some(false),
+            landed: Some(false),
+        },
     );
     atomic::write_temp_then_rename_cache(&runtime.root.join("diff-stats.json"), &diff).unwrap();
 
@@ -114,6 +113,7 @@ fn read_published_snapshot_folds_caches_without_forking() {
     );
     assert_eq!(group.label, "feat");
     assert_eq!(group.clean, Some(false), "the status verdict projects too");
+    assert_eq!(group.landed, Some(false), "the landed verdict projects too");
     // The own (sidebar) pane is excluded; the sibling renders as a row.
     assert!(
         snapshot

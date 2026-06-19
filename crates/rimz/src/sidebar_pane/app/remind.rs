@@ -282,6 +282,7 @@ mod tests {
             commits_behind: None,
             trunk: None,
             clean: None,
+            landed: None,
         }];
         snapshot
     }

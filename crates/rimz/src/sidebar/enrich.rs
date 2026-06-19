@@ -236,6 +236,7 @@ pub fn project_diff_stats(snapshot: &mut SidebarSnapshot, cache: &DiffStatsCache
         if let Some(clean) = entry.clean {
             group.clean = Some(clean);
         }
+        group.landed = entry.landed;
     }
 }
 

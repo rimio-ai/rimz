@@ -121,8 +121,8 @@ fn render_enriched_selected_agent_card() {
     );
 
     // The worktree's git story sits on the group header: the ⇡/⇣ commit
-    // delta leads the worktree-total diff. Clean but carrying work: the
-    // landed markers need a zero diff too, so the cluster stays.
+    // delta leads the worktree-total diff. This fixture has no landed verdict,
+    // so the cluster stays.
     assert!(rendered.contains("⇡3 ⇣1  +127 -43"), "header:\n{rendered}");
     assert!(
         !rendered.contains('≡') && !rendered.contains("✓ main"),
