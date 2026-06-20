@@ -7,7 +7,9 @@ on:
     branches: [main, master]
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # PRs: one run per PR ref, so a newer push cancels the superseded run.
+  # Pushes (main): unique per commit, so every landed commit verifies in parallel.
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
