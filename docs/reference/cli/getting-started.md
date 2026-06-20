@@ -54,7 +54,7 @@ rimz doctor --audit
 ## Start the room
 
 ```sh
-rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
+rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>]
 rimz start [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
 rimz attach [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [SESSION]
 ```

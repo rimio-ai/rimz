@@ -39,7 +39,7 @@ mod transcript;
 mod trust;
 mod workspace;
 mod worktree;
-use std::ffi::{OsStr, OsString};
+use std::ffi::OsString;
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 
@@ -107,19 +107,15 @@ pub fn dispatch() -> Result<()> {
         Some(Subcmd::Start(args)) => start(args, &globals),
         Some(Subcmd::Attach(args)) => attach(args, &globals),
         Some(Subcmd::Remote(args)) => remote::run(args, &globals),
-        None => {
-            let path = cli.path.unwrap_or_else(|| PathBuf::from("."));
-            reject_removed_agent_command_path(&path)?;
-            start(
-                StartArgs {
-                    path,
-                    attach: cli.attach,
-                    no_resume: cli.no_resume,
-                    refresh_ms: cli.refresh_ms,
-                },
-                &globals,
-            )
-        }
+        None => start(
+            StartArgs {
+                path: PathBuf::from("."),
+                attach: cli.attach,
+                no_resume: cli.no_resume,
+                refresh_ms: cli.refresh_ms,
+            },
+            &globals,
+        ),
     }
 }
 
@@ -148,8 +144,17 @@ where
         }) {
             continue;
         }
-        if arg.as_os_str() == OsStr::new("autoping") {
-            anyhow::bail!("`rimz autoping` has moved to `rimz loop`; use `rimz loop --help`");
+        match arg.to_str() {
+            Some("autoping") => {
+                anyhow::bail!("`rimz autoping` has moved to `rimz loop`; use `rimz loop --help`")
+            }
+            Some("run") => anyhow::bail!(
+                "`rimz run` has moved to `rimz agents <spec> <prompt> -p`; use `rimz agents show|wait|stop <ref>` for run records"
+            ),
+            Some("tab") => anyhow::bail!(
+                "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
+            ),
+            _ => {}
         }
         if !arg.to_string_lossy().starts_with('-') {
             return Ok(());
@@ -205,20 +210,6 @@ fn scope_facts(sub: Option<&Subcmd>) -> rimz::observability::ScopeFacts<'_> {
         session,
         agent,
     }
-}
-
-fn reject_removed_agent_command_path(path: &Path) -> Result<()> {
-    if path == Path::new("run") {
-        anyhow::bail!(
-            "`rimz run` has moved to `rimz agents <spec> <prompt> -p`; use `rimz agents show|wait|stop <ref>` for run records"
-        );
-    }
-    if path == Path::new("tab") {
-        anyhow::bail!(
-            "`rimz tab` has moved to `rimz agents <spec> [prompt]`; teams now come from `[agents.teams]`"
-        );
-    }
-    Ok(())
 }
 
 /// The current channel a command runs in: the worktree's branch, else its
@@ -447,16 +438,11 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     author,
     version,
     bin_name = "rimz",
-    about = "One room per project for agents, scripts, and humans.",
-    subcommand_negates_reqs = true
+    about = "One room per project for agents, scripts, and humans."
 )]
 struct Cli {
     #[clap(flatten)]
     global: GlobalFlags,
-
-    /// Optional path; equivalent to `rimz start <path>`.
-    #[arg(value_name = "PATH")]
-    path: Option<PathBuf>,
 
     #[clap(flatten)]
     attach: AttachFlags,
@@ -1122,13 +1108,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn removed_command_tokens_do_not_fall_through_to_path_start() {
-        assert!(reject_removed_agent_command_path(Path::new("run")).is_err());
-        assert!(reject_removed_agent_command_path(Path::new("tab")).is_err());
-        assert!(reject_removed_agent_command_path(Path::new("docs")).is_ok());
-    }
-
-    #[test]
     fn removed_top_level_command_rejects_before_global_help() {
         assert!(
             reject_removed_top_level_tokens_from([
@@ -1154,6 +1133,9 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(reject_removed_top_level_tokens_from([OsString::from("run")]).is_err());
+        assert!(reject_removed_top_level_tokens_from([OsString::from("tab")]).is_err());
+        assert!(reject_removed_top_level_tokens_from([OsString::from("agents")]).is_ok());
         assert!(
             reject_removed_top_level_tokens_from([
                 OsString::from("docs"),

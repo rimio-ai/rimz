@@ -8,6 +8,33 @@ use rimz::workspace::WorkspaceResolver;
 use crate::common::{CommandTimeoutExt, Env};
 
 #[test]
+fn singular_agent_is_unknown_subcommand_with_agents_suggestion() {
+    let env = Env::new();
+
+    let output = env
+        .rimz()
+        .arg("agent")
+        .bounded_output()
+        .expect("run rimz agent");
+
+    assert!(
+        !output.status.success(),
+        "`rimz agent` should fail, got: {:?}",
+        output.status,
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("agents"),
+        "stderr should suggest the plural subcommand, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("nested room"),
+        "stderr should come from clap, not the nested-room guard, got: {stderr}"
+    );
+}
+
+#[test]
 fn start_inside_selected_mux_reports_and_skips_launch() {
     let env = Env::new();
     let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve");

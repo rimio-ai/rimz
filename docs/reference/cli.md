@@ -41,12 +41,12 @@ rimz queue @codex --on done -- "open a PR summary when the tests pass"
 ## Start and attach a workspace
 
 ```sh
-rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
+rimz [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>]
 rimz start [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [PATH]
 rimz attach [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [SESSION]
 ```
 
-`rimz` and `rimz start` are the same entry point. They choose a room from the current path, preferring an explicit `--root`, then the enclosing git repository, then a project marker, then the directory itself. The session pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so participant commands inside the room write to the same ledger even when panes move through nested directories.
+`rimz` uses the current directory. `rimz start [PATH]` uses the given path, defaulting to `.`. Both choose a room by preferring an explicit `--root`, then the enclosing git repository, then a project marker, then the directory itself. The session pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so participant commands inside the room write to the same ledger even when panes move through nested directories.
 
 Interactive terminals attach by default. Non-interactive callers print the attach command. `--attach`, `--no-attach`, and `--print` force that decision. `--no-resume` starts an empty reborn room instead of re-seeding remembered agents, and `--refresh-ms` overrides the sidebar render cadence for sidebars spawned by that launch.
 

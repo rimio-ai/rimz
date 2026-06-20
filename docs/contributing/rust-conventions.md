@@ -14,16 +14,15 @@ The CLI is parsed with `clap` derive at the top level. Shared option groups are 
     author, version,
     bin_name = "rimz",
     about = "One room per project for agents, scripts, and humans.",
-    subcommand_negates_reqs = true,
 )]
 struct Cli {
     #[clap(flatten)] global: GlobalFlags,
-    #[arg(value_name = "PATH")] path: Option<PathBuf>,
+    #[clap(flatten)] attach: AttachFlags,
     #[command(subcommand)] subcommand: Option<Subcmd>,
 }
 ```
 
-- `subcommand_negates_reqs = true` lets root-level required args become optional when a subcommand is given.
+- The bare `rimz` default action targets `.`. Path-taking launch stays on `rimz start [PATH]` so mistyped subcommands reach clap as unknown commands.
 - `bin_name = "rimz"` keeps help text stable when the executable is invoked via a platform-specific path.
 - Subcommands are a flat `enum Subcmd { ... }`. Use `#[clap(visible_alias = "<short>")]` for discoverable shorthand and `#[clap(hide = true)]` for hooks-only or internal subcommands.
 
