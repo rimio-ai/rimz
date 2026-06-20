@@ -579,7 +579,7 @@ pub fn agent_handle(agent: &AgentState, peers: &[&AgentState], include_channel: 
     }
 }
 
-/// The optional `@sender: ` prefix for a peer-authored message. Human-authored
+/// The optional `from @sender: ` prefix for a peer-authored message. Human-authored
 /// text stays verbatim; agent-authored text uses the shortest live handle when the
 /// sender is visible in the snapshot and falls back to the launch env identity.
 pub fn sender_prefix(
@@ -604,7 +604,10 @@ pub fn sender_prefix(
             .find(|agent| agent.name.as_deref() == Some(sender_name))
     {
         let include_channel = agent_channel(agent).as_deref() != target_channel;
-        return Some(format!("{}: ", agent_handle(agent, peers, include_channel)));
+        return Some(format!(
+            "from {}: ",
+            agent_handle(agent, peers, include_channel)
+        ));
     }
     let include_channel = channel.as_deref() != target_channel;
     let mut handle =
@@ -613,7 +616,7 @@ pub fn sender_prefix(
         handle.push('#');
         handle.push_str(channel);
     }
-    Some(format!("{handle}: "))
+    Some(format!("from {handle}: "))
 }
 
 fn fallback_sender_handle(

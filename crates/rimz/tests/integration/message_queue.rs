@@ -325,7 +325,7 @@ fn steer_agent_env_prefixes_sender_and_no_from_suppresses_it() {
         "steer failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_text_then_enter(&trace_log, "@swift-otter: ping");
+    assert_text_then_enter(&trace_log, "from @swift-otter: ping");
     let steered = env
         .read_events()
         .into_iter()
@@ -429,7 +429,7 @@ fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
         "queue add failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert_text_then_enter(&trace_log, "@swift-otter: later");
+    assert_text_then_enter(&trace_log, "from @swift-otter: later");
 
     let listed = env
         .rimz()

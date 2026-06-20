@@ -47,7 +47,7 @@ pub(crate) struct SendFlags {
     /// with no `\n`/`\\` interpretation. Conflicts with inline `-- text`.
     #[arg(long, value_name = "PATH")]
     pub(crate) file: Option<PathBuf>,
-    /// Deliver the text verbatim with no `@sender:` prefix, even for an agent
+    /// Deliver the text verbatim with no `from @sender:` prefix, even for an agent
     /// caller. No effect for a human caller, which is already verbatim.
     #[arg(long)]
     pub(crate) no_from: bool,

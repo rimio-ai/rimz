@@ -549,11 +549,11 @@ fn sender_prefix_uses_live_handle_and_channel_only_when_crossing_channels() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "@claude: "
+        "from @claude: "
     );
     assert_eq!(
         sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "@claude#docs: "
+        "from @claude#docs: "
     );
 }
 
@@ -578,7 +578,7 @@ fn sender_prefix_live_handle_disambiguates_same_kind_peers() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "@claude-2: "
+        "from @claude-2: "
     );
 }
 
@@ -595,11 +595,11 @@ fn sender_prefix_falls_back_to_stored_identity_when_sender_is_absent() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("main")).unwrap(),
-        "@lucid-atlas#docs: "
+        "from @lucid-atlas#docs: "
     );
     assert_eq!(
         sender_prefix(&sender, &peers, Some("docs")).unwrap(),
-        "@lucid-atlas: "
+        "from @lucid-atlas: "
     );
 }
 
@@ -621,7 +621,7 @@ fn sender_prefix_fallback_keeps_petname_when_alias_matches_another_peer() {
 
     assert_eq!(
         sender_prefix(&sender, &peers, Some("auth")).unwrap(),
-        "@calm-fox: "
+        "from @calm-fox: "
     );
 }
 
