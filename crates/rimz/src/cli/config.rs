@@ -158,7 +158,7 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
         .parse::<DocumentMut>()
         .context("parsing shipped config template")?;
     let kind = FileKind::for_path(path);
-    let mut kept = 0;
+    let mut pending = Vec::new();
     let mut skipped = Vec::new();
     for found in collect_explicit_keys(kind, &old_doc) {
         match found {
@@ -170,20 +170,11 @@ fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
                 if template_has_same_value(&new_doc, &logical, &value) {
                     continue;
                 }
-                let mut trial = new_doc.clone();
-                match apply_logical_key(&mut trial, path, &logical, value) {
-                    Ok(()) => {
-                        new_doc = trial;
-                        kept += 1;
-                    }
-                    Err(err) => skipped.push(SkippedKey {
-                        key: logical.join("."),
-                        reason: SkipReason::Invalid(err.to_string()),
-                    }),
-                }
+                pending.push(PendingKey { logical, value });
             }
         }
     }
+    let kept = apply_merge_keys(path, &mut new_doc, pending, &mut skipped);
 
     let rendered = new_doc.to_string();
     write_bytes_atomically(path, rendered.as_bytes())
@@ -314,10 +305,49 @@ enum Found {
     Unknown(String),
 }
 
+struct PendingKey {
+    logical: Vec<String>,
+    value: Value,
+}
+
 fn collect_explicit_keys(kind: FileKind, doc: &DocumentMut) -> Vec<Found> {
     let mut found = Vec::new();
     walk_table(kind, &[], doc.as_table(), &mut found);
     found
+}
+
+fn apply_merge_keys(
+    path: &Path,
+    doc: &mut DocumentMut,
+    keys: Vec<PendingKey>,
+    skipped: &mut Vec<SkippedKey>,
+) -> usize {
+    let mut kept = 0;
+    let mut pending = keys;
+    while !pending.is_empty() {
+        let mut progressed = false;
+        let mut next = Vec::new();
+        for PendingKey { logical, value } in pending {
+            let mut trial = doc.clone();
+            match apply_logical_key(&mut trial, path, &logical, value.clone()) {
+                Ok(()) => {
+                    *doc = trial;
+                    kept += 1;
+                    progressed = true;
+                }
+                Err(err) => next.push((PendingKey { logical, value }, format!("{err:#}"))),
+            }
+        }
+        if !progressed {
+            skipped.extend(next.into_iter().map(|(key, err)| SkippedKey {
+                key: key.logical.join("."),
+                reason: SkipReason::Invalid(err),
+            }));
+            break;
+        }
+        pending = next.into_iter().map(|(key, _)| key).collect();
+    }
+    kept
 }
 
 fn walk_table(kind: FileKind, doc_prefix: &[String], table: &Table, out: &mut Vec<Found>) {

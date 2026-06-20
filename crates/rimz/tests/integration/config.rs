@@ -302,6 +302,76 @@ dsn = "https://k@o0.ingest.sentry.io/0"
 }
 
 #[test]
+fn setup_yes_merges_agents_team_layout_before_roles() {
+    let env = Env::new();
+    write_machine_file(
+        &agents_config_path(&env),
+        r#"
+[agents.profiles.lead]
+agent = "claude"
+
+[agents.profiles.helper]
+agent = "codex"
+
+[agents.teams.duo]
+layout = "lead+helper"
+[[agents.teams.duo.roles]]
+role = "lead"
+profile = "lead"
+[[agents.teams.duo.roles]]
+role = "helper"
+profile = "helper"
+"#,
+    );
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("Merged"))
+        .stdout(contains("No hooks or trust grants were changed"));
+
+    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
+    assert!(
+        text.contains("layout = \"lead+helper\""),
+        "custom layout should survive:\n{text}"
+    );
+    assert!(
+        text.contains("role = \"lead\"") && text.contains("profile = \"helper\""),
+        "roles should survive:\n{text}"
+    );
+}
+
+#[test]
+fn setup_yes_merges_agents_team_referencing_later_profile() {
+    let env = Env::new();
+    write_machine_file(
+        &agents_config_path(&env),
+        r#"
+[agents.teams.duo]
+[[agents.teams.duo.roles]]
+role = "lead"
+profile = "late"
+
+[agents.profiles.late]
+agent = "claude"
+"#,
+    );
+
+    env.rimz().args(["setup", "--yes"]).assert().success();
+
+    let text = std::fs::read_to_string(agents_config_path(&env)).expect("read merged agents");
+    assert!(
+        text.contains("role = \"lead\"") && text.contains("profile = \"late\""),
+        "team role should survive after its profile is replayed:\n{text}"
+    );
+    assert!(
+        text.contains("[agents.profiles.late]") && text.contains("agent = \"claude\""),
+        "later profile should survive:\n{text}"
+    );
+}
+
+#[test]
 fn setup_yes_preserves_template_comments_for_untouched_config() {
     let env = Env::new();
     write_machine_file(
