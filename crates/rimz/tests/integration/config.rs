@@ -180,7 +180,7 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .stderr(contains("unknown sidebar theme scheme `auto`"));
 
     env.rimz()
-        .args(["config", "set", "harness.smart_auto_compact", "abc"])
+        .args(["config", "set", "harness.smart_compact", "abc"])
         .assert()
         .failure()
         .stderr(contains("invalid auto-compact threshold `abc`"));

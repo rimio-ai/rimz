@@ -446,7 +446,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.worktree.dir",
         "agents.worktree.base",
         "agents.placement",
-        "harness.smart_auto_compact",
+        "harness.smart_compact",
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
@@ -571,7 +571,7 @@ fn parse_edit_value(raw: &str) -> Value {
 }
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
-    if is_harness_smart_auto_compact_edit(path)
+    if is_harness_smart_compact_edit(path)
         || is_sidebar_theme_scheme_edit(path)
         || is_sidebar_glyph_string_edit(path)
     {
@@ -588,9 +588,9 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
-    if is_harness_smart_auto_compact_edit(path) {
+    if is_harness_smart_compact_edit(path) {
         let Some(threshold) = value.as_str() else {
-            bail!("harness.smart_auto_compact must be a string");
+            bail!("harness.smart_compact must be a string");
         };
         if let Err(err) = rimz::message::AutoCompact::parse(threshold) {
             bail!("{err}");
@@ -639,8 +639,8 @@ fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
         || matches!(path, [root, leaf] if root == "theme" && leaf == "scheme")
 }
 
-fn is_harness_smart_auto_compact_edit(path: &[String]) -> bool {
-    matches!(path, [root, child] if root == "harness" && child == "smart_auto_compact")
+fn is_harness_smart_compact_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "smart_compact")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {
@@ -740,7 +740,7 @@ mod tests {
             "theme.glyphs.nerd_font.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
-            "harness.smart_auto_compact",
+            "harness.smart_compact",
         ] {
             validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
         }
@@ -840,22 +840,22 @@ mod tests {
     }
 
     #[test]
-    fn harness_smart_auto_compact_values_are_parsed_as_strings() {
-        let key = parse_key("harness.smart_auto_compact").expect("key");
+    fn harness_smart_compact_values_are_parsed_as_strings() {
+        let key = parse_key("harness.smart_compact").expect("key");
 
         assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
         assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
     }
 
     #[test]
-    fn harness_smart_auto_compact_validation_rejects_bad_values() {
-        let key = parse_key("harness.smart_auto_compact").expect("key");
+    fn harness_smart_compact_validation_rejects_bad_values() {
+        let key = parse_key("harness.smart_compact").expect("key");
 
         validate_set_value(&key, &Value::from("70%")).expect("percent threshold");
         validate_set_value(&key, &Value::from("120000")).expect("token threshold");
 
         let err = validate_set_value(&key, &Value::from("abc"))
-            .expect_err("invalid smart auto-compact threshold")
+            .expect_err("invalid smart-compact threshold")
             .to_string();
         assert!(
             err.contains("invalid auto-compact threshold `abc`"),

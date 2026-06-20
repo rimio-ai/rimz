@@ -465,7 +465,7 @@ fn queue_agent_env_prefixes_delivery_lists_sender_and_no_from_suppresses_it() {
     assert_text_then_enter(&trace_log, "exact");
 }
 
-/// `steer --smart-auto-compact 70%` against a window past the threshold types `/compact`
+/// `steer --smart-compact 70%` against a window past the threshold types `/compact`
 /// and submits it before pasting the message, so the prompt lands against a fresh
 /// window. The single-target run reports the compaction it ran.
 #[test]
@@ -479,14 +479,7 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "steer",
-            "@claude",
-            "--smart-auto-compact",
-            "70%",
-            "--",
-            "go",
-        ])
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go"])
         .output()
         .expect("steer");
     assert!(
@@ -517,7 +510,7 @@ fn steer_auto_compact_runs_compact_before_a_full_window() {
     );
 }
 
-/// `[harness] smart_auto_compact` gives steer the same compact-first threshold
+/// `[harness] smart_compact` gives steer the same compact-first threshold
 /// as the flag when the invocation omits it.
 #[test]
 fn steer_auto_compact_uses_config_default() {
@@ -526,7 +519,7 @@ fn steer_auto_compact_uses_config_default() {
     std::fs::create_dir_all(&config_dir).expect("mkdir config");
     std::fs::write(
         config_dir.join("config.toml"),
-        "[harness]\nsmart_auto_compact = \"70%\"\n",
+        "[harness]\nsmart_compact = \"70%\"\n",
     )
     .expect("write config");
     register_running_agent(
@@ -591,14 +584,7 @@ fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
         .rimz()
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
-        .args([
-            "steer",
-            "@claude",
-            "--smart-auto-compact",
-            "70%",
-            "--",
-            "go",
-        ])
+        .args(["steer", "@claude", "--smart-compact", "70%", "--", "go"])
         .output()
         .expect("steer");
     assert!(
@@ -615,7 +601,7 @@ fn steer_auto_compact_leaves_a_window_below_threshold_alone() {
     assert_text_then_enter(&trace_log, "go");
 }
 
-/// Queue delivery honours `--smart-auto-compact` at the turn boundary: an idle agent
+/// Queue delivery honours `--smart-compact` at the turn boundary: an idle agent
 /// past the threshold gets `/compact` ahead of the queued text, in one delivery.
 #[test]
 fn queue_auto_compact_runs_compact_before_delivering() {
@@ -641,14 +627,7 @@ fn queue_auto_compact_runs_compact_before_delivering() {
         .env("RIMZ_ZELLIJ_BIN", zellij_trace_shim())
         .env("RIMZ_TEST_ZELLIJ_LOG", &trace_log)
         .env("RIMZ_QUEUE_SETTLE_MS", "0")
-        .args([
-            "queue",
-            "@claude",
-            "--smart-auto-compact",
-            "70%",
-            "--",
-            "go",
-        ])
+        .args(["queue", "@claude", "--smart-compact", "70%", "--", "go"])
         .output()
         .expect("queue add");
     assert!(
@@ -989,7 +968,7 @@ fn register_running_agent(env: &Env, session_id: &str, branch: &str, pane_env: &
     );
 }
 
-/// Seed a context sidecar so `--smart-auto-compact` reads `used_pct` as the agent's
+/// Seed a context sidecar so `--smart-compact` reads `used_pct` as the agent's
 /// window fill — the same record the producer would fold from a live statusline.
 fn seed_context_fill(env: &Env, agent_id: &str, used_pct: u8) {
     let mut context = rimz::ledger::agent_context::empty_context("claude", jiff::Timestamp::now());

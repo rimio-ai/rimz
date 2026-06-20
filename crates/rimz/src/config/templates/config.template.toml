@@ -80,7 +80,7 @@ pane_border_lines = "simple"          # "simple", "single", "double", or "heavy"
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
 [harness]
-## smart_auto_compact = "70%"          # default compact-first threshold for steer/queue ("70%" or a token count); unset = off
+## smart_compact = "70%"          # default compact-first threshold for steer/queue ("70%" or a token count); unset = off
 
 [sentry]
 # Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no

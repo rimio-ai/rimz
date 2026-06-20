@@ -21,7 +21,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 
 | File | Scope | What it does | Who writes it |
 | --- | --- | --- | --- |
-| `~/.config/rimz/config.toml` | per-machine | core room behavior: accounts, notifications, remote-control auto-launch, sidebar behavior, multiplexer defaults, resume, smart auto-compact, Sentry | you, `rimz setup`, `rimz config` |
+| `~/.config/rimz/config.toml` | per-machine | core room behavior: accounts, notifications, remote-control auto-launch, sidebar behavior, multiplexer defaults, resume, smart-compact, Sentry | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, semantic slots, glyphs, animations, provider brand styling | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop automation, attention windows, pets | you, `rimz setup`, `rimz config`, `rimz loop` |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
@@ -48,7 +48,7 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding on rebirth, and opt-in auto-continue on rate-limit reset |
-| `[harness]` | default smart-auto-compact threshold for steer/queue |
+| `[harness]` | default smart-compact threshold for steer/queue |
 | `[sentry]` | off-box error reporting target |
 
 `theme.toml` carries appearance:
@@ -190,10 +190,10 @@ While the room is **live**, `auto_continue` picks a rate-limit-parked agent's tu
 
 ```toml
 [harness]
-smart_auto_compact = "70%"
+smart_compact = "70%"
 ```
 
-`smart_auto_compact` sets the default threshold for Rimz's compact-first `steer` and `queue` sends. Use a percentage string (`"70%"`) or an occupied-token count string (`"120000"`); leave it unset to keep compact-first sends opt-in through `--smart-auto-compact`. A per-command flag overrides the config value. Mechanics live in [internals/agents/harness.md](../internals/agents/harness.md#compact-before-sending).
+`smart_compact` sets the default threshold for Rimz's compact-first `steer` and `queue` sends. Use a percentage string (`"70%"`) or an occupied-token count string (`"120000"`); leave it unset to keep compact-first sends opt-in through `--smart-compact`. A per-command flag overrides the config value. Mechanics live in [internals/agents/harness.md](../internals/agents/harness.md#compact-before-sending).
 
 ### Off-Box Error Reporting
 

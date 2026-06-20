@@ -11,12 +11,12 @@ pub struct HarnessConfig {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        with = "smart_auto_compact_serde"
+        with = "smart_compact_serde"
     )]
-    pub smart_auto_compact: Option<AutoCompact>,
+    pub smart_compact: Option<AutoCompact>,
 }
 
-mod smart_auto_compact_serde {
+mod smart_compact_serde {
     use super::*;
 
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<AutoCompact>, D::Error>
@@ -29,13 +29,13 @@ mod smart_auto_compact_serde {
     }
 
     pub fn serialize<S>(
-        smart_auto_compact: &Option<AutoCompact>,
+        smart_compact: &Option<AutoCompact>,
         serializer: S,
     ) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
-        match smart_auto_compact {
+        match smart_compact {
             Some(AutoCompact::Percent(pct)) => serializer.serialize_str(&format!("{pct}%")),
             Some(AutoCompact::Tokens(tokens)) => serializer.serialize_str(&tokens.to_string()),
             None => serializer.serialize_none(),
@@ -48,28 +48,25 @@ mod tests {
     use super::*;
 
     #[test]
-    fn smart_auto_compact_deserializes_percent() {
+    fn smart_compact_deserializes_percent() {
         let config: HarnessConfig =
-            toml::from_str("smart_auto_compact = \"70%\"").expect("parse harness config");
+            toml::from_str("smart_compact = \"70%\"").expect("parse harness config");
 
-        assert_eq!(config.smart_auto_compact, Some(AutoCompact::Percent(70)));
+        assert_eq!(config.smart_compact, Some(AutoCompact::Percent(70)));
     }
 
     #[test]
-    fn smart_auto_compact_deserializes_token_count() {
+    fn smart_compact_deserializes_token_count() {
         let config: HarnessConfig =
-            toml::from_str("smart_auto_compact = \"120000\"").expect("parse harness config");
+            toml::from_str("smart_compact = \"120000\"").expect("parse harness config");
 
-        assert_eq!(
-            config.smart_auto_compact,
-            Some(AutoCompact::Tokens(120_000))
-        );
+        assert_eq!(config.smart_compact, Some(AutoCompact::Tokens(120_000)));
     }
 
     #[test]
-    fn smart_auto_compact_round_trips() {
+    fn smart_compact_round_trips() {
         let config = HarnessConfig {
-            smart_auto_compact: Some(AutoCompact::Percent(70)),
+            smart_compact: Some(AutoCompact::Percent(70)),
         };
 
         let toml = toml::to_string(&config).expect("serialize harness config");

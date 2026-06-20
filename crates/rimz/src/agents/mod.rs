@@ -674,7 +674,7 @@ pub trait AgentAdapter: Send + Sync {
 
     /// The interactive slash command that triggers a manual context compaction
     /// in the agent's own composer. Typed as keystrokes ahead of a steered or
-    /// queued message under `--smart-auto-compact`, never a bracketed paste — agents
+    /// queued message under `--smart-compact`, never a bracketed paste — agents
     /// treat pasted text as literal content and would not run a pasted command.
     /// `None` when the agent exposes no such command.
     fn compact_command(&self) -> Option<&'static str> {
