@@ -28,6 +28,7 @@ mod color;
 mod display;
 pub mod effective;
 mod glyphs;
+mod harness;
 mod loop_;
 mod mux;
 mod notifications;
@@ -58,6 +59,7 @@ pub use display::{
     DisplayConfig, GlowMode, ProviderTabsMode, ScrollbarMode,
 };
 pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
+pub use harness::HarnessConfig;
 pub use loop_::{LoopConfig, TaskEntry, Tasks};
 pub use mux::{
     MultiplexerConfig, TmuxConfig, TmuxExtendedKeysFormat, TmuxPaneBorderLines,
@@ -122,6 +124,7 @@ pub struct MachineConfig {
     pub zellij: ZellijConfig,
     pub tmux: TmuxConfig,
     pub resume: ResumeConfig,
+    pub harness: HarnessConfig,
     pub sentry: SentryConfig,
     #[serde(skip_serializing_if = "ThemeConfig::is_unset")]
     pub theme: ThemeConfig,
@@ -245,6 +248,7 @@ impl MachineConfig {
             zellij: core.zellij,
             tmux: core.tmux,
             resume: core.resume,
+            harness: core.harness,
             sentry: core.sentry,
             theme,
             agents,
@@ -262,6 +266,7 @@ struct CoreConfig {
     zellij: ZellijConfig,
     tmux: TmuxConfig,
     resume: ResumeConfig,
+    harness: HarnessConfig,
     sentry: SentryConfig,
 }
 

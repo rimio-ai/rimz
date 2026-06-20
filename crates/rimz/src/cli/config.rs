@@ -446,6 +446,7 @@ fn exact_set_keys() -> BTreeSet<String> {
         "agents.worktree.dir",
         "agents.worktree.base",
         "agents.placement",
+        "harness.smart_auto_compact",
         "resume.on_rebirth",
         "resume.max",
         "resume.auto_continue",
@@ -570,7 +571,10 @@ fn parse_edit_value(raw: &str) -> Value {
 }
 
 fn parse_set_value(path: &[String], raw: &str) -> Value {
-    if is_sidebar_theme_scheme_edit(path) || is_sidebar_glyph_string_edit(path) {
+    if is_harness_smart_auto_compact_edit(path)
+        || is_sidebar_theme_scheme_edit(path)
+        || is_sidebar_glyph_string_edit(path)
+    {
         return parse_string_edit_value(raw);
     }
     parse_edit_value(raw)
@@ -625,6 +629,10 @@ fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
 fn is_sidebar_theme_scheme_edit(path: &[String]) -> bool {
     matches!(path, [root] if root == "theme")
         || matches!(path, [root, leaf] if root == "theme" && leaf == "scheme")
+}
+
+fn is_harness_smart_auto_compact_edit(path: &[String]) -> bool {
+    matches!(path, [root, child] if root == "harness" && child == "smart_auto_compact")
 }
 
 fn is_sidebar_glyph_string_edit(path: &[String]) -> bool {
@@ -724,6 +732,7 @@ mod tests {
             "theme.glyphs.nerd_font.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
+            "harness.smart_auto_compact",
         ] {
             validate_set_key(&parse_key(key).unwrap()).unwrap_or_else(|err| panic!("{key}: {err}"));
         }
@@ -820,6 +829,14 @@ mod tests {
 
         let leaf = parse_key("theme.glyphs.unicode.process.cpu").expect("key");
         assert_eq!(parse_set_value(&leaf, "1").as_str(), Some("1"));
+    }
+
+    #[test]
+    fn harness_smart_auto_compact_values_are_parsed_as_strings() {
+        let key = parse_key("harness.smart_auto_compact").expect("key");
+
+        assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
+        assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
     }
 
     #[test]

@@ -108,10 +108,12 @@ fn queue_add(
         all,
         create,
         yes,
-        auto_compact,
+        smart_auto_compact,
         file,
         no_from,
     } = send;
+    let auto_compact =
+        smart_auto_compact.or_else(|| super::machine_config().harness.smart_auto_compact);
     let text = resolve_message(&text, file.as_deref())?;
     add_message(
         target,
@@ -341,7 +343,7 @@ fn deliver_one(
     debug_assert!(message.same_agent(&candidate.message.kind, &candidate.message.agent_id));
     debug_assert_eq!(message.message_id, candidate.message.message_id);
     let backend = rimz::mux::backend_for(candidate.pane_id.mux());
-    // A `--auto-compact` message types `/compact` ahead of the text, so the
+    // A `--smart-auto-compact` message types `/compact` ahead of the text, so the
     // prompt lands against a fresh window. A failed compaction fails the whole
     // delivery through the same retry path as a failed message send.
     let send = (|| {
@@ -383,7 +385,7 @@ fn deliver_one(
 struct DeliveryCandidate {
     message: MessageRecord,
     pane_id: PaneId,
-    /// The `/compact` to type ahead of the text, set when `--auto-compact`'s
+    /// The `/compact` to type ahead of the text, set when `--smart-auto-compact`'s
     /// threshold is met at this delivery boundary. `None` leaves delivery as a
     /// plain message send.
     compact: Option<&'static str>,
@@ -416,7 +418,7 @@ fn delivery_candidate(
     let mut snapshot = ledger
         .snapshot_cached()
         .context("reading delivery snapshot")?;
-    // `--auto-compact` reads context fill, which the cached snapshot does not
+    // `--smart-auto-compact` reads context fill, which the cached snapshot does not
     // carry; fold the disposable context sidecars in for the freshest gauge.
     if message.auto_compact.is_some()
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(message.workspace_id.clone())
@@ -470,7 +472,7 @@ fn delivery_candidate(
     }))
 }
 
-/// The agent's `/compact` when a `--auto-compact` message's threshold is met by
+/// The agent's `/compact` when a `--smart-auto-compact` message's threshold is met by
 /// the agent's current fill, else `None`. An agent kind with no compaction
 /// command can't compact, so it passes through as a plain send.
 fn compact_command_if_full(message: &MessageRecord, agent: &AgentState) -> Option<&'static str> {

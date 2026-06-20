@@ -51,15 +51,17 @@ pub fn run(args: SteerArgs, globals: &GlobalFlags) -> Result<()> {
         all,
         create,
         yes,
-        auto_compact,
+        smart_auto_compact,
         file,
         no_from,
     } = args.send;
+    let auto_compact =
+        smart_auto_compact.or_else(|| super::machine_config().harness.smart_auto_compact);
     let text = resolve_message(&args.text, file.as_deref())?;
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())?;
     let ledger = open_ledger(&workspace)?;
     let mut snapshot = super::resolution_snapshot(&workspace, &ledger, globals)?;
-    // `--auto-compact` reads context fill, which the resolution snapshot does not
+    // `--smart-auto-compact` reads context fill, which the resolution snapshot does not
     // carry; fold the disposable context sidecars in for the freshest gauge.
     if auto_compact.is_some()
         && let Ok(runtime) = rimz::RuntimePaths::for_workspace(workspace.workspace_id.clone())
@@ -182,7 +184,7 @@ fn steer_one(
     Ok(Outcome::Sent { label, compacted })
 }
 
-/// Submit the agent's `/compact` ahead of the steer when `--auto-compact` is set
+/// Submit the agent's `/compact` ahead of the steer when `--smart-auto-compact` is set
 /// and a bound agent's context has reached the threshold. A lazy pane carries no
 /// context, and an agent kind with no compaction command can't compact, so both
 /// pass through untouched. Returns whether a compaction was sent.

@@ -1164,13 +1164,13 @@ impl AgentState {
             })
     }
 
-    /// Tokens occupying the window for a `--auto-compact <tokens>` threshold: the
+    /// Tokens occupying the window for a `--smart-auto-compact <tokens>` threshold: the
     /// precise composition when known, else the carried turn total. The gauge's
     /// `context_used_tokens` withholds a bare total so it never legends a partial
     /// composition; a threshold instead scales against the same numerator the
-    /// percent gauge derives from, so `--auto-compact 100000` fires for a
+    /// percent gauge derives from, so `--smart-auto-compact 100000` fires for a
     /// transcript-derived session that reports only a running total — matching
-    /// `--auto-compact 70%`, which already reads that total through the gauge.
+    /// `--smart-auto-compact 70%`, which already reads that total through the gauge.
     pub fn occupied_context_tokens(&self) -> Option<u64> {
         self.context_used_tokens().or(self.total_tokens)
     }

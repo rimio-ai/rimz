@@ -68,7 +68,7 @@ mod tests {
 
     #[test]
     fn every_adapter_exposes_a_manual_compaction_command() {
-        // `--auto-compact` types this into the agent's composer; every wired
+        // `--smart-auto-compact` types this into the agent's composer; every wired
         // agent supports the `/compact` slash command, so a new adapter that
         // forgets to opt in fails here rather than silently never compacting.
         for adapter in ADAPTERS {

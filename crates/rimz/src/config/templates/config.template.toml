@@ -79,6 +79,9 @@ pane_border_lines = "simple"          # "simple", "single", "double", or "heavy"
 # auto_continue_overloaded_max_retries = 10 # stop attempting after this many overload retries
 # auto_continue_text = "continue"     # the nudge typed into the parked pane on resume
 
+[harness]
+## smart_auto_compact = "70%"          # default compact-first threshold for steer/queue ("70%" or a token count); unset = off
+
 [sentry]
 # Off-box error reporting. With no DSN, Sentry stays off and Rimz makes no
 # network calls. When set, Rimz warn/error events and observed agent

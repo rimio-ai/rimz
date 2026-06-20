@@ -104,7 +104,7 @@ pub enum AutoCompact {
 }
 
 impl AutoCompact {
-    /// Parse a CLI threshold: `70%` is a percentage of the window, a bare integer
+    /// Parse a threshold: `70%` is a percentage of the window, a bare integer
     /// (`120000`) is an absolute occupied-token count.
     pub fn parse(raw: &str) -> Result<Self, String> {
         let raw = raw.trim();
@@ -112,14 +112,14 @@ impl AutoCompact {
             let pct: u8 = pct
                 .trim()
                 .parse()
-                .map_err(|_| format!("invalid --auto-compact percentage `{raw}`"))?;
+                .map_err(|_| format!("invalid auto-compact percentage `{raw}`"))?;
             if pct > 100 {
-                return Err(format!("--auto-compact percentage `{pct}` exceeds 100"));
+                return Err(format!("auto-compact percentage `{pct}` exceeds 100"));
             }
             Ok(Self::Percent(pct))
         } else {
             let tokens: u64 = raw.parse().map_err(|_| {
-                format!("invalid --auto-compact threshold `{raw}`; use `70%` or a token count")
+                format!("invalid auto-compact threshold `{raw}`; use `70%` or a token count")
             })?;
             Ok(Self::Tokens(tokens))
         }
