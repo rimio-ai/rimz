@@ -78,7 +78,7 @@ scheme = "~/themes/rimz.toml"
 
 ## Color Depth
 
-`[theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it and otherwise quantizes the selected RGB tones to xterm 256 indexes; `truecolor` forces RGB, which is useful across SSH or mux hops that forward `TERM` but drop `COLORTERM`; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
+`[theme] mode` sets the palette depth. `auto` (default) uses truecolor when `COLORTERM` advertises it or the terminfo entry for `$TERM` declares direct color (`RGB`, `Tc`, or the `setrgbf`/`setrgbb` pair), so Ghostty, kitty, and WezTerm over SSH get RGB without forwarding `COLORTERM`; otherwise it quantizes the selected RGB tones to xterm 256 indexes. `truecolor` forces RGB for a terminal whose terminfo lacks the capability; `256` pins indexed output. Use [`glow = "always"`](#glow) separately when the same hop also under-advertises transition-flash support.
 
 ```toml
 [theme]
@@ -293,7 +293,7 @@ ascii_art = "CLAUDE"
 
 ## Glow
 
-`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows ``theme.mode`` plus the `NO_COLOR` fallback. `auto` (default) follows `COLORTERM`; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop that forwards `TERM` but drops `COLORTERM` — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
+`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows ``theme.mode`` plus the `NO_COLOR` fallback. `auto` (default) follows the same `COLORTERM` or terminfo truecolor signal as palette depth; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop where terminfo also lacks the capability — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
 
 ```toml
 [sidebar]

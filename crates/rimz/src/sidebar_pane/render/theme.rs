@@ -20,7 +20,6 @@ use crate::config::{
     nearest_xterm_index, xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
-use std::sync::OnceLock;
 
 use super::animation::{BreathSample, ResolvedAnimations};
 use super::oklab;
@@ -343,7 +342,7 @@ fn ansi_index_rgb(index: u8) -> (u8, u8, u8) {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Theme {
     no_color: bool,
-    /// The terminal advertises 24-bit color (`COLORTERM`). Gates the
+    /// The terminal advertises 24-bit color. Gates the
     /// post-render effects pass; palette depth has its own mode.
     truecolor: bool,
     depth: ColorDepth,
@@ -374,11 +373,11 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// The active theme for a frame: cached `NO_COLOR` and `COLORTERM`
-    /// readings plus the palette, depth, and glow mode resolved from the
-    /// snapshot's `[sidebar]` config.
+    /// The active theme for a frame: cached terminal color-capability readings
+    /// plus the palette, depth, and glow mode resolved from the snapshot's
+    /// `[sidebar]` config.
     pub(crate) fn for_sidebar(sidebar: &SidebarConfig, theme: &ThemeConfig) -> Self {
-        let truecolor = truecolor_env();
+        let truecolor = crate::tui::truecolor();
         let depth = theme.effective_theme_mode().depth(truecolor);
         let palette = Palette::resolve(theme, depth);
         let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
@@ -756,13 +755,6 @@ impl Theme {
             _ => Color::Indexed(panel.color),
         }
     }
-}
-
-fn truecolor_env() -> bool {
-    static CACHED: OnceLock<bool> = OnceLock::new();
-    *CACHED.get_or_init(|| {
-        std::env::var("COLORTERM").is_ok_and(|v| matches!(v.as_str(), "truecolor" | "24bit"))
-    })
 }
 
 #[cfg(test)]

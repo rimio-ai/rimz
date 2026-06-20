@@ -30,6 +30,7 @@ pub(super) struct DoctorReport {
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
     pub(super) sidebar_renderer: &'static str,
+    pub(super) terminal: Terminal,
     pub(super) hooks: Vec<HookRow>,
     pub(super) coverage: Vec<AgentCoverage>,
     pub(super) loop_tasks: LoopTasks,
@@ -45,6 +46,18 @@ pub(super) struct DoctorReport {
     pub(super) agents: Option<AgentRollup>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) diagnostics: Option<Diagnostics>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Terminal {
+    pub(super) theme_mode: rimz::config::ThemeMode,
+    pub(super) truecolor_advertised: bool,
+    pub(super) resolved_depth: &'static str,
+    pub(super) colorterm: Option<String>,
+    pub(super) term: Option<String>,
+    pub(super) terminfo_truecolor: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(super) fix: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

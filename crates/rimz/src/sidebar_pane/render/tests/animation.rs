@@ -32,8 +32,8 @@ fn effects_pass_never_changes_the_composed_text() {
         let mut ui = UiState::default();
         // Frame 1 records the room; frame 2 flips the agent to `waiting`,
         // spawning the flash at full tone; frame 3 paints it mid-decay. The
-        // pass is driven directly so the guard holds whatever `COLORTERM` the
-        // test shell has.
+        // pass is driven directly so the guard holds whatever truecolor signal
+        // the test shell has.
         for (snapshot, phase) in [(&idle, 0), (&waiting, 6), (&waiting, 7)] {
             let mut effects = std::mem::take(&mut ui.effects);
             ui.animation_phase = phase;

@@ -15,7 +15,7 @@ use rimz::trust::TrustState;
 
 use super::model::{
     AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, LoopTasks,
-    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Trust, Version, Workspace,
+    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Terminal, Trust, Version, Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -76,6 +76,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     kv.push("renderer", cell(report.sidebar_renderer));
     kv.render(w)?;
 
+    render_terminal(w, &report.terminal)?;
     render_hooks(w, report)?;
     render_coverage(w, report)?;
     render_loop(w, &report.loop_tasks)?;
@@ -101,6 +102,50 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_agents(w, report)?;
     render_diagnostics(w, report)?;
     Ok(())
+}
+
+fn render_terminal(w: &mut impl Write, terminal: &Terminal) -> io::Result<()> {
+    section(w, "TERMINAL")?;
+    let mut kv = KeyVals::new().indent(2);
+    let depth_health = if terminal.resolved_depth == "truecolor" {
+        Health::Ok
+    } else {
+        Health::Neutral
+    };
+    kv.push(
+        "depth",
+        verdict(
+            depth_health,
+            format!(
+                "{} (mode {})",
+                terminal.resolved_depth,
+                terminal_mode_label(terminal.theme_mode)
+            ),
+        ),
+    );
+    kv.push(
+        "signals",
+        cell(format!(
+            "truecolor-advertised={} COLORTERM={} TERM={} terminfo-truecolor={}",
+            terminal.truecolor_advertised,
+            terminal.colorterm.as_deref().unwrap_or("unset"),
+            terminal.term.as_deref().unwrap_or("unset"),
+            terminal.terminfo_truecolor,
+        ))
+        .fg(palette::FAINT),
+    );
+    if let Some(fix) = &terminal.fix {
+        kv.push("fix", verdict(Health::Warn, fix));
+    }
+    kv.render(w)
+}
+
+fn terminal_mode_label(mode: rimz::config::ThemeMode) -> &'static str {
+    match mode {
+        rimz::config::ThemeMode::Auto => "auto",
+        rimz::config::ThemeMode::Truecolor => "truecolor",
+        rimz::config::ThemeMode::Indexed => "256",
+    }
 }
 
 fn render_workspace(w: &mut impl Write, workspace: &Probe<Workspace>) -> io::Result<()> {
@@ -751,6 +796,41 @@ mod tests {
         String::from_utf8(stream.into_inner()).expect("utf-8")
     }
 
+    fn terminal_fixture() -> Terminal {
+        Terminal {
+            theme_mode: rimz::config::ThemeMode::Auto,
+            truecolor_advertised: true,
+            resolved_depth: "truecolor",
+            colorterm: None,
+            term: Some("xterm-ghostty".to_owned()),
+            terminfo_truecolor: true,
+            fix: None,
+        }
+    }
+
+    #[test]
+    fn terminal_section_renders_depth_signals_and_fix() {
+        let terminal = Terminal {
+            truecolor_advertised: false,
+            resolved_depth: "256",
+            term: Some("xterm-256color".to_owned()),
+            terminfo_truecolor: false,
+            fix: Some("set `[theme] mode = \"truecolor\"` to force RGB".to_owned()),
+            ..terminal_fixture()
+        };
+        let out = strip(|w| render_terminal(w, &terminal));
+        assert!(out.contains("TERMINAL"), "section title:\n{out}");
+        assert!(out.contains("256 (mode auto)"), "resolved depth:\n{out}");
+        assert!(out.contains("truecolor-advertised=false"), "{out}");
+        assert!(out.contains("COLORTERM=unset"), "{out}");
+        assert!(out.contains("TERM=xterm-256color"), "{out}");
+        assert!(out.contains("terminfo-truecolor=false"), "{out}");
+        assert!(
+            out.contains("mode = \"truecolor\""),
+            "fix command is present:\n{out}"
+        );
+    }
+
     #[test]
     fn hooks_section_renders_glyph_status_and_fix() {
         let report = DoctorReport {
@@ -761,6 +841,7 @@ mod tests {
                 error: "test".to_owned(),
             },
             sidebar_renderer: "built into rimz",
+            terminal: terminal_fixture(),
             hooks: vec![
                 HookRow {
                     kind: "claude".to_owned(),
@@ -810,6 +891,7 @@ mod tests {
                 error: "x".to_owned(),
             },
             sidebar_renderer: "built into rimz",
+            terminal: terminal_fixture(),
             hooks: Vec::new(),
             coverage: vec![AgentCoverage {
                 kind: "codex".to_owned(),

@@ -26,11 +26,11 @@ pub enum ScrollbarMode {
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum GlowMode {
-    /// Follow the terminal: run when `COLORTERM` advertises 24-bit color.
+    /// Follow the terminal: run when `COLORTERM` or terminfo advertises 24-bit color.
     #[default]
     Auto,
-    /// Force the pass on. The lever for a truecolor terminal the environment
-    /// under-advertises — an SSH hop forwards `TERM` but drops `COLORTERM`.
+    /// Force the pass on. The lever for a truecolor terminal whose capability
+    /// signal is missing from both the environment and terminfo.
     /// `NO_COLOR` still wins.
     Always,
     /// Pin the plain 256-color render on any terminal.
@@ -141,11 +141,10 @@ pub struct SidebarConfig {
     /// producer-side onto the snapshot like the rest of `[sidebar]`.
     pub scrollbar: ScrollbarMode,
     /// Whether the transition-flash tier runs over the composed frame. `auto`
-    /// (default) follows the terminal's 24-bit advertisement (`COLORTERM`);
-    /// `always` forces the pass where the advertisement is missing — an SSH
-    /// hop forwards `TERM` but drops `COLORTERM`; `never` keeps the plain base
-    /// render and pulse. `NO_COLOR` beats every mode. Resolved producer-side
-    /// onto the snapshot like the rest of `[sidebar]`.
+    /// (default) follows the terminal's 24-bit advertisement from `COLORTERM`
+    /// or terminfo; `always` forces the pass where both are missing; `never`
+    /// keeps the plain base render and pulse. `NO_COLOR` beats every mode.
+    /// Resolved producer-side onto the snapshot like the rest of `[sidebar]`.
     pub glow: GlowMode,
     /// How much detail resting agent cards show. `auto` keeps the standard
     /// card shape; `expanded` shows every card's subagent section; `compact`

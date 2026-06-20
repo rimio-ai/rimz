@@ -8,7 +8,7 @@
 [theme]
 ## style = "modern"                   # "modern" = truecolor + Nerd Font; "default" = auto color + Unicode
 # Palette depth and scheme are optional. mode = "auto" uses truecolor when
-# COLORTERM advertises it, otherwise 256. Unset scheme uses the bundled
+# COLORTERM or $TERM terminfo advertises it, otherwise 256. Unset scheme uses the bundled
 # TokyoNight Night theme; set a bundled Alacritty theme name (`rimz list-themes`)
 # or a path to an Alacritty TOML file.
 ## mode = "auto"

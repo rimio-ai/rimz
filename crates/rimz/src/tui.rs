@@ -2,6 +2,7 @@
 
 use std::io;
 use std::panic::{self, PanicHookInfo};
+use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 
 use ratatui::crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -28,6 +29,81 @@ pub struct TerminalModeGuard {
 pub fn no_color() -> bool {
     static CACHED: OnceLock<bool> = OnceLock::new();
     *CACHED.get_or_init(|| std::env::var_os("NO_COLOR").is_some_and(|value| !value.is_empty()))
+}
+
+/// Terminal capability signals behind the truecolor decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TruecolorSignals {
+    /// Raw `COLORTERM`, when set.
+    pub colorterm: Option<String>,
+    /// Raw `TERM`, when set.
+    pub term: Option<String>,
+    /// The terminfo entry for `$TERM` declares 24-bit color.
+    pub terminfo: bool,
+}
+
+impl TruecolorSignals {
+    /// Read the live signals fresh from the environment and terminfo database.
+    pub fn detect() -> Self {
+        Self {
+            colorterm: non_empty_env("COLORTERM"),
+            term: non_empty_env("TERM"),
+            terminfo: terminfo_truecolor(),
+        }
+    }
+
+    /// Whether 24-bit color is advertised by `COLORTERM` or terminfo.
+    pub fn truecolor(&self) -> bool {
+        matches!(self.colorterm.as_deref(), Some("truecolor" | "24bit")) || self.terminfo
+    }
+}
+
+/// 24-bit color advertised by the active terminal. The value is process static
+/// by convention, so cache it once rather than probing terminfo per frame.
+pub fn truecolor() -> bool {
+    static CACHED: OnceLock<bool> = OnceLock::new();
+    *CACHED.get_or_init(|| TruecolorSignals::detect().truecolor())
+}
+
+fn terminfo_truecolor() -> bool {
+    let Some(term) = std::env::var_os("TERM").filter(|term| !term.is_empty()) else {
+        return false;
+    };
+    terminfo_capability(&term, "Tc", &[])
+        || terminfo_capability(&term, "RGB", &[])
+        || (terminfo_capability(&term, "setrgbf", &["1", "2", "3"])
+            && terminfo_capability(&term, "setrgbb", &["1", "2", "3"]))
+}
+
+fn non_empty_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|value| !value.is_empty())
+}
+
+fn terminfo_capability(term: &std::ffi::OsStr, capability: &str, params: &[&str]) -> bool {
+    tput_capability(term, capability, params, true)
+        || tput_capability(term, capability, params, false)
+}
+
+fn tput_capability(
+    term: &std::ffi::OsStr,
+    capability: &str,
+    params: &[&str],
+    extended: bool,
+) -> bool {
+    let mut command = Command::new("tput");
+    if extended {
+        command.arg("-x");
+    }
+    command
+        .arg("-T")
+        .arg(term)
+        .arg(capability)
+        .args(params)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
 }
 
 impl TerminalModeGuard {
@@ -86,4 +162,28 @@ fn restore_terminal(mouse: MouseCapture) {
         }
     }
     let _ = terminal::disable_raw_mode();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TruecolorSignals;
+
+    fn signals(colorterm: Option<&str>, terminfo: bool) -> TruecolorSignals {
+        TruecolorSignals {
+            colorterm: colorterm.map(str::to_owned),
+            term: None,
+            terminfo,
+        }
+    }
+
+    #[test]
+    fn truecolor_signals_accept_colorterm_or_terminfo() {
+        assert!(signals(Some("truecolor"), false).truecolor());
+        assert!(signals(Some("24bit"), false).truecolor());
+        assert!(signals(None, true).truecolor());
+        assert!(signals(Some("8bit"), true).truecolor());
+        assert!(!signals(Some("8bit"), false).truecolor());
+        assert!(!signals(Some(""), false).truecolor());
+        assert!(!signals(None, false).truecolor());
+    }
 }

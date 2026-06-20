@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::SystemTime;
 
 use rimz::RuntimePaths;
-use rimz::config::MachineConfig;
+use rimz::config::{ColorDepth, MachineConfig, ThemeMode};
 use rimz::ids::MuxName;
 use rimz::mux::{
     MuxBackend, SessionHealth,
@@ -13,6 +13,30 @@ use rimz::mux::{
 };
 
 use super::model;
+
+pub(super) fn collect_terminal() -> model::Terminal {
+    let theme_mode = MachineConfig::load()
+        .map(|config| config.theme.effective_theme_mode())
+        .unwrap_or_default();
+    let signals = rimz::tui::TruecolorSignals::detect();
+    let truecolor_advertised = signals.truecolor();
+    let depth = theme_mode.depth(truecolor_advertised);
+    let resolved_depth = match depth {
+        ColorDepth::Truecolor => "truecolor",
+        ColorDepth::Indexed => "256",
+    };
+    let fix = (theme_mode == ThemeMode::Auto && !truecolor_advertised)
+        .then(|| "set `[theme] mode = \"truecolor\"` to force RGB".to_owned());
+    model::Terminal {
+        theme_mode,
+        truecolor_advertised,
+        resolved_depth,
+        colorterm: signals.colorterm,
+        term: signals.term,
+        terminfo_truecolor: signals.terminfo,
+        fix,
+    }
+}
 
 /// The multiplexer section: which backend Rimz detected, its version and floor,
 /// and — once a workspace resolves — its session, socket, duplicate-session, and

@@ -488,7 +488,7 @@ fn effects_follow_glow_mode_from_snapshot_and_no_color_beats_it() {
     );
     assert!(
         theme(false, false, GlowMode::Always).effects_enabled(),
-        "always forces the pass past a missing COLORTERM"
+        "always forces the pass past a missing truecolor advertisement"
     );
     assert!(
         !theme(false, true, GlowMode::Never).effects_enabled(),
