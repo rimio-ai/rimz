@@ -181,6 +181,20 @@ fn write_untrusted_hooks_notice(
 }
 
 fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+    write_intro_context(out, previews)?;
+    if previews.len() == 1 {
+        writeln!(out, "One quick question. {CONSENT_REVERSIBLE}")?;
+    } else {
+        writeln!(
+            out,
+            "{} quick questions — one per agent. {CONSENT_REVERSIBLE}",
+            previews.len()
+        )?;
+    }
+    Ok(())
+}
+
+fn write_intro_context(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
     for line in intro_card_lines(terminal_columns()) {
         writeln!(out, "{line}")?;
     }
@@ -204,15 +218,6 @@ fn write_intro(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<(
         out,
         "To show what an agent is doing, Rimz adds reporting hooks to the agent's config."
     )?;
-    if previews.len() == 1 {
-        writeln!(out, "One quick question. {CONSENT_REVERSIBLE}")?;
-    } else {
-        writeln!(
-            out,
-            "{} quick questions — one per agent. {CONSENT_REVERSIBLE}",
-            previews.len()
-        )?;
-    }
     Ok(())
 }
 
@@ -405,10 +410,14 @@ fn write_skipped_note(out: &mut dyn Write, preview: &HookInstallPreview) -> Resu
 
 fn print_noninteractive_notice(previews: &[HookInstallPreview]) -> Result<()> {
     let mut out = render::err();
-    write_intro(&mut out, previews)?;
+    write_noninteractive_notice(&mut out, previews)
+}
+
+fn write_noninteractive_notice(out: &mut dyn Write, previews: &[HookInstallPreview]) -> Result<()> {
+    write_intro_context(out, previews)?;
     for (idx, preview) in previews.iter().enumerate() {
         writeln!(out)?;
-        write_agent_body(&mut out, preview, idx, previews.len())?;
+        write_agent_body(out, preview, idx, previews.len())?;
     }
     writeln!(out)?;
     writeln!(out, "{CONSENT_REVERSIBLE}")?;
@@ -596,6 +605,25 @@ mod tests {
         assert!(rendered.contains("(additive"));
         assert!(rendered.contains("(new file)"));
         assert!(rendered.contains("sets your statusLine"));
+    }
+
+    #[test]
+    fn noninteractive_notice_has_no_questions_and_one_reversible_line() {
+        let previews = [
+            preview("claude", Some("{}\n"), "{\"hooks\": []}\n"),
+            preview("codex", None, "{\"hooks\": []}\n"),
+        ];
+
+        let rendered = strip(|w| write_noninteractive_notice(w, &previews));
+
+        assert!(rendered.contains("Rimz found 2 coding agents on this machine: claude, codex."));
+        assert!(rendered.contains("claude · 1 of 2"));
+        assert!(rendered.contains("codex · 2 of 2"));
+        assert!(!rendered.contains("quick question"));
+        assert_eq!(rendered.matches(CONSENT_REVERSIBLE).count(), 1);
+        assert!(rendered.contains(
+            "No terminal input is available, so Rimz installs nothing and continues into the room."
+        ));
     }
 
     #[test]

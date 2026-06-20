@@ -58,8 +58,8 @@ To show what an agent is doing, Rimz adds reporting hooks to the agent's config.
     +    ],
   Add hooks?  [Y/n] · d=diff · s=skip remaining
 
-  ✓ claude  8 hooks → ~/.claude/settings.json
-  · codex  skipped — wire later with `rimz hooks install codex`
+✓ claude  8 hooks → ~/.claude/settings.json
+· codex  skipped — wire later with `rimz hooks install codex`
 All set — your agents appear in the sidebar as they run.
 ```
 
