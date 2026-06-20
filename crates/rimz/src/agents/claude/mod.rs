@@ -401,7 +401,17 @@ impl AgentAdapter for ClaudeAdapter {
                 path.to_string_lossy().into_owned(),
             ]);
         }
+        if let Some(path) = preset.append_system_prompt_file.as_deref() {
+            argv.extend([
+                "--append-system-prompt-file".to_owned(),
+                path.to_string_lossy().into_owned(),
+            ]);
+        }
         Ok(argv)
+    }
+
+    fn max_turns_args(&self, limit: u32) -> Option<Vec<String>> {
+        Some(vec!["--max-turns".to_owned(), limit.to_string()])
     }
 
     fn launch_command(&self, extra_args: &[String], prompt: Option<&str>) -> Option<Vec<String>> {

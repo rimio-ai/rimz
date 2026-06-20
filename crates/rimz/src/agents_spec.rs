@@ -666,6 +666,7 @@ fn profile_preset(resolved: &ResolvedProfile) -> crate::agents::LaunchPreset {
         model: resolved.model.clone(),
         effort: resolved.effort.clone(),
         system_prompt_file: resolved.system_prompt_file.clone(),
+        append_system_prompt_file: None,
     }
 }
 

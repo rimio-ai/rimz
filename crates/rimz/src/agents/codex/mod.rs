@@ -380,6 +380,12 @@ impl AgentAdapter for CodexAdapter {
                 format!("model_instructions_file={}", path.to_string_lossy()),
             ]);
         }
+        if preset.append_system_prompt_file.is_some() {
+            return Err(super::PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "append-system-prompt-file",
+            });
+        }
         Ok(argv)
     }
 

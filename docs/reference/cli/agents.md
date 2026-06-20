@@ -63,8 +63,8 @@ rimz agents show <REF> [--json]
 rimz agents focus <REF>
 rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
-rimz agents <SPEC> [PROMPT] -p|--print [--system-prompt-file <PATH>] [--effort <LEVEL>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
+rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] -p|--print [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [--max-turns <N>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] [--json]
 ```
 
@@ -98,7 +98,7 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 
 ### Shared launch params
 
-`--system-prompt-file <PATH>` and `--effort <LEVEL>` broadcast to every agent cell like `PROMPT`, and each adapter renders them into its native flags: `--system-prompt-file` replaces the agent's base system prompt (Claude `--system-prompt-file <PATH>`; Codex `-c model_instructions_file=<PATH>`), and `--effort` sets reasoning effort (Claude `--effort <LEVEL>`; Codex `-c model_reasoning_effort=<LEVEL>`). The launcher resolves the prompt file to an absolute path and refuses a missing file before launch. Levels are provider-specific — Claude takes `low|medium|high|xhigh|max`, Codex takes `minimal|low|medium|high|xhigh` — and an agent with no native flag for a param (Pi today) refuses the launch with the offending flag named. A configured profile preset renders first, so an explicit `--effort` on the command line wins.
+`--model <MODEL>`, `--system-prompt-file <PATH>`, `--append-system-prompt-file <PATH>`, and `--effort <LEVEL>` broadcast to every agent cell like `PROMPT`, and each adapter renders them into its native flags: `--model` selects the provider model (Claude `--model <MODEL>`; Codex `--model <MODEL>`), `--system-prompt-file` replaces the agent's base system prompt (Claude `--system-prompt-file <PATH>`; Codex `-c model_instructions_file=<PATH>`), `--append-system-prompt-file` appends rules to the base prompt where supported (Claude `--append-system-prompt-file <PATH>`), and `--effort` sets reasoning effort (Claude `--effort <LEVEL>`; Codex `-c model_reasoning_effort=<LEVEL>`). The launcher resolves prompt files to absolute paths and refuses a missing file before launch. Levels are provider-specific — Claude takes `low|medium|high|xhigh|max`, Codex takes `minimal|low|medium|high|xhigh` — and an agent with no native flag for a param (Pi for these typed params, and Codex for append) refuses the launch with the offending flag named. A configured profile preset renders first, so an explicit `--model` or `--effort` on the command line wins.
 
 ### Worktree and placement
 
@@ -110,7 +110,7 @@ Placement follows intent. Under the default `auto` policy a worktree launch, nam
 
 `-p` launches exactly one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with the run status code: `0` completed, `1` failed, `124` timed out, `130` canceled. `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
 
-`--output-format` selects how `-p` renders the run: `text` (default) prints the final assistant message, `json` prints the full run record, and `stream-json` emits run events as NDJSON while the turn runs. `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT`, while `stream-json` reads user messages from stdin until EOF and refuses a positional `PROMPT`. `stream-json` output cannot combine with `--detach`.
+`--max-turns <N>` caps the supervised agentic turn count where the adapter exposes a native turn limit (Claude `--max-turns <N>` today); an agent without one refuses the run with `--max-turns` named. `--output-format` selects how `-p` renders the run: `text` (default) prints the final assistant message, `json` prints the full run record, and `stream-json` emits run events as NDJSON while the turn runs. `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT`, while `stream-json` reads user messages from stdin until EOF and refuses a positional `PROMPT`. `stream-json` output cannot combine with `--detach`.
 
 Supervised `-p` runs require installed and trusted hooks, because hooks provide the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/agents/harness.md#supervised-runs).
 

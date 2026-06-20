@@ -217,22 +217,59 @@ fn effort_and_system_prompt_file_parse_and_require_spec() {
         "rimz",
         "claude",
         "hi",
+        "--model",
+        "opus",
         "--effort",
         "high",
         "--system-prompt-file",
         "/abs/prompt.md",
+        "--append-system-prompt-file",
+        "/abs/append.md",
+        "-p",
+        "--max-turns",
+        "3",
     ])
     .expect("parse shared launch params");
+    assert_eq!(parsed.args.model.as_deref(), Some("opus"));
     assert_eq!(parsed.args.effort.as_deref(), Some("high"));
     assert_eq!(
         parsed.args.system_prompt_file.as_deref(),
         Some(Path::new("/abs/prompt.md"))
     );
+    assert_eq!(
+        parsed.args.append_system_prompt_file.as_deref(),
+        Some(Path::new("/abs/append.md"))
+    );
+    assert_eq!(parsed.args.max_turns, Some(3));
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "-n", "swift-otter"])
+        .expect("parse name short flag");
+    assert_eq!(parsed.args.name.as_deref(), Some("swift-otter"));
 
     let parsed = AgentsHarness::try_parse_from(["rimz", "--effort", "high"])
         .expect("parse effort without spec");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject effort");
     assert!(err.to_string().contains("require an agent spec"), "{err:#}");
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "--model", "opus"]).expect("parse model");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject model");
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
+
+    let parsed =
+        AgentsHarness::try_parse_from(["rimz", "--append-system-prompt-file", "/abs/append.md"])
+            .expect("parse append prompt without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject append prompt");
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "-p", "--max-turns", "3"])
+        .expect("parse max turns without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject max turns");
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
+
+    assert!(
+        AgentsHarness::try_parse_from(["rimz", "claude", "hi", "--max-turns", "3"]).is_err(),
+        "--max-turns is print-mode only"
+    );
 }
 
 #[test]
@@ -245,11 +282,14 @@ fn system_prompt_file_resolves_a_file_and_rejects_a_directory() {
         "rimz",
         "claude",
         "hi",
+        "--model",
+        "opus",
         "--system-prompt-file",
         file.to_str().expect("utf8 file path"),
     ])
     .expect("parse system-prompt-file");
     let preset = launch_override_preset(&parsed.args).expect("resolve prompt file");
+    assert_eq!(preset.model.as_deref(), Some("opus"));
     assert_eq!(
         preset.system_prompt_file.as_deref(),
         Some(file.canonicalize().expect("canonicalize file").as_path())
@@ -265,6 +305,54 @@ fn system_prompt_file_resolves_a_file_and_rejects_a_directory() {
     .expect("parse system-prompt-file dir");
     let err = launch_override_preset(&parsed.args).expect_err("reject a directory");
     assert!(err.to_string().contains("is not a regular file"), "{err:#}");
+}
+
+#[test]
+fn append_system_prompt_file_resolves_a_file_and_rejects_bad_paths() {
+    let dir = tempfile::tempdir().expect("temp dir");
+    let file = dir.path().join("append.md");
+    std::fs::write(&file, "follow project rules").expect("write prompt");
+
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--append-system-prompt-file",
+        file.to_str().expect("utf8 file path"),
+    ])
+    .expect("parse append-system-prompt-file");
+    let preset = launch_override_preset(&parsed.args).expect("resolve append prompt file");
+    assert_eq!(
+        preset.append_system_prompt_file.as_deref(),
+        Some(file.canonicalize().expect("canonicalize file").as_path())
+    );
+
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--append-system-prompt-file",
+        dir.path().to_str().expect("utf8 dir path"),
+    ])
+    .expect("parse append-system-prompt-file dir");
+    let err = launch_override_preset(&parsed.args).expect_err("reject a directory");
+    assert!(err.to_string().contains("is not a regular file"), "{err:#}");
+
+    let missing = dir.path().join("missing.md");
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "claude",
+        "hi",
+        "--append-system-prompt-file",
+        missing.to_str().expect("utf8 missing path"),
+    ])
+    .expect("parse missing append-system-prompt-file");
+    let err = launch_override_preset(&parsed.args).expect_err("reject missing path");
+    assert!(
+        err.to_string()
+            .contains("reading --append-system-prompt-file"),
+        "{err:#}"
+    );
 }
 
 #[test]
@@ -290,6 +378,84 @@ fn preset_renders_effort_per_adapter_and_fails_fast_for_pi() {
         .expect_err("pi rejects effort");
     assert!(
         err.to_string().contains("pi does not support --effort"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn preset_renders_model_and_append_prompt_per_adapter() {
+    let preset = rimz::agents::LaunchPreset {
+        model: Some("opus".to_owned()),
+        append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
+        ..Default::default()
+    };
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
+        .expect("claude model and append prompt");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(
+        args,
+        &[
+            "--model",
+            "opus",
+            "--append-system-prompt-file",
+            "/abs/append.md"
+        ]
+    );
+
+    let model_preset = rimz::agents::LaunchPreset {
+        model: Some("gpt-5-codex".to_owned()),
+        ..Default::default()
+    };
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    apply_launch_mode_and_passthrough(&mut layout, None, &model_preset, &[]).expect("codex model");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--model", "gpt-5-codex"]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
+        .expect_err("codex rejects append prompt");
+    assert!(
+        err.to_string()
+            .contains("codex does not support --append-system-prompt-file"),
+        "{err:#}"
+    );
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("pi")));
+    let err = apply_launch_mode_and_passthrough(&mut layout, None, &preset, &[])
+        .expect_err("pi rejects model first");
+    assert!(
+        err.to_string().contains("pi does not support --model"),
+        "{err:#}"
+    );
+
+    let append_only = rimz::agents::LaunchPreset {
+        append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
+        ..Default::default()
+    };
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("pi")));
+    let err = apply_launch_mode_and_passthrough(&mut layout, None, &append_only, &[])
+        .expect_err("pi rejects append prompt");
+    assert!(
+        err.to_string()
+            .contains("pi does not support --append-system-prompt-file"),
+        "{err:#}"
+    );
+}
+
+#[test]
+fn supervised_turn_limit_renders_per_adapter_and_fails_fast() {
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("claude")));
+    apply_supervised_turn_limit(&mut layout, 3).expect("claude supports max turns");
+    let (args, _) = only_agent(&layout);
+    assert_eq!(args, &["--max-turns", "3"]);
+
+    let mut layout = LayoutSpec::single(Cell::agent(AgentKind::new_unchecked("codex")));
+    let err = apply_supervised_turn_limit(&mut layout, 3).expect_err("codex rejects max turns");
+    assert!(
+        err.to_string()
+            .contains("codex does not support --max-turns"),
         "{err:#}"
     );
 }

@@ -65,8 +65,9 @@ fn claude_render_preset_maps_model_effort_and_system_prompt_file() {
             model: Some("opus".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+            append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
         })
-        .expect("claude renders model, effort, and system-prompt-file natively");
+        .expect("claude renders model, effort, and prompt files natively");
     assert_eq!(
         argv,
         vec![
@@ -76,7 +77,14 @@ fn claude_render_preset_maps_model_effort_and_system_prompt_file() {
             "high",
             "--system-prompt-file",
             "/abs/prompt.md",
+            "--append-system-prompt-file",
+            "/abs/append.md",
         ]
+    );
+
+    assert_eq!(
+        ClaudeAdapter.max_turns_args(3),
+        Some(vec!["--max-turns".to_owned(), "3".to_owned()])
     );
 
     // Empty preset renders nothing.

@@ -465,6 +465,9 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &launch_override_preset(&args)?,
         &args.passthrough,
     )?;
+    if let Some(limit) = args.max_turns {
+        apply_supervised_turn_limit(&mut layout, limit)?;
+    }
     let agent_cells = agent_cells(&layout);
     if agent_cells.len() != 1 {
         bail!("--print requires a layout with exactly one agent cell");

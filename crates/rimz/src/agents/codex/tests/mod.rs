@@ -73,6 +73,7 @@ fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() 
             model: Some("gpt-5-codex".to_owned()),
             effort: Some("high".to_owned()),
             system_prompt_file: Some(Path::new("/abs/prompt.md").to_path_buf()),
+            ..Default::default()
         })
         .expect("codex renders model, effort, and instructions file via -c overrides");
     assert_eq!(
@@ -85,6 +86,20 @@ fn codex_render_preset_maps_effort_and_system_prompt_file_to_config_overrides() 
             "-c",
             "model_instructions_file=/abs/prompt.md",
         ]
+    );
+
+    let err = CodexAdapter
+        .render_preset(&crate::agents::LaunchPreset {
+            append_system_prompt_file: Some(Path::new("/abs/append.md").to_path_buf()),
+            ..Default::default()
+        })
+        .expect_err("codex has no append prompt flag");
+    assert_eq!(
+        err,
+        crate::agents::PresetErr::UnsupportedField {
+            agent: "codex",
+            field: "append-system-prompt-file",
+        }
     );
 }
 

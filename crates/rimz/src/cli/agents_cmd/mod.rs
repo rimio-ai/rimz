@@ -69,7 +69,7 @@ pub struct AgentsArgs {
     #[arg(long, short = 'w', value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
     worktree: Option<String>,
     /// Durable name for a single launched agent.
-    #[arg(long)]
+    #[arg(long, short = 'n')]
     name: Option<String>,
     /// Launch in the background, leaving focus on the launching pane.
     #[arg(long)]
@@ -87,9 +87,15 @@ pub struct AgentsArgs {
     /// Skip provider permission prompts where supported.
     #[arg(long)]
     yolo: bool,
+    /// Model for the launched agents.
+    #[arg(long, value_name = "MODEL")]
+    model: Option<String>,
     /// Replace each agent's base system prompt with a file's contents.
     #[arg(long, value_name = "PATH")]
     system_prompt_file: Option<PathBuf>,
+    /// Append a file's contents to each agent's base system prompt where supported.
+    #[arg(long, value_name = "PATH")]
+    append_system_prompt_file: Option<PathBuf>,
     /// Reasoning effort for the launched agents (provider-specific levels).
     #[arg(long, value_name = "LEVEL")]
     effort: Option<String>,
@@ -114,6 +120,9 @@ pub struct AgentsArgs {
     /// How `--print` reads the prompt (text positional, or stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     input_format: Option<InputFormat>,
+    /// Maximum agentic turns for one supervised print-mode prompt.
+    #[arg(long, value_name = "N", requires = "print")]
+    max_turns: Option<u32>,
     /// Extra argv appended to every launched agent cell.
     #[arg(last = true)]
     passthrough: Vec<String>,
@@ -289,7 +298,9 @@ impl AgentsArgs {
             new_tab: false,
             ask: false,
             yolo: false,
+            model: None,
             system_prompt_file: None,
+            append_system_prompt_file: None,
             effort: None,
             print: false,
             timeout: None,
@@ -298,6 +309,7 @@ impl AgentsArgs {
             json: false,
             output_format: None,
             input_format: None,
+            max_turns: None,
             passthrough: Vec::new(),
         }
     }
@@ -318,7 +330,9 @@ impl AgentsArgs {
             new_tab: false,
             ask: task.ask,
             yolo: task.yolo,
+            model: None,
             system_prompt_file: task.system_prompt_file,
+            append_system_prompt_file: None,
             effort: task.effort,
             print: true,
             timeout: task.timeout,
@@ -327,6 +341,7 @@ impl AgentsArgs {
             json: false,
             output_format: None,
             input_format: None,
+            max_turns: None,
             passthrough: Vec::new(),
         }
     }

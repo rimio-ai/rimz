@@ -397,7 +397,10 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.yolo
         || args.print
         || args.effort.is_some()
+        || args.model.is_some()
         || args.system_prompt_file.is_some()
+        || args.append_system_prompt_file.is_some()
+        || args.max_turns.is_some()
     {
         bail!("agent launch options require an agent spec");
     }
@@ -491,28 +494,23 @@ pub(super) fn ensure_profile_prompt_files(layout: &LayoutSpec) -> Result<()> {
     Ok(())
 }
 
-/// Build the launch-override preset from the shared `--effort` /
-/// `--system-prompt-file` flags. The prompt file is resolved to an absolute
-/// path and required to exist — a missing file fails here, at the entry point,
+/// Build the launch-override preset from shared launch flags. Prompt files are
+/// resolved to absolute paths and required to exist here, at the entry point,
 /// rather than downstream in the agent.
 pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::LaunchPreset> {
-    let system_prompt_file = match args.system_prompt_file.as_deref() {
-        Some(path) => {
-            let resolved = path
-                .canonicalize()
-                .with_context(|| format!("reading --system-prompt-file `{}`", path.display()))?;
-            if !resolved.is_file() {
-                bail!(
-                    "--system-prompt-file `{}` is not a regular file",
-                    path.display()
-                );
-            }
-            Some(resolved)
-        }
-        None => None,
-    };
+    let system_prompt_file =
+        resolve_launch_prompt_file(args.system_prompt_file.as_deref(), "--system-prompt-file")?;
+    let append_system_prompt_file = resolve_launch_prompt_file(
+        args.append_system_prompt_file.as_deref(),
+        "--append-system-prompt-file",
+    )?;
     Ok(rimz::agents::LaunchPreset {
-        model: None,
+        model: args
+            .model
+            .as_deref()
+            .map(str::trim)
+            .filter(|model| !model.is_empty())
+            .map(ToOwned::to_owned),
         effort: args
             .effort
             .as_deref()
@@ -520,7 +518,21 @@ pub(super) fn launch_override_preset(args: &AgentsArgs) -> Result<rimz::agents::
             .filter(|effort| !effort.is_empty())
             .map(ToOwned::to_owned),
         system_prompt_file,
+        append_system_prompt_file,
     })
+}
+
+fn resolve_launch_prompt_file(path: Option<&Path>, flag: &str) -> Result<Option<PathBuf>> {
+    let Some(path) = path else {
+        return Ok(None);
+    };
+    let resolved = path
+        .canonicalize()
+        .with_context(|| format!("reading {flag} `{}`", path.display()))?;
+    if !resolved.is_file() {
+        bail!("{flag} `{}` is not a regular file", path.display());
+    }
+    Ok(Some(resolved))
 }
 
 pub(super) fn reject_prompt_that_looks_like_spec(
@@ -575,6 +587,23 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 args.extend(adapter.render_preset(preset).map_err(launch_option_error)?);
             }
             args.extend(passthrough.iter().cloned());
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn apply_supervised_turn_limit(layout: &mut LayoutSpec, limit: u32) -> Result<()> {
+    for column in &mut layout.columns {
+        for cell in &mut column.rows {
+            let Cell::Agent { kind, args, .. } = cell else {
+                continue;
+            };
+            let adapter = rimz::agents::find_adapter(kind)
+                .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", kind.as_str()))?;
+            let turn_args = adapter.max_turns_args(limit).ok_or_else(|| {
+                anyhow::anyhow!("{} does not support --max-turns", adapter.descriptor().kind)
+            })?;
+            args.extend(turn_args);
         }
     }
     Ok(())

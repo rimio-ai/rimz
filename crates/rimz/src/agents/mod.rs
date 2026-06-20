@@ -115,6 +115,9 @@ pub struct LaunchPreset {
     /// Absolute path to a file whose contents replace the agent's base system
     /// prompt. Resolved and existence-checked by the launcher before render.
     pub system_prompt_file: Option<PathBuf>,
+    /// Absolute path to a file whose contents are appended to the agent's base
+    /// system prompt. Resolved and existence-checked by the launcher before render.
+    pub append_system_prompt_file: Option<PathBuf>,
 }
 
 impl LaunchPreset {
@@ -122,6 +125,7 @@ impl LaunchPreset {
         self.model.as_deref().is_none_or(str::is_empty)
             && self.effort.as_deref().is_none_or(str::is_empty)
             && self.system_prompt_file.is_none()
+            && self.append_system_prompt_file.is_none()
     }
 }
 
@@ -655,6 +659,12 @@ pub trait AgentAdapter: Send + Sync {
         None
     }
 
+    /// Extra launch argv for a supervised print-mode agentic-turn cap. Returns
+    /// `None` when the agent exposes no native turn limit.
+    fn max_turns_args(&self, _limit: u32) -> Option<Vec<String>> {
+        None
+    }
+
     /// The interactive slash command that triggers a manual context compaction
     /// in the agent's own composer. Typed as keystrokes ahead of a steered or
     /// queued message under `--auto-compact`, never a bracketed paste — agents
@@ -691,6 +701,12 @@ pub trait AgentAdapter: Send + Sync {
             return Err(PresetErr::UnsupportedField {
                 agent: self.descriptor().kind,
                 field: "system-prompt-file",
+            });
+        }
+        if preset.append_system_prompt_file.is_some() {
+            return Err(PresetErr::UnsupportedField {
+                agent: self.descriptor().kind,
+                field: "append-system-prompt-file",
             });
         }
         Ok(Vec::new())
