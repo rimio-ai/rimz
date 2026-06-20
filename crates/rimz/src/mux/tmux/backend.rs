@@ -160,6 +160,7 @@ impl MuxBackend for TmuxBackend {
             panes,
             observed_at_ms,
             source_active: std::collections::BTreeMap::new(),
+            served_from_topology: false,
         })
     }
 

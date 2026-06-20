@@ -511,6 +511,7 @@ pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
     pub(super) source_active: std::collections::BTreeMap<ViewId, PaneId>,
+    pub(super) served_from_topology: bool,
 }
 
 impl RawPaneListing {
@@ -519,6 +520,7 @@ impl RawPaneListing {
             panes,
             observed_at_ms,
             source_active: std::collections::BTreeMap::new(),
+            served_from_topology: false,
         }
     }
 
@@ -538,6 +540,7 @@ impl RawPaneListing {
             panes: raw_panes_from_topology(cache),
             observed_at_ms,
             source_active,
+            served_from_topology: true,
         }
     }
 
@@ -555,6 +558,7 @@ impl RawPaneListing {
                 .collect(),
             observed_at_ms: self.observed_at_ms,
             source_active: self.source_active,
+            served_from_topology: self.served_from_topology,
         }
     }
 }

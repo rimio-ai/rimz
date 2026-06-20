@@ -188,6 +188,11 @@ pub struct PaneListing {
     /// fills this from transition-derived focus; normal CLI reads leave it
     /// empty and frame assembly arbitrates from raw marks.
     pub source_active: BTreeMap<ViewId, PaneId>,
+    /// Whether this listing came from the presence topology cache rather than a
+    /// live mux read. A topology hit forks no mux command, so the producer skips
+    /// the per-client focus probe too and carries viewed panes from its prior
+    /// publish instead.
+    pub served_from_topology: bool,
 }
 
 #[derive(Clone, Debug, Default)]

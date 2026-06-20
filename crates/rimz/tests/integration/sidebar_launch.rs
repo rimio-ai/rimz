@@ -204,6 +204,7 @@ impl MuxBackend for FakeBackend {
             }],
             observed_at_ms: rimz::sidebar::snapshot::unix_now_ms(),
             source_active: std::collections::BTreeMap::new(),
+            served_from_topology: false,
         })
     }
 

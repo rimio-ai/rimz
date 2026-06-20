@@ -176,6 +176,7 @@ pub fn repaired_pane_frame_for_binding(
             panes: fixture,
             observed_at_ms: unix_now_ms(),
             source_active: std::collections::BTreeMap::new(),
+            served_from_topology: false,
         },
         None => list_session_panes(
             mux,
@@ -473,42 +474,52 @@ pub(super) fn cached_panes_or_produce(
             diag,
         )
     };
-    let produce_candidate = |enrich_metrics: bool,
-                             min_topology_produced_at_ms: Option<u64>|
-     -> Result<PaneFrame> {
-        let listing = match list_session_panes(
-            mux,
-            session,
-            runtime.workspace_id.clone(),
-            min_topology_produced_at_ms,
-            None,
-        ) {
-            Ok(panes) => panes,
-            Err(err) => {
-                emit_mux_error(diag, &cache_path, session, &err);
-                return Err(err);
-            }
+    let produce_candidate =
+        |enrich_metrics: bool, min_topology_produced_at_ms: Option<u64>| -> Result<PaneFrame> {
+            let listing = match list_session_panes(
+                mux,
+                session,
+                runtime.workspace_id.clone(),
+                min_topology_produced_at_ms,
+                None,
+            ) {
+                Ok(panes) => panes,
+                Err(err) => {
+                    emit_mux_error(diag, &cache_path, session, &err);
+                    return Err(err);
+                }
+            };
+            let served_from_topology = listing.served_from_topology;
+            let panes = filter_foreign_session_panes(listing.panes, session, diag);
+            let (mut frame, diagnostics) =
+                crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
+                    panes,
+                    produced_at_ms: unix_now_ms(),
+                    observed_at_ms: listing.observed_at_ms,
+                    session_name: session.to_owned(),
+                    source_active: listing.source_active,
+                    prior: read_snapshot_cache(&cache_path, session).as_ref(),
+                });
+            emit_frame_diagnostics(diag, diagnostics);
+            repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+            // Sample attached-client focus only on a live read. A topology-served
+            // frame forks no mux command (the topology cache's contract), so carry
+            // the prior publish's viewed panes forward as the freshest non-forking
+            // estimate rather than reach for `list-clients`.
+            frame.viewed_panes = if served_from_topology {
+                read_snapshot_cache(&cache_path, session)
+                    .map(|prior| prior.viewed_panes)
+                    .unwrap_or_default()
+            } else {
+                crate::mux::backend_for(mux)
+                    .focused_client_panes(ClientFocusOptions {
+                        session_name: Some(session.to_owned()),
+                        ..Default::default()
+                    })
+                    .unwrap_or_default()
+            };
+            Ok(frame)
         };
-        let panes = filter_foreign_session_panes(listing.panes, session, diag);
-        let (mut frame, diagnostics) =
-            crate::sidebar::frame::assemble_frame_from_inputs(FrameInputs {
-                panes,
-                produced_at_ms: unix_now_ms(),
-                observed_at_ms: listing.observed_at_ms,
-                session_name: session.to_owned(),
-                source_active: listing.source_active,
-                prior: read_snapshot_cache(&runtime.root.join("snapshot.json"), session).as_ref(),
-            });
-        emit_frame_diagnostics(diag, diagnostics);
-        repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
-        frame.viewed_panes = crate::mux::backend_for(mux)
-            .focused_client_panes(ClientFocusOptions {
-                session_name: Some(session.to_owned()),
-                ..Default::default()
-            })
-            .unwrap_or_default();
-        Ok(frame)
-    };
     match single_flight::coalesce(
         &lock_path,
         SNAPSHOT_CACHE_WAIT_STEP,
