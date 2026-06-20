@@ -211,8 +211,8 @@ fn process_rows_dim_a_step_below_agent_cards() {
             &snapshot.providers,
             snapshot.now,
             44,
-            &snapshot.sidebar.context,
-            snapshot.sidebar.card_density,
+            &snapshot.theme.display.context_meter,
+            snapshot.theme.display.card_density,
             None,
             &mut row_index,
             0,
@@ -261,11 +261,7 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         )
         .expect("working animation spec"),
     );
-    let theme = Theme::fixed_for_theme(
-        false,
-        &crate::config::SidebarConfig::default(),
-        &theme_config,
-    );
+    let theme = Theme::fixed_for_theme(false, &theme_config);
     let snapshot = snapshot_with(Vec::new(), Vec::new()).with_live_panes(
         vec![pane("%1", "cargo build --release", "/repo/main")],
         None,
@@ -280,8 +276,8 @@ fn active_process_rows_use_the_configured_working_animation_style() {
         &snapshot.providers,
         snapshot.now,
         44,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
         None,
         &mut row_index,
         0,

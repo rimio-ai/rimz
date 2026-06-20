@@ -2,7 +2,7 @@
 //! story, the dim `external` divider, and the row roster with its parallel
 //! hit-test map entries.
 
-use crate::config::{CardDensityMode, ContextSeverityConfig, GlyphRole};
+use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::{SidebarProviderPanel, SidebarStatusCount, SidebarWorktreeGroup, SidebarWorktreeKind};
 use jiff::Timestamp;
 use ratatui::style::Modifier;
@@ -37,7 +37,7 @@ pub(in crate::sidebar_pane::render) fn worktree_group_lines(
     providers: &[SidebarProviderPanel],
     now: Timestamp,
     width: usize,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
     card_density: CardDensityMode,
     filter: Option<BodyFilter>,
     row_index: &mut usize,

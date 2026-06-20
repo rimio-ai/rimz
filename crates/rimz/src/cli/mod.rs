@@ -672,7 +672,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     report_start_notices(&workspace)?;
     let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     // One terminal probe per command flow: the width picks every sidebar
     // pane's birth size; the pair sizes a detached tmux birth.
     let detected_size = rimz::mux::detect_terminal_size();
@@ -844,7 +844,7 @@ fn attach_cwd(
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
     let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
@@ -912,7 +912,7 @@ fn attach_named(
     };
     let machine_config = machine_config()?;
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    let sidebar_width = SidebarWidth::from_config(&machine_config.sidebar);
+    let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let mux = pick_mux_for_session(session, globals.mux, missing_report)?;
     let backend = rimz::mux::backend_for(mux);

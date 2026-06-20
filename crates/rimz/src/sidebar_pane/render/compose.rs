@@ -62,7 +62,7 @@ pub(crate) fn compose_lines(
     // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
     // config lands with the next snapshot, identically on every renderer of
     // the workspace.
-    let theme = Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme);
+    let theme = Theme::for_sidebar(&snapshot.theme);
     let cells = usize::from(width.max(1));
     // The whole sidebar sits inside a one-cell frame: chrome is built to the inner
     // width and opened with a blank gutter, reserving the trailing right rail —
@@ -119,11 +119,11 @@ pub(crate) fn compose_lines(
 
     // Window the scroll zone, riding the scrollbar glyph on each visible line's
     // right rail column when the cards overflow the viewport — gated by the
-    // `[sidebar] scrollbar` mode. `auto` paints the bar on the very frame the
+    // `[theme.display] scrollbar` mode. `auto` paints the bar on the very frame the
     // viewport moves (the fade's baseline still holds the pre-move offset; the
     // caller stamps it at the write-back) and through the settle window after.
     // The column is reserved in every mode, so the gate reflows nothing.
-    let show_bar = match snapshot.sidebar.scrollbar {
+    let show_bar = match snapshot.theme.display.scrollbar {
         ScrollbarMode::Always => true,
         ScrollbarMode::Never => false,
         ScrollbarMode::Auto => {
@@ -224,7 +224,7 @@ pub(super) fn build_bottom_chrome(
             snapshot.pets.enabled,
             folded_footer.clone(),
             inner,
-            &snapshot.sidebar.budget,
+            &snapshot.theme.display.budget_bar,
             snapshot.now,
         );
         tab_hits = panel_hits
@@ -597,8 +597,8 @@ pub(super) fn scroll_lines(
                 &snapshot.providers,
                 snapshot.now,
                 width,
-                &snapshot.sidebar.context,
-                snapshot.sidebar.card_density,
+                &snapshot.theme.display.context_meter,
+                snapshot.theme.display.card_density,
                 ui.make_up_filter,
                 &mut row_index,
                 ui.selected_index,

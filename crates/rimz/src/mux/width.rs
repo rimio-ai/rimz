@@ -9,7 +9,7 @@ use std::num::NonZeroU16;
 const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 
 /// Sidebar pane width: a percentage of the view, capped at `max_cols` columns
-/// (`sidebar.max_cols`). The width is resolved once per launch command: the
+/// (`theme.display.max_cols`). The width is resolved once per launch command: the
 /// launch paths probe the invoking terminal ([`detect_terminal_size`]) and
 /// [`SidebarWidth::birth_size`] turns the probe into the one [`BirthSize`]
 /// verdict every pane of the session is born with — constant for the session's
@@ -18,17 +18,17 @@ const DEFAULT_SIDEBAR_WIDTH_PERCENT: u16 = 30;
 pub struct SidebarWidth {
     /// Percentage of the view width — tracks terminal size below the cap.
     pub percent: u16,
-    /// Column cap the percentage never exceeds (`sidebar.max_cols`).
+    /// Column cap the percentage never exceeds (`theme.display.max_cols`).
     pub max_cols: NonZeroU16,
 }
 
 impl SidebarWidth {
     /// The width a machine config asks for: the default percentage at the
     /// configured column cap.
-    pub fn from_config(sidebar: &crate::config::SidebarConfig) -> Self {
+    pub fn from_config(display: &crate::config::DisplayConfig) -> Self {
         Self {
             percent: DEFAULT_SIDEBAR_WIDTH_PERCENT,
-            max_cols: sidebar.max_cols,
+            max_cols: display.max_cols,
         }
     }
 
@@ -81,7 +81,7 @@ impl SidebarWidth {
 
 impl Default for SidebarWidth {
     fn default() -> Self {
-        Self::from_config(&crate::config::SidebarConfig::default())
+        Self::from_config(&crate::config::DisplayConfig::default())
     }
 }
 
@@ -118,16 +118,16 @@ mod tests {
 
     #[test]
     fn sidebar_width_uses_default_percent_and_configured_cap() {
-        let mut sidebar = crate::config::SidebarConfig::default();
-        let width = SidebarWidth::from_config(&sidebar);
+        let mut display = crate::config::DisplayConfig::default();
+        let width = SidebarWidth::from_config(&display);
         assert_eq!(width.percent, DEFAULT_SIDEBAR_WIDTH_PERCENT);
         assert_eq!(width.cap_cols(), 72);
         assert_eq!(width.target_cols(120), 36);
         assert_eq!(width.target_cols(300), 72);
 
         let max = NonZeroU16::new(100).expect("nonzero");
-        sidebar.max_cols = max;
-        assert_eq!(SidebarWidth::from_config(&sidebar).max_cols, max);
+        display.max_cols = max;
+        assert_eq!(SidebarWidth::from_config(&display).max_cols, max);
     }
 
     #[test]

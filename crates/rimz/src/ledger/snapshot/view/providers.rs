@@ -152,9 +152,9 @@ impl SidebarSnapshot {
 
         self.providers = resolve_provider_panels(
             panels,
-            &self.sidebar.provider_list,
-            self.sidebar.max_provider_blocks,
-            self.sidebar.provider_tabs,
+            &self.theme.display.provider_list,
+            self.theme.display.max_provider_blocks,
+            self.theme.display.provider_tabs,
         );
         self
     }

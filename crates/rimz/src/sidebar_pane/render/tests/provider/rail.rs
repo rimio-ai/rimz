@@ -21,7 +21,7 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
         Some("claude"),
         true,
         28,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let tab_line: String = lines[0]
@@ -45,7 +45,7 @@ fn tab_rail_drops_whole_tabs_that_overflow_the_width() {
 fn tab_rail_keeps_every_glyph_still_across_picks() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetZonesConfig::default();
+    let zones = crate::config::BudgetBarConfig::default();
     let now = fixed_now();
     let (claude_lines, claude_hits) =
         provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones, now);
@@ -72,7 +72,7 @@ fn tab_rail_keeps_every_glyph_still_across_picks() {
 fn tab_rail_caps_mark_the_pick_under_no_color() {
     let theme = Theme::fixed(true);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetZonesConfig::default();
+    let zones = crate::config::BudgetBarConfig::default();
     let now = fixed_now();
     let (claude_lines, _) =
         provider_panel_lines(&theme, &panels, Some("claude"), true, 52, &zones, now);
@@ -100,7 +100,7 @@ fn tab_rail_caps_mark_the_pick_under_no_color() {
 fn pets_enabled_keeps_rail_to_provider_tabs_only() {
     let theme = Theme::fixed(false);
     let panels = two_provider_panels();
-    let zones = crate::config::BudgetZonesConfig::default();
+    let zones = crate::config::BudgetBarConfig::default();
     let active = "claude".to_owned();
     let (lines, hits) = dashboard_panel_lines(
         &theme,

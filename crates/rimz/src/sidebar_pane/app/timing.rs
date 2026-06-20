@@ -68,7 +68,7 @@ pub(super) fn frame_interval(
     ui: &UiState,
     alert_active: bool,
 ) -> Duration {
-    let refresh_ms = snapshot.sidebar.resolved_refresh_ms();
+    let refresh_ms = snapshot.theme.display.resolved_refresh_ms();
     let base = crate::sidebar::timing::animation_frame(refresh_ms);
     // A decaying one-shot flash needs the fast grid to read as motion; it is
     // brief and self-terminating, so the cost is bounded to the transition
@@ -117,7 +117,7 @@ pub(super) fn frame_interval(
 /// layer is decoupled from the data layer and stays smooth regardless of fetch
 /// latency.
 pub(super) fn animation_frame(snapshot: &SidebarSnapshot) -> Duration {
-    crate::sidebar::timing::animation_frame(snapshot.sidebar.resolved_refresh_ms())
+    crate::sidebar::timing::animation_frame(snapshot.theme.display.resolved_refresh_ms())
 }
 
 pub(super) fn tick_for(seconds: u64) -> Duration {

@@ -56,7 +56,7 @@ fn compact_density_trims_resting_cards_by_status() {
             selected,
         ],
     );
-    snapshot.sidebar.card_density = CardDensityMode::Compact;
+    snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -125,7 +125,7 @@ fn compact_density_running_waiting_without_context_use_baseline_gauge() {
     selected.worktree_branch = Some("other".to_owned());
 
     let mut snapshot = snapshot_with(Vec::new(), vec![running, waiting, selected]);
-    snapshot.sidebar.card_density = CardDensityMode::Compact;
+    snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -180,7 +180,7 @@ fn compact_density_standalone_waiting_without_context_omits_gauge() {
     selected.worktree_branch = Some("other".to_owned());
 
     let mut snapshot = snapshot_with(vec![item], vec![selected]);
-    snapshot.sidebar.card_density = CardDensityMode::Compact;
+    snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -226,7 +226,7 @@ fn compact_density_selected_card_opens_to_full_form() {
     child.subagent_started_at = Some(fixed_now() - Duration::from_secs(120));
 
     let mut snapshot = snapshot_with(Vec::new(), vec![parent, child]);
-    snapshot.sidebar.card_density = CardDensityMode::Compact;
+    snapshot.theme.display.card_density = CardDensityMode::Compact;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
@@ -279,7 +279,7 @@ fn expanded_density_shows_subagents_on_non_selected_cards() {
     child.last_activity = fixed_now() - Duration::from_secs(60);
 
     let mut snapshot = snapshot_with(Vec::new(), vec![parent, selected, child]);
-    snapshot.sidebar.card_density = CardDensityMode::Expanded;
+    snapshot.theme.display.card_density = CardDensityMode::Expanded;
 
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,

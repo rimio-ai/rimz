@@ -2,7 +2,7 @@
 
 > See [interface/sidebar.md](../interface/sidebar.md) for what every tone and glyph means on screen; this doc is the knobs that restyle them.
 
-The sidebar's palette, glyph set, status-head animations, and provider brand styling are per-machine display settings in `~/.config/rimz/theme.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
+The sidebar's palette, render preferences, glyph set, status-head animations, and provider brand styling are per-machine display settings in `~/.config/rimz/theme.toml`. Glyph shapes carry every state and color reinforces them ([reading the glyphs](../interface/sidebar.md#reading-the-glyphs)), so any theme — including no color at all — keeps the room readable. Theme settings are personal display preferences and stay outside the project trust hash.
 
 ```sh
 rimz config set theme "TokyoNight Night"
@@ -85,6 +85,48 @@ scheme = "~/themes/rimz.toml"
 mode = "auto"        # or "truecolor", "256"
 ```
 
+## Display
+
+`[theme.display]` owns the sidebar's visual cadence, sizing, dashboard layout, overflow indicator, transition flashes, and card density.
+
+```toml
+[theme.display]
+refresh_ms = 100
+max_cols = 72
+scrollbar = "auto"      # or "always", "never"
+glow = "auto"           # or "always", "never"
+card_density = "auto"   # or "expanded", "compact"
+provider_tabs = "auto"  # or "always", "never"
+provider_list = ["codex", "all"]
+max_provider_blocks = 3
+```
+
+`max_cols` caps the creation-time sidebar pane width; `refresh_ms` controls the animation grid. `scrollbar` pins, removes, or auto-hides the right-margin overflow indicator. `card_density` keeps the standard card shape, expands subagents on every parent card, or compacts resting cards. `provider_tabs`, `provider_list`, and `max_provider_blocks` choose how provider account blocks stack or tab.
+
+`[theme.display.context_meter]` sets the agent-card context meter stops. Severity is the worse of fill percent and absolute tokens.
+
+```toml
+[theme.display.context_meter]
+green = { percent = 40, tokens = 100000 }
+yellow = { percent = 60, tokens = 160000 }
+amber = { percent = 75, tokens = 258000 }
+red = { percent = 90, tokens = 420000 }
+```
+
+`[theme.display.budget_bar]` and `[theme.display.budget_bar.burn_rate]` set the provider budget bar and reset-marker heat stops.
+
+```toml
+[theme.display.budget_bar]
+yellow = 50
+amber = 25
+red = 10
+
+[theme.display.budget_bar.burn_rate]
+yellow = 100
+amber = 150
+red = 200
+```
+
 ## Palette Slots
 
 Thirteen semantic slots cover everything the sidebar paints. Each accepts a palette role name (`background`, `foreground`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `bright_blue`), `#rrggbb` hex, or a raw 0–255 xterm index under `[theme]`; an omitted slot keeps the selected scheme's tone (the bundled `TokyoNight Night` palette by default). Role names resolve through the active raw palette, so `good = "green"` follows a pasted `[colors.normal] green` just like a bundled scheme.
@@ -116,7 +158,7 @@ caution = "yellow" # palette role name tracks the active [colors] table
 
 RGB values render as RGB under truecolor depth and quantize to the nearest xterm index under `mode = "256"` or a non-truecolor `auto`; raw indexes stay exact.
 
-The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. The provider budget ("mana") bar rides the same full ramp: it anchors green at a brimming window and warms continuously toward red as it drains, with the `[sidebar.budget]` zones as its warm stops. The recede-when-healthy readers — the card age clock, the reset-countdown burn pace, and the remote link badge — keep a quiet resting tone and ride only the warm tail of the ramp (`warn` → `caution` → `alarm`) once they leave their calm zone, since a fresh agent, a sustainable pace, or a healthy link reads quiet rather than healthy-green. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The waiting `?`, failed `!`, and paused `⏸` glyphs wear their flat `warn`, `alarm`, and `cool` slots, held steady at any age, so a slot override restyles them directly.
+The context meter resolves a health tone from the `good` → `warn` → `caution` → `alarm` ramp — healthy green through gold and orange to alarm red — in OKLab, then emits the result at the active depth. The filled bar uses that single current tone. The provider budget ("mana") bar rides the same full ramp: it anchors green at a brimming window and warms continuously toward red as it drains, with the `[theme.display.budget_bar]` zones as its warm stops. The recede-when-healthy readers — the card age clock, the reset-countdown burn pace, and the remote link badge — keep a quiet resting tone and ride only the warm tail of the ramp (`warn` → `caution` → `alarm`) once they leave their calm zone, since a fresh agent, a sustainable pace, or a healthy link reads quiet rather than healthy-green. RGB overrides and raw xterm indexes 16–255 participate in the ramp; ANSI indexes 0–15 are terminal-defined, so flat slot uses wear the override while the ramp keeps the scheme RGB for that slot. The waiting `?`, failed `!`, and paused `⏸` glyphs wear their flat `warn`, `alarm`, and `cool` slots, held steady at any age, so a slot override restyles them directly.
 
 The context composition accents reuse stable sidebar tones: fresh input `↘` wears a deep red a step past the `alarm` stop — the costliest read in the breakdown and the reddest marker on screen, so it always reads hotter than the bar's scaled-to-red cache-read run (retune it through the `alarm` slot it derives from); cache-read `◌` wears green; output `↗` wears blue; cache-write `◍` wears the `meta` compaction/delegation violet; and the completed-compaction `↻` marker wears yellow. The `◇` token total uses `cool` blue so it stays distinct from those cost markers.
 
@@ -235,7 +277,7 @@ unread = "shimmer"   # or "bright", "blink"
 
 ## Glyphs
 
-`[theme.glyphs]` shapes the sidebar vocabulary, grouped the way the sidebar reads on screen. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table; this section changes the shapes that carry those meanings. `rimz config init` writes both shipped sets as **active defaults** — `[theme.glyphs.unicode.*]` and `[theme.glyphs.nerd_font.*]` — so customizing is direct: paste a different glyph over any value and it takes effect on the next render. Each glyph must occupy exactly one terminal cell, or two when a trailing space pads a double-width icon.
+`[theme.glyphs]` shapes the sidebar vocabulary, grouped the way the sidebar reads on screen. The [glyph legend](../interface/sidebar.md#reading-the-glyphs) stays the canonical meaning table; this section changes the shapes that carry those meanings. `rimz config init` lists both shipped sets as commented examples — `[theme.glyphs.unicode.*]` and `[theme.glyphs.nerd_font.*]` — so customizing is direct: uncomment or set a single glyph and it takes effect on the next render. Each glyph must occupy exactly one terminal cell, or two when a trailing space pads a double-width icon.
 
 Set a whole zone in one block. The cockpit make-up row is the `status` group:
 
@@ -280,23 +322,27 @@ The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling 
 
 ## Provider Styling
 
-`[theme.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults (claude clay, codex blue, pi forest green).
+`[theme.providers.<kind>]` restyles a provider's dashboard block — display name, ASCII emblem, and brand color — over the built-in defaults: Claude clay (`#d97757`), Codex blue (`#2fb1d1`), Pi green (`#27a077`), and Open Code orange (`#ff8700`).
 
 ```toml
 [theme.providers.claude]
-product_name = "Claude Code"
+product_name = "Claude"
 color = "#d97757"
-ascii_art = "CLAUDE"
+ascii_art = """
+ ▐▛███▜▌
+▝▜█████▛▘
+  ▘▘ ▝▝
+"""
 ```
 
 `color` accepts a palette role name, `#rrggbb`, or a raw 0-255 index; RGB and role values carry a quantized fallback for indexed renderers. Each field is optional, so a color override can leave the shipped art intact. Block selection and ordering stay in [configuration.md](./configuration.md#provider-dashboard); account and emblem resolution is in [internals/agents/provider.md](../internals/agents/provider.md).
 
 ## Glow
 
-`[sidebar] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows ``theme.mode`` plus the `NO_COLOR` fallback. `auto` (default) follows the same `COLORTERM` or terminfo truecolor signal as palette depth; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop where terminfo also lacks the capability — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
+`[theme.display] glow` gates the post-render transition-flash tier layered over the base palette. The unread attention effect is part of base status-head rendering and follows ``theme.mode`` plus the `NO_COLOR` fallback. `auto` (default) follows the same `COLORTERM` or terminfo truecolor signal as palette depth; `always` forces transition flashes when a real truecolor terminal under-advertises, such as an SSH hop where terminfo also lacks the capability — pair it with `mode = "truecolor"` for RGB base tones; `never` keeps the plain render plus the base attention effect.
 
 ```toml
-[sidebar]
+[theme.display]
 glow = "auto"        # or "always", "never"
 ```
 
@@ -307,7 +353,7 @@ Glyph shapes carry every state, so `NO_COLOR` suppresses color while keeping sha
 ```sh
 rimz config set theme "TokyoNight Night"
 rimz config set theme.good '#a0d0a0'
-rimz config set sidebar.glow always
+rimz config set theme.display.glow always
 rimz config set theme.glyphs.set nerd_font
 rimz config set theme.glyphs.unicode.status.working '⢿'
 rimz config set theme.glyphs.unicode.tokens.total '◇'

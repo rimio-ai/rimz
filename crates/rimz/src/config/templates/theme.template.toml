@@ -30,6 +30,36 @@
 ## selection = "bright_blue"          # colors.bright.blue, falling back to normal.blue
 ## selection_bg = "#2a2723"           # derived from colors.selection.background
 
+[theme.display]
+# Sidebar render preferences - cadence, sizing, and dashboard layout. All optional.
+## refresh_ms = 100                   # render/animation grid; clamped internally
+## max_cols = 72                      # creation-time cap for sidebar pane width
+## scrollbar = "auto"                 # "auto", "always", or "never"
+## glow = "auto"                      # transition flashes: "auto", "always", or "never"
+## card_density = "auto"              # "auto", "expanded", or "compact"
+## provider_tabs = "auto"             # "auto", "always", or "never"
+## provider_list = []                 # explicit provider order; include "all" to expand the rest
+## max_provider_blocks = 3            # cap stacked provider blocks when provider_list is empty
+
+[theme.display.context_meter]
+# Agent-card context meter color stops (worse of fill % and absolute tokens).
+## green = { percent = 40, tokens = 100000 }
+## yellow = { percent = 60, tokens = 160000 }
+## amber = { percent = 75, tokens = 258000 }
+## red = { percent = 90, tokens = 420000 }
+
+[theme.display.budget_bar]
+# Provider budget bar color zones, by remaining budget percent (plan + metered).
+## yellow = 50
+## amber = 25
+## red = 10
+
+[theme.display.budget_bar.burn_rate]
+# Reset-marker burn-rate zones, as percent of even pace (100 = on-pace).
+## yellow = 100
+## amber = 150
+## red = 200
+
 [theme.animations]
 # Status-head animation roles are optional. Each role accepts frames, color,
 # effect, and speed; omitted fields keep the built-in value. Colors are semantic
@@ -82,186 +112,204 @@
 
 [theme.glyphs]
 # Glyphs are display-only and grouped the way the sidebar reads on screen. Both
-# shipped sets are active below so customizing is direct: paste a different
-# glyph over any value. Every glyph must occupy one terminal cell, or two when a
-# trailing space pads a double-width icon.
+# shipped sets are listed as examples; uncomment any line to override one glyph.
+# Every glyph must occupy one terminal cell, or two when a trailing space pads a
+# double-width icon.
 ## set = "nerd_font"
 
 [theme.glyphs.unicode.status]
-waiting = "?"
-attention = "!"
-paused = "⏸︎"
-done = "✓"
-idle = "○"
-working = "⢿"
-thinking = "⠁"
-delegating = "⢄"
-resolving = "⠙"
-compacting = "▇"
+## waiting = "?"
+## attention = "!"
+## paused = "⏸︎"
+## done = "✓"
+## idle = "○"
+## working = "⢿"
+## thinking = "⠁"
+## delegating = "⢄"
+## resolving = "⠙"
+## compacting = "▇"
 
 [theme.glyphs.unicode.cockpit]
-workspace = "⌘"
-sessions = "◎"
-agents = "¤"
+## workspace = "⌘"
+## sessions = "◎"
+## agents = "¤"
 
 [theme.glyphs.unicode.tokens]
-total = "◇"
-input = "↘"
-output = "↗"
-cache_read = "◌"
-cache_write = "◍"
-filled = "▤"
-compaction = "↻"
+## total = "◇"
+## input = "↘"
+## output = "↗"
+## cache_read = "◌"
+## cache_write = "◍"
+## filled = "▤"
+## compaction = "↻"
 
 [theme.glyphs.unicode.meter]
-context_full = "▣"
-context_empty = "▢"
-bar_filled = "━"
-bar_track = "─"
-bar_cap = "╸"
-mana_filled = "▰"
-mana_track = "▱"
-reset = "↻"
-scroll_thumb = "▐"
-scroll_track = "▕"
+## context_full = "▣"
+## context_empty = "▢"
+## bar_filled = "━"
+## bar_track = "─"
+## bar_cap = "╸"
+## mana_filled = "▰"
+## mana_track = "▱"
+## reset = "↻"
+## scroll_thumb = "▐"
+## scroll_track = "▕"
 
 [theme.glyphs.unicode.clock]
-q1 = "◔"
-q2 = "◑"
-q3 = "◕"
-q4 = "●"
-over = "◉"
+## q1 = "◔"
+## q2 = "◑"
+## q3 = "◕"
+## q4 = "●"
+## over = "◉"
 
 [theme.glyphs.unicode.worktree]
-branch = "⑂"
-ahead = "⇡"
-behind = "⇣"
-trunk_equal = "≡"
-trunk_clear = "✓"
-dotted = "┄"
+## branch = "⑂"
+## ahead = "⇡"
+## behind = "⇣"
+## trunk_equal = "≡"
+## trunk_clear = "✓"
+## dotted = "┄"
 
 [theme.glyphs.unicode.card]
-subagents = "⧉"
-todo_done = "●"
-todo_pending = "○"
-parked_bg = "⋯"
+## subagents = "⧉"
+## todo_done = "●"
+## todo_pending = "○"
+## parked_bg = "⋯"
 
 [theme.glyphs.unicode.process]
-cpu = "C"
-mem = "M"
-io = "⇅"
+## cpu = "C"
+## mem = "M"
+## io = "⇅"
 
 [theme.glyphs.unicode.chrome]
-alert = "⚠"
-remote_link = "⇄"
-remote_control = "⇅"
-hairline = "─"
-tab_cap_left = "┤"
-tab_cap_right = "├"
-spine_card_left = "▌"
-spine_card_right = "▐"
-spine_lane_left = "▎"
-spine_lane_right = "🮇"
-infinity = "∞"
+## alert = "⚠"
+## remote_link = "⇄"
+## remote_control = "⇅"
+## hairline = "─"
+## tab_cap_left = "┤"
+## tab_cap_right = "├"
+## spine_card_left = "▌"
+## spine_card_right = "▐"
+## spine_lane_left = "▎"
+## spine_lane_right = "🮇"
+## infinity = "∞"
 
 [theme.glyphs.nerd_font.status]
-waiting = ""
-attention = ""
-paused = ""
-done = ""
-idle = ""
-working = "⢿"
-thinking = "⠁"
-delegating = "⢄"
-resolving = "⠙"
-compacting = "▇"
+## waiting = ""
+## attention = ""
+## paused = ""
+## done = ""
+## idle = ""
+## working = "⢿"
+## thinking = "⠁"
+## delegating = "⢄"
+## resolving = "⠙"
+## compacting = "▇"
 
 [theme.glyphs.nerd_font.cockpit]
-workspace = ""
-sessions = ""
-agents = ""
+## workspace = ""
+## sessions = ""
+## agents = ""
 
 [theme.glyphs.nerd_font.tokens]
-total = ""
-input = ""
-output = ""
-cache_read = "󱥸"
-cache_write = ""
-filled = "󰿦"
-compaction = ""
+## total = ""
+## input = ""
+## output = ""
+## cache_read = "󱥸"
+## cache_write = ""
+## filled = "󰿦"
+## compaction = ""
 
 [theme.glyphs.nerd_font.meter]
-context_full = "󰕰"
-context_empty = "󱇙"
-bar_filled = "━"
-bar_track = "─"
-bar_cap = "╸"
-mana_filled = "▰"
-mana_track = "▱"
-reset = "󰑐"
-scroll_thumb = "▐"
-scroll_track = "▕"
+## context_full = "󰕰"
+## context_empty = "󱇙"
+## bar_filled = "━"
+## bar_track = "─"
+## bar_cap = "╸"
+## mana_filled = "▰"
+## mana_track = "▱"
+## reset = "󰑐"
+## scroll_thumb = "▐"
+## scroll_track = "▕"
 
 [theme.glyphs.nerd_font.clock]
-q1 = "◔"
-q2 = "◑"
-q3 = "◕"
-q4 = "●"
-over = "◉"
+## q1 = "◔"
+## q2 = "◑"
+## q3 = "◕"
+## q4 = "●"
+## over = "◉"
 
 [theme.glyphs.nerd_font.worktree]
-branch = ""
-ahead = "⇡"
-behind = "⇣"
-trunk_equal = "≡"
-trunk_clear = "✓"
-dotted = "┄"
+## branch = ""
+## ahead = "⇡"
+## behind = "⇣"
+## trunk_equal = "≡"
+## trunk_clear = "✓"
+## dotted = "┄"
 
 [theme.glyphs.nerd_font.card]
-subagents = ""
-todo_done = "●"
-todo_pending = "○"
-parked_bg = "⋯"
+## subagents = ""
+## todo_done = "●"
+## todo_pending = "○"
+## parked_bg = "⋯"
 
 [theme.glyphs.nerd_font.process]
-cpu = ""
-mem = ""
-io = ""
+## cpu = ""
+## mem = ""
+## io = ""
 
 [theme.glyphs.nerd_font.chrome]
-alert = "⚠"
-remote_link = ""
-remote_control = "⇅"
-hairline = "─"
-tab_cap_left = "┤"
-tab_cap_right = "├"
-spine_card_left = "▌"
-spine_card_right = "▐"
-spine_lane_left = "▎"
-spine_lane_right = "🮇"
-infinity = ""
+## alert = "⚠"
+## remote_link = ""
+## remote_control = "⇅"
+## hairline = "─"
+## tab_cap_left = "┤"
+## tab_cap_right = "├"
+## spine_card_left = "▌"
+## spine_card_right = "▐"
+## spine_lane_left = "▎"
+## spine_lane_right = "🮇"
+## infinity = ""
 
 [theme.providers]
 # Provider styles are keyed by agent kind and every field is optional.
 ## [theme.providers.claude]
-## product_name = "Claude Code"
+## product_name = "Claude"
 ## color = "#d97757"
 ## ascii_art = """
-## CLAUDE
+##  ▐▛███▜▌
+## ▝▜█████▛▘
+##   ▘▘ ▝▝
 ## """
 ## [theme.providers.codex]
 ## product_name = "Codex"
-## color = "blue"
-## ascii_art = "CODEX"
+## color = "#2fb1d1"
+## ascii_art = """
+##  ▗▛███▜▖
+## ▐▜▌ ▚ ▐▛▌
+##  ▝▀▀▀▀▀▘
+## """
 ## [theme.providers.pi]
 ## product_name = "Pi"
-## color = "green"
-## ascii_art = "PI"
+## color = "#27a077"
+## ascii_art = """
+##  █▜███▛█
+## ▝▜▛▀▀▀▜▛▘
+##  ▝▘   ▝▘
+## """
 ## [theme.providers.opencode]
-## product_name = "OpenCode"
-## color = "magenta"
-## ascii_art = "OPEN"
+## product_name = "Open Code"
+## color = "#ff8700"
+## ascii_art = """
+##  ▗▛▀▀▀▜▖
+## ▝▜▌ █ ▐▛▘
+##  ▝▀▀▀▀▀▘
+## """
 
+# Drop in any Alacritty theme: the [colors.*] tables below follow Alacritty's
+# schema, so you can paste a whole scheme file here verbatim to override the
+# palette. The shipped default is TokyoNight Night
+# (https://github.com/mbadolato/iTerm2-Color-Schemes/blob/master/alacritty/TokyoNight.toml).
 [colors.primary]
 background = "#1a1b26"
 foreground = "#c0caf5"

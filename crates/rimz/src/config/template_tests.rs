@@ -9,6 +9,21 @@ const ACTIVE_ZELLIJ_DEFAULTS: &[&str] = &[
     "auto_layout",
 ];
 
+const ACTIVE_TMUX_DEFAULTS: &[&str] = &[
+    "mouse",
+    "focus_events",
+    "history_limit",
+    "allow_passthrough",
+    "set_clipboard",
+    "extended_keys",
+    "extended_keys_format",
+    "escape_time_ms",
+    "renumber_windows",
+    "aggressive_resize",
+    "pane_border_status",
+    "pane_border_lines",
+];
+
 #[test]
 fn template_defaults_deserialize_to_machine_defaults() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -30,14 +45,9 @@ fn template_defaults_deserialize_to_machine_defaults() {
     let parsed =
         MachineConfig::load_from(&dir.path().join("config.toml")).expect("template defaults parse");
 
-    // The template ships both glyph groups and the pasteable palette as active
-    // defaults, so normalize them away before comparing the rest of the config.
-    assert!(
-        !parsed.theme.glyphs.is_unset(),
-        "template ships active glyph defaults"
-    );
+    // The template ships the pasteable palette as active defaults, so normalize
+    // it away before comparing the rest of the config.
     let mut normalized = parsed.clone();
-    normalized.theme.glyphs = super::ThemeGlyphsConfig::default();
     normalized.theme.colors = None;
     assert_eq!(normalized, MachineConfig::default());
 }
@@ -57,7 +67,7 @@ fn template_covers_serialized_default_leaves() {
         );
     }
 
-    let allowed_template_only = BTreeSet::from(["sidebar.provider_list".to_owned()]);
+    let allowed_template_only = BTreeSet::<String>::new();
     for path in template.difference(&expected) {
         assert!(
             allowed_template_only.contains(path),
@@ -141,6 +151,9 @@ fn template_default_paths(template: &str) -> BTreeSet<String> {
             if section.len() == 1 && section[0] == "zellij" {
                 active_default_assignment(line)
                     .filter(|(key, _)| ACTIVE_ZELLIJ_DEFAULTS.contains(key))
+            } else if section.len() == 1 && section[0] == "tmux" {
+                active_default_assignment(line)
+                    .filter(|(key, _)| ACTIVE_TMUX_DEFAULTS.contains(key))
             } else {
                 None
             }

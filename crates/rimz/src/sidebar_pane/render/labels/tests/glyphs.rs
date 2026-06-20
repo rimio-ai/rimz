@@ -8,13 +8,13 @@ fn truecolor_theme() -> Theme {
         mode: crate::config::ThemeMode::Truecolor,
         ..crate::config::ThemeConfig::default()
     };
-    Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme)
+    Theme::fixed_for_theme(false, &theme)
 }
 
 fn truecolor_theme_with(theme: &crate::config::ThemeConfig) -> Theme {
     let mut theme = theme.clone();
     theme.mode = crate::config::ThemeMode::Truecolor;
-    Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme)
+    Theme::fixed_for_theme(false, &theme)
 }
 
 /// A sidebar config that pins the unread attention effect, so a test can drive
@@ -418,11 +418,7 @@ fn unread_glyph_pulses_without_losing_status_color_or_heat() {
     );
     assert_eq!(red_read.add_modifier, Modifier::empty());
 
-    let plain = Theme::fixed_for_theme(
-        true,
-        &crate::config::SidebarConfig::default(),
-        &unread_theme(crate::config::UnreadEffect::Blink),
-    );
+    let plain = Theme::fixed_for_theme(true, &unread_theme(crate::config::UnreadEffect::Blink));
     let read_waiting_plain = agent_lead_style(
         &plain,
         AgentStatus::Waiting,
@@ -715,7 +711,7 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
         toml::from_str::<crate::config::AnimationSpec>("frames = \"XY\"\nspeed = \"fast\"\n")
             .expect("success animation spec"),
     );
-    let custom = Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme);
+    let custom = Theme::fixed_for_theme(false, &theme);
     assert_eq!(
         agent_glyph(&custom, AgentStatus::Idle, TurnPhase::Idle, 1),
         "B"
@@ -737,11 +733,7 @@ fn agent_glyph_animates_live_and_calm_status_frames() {
         .expect("status glyph override"),
         ..crate::config::ThemeConfig::default()
     };
-    let shaped = Theme::fixed_for_theme(
-        false,
-        &crate::config::SidebarConfig::default(),
-        &shaped_theme,
-    );
+    let shaped = Theme::fixed_for_theme(false, &shaped_theme);
     assert_eq!(
         status_glyph(&shaped, AgentStatus::Idle),
         "o",
@@ -786,7 +778,7 @@ fn default_idle_glyph_has_no_foreground_color_but_keeps_modifiers() {
         toml::from_str::<crate::config::AnimationSpec>("color = \"good\"\n")
             .expect("idle color spec"),
     );
-    let custom = Theme::fixed_for_theme(false, &crate::config::SidebarConfig::default(), &theme);
+    let custom = Theme::fixed_for_theme(false, &theme);
     assert_eq!(
         status_style(&custom, AgentStatus::Idle),
         custom.good(Modifier::empty()),

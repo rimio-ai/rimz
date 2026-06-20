@@ -68,7 +68,7 @@ pub(super) fn launch_layout(
     record_workspace(&workspace)?;
 
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.sidebar);
+    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let launch = agents_launch::resolve_cwd(
         &workspace,

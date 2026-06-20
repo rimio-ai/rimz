@@ -656,7 +656,7 @@ impl AgentStatus {
 
 /// The context meter's four-tier severity ramp — calm → yellow → amber → red.
 /// Classified once ([`ContextSeverity::classify`]) from the configured
-/// `[sidebar.context]` bands and stamped on each agent's sidebar row where the
+/// `[theme.display.context_meter]` bands and stamped on each agent's sidebar row where the
 /// config is folded onto the snapshot, so the renderer's color ramp and a
 /// future hook flow (e.g. a resolver triggering `/compact` at amber) read one
 /// verdict instead of re-deriving it. Ordered, so a threshold reads
@@ -681,7 +681,7 @@ impl ContextSeverity {
     pub fn classify(
         percent: u8,
         used_tokens: Option<u64>,
-        bands: &crate::config::ContextSeverityConfig,
+        bands: &crate::config::ContextMeterConfig,
     ) -> Self {
         let percent = percent.min(100);
         let tokens = used_tokens.unwrap_or(0);
@@ -1371,7 +1371,7 @@ mod tests {
     /// starts at 90% / 420k.
     #[test]
     fn context_severity_takes_the_worse_of_percent_and_tokens() {
-        let bands = crate::config::ContextSeverityConfig::default();
+        let bands = crate::config::ContextMeterConfig::default();
         let tier = |percent, tokens| ContextSeverity::classify(percent, tokens, &bands);
         // Low fill, low tokens: calm.
         assert_eq!(tier(20, Some(50_000)), ContextSeverity::Calm);
@@ -1396,13 +1396,13 @@ mod tests {
         assert!(ContextSeverity::Amber > ContextSeverity::Yellow);
     }
 
-    /// The bands come from `[sidebar.context]`, so a custom set moves every
+    /// The bands come from `[theme.display.context_meter]`, so a custom set moves every
     /// edge; a misordered set degrades to the highest matching tier (the red
     /// band is checked first), never to a calmer one.
     #[test]
     fn context_severity_honours_custom_and_misordered_bands() {
-        use crate::config::{ContextBand, ContextSeverityConfig};
-        let tight = ContextSeverityConfig {
+        use crate::config::{ContextBand, ContextMeterConfig};
+        let tight = ContextMeterConfig {
             green: ContextBand {
                 percent: 10,
                 tokens: 1_000,
@@ -1439,7 +1439,7 @@ mod tests {
 
         // Red configured *below* yellow: a mid fill reaches the red band even
         // though the calmer tiers do not — worst-first keeps the warning loud.
-        let misordered = ContextSeverityConfig {
+        let misordered = ContextMeterConfig {
             green: ContextBand {
                 percent: 95,
                 tokens: 950_000,

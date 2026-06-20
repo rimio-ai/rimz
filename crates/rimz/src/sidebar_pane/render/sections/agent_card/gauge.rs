@@ -73,7 +73,7 @@ pub(super) fn bar_row(
 /// **percent used** on the right (always — the window *size* moves to the
 /// expanded token line), the bar between. The fill amount and its calm-blue →
 /// continuous OKLab warn/caution/alarm severity ([`row_severity`], bands from
-/// `[sidebar.context]`) come from the used percentage and the absolute tokens;
+/// `[theme.display.context_meter]`) come from the used percentage and the absolute tokens;
 /// when the statusline reports the per-message token breakdown a *calm* fill is
 /// split into colored segments (cache reads / cache writes / fresh input) that
 /// add up to exactly that percentage, and a warmed bar goes one solid severity
@@ -84,7 +84,7 @@ pub(super) fn bar_row(
 pub(super) fn gauge_line(
     theme: &Theme,
     row: &SidebarRow,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
     width: usize,
 ) -> Option<Line<'static>> {
     let percent = gauge_percent(row)?;
@@ -121,7 +121,7 @@ pub(super) fn gauge_line(
 /// from the same inputs and bands — the fallback for a snapshot produced
 /// before the stamp (an older producer mid-upgrade). Either way it is
 /// [`ContextSeverity::classify`]'s verdict, never a renderer-private ramp.
-pub(super) fn row_severity(row: &SidebarRow, bands: &ContextSeverityConfig) -> ContextSeverity {
+pub(super) fn row_severity(row: &SidebarRow, bands: &ContextMeterConfig) -> ContextSeverity {
     agent(row)
         .and_then(|agent| agent.context_severity)
         .unwrap_or_else(|| {
@@ -136,7 +136,7 @@ pub(super) fn row_severity(row: &SidebarRow, bands: &ContextSeverityConfig) -> C
 fn row_severity_color(
     theme: &Theme,
     row: &SidebarRow,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
     severity: ContextSeverity,
 ) -> Color {
     severity_heat_color(
@@ -229,7 +229,7 @@ pub(super) fn gauge_segments(theme: &Theme, row: &SidebarRow) -> Option<[(u64, C
 pub(super) fn context_tokens_line(
     theme: &Theme,
     row: &SidebarRow,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
     now: Timestamp,
     width: usize,
 ) -> Option<Line<'static>> {

@@ -70,7 +70,7 @@ impl LoopState {
     }
 
     pub(super) fn frame_timing(&self, tick: Duration, anim_start: Instant) -> (bool, Duration) {
-        let phase = wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
+        let phase = wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
         let alert_active = self
             .health
             .alert
@@ -506,7 +506,7 @@ impl LoopState {
         // defers its paint until the sibling-count verdict releases the hold.
         if !self.should_exit && !paint_blocked && (active || self.dirty) && now >= self.next_frame {
             self.ui.animation_phase =
-                wall_clock_phase(anim_start, self.current.sidebar.resolved_refresh_ms());
+                wall_clock_phase(anim_start, self.current.theme.display.resolved_refresh_ms());
             let alert_active = self
                 .health
                 .alert

@@ -42,7 +42,7 @@ struct InitArgs {
 
 #[derive(Debug, Args)]
 struct GetArgs {
-    /// Dotted config key, for example `sidebar.max_cols`.
+    /// Dotted config key, for example `theme.display.max_cols`.
     key: Option<String>,
     /// Emit JSON instead of TOML/plain scalar output.
     #[arg(long)]
@@ -51,7 +51,7 @@ struct GetArgs {
 
 #[derive(Debug, Args)]
 struct SetArgs {
-    /// Dotted config key, for example `sidebar.max_cols`.
+    /// Dotted config key, for example `theme.display.max_cols`.
     key: String,
     /// TOML value. Bare words are treated as strings.
     value: String,
@@ -465,24 +465,25 @@ fn exact_set_keys() -> BTreeSet<String> {
         "notifications.remind_secs",
         "notifications.command",
         "theme.style",
-        "sidebar.refresh_ms",
-        "sidebar.max_provider_blocks",
-        "sidebar.provider_tabs",
-        "sidebar.provider_list",
-        "sidebar.max_cols",
+        "theme.display.refresh_ms",
+        "theme.display.max_provider_blocks",
+        "theme.display.provider_tabs",
+        "theme.display.provider_list",
+        "theme.display.max_cols",
+        "theme.display.scrollbar",
+        "theme.display.glow",
+        "theme.display.card_density",
+        "theme.display.context_meter.green",
+        "theme.display.context_meter.yellow",
+        "theme.display.context_meter.amber",
+        "theme.display.context_meter.red",
+        "theme.display.budget_bar.yellow",
+        "theme.display.budget_bar.amber",
+        "theme.display.budget_bar.red",
+        "theme.display.budget_bar.burn_rate.yellow",
+        "theme.display.budget_bar.burn_rate.amber",
+        "theme.display.budget_bar.burn_rate.red",
         "sidebar.focus_key",
-        "sidebar.card_density",
-        "sidebar.focus_key",
-        "sidebar.context.green",
-        "sidebar.context.yellow",
-        "sidebar.context.amber",
-        "sidebar.context.red",
-        "sidebar.budget.yellow",
-        "sidebar.budget.amber",
-        "sidebar.budget.red",
-        "sidebar.budget.pace.yellow",
-        "sidebar.budget.pace.amber",
-        "sidebar.budget.pace.red",
         "agents.attention.stalled_after_secs",
         "agents.attention.inactive_after_secs",
         "agents.pets.enabled",
@@ -529,8 +530,6 @@ fn exact_set_keys() -> BTreeSet<String> {
         "theme.rule",
         "theme.selection",
         "theme.selection_bg",
-        "sidebar.scrollbar",
-        "sidebar.glow",
         "zellij.mouse_mode",
         "zellij.mouse_click_through",
         "zellij.advanced_mouse_actions",
@@ -691,8 +690,8 @@ mod tests {
     #[test]
     fn validates_config_key_read_and_write_surfaces() {
         for key in [
-            "sidebar.max_cols",
-            "sidebar.budget.pace.red",
+            "theme.display.max_cols",
+            "theme.display.budget_bar.burn_rate.red",
             "accounts.usage_limit_usd.codex",
             "agents.teams.review.roles",
             "agents.teams.review.layout",
@@ -801,7 +800,7 @@ mod tests {
         let shorthand = parse_key("theme").expect("key");
         assert_eq!(parse_set_value(&shorthand, "0x96f").as_str(), Some("0x96f"));
 
-        let numeric = parse_key("sidebar.max_cols").expect("key");
+        let numeric = parse_key("theme.display.max_cols").expect("key");
         assert_eq!(parse_set_value(&numeric, "80").as_integer(), Some(80));
     }
 

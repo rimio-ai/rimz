@@ -77,7 +77,7 @@ fn render_scroll_overflow_shows_bar() {
 #[test]
 fn scrollbar_clips_help_overlay_without_erasing_text() {
     let mut snapshot = overflowing_fleet();
-    snapshot.sidebar.scrollbar = ScrollbarMode::Always;
+    snapshot.theme.display.scrollbar = ScrollbarMode::Always;
     let rendered = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,
@@ -119,7 +119,7 @@ fn render_scroll_offset_follows_selection_to_bottom() {
         "the zone's head scrolled off:\n{rendered}"
     );
     let mut no_bar = overflowing_fleet();
-    no_bar.sidebar.scrollbar = ScrollbarMode::Never;
+    no_bar.theme.display.scrollbar = ScrollbarMode::Never;
     let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &ui, 38, 18);
     assert_eq!(
         rendered, expected,
@@ -210,7 +210,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
     let settled =
         snapshot_to_screen_with_alert_and_ui(&overflowing_fleet(), None, &settled_ui, 38, 18);
     let mut no_bar = overflowing_fleet();
-    no_bar.sidebar.scrollbar = ScrollbarMode::Never;
+    no_bar.theme.display.scrollbar = ScrollbarMode::Never;
     let expected = snapshot_to_screen_with_alert_and_ui(&no_bar, None, &settled_ui, 38, 18);
     assert_eq!(
         settled, expected,
@@ -218,7 +218,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
     );
 
     let mut snapshot = overflowing_fleet();
-    snapshot.sidebar.scrollbar = ScrollbarMode::Always;
+    snapshot.theme.display.scrollbar = ScrollbarMode::Always;
     let always = snapshot_to_screen_with_alert_and_ui(&snapshot, None, &UiState::default(), 38, 18);
     assert!(
         line_containing(&always, "⑂ alpha").ends_with('▐'),
@@ -226,7 +226,7 @@ fn scrollbar_modes_control_visibility_without_moving_the_window() {
     );
 
     let mut snapshot = overflowing_fleet();
-    snapshot.sidebar.scrollbar = ScrollbarMode::Never;
+    snapshot.theme.display.scrollbar = ScrollbarMode::Never;
     let never = snapshot_to_screen_with_alert_and_ui(
         &snapshot,
         None,

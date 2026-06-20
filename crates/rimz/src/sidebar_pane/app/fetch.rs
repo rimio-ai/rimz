@@ -76,7 +76,7 @@ pub(super) struct FetchOutcome {
 
 pub(super) fn apply_refresh_override(config: &ServeConfig, snapshot: &mut SidebarSnapshot) {
     if let Some(refresh_ms) = config.refresh_ms_override {
-        snapshot.sidebar.refresh_ms = refresh_ms;
+        snapshot.theme.display.refresh_ms = refresh_ms;
     }
 }
 

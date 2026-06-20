@@ -355,8 +355,8 @@ fn card_lines(selected_index: usize) -> Vec<String> {
         &snapshot.providers,
         snapshot.now,
         54,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
         None,
         &mut row_index,
         selected_index,
@@ -393,8 +393,8 @@ fn group_lines(
         &snapshot.providers,
         snapshot.now,
         54,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
         None,
         &mut row_index,
         selected_index,
@@ -536,7 +536,7 @@ fn metered_bar_rows(theme: &Theme, panel: &crate::SidebarProviderPanel) -> Vec<L
         None,
         false,
         30,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     )
     .0
@@ -595,7 +595,7 @@ fn stats_line(theme: &Theme, panel: &crate::SidebarProviderPanel) -> String {
         None,
         false,
         52,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     )
     .0
@@ -733,7 +733,6 @@ fn scrolled_fade(offset: usize, phase: u64) -> ScrollbarFade {
 fn truecolor_sidebar_theme() -> Theme {
     Theme::fixed_for_theme(
         false,
-        &crate::config::SidebarConfig::default(),
         &crate::config::ThemeConfig {
             mode: crate::config::ThemeMode::Truecolor,
             ..Default::default()

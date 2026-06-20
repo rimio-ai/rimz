@@ -10,9 +10,9 @@ Every command on this page accepts the global `--mux <MUX>` and `--root <ROOT>` 
 rimz config init --print
 rimz config init
 rimz config path
-rimz config get sidebar.max_cols
+rimz config get theme.display.max_cols
 rimz config get sidebar --json
-rimz config set sidebar.max_cols 80
+rimz config set theme.display.max_cols 80
 rimz config set notifications.triggers '["waiting", "failed"]'
 ```
 
@@ -29,11 +29,11 @@ rimz config set <KEY> <VALUE>
 
 `path` prints the resolved core `config.toml` path, which is useful in scripts and editors.
 
-`get` loads the effective config over built-in defaults. With no key it prints the whole config as TOML; with a dotted key such as `sidebar.max_cols` it prints only that value; `--json` prints JSON for the whole config or selected value.
+`get` loads the effective config over built-in defaults. With no key it prints the whole config as TOML; with a dotted key such as `theme.display.max_cols` it prints only that value; `--json` prints JSON for the whole config or selected value.
 
 `set` edits one dotted key, preserves comments, rejects unknown keys, validates the resulting config, and writes with Rimz's temp-file-plus-rename durability primitive. Bare values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings, so `fresh` is accepted as a string value.
 
-Dotted keys address nested TOML tables. Examples include `agents.worktree.base`, `sidebar.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.teams.review.layout`, `agents.teams.review.roles`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `theme.providers.codex.color`.
+Dotted keys address nested TOML tables. Examples include `agents.worktree.base`, `theme.display.max_cols`, `notifications.enabled`, `notifications.triggers`, `agents.teams.review.layout`, `agents.teams.review.roles`, `agents.profiles.codex-yolo.mode`, `agents.commands.vim`, and `theme.providers.codex.color`.
 
 ## List themes
 

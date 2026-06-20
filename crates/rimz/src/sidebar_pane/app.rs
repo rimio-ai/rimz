@@ -408,7 +408,8 @@ fn apply_input(
     if outcome.redraw {
         // Carry the live spin phase into the instant paint so a keypress mid-spin
         // never rewinds the animation to a stale frame.
-        ui.animation_phase = wall_clock_phase(anim_start, snapshot.sidebar.resolved_refresh_ms());
+        ui.animation_phase =
+            wall_clock_phase(anim_start, snapshot.theme.display.resolved_refresh_ms());
         refresh_pet_view(
             ui,
             pet_assets,
@@ -469,7 +470,7 @@ fn refresh_pet_view(
         PetViewFrame {
             action,
             phase: ui.animation_phase,
-            refresh_ms: snapshot.sidebar.resolved_refresh_ms(),
+            refresh_ms: snapshot.theme.display.resolved_refresh_ms(),
             size,
             motion_enabled: render::pet_motion_enabled(snapshot, action),
             unread_triggered,

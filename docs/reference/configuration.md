@@ -44,7 +44,7 @@ Per-machine settings load leniently: a missing file is the default config, and u
 | `[remote_control]` | per-agent remote-control auto-launch opt-ins |
 | `[accounts]` | display-only monthly ceilings |
 | `[notifications]` | best-effort desktop, bell, and command notifications |
-| `[sidebar]` | sidebar width, render timing, ordering, card density, scroll, glow, and display bands |
+| `[sidebar]` | sidebar focus key and preferred worktree comparison trunk |
 | `[zellij]` | Rimz-owned Zellij room defaults |
 | `[tmux]` | Rimz-owned tmux room defaults |
 | `[resume]` | agent re-seeding on rebirth, and opt-in auto-continue on rate-limit reset |
@@ -55,8 +55,12 @@ Per-machine settings load leniently: a missing file is the default config, and u
 | Section | Purpose |
 | --- | --- |
 | `[theme]` | style preset, color depth, scheme, and semantic slot overrides |
+| `[theme.display]` | sidebar render cadence, sizing, dashboard layout, scroll, glow, and card density |
+| `[theme.display.context_meter]` | agent-card context meter color stops |
+| `[theme.display.budget_bar]` | provider budget bar color zones |
+| `[theme.display.budget_bar.burn_rate]` | provider reset-marker burn-rate zones |
 | `[theme.animations]` | status-head frames, tones, effects, and unread pulse |
-| `[theme.glyphs]` | active Unicode and Nerd Font glyph tables plus set selection |
+| `[theme.glyphs]` | Unicode and Nerd Font glyph examples plus set selection |
 | `[theme.providers]` | provider dashboard name, emblem, and brand colors |
 | `[colors.*]` | pasteable Alacritty palette lifted into `theme.colors` |
 
@@ -258,16 +262,16 @@ Trusted project config may also declare top-level `[profiles]` and `[agents.team
 ### Sidebar Bands
 
 ```toml
-[sidebar.context]
+[theme.display.context_meter]
 green = { percent = 40, tokens = 100000 }
 yellow = { percent = 60, tokens = 160000 }
 amber = { percent = 75, tokens = 258000 }
 red = { percent = 90, tokens = 420000 }
 
-[sidebar.budget]
+[theme.display.budget_bar]
 red = 10
 
-[sidebar.budget.pace]
+[theme.display.budget_bar.burn_rate]
 yellow = 100
 amber = 150
 red = 200
@@ -282,12 +286,14 @@ Budget pace colors only the provider reset marker. `100` is even burn, where the
 ### Sidebar Rendering
 
 ```toml
-[sidebar]
+[theme.display]
 max_cols = 72
 refresh_ms = 100
 scrollbar = "auto"
 glow = "auto"
 card_density = "auto"
+
+[sidebar]
 trunk = "develop"
 focus_key = "Alt+p"
 
@@ -303,7 +309,7 @@ voice = true
 
 `focus_key` is the global multiplexer chord that focuses the sidebar from any pane, and toggles — press it again to return to your last working pane. It runs `rimz sidebar focus --toggle`, which resolves and focuses the room's sidebar pane. Both backends bind it automatically at session birth: tmux as a root-table `bind-key`, and Zellij through the presence plugin, which binds the chord at runtime once you grant it Reconfigure (the bind resets when the session ends and never touches your `config.kdl`) ([multiplexers.md → Focus key](../internals/sidebar/multiplexers.md#focus-key)). The default is `Alt+p` (`Alt` survives the terminal and Zellij's locked mode, and avoids tmux's `Ctrl+B` prefix); `Ctrl+<key>` is also accepted. Set it empty or `off` to register nothing and leave every key as it was. The sidebar's `?` overlay shows the active chord, and the in-sidebar keys (`n`/`N` to walk the inbox, `m`/`M` to mark read/unread, and the rest) are in [the interface reference](../interface/sidebar.md#jump--the-row-is-the-link).
 
-`[theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `glow` gates transition flashes over that base render. The full theming surface, including `[theme.animations]` status heads and `[theme.providers]` brand styling, lives in [theme.md](./theme.md).
+`[theme]` picks the palette — built-in schemes, bundled Alacritty themes, color depth, and per-slot overrides — and `theme.display.glow` gates transition flashes over that base render. The full theming surface, including `[theme.animations]` status heads and `[theme.providers]` brand styling, lives in [theme.md](./theme.md).
 
 `card_density = "auto"` keeps the standard agent card: identity, description, context meter, context line, and subagents on the selected card. `expanded` shows every card's subagents. `compact` trims resting cards by status while the selected card opens to the standard card.
 
@@ -320,7 +326,7 @@ voice = true
 ### Provider Dashboard
 
 ```toml
-[sidebar]
+[theme.display]
 provider_tabs = "auto"
 provider_list = ["codex", "all"]
 max_provider_blocks = 3
@@ -335,9 +341,9 @@ The dashboard shows one block per discovered provider. `provider_tabs = "auto"` 
 ```sh
 rimz config path
 rimz config get
-rimz config get sidebar.max_cols
+rimz config get theme.display.max_cols
 rimz config get sidebar --json
-rimz config set sidebar.max_cols 80
+rimz config set theme.display.max_cols 80
 rimz config set theme "TokyoNight Night"
 rimz config set agents.worktree.base fresh
 rimz config set notifications.triggers '["waiting", "failed"]'
@@ -345,7 +351,7 @@ rimz config set notifications.triggers '["waiting", "failed"]'
 
 `rimz config get` loads the effective per-machine config over built-in defaults. `rimz config set` edits one key in the owning per-machine file (`config.toml`, `theme.toml`, or `agents.toml`), preserves comments through `toml_edit`, rejects unknown keys, deserializes the whole result as `MachineConfig`, then writes with Rimz's temp-file-plus-rename durability primitive. `theme.colors.*` keys write to root `[colors.*]` in `theme.toml`, so Alacritty palettes stay paste-compatible.
 
-Bare `config set` values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings (`fresh`, `always`). For context bands, set the whole band as an inline table: `rimz config set sidebar.context.red '{ percent = 90, tokens = 400000 }'`.
+Bare `config set` values become TOML values when they parse (`80`, `false`, arrays, inline tables); otherwise they become strings (`fresh`, `always`). For context bands, set the whole band as an inline table: `rimz config set theme.display.context_meter.red '{ percent = 90, tokens = 400000 }'`.
 
 ## Merge Order
 

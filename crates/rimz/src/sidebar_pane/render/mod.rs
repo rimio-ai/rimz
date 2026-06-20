@@ -193,11 +193,11 @@ pub fn draw_with_ui(
     ui.scroll_offset = composed.scroll_offset;
     let paragraph = Paragraph::new(Text::from(composed.lines)).wrap(Wrap { trim: false });
     frame.render_widget(paragraph, area);
-    let theme = Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme);
+    let theme = Theme::for_sidebar(&snapshot.theme);
     // The transition garnish tier: a color-only effects pass over the buffer
     // the paragraph just rendered, geometry-locked to the line map this draw wrote.
     // Gated here rather than inside the pass so a non-truecolor terminal — or a
-    // `[sidebar] glow = "never"` opt-out — pays nothing, not even the
+    // `[theme.display] glow = "never"` opt-out — pays nothing, not even the
     // transition observation.
     if theme.effects_enabled() {
         ui.effects.apply(
@@ -356,7 +356,8 @@ pub(crate) fn dashboard_tabbed(snapshot: &SidebarSnapshot) -> bool {
         return true;
     }
     snapshot
-        .sidebar
+        .theme
+        .display
         .provider_tabs
         .tabs(snapshot.providers.len())
 }
@@ -366,7 +367,7 @@ pub(crate) fn dashboard_present(snapshot: &SidebarSnapshot, alert_active: bool) 
 }
 
 pub(crate) fn pet_body_enabled(snapshot: &SidebarSnapshot) -> bool {
-    Theme::for_sidebar(&snapshot.sidebar, &snapshot.theme).pet_body_enabled()
+    Theme::for_sidebar(&snapshot.theme).pet_body_enabled()
 }
 
 pub(crate) fn pet_motion_enabled(snapshot: &SidebarSnapshot, action: PetAction) -> bool {

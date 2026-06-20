@@ -800,15 +800,17 @@ fn fold_machine_config_with(
     let crate::config::MachineConfig {
         remote_control,
         sidebar,
+        theme,
         ..
     } = config;
     snapshot.sidebar = sidebar;
+    snapshot.theme = theme;
 
     // Stamp each agent row's context-severity verdict now that the
-    // `[sidebar.context]` bands are known — classified once here, on both the
+    // `[theme.display.context_meter]` bands are known — classified once here, on both the
     // producer and consumer fold, so the renderer's color ramp and any future
     // signal emitter read one authority instead of re-deriving the tier.
-    let bands = snapshot.sidebar.context.clone();
+    let bands = snapshot.theme.display.context_meter.clone();
     stamp_context_severity(&mut snapshot.worktree_groups, &bands);
 
     // The `⇅ rc` flag per provider comes from either Rimz's auto-launch toggle
@@ -836,12 +838,12 @@ fn remote_control_toggle(kind: &str, config: &crate::config::RemoteControlConfig
 }
 
 /// Stamp [`SidebarRow::context_severity`] on every agent row from the
-/// `[sidebar.context]` bands: [`crate::feed::ContextSeverity::classify`] over
+/// `[theme.display.context_meter]` bands: [`crate::feed::ContextSeverity::classify`] over
 /// the row's gauge inputs, the one verdict the renderer's color ramp and any
 /// future signal emitter read. Process rows carry no context and stay `None`.
 pub(crate) fn stamp_context_severity(
     groups: &mut [crate::SidebarWorktreeGroup],
-    bands: &crate::config::ContextSeverityConfig,
+    bands: &crate::config::ContextMeterConfig,
 ) {
     for group in groups {
         for row in &mut group.rows {

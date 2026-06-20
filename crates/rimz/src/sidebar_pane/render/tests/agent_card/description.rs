@@ -109,8 +109,8 @@ fn rendered_group_lines_with(
         &snapshot.providers,
         snapshot.now,
         54,
-        &snapshot.sidebar.context,
-        snapshot.sidebar.card_density,
+        &snapshot.theme.display.context_meter,
+        snapshot.theme.display.card_density,
         None,
         &mut row_index,
         0,
@@ -138,11 +138,7 @@ fn rendered_group_lines_blink_no_color(
 ) -> Vec<Line<'static>> {
     rendered_group_lines_with(
         snapshot,
-        &Theme::fixed_for_theme(
-            true,
-            &crate::config::SidebarConfig::default(),
-            &blink_theme(),
-        ),
+        &Theme::fixed_for_theme(true, &blink_theme()),
         phase,
     )
 }
@@ -169,7 +165,6 @@ fn parked_background_marker_falls_back_to_unicode() {
     let snapshot = snapshot_with(Vec::new(), vec![claude]);
     let theme = Theme::fixed_for_theme(
         true,
-        &crate::config::SidebarConfig::default(),
         &crate::config::ThemeConfig {
             glyphs: crate::config::ThemeGlyphsConfig {
                 set: Some("nerd_font".to_owned()),
@@ -238,11 +233,7 @@ fn unread_descriptor_grows_bold_without_dimming() {
 fn unread_descriptor_holds_bold_while_colored_pulse_brightens() {
     let mut theme_config = blink_theme();
     theme_config.mode = crate::config::ThemeMode::Truecolor;
-    let theme = Theme::fixed_for_theme(
-        false,
-        &crate::config::SidebarConfig::default(),
-        &theme_config,
-    );
+    let theme = Theme::fixed_for_theme(false, &theme_config);
     // The lead unread row — the one that needs an answer — carries the continuous
     // pulse; a `failed` row is actionable, so a single one leads.
     let agent = agent(

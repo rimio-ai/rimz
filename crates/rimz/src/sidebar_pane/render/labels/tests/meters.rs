@@ -63,7 +63,7 @@ fn branch_delta_omits_zero_components() {
 #[test]
 fn gauge_bars_map_severity_and_apportion_segments() {
     let theme = Theme::fixed(false);
-    let bands = crate::config::ContextSeverityConfig::default();
+    let bands = crate::config::ContextMeterConfig::default();
     assert_eq!(
         severity_heat_color(&theme, ContextSeverity::Calm, 0, None, &bands),
         theme.heat_tone(0.0),
@@ -88,7 +88,6 @@ fn gauge_bars_map_severity_and_apportion_segments() {
 
     let truecolor = Theme::fixed_for_theme(
         false,
-        &crate::config::SidebarConfig::default(),
         &crate::config::ThemeConfig {
             mode: crate::config::ThemeMode::Truecolor,
             ..crate::config::ThemeConfig::default()
@@ -243,7 +242,7 @@ fn gauge_bars_map_severity_and_apportion_segments() {
 
 #[test]
 fn mana_bar_drains_ramps_and_keeps_edge_shapes() {
-    let zones = BudgetZonesConfig::default();
+    let zones = BudgetBarConfig::default();
     let plain = Theme::fixed(true);
     let spans = mana_bar_spans(&plain, 70, 10, &zones);
     assert_eq!(text(&spans), "▰▰▰▰▰▰▰▱▱▱");
@@ -313,12 +312,8 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
         alarm: Some(crate::config::ThemeColor::Indexed(1)),
         ..crate::config::ThemeConfig::default()
     };
-    let theme = Theme::fixed_for_theme(
-        false,
-        &crate::config::SidebarConfig::default(),
-        &theme_config,
-    );
-    let zones = BudgetZonesConfig::default();
+    let theme = Theme::fixed_for_theme(false, &theme_config);
+    let zones = BudgetBarConfig::default();
     let track = mana_bar_spans(&theme, 0, 10, &zones)[0].style.fg;
     assert_eq!(
         track,
@@ -336,12 +331,12 @@ fn spent_budget_track_mirrors_its_label_under_ansi_alarm_override() {
 #[test]
 fn mana_style_honours_custom_and_misordered_zones() {
     let lit = Theme::fixed(false);
-    let tone = |remaining, zones: &BudgetZonesConfig| mana_style(&lit, remaining, zones).fg;
-    let tuned = BudgetZonesConfig {
+    let tone = |remaining, zones: &BudgetBarConfig| mana_style(&lit, remaining, zones).fg;
+    let tuned = BudgetBarConfig {
         yellow: 80,
         amber: 40,
         red: 20,
-        ..BudgetZonesConfig::default()
+        ..BudgetBarConfig::default()
     };
     // Custom zones move the warm stops: brimming green, warn at yellow, caution
     // at amber, alarm at red (and below).
@@ -360,11 +355,11 @@ fn mana_style_honours_custom_and_misordered_zones() {
 
     // A misordered config degrades worst-first: a value under the (largest) red
     // threshold reds out, while a value clear of every threshold stays green-side.
-    let misordered = BudgetZonesConfig {
+    let misordered = BudgetBarConfig {
         yellow: 25,
         amber: 10,
         red: 50,
-        ..BudgetZonesConfig::default()
+        ..BudgetBarConfig::default()
     };
     assert_eq!(
         tone(30, &misordered),
@@ -408,7 +403,7 @@ fn pace_ratio_reads_burn_against_elapsed_window_and_edges() {
 #[test]
 fn pace_style_floors_then_climbs_the_warm_tail() {
     let lit = Theme::fixed(false);
-    let defaults = BudgetPaceConfig::default();
+    let defaults = BudgetBurnRateConfig::default();
     let fg = |ratio| pace_style(&lit, ratio, &defaults).fg;
     // Sustainable pace rests at the soft tier; the warm tail starts only past the
     // yellow threshold, reaching caution at amber and alarm at red (and beyond).
@@ -430,7 +425,7 @@ fn pace_style_floors_then_climbs_the_warm_tail() {
         "beyond red stays alarm"
     );
 
-    let tuned = BudgetPaceConfig {
+    let tuned = BudgetBurnRateConfig {
         yellow: 80,
         amber: 120,
         red: 160,
@@ -446,7 +441,7 @@ fn pace_style_floors_then_climbs_the_warm_tail() {
 
     // A misordered config degrades worst-first: a value past the (smallest) red
     // threshold reds out, while a calm value still rests.
-    let misordered = BudgetPaceConfig {
+    let misordered = BudgetBurnRateConfig {
         yellow: 200,
         amber: 150,
         red: 100,
@@ -527,7 +522,6 @@ fn token_breakdown_keeps_shape_and_marker_styles() {
 fn nerd_font_glyph_set_reaches_token_and_meter_labels() {
     let theme = Theme::fixed_for_theme(
         true,
-        &crate::config::SidebarConfig::default(),
         &crate::config::ThemeConfig {
             glyphs: crate::config::ThemeGlyphsConfig {
                 set: Some("nerd_font".to_owned()),

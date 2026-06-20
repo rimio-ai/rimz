@@ -36,7 +36,7 @@ fn config_init_prints_and_writes_the_template() {
         .stdout(contains("# === theme.toml ==="))
         .stdout(contains("# === agents.toml ==="))
         .stdout(contains("[agents.worktree]"))
-        .stdout(contains("# max_cols = 72"));
+        .stdout(contains("[theme.display]"));
 
     env.rimz()
         .args(["config", "init"])
@@ -80,20 +80,20 @@ fn config_get_set_round_trip_preserves_template_comments() {
         .stdout("[\"waiting\", \"failed\", \"paused\", \"success\"]\n");
 
     env.rimz()
-        .args(["config", "set", "sidebar.max_cols", "80"])
+        .args(["config", "set", "theme.display.max_cols", "80"])
         .assert()
         .success()
-        .stdout(contains("set sidebar.max_cols"));
+        .stdout(contains("set theme.display.max_cols"));
 
     env.rimz()
-        .args(["config", "get", "sidebar.max_cols"])
+        .args(["config", "get", "theme.display.max_cols"])
         .assert()
         .success()
         .stdout("80\n");
 
-    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read config");
+    let text = std::fs::read_to_string(theme_config_path(&env)).expect("read theme config");
     assert!(
-        text.contains("# max_cols = 72"),
+        text.contains("## max_cols = 72"),
         "set should preserve the commented default:\n{text}"
     );
     assert!(
@@ -162,10 +162,10 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .stderr(contains("unknown config key `sidebar.nope`"));
 
     env.rimz()
-        .args(["config", "set", "sidebar.max_cols", "0"])
+        .args(["config", "set", "theme.display.max_cols", "0"])
         .assert()
         .failure()
-        .stderr(contains("validating `sidebar.max_cols`"));
+        .stderr(contains("validating `theme.display.max_cols`"));
 
     env.rimz()
         .args(["config", "set", "theme.scheme", "does-not-exist"])

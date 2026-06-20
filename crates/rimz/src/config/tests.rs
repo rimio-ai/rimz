@@ -255,6 +255,11 @@ fn legacy_split_sections_hard_error() {
     .expect_err("legacy split");
     assert!(matches!(err, ConfigErr::LegacySplit { .. }));
     assert!(err.to_string().contains("rimz config init"));
+
+    let moved = MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 100\n"))
+        .expect_err("moved sidebar display key");
+    assert!(matches!(moved, ConfigErr::LegacySplit { .. }));
+    assert!(moved.to_string().contains("sidebar.refresh_ms"));
 }
 
 #[test]
@@ -376,43 +381,66 @@ fn notifications_parse_per_machine_preferences() {
 #[test]
 fn sidebar_max_cols_defaults_parses_and_rejects_zero() {
     let dir = tempdir().expect("tempdir");
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 100\n")).expect("load");
+    let config = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nmax_cols = 100\n",
+    ))
+    .expect("load");
     assert_eq!(
-        config.sidebar.max_cols,
+        config.theme.display.max_cols,
         NonZeroU16::new(100).expect("nonzero")
     );
     assert_eq!(
-        MachineConfig::default().sidebar.max_cols.get(),
+        MachineConfig::default().theme.display.max_cols.get(),
         72,
         "unset caps the percentage split at the 72-column default",
     );
-    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 0\n")).is_err());
+    assert!(
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme.display]\nmax_cols = 0\n"
+        ))
+        .is_err()
+    );
 }
 
 #[test]
 fn sidebar_refresh_ms_defaults_parses_and_clamps_at_use() {
     let dir = tempdir().expect("tempdir");
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 80\n")).expect("load");
-    assert_eq!(config.sidebar.refresh_ms, 80);
-    assert_eq!(config.sidebar.resolved_refresh_ms(), 80);
+    let config = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nrefresh_ms = 80\n",
+    ))
+    .expect("load");
+    assert_eq!(config.theme.display.refresh_ms, 80);
+    assert_eq!(config.theme.display.resolved_refresh_ms(), 80);
     assert_eq!(
-        MachineConfig::default().sidebar.refresh_ms,
+        MachineConfig::default().theme.display.refresh_ms,
         crate::sidebar::timing::DEFAULT_REFRESH_MS
     );
 
-    let too_low =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 1\n")).expect("load");
+    let too_low = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nrefresh_ms = 1\n",
+    ))
+    .expect("load");
     assert_eq!(
-        too_low.sidebar.resolved_refresh_ms(),
+        too_low.theme.display.resolved_refresh_ms(),
         crate::sidebar::timing::MIN_REFRESH_MS
     );
 
-    let too_high =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 5000\n")).expect("load");
+    let too_high = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nrefresh_ms = 5000\n",
+    ))
+    .expect("load");
     assert_eq!(
-        too_high.sidebar.resolved_refresh_ms(),
+        too_high.theme.display.resolved_refresh_ms(),
         crate::sidebar::timing::MAX_REFRESH_MS
     );
 }
@@ -433,15 +461,26 @@ fn sidebar_trunk_parses_and_defaults_unset() {
 #[test]
 fn sidebar_scrollbar_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"never\"\n")).expect("load");
-    assert_eq!(config.sidebar.scrollbar, ScrollbarMode::Never);
+    let config = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nscrollbar = \"never\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.theme.display.scrollbar, ScrollbarMode::Never);
     assert_eq!(
-        MachineConfig::default().sidebar.scrollbar,
+        MachineConfig::default().theme.display.scrollbar,
         ScrollbarMode::Auto,
         "unset auto-hides: the bar shows only while the viewport moves",
     );
-    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nscrollbar = \"bogus\"\n")).is_err());
+    assert!(
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme.display]\nscrollbar = \"bogus\"\n"
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -607,17 +646,32 @@ fn sidebar_glyphs_parse_and_default_unicode() {
 fn sidebar_glow_parses_and_defaults_auto() {
     let dir = tempdir().expect("tempdir");
     assert_eq!(
-        MachineConfig::default().sidebar.glow,
+        MachineConfig::default().theme.display.glow,
         GlowMode::Auto,
         "transition flashes ship following the terminal's advertisement",
     );
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"always\"\n")).expect("load");
-    assert_eq!(config.sidebar.glow, GlowMode::Always);
-    let config =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = \"never\"\n")).expect("load");
-    assert_eq!(config.sidebar.glow, GlowMode::Never);
-    assert!(MachineConfig::load_from(&write(&dir, "[sidebar]\nglow = false\n")).is_err());
+    let config = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nglow = \"always\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.theme.display.glow, GlowMode::Always);
+    let config = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nglow = \"never\"\n",
+    ))
+    .expect("load");
+    assert_eq!(config.theme.display.glow, GlowMode::Never);
+    assert!(
+        MachineConfig::load_from(&write_named(
+            &dir,
+            "theme.toml",
+            "[theme.display]\nglow = false\n"
+        ))
+        .is_err()
+    );
 }
 
 #[test]
@@ -742,29 +796,34 @@ fn malformed_toml_surfaces_an_error() {
 fn provider_block_cap_defaults_to_three() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    assert_eq!(config.sidebar.max_provider_blocks, 3);
-    assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Auto);
-    assert!(config.sidebar.provider_list.is_empty());
-    let partial =
-        MachineConfig::load_from(&write(&dir, "[sidebar]\nmax_cols = 60\n")).expect("load");
-    assert_eq!(partial.sidebar.max_provider_blocks, 3);
-    assert_eq!(partial.sidebar.provider_tabs, ProviderTabsMode::Auto);
-    assert!(partial.sidebar.provider_list.is_empty());
+    assert_eq!(config.theme.display.max_provider_blocks, 3);
+    assert_eq!(config.theme.display.provider_tabs, ProviderTabsMode::Auto);
+    assert!(config.theme.display.provider_list.is_empty());
+    let partial = MachineConfig::load_from(&write_named(
+        &dir,
+        "theme.toml",
+        "[theme.display]\nmax_cols = 60\n",
+    ))
+    .expect("load");
+    assert_eq!(partial.theme.display.max_provider_blocks, 3);
+    assert_eq!(partial.theme.display.provider_tabs, ProviderTabsMode::Auto);
+    assert!(partial.theme.display.provider_list.is_empty());
 }
 
 #[test]
 fn provider_dashboard_tabs_and_list_parse_and_round_trip() {
     let dir = tempdir().expect("tempdir");
-    let config = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar]\nprovider_tabs = \"always\"\nprovider_list = [\"codex\", \"all\"]\n",
+        "theme.toml",
+        "[theme.display]\nprovider_tabs = \"always\"\nprovider_list = [\"codex\", \"all\"]\n",
     ))
     .expect("load");
-    assert_eq!(config.sidebar.provider_tabs, ProviderTabsMode::Always);
-    assert_eq!(config.sidebar.provider_list, vec!["codex", "all"]);
+    assert_eq!(config.theme.display.provider_tabs, ProviderTabsMode::Always);
+    assert_eq!(config.theme.display.provider_list, vec!["codex", "all"]);
 
-    let encoded = toml::to_string(&config.sidebar).expect("serialize sidebar");
-    let round_tripped: SidebarConfig = toml::from_str(&encoded).expect("parse sidebar");
+    let encoded = toml::to_string(&config.theme.display).expect("serialize display");
+    let round_tripped: DisplayConfig = toml::from_str(&encoded).expect("parse display");
     assert_eq!(round_tripped.provider_tabs, ProviderTabsMode::Always);
     assert_eq!(round_tripped.provider_list, vec!["codex", "all"]);
 }
@@ -798,8 +857,8 @@ fn sidebar_pets_defaults_parse_and_round_trip() {
 fn context_severity_bands_default_and_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    let defaults = ContextSeverityConfig::default();
-    assert_eq!(config.sidebar.context, defaults);
+    let defaults = ContextMeterConfig::default();
+    assert_eq!(config.theme.display.context_meter, defaults);
     assert_eq!(
         (defaults.green.percent, defaults.green.tokens),
         (40, 100_000)
@@ -813,55 +872,68 @@ fn context_severity_bands_default_and_parse() {
         (75, 258_000)
     );
     assert_eq!((defaults.red.percent, defaults.red.tokens), (90, 420_000));
-    let tuned = MachineConfig::load_from(&write(
+    let tuned = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.context]\nred = { percent = 50, tokens = 100000 }\n",
+        "theme.toml",
+        "[theme.display.context_meter]\nred = { percent = 50, tokens = 100000 }\n",
     ))
     .expect("load");
     assert_eq!(
-        tuned.sidebar.context.red,
+        tuned.theme.display.context_meter.red,
         ContextBand {
             percent: 50,
             tokens: 100_000
         }
     );
-    assert_eq!(tuned.sidebar.context.green, defaults.green);
-    assert_eq!(tuned.sidebar.context.yellow, defaults.yellow);
-    assert_eq!(tuned.sidebar.context.amber, defaults.amber);
+    assert_eq!(tuned.theme.display.context_meter.green, defaults.green);
+    assert_eq!(tuned.theme.display.context_meter.yellow, defaults.yellow);
+    assert_eq!(tuned.theme.display.context_meter.amber, defaults.amber);
 }
 
 #[test]
 fn budget_zones_default_and_parse() {
     let dir = tempdir().expect("tempdir");
     let config = MachineConfig::load_from(&write(&dir, "")).expect("load");
-    let defaults = BudgetZonesConfig::default();
-    assert_eq!(config.sidebar.budget, defaults);
+    let defaults = BudgetBarConfig::default();
+    assert_eq!(config.theme.display.budget_bar, defaults);
     assert_eq!(
         (defaults.yellow, defaults.amber, defaults.red),
         (50, 25, 10)
     );
     assert_eq!(
-        (defaults.pace.yellow, defaults.pace.amber, defaults.pace.red),
+        (
+            defaults.burn_rate.yellow,
+            defaults.burn_rate.amber,
+            defaults.burn_rate.red
+        ),
         (100, 150, 200)
     );
 
-    let tuned = MachineConfig::load_from(&write(
+    let tuned = MachineConfig::load_from(&write_named(
         &dir,
-        "[sidebar.budget]\nred = 20\n[sidebar.budget.pace]\nred = 300\n",
+        "theme.toml",
+        "[theme.display.budget_bar]\nred = 20\n[theme.display.budget_bar.burn_rate]\nred = 300\n",
     ))
     .expect("load");
-    let budget = tuned.sidebar.budget;
+    let budget = tuned.theme.display.budget_bar;
     assert_eq!(
         (budget.yellow, budget.amber, budget.red),
         (defaults.yellow, defaults.amber, 20)
     );
     assert_eq!(
-        (budget.pace.yellow, budget.pace.amber, budget.pace.red),
-        (defaults.pace.yellow, defaults.pace.amber, 300)
+        (
+            budget.burn_rate.yellow,
+            budget.burn_rate.amber,
+            budget.burn_rate.red
+        ),
+        (defaults.burn_rate.yellow, defaults.burn_rate.amber, 300)
     );
     let reparsed: MachineConfig =
         toml::from_str(&toml::to_string(&tuned).expect("serialize")).expect("reparse");
-    assert_eq!(reparsed.sidebar.budget, tuned.sidebar.budget);
+    assert_eq!(
+        reparsed.theme.display.budget_bar,
+        tuned.theme.display.budget_bar
+    );
 }
 
 #[test]

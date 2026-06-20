@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::ContextSeverityConfig;
+use crate::config::ContextMeterConfig;
 use crate::config::GlyphRole;
 use crate::sidebar_pane::render::theme::Component;
 use jiff::SignedDuration;
@@ -200,7 +200,7 @@ pub(in crate::sidebar_pane::render) fn severity_heat_amount(
     severity: ContextSeverity,
     percent: u8,
     used_tokens: Option<u64>,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
 ) -> f32 {
     let anchor = severity_heat_anchor(severity);
     context_heat_amount(percent, used_tokens, bands).map_or(anchor, |amount| amount.max(anchor))
@@ -213,7 +213,7 @@ pub(in crate::sidebar_pane::render) fn severity_heat_color(
     severity: ContextSeverity,
     percent: u8,
     used_tokens: Option<u64>,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
 ) -> Color {
     theme.heat_tone(severity_heat_amount(severity, percent, used_tokens, bands))
 }
@@ -229,7 +229,7 @@ fn severity_heat_anchor(severity: ContextSeverity) -> f32 {
 fn context_heat_amount(
     percent: u8,
     used_tokens: Option<u64>,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
 ) -> Option<f32> {
     let pct_amount = axis_heat_amount(
         u64::from(percent.min(100)),
@@ -438,7 +438,7 @@ pub(in crate::sidebar_pane::render) fn apportion(
 /// A full bar means budget *left*: it shortens as the window is spent, and the
 /// reset countdown beside it says when it refills. Slides continuously green →
 /// gold → clay-amber → red along the health ramp by how much remains, with the
-/// `[sidebar.budget]` zones as the warm stops ([`mana_style`]), so a near-spent
+/// `[theme.display.budget_bar]` zones as the warm stops ([`mana_style`]), so a near-spent
 /// window reddens regardless of which window it is. The drained `▱` run rides
 /// the dim chrome — a step up from the faint
 /// context-gauge track, so the spent share stays legible on the dashboard. At
@@ -448,7 +448,7 @@ pub(in crate::sidebar_pane::render) fn mana_bar_spans(
     theme: &Theme,
     remaining_pct: u8,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
 ) -> Vec<Span<'static>> {
     // A fully spent window (0% remaining) reads as a full-width *red* empty track,
     // not the gray "no fill" track a plain drain leaves — an absent fill alone
@@ -493,7 +493,7 @@ pub(in crate::sidebar_pane::render) fn unknown_mana_bar_spans(
 pub(in crate::sidebar_pane::render) fn mana_style(
     theme: &Theme,
     remaining_pct: u8,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
 ) -> Style {
     theme.style(
         theme.heat_tone(mana_heat_amount(remaining_pct, zones)),
@@ -502,13 +502,13 @@ pub(in crate::sidebar_pane::render) fn mana_style(
 }
 
 /// The mana bar's heat amount: a full green→red drain anchored green at `100%`,
-/// with the `[sidebar.budget]` zones as the warm stops the remaining figure
+/// with the `[theme.display.budget_bar]` zones as the warm stops the remaining figure
 /// falls through — `100 → 0.0` green, `yellow → ⅓` warn, `amber → ⅔` caution,
 /// `red`/below `→ 1.0` alarm — so the bar warms continuously as it empties. Each
 /// zone names the exclusive upper bound of remaining budget where its tier is
-/// reached ([`BudgetZonesConfig`]); checked worst-first, so a misordered user
+/// reached ([`BudgetBarConfig`]); checked worst-first, so a misordered user
 /// config degrades to the worse tier.
-fn mana_heat_amount(remaining_pct: u8, zones: &BudgetZonesConfig) -> f32 {
+fn mana_heat_amount(remaining_pct: u8, zones: &BudgetBarConfig) -> f32 {
     let remaining = u64::from(remaining_pct.min(100));
     let yellow = u64::from(zones.yellow);
     let amber = u64::from(zones.amber);
@@ -527,7 +527,7 @@ fn mana_heat_amount(remaining_pct: u8, zones: &BudgetZonesConfig) -> f32 {
 /// Treat the first five percent of a budget window as already elapsed for pace
 /// math. This renderer-only damping keeps a tiny early spend from exploding the
 /// reset countdown's color, and is deliberately a tuning constant rather than a
-/// user-facing band like `[sidebar.budget.pace]`.
+/// user-facing band like `[theme.display.budget_bar.burn_rate]`.
 const PACE_ELAPSED_FLOOR: f64 = 0.05;
 
 /// Burn-rate pace for a budget window: used share divided by elapsed share.
@@ -553,7 +553,7 @@ pub(in crate::sidebar_pane::render) fn pace_ratio(
 
 /// The reset countdown marker's tone at a burn-rate ratio. A sustainable pace
 /// rests at the countdown's soft tier; once the burn rate outruns the
-/// `[sidebar.budget.pace]` yellow threshold the marker slides the warm tail —
+/// `[theme.display.budget_bar.burn_rate]` yellow threshold the marker slides the warm tail —
 /// gold at the threshold through amber to red — across the configured stops
 /// ([`warm_band_amount`], [`Theme::warm_heat_tone`]). Checked worst-first, so a
 /// misordered config degrades to the worse visible warning. With color off the
@@ -561,7 +561,7 @@ pub(in crate::sidebar_pane::render) fn pace_ratio(
 pub(in crate::sidebar_pane::render) fn pace_style(
     theme: &Theme,
     ratio: f64,
-    pace: &BudgetPaceConfig,
+    pace: &BudgetBurnRateConfig,
 ) -> Style {
     let pace_pct = (ratio * 100.0).max(0.0).round() as u64;
     warm_band_amount(

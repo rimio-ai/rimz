@@ -135,9 +135,9 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
         screen.cell(row as u16, col as u16).unwrap().fgcolor()
     };
 
-    snapshot.sidebar.glow = GlowMode::Always;
+    snapshot.theme.display.glow = GlowMode::Always;
     let always = glyph_fg(&snapshot);
-    snapshot.sidebar.glow = GlowMode::Never;
+    snapshot.theme.display.glow = GlowMode::Never;
     let never = glyph_fg(&snapshot);
     assert_eq!(
         always, never,
@@ -157,9 +157,9 @@ fn glow_gates_transition_flashes_not_the_steady_pulse() {
             )],
         );
         idle.theme.mode = ThemeMode::Truecolor;
-        idle.sidebar.glow = glow;
+        idle.theme.display.glow = glow;
         let mut waiting = snapshot.clone();
-        waiting.sidebar.glow = glow;
+        waiting.theme.display.glow = glow;
         let mut bytes = Vec::new();
         let backend = CrosstermBackend::new(&mut bytes);
         let viewport = Viewport::Fixed(Rect::new(0, 0, 44, 18));
@@ -519,11 +519,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         .expect("animation spec"),
     );
 
-    let lit = Theme::fixed_for_theme(
-        false,
-        &crate::config::SidebarConfig::default(),
-        &theme_config,
-    );
+    let lit = Theme::fixed_for_theme(false, &theme_config);
     assert_eq!(
         labels::agent_glyph(
             &lit,
@@ -555,11 +551,7 @@ fn custom_thinking_animation_changes_the_row_glyph_style_and_no_color_shape() {
         "the indexed breathe changes the style by weight (DIM at the trough), not color"
     );
 
-    let plain = Theme::fixed_for_theme(
-        true,
-        &crate::config::SidebarConfig::default(),
-        &theme_config,
-    );
+    let plain = Theme::fixed_for_theme(true, &theme_config);
     let plain_style = labels::agent_role_style_at(
         &plain,
         AgentStatus::Running,

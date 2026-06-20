@@ -9,7 +9,7 @@
 //! `effects_pass_never_changes_the_composed_text` golden guard).
 //!
 //! The pass runs only when [`Theme::effects_enabled`] clears it — the
-//! `[sidebar] glow` mode over the terminal's 24-bit advertisement. The
+//! `[theme.display] glow` mode over the terminal's 24-bit advertisement. The
 //! continuous row pulse is owned by base composition; this pass only animates
 //! the moment of change and decay, and a calm room paints nothing here.
 //!
@@ -159,7 +159,7 @@ impl EffectState {
         let elapsed = Duration::from_millis(step_ms(
             self.last_phase,
             phase,
-            u64::from(snapshot.sidebar.resolved_refresh_ms()),
+            u64::from(snapshot.theme.display.resolved_refresh_ms()),
         ));
         self.last_phase = Some(phase);
 

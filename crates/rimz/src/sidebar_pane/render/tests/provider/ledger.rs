@@ -141,7 +141,7 @@ fn pets_provider_dashboard_owns_total_rows() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.pets.enabled = true;
     snapshot.value_tally = Some(crate::SpendTally {
         week: crate::SpendWindow {
@@ -256,7 +256,7 @@ fn pets_provider_dashboard_folds_footer_left_of_pet() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     snapshot.pets.enabled = true;
     snapshot.link = Some(crate::SidebarLinkHealth {
         rtt_ms: Some(210),

@@ -6,7 +6,7 @@
 //! one-off widgets (see [the sidebar grammar](../../../docs/internals/sidebar/sidebar.md)).
 
 use crate::agents::TurnPhase;
-use crate::config::{BudgetPaceConfig, BudgetZonesConfig};
+use crate::config::{BudgetBarConfig, BudgetBurnRateConfig};
 use crate::feed::ContextSeverity;
 use crate::feed::{ATTENTION_AGE_CEILING_SECS, AgentStatus};
 use ratatui::style::{Color, Modifier, Style};

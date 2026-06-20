@@ -196,7 +196,7 @@ fn agent_row(
             rimz::feed::ContextSeverity::classify(
                 pct,
                 total_tokens,
-                &rimz::config::ContextSeverityConfig::default(),
+                &rimz::config::ContextMeterConfig::default(),
             )
         }),
         registered_at: Some(now),
@@ -280,7 +280,7 @@ fn status_count(status: rimz::feed::AgentStatus, count: usize) -> rimz::SidebarS
 }
 
 fn add_provider_fixture(snapshot: &mut rimz::SidebarSnapshot, now: jiff::Timestamp) {
-    snapshot.sidebar.provider_tabs = rimz::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = rimz::config::ProviderTabsMode::Always;
     snapshot.providers = vec![
         provider_panel(
             "claude",

@@ -7,7 +7,7 @@
 //! 256-color indexes. `NO_COLOR` strips color but keeps Unicode and
 //! modifiers, so every gauge still reads by shape and fill. The color-only
 //! transition effects pass ([`super::effects`]) remains a separate tier
-//! controlled by `[sidebar] glow`: it runs only when glow permits it and
+//! controlled by `[theme.display] glow`: it runs only when glow permits it and
 //! `NO_COLOR` is off.
 //!
 //! Palette choice is data in the snapshot's `[theme]`: `scheme`
@@ -16,8 +16,8 @@
 //! renderer resolves depth because terminal capability is a renderer-local fact.
 
 use crate::config::{
-    AnimationColor, ColorDepth, GlowMode, GlyphRole, SidebarConfig, ThemeColor, ThemeConfig,
-    nearest_xterm_index, xterm_rgb,
+    AnimationColor, ColorDepth, GlowMode, GlyphRole, ThemeColor, ThemeConfig, nearest_xterm_index,
+    xterm_rgb,
 };
 use ratatui::style::{Color, Modifier, Style};
 
@@ -375,8 +375,8 @@ impl Default for Theme {
 impl Theme {
     /// The active theme for a frame: cached terminal color-capability readings
     /// plus the palette, depth, and glow mode resolved from the snapshot's
-    /// `[sidebar]` config.
-    pub(crate) fn for_sidebar(sidebar: &SidebarConfig, theme: &ThemeConfig) -> Self {
+    /// `[theme.display]` config.
+    pub(crate) fn for_sidebar(theme: &ThemeConfig) -> Self {
         let truecolor = crate::tui::truecolor();
         let depth = theme.effective_theme_mode().depth(truecolor);
         let palette = Palette::resolve(theme, depth);
@@ -385,7 +385,7 @@ impl Theme {
             no_color: crate::tui::no_color(),
             truecolor,
             depth,
-            glow: sidebar.glow,
+            glow: theme.display.glow,
             animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
             glyphs,
             palette,
@@ -393,7 +393,7 @@ impl Theme {
     }
 
     /// Build a deterministic test theme. Tests use the default indexed palette
-    /// unless they explicitly pass a sidebar config to [`Self::fixed_for_sidebar`].
+    /// unless they explicitly pass a theme config to [`Self::fixed_for_theme`].
     #[cfg(test)]
     pub(crate) fn fixed(no_color: bool) -> Self {
         let palette = Palette::resolve(&ThemeConfig::default(), ColorDepth::Indexed);
@@ -414,11 +414,7 @@ impl Theme {
     }
 
     #[cfg(test)]
-    pub(crate) fn fixed_for_theme(
-        no_color: bool,
-        sidebar: &SidebarConfig,
-        theme: &ThemeConfig,
-    ) -> Self {
+    pub(crate) fn fixed_for_theme(no_color: bool, theme: &ThemeConfig) -> Self {
         let depth = theme.effective_theme_mode().depth(false);
         let palette = Palette::resolve(theme, depth);
         let glyphs = GlyphSet::resolve_with_set(theme.glyph_set_source().as_deref(), &theme.glyphs);
@@ -426,7 +422,7 @@ impl Theme {
             no_color,
             truecolor: false,
             depth,
-            glow: sidebar.glow,
+            glow: theme.display.glow,
             animations: ResolvedAnimations::resolve(&theme.animations, &glyphs, &palette),
             glyphs,
             palette,

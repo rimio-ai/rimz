@@ -229,7 +229,7 @@ pub(super) fn apply_fetch_outcome(
     // narrowed, so a hidden baseline holds rather than blanks.
     let derived = focused_pane.filter(|pane| row_index_of_pane(current, None, pane).is_some());
     reconcile_selection(ui, current, derived);
-    ui.animation_phase = wall_clock_phase(anim_start, current.sidebar.resolved_refresh_ms());
+    ui.animation_phase = wall_clock_phase(anim_start, current.theme.display.resolved_refresh_ms());
     // Fold the fresh today-spend into the count-up: a higher figure starts a
     // stepped roll that the next frames paint, a reset or first value snaps,
     // and an unchanged one is a no-op that leaves a climb in flight. The live

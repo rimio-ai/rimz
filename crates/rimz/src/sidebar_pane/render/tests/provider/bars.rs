@@ -25,7 +25,7 @@ fn provider_bars_share_one_front_and_end_column() {
                 Some(panel.kind.as_str()),
                 true,
                 30,
-                &crate::config::BudgetZonesConfig::default(),
+                &crate::config::BudgetBarConfig::default(),
                 fixed_now(),
             )
             .0

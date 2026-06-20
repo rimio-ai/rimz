@@ -2,7 +2,7 @@
 //! budget bars — and the W/M fleet ledger rows.
 
 use crate::agents::{ExtraCredits, RateLimitWindow};
-use crate::config::{BudgetZonesConfig, GlyphRole};
+use crate::config::{BudgetBarConfig, GlyphRole};
 use crate::sidebar_pane::pets::PetView;
 use crate::{SidebarProviderPanel, SpendTally, SpendWindow};
 use jiff::{SignedDuration, Timestamp};
@@ -472,7 +472,7 @@ pub(in crate::sidebar_pane::render) fn provider_panel_lines(
     active_kind: Option<&str>,
     tabbed: bool,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let active_tab = active_kind.map(str::to_owned);
@@ -501,7 +501,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines(
     pet: Option<&PetView>,
     pets_enabled: bool,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     dashboard_panel_lines_with_footer(
@@ -530,7 +530,7 @@ pub(in crate::sidebar_pane::render) fn dashboard_panel_lines_with_footer(
     pets_enabled: bool,
     folded_footer: Option<Line<'static>>,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> (Vec<Line<'static>>, Vec<ProviderTabHit>) {
     let mut lines = Vec::new();
@@ -636,7 +636,7 @@ fn single_block_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
     let layout = ProviderLayout::for_width(width, true);
@@ -666,7 +666,7 @@ fn active_provider_block_lines(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     width: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
     options: ActiveProviderBlockOptions<'_>,
 ) -> Vec<Line<'static>> {
@@ -1042,7 +1042,7 @@ fn provider_body_lines(
     panel: &SidebarProviderPanel,
     width: usize,
     layout: ProviderLayout,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Line<'static>> {
     let show_art = !panel.art.is_empty() && width >= PROVIDER_ART_MIN_WIDTH;
@@ -1194,7 +1194,7 @@ fn provider_bar_rows(
     theme: &Theme,
     panel: &SidebarProviderPanel,
     region: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Vec<Span<'static>>> {
     if !panel.metered {
@@ -1313,7 +1313,7 @@ fn metered_bar_row(
     window: &RateLimitWindow,
     region: usize,
     force_exhausted: bool,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
     now: Timestamp,
 ) -> Vec<Span<'static>> {
     let label = window_label(window.duration_mins);
@@ -1356,7 +1356,7 @@ fn metered_bar_row(
                     at.duration_since(now),
                 )
             })
-            .map(|ratio| pace_style(theme, ratio, &zones.pace))
+            .map(|ratio| pace_style(theme, ratio, &zones.burn_rate))
             .unwrap_or_else(|| theme.body())
     };
     let mut spans = vec![
@@ -1423,7 +1423,7 @@ fn extra_credits_bar_row(
     label: &str,
     credits: Option<&ExtraCredits>,
     region: usize,
-    zones: &BudgetZonesConfig,
+    zones: &BudgetBarConfig,
 ) -> Vec<Span<'static>> {
     let bar_width = provider_bar_width(region);
     let remaining = credits.and_then(ExtraCredits::remaining_percentage);

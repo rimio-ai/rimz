@@ -151,7 +151,7 @@ fn codex_transcript_backstop_is_stat_gated() {
 }
 
 /// The config fold stamps every *agent* row's context-severity verdict from
-/// the `[sidebar.context]` bands — the one classification the renderer's color
+/// the `[theme.display.context_meter]` bands — the one classification the renderer's color
 /// ramp and any future signal emitter read — and leaves process rows `None`.
 #[test]
 fn config_fold_stamps_agent_context_severity() {
@@ -198,10 +198,7 @@ fn config_fold_stamps_agent_context_severity() {
         landed: None,
     }];
 
-    stamp_context_severity(
-        &mut groups,
-        &crate::config::ContextSeverityConfig::default(),
-    );
+    stamp_context_severity(&mut groups, &crate::config::ContextMeterConfig::default());
 
     let rows = &groups[0].rows;
     assert_eq!(

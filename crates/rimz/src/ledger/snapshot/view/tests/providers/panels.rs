@@ -9,8 +9,8 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
 
     let mut snapshot = room(Vec::new(), vec![claude.clone(), codex.clone(), pi.clone()]);
     // The cap only trims the stacked dashboard; pin `never` so it bites here.
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Never;
-    snapshot.sidebar.max_provider_blocks = 3;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
+    snapshot.theme.display.max_provider_blocks = 3;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
@@ -28,8 +28,8 @@ fn provider_panel_spending_attaches_and_cap_keeps_top_spenders() {
     );
 
     let mut snapshot = room(Vec::new(), vec![claude, codex, pi]);
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Never;
-    snapshot.sidebar.max_provider_blocks = 2;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Never;
+    snapshot.theme.display.max_provider_blocks = 2;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &by_provider);
 
@@ -50,7 +50,7 @@ fn tabbed_dashboard_shows_every_provider_past_the_cap() {
     ];
     let mut snapshot = room(Vec::new(), agents);
     // Default `auto` tabs at four providers; a tight cap must not trim them.
-    snapshot.sidebar.max_provider_blocks = 2;
+    snapshot.theme.display.max_provider_blocks = 2;
     let snapshot =
         snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());
 
@@ -160,8 +160,9 @@ fn provider_list_filters_and_orders_dashboard_panels() {
             })
             .collect();
         let mut snapshot = room(Vec::new(), agents);
-        snapshot.sidebar.max_provider_blocks = 1;
-        snapshot.sidebar.provider_list = provider_list.into_iter().map(str::to_owned).collect();
+        snapshot.theme.display.max_provider_blocks = 1;
+        snapshot.theme.display.provider_list =
+            provider_list.into_iter().map(str::to_owned).collect();
 
         let snapshot =
             snapshot.with_provider_aggregates(&BTreeMap::new(), &BTreeMap::new(), &BTreeMap::new());

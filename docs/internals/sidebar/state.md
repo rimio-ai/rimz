@@ -110,7 +110,7 @@ The table names staleness-budget semantics. Exact values and rationale comments 
 
 ## Render Cadences
 
-`[sidebar] refresh_ms` is the base render grid and defaults to `DEFAULT_REFRESH_MS`. It rides `snapshot.sidebar`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
+`[theme.display] refresh_ms` is the base render grid and defaults to `DEFAULT_REFRESH_MS`. It rides `snapshot.theme.display`, so the renderer uses the default until the first fold and picks up config changes on later folds without reading config itself.
 
 Money rolls sample on `refresh_ms * CLICK_PHASES`, matching the odometer phase counter. Row animations sample on `BREATH_ANIMATION_FRAME`, clamped to at least the configured base. Input paints synchronously off-grid; an overlay event fuses on arrival and paints on the spot, and a burst of events still coalesces to one paint per base frame.
 

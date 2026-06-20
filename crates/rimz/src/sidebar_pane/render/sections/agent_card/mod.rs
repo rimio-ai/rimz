@@ -4,7 +4,7 @@
 //! docs/internals/sidebar/sidebar.md.
 
 use crate::agents::{AgentContext, TurnPhase};
-use crate::config::{CardDensityMode, ContextSeverityConfig, GlyphRole};
+use crate::config::{CardDensityMode, ContextMeterConfig, GlyphRole};
 use crate::feed::{AgentStatus, ContextSeverity};
 use crate::{AgentCard, SidebarProviderPanel, SidebarRow, SidebarSubAgent};
 use jiff::Timestamp;
@@ -67,7 +67,7 @@ pub(super) fn row_lines(
     card_density: CardDensityMode,
     animation_phase: u64,
     cost_rolls: &CostRolls,
-    bands: &ContextSeverityConfig,
+    bands: &ContextMeterConfig,
     gutter: Gutter,
     lead_unread: Option<&str>,
 ) -> Vec<Line<'static>> {

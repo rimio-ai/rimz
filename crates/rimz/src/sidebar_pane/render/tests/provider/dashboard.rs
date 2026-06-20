@@ -20,7 +20,7 @@ fn render_provider_dashboard_pins_panel_with_bars_and_rc_flag() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     // The tab rail names both accounts set into the line; the active chip is a
@@ -75,7 +75,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     claude.context = Some(claude_context(fixed_now()));
     let mut snapshot = snapshot_with(Vec::new(), vec![claude]);
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let ui = UiState {
         dashboard_tab: Some(DashboardTab {
             kind: "codex".to_owned(),
@@ -106,7 +106,7 @@ fn render_provider_dashboard_codex_tab_paints_however_derived() {
     );
     let mut snapshot = snapshot_with(Vec::new(), vec![codex]);
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     assert!(rendered.contains("ChatGPT Pro · v0.135.0"), "{rendered}");
@@ -140,7 +140,7 @@ fn render_pets_dashboard_body_uses_pet_view() {
         Some(&pet),
         true,
         24,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let rendered = line_texts(&lines).join("\n");
@@ -175,7 +175,7 @@ fn render_pets_dashboard_body_drops_sprite_under_no_color() {
         Some(&pet),
         true,
         24,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let rendered = line_texts(&lines).join("\n");
@@ -237,7 +237,7 @@ fn render_provider_dashboard_balances_totals_beside_pet() {
         Some(&pet),
         true,
         52,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let texts = line_texts(&lines);
@@ -364,7 +364,7 @@ fn render_provider_dashboard_pet_caption_leaves_inner_gap() {
         Some(&pet),
         true,
         66,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let texts = line_texts(&lines);
@@ -392,7 +392,7 @@ fn render_provider_dashboard_without_pet_uses_main_stats_body() {
         None,
         false,
         52,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let rendered = line_texts(&lines).join("\n");
@@ -425,7 +425,7 @@ fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
         None,
         true,
         38,
-        &crate::config::BudgetZonesConfig::default(),
+        &crate::config::BudgetBarConfig::default(),
         fixed_now(),
     );
     let rendered = line_texts(&lines).join("\n");
@@ -448,7 +448,7 @@ fn render_provider_dashboard_narrow_hides_io_tokens_and_version() {
 fn render_scroll_keeps_gap_above_provider_dashboard() {
     let mut snapshot = overflowing_fleet();
     snapshot.providers = two_provider_panels();
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let frame = compose_lines(
         &snapshot,
         None,
@@ -577,7 +577,7 @@ fn render_provider_dashboard_shows_version_placeholder_when_unknown() {
     snapshot.providers = two_provider_panels();
     snapshot.providers[0].version = None;
     snapshot.providers[0].plan = None;
-    snapshot.sidebar.provider_tabs = crate::config::ProviderTabsMode::Always;
+    snapshot.theme.display.provider_tabs = crate::config::ProviderTabsMode::Always;
     let rendered = snapshot_to_screen(&snapshot, 54, 34);
 
     assert!(

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use super::{ThemeAnimationsConfig, ThemeColor, ThemeGlyphsConfig, ThemeMode};
+use super::{DisplayConfig, ThemeAnimationsConfig, ThemeColor, ThemeGlyphsConfig, ThemeMode};
 
 /// `[theme] style`: a headline preset bundling color depth and glyph set so one
 /// switch picks the whole look. `modern` forces truecolor and the Nerd Font
@@ -17,9 +17,9 @@ pub enum ThemeStyle {
 }
 
 /// `[theme]`: per-machine appearance. It owns palette depth, scheme selection,
-/// semantic slot overrides, glyphs, provider styling, and status-head
-/// animations. Display-only — it tunes what the renderer paints, never ledger
-/// correctness.
+/// semantic slot overrides, sidebar render preferences, glyphs, provider
+/// styling, and status-head animations. Display-only — it tunes what the
+/// renderer paints, never ledger correctness.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ThemeConfig {
@@ -64,6 +64,10 @@ pub struct ThemeConfig {
     pub selection: Option<ThemeColor>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub selection_bg: Option<ThemeColor>,
+    /// Sidebar render preferences: cadence, sizing, dashboard layout, and
+    /// display-only meter bands.
+    #[serde(default, skip_serializing_if = "DisplayConfig::is_unset")]
+    pub display: DisplayConfig,
     #[serde(skip_serializing_if = "ThemeGlyphsConfig::is_unset")]
     pub glyphs: ThemeGlyphsConfig,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]

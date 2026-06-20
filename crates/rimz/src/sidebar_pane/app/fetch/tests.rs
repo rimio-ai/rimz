@@ -44,7 +44,7 @@ fn produce_guard_maps_failures_and_suppresses_renderer_panic_diagnostics() {
 fn refresh_override_stamps_folded_snapshot() {
     let workspace_id = workspace();
     let mut snapshot = super::super::state::placeholder_snapshot(workspace_id.clone());
-    snapshot.sidebar.refresh_ms = 250;
+    snapshot.theme.display.refresh_ms = 250;
     let config = ServeConfig {
         workspace_id,
         mux: MuxName::Zellij,
@@ -58,8 +58,8 @@ fn refresh_override_stamps_folded_snapshot() {
 
     apply_refresh_override(&config, &mut snapshot);
 
-    assert_eq!(snapshot.sidebar.refresh_ms, 50);
-    assert_eq!(snapshot.sidebar.resolved_refresh_ms(), 50);
+    assert_eq!(snapshot.theme.display.refresh_ms, 50);
+    assert_eq!(snapshot.theme.display.resolved_refresh_ms(), 50);
 }
 
 #[test]

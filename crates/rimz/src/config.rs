@@ -23,6 +23,7 @@ mod agents;
 mod animation;
 mod attention;
 mod color;
+mod display;
 pub mod effective;
 mod glyphs;
 mod loop_;
@@ -50,6 +51,10 @@ pub(crate) use color::xterm_rgb;
 pub use color::{
     ColorDepth, PaletteRole, Semantic, ThemeColor, ThemeMode, nearest_xterm_index, parse_hex,
 };
+pub use display::{
+    BudgetBarConfig, BudgetBurnRateConfig, CardDensityMode, ContextBand, ContextMeterConfig,
+    DisplayConfig, GlowMode, ProviderTabsMode, ScrollbarMode,
+};
 pub use glyphs::{GlyphGroup, GlyphNamespaces, GlyphRole, ThemeGlyphsConfig, is_named_glyph_set};
 pub use loop_::{LoopConfig, TaskEntry, Tasks};
 pub use mux::{
@@ -63,10 +68,7 @@ pub use pets::{PetsConfig, PetsGlyphMode, PetsSize};
 pub use remote_control::RemoteControlConfig;
 pub use resume::{DEFAULT_OVERLOAD_BACKOFF_SECS, ResumeConfig};
 pub use sentry::SentryConfig;
-pub use sidebar::{
-    BudgetPaceConfig, BudgetZonesConfig, CardDensityMode, ContextBand, ContextSeverityConfig,
-    GlowMode, ProviderTabsMode, ScrollbarMode, SidebarConfig,
-};
+pub use sidebar::SidebarConfig;
 pub use theme::{
     InlineAnsiColors, InlinePalette, InlinePrimaryColors, InlineSelectionColors, ThemeConfig,
     ThemeProviderStyle, ThemeStyle,
@@ -326,6 +328,16 @@ fn legacy_split_sections(value: &toml::Value) -> Option<Vec<&'static str>> {
             "animations",
             "attention",
             "pets",
+            "refresh_ms",
+            "max_provider_blocks",
+            "provider_tabs",
+            "provider_list",
+            "max_cols",
+            "scrollbar",
+            "glow",
+            "card_density",
+            "context",
+            "budget",
         ] {
             if sidebar.contains_key(key) {
                 sections.push(match key {
@@ -336,6 +348,16 @@ fn legacy_split_sections(value: &toml::Value) -> Option<Vec<&'static str>> {
                     "animations" => "sidebar.animations",
                     "attention" => "sidebar.attention",
                     "pets" => "sidebar.pets",
+                    "refresh_ms" => "sidebar.refresh_ms",
+                    "max_provider_blocks" => "sidebar.max_provider_blocks",
+                    "provider_tabs" => "sidebar.provider_tabs",
+                    "provider_list" => "sidebar.provider_list",
+                    "max_cols" => "sidebar.max_cols",
+                    "scrollbar" => "sidebar.scrollbar",
+                    "glow" => "sidebar.glow",
+                    "card_density" => "sidebar.card_density",
+                    "context" => "sidebar.context",
+                    "budget" => "sidebar.budget",
                     _ => key,
                 });
             }

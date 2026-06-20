@@ -498,7 +498,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
-    let width = rimz::mux::SidebarWidth::from_config(&machine_config.sidebar);
+    let width = rimz::mux::SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
     let ledger = crate::cli::open_ledger(&workspace)?;
     backend.ensure_session(&rimz::mux::SessionOptions {

@@ -29,32 +29,9 @@
 ## command = "ntfy publish rimz"       # optional shell command; receives RIMZ_NOTIFY_* environment variables
 
 [sidebar]
-# refresh_ms = 100                    # render/animation grid; clamped internally
-# max_provider_blocks = 3             # cap discovered provider blocks when provider_list is empty
-# provider_tabs = "auto"              # "auto", "always", or "never"
-# provider_list = []                  # explicit provider order; include "all" to expand remaining providers
-# max_cols = 72                       # creation-time cap for sidebar pane width
-# scrollbar = "auto"                  # "auto", "always", or "never"
-# glow = "auto"                       # transition flashes: "auto", "always", or "never"
-# card_density = "auto"               # "auto", "expanded", or "compact"
+# Sidebar behavior: keybind and worktree comparison target.
 # focus_key = "Alt+p"                 # global chord to focus the sidebar (toggle); "" or "off" to disable
 ## trunk = "develop"                  # optional preferred branch for worktree comparison stats
-
-[sidebar.context]
-# green = { percent = 40, tokens = 100000 }
-# yellow = { percent = 60, tokens = 160000 }
-# amber = { percent = 75, tokens = 258000 }
-# red = { percent = 90, tokens = 420000 }
-
-[sidebar.budget]
-# yellow = 50                         # remaining percent where the draining bar reaches warn (gold)
-# amber = 25                          # remaining percent where the bar reaches caution (amber)
-# red = 10                            # remaining percent where the bar reaches alarm (red)
-
-[sidebar.budget.pace]
-# yellow = 100                        # pace percent where the reset marker leaves the soft tier for warn
-# amber = 150                         # pace percent where the marker reaches caution (amber)
-# red = 200                           # pace percent where the marker reaches alarm (red)
 
 [zellij]
 # Critical room invariants Rimz always applies:
@@ -79,18 +56,19 @@ auto_layout = true                    # use Rimz's swap layout for no-direction 
 ## osc8_hyperlinks = true
 
 [tmux]
-# mouse = true
-# focus_events = true
-# history_limit = 100000
-# allow_passthrough = true
-# set_clipboard = "on"                # "on", "external", or "off"
-# extended_keys = true
-# extended_keys_format = "csi-u"      # "csi-u" or "xterm"
-# escape_time_ms = 0
-# renumber_windows = true
-# aggressive_resize = true
-# pane_border_status = "off"          # "off", "top", or "bottom"
-# pane_border_lines = "simple"        # "simple", "single", "double", or "heavy"
+# Rimz applies these to its tmux session on every birth.
+mouse = true
+focus_events = true
+history_limit = 100000
+allow_passthrough = true
+set_clipboard = "on"                  # "on", "external", or "off"
+extended_keys = true
+extended_keys_format = "csi-u"        # "csi-u" or "xterm"
+escape_time_ms = 0
+renumber_windows = true
+aggressive_resize = true
+pane_border_status = "off"            # "off", "top", or "bottom"
+pane_border_lines = "simple"          # "simple", "single", "double", or "heavy"
 
 [resume]
 # on_rebirth = true                   # re-seed prior agents when a room is reborn
