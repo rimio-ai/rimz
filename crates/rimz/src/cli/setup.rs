@@ -14,12 +14,9 @@ use crate::cli::render;
 
 #[derive(Debug, Args)]
 pub struct SetupArgs {
-    /// Apply the non-interactive default setup: write config only, no hooks or trust.
+    /// Apply non-interactive setup: refresh config only, no hooks or trust.
     #[arg(long)]
     yes: bool,
-    /// Replace an existing per-machine config when writing.
-    #[arg(long)]
-    force: bool,
 }
 
 pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
@@ -29,23 +26,29 @@ pub fn run(args: SetupArgs, globals: &GlobalFlags) -> Result<()> {
     if !interactive && !args.yes {
         print_report(&report)?;
         print_line("No terminal input is available; setup changed nothing.")?;
-        print_line(
-            "Run `rimz setup --yes` to write the default config, or run setup from a terminal.",
-        )?;
+        print_line("Run `rimz setup --yes` to refresh config, or run setup from a terminal.")?;
         return Ok(());
     }
 
     if args.yes {
         print_report(&report)?;
-        write_config(args.force)?;
+        render_merge_report(&config::merge_default_config()?)?;
         print_line("No hooks or trust grants were changed by --yes.")?;
         print_line("Run `rimz start` when ready.")?;
         return Ok(());
     }
 
     print_report(&report)?;
-    if super::confirm("Write the default per-machine config now?")? {
-        write_config(args.force)?;
+    let paths = default_config_paths();
+    let exists = paths.iter().any(|path| path.exists());
+    if exists {
+        if super::confirm_with_default("Keep your current config?", true)? {
+            render_merge_report(&config::merge_default_config()?)?;
+        } else {
+            write_fresh_config()?;
+        }
+    } else if super::confirm("Write the default per-machine config now?")? {
+        write_fresh_config()?;
     } else {
         print_line("Config unchanged.")?;
     }
@@ -133,17 +136,55 @@ impl SetupReport {
     }
 }
 
-fn write_config(force: bool) -> Result<()> {
-    let path = rimz::config::MachineConfig::config_path();
-    if config::write_default_config(force)? {
+fn default_config_paths() -> [PathBuf; 3] {
+    [
+        rimz::config::MachineConfig::config_path(),
+        rimz::config::MachineConfig::theme_path(),
+        rimz::config::MachineConfig::agents_path(),
+    ]
+}
+
+fn write_fresh_config() -> Result<()> {
+    config::write_default_config(true)?;
+    for path in default_config_paths() {
         print_line(&format!("Wrote {}", path.display()))?;
-    } else {
-        print_line(&format!(
-            "{} already exists; pass --force to replace it.",
-            path.display()
-        ))?;
     }
     Ok(())
+}
+
+fn render_merge_report(report: &config::MergeReport) -> Result<()> {
+    for file in &report.files {
+        match file.action {
+            config::MergeAction::Wrote => {
+                print_line(&format!("Wrote {}", file.path.display()))?;
+            }
+            config::MergeAction::Merged { kept } => {
+                print_line(&format!(
+                    "Merged {} - kept {kept} setting(s)",
+                    file.path.display()
+                ))?;
+            }
+        }
+        for skipped in &file.skipped {
+            let reason = match &skipped.reason {
+                config::SkipReason::Unknown => "unknown key".to_owned(),
+                config::SkipReason::Invalid(message) => {
+                    format!("invalid: {}", one_line(message))
+                }
+            };
+            print_line(&format!("  skipped {} ({reason})", skipped.key))?;
+        }
+    }
+    Ok(())
+}
+
+fn one_line(message: &str) -> String {
+    message
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn print_report(report: &SetupReport) -> std::io::Result<()> {

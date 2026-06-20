@@ -85,6 +85,116 @@ pub(crate) fn write_default_config(force: bool) -> Result<bool> {
     Ok(true)
 }
 
+#[derive(Debug)]
+pub(crate) struct MergeReport {
+    pub(crate) files: Vec<FileMergeOutcome>,
+}
+
+#[derive(Debug)]
+pub(crate) struct FileMergeOutcome {
+    pub(crate) path: PathBuf,
+    pub(crate) action: MergeAction,
+    pub(crate) skipped: Vec<SkippedKey>,
+}
+
+#[derive(Debug)]
+pub(crate) enum MergeAction {
+    Wrote,
+    Merged { kept: usize },
+}
+
+#[derive(Debug)]
+pub(crate) struct SkippedKey {
+    pub(crate) key: String,
+    pub(crate) reason: SkipReason,
+}
+
+#[derive(Debug)]
+pub(crate) enum SkipReason {
+    Unknown,
+    Invalid(String),
+}
+
+pub(crate) fn merge_default_config() -> Result<MergeReport> {
+    let files = [
+        (MachineConfig::config_path(), MachineConfig::template_core()),
+        (MachineConfig::theme_path(), MachineConfig::template_theme()),
+        (
+            MachineConfig::agents_path(),
+            MachineConfig::template_agents(),
+        ),
+    ];
+    let mut outcomes = Vec::new();
+    for (path, template) in files {
+        outcomes.push(merge_one(&path, template)?);
+    }
+    Ok(MergeReport { files: outcomes })
+}
+
+fn merge_one(path: &Path, template: &str) -> Result<FileMergeOutcome> {
+    let Some(old_text) = read_existing(path)? else {
+        write_bytes_atomically(path, template.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        return Ok(FileMergeOutcome {
+            path: path.to_path_buf(),
+            action: MergeAction::Wrote,
+            skipped: Vec::new(),
+        });
+    };
+    let Ok(old_doc) = old_text.parse::<DocumentMut>() else {
+        write_bytes_atomically(path, template.as_bytes())
+            .with_context(|| format!("writing {}", path.display()))?;
+        return Ok(FileMergeOutcome {
+            path: path.to_path_buf(),
+            action: MergeAction::Wrote,
+            skipped: vec![SkippedKey {
+                key: "<file>".to_owned(),
+                reason: SkipReason::Invalid("unparseable; rewritten from template".to_owned()),
+            }],
+        });
+    };
+
+    let mut new_doc = template
+        .parse::<DocumentMut>()
+        .context("parsing shipped config template")?;
+    let kind = FileKind::for_path(path);
+    let mut kept = 0;
+    let mut skipped = Vec::new();
+    for found in collect_explicit_keys(kind, &old_doc) {
+        match found {
+            Found::Unknown(key) => skipped.push(SkippedKey {
+                key,
+                reason: SkipReason::Unknown,
+            }),
+            Found::Settable { logical, value } => {
+                if template_has_same_value(&new_doc, &logical, &value) {
+                    continue;
+                }
+                let mut trial = new_doc.clone();
+                match apply_logical_key(&mut trial, path, &logical, value) {
+                    Ok(()) => {
+                        new_doc = trial;
+                        kept += 1;
+                    }
+                    Err(err) => skipped.push(SkippedKey {
+                        key: logical.join("."),
+                        reason: SkipReason::Invalid(err.to_string()),
+                    }),
+                }
+            }
+        }
+    }
+
+    let rendered = new_doc.to_string();
+    write_bytes_atomically(path, rendered.as_bytes())
+        .with_context(|| format!("writing {}", path.display()))?;
+    Ok(FileMergeOutcome {
+        path: path.to_path_buf(),
+        action: MergeAction::Merged { kept },
+        skipped,
+    })
+}
+
 fn init(args: InitArgs) -> Result<()> {
     if args.print {
         print_text(&render_all_templates())?;
@@ -148,21 +258,129 @@ fn set(args: SetArgs) -> Result<()> {
     let key = normalize_set_key(&requested_key, &value)?;
     validate_set_key(&key)?;
     let (path, template) = file_for_key(&key);
-    let document_key = document_key_for_set(&key);
 
     let text = read_config_or_template(&path, template)?;
     let mut doc = text
         .parse::<DocumentMut>()
         .with_context(|| format!("parsing {}", path.display()))?;
-    validate_set_value(&key, &value)?;
-    set_document_value(&mut doc, &document_key, value)?;
-
+    apply_logical_key(&mut doc, &path, &key, value)?;
     let rendered = doc.to_string();
-    MachineConfig::parse_text(&path, &rendered)
-        .with_context(|| format!("validating `{}`", args.key))?;
     write_bytes_atomically(&path, rendered.as_bytes())
         .with_context(|| format!("writing {}", path.display()))?;
     print_line(&format!("set {}", args.key))
+}
+
+fn apply_logical_key(
+    doc: &mut DocumentMut,
+    path: &Path,
+    logical: &[String],
+    value: Value,
+) -> Result<()> {
+    validate_set_value(logical, &value)?;
+    set_document_value(doc, &document_key_for_set(logical), value)?;
+    MachineConfig::parse_text(path, &doc.to_string())
+        .map(|_| ())
+        .with_context(|| format!("validating `{}`", logical.join(".")))
+}
+
+fn read_existing(path: &Path) -> Result<Option<String>> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(err).with_context(|| format!("reading {}", path.display())),
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FileKind {
+    Core,
+    Theme,
+    Agents,
+}
+
+impl FileKind {
+    fn for_path(path: &Path) -> Self {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("theme.toml") => Self::Theme,
+            Some("agents.toml") => Self::Agents,
+            _ => Self::Core,
+        }
+    }
+}
+
+#[derive(Debug)]
+enum Found {
+    Settable { logical: Vec<String>, value: Value },
+    Unknown(String),
+}
+
+fn collect_explicit_keys(kind: FileKind, doc: &DocumentMut) -> Vec<Found> {
+    let mut found = Vec::new();
+    walk_table(kind, &[], doc.as_table(), &mut found);
+    found
+}
+
+fn walk_table(kind: FileKind, doc_prefix: &[String], table: &Table, out: &mut Vec<Found>) {
+    for (key, item) in table.iter() {
+        let mut doc_path = doc_prefix.to_vec();
+        doc_path.push(key.to_string());
+        let logical = to_logical(kind, &doc_path);
+        if is_known_merge_key(&logical) {
+            match item.clone().into_value() {
+                Ok(value) => out.push(Found::Settable { logical, value }),
+                Err(_) => out.push(Found::Unknown(doc_path.join("."))),
+            }
+        } else if let Some(child) = item.as_table() {
+            walk_table(kind, &doc_path, child, out);
+        } else {
+            out.push(Found::Unknown(doc_path.join(".")));
+        }
+    }
+}
+
+fn to_logical(kind: FileKind, doc_path: &[String]) -> Vec<String> {
+    match kind {
+        FileKind::Theme if doc_path.first().is_some_and(|segment| segment == "colors") => {
+            std::iter::once("theme".to_owned())
+                .chain(doc_path.iter().cloned())
+                .collect()
+        }
+        _ => doc_path.to_vec(),
+    }
+}
+
+fn is_known_merge_key(logical: &[String]) -> bool {
+    validate_set_key(logical).is_ok()
+        || matches!(
+            logical,
+            [root, leaf]
+                if root == "sentry" && matches!(leaf.as_str(), "dsn" | "environment")
+        )
+}
+
+fn template_has_same_value(doc: &DocumentMut, logical: &[String], value: &Value) -> bool {
+    let Some(existing) = item_at(doc, &document_key_for_set(logical))
+        .cloned()
+        .and_then(|item| item.into_value().ok())
+    else {
+        return false;
+    };
+    as_toml_value(&existing) == as_toml_value(value)
+}
+
+fn item_at<'a>(doc: &'a DocumentMut, path: &[String]) -> Option<&'a Item> {
+    let (leaf, parents) = path.split_last()?;
+    let mut table = doc.as_table();
+    for segment in parents {
+        table = table.get(segment)?.as_table()?;
+    }
+    table.get(leaf)
+}
+
+fn as_toml_value(value: &Value) -> Option<toml::Value> {
+    toml::from_str::<toml::Table>(&format!("x = {}", value.to_string().trim()))
+        .ok()?
+        .remove("x")
 }
 
 fn render_all_templates() -> String {
@@ -781,6 +999,50 @@ mod tests {
         ] {
             assert_eq!(is_known_get_key(&parse_key(key).unwrap()), known, "{key}");
         }
+    }
+
+    #[test]
+    fn collect_explicit_keys_maps_theme_colors_and_reports_unknowns() {
+        let doc = r##"
+[colors.primary]
+background = "#000000"
+nope = "surprise"
+"##
+        .parse::<DocumentMut>()
+        .expect("parse theme snippet");
+
+        let expected_background = parse_key("theme.colors.primary.background").expect("key");
+        let found = collect_explicit_keys(FileKind::Theme, &doc);
+        let mut saw_background = false;
+        let mut saw_unknown = false;
+        for item in found {
+            match item {
+                Found::Settable { logical, value } if logical == expected_background => {
+                    assert_eq!(value.as_str(), Some("#000000"));
+                    saw_background = true;
+                }
+                Found::Unknown(key) if key == "colors.primary.nope" => {
+                    saw_unknown = true;
+                }
+                other => panic!("unexpected key: {other:?}"),
+            }
+        }
+        assert!(saw_background, "background override should be settable");
+        assert!(saw_unknown, "unknown color leaf should be reported");
+    }
+
+    #[test]
+    fn merge_key_oracle_accepts_sentry_and_rejects_bogus_keys() {
+        assert!(is_known_merge_key(&parse_key("sentry.dsn").expect("key")));
+        assert!(is_known_merge_key(
+            &parse_key("sentry.environment").expect("key")
+        ));
+        assert!(is_known_merge_key(
+            &parse_key("notifications.enabled").expect("key")
+        ));
+        assert!(!is_known_merge_key(
+            &parse_key("notifications.nope").expect("key")
+        ));
     }
 
     #[test]

@@ -17,6 +17,11 @@ fn agents_config_path(env: &Env) -> std::path::PathBuf {
     env.config_root().join("rimz").join("agents.toml")
 }
 
+fn write_machine_file(path: &std::path::Path, text: &str) {
+    std::fs::create_dir_all(path.parent().expect("config file parent")).expect("mkdir config");
+    std::fs::write(path, text).expect("write config seed");
+}
+
 #[test]
 fn config_init_prints_and_writes_the_template() {
     let env = Env::new();
@@ -230,4 +235,91 @@ fn setup_yes_writes_default_config_without_hook_or_trust_side_effects() {
     assert!(text.contains("# on_rebirth = true"));
     assert!(theme_config_path(&env).exists());
     assert!(agents_config_path(&env).exists());
+}
+
+#[test]
+fn setup_yes_merges_overrides_and_skips_incompatible_keys() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        r#"
+[notifications]
+enabled = false
+bogus_key = 1
+
+[zellij]
+on_force_close = "explode"
+"#,
+    );
+
+    env.rimz()
+        .args(["setup", "--yes"])
+        .assert()
+        .success()
+        .stdout(contains("Merged"))
+        .stdout(contains("kept 1 setting(s)"))
+        .stdout(contains("skipped notifications.bogus_key (unknown key)"))
+        .stdout(contains("skipped zellij.on_force_close (invalid:"))
+        .stdout(contains("Wrote"))
+        .stdout(contains("No hooks or trust grants were changed"));
+
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read merged config");
+    assert!(text.contains("enabled = false"), "override kept:\n{text}");
+    assert!(
+        text.contains("# on_rebirth = true"),
+        "template comments kept:\n{text}"
+    );
+    assert!(
+        !text.contains("bogus_key"),
+        "unknown key should be dropped:\n{text}"
+    );
+    assert!(
+        !text.contains("on_force_close = \"explode\""),
+        "invalid key should be dropped:\n{text}"
+    );
+    assert!(theme_config_path(&env).exists());
+    assert!(agents_config_path(&env).exists());
+}
+
+#[test]
+fn setup_yes_preserves_sentry_keys_during_merge() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        r#"
+[sentry]
+dsn = "https://k@o0.ingest.sentry.io/0"
+"#,
+    );
+
+    env.rimz().args(["setup", "--yes"]).assert().success();
+
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read merged config");
+    assert!(
+        text.contains("dsn = \"https://k@o0.ingest.sentry.io/0\""),
+        "sentry dsn should survive:\n{text}"
+    );
+}
+
+#[test]
+fn setup_yes_preserves_template_comments_for_untouched_config() {
+    let env = Env::new();
+    write_machine_file(
+        &machine_config_path(&env),
+        rimz::config::MachineConfig::template_core(),
+    );
+
+    env.rimz().args(["setup", "--yes"]).assert().success();
+
+    let text = std::fs::read_to_string(machine_config_path(&env)).expect("read merged config");
+    assert!(
+        text.contains(
+            "mouse_click_through = true            # single click on a card jumps to the agent"
+        ),
+        "zellij inline comment should stay attached:\n{text}"
+    );
+    assert!(
+        text.contains("pane_border_status = \"off\"            # \"off\", \"top\", or \"bottom\""),
+        "tmux inline comment should stay attached:\n{text}"
+    );
 }

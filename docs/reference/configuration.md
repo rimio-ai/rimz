@@ -9,13 +9,13 @@ Configuration has two tiers. The per-machine tier under `~/.config/rimz/` drives
 ## Get Started
 
 ```sh
-rimz setup                         # detect this machine and offer a default config write
-rimz setup --yes                   # non-interactive default config write; no hook or trust side effects
+rimz setup                         # detect this machine and offer to keep and refresh config
+rimz setup --yes                   # non-interactive config merge/write; no hook or trust side effects
 rimz config init --print           # print the commented field reference
 rimz config init                   # write config.toml, theme.toml, and agents.toml
 ```
 
-Most users start with `rimz setup` or `rimz config init`, then edit only the few lines they need. The generated template is the exhaustive field reference: every persisted section and default scalar is shown as commented TOML. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
+Most users start with `rimz setup` or `rimz config init`, then edit only the few lines they need. Setup keeps an existing config by default, refreshes it against the current templates, and reports any unknown or incompatible keys it skips. The generated template is the exhaustive field reference: every persisted section and default scalar is shown as commented TOML. Leaving a line commented keeps following the defaults shipped by future Rimz versions; uncommenting makes it this machine's override.
 
 ## The Files
 

@@ -117,14 +117,14 @@ rimz list [-a|--all] [--json]
 ## Setup and doctor
 
 ```sh
-rimz setup [--yes] [--force]
+rimz setup [--yes]
 ```
 
 `rimz setup` prints a first-run report: selected multiplexer, workspace root, root class, trust state when available, per-machine config path, detected agent binaries, and hook install status.
 
-In an interactive terminal, setup offers to write the default per-machine config. `--yes` takes the non-interactive path: it writes the default config only, with no hook installs and no trust grants.
+In an interactive terminal, setup offers to keep and refresh an existing per-machine config against the current templates; incompatible or unknown keys are skipped with a warning. The prompt also offers a clean overwrite. `--yes` takes the non-interactive path: it merges existing files, writes missing files, and makes no hook installs or trust grants.
 
-`--force` replaces an existing per-machine config when setup writes. The generated config path and field model are described in [configuration.md](../configuration.md).
+Run `rimz config init --force` for an explicit clean reset. The generated config path and field model are described in [configuration.md](../configuration.md).
 
 ```sh
 rimz doctor [--audit] [--json] [--output PATH]

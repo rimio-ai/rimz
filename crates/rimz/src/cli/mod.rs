@@ -1090,13 +1090,22 @@ fn launch_sidebar_for_workspace(
 }
 
 pub(crate) fn confirm(prompt: &str) -> Result<bool> {
+    confirm_with_default(prompt, false)
+}
+
+pub(crate) fn confirm_with_default(prompt: &str, default_yes: bool) -> Result<bool> {
     let mut stderr = std::io::stderr().lock();
-    write!(stderr, "{prompt} [y/N] ")?;
+    let suffix = if default_yes { "[Y/n]" } else { "[y/N]" };
+    write!(stderr, "{prompt} {suffix} ")?;
     stderr.flush()?;
     drop(stderr);
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
+    let answer = answer.trim();
+    if answer.is_empty() {
+        return Ok(default_yes);
+    }
+    Ok(answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 pub(crate) fn confirm_default_yes(prompt: &str) -> Result<bool> {
