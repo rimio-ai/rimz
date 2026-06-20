@@ -48,13 +48,20 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
         "--worktree",
         "feature-transcript",
     ]));
-    assert!(single.contains("you: first prompt"), "{single}");
-    assert!(single.contains("final answer"), "{single}");
+    assert!(single.contains("#feature-transcript"), "{single}");
+    assert!(
+        single.contains("user  00:00:00\n  first prompt"),
+        "{single}"
+    );
+    assert!(
+        single.contains("assistant  00:00:02\n  @claude  final answer"),
+        "{single}"
+    );
     assert!(
         !single.contains("draft answer"),
         "default view keeps only the final assistant message:\n{single}"
     );
-    assert!(single.contains("ask:"), "{single}");
+    assert!(single.contains("\nask\n  approve patch"), "{single}");
     assert!(
         single.contains("approve patch: choose one [allow, deny]"),
         "{single}"
@@ -88,10 +95,14 @@ fn transcript_renders_agent_turns_channel_timeline_and_pending_asks() {
             && final_answer < second_answer,
         "channel timeline should sort by transcript timestamps:\n{channel}"
     );
+    assert!(channel.contains("#feature-transcript"), "{channel}");
+    assert!(channel.contains("@claude"), "{channel}");
+    assert!(channel.contains("@codex"), "{channel}");
     assert!(
-        channel.contains("you→@") && channel.contains("second answer"),
+        !channel.contains("you→@") && !channel.contains("@claude#feature-transcript"),
         "{channel}"
     );
+    assert!(channel.contains("second answer"), "{channel}");
 
     let json = run_ok(env.rimz().args([
         "transcript",

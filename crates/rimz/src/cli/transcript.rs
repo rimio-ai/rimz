@@ -5,6 +5,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
+use jiff::Timestamp;
 use serde::Serialize;
 
 use super::{GlobalFlags, current_channel, open_ledger};
@@ -116,7 +117,8 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                     ask,
                 })?;
             } else {
-                render_agent(&label, &turns, ask.as_ref())?;
+                let channel = rimz::target::agent_channel(&agent);
+                render_agent(channel.as_deref(), &label, &turns, ask.as_ref())?;
             }
         }
         Scope::Channel { channel, agents } => {
@@ -162,7 +164,7 @@ pub fn run(args: TranscriptArgs, globals: &GlobalFlags) -> Result<()> {
                     asks,
                 })?;
             } else {
-                render_channel(&timeline, &asks)?;
+                render_channel(channel.as_deref(), &timeline, &asks)?;
             }
         }
     }
@@ -296,70 +298,175 @@ pub(crate) fn ask_summary(ask: &AskView) -> String {
     text
 }
 
-fn render_agent(label: &str, turns: &[rimz::agents::Turn], ask: Option<&AskView>) -> Result<()> {
+const AGENT_TONES: [anstyle::Style; 3] = [
+    render::palette::META,
+    render::palette::ACCENT,
+    render::palette::GOOD,
+];
+
+#[derive(Default)]
+struct AgentTones {
+    order: Vec<String>,
+}
+
+impl AgentTones {
+    fn tone(&mut self, handle: &str) -> anstyle::Style {
+        let idx = self
+            .order
+            .iter()
+            .position(|seen| seen == handle)
+            .unwrap_or_else(|| {
+                self.order.push(handle.to_owned());
+                self.order.len() - 1
+            });
+        AGENT_TONES[idx % AGENT_TONES.len()]
+    }
+}
+
+fn base_handle(handle: &str) -> &str {
+    handle.split_once('#').map_or(handle, |(base, _)| base)
+}
+
+fn write_header(out: &mut impl Write, channel: Option<&str>) -> Result<()> {
+    if let Some(channel) = channel {
+        writeln!(
+            out,
+            "{}",
+            render::paint(render::palette::ACCENT.bold(), &format!("#{channel}"))
+        )?;
+        writeln!(out)?;
+    }
+    Ok(())
+}
+
+fn render_agent(
+    channel: Option<&str>,
+    label: &str,
+    turns: &[rimz::agents::Turn],
+    ask: Option<&AskView>,
+) -> Result<()> {
     let mut out = render::out();
-    for (index, turn) in turns.iter().enumerate() {
-        if index > 0 {
-            writeln!(out)?;
-        }
+    write_header(&mut out, channel)?;
+    let display = if channel.is_some() {
+        base_handle(label)
+    } else {
+        label
+    };
+    let agent = render::paint(render::palette::META.bold(), display);
+    let user = render::paint(render::palette::COOL, "user");
+    let assistant = render::paint(render::palette::META, "assistant");
+    let ask_role = render::paint(render::palette::WARN, "ask");
+    let mut first = true;
+    for turn in turns {
         for message in &turn.messages {
-            let prefix = match message.role {
-                TranscriptRole::User => "you".to_owned(),
-                TranscriptRole::Assistant => label.to_owned(),
-            };
-            write_message(&mut out, &prefix, &message.text)?;
+            if !first {
+                writeln!(out)?;
+            }
+            first = false;
+            match message.role {
+                TranscriptRole::User => {
+                    write_block(&mut out, &user, message.at, None, &message.text)?;
+                }
+                TranscriptRole::Assistant => {
+                    write_block(
+                        &mut out,
+                        &assistant,
+                        message.at,
+                        Some(&agent),
+                        &message.text,
+                    )?;
+                }
+            }
         }
     }
     if let Some(ask) = ask {
-        if !turns.is_empty() {
+        if !first {
             writeln!(out)?;
         }
-        write_ask_view(&mut out, None, ask)?;
+        write_block(&mut out, &ask_role, None, None, &ask_summary(ask))?;
     }
     Ok(())
 }
 
-fn render_channel(timeline: &[rimz::agents::TimelineEntry], asks: &[ChannelAskView]) -> Result<()> {
+fn render_channel(
+    channel: Option<&str>,
+    timeline: &[rimz::agents::TimelineEntry],
+    asks: &[ChannelAskView],
+) -> Result<()> {
     let mut out = render::out();
+    write_header(&mut out, channel)?;
+    let grouped = channel.is_some();
+    let mut tones = AgentTones::default();
+    let user = render::paint(render::palette::COOL, "user");
+    let assistant = render::paint(render::palette::META, "assistant");
+    let ask_role = render::paint(render::palette::WARN, "ask");
+    let mut first = true;
     for entry in timeline {
-        let prefix = match entry.role {
-            TranscriptRole::User => format!("you→{}", entry.agent),
-            TranscriptRole::Assistant => entry.agent.clone(),
+        if !first {
+            writeln!(out)?;
+        }
+        first = false;
+        let display = if grouped {
+            base_handle(&entry.agent)
+        } else {
+            entry.agent.as_str()
         };
-        write_message(&mut out, &prefix, &entry.text)?;
-    }
-    if !asks.is_empty() && !timeline.is_empty() {
-        writeln!(out)?;
+        match entry.role {
+            TranscriptRole::User => write_block(&mut out, &user, entry.at, None, &entry.text)?,
+            TranscriptRole::Assistant => {
+                let handle = render::paint(tones.tone(display).bold(), display);
+                write_block(&mut out, &assistant, entry.at, Some(&handle), &entry.text)?;
+            }
+        }
     }
     for ask in asks {
-        write_ask_view(&mut out, Some(&ask.agent), &ask.ask)?;
-    }
-    Ok(())
-}
-
-fn write_message(out: &mut impl Write, prefix: &str, text: &str) -> Result<()> {
-    let indent = " ".repeat(prefix.chars().count());
-    let mut lines = text.lines();
-    if let Some(first) = lines.next() {
-        writeln!(out, "{prefix}: {first}")?;
-        for line in lines {
-            writeln!(out, "{indent}  {line}")?;
+        if !first {
+            writeln!(out)?;
         }
-    } else {
-        writeln!(out, "{prefix}:")?;
+        first = false;
+        let display = if grouped {
+            base_handle(&ask.agent)
+        } else {
+            ask.agent.as_str()
+        };
+        let handle = render::paint(tones.tone(display).bold(), display);
+        write_block(
+            &mut out,
+            &ask_role,
+            None,
+            Some(&handle),
+            &ask_summary(&ask.ask),
+        )?;
     }
     Ok(())
 }
 
-fn write_ask_view(out: &mut impl Write, agent: Option<&str>, ask: &AskView) -> Result<()> {
-    let prefix = agent.map_or_else(|| "ask".to_owned(), |agent| format!("ask {agent}"));
-    let summary = ask_summary(ask);
-    writeln!(
-        out,
-        "{}: {}",
-        render::paint(render::palette::WARN, &prefix),
-        summary
-    )?;
+fn write_block(
+    out: &mut impl Write,
+    role: &str,
+    at: Option<Timestamp>,
+    handle: Option<&str>,
+    text: &str,
+) -> Result<()> {
+    match at {
+        Some(at) => writeln!(
+            out,
+            "{role}  {}",
+            render::paint(render::palette::FAINT, &at.strftime("%H:%M:%S").to_string())
+        )?,
+        None => writeln!(out, "{role}")?,
+    }
+
+    let mut lines = text.lines();
+    match (handle, lines.next()) {
+        (Some(handle), Some(first)) => writeln!(out, "  {handle}  {first}")?,
+        (Some(handle), None) => writeln!(out, "  {handle}")?,
+        (None, Some(first)) => writeln!(out, "  {first}")?,
+        (None, None) => {}
+    }
+    for line in lines {
+        writeln!(out, "  {line}")?;
+    }
     Ok(())
 }
 
