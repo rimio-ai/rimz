@@ -328,7 +328,7 @@ Top-level KDL options (`option_name value`). Every one doubles as a kebab-case `
 | `mouse_click_through` | `false` \| `true` | click focuses **and** reaches the pane — first-click jump; Rimz sets `true`; flag exists ≥ 0.44.0 |
 | `advanced_mouse_actions` | `true` \| `false` | hover effects, pane grouping, mouse resize; flag exists ≥ 0.43.0 |
 | `mouse_hover_effects` | `true` \| `false` | frame highlight + help text on hover; flag exists ≥ 0.44.0 |
-| `focus_follows_mouse` | `false` \| `true` | 0.44: first click only passes through when click-through on **and** this off |
+| `focus_follows_mouse` | `false` \| `true` | Rimz sets `true` so the pointer focuses the sidebar before the press |
 | `support_kitty_keyboard_protocol` | `true` \| `false` | |
 | `copy_command` | e.g. `wl-copy` | replaces OSC52 |
 | `copy_clipboard` | `system` \| `primary` | OSC52 destination |
@@ -357,7 +357,7 @@ Plus the `keybinds`, `themes`, `plugins` (aliases), and `load_plugins` blocks. `
 
 ### Mouse handling and reconfigure (0.44.3)
 
-The tab mouse handler gathers `focus_follows_mouse` and `mouse_click_through` from tab state, then `determine_mouse_action` returns `FocusPaneAndClickThrough` for a plain left press on an inactive pane only when click-through is enabled and focus-follows-mouse is disabled; otherwise the press focuses the pane and the user needs a later click to reach the terminal/application ([`mouse_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L396-L401), [`determine_mouse_action`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1196-L1441)).
+The tab mouse handler gathers `focus_follows_mouse` and `mouse_click_through` from tab state. With focus-follows-mouse enabled, pointer movement focuses the pane before the left press, so the first click reaches the terminal/application; the click-through branch covers inactive panes reached without that hover focus transition ([`mouse_handler.rs`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L396-L401), [`determine_mouse_action`](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1196-L1441)).
 
 `advanced_mouse_actions` participates in hover chrome, grouping, and resize branches; the click-through branch reads only `mouse_click_through` and `focus_follows_mouse` ([hover branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1086-L1089), [click-through branch](https://github.com/zellij-org/zellij/blob/v0.44.3/zellij-server/src/tab/mouse_handler.rs#L1357-L1362)).
 

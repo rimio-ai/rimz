@@ -72,7 +72,7 @@ impl Default for ZellijConfig {
             mouse_click_through: true,
             advanced_mouse_actions: None,
             mouse_hover_effects: None,
-            focus_follows_mouse: false,
+            focus_follows_mouse: true,
             pane_frames: None,
             on_force_close: None,
             scroll_buffer_size: None,

@@ -153,7 +153,7 @@ Rimz applies room-scoped settings when it creates or reattaches a session, so th
 ```toml
 [zellij]
 mouse_click_through = true
-focus_follows_mouse = false
+focus_follows_mouse = true
 session_serialization = false
 auto_layout = true
 
@@ -166,7 +166,7 @@ set_clipboard = "on"
 extended_keys_format = "csi-u"
 ```
 
-Zellij receives settings as `zellij attach ... options ...` on room birth and attach. Rimz always applies the room invariants it owns: locked mode, click-through on supported Zellij versions, focus-follows-mouse off, session serialization off, and auto-layout on. Every other `[zellij]` key is an override: set it in `config.toml` to pass the matching Zellij `options` flag, or leave it unset to use `~/.config/zellij/config.kdl` and Zellij's defaults. Work panes keep Zellij's default frames unless you configure otherwise; the sidebar pane is explicitly borderless so its hit-testing stays stable. tmux receives session, window, and server-scoped options as required by tmux itself; clipboard and rich-key handling are server-scoped in tmux. The backend mapping is in [internals/sidebar/multiplexers.md](../internals/sidebar/multiplexers.md).
+Zellij receives settings as `zellij attach ... options ...` on room birth and attach. Rimz always applies the room invariants it owns: locked mode, click-through on supported Zellij versions, focus-follows-mouse on, session serialization off, and auto-layout on. Every other `[zellij]` key is an override: set it in `config.toml` to pass the matching Zellij `options` flag, or leave it unset to use `~/.config/zellij/config.kdl` and Zellij's defaults. Work panes keep Zellij's default frames unless you configure otherwise; the sidebar pane is explicitly borderless so its hit-testing stays stable. tmux receives session, window, and server-scoped options as required by tmux itself; clipboard and rich-key handling are server-scoped in tmux. The backend mapping is in [internals/sidebar/multiplexers.md](../internals/sidebar/multiplexers.md).
 
 ### Resume
 
