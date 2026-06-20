@@ -190,20 +190,21 @@ impl MuxBackend for ZellijBackend {
         if !opts.focus
             && let Some(target) = &target
         {
-            let _ = self.focus_pane(target);
+            let _ = self.focus_pane(target, None);
         }
         Ok(())
     }
 
-    fn focus_pane(&self, pane: &PaneId) -> Result<()> {
+    fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
         ensure_pane_backend(pane, MuxName::Zellij)?;
         // Zellij 0.41+: `focus-pane-id <raw>`. The earlier `focus-pane-with-id`
         // name was removed; the stub that referenced it never reached a
         // running binary.
-        self.cmd()
-            .args(["action", "focus-pane-id", pane.raw()])
-            .run()
-            .map(|_| ())
+        let spec = match session {
+            Some(session) => self.zellij_action(session).arg("focus-pane-id"),
+            None => self.cmd().args(["action", "focus-pane-id"]),
+        };
+        spec.arg(pane.raw()).run().map(|_| ())
     }
 
     fn capture_pane(&self, pane: &PaneId, lines: Option<u16>, ansi: bool) -> Result<PaneCapture> {
@@ -527,7 +528,7 @@ impl MuxBackend for ZellijBackend {
             let result = match &restore {
                 Some(restore) => self
                     .go_to_tab_id(&opts.session_name, restore.tab_id)
-                    .and_then(|_| self.focus_pane(&restore.pane)),
+                    .and_then(|_| self.focus_pane(&restore.pane, Some(&opts.session_name))),
                 None => self.go_to_tab(&opts.session_name, 1),
             };
             if let Err(err) = result {

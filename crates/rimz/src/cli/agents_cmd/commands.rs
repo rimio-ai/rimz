@@ -291,7 +291,9 @@ pub(super) fn focus_agent(reference: String, globals: &GlobalFlags) -> Result<()
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("agent {} has no bound pane", agent_name(agent)))?;
     let backend = rimz::mux::backend_for(pane.pane_id.mux());
-    backend.focus_pane(&pane.pane_id).map_err(Into::into)
+    backend
+        .focus_pane(&pane.pane_id, Some(&workspace.session_name))
+        .map_err(Into::into)
 }
 
 pub(super) fn wait_agent(

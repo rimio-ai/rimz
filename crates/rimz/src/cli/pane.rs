@@ -380,14 +380,21 @@ fn focus(
     pane_process_start: Option<String>,
 ) -> Result<()> {
     let pane = PaneId::parse(&pane_id)?;
-    validate_pane_not_reused(backend, &pane, session_name, pane_process_start.as_deref())?;
-    backend.focus_pane(&pane).map_err(Into::into)
+    validate_pane_not_reused(
+        backend,
+        &pane,
+        session_name.as_deref(),
+        pane_process_start.as_deref(),
+    )?;
+    backend
+        .focus_pane(&pane, session_name.as_deref())
+        .map_err(Into::into)
 }
 
 fn validate_pane_not_reused(
     backend: &dyn MuxBackend,
     pane: &PaneId,
-    session_name: Option<String>,
+    session_name: Option<&str>,
     expected_start: Option<&str>,
 ) -> Result<()> {
     let Some(expected_start) = expected_start else {
@@ -395,7 +402,7 @@ fn validate_pane_not_reused(
     };
     let panes = backend
         .list_panes(PaneListOptions {
-            session_name,
+            session_name: session_name.map(str::to_owned),
             ..Default::default()
         })?
         .panes;

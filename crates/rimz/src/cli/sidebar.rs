@@ -742,7 +742,13 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
     else {
         bail!("session {session_name} has no sidebar pane to focus");
     };
-    let on_sidebar = focused_pane.as_ref() == Some(&sidebar);
+    // Zellij's `list-clients` keeps the client terminal id after an external
+    // `focus-pane-id`, while `list-panes` marks the sidebar focused.
+    let on_sidebar = focused_pane.as_ref() == Some(&sidebar)
+        || listing
+            .panes
+            .iter()
+            .any(|pane| pane.pane_id == sidebar && pane.is_focused);
     let target = if toggle && on_sidebar {
         let sidebar_tab = listing
             .panes
@@ -761,7 +767,9 @@ fn focus(globals: &GlobalFlags, session_name: Option<String>, toggle: bool) -> R
         Some(sidebar)
     };
     if let Some(target) = target {
-        backend.focus_pane(&target).context("focusing pane")?;
+        backend
+            .focus_pane(&target, Some(&session_name))
+            .context("focusing pane")?;
     }
     Ok(())
 }

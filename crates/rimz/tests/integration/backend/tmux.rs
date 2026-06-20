@@ -435,7 +435,7 @@ fn focus_pane_switches_the_containing_window() {
 
     server
         .backend
-        .focus_pane(&target.pane_id)
+        .focus_pane(&target.pane_id, None)
         .expect("focus_pane");
 
     assert_eq!(

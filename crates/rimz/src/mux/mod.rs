@@ -460,7 +460,11 @@ pub trait MuxBackend: Send + Sync {
         Ok(Vec::new())
     }
     fn split_pane(&self, opts: SplitPaneOptions) -> Result<()>;
-    fn focus_pane(&self, pane: &PaneId) -> Result<()>;
+    /// Focus `pane`. Zellij pane ids are session-scoped, so callers outside a
+    /// room pane pass `Some(session)`; in-pane callers may pass `None` and let
+    /// `ZELLIJ_SESSION_NAME` resolve it. tmux ignores the session because pane
+    /// ids are server-global.
+    fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()>;
     /// Register the chord that focuses the sidebar from any pane — the
     /// `[sidebar] focus_key` toggle. tmux binds it as a root-table `bind-key`
     /// whose command resolves the pressing session at keypress, so one

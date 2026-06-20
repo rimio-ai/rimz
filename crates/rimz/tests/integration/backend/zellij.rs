@@ -27,7 +27,7 @@ use rimz::mux::{
 };
 use tempfile::TempDir;
 
-use crate::common::{CommandTimeoutExt, ScrubSessionEnvExt};
+use crate::common::{CommandTimeoutExt, Env, ScrubSessionEnvExt};
 
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -448,6 +448,119 @@ fn open_sidebar_births_native_layout_and_template() {
             "tab {tab} focuses the sidebar; focus must land on the right terminal",
         );
     }
+}
+
+#[test]
+fn sidebar_focus_command_targets_session_from_outside_room() {
+    require_zellij!();
+
+    let xdg = scoped_runtime_dir();
+    let name = unique_session_name("focuscmd");
+    let _cleanup = ScopedSessionCleanup {
+        name: name.clone(),
+        xdg: xdg.path().to_path_buf(),
+    };
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let backend = ZellijBackend::with_runtime_dir(xdg.path());
+    backend
+        .open_sidebar(
+            &SidebarPaneOptions {
+                session_name: name.clone(),
+                workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-focuscmd")),
+                project_root: cwd.path().to_path_buf(),
+                cwd: cwd.path().to_path_buf(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(200)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_tabs: Vec::new(),
+                refresh_ms: None,
+            },
+            None,
+        )
+        .expect("open_sidebar");
+    wait_for_pane_count(xdg.path(), &name, 2);
+
+    let sidebar = raw_sidebar_pane(xdg.path(), &name);
+    let sidebar_id = sidebar
+        .get("id")
+        .and_then(|value| value.as_u64())
+        .expect("sidebar pane id");
+    let tab_id = sidebar
+        .get("tab_id")
+        .and_then(|value| value.as_u64())
+        .expect("sidebar tab id");
+    let work_id = list_panes_json(xdg.path(), &name)
+        .as_array()
+        .expect("pane array")
+        .iter()
+        .find_map(|pane| {
+            (pane.get("is_plugin").and_then(|value| value.as_bool()) == Some(false)
+                && pane.get("tab_id").and_then(|value| value.as_u64()) == Some(tab_id)
+                && pane.get("title").and_then(|value| value.as_str()) != Some("rimz-sidebar"))
+            .then(|| pane.get("id").and_then(|value| value.as_u64()))
+            .flatten()
+        })
+        .expect("work pane id");
+
+    let _client = AttachedClient::attach(xdg.path(), &name, 200, 50);
+    wait_for_attached_client(xdg.path(), &name);
+    let focused_work = scoped_zellij(xdg.path())
+        .args([
+            "--session",
+            &name,
+            "action",
+            "focus-pane-id",
+            &format!("terminal_{work_id}"),
+        ])
+        .bounded_status()
+        .expect("focus work pane");
+    assert!(focused_work.success(), "focus work pane failed");
+    assert_eq!(
+        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, work_id),
+        Some(work_id),
+        "fixture must start focused on the work pane",
+    );
+
+    let env = Env::new();
+    let run_focus_toggle = || {
+        let output = env
+            .rimz()
+            .env("XDG_RUNTIME_DIR", xdg.path())
+            .args([
+                "--mux",
+                "zellij",
+                "sidebar",
+                "focus",
+                "--toggle",
+                "--session-name",
+                &name,
+            ])
+            .bounded_output()
+            .expect("rimz sidebar focus");
+        assert!(
+            output.status.success(),
+            "rimz sidebar focus failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    };
+
+    run_focus_toggle();
+    assert_eq!(
+        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, sidebar_id),
+        Some(sidebar_id),
+        "out-of-session focus should land on the sidebar pane",
+    );
+
+    run_focus_toggle();
+    assert_eq!(
+        wait_for_focused_nonplugin_id_in_tab(xdg.path(), &name, tab_id, work_id),
+        Some(work_id),
+        "toggle should return focus to the work pane in the sidebar tab",
+    );
 }
 
 #[test]

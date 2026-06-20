@@ -211,7 +211,7 @@ impl MuxBackend for FakeBackend {
         Ok(())
     }
 
-    fn focus_pane(&self, _pane: &PaneId) -> rimz::mux::Result<()> {
+    fn focus_pane(&self, _pane: &PaneId, _session: Option<&str>) -> rimz::mux::Result<()> {
         Ok(())
     }
 

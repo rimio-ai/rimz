@@ -198,7 +198,9 @@ impl MuxBackend for TmuxBackend {
         spec.run().map(|_| ())
     }
 
-    fn focus_pane(&self, pane: &PaneId) -> Result<()> {
+    fn focus_pane(&self, pane: &PaneId, session: Option<&str>) -> Result<()> {
+        // tmux pane ids are server-global, so no session target is needed.
+        let _ = session;
         ensure_pane_backend(pane, MuxName::Tmux)?;
         // `select-pane` activates within its window only — it never switches
         // the session's current window — so a cross-window jump needs

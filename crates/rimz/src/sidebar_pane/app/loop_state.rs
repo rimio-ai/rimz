@@ -220,7 +220,7 @@ impl LoopState {
                     sent_at_ms,
                     now_ms,
                 ) {
-                    spawn_pane_focus(target.clone());
+                    spawn_pane_focus(target.clone(), &config.session_name);
                     self.record_focus_intent(config, target, anim_start, diag)?;
                 }
             }
@@ -339,6 +339,11 @@ impl LoopState {
             self.dirty = false;
         }
         if let Some(pane) = applied.focused {
+            // A jump fires the one-way focus command at the resolved pane. The
+            // highlight moves only when the derived baseline catches up on a
+            // later fold — late, never wrong — and any make-up filter clears
+            // as focus leaves the tab.
+            spawn_pane_focus(pane.clone(), &config.session_name);
             self.record_focus_intent(config, pane, anim_start, diag)?;
         }
         if let Some(row_id) = applied.mark_read {

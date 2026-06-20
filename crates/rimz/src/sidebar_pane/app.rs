@@ -419,13 +419,6 @@ fn apply_input(
         );
         render::draw_to_terminal_with_ui(terminal, snapshot, health.alert.as_ref(), ui)?;
     }
-    if let Some(pane) = &outcome.focus {
-        // A jump fires the one-way focus command at the resolved pane. The
-        // highlight moves only when the derived baseline catches up on a later
-        // fold — late, never wrong — and any make-up filter clears as focus
-        // leaves the tab (the redraw above repaints the reshaped body).
-        spawn_pane_focus(pane.clone());
-    }
     Ok(InputApply {
         painted: outcome.redraw,
         focused: outcome.focus,
@@ -591,10 +584,11 @@ fn reload_or_refetch(
 /// never a reason to block the UI. The command is the whole jump: no local
 /// state changes, and the highlight converges on the next data fold (the
 /// backstop tick or a ledger wakeup) once the mux reports the new focus.
-fn spawn_pane_focus(pane_id: PaneId) {
+fn spawn_pane_focus(pane_id: PaneId, session_name: &str) {
+    let session_name = session_name.to_owned();
     std::thread::spawn(move || {
         let backend = crate::mux::backend_for(pane_id.mux());
-        if let Err(err) = backend.focus_pane(&pane_id) {
+        if let Err(err) = backend.focus_pane(&pane_id, Some(&session_name)) {
             warn!(pane = %pane_id, error = %err, "sidebar pane focus failed");
         }
     });
