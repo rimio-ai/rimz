@@ -37,6 +37,27 @@ pub(crate) fn home_relative(path: &str) -> String {
     home_relative_to(home.as_ref().and_then(|home| home.to_str()), path)
 }
 
+/// Format bytes for human CLI reports with 1024-based units.
+pub(crate) fn fmt_bytes(bytes: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    if bytes < 1024 {
+        return format!("{bytes} B");
+    }
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if value.fract() == 0.0 {
+        format!("{value:.0} {}", UNITS[unit])
+    } else if value < 10.0 {
+        format!("{value:.1} {}", UNITS[unit])
+    } else {
+        format!("{value:.0} {}", UNITS[unit])
+    }
+}
+
 fn home_relative_to(home: Option<&str>, path: &str) -> String {
     let Some(home) = home.filter(|home| !home.is_empty()) else {
         return path.to_owned();
@@ -325,6 +346,15 @@ mod tests {
         assert_eq!(home_relative_to(home, "/srv/work"), "/srv/work");
         // No home → identity.
         assert_eq!(home_relative_to(None, "/home/dev/x"), "/home/dev/x");
+    }
+
+    #[test]
+    fn fmt_bytes_uses_binary_units_and_short_decimals() {
+        assert_eq!(fmt_bytes(1023), "1023 B");
+        assert_eq!(fmt_bytes(1024), "1 KB");
+        assert_eq!(fmt_bytes(13_018), "13 KB");
+        assert_eq!(fmt_bytes(1_503_238_553), "1.4 GB");
+        assert_eq!(fmt_bytes(18 * 1024 * 1024), "18 MB");
     }
 
     #[test]

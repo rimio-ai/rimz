@@ -1,12 +1,16 @@
 //! `rimz gc` — remove stale runtime liveness hints.
 
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use clap::Args;
 
+use super::render::{self, Table, cell, fmt_bytes, paint, palette};
+use super::spinner::Spinner;
 use super::{GlobalFlags, open_ledger};
+use rimz::ledger::event_log::RepairOutcome;
 use rimz::ledger::gc;
 use rimz::workspace::WorkspaceResolver;
 
@@ -21,7 +25,10 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
     if args.older_than.is_zero() {
         bail!("--older-than must be greater than zero");
     }
+    let spinner = Spinner::new("starting gc…");
+    spinner.set("sweeping runtime hints…");
     let report = gc::collect_runtime(args.older_than).context("collecting runtime garbage")?;
+    spinner.set("repairing ledger…");
     let (abandoned, messages_abandoned, repaired) =
         match WorkspaceResolver::resolve(".", globals.root.clone()) {
             Ok(workspace) => match open_ledger(&workspace) {
@@ -33,6 +40,7 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
                     let repaired = ledger
                         .repair_event_log()
                         .context("repairing the event log")?;
+                    spinner.set("abandoning dead items…");
                     let abandoned = ledger
                         .abandon_dead_owned_items(&workspace.session_name)
                         .context("abandoning dead owned feed items")?;
@@ -51,45 +59,47 @@ pub fn run(args: GcArgs, globals: &GlobalFlags) -> Result<()> {
             },
             Err(_) => (0, 0, None),
         };
+    spinner.set("pruning dead workspaces…");
     let prune = gc::prune_dead_workspaces().context("pruning dead workspaces")?;
-    let worktrees_swept = sweep_worktrees(globals);
-    #[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-    {
-        println!("gc complete");
-        println!("  older than    : {}s", args.older_than.as_secs());
-        println!("  feed abandoned: {abandoned}");
-        println!("  queue abandoned: {messages_abandoned}");
-        if let Some(repair) = repaired.filter(rimz::ledger::event_log::RepairOutcome::truncated) {
-            println!(
-                "  log repaired  : {} bytes cut ({} frames kept)",
-                repair.bytes_truncated, repair.frames_kept
-            );
-        }
-        println!("  runtime roots : {}", report.runtime_roots_scanned);
-        println!("  heartbeats    : {}", report.heartbeat_files_removed);
-        println!("  sidebar socks : {}", report.sidebar_sockets_removed);
-        println!("  sidecars      : {}", report.sidecar_files_removed);
-        println!("  dirs removed  : {}", report.dirs_removed);
-        println!("  bytes removed : {}", report.bytes_removed);
-        println!("  workspaces    : {}", prune.removed.len());
-        println!("  worktrees swept: {worktrees_swept}");
-        print_prune_removals(&prune);
-        if !prune.retained_unreadable.is_empty() {
-            println!(
-                "  retained      : {} (unreadable record + history)",
-                prune.retained_unreadable.len()
-            );
-        }
-    }
+    let worktrees = sweep_worktrees(globals, &spinner);
+    let outcome = GcOutcome {
+        older_than: args.older_than,
+        runtime: report,
+        repaired,
+        feed_abandoned: abandoned,
+        queue_abandoned: messages_abandoned,
+        prune,
+        worktrees,
+    };
+    drop(spinner);
+    let mut out = render::out();
+    render_report(&outcome, &mut out)?;
     Ok(())
 }
 
-fn sweep_worktrees(globals: &GlobalFlags) -> usize {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct GcOutcome {
+    older_than: Duration,
+    runtime: gc::GcReport,
+    repaired: Option<RepairOutcome>,
+    feed_abandoned: usize,
+    queue_abandoned: usize,
+    prune: gc::WorkspacePruneReport,
+    worktrees: WorktreeSweep,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct WorktreeSweep {
+    swept: usize,
+    bytes: u64,
+}
+
+fn sweep_worktrees(globals: &GlobalFlags, spinner: &Spinner) -> WorktreeSweep {
     let Ok(workspace) = WorkspaceResolver::resolve(".", globals.root.clone()) else {
-        return 0;
+        return WorktreeSweep::default();
     };
     if workspace.root_class != rimz::workspace::RootClass::Repo {
-        return 0;
+        return WorktreeSweep::default();
     }
     let live_cwds = match rimz::mux::auto_detect_backend(globals.mux) {
         Ok(mux) => rimz::mux::backend_for(mux)
@@ -98,29 +108,40 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
             .unwrap_or_default(),
         Err(_) => Vec::new(),
     };
+    spinner.set("scanning worktrees…");
     let entries = match rimz::worktree::list(&workspace.project_root) {
         Ok(entries) => entries,
         Err(err) => {
             tracing::debug!(error = %err, "worktree gc skipped");
-            return 0;
+            return WorktreeSweep::default();
         }
     };
-    let mut swept = 0;
-    for entry in entries {
-        if live_cwds
-            .iter()
-            .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
-            || entry.dirty
-            || entry.landed != Some(true)
-        {
-            continue;
-        }
+    let candidates: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| {
+            !live_cwds
+                .iter()
+                .any(|cwd| rimz::worktree::path_inside(cwd, &entry.path))
+                && !entry.dirty
+                && entry.landed == Some(true)
+        })
+        .collect();
+    let total = candidates.len();
+    let mut sweep = WorktreeSweep::default();
+    for (i, entry) in candidates.into_iter().enumerate() {
+        spinner.set(format!(
+            "removing worktree [{}/{}] {}",
+            i + 1,
+            total,
+            entry.name
+        ));
         let Some(marker) = rimz::worktree::read_marker_for_worktree(&entry.path)
             .ok()
             .flatten()
         else {
             continue;
         };
+        let bytes = rimz::storage::dir_size(&entry.path);
         match rimz::worktree::remove_marked_worktree(
             &workspace.project_root,
             &entry.path,
@@ -128,7 +149,8 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
             false,
         ) {
             Ok(branch) => {
-                swept += 1;
+                sweep.swept += 1;
+                sweep.bytes = sweep.bytes.saturating_add(bytes);
                 if branch == rimz::worktree::BranchDeletion::KeptUnmerged {
                     tracing::debug!(
                         path = %entry.path.display(),
@@ -144,10 +166,10 @@ fn sweep_worktrees(globals: &GlobalFlags) -> usize {
             ),
         }
     }
-    if swept > 0 {
+    if sweep.swept > 0 {
         let _ = rimz::worktree::prune(&workspace.project_root);
     }
-    swept
+    sweep
 }
 
 fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>) -> Vec<PathBuf> {
@@ -158,22 +180,163 @@ fn live_user_cwds<'a>(panes: impl IntoIterator<Item = &'a rimz::feed::PaneRef>) 
         .collect()
 }
 
-/// Render the per-workspace removal lines for the prune step.
-#[expect(clippy::print_stdout, reason = "user-facing maintenance report")]
-fn print_prune_removals(report: &gc::WorkspacePruneReport) {
-    for removed in &report.removed {
+fn render_report(out: &GcOutcome, w: &mut impl Write) -> io::Result<()> {
+    let reclaimed = out
+        .runtime
+        .bytes_removed
+        .saturating_add(out.prune.bytes_removed())
+        .saturating_add(out.worktrees.bytes);
+    let active = reclaimed > 0
+        || runtime_items(&out.runtime) > 0
+        || out.feed_abandoned > 0
+        || out.queue_abandoned > 0
+        || out.repaired.as_ref().is_some_and(RepairOutcome::truncated)
+        || !out.prune.removed.is_empty()
+        || !out.prune.retained_unreadable.is_empty()
+        || out.worktrees.swept > 0;
+
+    if active {
+        writeln!(
+            w,
+            "{}",
+            paint(
+                palette::ACCENT.bold(),
+                &format!("gc reclaimed {}", fmt_bytes(reclaimed))
+            )
+        )?;
+    } else {
+        writeln!(
+            w,
+            "{}",
+            paint(palette::ACCENT.bold(), "gc — nothing to reclaim")
+        )?;
+    }
+    writeln!(
+        w,
+        "  {}",
+        paint(
+            palette::MUTED,
+            &format!("older than {}s", out.older_than.as_secs())
+        )
+    )?;
+
+    let mut table = Table::new(["CLASS", "COUNT", "BYTES", "DETAIL"]).right(&[2]);
+    if out.worktrees.swept > 0 {
+        table.row([
+            cell("worktrees"),
+            cell(plural(out.worktrees.swept, "swept", "swept")),
+            cell(fmt_bytes(out.worktrees.bytes)),
+            cell("landed checkouts"),
+        ]);
+    }
+    if !out.prune.removed.is_empty() {
+        table.row([
+            cell("workspaces"),
+            cell(plural(out.prune.removed.len(), "pruned", "pruned")),
+            cell(fmt_bytes(out.prune.bytes_removed())),
+            cell("dead ledgers"),
+        ]);
+    }
+    let runtime_items = runtime_items(&out.runtime);
+    if runtime_items > 0 {
+        table.row([
+            cell("runtime"),
+            cell(plural(runtime_items, "item", "items")),
+            cell(fmt_bytes(out.runtime.bytes_removed)),
+            cell(runtime_breakdown(&out.runtime)),
+        ]);
+    }
+    if out.worktrees.swept > 0 || !out.prune.removed.is_empty() || runtime_items > 0 {
+        writeln!(w)?;
+        table.render(w)?;
+    }
+
+    if out.feed_abandoned > 0 {
+        report_note(w, &format!("feed abandoned: {}", out.feed_abandoned))?;
+    }
+    if out.queue_abandoned > 0 {
+        report_note(w, &format!("queue abandoned: {}", out.queue_abandoned))?;
+    }
+    if let Some(repair) = out.repaired.filter(RepairOutcome::truncated) {
+        report_note(
+            w,
+            &format!(
+                "log repaired: {} cut ({} frames kept)",
+                fmt_bytes(repair.bytes_truncated),
+                repair.frames_kept
+            ),
+        )?;
+    }
+    for removed in &out.prune.removed {
         match &removed.project_root {
-            Some(root) => println!(
-                "  removed       : {} {}",
-                removed.workspace_id,
-                root.display()
-            ),
-            None => println!(
-                "  removed       : {} (abandoned scaffold)",
-                removed.workspace_id
-            ),
+            Some(root) => report_note(
+                w,
+                &format!(
+                    "workspace pruned: {} {} ({})",
+                    removed.workspace_id,
+                    root.display(),
+                    fmt_bytes(removed.bytes)
+                ),
+            )?,
+            None => report_note(
+                w,
+                &format!(
+                    "workspace pruned: {} (abandoned scaffold, {})",
+                    removed.workspace_id,
+                    fmt_bytes(removed.bytes)
+                ),
+            )?,
         }
     }
+    if !out.prune.retained_unreadable.is_empty() {
+        report_note(
+            w,
+            &format!(
+                "retained: {} (unreadable record + history)",
+                out.prune.retained_unreadable.len()
+            ),
+        )?;
+    }
+    if out.runtime.runtime_roots_scanned > 0 {
+        report_note(
+            w,
+            &format!(
+                "scanned {} runtime roots",
+                out.runtime.runtime_roots_scanned
+            ),
+        )?;
+    }
+    Ok(())
+}
+
+fn report_note(w: &mut impl Write, text: &str) -> io::Result<()> {
+    writeln!(w, "  {}", paint(palette::MUTED, text))
+}
+
+fn runtime_items(report: &gc::GcReport) -> usize {
+    report.heartbeat_files_removed
+        + report.sidebar_sockets_removed
+        + report.sidecar_files_removed
+        + report.dirs_removed
+}
+
+fn runtime_breakdown(report: &gc::GcReport) -> String {
+    [
+        (report.heartbeat_files_removed, "heartbeat", "heartbeats"),
+        (report.sidebar_sockets_removed, "socket", "sockets"),
+        (report.sidecar_files_removed, "sidecar", "sidecars"),
+        (report.dirs_removed, "dir", "dirs"),
+    ]
+    .into_iter()
+    .filter(|(count, _, _)| *count > 0)
+    .map(|(count, singular, plural_label)| plural(count, singular, plural_label))
+    .collect::<Vec<_>>()
+    .join(" · ")
+}
+
+fn plural(count: usize, singular: &str, plural: &str) -> String {
+    let label = if count == 1 { singular } else { plural };
+    format!("{count} {label}")
 }
 
 fn parse_duration(raw: &str) -> std::result::Result<Duration, String> {
@@ -215,6 +378,62 @@ mod tests {
                 PathBuf::from("/repo-worktrees/demo")
             ]
         );
+    }
+
+    #[test]
+    fn render_report_groups_reclaimed_bytes_by_class() {
+        let outcome = GcOutcome {
+            older_than: Duration::from_secs(3600),
+            runtime: gc::GcReport {
+                runtime_roots_scanned: 2,
+                heartbeat_files_removed: 1,
+                sidecar_files_removed: 2,
+                sidebar_sockets_removed: 0,
+                dirs_removed: 1,
+                bytes_removed: 13_018,
+            },
+            repaired: None,
+            feed_abandoned: 3,
+            queue_abandoned: 0,
+            prune: gc::WorkspacePruneReport {
+                removed: vec![gc::RemovedWorkspace {
+                    workspace_id: rimz::WorkspaceId::parse("ws_0123456789abcdef01234567").unwrap(),
+                    reason: gc::PruneReason::ProjectRootGone,
+                    bytes: 2048,
+                    project_root: Some(PathBuf::from("/gone")),
+                }],
+                kept: 0,
+                retained_unreadable: Vec::new(),
+            },
+            worktrees: WorktreeSweep {
+                swept: 2,
+                bytes: 1_503_238_553,
+            },
+        };
+
+        let out = strip_report(&outcome);
+        assert!(out.contains("gc reclaimed"));
+        assert!(out.contains("worktrees"));
+        assert!(out.contains("workspaces"));
+        assert!(out.contains("runtime"));
+        assert!(out.contains("heartbeat"));
+        assert!(out.contains("sidecars"));
+        assert!(out.contains("1.4 GB"));
+    }
+
+    #[test]
+    fn render_report_names_empty_runs() {
+        let out = strip_report(&GcOutcome {
+            older_than: Duration::from_secs(3600),
+            ..GcOutcome::default()
+        });
+        assert!(out.contains("nothing to reclaim"));
+    }
+
+    fn strip_report(outcome: &GcOutcome) -> String {
+        let mut stream = anstream::StripStream::new(Vec::new());
+        render_report(outcome, &mut stream).expect("render report");
+        String::from_utf8(stream.into_inner()).expect("utf-8")
     }
 
     fn pane(raw: &str, command: Option<&str>, cwd: Option<&str>) -> rimz::feed::PaneRef {

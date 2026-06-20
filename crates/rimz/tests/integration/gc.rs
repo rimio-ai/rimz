@@ -30,8 +30,8 @@ fn gc_removes_stale_runtime_heartbeat() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("gc complete"))
-        .stdout(contains("heartbeats    : 1"));
+        .stdout(contains("reclaimed"))
+        .stdout(contains("heartbeat"));
 
     assert!(
         !heartbeat_path.exists(),
@@ -57,8 +57,8 @@ fn gc_removes_stale_sidebar_read_marks() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("gc complete"))
-        .stdout(contains("sidecars      : 1"));
+        .stdout(contains("reclaimed"))
+        .stdout(contains("sidecar"));
 
     assert!(
         !read_marks_path.exists(),
@@ -80,7 +80,7 @@ fn gc_prunes_dead_root_workspace() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("gc complete"));
+        .stdout(contains("reclaimed"));
 
     assert!(
         !gone_paths.root.exists(),
@@ -112,9 +112,9 @@ fn gc_reaps_scaffold_but_keeps_unreadable_history() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("gc complete"))
+        .stdout(contains("reclaimed"))
         .stdout(contains("abandoned scaffold"))
-        .stdout(contains("retained      : 1"));
+        .stdout(contains("retained"));
 
     assert!(!scaffold.exists(), "abandoned scaffold should be reaped");
     assert!(

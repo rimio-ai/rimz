@@ -465,7 +465,8 @@ fn gc_sweeps_merged_worktree() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("worktrees swept: 1"));
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 swept"));
 
     assert!(!path.exists(), "gc swept merged worktree");
     assert!(
@@ -519,7 +520,8 @@ fn gc_sweeps_merge_landed_worktree() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("worktrees swept: 1"));
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 swept"));
 
     assert!(!path.exists(), "gc swept merge-landed worktree");
     assert!(
@@ -582,7 +584,8 @@ fn gc_sweeps_worktree_whose_base_branch_landed_on_trunk() {
         .args(["gc", "--older-than", "1h"])
         .assert()
         .success()
-        .stdout(contains("worktrees swept: 1"));
+        .stdout(contains("worktrees"))
+        .stdout(contains("1 swept"));
 
     assert!(!path.exists(), "gc swept stale-base worktree");
     assert!(

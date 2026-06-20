@@ -22,6 +22,7 @@ pub enum PruneReason {
 pub struct RemovedWorkspace {
     pub workspace_id: WorkspaceId,
     pub reason: PruneReason,
+    pub bytes: u64,
     /// The recorded project root, when the record was readable.
     pub project_root: Option<PathBuf>,
 }
@@ -33,6 +34,14 @@ pub struct WorkspacePruneReport {
     /// Dirs with an unreadable record that still hold history, kept for the
     /// operator to inspect rather than silently deleted: `(id, error)`.
     pub retained_unreadable: Vec<(WorkspaceId, String)>,
+}
+
+impl WorkspacePruneReport {
+    pub fn bytes_removed(&self) -> u64 {
+        self.removed
+            .iter()
+            .fold(0_u64, |total, removed| total.saturating_add(removed.bytes))
+    }
 }
 
 /// A workspace is removed when it is *provably dead*:
@@ -82,10 +91,11 @@ pub(crate) fn prune_dead_workspaces_under(
             Verdict::Keep => report.kept += 1,
             Verdict::Retain(err) => report.retained_unreadable.push((workspace_id, err)),
             Verdict::Remove(reason, project_root) => {
-                remove_workspace(&path, &workspace_id, runtime_rimz_root)?;
+                let bytes = remove_workspace(&path, &workspace_id, runtime_rimz_root)?;
                 report.removed.push(RemovedWorkspace {
                     workspace_id,
                     reason,
+                    bytes,
                     project_root,
                 });
             }
@@ -125,9 +135,13 @@ fn remove_workspace(
     state_dir: &Path,
     workspace_id: &WorkspaceId,
     runtime_rimz_root: &Path,
-) -> Result<()> {
+) -> Result<u64> {
+    let runtime_dir = runtime_rimz_root.join(workspace_id.as_str());
+    let bytes =
+        crate::storage::dir_size(state_dir).saturating_add(crate::storage::dir_size(&runtime_dir));
     remove_dir_all_if_exists(state_dir)?;
-    remove_dir_all_if_exists(&runtime_rimz_root.join(workspace_id.as_str()))
+    remove_dir_all_if_exists(&runtime_dir)?;
+    Ok(bytes)
 }
 
 fn remove_dir_all_if_exists(path: &Path) -> Result<()> {
@@ -187,6 +201,14 @@ mod tests {
         let reasons: Vec<_> = report.removed.iter().map(|r| r.reason).collect();
         assert!(reasons.contains(&PruneReason::ProjectRootGone));
         assert!(reasons.contains(&PruneReason::AbandonedScaffold));
+        assert!(
+            report
+                .removed
+                .iter()
+                .find(|removed| removed.reason == PruneReason::ProjectRootGone)
+                .is_some_and(|removed| removed.bytes > 0),
+            "dead-root removal reports reclaimed bytes"
+        );
 
         assert!(workspaces.join(alive_id.as_str()).exists());
         assert!(!workspaces.join(gone_id.as_str()).exists());

@@ -36,6 +36,7 @@ pub(super) struct DoctorReport {
     pub(super) loop_tasks: LoopTasks,
     pub(super) remote_control: RemoteControl,
     pub(super) rooms: Probe<Rooms>,
+    pub(super) storage: Storage,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(super) protocols: Option<Protocols>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -279,6 +280,20 @@ pub(super) struct Room {
 pub(super) struct RoomOverlap {
     pub(super) a: String,
     pub(super) b: String,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct Storage {
+    pub(super) total_bytes: u64,
+    pub(super) roots: Vec<StorageRootView>,
+}
+
+#[derive(Debug, Serialize)]
+pub(super) struct StorageRootView {
+    pub(super) label: &'static str,
+    pub(super) path: String,
+    pub(super) bytes: u64,
+    pub(super) present: bool,
 }
 
 #[derive(Debug, Serialize)]

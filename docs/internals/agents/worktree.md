@@ -53,4 +53,4 @@ The automatic path deletes a branch only after proving its work landed on the li
 
 ## `rimz gc`
 
-`rimz gc` sweeps clean, marked, content-landed worktrees in the current repo when no live user pane cwd sits inside them, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.
+`rimz gc` sweeps clean, marked, content-landed worktrees in the current repo when no live user pane cwd sits inside them, measures the checkout bytes it reclaims, then runs `git worktree prune`. `Fresh`-based worktrees compare against `origin/...`, so unfetched merges keep them until a fetch updates the remote-tracking base.

@@ -26,6 +26,7 @@ use serde::Serialize;
 
 use super::GlobalFlags;
 use crate::cli::render;
+use crate::cli::spinner::{SPINNER_FRAMES, SPINNER_TICK};
 use rimz::RuntimePaths;
 use rimz::agents::AgentAdapter;
 use rimz::agents::pricing;
@@ -55,8 +56,6 @@ const MAX_MODELS: usize = 6;
 /// A two-column body (models, insights) needs at least this much panel width;
 /// narrower terminals stack to one column.
 const TWO_COL_MIN: usize = 56;
-const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-const SPINNER_TICK: Duration = Duration::from_millis(80);
 const SPINNER_MIN_AGE: Duration = Duration::from_millis(150);
 const PROGRESS_BAR_WIDTH: usize = 20;
 const SPINNER_CLEAR_COLS: usize = 120;

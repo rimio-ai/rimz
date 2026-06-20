@@ -38,6 +38,23 @@ pub(super) fn collect_terminal() -> model::Terminal {
     }
 }
 
+pub(super) fn collect_storage() -> model::Storage {
+    let storage = rimz::storage::measure();
+    model::Storage {
+        total_bytes: storage.total_bytes(),
+        roots: storage
+            .roots
+            .into_iter()
+            .map(|root| model::StorageRootView {
+                label: root.kind.label(),
+                path: root.path.display().to_string(),
+                bytes: root.bytes,
+                present: root.present,
+            })
+            .collect(),
+    }
+}
+
 /// The multiplexer section: which backend Rimz detected, its version and floor,
 /// and — once a workspace resolves — its session, socket, duplicate-session, and
 /// presence health.

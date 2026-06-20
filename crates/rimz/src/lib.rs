@@ -41,6 +41,7 @@ pub mod schema;
 pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
+pub mod storage;
 pub mod target;
 #[cfg(feature = "testkit")]
 #[doc(hidden)]

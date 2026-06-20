@@ -99,7 +99,7 @@ rimz gc [--older-than <DURATION>]
 
 `--hard` also removes the agent carryover. A reset without `--hard` keeps carryover for history and audit, but the rebuilt room still starts empty.
 
-`gc` removes stale runtime state older than `--older-than`, abandons pending feed items whose owner process has exited, abandons queued messages for missing agent sessions, repairs a corrupt event-log tail when needed, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed and have no live user pane inside them.
+`gc` removes stale runtime state older than `--older-than`, abandons pending feed items whose owner process has exited, abandons queued messages for missing agent sessions, repairs a corrupt event-log tail when needed, prunes provably dead workspace ledgers, and sweeps clean Rimz-marked worktrees whose work has landed and have no live user pane inside them. It prints live progress while sweeping and reports reclaimed disk grouped as runtime hints, dead workspace ledgers, and landed worktrees.
 
 `--older-than <DURATION>` defaults to `24h` and accepts `s`, `m`, and `h` units, such as `30s`, `5m`, or `1h`.
 

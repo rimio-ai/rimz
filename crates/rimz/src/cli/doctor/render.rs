@@ -8,14 +8,17 @@ use std::io::{self, Write};
 
 use jiff::Timestamp;
 
-use crate::cli::render::{Cell, KeyVals, Table, cell, home_relative, paint, palette, status};
+use crate::cli::render::{
+    Cell, KeyVals, Table, cell, fmt_bytes, home_relative, paint, palette, status,
+};
 use rimz::feed::AgentStatus;
 use rimz::schema::diag::DiagSeverity;
 use rimz::trust::TrustState;
 
 use super::model::{
     AgentCoverage, AgentRollup, Capabilities, Diagnostics, DoctorReport, HookStatus, LoopTasks,
-    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Terminal, Trust, Version, Workspace,
+    Mux, Presence, Probe, RemoteControl, Rooms, SessionHealth, Storage, Terminal, Trust, Version,
+    Workspace,
 };
 
 /// A section verdict: the glyph and palette tone it renders with.
@@ -82,6 +85,7 @@ pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Res
     render_loop(w, &report.loop_tasks)?;
     render_remote_control(w, &report.remote_control)?;
     render_rooms(w, &report.rooms)?;
+    render_storage(w, &report.storage)?;
 
     if let Some(protocols) = &report.protocols {
         section(w, "PROTOCOLS")?;
@@ -596,6 +600,37 @@ fn render_rooms(w: &mut impl Write, rooms: &Probe<Rooms>) -> io::Result<()> {
     Ok(())
 }
 
+fn render_storage(w: &mut impl Write, storage: &Storage) -> io::Result<()> {
+    section(w, "STORAGE")?;
+    writeln!(
+        w,
+        "  {}",
+        paint(
+            palette::MUTED,
+            &format!("rimz on disk: {}", fmt_bytes(storage.total_bytes))
+        )
+    )?;
+    let mut table = Table::new(["", "AREA", "SIZE", "PATH"]).right(&[2]);
+    for root in &storage.roots {
+        let size = if root.present {
+            fmt_bytes(root.bytes)
+        } else {
+            "-".to_owned()
+        };
+        table.row([
+            badge(Health::Neutral),
+            cell(root.label),
+            cell(size).dash(),
+            cell(home_relative(&root.path)).fg(if root.present {
+                palette::BODY
+            } else {
+                palette::FAINT
+            }),
+        ]);
+    }
+    table.render(w)
+}
+
 fn render_trust(w: &mut impl Write, trust: &Probe<Trust>) -> io::Result<()> {
     section(w, "TRUST")?;
     let mut kv = KeyVals::new().indent(2);
@@ -785,7 +820,8 @@ fn age_label(secs: u64) -> String {
 mod tests {
     use super::*;
     use crate::cli::doctor::model::{
-        AgentCoverage, HookRow, LoopTaskRow, PartialConcern, RemoteAgent, UnsupportedConcern,
+        AgentCoverage, HookRow, LoopTaskRow, PartialConcern, RemoteAgent, StorageRootView,
+        UnsupportedConcern,
     };
 
     fn strip(
@@ -805,6 +841,13 @@ mod tests {
             term: Some("xterm-ghostty".to_owned()),
             terminfo_truecolor: true,
             fix: None,
+        }
+    }
+
+    fn storage_fixture() -> Storage {
+        Storage {
+            total_bytes: 0,
+            roots: Vec::new(),
         }
     }
 
@@ -863,6 +906,7 @@ mod tests {
                 rooms: Vec::new(),
                 overlaps: Vec::new(),
             }),
+            storage: storage_fixture(),
             protocols: None,
             trust: None,
             resolver_heartbeats: None,
@@ -916,6 +960,7 @@ mod tests {
                 rooms: Vec::new(),
                 overlaps: Vec::new(),
             }),
+            storage: storage_fixture(),
             protocols: None,
             trust: None,
             resolver_heartbeats: None,
@@ -986,6 +1031,38 @@ mod tests {
         let out = strip(|w| render_loop(w, &LoopTasks { tasks: Vec::new() }));
         assert!(out.contains("LOOP TASKS"), "{out}");
         assert!(out.contains("none configured"), "{out}");
+    }
+
+    #[test]
+    fn storage_section_renders_total_and_roots() {
+        let storage = Storage {
+            total_bytes: 13_018,
+            roots: vec![
+                StorageRootView {
+                    label: "state",
+                    path: "/home/you/.local/state/rimz".to_owned(),
+                    bytes: 13_018,
+                    present: true,
+                },
+                StorageRootView {
+                    label: "runtime",
+                    path: "/run/user/1000/rimz".to_owned(),
+                    bytes: 0,
+                    present: false,
+                },
+            ],
+        };
+        let out = strip(|w| render_storage(w, &storage));
+        assert!(out.contains("STORAGE"), "section title:\n{out}");
+        assert!(out.contains("rimz on disk: 13 KB"), "total:\n{out}");
+        assert!(
+            out.contains("state") && out.contains("13 KB") && out.contains(".local/state/rimz"),
+            "present root row:\n{out}"
+        );
+        assert!(
+            out.contains("runtime") && out.contains("-") && out.contains("/run/user/1000/rimz"),
+            "absent root row:\n{out}"
+        );
     }
 
     #[test]

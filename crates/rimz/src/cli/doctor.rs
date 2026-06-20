@@ -60,6 +60,7 @@ fn collect_report(globals: &GlobalFlags, audit: bool) -> DoctorReport {
         loop_tasks: collect_loop(),
         remote_control: runtime::collect_remote_control(),
         rooms: runtime::collect_rooms(ws),
+        storage: runtime::collect_storage(),
         protocols: ws.map(protocol::collect_protocols),
         trust: ws.map(agents::collect_trust),
         resolver_heartbeats: ws.map(agents::collect_unauthorized_resolvers),

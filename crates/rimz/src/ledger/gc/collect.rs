@@ -318,9 +318,20 @@ fn remove_dir_if_empty(path: &Path, report: &mut GcReport) -> Result<()> {
     if entries.next().is_some() {
         return Ok(());
     }
+    let bytes = match fs::symlink_metadata(path) {
+        Ok(meta) => meta.len(),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => 0,
+        Err(source) => {
+            return Err(GcErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
     match fs::remove_dir(path) {
         Ok(()) => {
             report.dirs_removed += 1;
+            report.bytes_removed = report.bytes_removed.saturating_add(bytes);
             Ok(())
         }
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(()),

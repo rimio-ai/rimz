@@ -31,6 +31,7 @@ mod send;
 mod session_record;
 mod setup;
 mod sidebar;
+mod spinner;
 mod start_notice;
 mod stats;
 mod statusline;
