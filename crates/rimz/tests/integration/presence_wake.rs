@@ -8,8 +8,8 @@
 //! `PanesChanged` nudge.
 //!
 //! The producer contract (`rimz sidebar snapshot`): with a fresh stamp, a
-//! pane cache far past the poll TTL is served with **zero** mux forks — the
-//! layer's whole point — and without the stamp the same cache is stale and
+//! pane cache far past the poll TTL is served without a `list-panes` fork —
+//! the layer's whole point — and without the stamp the same cache is stale and
 //! the producer forks `list-panes` exactly as before the layer landed.
 //!
 //! No live Zellij needed; the `zellij-trace` shim stands in for every mux
@@ -301,6 +301,12 @@ impl WakeEnv {
             .unwrap_or(0);
         assert_eq!(lines, 0, "the wake path must never fork the mux client");
     }
+
+    fn assert_no_list_panes_fork(&self, context: &str) {
+        let trace = self.trace_lines();
+        let forked = trace.iter().any(|line| line.contains("list-panes"));
+        assert!(!forked, "{context} must avoid zellij list-panes: {trace:?}");
+    }
 }
 
 /// A datagram never arrives on `recv`: the wake subprocess has already exited,
@@ -478,11 +484,7 @@ fn snapshot_producer_uses_topology_cache_without_list_panes_fork() {
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
-    assert_eq!(
-        env.trace_lines(),
-        Vec::<String>::new(),
-        "fresh topology cache must avoid zellij list-panes",
-    );
+    env.assert_no_list_panes_fork("fresh topology cache");
     let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
         .expect("snapshot cache published from topology");
     assert_eq!(
@@ -556,11 +558,7 @@ fn pane_closed_pruned_topology_publishes_without_a_list_panes_fork() {
         "snapshot failed: stderr={}",
         String::from_utf8_lossy(&output.stderr),
     );
-    assert_eq!(
-        env.trace_lines(),
-        Vec::<String>::new(),
-        "fresh PaneClosed-pruned topology must avoid zellij list-panes",
-    );
+    env.assert_no_list_panes_fork("fresh PaneClosed-pruned topology");
     let cached = read_snapshot_cache(&env.runtime.root.join("snapshot.json"), SESSION_NAME)
         .expect("snapshot cache published from pruned topology");
     let panes = cached.to_pane_refs();
