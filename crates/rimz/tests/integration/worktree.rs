@@ -474,6 +474,73 @@ fn gc_sweeps_merge_landed_worktree() {
     );
 }
 
+#[test]
+fn gc_sweeps_worktree_whose_base_branch_landed_on_trunk() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    git(&env.project_root, &["branch", "feature"]);
+    git(&env.project_root, &["checkout", "feature"]);
+    commit_file(&env.project_root, "base.txt", "base\n", "base");
+    let feature_tip = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    git(&env.project_root, &["checkout", "main"]);
+    commit_file(&env.project_root, "trunk.txt", "trunk\n", "trunk");
+
+    env.rimz()
+        .args(["worktree", "new", "demo", "--base", "feature"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(marker.base_branch.as_deref(), Some("feature"));
+    assert_eq!(marker.base_ref, feature_tip);
+    commit_file(&path, "work.txt", "work\n", "work");
+    let demo_tip = git_stdout(&path, &["rev-parse", "HEAD"]);
+
+    git(&env.project_root, &["cherry-pick", feature_tip.as_str()]);
+    git(&env.project_root, &["cherry-pick", demo_tip.as_str()]);
+    commit_file(&env.project_root, "extra.txt", "extra\n", "extra");
+    assert!(
+        !git_succeeds(
+            &env.project_root,
+            &["merge-base", "--is-ancestor", "feature", "main"]
+        ),
+        "feature landed by patch, not by ancestry"
+    );
+    assert_ne!(
+        git_stdout(&path, &["rev-list", "--count", "main..HEAD"]),
+        "0",
+        "the fixture remains ahead by ancestry"
+    );
+    assert_eq!(
+        rimz::worktree::status(&path, &marker)
+            .expect("status")
+            .landed,
+        rimz::worktree::LandedVerdict::Landed,
+        "worktree content is landed on trunk once its stale base branch is superseded"
+    );
+
+    env.rimz()
+        .args(["gc", "--older-than", "1h"])
+        .assert()
+        .success()
+        .stdout(contains("worktrees swept: 1"));
+
+    assert!(!path.exists(), "gc swept stale-base worktree");
+    assert!(
+        !branch_exists(&env.project_root, "demo"),
+        "gc force-deleted content-landed branch"
+    );
+    assert!(
+        branch_exists(&env.project_root, "feature"),
+        "superseded base branch remains"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn auto_remove_force_deletes_branch_merged_into_explicit_base() {
@@ -566,6 +633,16 @@ fn git(cwd: &Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr),
     );
+}
+
+fn git_succeeds(cwd: &Path, args: &[&str]) -> bool {
+    Command::new("git")
+        .args(args)
+        .current_dir(cwd)
+        .output()
+        .expect("spawn git")
+        .status
+        .success()
 }
 
 fn git_stdout(cwd: &Path, args: &[&str]) -> String {

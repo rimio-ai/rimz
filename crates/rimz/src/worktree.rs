@@ -474,25 +474,44 @@ fn origin_head(repo_root: &Path) -> Option<String> {
 }
 
 fn comparison_ref(cwd: &Path, marker: &WorktreeMarker) -> Option<String> {
+    let trunk = trunk_ref(cwd);
     if let Some(base_branch) = marker.base_branch.as_deref()
         && ref_resolves(cwd, base_branch)
+        && !base_branch_superseded(cwd, base_branch, trunk.as_deref())
     {
         return Some(base_branch.to_owned());
     }
+    trunk.or_else(|| {
+        base_ref_is_snapshot_commit(cwd, &marker.base_ref).then(|| marker.base_ref.clone())
+    })
+}
+
+/// The repository trunk for landed comparisons: the first of `main`, `master`,
+/// or the `origin/HEAD` default branch that resolves in this worktree.
+fn trunk_ref(cwd: &Path) -> Option<String> {
     for candidate in ["main", "master"] {
         if ref_resolves(cwd, candidate) {
             return Some(candidate.to_owned());
         }
     }
-    if let Some(remote_head) = origin_head(cwd)
-        && ref_resolves(cwd, &remote_head)
-    {
-        return Some(remote_head);
-    }
-    if base_ref_is_snapshot_commit(cwd, &marker.base_ref) {
-        return Some(marker.base_ref.clone());
-    }
-    None
+    origin_head(cwd).filter(|head| ref_resolves(cwd, head))
+}
+
+/// A base branch is a live destination until its own commits have landed on the
+/// trunk. Once a diverged base branch is itself content-landed there, the trunk
+/// is the authoritative comparison for work built on top of it. An ancestor base
+/// branch stays the comparison.
+fn base_branch_superseded(cwd: &Path, base_branch: &str, trunk: Option<&str>) -> bool {
+    let Some(trunk) = trunk else {
+        return false;
+    };
+    base_branch != trunk
+        && !is_ancestor(cwd, base_branch, trunk)
+        && content_landed(cwd, trunk, base_branch) == LandedVerdict::Landed
+}
+
+fn is_ancestor(cwd: &Path, ancestor: &str, descendant: &str) -> bool {
+    git_run(cwd, ["merge-base", "--is-ancestor", ancestor, descendant]).is_ok()
 }
 
 fn landed_json(verdict: LandedVerdict) -> Option<bool> {
