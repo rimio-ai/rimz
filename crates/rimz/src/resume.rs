@@ -6,7 +6,7 @@
 //! remembers them. This module reads that memory (the audit rollup, which keeps
 //! the dead-process agents the runtime projection would expel) and plans one
 //! `#channel` tab per worktree, with one resume pane per prior root agent, so
-//! the next birth comes up where the user left off instead of empty.
+//! the next birth can recover where the user left off instead of empty.
 //!
 //! Pure over its inputs: the caller supplies the rollup, the set of cleanly
 //! ended sessions, and a worktree-exists predicate, so every filtering rule is
@@ -170,7 +170,7 @@ pub fn plan_resume(
             tab.panes.push(command);
         } else {
             plan.tabs.push(ResumeTab {
-                label: channel_label(agent.worktree_branch.as_deref(), &cwd),
+                label: channel_label(&cwd),
                 cwd,
                 panes: vec![command],
             });
@@ -219,9 +219,18 @@ pub fn channel_short(branch: Option<&str>, worktree: &Path) -> String {
         .unwrap_or_else(|| "agent".to_owned())
 }
 
-/// A channel tab label, matching live worktree-launch tabs.
-pub fn channel_label(branch: Option<&str>, worktree: &Path) -> String {
-    format!("#{}", channel_short(branch, worktree))
+/// A channel tab label from the worktree directory name, matching live
+/// worktree-launch tabs. A main-repo non-worktree agent falls back to
+/// `#<repo-name>` rather than the live `kind:repo` title because resume groups by
+/// cwd.
+pub fn channel_label(worktree: &Path) -> String {
+    format!(
+        "#{}",
+        worktree
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "agent".to_owned())
+    )
 }
 
 #[cfg(test)]
@@ -358,12 +367,12 @@ mod tests {
         assert!(plan.skipped.is_empty());
         assert_eq!(plan.tabs.len(), 2);
         // Most-recently-active leads (the focus target).
-        assert_eq!(plan.tabs[0].label, "#feature-migration");
+        assert_eq!(plan.tabs[0].label, "#qe-feature");
         // Wrapper argv: the pane funnels through `rimz agents exec`, which
         // injects launch env before spawning the adapter's resume argv.
         assert_eq!(plan.tabs[0].panes, vec![exec_resume("claude", "a1")]);
         assert_eq!(plan.tabs[0].cwd, PathBuf::from("/code/qe-feature"));
-        assert_eq!(plan.tabs[1].label, "#main");
+        assert_eq!(plan.tabs[1].label, "#query-engine");
         assert_eq!(plan.tabs[1].panes, vec![exec_resume("codex", "c1")]);
     }
 
@@ -542,7 +551,7 @@ mod tests {
             Path::new("/bin/rimz"),
         );
         assert_eq!(plan.tabs.len(), 1);
-        assert_eq!(plan.tabs[0].label, "#main");
+        assert_eq!(plan.tabs[0].label, "#query-engine");
         assert_eq!(plan.tabs[0].panes.len(), 2);
     }
 

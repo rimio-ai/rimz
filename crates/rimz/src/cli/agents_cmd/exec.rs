@@ -56,7 +56,6 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         }
     }
     reset_cleanup_signal_flag();
-    reset_term_signal_flag();
     install_cleanup_signal_handlers().context("installing cleanup signal handlers")?;
     let mut command = Command::new(program);
     command.args(rest);
@@ -92,14 +91,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
             "rimz: worktree cleanup did not complete: {err}"
         );
     }
-    if should_record_end_trace(&args, term_signal_received()) {
+    let session_name = run_context
+        .as_ref()
+        .map(|context| context.session_name.as_str())
+        .unwrap_or(&workspace.session_name);
+    if should_record_end_trace(&args) && room_is_live(globals, session_name) {
         record_own_agent_end_trace(&workspace, &args);
     }
     if args.close_pane_on_exit {
-        let session_name = run_context
-            .as_ref()
-            .map(|context| context.session_name.as_str())
-            .unwrap_or(&workspace.session_name);
         close_own_pane(globals, session_name);
     }
     std::process::exit(outcome.status.code().unwrap_or(1));
@@ -113,8 +112,8 @@ pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
         && !args.close_pane_on_exit
 }
 
-pub(super) fn should_record_end_trace(args: &ExecArgs, term_seen: bool) -> bool {
-    !args.exit_on_run_completion && !term_seen
+pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
+    !args.exit_on_run_completion
 }
 
 #[cfg(unix)]
@@ -540,24 +539,12 @@ fn reset_cleanup_signal_flag() {
     cleanup_signal_flag().store(false, Ordering::SeqCst);
 }
 
-fn reset_term_signal_flag() {
-    term_signal_flag().store(false, Ordering::SeqCst);
-}
-
 fn cleanup_signal_received() -> bool {
     cleanup_signal_flag().load(Ordering::SeqCst)
 }
 
-fn term_signal_received() -> bool {
-    term_signal_flag().load(Ordering::SeqCst)
-}
-
 fn cleanup_signal_flag() -> &'static Arc<AtomicBool> {
     CLEANUP_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
-}
-
-fn term_signal_flag() -> &'static Arc<AtomicBool> {
-    TERM_SIGNAL_RECEIVED.get_or_init(|| Arc::new(AtomicBool::new(false)))
 }
 
 #[cfg(unix)]
@@ -567,7 +554,6 @@ fn install_cleanup_signal_handlers() -> Result<()> {
     for signal in [SIGHUP, SIGTERM] {
         signal_hook::flag::register(signal, cleanup_signal_flag().clone())?;
     }
-    signal_hook::flag::register(SIGTERM, term_signal_flag().clone())?;
     Ok(())
 }
 
@@ -596,6 +582,14 @@ fn signal_child(pid: u32, signal: ChildSignal) {
 
 #[cfg(not(unix))]
 fn signal_child(_pid: u32, _signal: ChildSignal) {}
+
+fn room_is_live(globals: &GlobalFlags, session_name: &str) -> bool {
+    let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {
+        return false;
+    };
+    let backend = rimz::mux::backend_for(mux);
+    crate::cli::resume::session_is_healthy_live(backend.as_ref(), session_name)
+}
 
 fn close_own_pane(globals: &GlobalFlags, session_name: &str) {
     let Ok(mux) = rimz::mux::auto_detect_backend(globals.mux) else {

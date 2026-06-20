@@ -154,7 +154,7 @@ fn two_same_kind_agents_in_one_worktree_each_resume_their_own_pane() {
         1,
         "two concurrent same-kind agents in one worktree share one resume tab"
     );
-    assert_eq!(plan.tabs[0].label, "#main");
+    assert_eq!(plan.tabs[0].label, "#shared");
     assert_eq!(plan.tabs[0].panes.len(), 2);
 }
 

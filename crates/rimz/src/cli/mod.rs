@@ -448,7 +448,7 @@ struct Cli {
     #[clap(flatten)]
     attach: AttachFlags,
 
-    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    /// Come up empty: skip recovering prior agents when the session is reborn.
     #[arg(long)]
     no_resume: bool,
     /// Override the sidebar render cadence for this launch.
@@ -570,7 +570,7 @@ pub struct StartArgs {
     /// Path to use as the workspace cwd.
     #[arg(default_value = ".")]
     pub path: PathBuf,
-    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    /// Come up empty: skip recovering prior agents when the session is reborn.
     #[arg(long)]
     pub no_resume: bool,
     /// Override the sidebar render cadence for this launch.
@@ -611,7 +611,7 @@ pub struct AttachArgs {
     /// Workspace session name (omit to use the cwd's workspace).
     #[arg(value_name = "SESSION")]
     workspace: Option<String>,
-    /// Come up empty: skip re-seeding prior agents when the session is reborn.
+    /// Come up empty: skip recovering prior agents when the session is reborn.
     #[arg(long)]
     pub no_resume: bool,
     /// Override the sidebar render cadence for this launch.
@@ -723,22 +723,17 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         name: view.name.clone(),
         hosts: view.hosts.clone(),
     });
-    // Plan which prior agents the reborn room re-seeds, from the durable rollup.
-    // Empty on a healthy reattach (the agents are still alive), when nothing is
-    // recoverable, or when the user opted out — then the birth is exactly today's
-    // bare working room.
-    let resume_plan = if was_live {
-        rimz::resume::ResumePlan::default()
-    } else {
-        let plan = plan_room_resume(
-            &workspace.workspace_id,
-            &workspace.session_name,
-            &machine_config.resume,
-            args.no_resume,
-        );
-        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
-        plan
-    };
+    // Plan which prior agents the reborn room can recover, from the durable
+    // rollup. Empty on a healthy reattach (the agents are still alive), when
+    // nothing is recoverable, or when the user opted out — then the birth is
+    // exactly today's bare working room.
+    let resume_plan = resume_plan_for_birth(
+        was_live,
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &machine_config.resume,
+        args.no_resume,
+    )?;
     launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs);
     maybe_launch_remote_control(
         backend.as_ref(),
@@ -749,7 +744,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // Authoritative gate before the resurrecting `attach --create`: rebirth an
     // inspected stale/serialized room, and on one that cannot self-heal or
     // cannot be inspected, offer a reset (interactive) or fail fast with the fix
-    // (non-interactive). The reborn room is seeded with the resume tabs.
+    // (non-interactive). Accepted recovery seeds the reborn room with resume tabs.
     gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs)?;
     report_resume(&resume_plan);
     ensure_presence_plugin(
@@ -863,18 +858,13 @@ fn attach_cwd(
         detected_size,
     })?;
     register_focus_key(backend.as_ref(), &machine_config);
-    let resume_plan = if was_live {
-        rimz::resume::ResumePlan::default()
-    } else {
-        let plan = plan_room_resume(
-            &workspace.workspace_id,
-            &workspace.session_name,
-            &machine_config.resume,
-            no_resume,
-        );
-        record_rebirth_boundary(&workspace.workspace_id, &workspace.session_name);
-        plan
-    };
+    let resume_plan = resume_plan_for_birth(
+        was_live,
+        &workspace.workspace_id,
+        &workspace.session_name,
+        &machine_config.resume,
+        no_resume,
+    )?;
     let room = RoomTarget {
         workspace_id: &workspace.workspace_id,
         project_root: &workspace.project_root,
@@ -934,18 +924,13 @@ fn attach_named(
                 detected_size,
             })?;
             register_focus_key(backend.as_ref(), &machine_config);
-            let resume_plan = if was_live {
-                rimz::resume::ResumePlan::default()
-            } else {
-                let plan = plan_room_resume(
-                    &record.workspace_id,
-                    &record.session_name,
-                    &machine_config.resume,
-                    no_resume,
-                );
-                record_rebirth_boundary(&record.workspace_id, &record.session_name);
-                plan
-            };
+            let resume_plan = resume_plan_for_birth(
+                was_live,
+                &record.workspace_id,
+                &record.session_name,
+                &machine_config.resume,
+                no_resume,
+            )?;
             let room = RoomTarget {
                 workspace_id: &record.workspace_id,
                 project_root: &record.project_root,
@@ -984,6 +969,43 @@ fn attach_named(
     }
     let spec = backend.attach_command(session, &mux_config);
     run_attach_action(&spec, mode, mux)
+}
+
+fn resume_plan_for_birth(
+    was_live: bool,
+    workspace_id: &WorkspaceId,
+    session_name: &str,
+    resume_cfg: &rimz::config::ResumeConfig,
+    no_resume: bool,
+) -> Result<rimz::resume::ResumePlan> {
+    if was_live {
+        return Ok(rimz::resume::ResumePlan::default());
+    }
+    let plan = plan_room_resume(workspace_id, session_name, resume_cfg, no_resume);
+    let plan = prompt_recover_or_fresh(plan)?;
+    record_rebirth_boundary(workspace_id, session_name);
+    Ok(plan)
+}
+
+fn prompt_recover_or_fresh(plan: rimz::resume::ResumePlan) -> Result<rimz::resume::ResumePlan> {
+    if plan.is_empty() || !std::io::stdin().is_terminal() {
+        return Ok(plan);
+    }
+    let agents = plan.tabs.iter().map(|tab| tab.panes.len()).sum::<usize>();
+    let labels = plan
+        .tabs
+        .iter()
+        .map(|tab| tab.label.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if confirm_default_yes(&format!(
+        "Recover {agents} agent{} ({labels})?",
+        if agents == 1 { "" } else { "s" },
+    ))? {
+        Ok(plan)
+    } else {
+        Ok(rimz::resume::ResumePlan::default())
+    }
 }
 
 /// The room a sidebar launch or pre-attach gate targets: workspace identity
@@ -1075,6 +1097,19 @@ pub(crate) fn confirm(prompt: &str) -> Result<bool> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
+}
+
+pub(crate) fn confirm_default_yes(prompt: &str) -> Result<bool> {
+    let mut stderr = std::io::stderr().lock();
+    write!(stderr, "{prompt} [Y/n] ")?;
+    stderr.flush()?;
+    drop(stderr);
+    let mut answer = String::new();
+    std::io::stdin().read_line(&mut answer)?;
+    let answer = answer.trim();
+    Ok(answer.is_empty()
+        || answer.eq_ignore_ascii_case("y")
+        || answer.eq_ignore_ascii_case("yes"))
 }
 
 pub(crate) fn machine_config() -> rimz::config::MachineConfig {

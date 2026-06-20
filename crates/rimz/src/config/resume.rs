@@ -17,17 +17,20 @@ pub const DEFAULT_OVERLOAD_MAX_RETRIES: u32 = 10;
 
 /// Resume behavior, in two tenses. On an involuntary session *rebirth* —
 /// reboot, multiplexer crash, or a Rimz-initiated rebirth of a stuck room —
-/// Rimz re-seeds the prior agents from the durable rollup so the room comes up
-/// where the user left off instead of empty; manual `rimz reset` starts fresh.
-/// While the room is *live*, opt-in auto-continue picks a parked agent's turn
-/// back up after a rate-limit window resets or an overloaded retry backoff
-/// elapses. Backend-neutral product behavior the cli and producer read
-/// directly, not a multiplexer preference.
+/// Rimz offers to re-seed prior agents from the durable rollup; the prompt
+/// defaults to recovery, and non-interactive starts recover. Closing a tab
+/// while the room survives records the end trace that keeps that agent out of
+/// future recovery; manual `rimz reset` starts fresh. While the room is *live*,
+/// opt-in auto-continue picks a parked agent's turn back up after a rate-limit
+/// window resets or an overloaded retry backoff elapses. Backend-neutral
+/// product behavior the cli and producer read directly, not a multiplexer
+/// preference.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct ResumeConfig {
-    /// Re-seed prior agents on any session birth. `--no-resume` overrides it
-    /// per-invocation for a deliberately fresh start.
+    /// Offer to re-seed prior agents on session birth. The interactive prompt
+    /// defaults yes, non-interactive starts recover, and `--no-resume` overrides
+    /// it per-invocation for a deliberately fresh start.
     pub on_rebirth: bool,
     /// Ceiling on agents auto-resumed into one reborn session, bounding the
     /// processes a long-lived workspace launches at birth. Overflow is reported,

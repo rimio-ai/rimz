@@ -1004,14 +1004,13 @@ fn exec_keeps_the_wrapper_when_it_owns_run_or_cleanup_work() {
 }
 
 #[test]
-fn exec_records_end_trace_for_interactive_non_term_exits() {
+fn exec_records_end_trace_for_interactive_wrapper_exits() {
     let args = bare_exec_args();
-    assert!(should_record_end_trace(&args, false));
-    assert!(!should_record_end_trace(&args, true));
+    assert!(should_record_end_trace(&args));
 
     let mut args = bare_exec_args();
     args.exit_on_run_completion = true;
-    assert!(!should_record_end_trace(&args, false));
+    assert!(!should_record_end_trace(&args));
 }
 
 #[tokio::test(flavor = "current_thread")]

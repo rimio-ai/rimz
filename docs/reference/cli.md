@@ -48,7 +48,7 @@ rimz attach [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [SE
 
 `rimz` uses the current directory. `rimz start [PATH]` uses the given path, defaulting to `.`. Both choose a room by preferring an explicit `--root`, then the enclosing git repository, then a project marker, then the directory itself. The session pins `RIMZ_WORKSPACE_ID` and `RIMZ_PROJECT_ROOT`, so participant commands inside the room write to the same ledger even when panes move through nested directories.
 
-Interactive terminals attach by default. Non-interactive callers print the attach command. `--attach`, `--no-attach`, and `--print` force that decision. `--no-resume` starts an empty reborn room instead of re-seeding remembered agents, and `--refresh-ms` overrides the sidebar render cadence for sidebars spawned by that launch.
+Interactive terminals attach by default. Non-interactive callers print the attach command. `--attach`, `--no-attach`, and `--print` force that decision. Reborn rooms prompt to recover remembered agents, defaulting yes; non-interactive starts recover. `--no-resume` starts an empty reborn room, and `--refresh-ms` overrides the sidebar render cadence for sidebars spawned by that launch.
 
 `rimz attach <session>` attaches by exact session name. With no session argument, it resolves the current directory's room.
 

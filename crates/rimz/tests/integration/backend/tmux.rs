@@ -15,14 +15,16 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
-use rimz::ids::{MuxName, PaneId, WorkspaceId};
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
 use rimz::mux::{
     ClientFocusOptions, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
+use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
-use crate::common::ScrubSessionEnvExt;
+use crate::common::{Env, ScrubSessionEnvExt};
 
 /// Poll `capture_pane` on `pane_id` until its text contains `needle` or the
 /// budget elapses; returns the last capture seen either way. Faster than a flat
@@ -780,6 +782,121 @@ fn open_sidebar_seeds_resume_windows_idempotently() {
     );
 }
 
+/// Closing one agent tab while the tmux session still has another window is a
+/// voluntary close: the wrapper records `agent.ended`, and the next resume plan
+/// leaves that session out.
+#[test]
+fn closing_agent_tab_records_end_trace_when_session_survives() {
+    require_tmux!();
+
+    let env = Env::new();
+    let workspace = WorkspaceResolver::resolve(&env.project_root, None).expect("resolve workspace");
+    let worktree = env.project_root.join("rimz-gc");
+    std::fs::create_dir_all(&worktree).expect("mkdir worktree");
+    let agent_id = "sess-closed";
+
+    let mut observation =
+        AgentLifecycleObservation::new(Some(agent_id.into()), LifecycleSignal::Registered);
+    observation.agent_name = Some("closed-lane".to_owned());
+    observation.worktree_path = Some(worktree.display().to_string());
+    observation.worktree_branch = Some("gc-fixes".to_owned());
+    observation.pane_id = Some(PaneId::from_parts(MuxName::Tmux, "%99"));
+    env.ledger()
+        .append_event(&rimz::EventEnvelope::agent_lifecycle(
+            workspace.workspace_id.clone(),
+            &workspace.session_name,
+            "claude",
+            "SessionStart",
+            &observation,
+        ))
+        .expect("append registered agent");
+
+    let before = plan_from_env(&env);
+    assert_eq!(before.tabs.len(), 1, "seeded agent should be recoverable");
+
+    let server = TmuxServer::new();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: workspace.session_name.clone(),
+            workspace_id: workspace.workspace_id.clone(),
+            project_root: workspace.project_root.clone(),
+            cwd: workspace.worktree_root.clone(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((160, 40)),
+        })
+        .expect("ensure session");
+
+    let agent_bin = write_sleeping_agent_shim(&env, "claude");
+    let ready = env.home_root.join("agent-ready");
+    let path = path_with_front(&agent_bin);
+    let rimz_bin = env.rimz_bin().to_string_lossy().into_owned();
+    let command = vec![
+        "/usr/bin/env".to_owned(),
+        format!("XDG_STATE_HOME={}", env.state_root().display()),
+        format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
+        format!("XDG_CONFIG_HOME={}", env.config_root().display()),
+        format!("HOME={}", env.home_root.display()),
+        "SHELL=/bin/sh".to_owned(),
+        format!("PATH={path}"),
+        format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
+        rimz_bin,
+        "--mux".to_owned(),
+        "tmux".to_owned(),
+        "agents".to_owned(),
+        "exec".to_owned(),
+        "claude".to_owned(),
+        "--resume".to_owned(),
+        agent_id.to_owned(),
+        "--close-pane-on-exit".to_owned(),
+    ];
+    let (_stub_dir, stub) = sidebar_command_stub();
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: workspace.session_name.clone(),
+            title: "#rimz-gc".to_owned(),
+            cwd: worktree.clone(),
+            panes: LayoutPanes {
+                columns: vec![vec![PaneCmd { argv: command }]],
+            },
+            focus: false,
+            sidebar: SidebarPaneOptions {
+                session_name: workspace.session_name.clone(),
+                workspace_id: workspace.workspace_id.clone(),
+                project_root: workspace.project_root.clone(),
+                cwd: worktree.clone(),
+                width: SidebarWidth::default(),
+                birth_size: SidebarWidth::default().birth_size(Some(160)),
+                rimz_bin: stub,
+                replace_existing: false,
+                config: rimz::config::MultiplexerConfig::default(),
+                resume_tabs: Vec::new(),
+                refresh_ms: None,
+            },
+        })
+        .expect("open agent tab");
+    wait_for_path(&ready, "agent shim did not start");
+
+    let target = format!("{}:#rimz-gc", workspace.session_name);
+    server.tmux(&["kill-window", "-t", target.as_str()]);
+    assert!(
+        server
+            .backend
+            .list_sessions()
+            .expect("list sessions")
+            .contains(&workspace.session_name),
+        "closing one tab must leave the room alive"
+    );
+    wait_for_agent_tombstone(&env, agent_id);
+
+    let after = plan_from_env(&env);
+    assert!(
+        after.is_empty(),
+        "a closed-tab end trace removes the agent from resume candidates"
+    );
+}
+
 /// `open_tab` builds a caller-specified multi-column layout imperatively: the
 /// first pane is the `new-window`, the remaining rows of a column split `-v`
 /// below it, and each later column splits `-h` to the right of the previous
@@ -1268,14 +1385,84 @@ fn sidebar_command_stub() -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
     std::fs::write(&path, "#!/bin/sh\nsleep 5\n").expect("write stub");
+    chmod_executable(&path);
+    (dir, path)
+}
+
+fn write_sleeping_agent_shim(env: &Env, agent: &str) -> PathBuf {
+    let dir = env.home_root.join("agent-bin");
+    std::fs::create_dir_all(&dir).expect("mkdir agent bin");
+    let path = dir.join(agent);
+    std::fs::write(
+        &path,
+        "#!/bin/sh\n\
+         printf ready > \"$RIMZ_TEST_AGENT_READY\"\n\
+         trap 'exit 0' HUP TERM INT\n\
+         while :; do sleep 1; done\n",
+    )
+    .expect("write agent shim");
+    chmod_executable(&path);
+    dir
+}
+
+fn chmod_executable(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut perms = std::fs::metadata(&path).expect("metadata").permissions();
+        let mut perms = std::fs::metadata(path).expect("metadata").permissions();
         perms.set_mode(0o755);
-        std::fs::set_permissions(&path, perms).expect("chmod");
+        std::fs::set_permissions(path, perms).expect("chmod");
     }
-    (dir, path)
+}
+
+fn path_with_front(dir: &Path) -> String {
+    let original = std::env::var_os("PATH").unwrap_or_default();
+    let mut paths = vec![dir.to_path_buf()];
+    paths.extend(std::env::split_paths(&original));
+    std::env::join_paths(paths)
+        .expect("join PATH")
+        .to_string_lossy()
+        .into_owned()
+}
+
+fn wait_for_path(path: &Path, message: &str) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        if path.exists() {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("{message}: {}", path.display());
+}
+
+fn wait_for_agent_tombstone(env: &Env, agent_id: &str) {
+    let key = (AgentKind::new_unchecked("claude"), agent_id.into());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while Instant::now() < deadline {
+        let events = env.read_events();
+        let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&events);
+        if ended.contains(&key) {
+            return;
+        }
+        thread::sleep(Duration::from_millis(25));
+    }
+    panic!("agent.ended tombstone was not recorded for {agent_id}");
+}
+
+fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
+    let projection = env
+        .ledger()
+        .runtime_projection(rimz::RuntimeScope::Audit)
+        .expect("audit projection");
+    let ended = rimz::ledger::snapshot::agent_tombstones_for_events(&projection.events);
+    rimz::resume::plan_resume(
+        &projection.agents,
+        &ended,
+        rimz::resume::DEFAULT_RESUME_MAX,
+        |path| path.is_dir(),
+        &env.rimz_bin(),
+    )
 }
 
 /// The control-mode presence stream surfaces topology changes as nudges — the

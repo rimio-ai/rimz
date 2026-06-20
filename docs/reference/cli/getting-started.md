@@ -67,7 +67,7 @@ rimz attach [--attach|--no-attach|--print] [--no-resume] [--refresh-ms <ms>] [SE
 
 Inside the selected mux backend, the automatic `rimz` path reports the selected directory's room and exits so the existing client stays active. Use `--attach` only when you explicitly want to hand control to the mux attach command.
 
-`--no-resume` skips re-seeding prior agents when the room is born or reborn. Existing live agents stay live; the flag controls the recovery launch path.
+Reborn rooms prompt to recover prior agents, defaulting yes; non-interactive starts recover. `--no-resume` skips that recovery. Existing live agents stay live; the flag controls the recovery launch path.
 
 `--refresh-ms <ms>` overrides the sidebar render cadence for sidebars born by this launch. Persistent cadence lives in machine config.
 
@@ -96,7 +96,7 @@ Examples of valid raw targets are `dev-box:query-engine`, `dev-box:~/code/query-
 
 Remote reconnect is enabled by default. `--no-reconnect` hands the link to one SSH run for that invocation; `remote add --no-reconnect` saves that one-shot default on the alias.
 
-`rimz remote connect --reset <alias-or-target>` and `rimz remote reset <alias-or-target>` pass `--no-resume` to the remote `rimz`, so a remote room born or reborn by that command comes up empty instead of re-seeding prior agents. `remote add --no-resume` saves the same birth behavior on the alias.
+`rimz remote connect --reset <alias-or-target>` and `rimz remote reset <alias-or-target>` pass `--no-resume` to the remote `rimz`, so a remote room born or reborn by that command comes up empty instead of recovering prior agents. `remote add --no-resume` saves the same birth behavior on the alias.
 
 `--attach`, `--no-attach`, and `--print` mirror local attach behavior. `--print` emits the SSH command instead of executing it.
 
