@@ -915,6 +915,7 @@ fn build_codex_observation(
     transcript: CodexTranscriptObservation,
 ) -> AgentLifecycleObservation {
     let usage = transcript.usage;
+    let is_subagent = parent_agent_id.is_some();
     let mut observation =
         AgentLifecycleObservation::new(agent_id, signal).with_worktree_from_payload(payload);
     observation.parent_agent_id = parent_agent_id;
@@ -927,7 +928,13 @@ fn build_codex_observation(
     observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
     observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
-    observation.effort = payload_reasoning_effort(payload);
+    observation.effort = payload_reasoning_effort(payload).or_else(|| {
+        if is_subagent {
+            configured_reasoning_effort()
+        } else {
+            None
+        }
+    });
     observation.context_window = reported_context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation.cache_read_input_tokens = usage.last_cached_input_tokens;

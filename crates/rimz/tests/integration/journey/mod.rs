@@ -227,14 +227,14 @@ impl<'a> RoomHarness<'a> {
         }
         // The hook reads the mux's per-pane env var to stamp the pane it ran
         // inside; feed it the roster's pane id so the bind matches the fixture.
-        let pane_env = self.pane_env(&session_id);
-        let pane_env: Vec<(&str, &str)> = pane_env
+        let hook_env = self.hook_env(source, &session_id);
+        let hook_env: Vec<(&str, &str)> = hook_env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
         let out = self
             .env
-            .run_installed_hook_in_pane(source, &payload.to_string(), &pane_env);
+            .run_installed_hook_in_pane(source, &payload.to_string(), &hook_env);
         assert!(
             out.status.success(),
             "{source} {event} hook failed: {}",
@@ -250,13 +250,19 @@ impl<'a> RoomHarness<'a> {
             "spawn_agent needs an onboarded room — call onboard(&[{source:?}]) first"
         );
         let session_id = payload_session_id(payload, source);
-        let pane_env = self.pane_env(&session_id);
-        let pane_env: Vec<(&str, &str)> = pane_env
+        let hook_env = self.hook_env(source, &session_id);
+        let hook_env: Vec<(&str, &str)> = hook_env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
             .collect();
         self.env
-            .spawn_installed_hook_in_pane(source, &payload.to_string(), &pane_env)
+            .spawn_installed_hook_in_pane(source, &payload.to_string(), &hook_env)
+    }
+
+    fn hook_env(&self, source: &str, session_id: &str) -> Vec<(String, String)> {
+        let mut env = self.pane_env(session_id);
+        env.extend(journey_launch_identity(source));
+        env
     }
 
     /// The per-pane env the mux exports for `session_id`'s pane, matching the
@@ -411,6 +417,21 @@ fn payload_session_id(payload: &Value, source: &str) -> String {
         .and_then(Value::as_str)
         .unwrap_or(source)
         .to_owned()
+}
+
+/// The journey simulates a launched agent by firing the installed hook from the
+/// test process, whose `/proc` env may carry the developer's own Rimz role.
+/// Stamp deterministic launch identity directly on the hook command so role
+/// projection is driven by the fixture, not the shell that ran the suite.
+fn journey_launch_identity(source: &str) -> Vec<(String, String)> {
+    let (role, profile) = match source {
+        "codex" => ("coder", "codex-coder"),
+        other => (other, other),
+    };
+    vec![
+        (rimz::run::ENV_AGENT_ROLE.to_owned(), role.to_owned()),
+        (rimz::run::ENV_AGENT_PROFILE.to_owned(), profile.to_owned()),
+    ]
 }
 
 /// `SessionStart` lifecycle payload. Groups key on `worktree_path` (the

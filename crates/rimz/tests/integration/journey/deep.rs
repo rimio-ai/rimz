@@ -115,6 +115,11 @@ fn tmux_room_shows_agent_after_hook() {
     // Wire codex the way the user does, then run it through its installed
     // hook against the shared ledger — the only way a real agent reaches Rimz.
     env.install_agent_hooks("codex");
+    let hook_env = [
+        ("TMUX_PANE", codex_pane.as_str()),
+        (rimz::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+    ];
     let out = env.run_installed_hook_in_pane(
         "codex",
         &session_start_at(
@@ -125,7 +130,7 @@ fn tmux_room_shows_agent_after_hook() {
             Some("main"),
         )
         .to_string(),
-        &[("TMUX_PANE", &codex_pane)],
+        &hook_env,
     );
     assert!(
         out.status.success(),
@@ -222,6 +227,11 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     // frame means a snapshot enumerated the live panes, so the self-close latch
     // has seen its sibling (the codex pane). Now an empty tab means teardown.
     env.install_agent_hooks("codex");
+    let hook_env = [
+        ("TMUX_PANE", codex_pane.as_str()),
+        (rimz::run::ENV_AGENT_ROLE, "coder"),
+        (rimz::run::ENV_AGENT_PROFILE, "codex-coder"),
+    ];
     let out = env.run_installed_hook_in_pane(
         "codex",
         &session_start_at(
@@ -232,7 +242,7 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
             Some("main"),
         )
         .to_string(),
-        &[("TMUX_PANE", &codex_pane)],
+        &hook_env,
     );
     assert!(
         out.status.success(),
@@ -351,7 +361,11 @@ fn zellij_room_shows_agent_after_hook() {
     assert!(created.success(), "create-background failed for {name}");
 
     env.install_agent_hooks("codex");
-    let out = env.run_installed_hook(
+    let hook_env = [
+        (rimz::run::ENV_AGENT_ROLE, "codex"),
+        (rimz::run::ENV_AGENT_PROFILE, "codex"),
+    ];
+    let out = env.run_installed_hook_in_pane(
         "codex",
         &session_start_at(
             "sess-1",
@@ -361,6 +375,7 @@ fn zellij_room_shows_agent_after_hook() {
             Some("main"),
         )
         .to_string(),
+        &hook_env,
     );
     assert!(
         out.status.success(),

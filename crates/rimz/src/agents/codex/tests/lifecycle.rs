@@ -201,6 +201,35 @@ fn root_and_child_lifecycle_events_keep_identity_boundaries() {
 }
 
 #[test]
+fn subagent_lifecycle_effort_falls_back_to_codex_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+model_reasoning_effort = "xhigh"
+"#,
+    )
+    .unwrap();
+
+    let start = with_codex_config_path(&path, || {
+        CodexAdapter
+            .observe_lifecycle(
+                "SubagentStart",
+                &json!({
+                    "session_id": "sess-parent",
+                    "agent_id": "child-thread-1",
+                    "agent_type": "review",
+                }),
+            )
+            .unwrap()
+    });
+
+    assert_eq!(start.parent_agent_id.as_deref(), Some("sess-parent"));
+    assert_eq!(start.effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
 fn expiry_predicates_match_observed_root_signals() {
     for (event, payload) in [
         ("SessionStart", json!({ "session_id": "sess-1" })),
