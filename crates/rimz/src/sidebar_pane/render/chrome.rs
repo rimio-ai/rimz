@@ -297,7 +297,7 @@ pub(super) fn help_lines(
     if width < MIN_FRAME_WIDTH {
         return rows
             .into_iter()
-            .map(|line| trim_line_to_width(line, width))
+            .map(|line| borderless_line(line, width))
             .collect();
     }
 
@@ -459,6 +459,17 @@ fn framed_box(
 
 fn rule_span(theme: &Theme, role: GlyphRole) -> Span<'static> {
     Span::styled(theme.glyph(role).to_owned(), theme.rule())
+}
+
+fn borderless_line(line: Line<'static>, width: usize) -> Line<'static> {
+    if width == 0 {
+        return trim_line_to_width(line, width);
+    }
+    let style = line.style;
+    let mut spans = Vec::with_capacity(line.spans.len() + 1);
+    spans.push(Span::raw(" "));
+    spans.extend(line.spans);
+    pad_line_to_width(Line::from(spans).style(style), width)
 }
 
 fn pad_line_to_width(line: Line<'static>, width: usize) -> Line<'static> {

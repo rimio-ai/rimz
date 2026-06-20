@@ -82,7 +82,7 @@ fn chrome_rebuilds_carry_line_level_styles() {
 fn help_overlay_falls_back_borderless_when_too_narrow() {
     let theme = Theme::fixed(false);
     let lines = help_lines(&theme, Some("Alt+p"), 20);
-    let text = lines
+    let text_lines = lines
         .iter()
         .map(|line| {
             line.spans
@@ -90,8 +90,8 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
                 .map(|span| span.content.as_ref())
                 .collect::<String>()
         })
-        .collect::<Vec<_>>()
-        .join("\n");
+        .collect::<Vec<_>>();
+    let text = text_lines.join("\n");
 
     assert!(!text.contains("╭"), "narrow help drops the frame:\n{text}");
     assert!(
@@ -99,8 +99,16 @@ fn help_overlay_falls_back_borderless_when_too_narrow() {
         "narrow help keeps glyph-prefixed rows:\n{text}"
     );
     assert!(
-        lines.iter().all(|line| line.width() <= 20),
-        "narrow help lines stay within the pane:\n{text}"
+        lines.iter().all(|line| line.width() == 20),
+        "narrow help lines occupy the pane width so compose keeps them left-aligned:\n{text}"
+    );
+    assert!(
+        text_lines.iter().all(|line| line.starts_with(' ')),
+        "narrow help rows share one left gutter:\n{text}"
+    );
+    assert!(
+        text_lines[5].starts_with(" filter"),
+        "the filter header stays on the shared left edge:\n{text}"
     );
 }
 #[test]
