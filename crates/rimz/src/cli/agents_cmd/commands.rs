@@ -493,6 +493,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         &workspace,
         &machine_config.agents.worktree,
         args.worktree.as_deref(),
+        args.from_pr.as_ref(),
     )?;
     let mux = rimz::mux::auto_detect_backend(globals.mux)?;
     let backend = rimz::mux::backend_for(mux);
@@ -578,7 +579,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         launch_id: Some(&launch_identity.agent_id),
         cwd: &launch.cwd,
         prompt: &prompt,
-        cleanup_worktree: args.worktree.is_some(),
+        cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
         permission_args: agent_args,
         self_cleanup_on_completion: args.detach && !args.keep,
     })?;

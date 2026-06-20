@@ -32,6 +32,9 @@ enum WorktreeSubcmd {
         /// Base ref: `head`, `fresh`, or any git ref.
         #[arg(long, value_parser = parse_base)]
         base: Option<WorktreeBase>,
+        /// Create the worktree from a pull request number or URL.
+        #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr, conflicts_with = "base")]
+        from_pr: Option<rimz::forge::PrTarget>,
         /// Branch to create instead of `<name>`.
         #[arg(long)]
         branch: Option<String>,
@@ -77,15 +80,31 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let config = super::machine_config()?.agents.worktree;
     match command {
-        WorktreeSubcmd::New { name, base, branch } => {
-            let created = rimz::worktree::create(
-                &workspace.project_root,
-                &config,
-                name.as_deref(),
-                base,
-                branch.as_deref(),
-                false,
-            )?;
+        WorktreeSubcmd::New {
+            name,
+            base,
+            from_pr,
+            branch,
+        } => {
+            let created = if let Some(pr) = from_pr.as_ref() {
+                rimz::worktree::create_from_pr(
+                    &workspace.project_root,
+                    &config,
+                    pr,
+                    name.as_deref(),
+                    branch.as_deref(),
+                    false,
+                )?
+            } else {
+                rimz::worktree::create(
+                    &workspace.project_root,
+                    &config,
+                    name.as_deref(),
+                    base,
+                    branch.as_deref(),
+                    false,
+                )?
+            };
             #[expect(clippy::print_stdout, reason = "user-facing lifecycle report")]
             {
                 println!("created {}", created.name);
@@ -200,6 +219,10 @@ fn parse_base(raw: &str) -> std::result::Result<WorktreeBase, String> {
         "fresh" => WorktreeBase::Fresh,
         other => WorktreeBase::Explicit(other.to_owned()),
     })
+}
+
+fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
+    rimz::forge::parse(raw)
 }
 
 pub(super) fn cleanup_worktree(

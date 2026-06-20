@@ -35,7 +35,28 @@ pub(crate) fn resolve_cwd(
     workspace: &rimz::ResolvedWorkspace,
     config: &rimz::config::WorktreeConfig,
     worktree: Option<&str>,
+    from_pr: Option<&rimz::forge::PrTarget>,
 ) -> Result<ResolvedCwd> {
+    if let Some(pr) = from_pr {
+        if workspace.root_class != RootClass::Repo {
+            bail!("--from-pr requires a git repository-backed room");
+        }
+        let name = worktree.map(str::trim).filter(|name| !name.is_empty());
+        let created = rimz::worktree::create_from_pr(
+            &workspace.project_root,
+            config,
+            pr,
+            name,
+            None,
+            name.is_some(),
+        )?;
+        return Ok(ResolvedCwd {
+            cwd: created.path,
+            worktree_name: Some(created.name),
+            generated_worktree: false,
+        });
+    }
+
     let Some(raw_name) = worktree else {
         return Ok(ResolvedCwd {
             cwd: workspace.worktree_root.clone(),

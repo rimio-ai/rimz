@@ -68,6 +68,9 @@ pub struct AgentsArgs {
     /// Use a Rimz-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
     #[arg(long, short = 'w', value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
     worktree: Option<String>,
+    /// Create or reuse a Rimz-owned worktree from a pull request number or URL.
+    #[arg(long = "from-pr", value_name = "PR", value_parser = parse_pr)]
+    from_pr: Option<rimz::forge::PrTarget>,
     /// Durable name for a single launched agent.
     #[arg(long, short = 'n')]
     name: Option<String>,
@@ -292,6 +295,7 @@ impl AgentsArgs {
             spec: Some(spec),
             prompt,
             worktree,
+            from_pr: None,
             name: None,
             bg: false,
             new_pane: false,
@@ -324,6 +328,7 @@ impl AgentsArgs {
             spec: Some(task.spec),
             prompt: task.prompt,
             worktree: task.worktree,
+            from_pr: None,
             name: None,
             bg: false,
             new_pane: false,
@@ -356,6 +361,10 @@ pub(crate) struct TaskRunArgs {
     pub(crate) effort: Option<String>,
     pub(crate) system_prompt_file: Option<PathBuf>,
     pub(crate) timeout: Option<Duration>,
+}
+
+fn parse_pr(raw: &str) -> std::result::Result<rimz::forge::PrTarget, String> {
+    rimz::forge::parse(raw)
 }
 
 /// Drive one blocking scheduled loop task for `rimz loop run`. Routes through

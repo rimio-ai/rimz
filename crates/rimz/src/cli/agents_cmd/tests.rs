@@ -60,6 +60,29 @@ fn agents_launch_accepts_space_separated_worktree() {
 }
 
 #[test]
+fn agents_launch_from_pr_parses_and_can_name_worktree() {
+    let parsed = AgentsHarness::try_parse_from([
+        "rimz",
+        "codex",
+        "--from-pr",
+        "https://gitlab.com/org/repo/-/merge_requests/12",
+        "--worktree",
+        "review-12",
+    ])
+    .expect("parse agents launch from PR");
+
+    assert_eq!(parsed.args.spec.as_deref(), Some("codex"));
+    assert_eq!(parsed.args.worktree.as_deref(), Some("review-12"));
+    assert_eq!(
+        parsed.args.from_pr,
+        Some(rimz::forge::PrTarget {
+            number: 12,
+            forge: Some(rimz::forge::Forge::GitLab)
+        })
+    );
+}
+
+#[test]
 fn agents_list_verb_does_not_parse_as_launch_spec() {
     let parsed =
         AgentsHarness::try_parse_from(["rimz", "list", "--json"]).expect("parse agents list");
@@ -474,6 +497,11 @@ fn launch_flags_require_a_spec() {
         AgentsHarness::try_parse_from(["rimz", "--worktree=docs"]).expect("parse worktree");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject worktree");
     assert!(err.to_string().contains("--worktree requires"), "{err:#}");
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "--from-pr", "1"])
+        .expect("parse from-pr without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject from-pr");
+    assert!(err.to_string().contains("--from-pr requires"), "{err:#}");
 
     let parsed = AgentsHarness::try_parse_from(["rimz", "--", "term"])
         .expect("parse passthrough without spec");

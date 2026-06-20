@@ -79,14 +79,14 @@ rimz agents show <ref> [--json]
 rimz agents focus <ref>
 rimz agents wait <ref> [--timeout <duration>] [--stream [--from-start]] [--json]
 rimz agents stop <ref>
-rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--name <name>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--system-prompt-file <path>] [--effort <level>] [-- passthrough...]
-rimz agents <spec> [prompt] -p|--print [--system-prompt-file <path>] [--effort <level>] [--timeout <duration>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
+rimz agents <spec> [prompt] [-w|--worktree[=<name>]] [--from-pr <pr>] [--name <name>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--system-prompt-file <path>] [--effort <level>] [-- passthrough...]
+rimz agents <spec> [prompt] -p|--print [-w|--worktree[=<name>]] [--from-pr <pr>] [--system-prompt-file <path>] [--effort <level>] [--timeout <duration>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 rimz transcript [target] [-w|--worktree <name>] [-n|--last <n>] [--details] [--json]
 ```
 
 `rimz agents` lists live agent cards by default. A launch spec is either a named `[agents.teams]` team or the inline layout grammar from `[agents.profiles]` and `[agents.commands]`: commas split columns, plus signs stack rows, and inline cells are `term`, agent kinds, virtual `<kind>-<mode>` cells such as `codex-yolo`, configured profiles, or configured commands. `-p` launches one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with `0` for success, `1` for failure, `124` for timeout, and `130` for cancellation. Hooks are the completion signal, so the selected agent's Rimz hooks must be installed and trusted.
 
-`--system-prompt-file` and `--effort` are shared launch params that each adapter renders into its native flags, so one flag works across providers; `--output-format` and `--input-format` shape how `-p` prints the run and reads the prompt. Both are detailed in [agents.md](./cli/agents.md).
+`--system-prompt-file` and `--effort` are shared launch params that each adapter renders into its native flags, so one flag works across providers; `--from-pr <number|url>` creates the launch worktree from a pull request head through Git; `--output-format` and `--input-format` shape how `-p` prints the run and reads the prompt. These surfaces are detailed in [agents.md](./cli/agents.md).
 
 Use `transcript` to read a single agent's turn history or a channel's fused timeline. Use `steer` for immediate text into a live agent pane, and `queue` for durable delivery after the agent reaches a safe gate.
 

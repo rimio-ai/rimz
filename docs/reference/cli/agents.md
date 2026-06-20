@@ -35,6 +35,7 @@ rimz transcript #auth-refresh            # the channel timeline
 rimz agents peer                                       # built-in claude,codex side by side
 rimz agents claude,codex+term                          # Claude | Codex stacked over a shell
 rimz agents claude,codex --worktree=cli-docs "Review the CLI docs."
+rimz agents codex --from-pr 42 "Review this pull request."
 rimz agents 'vim,codex+term' "Review the CLI docs."    # raw command cells beside an agent
 rimz agents claude --worktree "Take one approach."     # parallel attempts, each in a fresh worktree
 rimz agents claude --worktree "Take another approach."
@@ -63,8 +64,8 @@ rimz agents show <REF> [--json]
 rimz agents focus <REF>
 rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
-rimz agents <SPEC> [PROMPT] -p|--print [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [--max-turns <N>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
+rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--from-pr <PR>] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] -p|--print [-w|--worktree[=<NAME>]] [--from-pr <PR>] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [--max-turns <N>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] [--json]
 ```
 
@@ -102,7 +103,7 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 
 ### Worktree and placement
 
-`-w`/`--worktree` takes a value as `--worktree=docs` or space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. A worktree launch names the backend tab `#<NAME>`, matching the channel suffix used in agent addresses; a launch without a worktree names the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
+`-w`/`--worktree` takes a value as `--worktree=docs` or space-separated `--worktree docs` (both reuse or create that worktree), while bare `--worktree` creates a fresh generated worktree. `--from-pr <number|url>` creates a worktree from the pull request head and implies a worktree launch; pair it with `--worktree <NAME>` to choose the local worktree name, or let Rimz use `pr-<N>`. A worktree launch names the backend tab `#<NAME>`, matching the channel suffix used in agent addresses; a launch without a worktree names the tab `<kind>:<dir>`. A single-agent launch into a fresh generated worktree uses the generated name as a pet-name candidate unless `--name` is set; named shared worktrees keep independent agent names.
 
 Placement follows intent. Under the default `auto` policy a worktree launch, named team, or multi-cell inline spec opens its own tab, while a single non-worktree agent takes over the current pane and returns to the shell when the agent exits. `--new-pane` forces a split for a single agent cell — including a single worktree launch — run from inside the room, and is rejected for a multi-cell spec; `--new-tab` forces a tab. The per-machine `[agents] placement` default sets the policy when neither flag is given, and `placement = "pane"` splits a single non-worktree agent while worktrees and teams keep their tab. `--bg` downgrades an in-place launch to a split so focus can stay on the launching pane. The split-versus-tab mechanics are in [harness.md → Backend shape and placement](../../internals/agents/harness.md#backend-shape-and-placement).
 
@@ -246,18 +247,20 @@ Pane capture is untrusted terminal text. Scripts and resolvers match bounded pat
 ```sh
 rimz worktree new cli-docs --base head                          # branch cli-docs from HEAD
 rimz worktree new experiment --base fresh --branch spike/experiment
+rimz worktree new --from-pr 42                                  # branch pr-42 from the PR head
+rimz worktree new review-42 --from-pr https://gitlab.com/acme/app/-/merge_requests/42
 rimz worktree list --json
 rimz worktree remove cli-docs                                   # refuses if dirty or not landed
 rimz worktree remove experiment --force                         # remove anyway
 ```
 
 ```sh
-rimz worktree new [NAME] [--base <head|fresh|REF>] [--branch <NAME>]
+rimz worktree new [NAME] [--base <head|fresh|REF>|--from-pr <PR>] [--branch <NAME>]
 rimz worktree list [--json]
 rimz worktree remove <NAME> [--force]
 ```
 
-`new` creates a marked worktree under the configured worktree directory. `--base head` branches from the current `HEAD`, `--base fresh` branches from the configured fresh base, and any other value is used as a git ref. `--branch <NAME>` creates that branch instead of using the worktree name.
+`new` creates a marked worktree under the configured worktree directory. `--base head` branches from the current `HEAD`, `--base fresh` branches from the configured fresh base, and any other value is used as a git ref. `--from-pr <number|url>` fetches the pull request head through `origin` using Git credentials and creates a local branch named `pr-<N>` unless `--branch` names it. GitHub, Gitea, and Forgejo use `refs/pull/<N>/head`; GitLab uses `refs/merge-requests/<N>/head`. A PR URL supplies the forge shape from its path, while a bare number derives it from the `origin` host. The marker records the trunk as the cleanup base, so the worktree is reclaimable after the pull request lands. `--branch <NAME>` creates that branch instead of using the worktree name.
 
 `list` shows Rimz-owned worktrees for the current repo as the channels they are: each row carries the worktree name, branch, the `@kind` handles of the agent-colleagues working there, a dirty marker, the content-landed signal, and the path; `--json` emits structured entries. `remove` refuses dirty worktrees or worktrees whose content is not proven landed on their base; `--force` removes anyway and keeps a branch when Git still rejects safe deletion.
 

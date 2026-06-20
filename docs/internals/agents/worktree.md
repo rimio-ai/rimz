@@ -10,7 +10,11 @@ Rimz acts only on worktrees it owns. A marker file inside the worktree's Git adm
 
 `rimz worktree new` creates a Git worktree under the per-machine `[agents.worktree] dir` template, defaulting to a sibling `../{repo}-worktrees/<name>`, and creates a branch named `<name>` from the configured base (`head`, `fresh`, or an explicit ref) ([configuration.md](../../reference/configuration.md#worktrees)). Omitted names come from a two-word generated name; explicit names use letters, numbers, `_`, and `-`. `--base` overrides the base ref, and `--branch <NAME>` names the branch independently of the worktree name.
 
+`rimz worktree new --from-pr <number|url>` creates the same marked worktree from a pull request head. A bare number uses the `origin` host to choose the ref shape: GitLab hosts fetch `refs/merge-requests/<N>/head`, while GitHub, Gitea, Forgejo, and other hosts fetch `refs/pull/<N>/head`. A URL chooses from its path instead: `/pull/<N>` or `/pulls/<N>` for GitHub-style forges, and `/-/merge_requests/<N>` for GitLab. Fetching rides on the user's Git credentials for `origin`. The default worktree name and local branch are `pr-<N>`; explicit `NAME` and `--branch <NAME>` override those independently. `rimz agents <SPEC> --from-pr <PR>` implies a worktree launch, and `--worktree <NAME>` beside it names the PR worktree.
+
 The marker stores the base branch name and the resolved base commit snapshot, so cleanup prefers a still-live base branch for committed-work checks and keeps the snapshot as the detached or unresolved fallback.
+
+A pull-request worktree records the repository trunk as its base branch and the trunk's resolved commit as its base snapshot. That makes the existing cleanup proof reclaim the worktree once the pull request content lands on trunk, including merge, squash, and rebase shapes.
 
 ## Ownership marker
 

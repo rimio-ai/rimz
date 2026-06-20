@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::config::{WorktreeBase, WorktreeConfig};
+use crate::forge;
 
 const MARKER_FILE: &str = "rimz-worktree.json";
 const MARKER_VERSION: u32 = 3;
@@ -44,6 +45,12 @@ pub enum WorktreeErr {
     Git {
         cwd: PathBuf,
         args: String,
+        stderr: String,
+    },
+    #[error("could not fetch PR #{number} from {remote}: {stderr}")]
+    PrFetch {
+        number: u64,
+        remote: String,
         stderr: String,
     },
     #[error("could not parse git output: {0}")]
@@ -166,84 +173,80 @@ pub fn create(
     reuse_existing: bool,
 ) -> Result<CreatedWorktree> {
     ensure_repo(repo_root)?;
-    let name = match name {
-        Some(raw) => {
-            validate_name(raw)?;
-            raw.to_owned()
-        }
-        None => available_auto_name(repo_root, config)?,
-    };
-    let path = worktree_path(repo_root, config, &name)?;
-    if path.exists() {
-        if reuse_existing {
-            let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
-                name: name.clone(),
-                path: path.clone(),
-            })?;
-            return Ok(CreatedWorktree {
-                name,
-                path,
-                branch: marker.branch,
-                base_branch: marker.base_branch,
-                base_ref: marker.base_ref,
-                reused: true,
-                included: 0,
-                linked: 0,
-            });
-        }
-        return Err(WorktreeErr::Exists { name, path });
-    }
+    let FreshWorktree { name, path } =
+        match resolve_fresh_worktree(repo_root, config, name, None, reuse_existing)? {
+            WorktreeCreateTarget::Fresh(fresh) => fresh,
+            WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
+        };
 
     let base = base.unwrap_or_else(|| config.base.clone());
     let checkout_base_ref = base.as_refspec().to_owned();
     let base_ref = resolve_base_commit(repo_root, &checkout_base_ref)?;
     let base_branch = resolve_base_branch(repo_root, &base);
-    let branch = branch
-        .map(ToOwned::to_owned)
-        .unwrap_or_else(|| name.clone());
-    if branch.trim().is_empty() {
-        return Err(WorktreeErr::Parse(
-            "worktree branch cannot be empty".to_owned(),
-        ));
-    }
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let path_arg = path.to_string_lossy().into_owned();
-    git_run(
+    add_and_seed(
         repo_root,
-        vec![
-            "worktree",
-            "add",
-            "-b",
-            branch.as_str(),
-            path_arg.as_str(),
-            checkout_base_ref.as_str(),
-        ],
-    )?;
-    let marker = WorktreeMarker {
-        version: MARKER_VERSION,
-        name: name.clone(),
-        branch: branch.clone(),
-        base_branch: base_branch.clone(),
-        base_ref: base_ref.clone(),
-        repo_root: repo_root.to_path_buf(),
-        worktree_path: path.clone(),
-        created_at: jiff::Timestamp::now(),
-    };
-    write_marker(&path, &marker)?;
-    let included = crate::worktree_include::copy_includes(repo_root, &path);
-    let linked = crate::worktree_link::link_dirs(repo_root, &path);
-    Ok(CreatedWorktree {
         name,
         path,
         branch,
         base_branch,
         base_ref,
-        reused: false,
-        included,
-        linked,
-    })
+        &checkout_base_ref,
+    )
+}
+
+pub fn create_from_pr(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    pr: &forge::PrTarget,
+    name: Option<&str>,
+    branch: Option<&str>,
+    reuse_existing: bool,
+) -> Result<CreatedWorktree> {
+    ensure_repo(repo_root)?;
+    let default_name = format!("pr-{}", pr.number);
+    let FreshWorktree { name, path } = match resolve_fresh_worktree(
+        repo_root,
+        config,
+        name,
+        Some(default_name.as_str()),
+        reuse_existing,
+    )? {
+        WorktreeCreateTarget::Fresh(fresh) => fresh,
+        WorktreeCreateTarget::Reuse(reused) => return Ok(reused),
+    };
+
+    let remote =
+        git_stdout(repo_root, ["remote", "get-url", "origin"]).map_err(|err| match err {
+            WorktreeErr::Git { .. } => WorktreeErr::Parse(format!(
+                "could not fetch PR #{}: git remote `origin` is not configured",
+                pr.number
+            )),
+            other => other,
+        })?;
+    let forge = pr.forge.unwrap_or_else(|| forge::forge_for_remote(&remote));
+    let refspec = forge.pr_refspec(pr.number);
+    git_run(repo_root, ["fetch", "origin", refspec.as_str()]).map_err(|err| match err {
+        WorktreeErr::Git { stderr, .. } => WorktreeErr::PrFetch {
+            number: pr.number,
+            remote: remote.clone(),
+            stderr,
+        },
+        other => other,
+    })?;
+    let pr_head = git_stdout(repo_root, ["rev-parse", "FETCH_HEAD"])?;
+    let base_branch = trunk_ref(repo_root);
+    let base_ref_name = base_branch.as_deref().unwrap_or("origin/HEAD");
+    let base_ref =
+        resolve_base_commit(repo_root, base_ref_name).unwrap_or_else(|_| pr_head.clone());
+    add_and_seed(
+        repo_root,
+        name,
+        path,
+        branch,
+        base_branch,
+        base_ref,
+        pr_head.as_str(),
+    )
 }
 
 pub fn remove(
@@ -425,6 +428,110 @@ pub fn marker_path(worktree: &Path) -> Result<PathBuf> {
 
 pub fn path_inside(path: &Path, parent: &Path) -> bool {
     path == parent || path.starts_with(parent)
+}
+
+struct FreshWorktree {
+    name: String,
+    path: PathBuf,
+}
+
+enum WorktreeCreateTarget {
+    Fresh(FreshWorktree),
+    Reuse(CreatedWorktree),
+}
+
+fn resolve_fresh_worktree(
+    repo_root: &Path,
+    config: &WorktreeConfig,
+    name: Option<&str>,
+    default_name: Option<&str>,
+    reuse_existing: bool,
+) -> Result<WorktreeCreateTarget> {
+    let name = match (name, default_name) {
+        (Some(raw), _) | (None, Some(raw)) => {
+            validate_name(raw)?;
+            raw.to_owned()
+        }
+        (None, None) => available_auto_name(repo_root, config)?,
+    };
+    let path = worktree_path(repo_root, config, &name)?;
+    if path.exists() {
+        if reuse_existing {
+            let marker = read_marker_for_worktree(&path)?.ok_or_else(|| WorktreeErr::Unmarked {
+                name: name.clone(),
+                path: path.clone(),
+            })?;
+            return Ok(WorktreeCreateTarget::Reuse(CreatedWorktree {
+                name,
+                path,
+                branch: marker.branch,
+                base_branch: marker.base_branch,
+                base_ref: marker.base_ref,
+                reused: true,
+                included: 0,
+                linked: 0,
+            }));
+        }
+        return Err(WorktreeErr::Exists { name, path });
+    }
+    Ok(WorktreeCreateTarget::Fresh(FreshWorktree { name, path }))
+}
+
+fn add_and_seed(
+    repo_root: &Path,
+    name: String,
+    path: PathBuf,
+    branch: Option<&str>,
+    base_branch: Option<String>,
+    base_ref: String,
+    checkout_ref: &str,
+) -> Result<CreatedWorktree> {
+    let branch = branch
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| name.clone());
+    if branch.trim().is_empty() {
+        return Err(WorktreeErr::Parse(
+            "worktree branch cannot be empty".to_owned(),
+        ));
+    }
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let path_arg = path.to_string_lossy().into_owned();
+    git_run(
+        repo_root,
+        vec![
+            "worktree",
+            "add",
+            "-b",
+            branch.as_str(),
+            path_arg.as_str(),
+            checkout_ref,
+        ],
+    )?;
+    let marker = WorktreeMarker {
+        version: MARKER_VERSION,
+        name: name.clone(),
+        branch: branch.clone(),
+        base_branch: base_branch.clone(),
+        base_ref: base_ref.clone(),
+        repo_root: repo_root.to_path_buf(),
+        worktree_path: path.clone(),
+        created_at: jiff::Timestamp::now(),
+    };
+    write_marker(&path, &marker)?;
+    let included = crate::worktree_include::copy_includes(repo_root, &path);
+    let linked = crate::worktree_link::link_dirs(repo_root, &path);
+    Ok(CreatedWorktree {
+        name,
+        path,
+        branch,
+        base_branch,
+        base_ref,
+        reused: false,
+        included,
+        linked,
+    })
 }
 
 fn write_marker(path: &Path, marker: &WorktreeMarker) -> Result<()> {

@@ -48,12 +48,13 @@ pub(super) fn launch_layout(
         .map(|column| column.rows.len())
         .sum::<usize>()
         == 1;
+    let worktree_launch = args.worktree.is_some() || args.from_pr.is_some();
     let placement = apply_in_place_downgrade(
         resolve_placement(
             args.new_tab,
             args.new_pane,
             machine_config.agents.placement,
-            args.worktree.is_some(),
+            worktree_launch,
             single_cell,
             rimz::mux::ambient_pane_id().is_some(),
         )?,
@@ -73,6 +74,7 @@ pub(super) fn launch_layout(
         &workspace,
         &machine_config.agents.worktree,
         args.worktree.as_deref(),
+        args.from_pr.as_ref(),
     )?;
     let ledger = open_ledger(&workspace)?;
     let launch_requests = launch_identity_requests(
@@ -110,7 +112,7 @@ pub(super) fn launch_layout(
         &layout,
         &cwd,
         args.prompt.as_deref(),
-        args.worktree.is_some(),
+        worktree_launch,
         in_place,
         &launch_identities,
     )?;
@@ -388,6 +390,9 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         bail!(
             "--worktree requires an agent spec; use `rimz agents list --worktree <name>` to filter cards"
         );
+    }
+    if args.from_pr.is_some() {
+        bail!("--from-pr requires an agent spec");
     }
     if args.name.is_some()
         || args.bg

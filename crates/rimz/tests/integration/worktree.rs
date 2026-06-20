@@ -71,6 +71,60 @@ fn worktree_new_list_and_remove_round_trip() {
 }
 
 #[test]
+fn worktree_new_from_pr_fetches_github_style_ref() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, trunk) = publish_pr_ref(&env, "refs/pull/1/head");
+
+    env.rimz()
+        .args(["worktree", "new", "--from-pr", "1"])
+        .assert()
+        .success()
+        .stdout(contains("created pr-1"));
+
+    let path = env.home_root.join("project-worktrees").join("pr-1");
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "pr-1"
+    );
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .expect("read marker")
+        .expect("marker");
+    assert_eq!(marker.base_branch.as_deref(), Some("main"));
+    assert_eq!(marker.base_ref, trunk);
+}
+
+#[test]
+fn worktree_new_from_pr_url_fetches_gitlab_ref() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    let (pr_head, _trunk) = publish_pr_ref(&env, "refs/merge-requests/1/head");
+
+    env.rimz()
+        .args([
+            "worktree",
+            "new",
+            "--from-pr",
+            "https://gitlab.com/org/repo/-/merge_requests/1",
+        ])
+        .assert()
+        .success()
+        .stdout(contains("created pr-1"));
+
+    let path = env.home_root.join("project-worktrees").join("pr-1");
+    assert_eq!(
+        git_stdout(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "pr-1"
+    );
+    assert_eq!(git_stdout(&path, &["rev-parse", "HEAD"]), pr_head);
+}
+
+#[test]
 fn worktree_new_seeds_files_from_worktreeinclude() {
     if git_missing() {
         return;
@@ -598,6 +652,25 @@ fn init_repo(path: &Path) {
     git(path, &["config", "user.email", "rimz@example.com"]);
     git(path, &["config", "user.name", "Rimz Test"]);
     commit_file(path, "README.md", "fixture\n", "initial");
+}
+
+fn publish_pr_ref(env: &Env, remote_ref: &str) -> (String, String) {
+    init_repo(&env.project_root);
+    let remote = env.home_root.join("origin.git");
+    let remote_arg = remote.to_str().expect("utf8 remote path");
+    git(&env.project_root, &["init", "--bare", remote_arg]);
+    git(&env.project_root, &["remote", "add", "origin", remote_arg]);
+    git(&env.project_root, &["push", "-u", "origin", "main"]);
+    let trunk = git_stdout(&env.project_root, &["rev-parse", "main"]);
+
+    git(&env.project_root, &["checkout", "-b", "feature"]);
+    commit_file(&env.project_root, "feature.txt", "feature\n", "feature");
+    let pr_head = git_stdout(&env.project_root, &["rev-parse", "HEAD"]);
+    let refspec = format!("{pr_head}:{remote_ref}");
+    git(&env.project_root, &["push", "origin", refspec.as_str()]);
+    git(&env.project_root, &["checkout", "main"]);
+
+    (pr_head, trunk)
 }
 
 fn commit_file(repo: &Path, name: &str, contents: &str, message: &str) {

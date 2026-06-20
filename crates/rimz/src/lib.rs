@@ -18,6 +18,7 @@ pub mod child_process;
 pub mod config;
 pub mod diag;
 pub mod feed;
+pub mod forge;
 pub mod ids;
 pub mod launch;
 pub mod ledger;
