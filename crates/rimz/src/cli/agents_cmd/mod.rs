@@ -164,7 +164,7 @@ enum AgentsSubcmd {
         json: bool,
         #[arg(long)]
         all: bool,
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all")]
         worktree: Option<String>,
     },
     /// Show one agent card.

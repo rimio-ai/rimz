@@ -15,45 +15,7 @@ pub(super) fn list_agents(
         .context("preparing runtime paths")?;
     let context_records = rimz::ledger::agent_context::read_all(&runtime);
 
-    let (mut snapshot, live_keys) = if all {
-        let audit = ledger
-            .runtime_projection(rimz::RuntimeScope::Audit)
-            .context("reading audit agent rollup")?
-            .agents;
-        let mut snapshot = rimz::SidebarSnapshot::build_with_agents(
-            workspace.workspace_id.clone(),
-            Vec::new(),
-            audit,
-            jiff::Timestamp::now(),
-        );
-        // The audit projection carries no workspace identity. Copy the live
-        // snapshot's root and class so an out-of-project stale agent tails into
-        // `external` instead of earning its own pod above project work — the
-        // same identity the sidebar groups by. Only the grouped human view needs
-        // it; `--json` emits a flat array, so it skips the extra read.
-        let live_keys = if json {
-            None
-        } else {
-            let live = ledger
-                .snapshot_cached()
-                .context("reading live agent snapshot")?;
-            snapshot = snapshot
-                .with_root_class(live.root_class)
-                .with_project_root(live.project_root.clone());
-            Some(
-                live.agents
-                    .iter()
-                    .map(agent_key)
-                    .collect::<std::collections::BTreeSet<_>>(),
-            )
-        };
-        (snapshot, live_keys)
-    } else {
-        (
-            ledger.snapshot_cached().context("reading agent snapshot")?,
-            None,
-        )
-    };
+    let mut snapshot = ledger.snapshot_cached().context("reading agent snapshot")?;
     // Group by the room's worktree checkouts the way the sidebar does: a
     // worktree parked outside the project root still earns its own pod. The
     // cached enumeration is read-only and best-effort, matching the sidebar's
@@ -66,12 +28,13 @@ pub(super) fn list_agents(
     // real used/window fill, not the carried-forward `context_pct`.
     let snapshot = snapshot.with_agent_context(context_records);
 
+    let channel = list_channel_filter(all, worktree.as_deref(), &workspace);
     let agents: Vec<&AgentState> = snapshot
         .agents
         .iter()
         .filter(|agent| agent.parent_agent_id.is_none())
         .filter(|agent| {
-            worktree
+            channel
                 .as_deref()
                 .is_none_or(|filter| rimz::target::agent_in_worktree(agent, filter))
         })
@@ -88,43 +51,26 @@ pub(super) fn list_agents(
         .collect();
     let now = jiff::Timestamp::now();
     let mut out = render::out();
-    let mut table = if live_keys.is_some() {
-        render::Table::new([
-            "AGENT",
-            "STATUS",
-            "LIFECYCLE",
-            "MODEL",
-            "CTX",
-            "TOKENS",
-            "AGE",
-        ])
-        .right(&[4, 5, 6])
-    } else {
-        render::Table::new(["AGENT", "STATUS", "MODEL", "CTX", "TOKENS", "AGE"]).right(&[3, 4, 5])
-    };
+    let mut table = render::Table::new([
+        "AGENT", "STATUS", "CHANNEL", "MODEL", "CTX", "TOKENS", "AGE",
+    ])
+    .right(&[4, 5, 6]);
     for &agent in &ordered_agents {
-        let mut cells = agent_row(agent, &ordered_agents, now);
-        if let Some(live_keys) = live_keys.as_ref() {
-            cells.insert(2, lifecycle_cell(agent, live_keys));
-        }
-        table.row(cells);
+        table.row(agent_row(agent, &ordered_agents, now));
     }
     table.render(&mut out)?;
     Ok(())
 }
 
-fn agent_key(agent: &AgentState) -> (AgentKind, AgentSessionId) {
-    (agent.kind.clone(), agent.agent_id.clone())
-}
-
-fn lifecycle_label(
-    agent: &AgentState,
-    live_keys: &std::collections::BTreeSet<(AgentKind, AgentSessionId)>,
-) -> &'static str {
-    if live_keys.contains(&agent_key(agent)) {
-        "live"
-    } else {
-        "stale"
+fn list_channel_filter(
+    all: bool,
+    worktree: Option<&str>,
+    workspace: &rimz::ResolvedWorkspace,
+) -> Option<String> {
+    match (worktree, all) {
+        (Some(worktree), _) => Some(worktree.to_owned()),
+        (None, true) => None,
+        (None, false) => crate::cli::current_channel(workspace),
     }
 }
 
@@ -780,16 +726,15 @@ fn print_run_line(run: &RunRecord) -> std::io::Result<()> {
     )
 }
 
-/// The columns shared by `agents list` in both its default and `--all` shapes,
-/// in display order; the `--all` view inserts `LIFECYCLE` at index 2. The lead
-/// `AGENT` cell is the canonical address, including its `#channel` when one is
-/// present.
+/// The columns shared by `agents list` in display order. The lead `AGENT` cell
+/// omits `#channel`; the `CHANNEL` cell carries that scope.
 fn agent_row(agent: &AgentState, peers: &[&AgentState], now: jiff::Timestamp) -> Vec<render::Cell> {
     vec![
-        render::cell(rimz::target::agent_handle(agent, peers, true)).fg(render::palette::ACCENT),
+        render::cell(rimz::target::agent_handle(agent, peers, false)).fg(render::palette::ACCENT),
         render::cell(agent_status_label(agent))
             .fg(render::status::agent(agent.status, agent.phase)),
-        render::cell(model_label(agent)).dash(),
+        render::cell(worktree_label(agent)).dash(),
+        model_cell(agent),
         context_cell(agent),
         render::cell(tokens_label(agent)).dash(),
         render::cell(age_label(now, agent.last_seen)),
@@ -808,19 +753,6 @@ fn context_cell(agent: &AgentState) -> render::Cell {
         Some(pct) if pct >= 75.0 => c.fg(render::palette::WARN),
         Some(_) => c,
         None => c.dash(),
-    }
-}
-
-fn lifecycle_cell(
-    agent: &AgentState,
-    live_keys: &std::collections::BTreeSet<(AgentKind, AgentSessionId)>,
-) -> render::Cell {
-    let label = lifecycle_label(agent, live_keys);
-    let cell = render::cell(label);
-    if label == "stale" {
-        cell.fg(render::palette::FAINT)
-    } else {
-        cell
     }
 }
 
@@ -897,6 +829,27 @@ fn model_label(agent: &AgentState) -> String {
     }
 }
 
+fn model_cell(agent: &AgentState) -> render::Cell {
+    let label = model_label(agent);
+    if label == "-" {
+        return render::cell(label).dash();
+    }
+    match brand_style(agent.kind.as_str()) {
+        Some(style) => render::cell(label).fg(style),
+        None => render::cell(label),
+    }
+}
+
+/// The agent kind's brand tone for truecolor output, or `None` for an unknown kind.
+fn brand_style(kind: &str) -> Option<anstyle::Style> {
+    let (r, g, b) = rimz::agents::descriptor_by_kind(kind)?.brand.color_rgb;
+    Some(rgb_style((r, g, b)))
+}
+
+fn rgb_style((r, g, b): (u8, u8, u8)) -> anstyle::Style {
+    anstyle::Style::new().fg_color(Some(anstyle::Color::Rgb(anstyle::RgbColor(r, g, b))))
+}
+
 fn tokens_label(agent: &AgentState) -> String {
     agent
         .total_tokens
@@ -927,10 +880,10 @@ fn compact_count(value: u64) -> String {
     }
 }
 
-/// The agent's channel for the `show` view, dashed when it runs outside any
-/// worktree. The channel itself comes from [`rimz::target::agent_channel`], the
-/// single source of truth; this only chooses the `-` placeholder over the
-/// resolver's prose label.
+/// The agent's channel for display, dashed when it runs outside any worktree.
+/// The channel itself comes from [`rimz::target::agent_channel`], the single
+/// source of truth; this only chooses the `-` placeholder over the resolver's
+/// prose label.
 fn worktree_label(agent: &AgentState) -> String {
     rimz::target::agent_channel(agent).unwrap_or_else(|| "-".to_owned())
 }
@@ -941,4 +894,65 @@ fn pane_label(agent: &AgentState) -> String {
         .as_ref()
         .map(|pane| pane.pane_id.to_string())
         .unwrap_or_else(|| "-".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    fn resolved_workspace(
+        project_root: &str,
+        worktree_root: &str,
+        worktree_branch: Option<&str>,
+    ) -> rimz::ResolvedWorkspace {
+        use rimz::ids::WorkspaceId;
+        let project_root = PathBuf::from(project_root);
+        rimz::ResolvedWorkspace {
+            workspace_id: WorkspaceId::from_project_root(&project_root),
+            project_root,
+            root_class: rimz::workspace::RootClass::Repo,
+            worktree_root: PathBuf::from(worktree_root),
+            worktree_branch: worktree_branch.map(str::to_owned),
+            session_name: "rimz-test".to_owned(),
+            mux_hint: None,
+        }
+    }
+
+    #[test]
+    fn list_channel_filter_resolves_explicit_all_and_current_channel() {
+        let workspace = resolved_workspace("/repo", "/repo/worktrees/feature", Some("feature"));
+
+        assert_eq!(
+            list_channel_filter(true, Some("manual"), &workspace).as_deref(),
+            Some("manual")
+        );
+        assert_eq!(list_channel_filter(true, None, &workspace), None);
+        assert_eq!(
+            list_channel_filter(false, None, &workspace).as_deref(),
+            Some("feature")
+        );
+
+        let bare = resolved_workspace("/repo", "/repo", None);
+        assert_eq!(list_channel_filter(false, None, &bare), None);
+
+        let named_worktree = resolved_workspace("/repo", "/repo/worktrees/docs", None);
+        assert_eq!(
+            list_channel_filter(false, None, &named_worktree).as_deref(),
+            Some("docs")
+        );
+    }
+
+    #[test]
+    fn brand_style_uses_registered_agent_brand_rgb() {
+        for kind in ["claude", "codex"] {
+            let expected = rimz::agents::descriptor_by_kind(kind)
+                .expect("registered descriptor")
+                .brand
+                .color_rgb;
+            assert_eq!(brand_style(kind), Some(rgb_style(expected)));
+        }
+
+        assert_eq!(brand_style("unknown"), None);
+    }
 }

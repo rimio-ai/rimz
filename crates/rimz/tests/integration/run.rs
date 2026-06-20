@@ -425,29 +425,53 @@ fn agents_show_falls_back_to_audit_rollup_for_stale_card() {
         .expect("spawn agents list --all");
     assert!(
         out.status.success(),
-        "agents list --all should print the audit table\nstdout:\n{}\nstderr:\n{}",
+        "agents list --all should print the live table\nstdout:\n{}\nstderr:\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(
-        stdout.contains("LIFECYCLE"),
-        "missing lifecycle column: {stdout}"
+        stdout.contains("CHANNEL"),
+        "missing channel column: {stdout}"
     );
     assert!(
-        stdout.contains("@claude#pets"),
-        "stale card shows its channelled canonical address: {stdout}"
+        !stdout.contains("LIFECYCLE"),
+        "list no longer prints audit lifecycle rows: {stdout}"
     );
     assert!(
-        stdout.contains("stale"),
-        "stale audit card should be labelled: {stdout}"
+        !stdout.contains("@claude#pets"),
+        "stale card should not surface in live list: {stdout}"
     );
-    for removed in ["TODO", "WORKTREE", "PANE"] {
-        assert!(
-            !stdout.contains(removed),
-            "agents list --all should omit the {removed} column: {stdout}"
-        );
-    }
+    assert!(
+        !stdout.contains("stale"),
+        "stale audit label should not surface in live list: {stdout}"
+    );
+}
+
+#[test]
+fn agents_list_prints_channel_column_without_audit_lifecycle() {
+    let env = Env::new();
+
+    let out = env
+        .rimz()
+        .args(["agents", "list"])
+        .output()
+        .expect("spawn agents list");
+    assert!(
+        out.status.success(),
+        "agents list should print the live table\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("CHANNEL"),
+        "missing channel column: {stdout}"
+    );
+    assert!(
+        !stdout.contains("LIFECYCLE"),
+        "list should not print the audit lifecycle column: {stdout}"
+    );
 }
 
 #[test]

@@ -93,6 +93,13 @@ fn agents_list_verb_does_not_parse_as_launch_spec() {
 }
 
 #[test]
+fn agents_list_all_conflicts_with_worktree_filter() {
+    let err = AgentsHarness::try_parse_from(["rimz", "list", "--all", "--worktree", "docs"])
+        .expect_err("all channels and one channel conflict");
+    assert_eq!(err.kind(), clap::error::ErrorKind::ArgumentConflict);
+}
+
+#[test]
 fn agents_bare_json_parses_as_list_flag() {
     let parsed = AgentsHarness::try_parse_from(["rimz", "--json"]).expect("parse agents json");
     assert!(parsed.args.command.is_none());

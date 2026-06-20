@@ -74,7 +74,7 @@ Full remote examples and target grammar live in [Getting started](./cli/getting-
 
 ```sh
 rimz agents [--json]
-rimz agents list|ls [--json] [--worktree <name>]
+rimz agents list|ls [--json] [--all] [--worktree <name>]
 rimz agents show <ref> [--json]
 rimz agents focus <ref>
 rimz agents wait <ref> [--timeout <duration>] [--stream [--from-start]] [--json]

@@ -21,7 +21,7 @@ rimz agents focus @claude#auth-refresh        # jump to the pane when it needs y
 
 ```sh
 rimz agents                              # live root-agent cards
-rimz agents list --all                   # include audit rollup rows
+rimz agents list --all                   # every channel (default is the current one)
 rimz agents list --worktree auth-refresh # filter to one branch / worktree / dir
 rimz agents show swift-otter             # one card plus its newest run record
 rimz agents show swift-otter --json      # the AgentState record
@@ -72,7 +72,7 @@ rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] 
 
 ### Listing and inspecting
 
-Bare `rimz agents` lists live root-agent cards in attention order. The lead `AGENT` column is the agent's canonical address — its role (`@coder#auth-refresh`) when a unique team role names it, then its profile (`@planner#auth-refresh`), else `@<kind>#<channel>`, growing an ordinal (`@claude-2#auth-refresh`) only when two of a kind share one worktree — so the column reads as the address you would type back. `list --all` adds audit rollup rows, `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, session, status, model, context, worktree, pane) and its newest attached run record when present. When the agent is waiting on a native ask, `show` adds an `ask` line with the question and options; `show --json` includes the same projection as `ask`. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
+Bare `rimz agents` lists live root-agent cards in attention order, scoped to the current channel when the command runs from a worktree and widened with `list --all`. The lead `AGENT` column is the shortest handle you type back within that scope — its role (`@coder`) when a unique team role names it, then its profile (`@planner`), else `@<kind>`, growing an ordinal (`@claude-2`) only when two of a kind share one worktree — and the `CHANNEL` column carries `#<channel>`. The `MODEL` column uses the agent kind's brand color. `--worktree` filters by branch, worktree name, or directory basename, and `--json` emits the filtered `AgentState` records. `show` prints one card (its handle, kind, petname, session, status, model, context, worktree, pane) and its newest attached run record when present. When the agent is waiting on a native ask, `show` adds an `ask` line with the question and options; `show --json` includes the same projection as `ask`. `--json` selects JSON for `list` and bare `agents` card output — not for `-p`, which has its own `--output-format`.
 
 ### Inspect transcripts
 
