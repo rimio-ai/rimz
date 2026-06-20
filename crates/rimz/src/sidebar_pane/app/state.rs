@@ -192,8 +192,13 @@ pub(super) fn apply_fetch_outcome(
     } else {
         focused_working_pane(current)
     };
+    let viewing_active_pane = current
+        .own_view
+        .as_ref()
+        .is_some_and(|view| view.active_pane_is_viewed);
     let focused_row_id = focused_pane
         .as_ref()
+        .filter(|_| viewing_active_pane)
         .and_then(|pane| row_id_of_pane(current, pane));
     let marks = read_marks.load_merged();
     let live: HashSet<String> = current

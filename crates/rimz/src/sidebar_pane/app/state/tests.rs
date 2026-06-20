@@ -107,6 +107,7 @@ fn row_snapshot_at(
             sibling_count: 2,
             own_is_active: false,
             active_pane_id: Some(pane_id),
+            active_pane_is_viewed: true,
             working_pane_ids: Vec::new(),
             focus_contested: false,
             own_view_is_daemon: false,
@@ -209,6 +210,7 @@ fn two_pane_snapshot(
         sibling_count: 2,
         own_is_active: false,
         active_pane_id: Some(active),
+        active_pane_is_viewed: true,
         working_pane_ids: vec![first.clone(), second.clone()],
         focus_contested,
         own_view_is_daemon: false,
@@ -382,6 +384,41 @@ fn focus_clears_sticky_unread_after_status_returns_to_running() {
     assert!(
         runtime.sidebar_read_marks_path(&instance_a).exists(),
         "viewing a sticky unread row writes a read receipt even after status recovery"
+    );
+    assert!(!row_unread(&a.current));
+}
+
+#[test]
+fn background_active_pane_does_not_focus_clear_until_viewed() {
+    let ws = workspace();
+    let (_dir, runtime) = runtime_for(&ws);
+    let instance_a = SidebarInstanceId::new();
+    let mut a = ApplyHarness::for_runtime(&ws, runtime.clone(), instance_a.clone());
+    let read_marks = runtime.sidebar_read_marks_path(&instance_a);
+    let mut background =
+        row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
+    background.worktree_groups[0].rows[0].unread = true;
+    background
+        .own_view
+        .as_mut()
+        .expect("own view")
+        .active_pane_is_viewed = false;
+
+    a.apply(background);
+
+    assert!(row_unread(&a.current));
+    assert!(
+        !read_marks.exists(),
+        "a background tab's active pane must not write a focus receipt"
+    );
+
+    let mut viewed = row_snapshot_at(&ws, AgentStatus::Waiting, true, fixed_time(1_700_000_000));
+    viewed.worktree_groups[0].rows[0].unread = true;
+    a.apply(viewed);
+
+    assert!(
+        read_marks.exists(),
+        "viewing the active pane writes the normal focus receipt"
     );
     assert!(!row_unread(&a.current));
 }

@@ -123,6 +123,7 @@ impl SidebarSnapshot {
             && let Some(view) = &mut self.own_view
         {
             view.active_pane_id = None;
+            view.active_pane_is_viewed = false;
         }
         changed
     }
@@ -199,8 +200,10 @@ impl SidebarSnapshot {
                 if view.active_pane_id.as_ref() != Some(own_focused)
                     || view.own_is_active
                     || view.focus_contested
+                    || !view.active_pane_is_viewed
                 {
                     view.active_pane_id = Some(own_focused.clone());
+                    view.active_pane_is_viewed = true;
                     view.own_is_active = false;
                     view.focus_contested = false;
                     changed = true;
@@ -211,6 +214,7 @@ impl SidebarSnapshot {
                 .is_some_and(|active| unfocused.iter().any(|pane_id| pane_id == active))
             {
                 view.active_pane_id = None;
+                view.active_pane_is_viewed = false;
                 changed = true;
             }
         }

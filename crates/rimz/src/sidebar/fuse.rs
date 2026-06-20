@@ -156,6 +156,7 @@ mod tests {
             sibling_count: working.len(),
             own_is_active: false,
             active_pane_id: active,
+            active_pane_is_viewed: false,
             working_pane_ids: working.iter().map(|&pane_id| pane_id.clone()).collect(),
             focus_contested: false,
             own_view_is_daemon: false,
@@ -422,9 +423,11 @@ mod tests {
         );
 
         let fused = fuse(&snapshot, &store, 12);
-        assert_eq!(
-            fused.own_view.and_then(|view| view.active_pane_id),
-            Some(active)
+        let view = fused.own_view.expect("own view kept");
+        assert_eq!(view.active_pane_id, Some(active));
+        assert!(
+            view.active_pane_is_viewed,
+            "a FocusChanged event that names an own working pane is a viewing signal"
         );
     }
 
@@ -555,11 +558,12 @@ mod tests {
         );
 
         let fused = fuse(&snapshot, &store, 11);
+        let view = fused.own_view.expect("own view kept");
         assert_eq!(
-            fused.own_view.and_then(|view| view.active_pane_id),
-            None,
+            view.active_pane_id, None,
             "the renderer holds its last selection on a None derivation"
         );
+        assert!(!view.active_pane_is_viewed);
     }
 
     #[test]

@@ -332,6 +332,7 @@ fn legacy_frame_without_observed_time_or_focus_contested_parses() {
     assert_eq!(frame.produced_at_ms, 7);
     assert_eq!(frame.observed_at_ms, None);
     assert!(frame.carried_panes.is_empty());
+    assert!(frame.viewed_panes.is_empty());
     assert!(!frame.tabs[0].focus_contested);
     assert_eq!(
         frame.observed_or_produced_at_ms(),
@@ -556,6 +557,32 @@ fn own_view_derives_from_the_own_tab() {
         "the working set names only this tab's siblings — the fused \
          focus filter rides it"
     );
+}
+
+#[test]
+fn own_view_marks_active_pane_viewed_from_client_focus() {
+    let own = PaneId::from_parts(MuxName::Zellij, "terminal_1");
+    let active = PaneId::from_parts(MuxName::Zellij, "terminal_2");
+    let foreign = PaneId::from_parts(MuxName::Zellij, "terminal_9");
+    let mut frame = assemble_frame(
+        vec![
+            pane("terminal_1", "tab_0", Some("rimz-sidebar"), false),
+            pane("terminal_2", "tab_0", Some("zsh"), true),
+        ],
+        1,
+        "rimz-test",
+    );
+
+    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
+    assert!(!view.active_pane_is_viewed);
+
+    frame.viewed_panes = vec![active];
+    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
+    assert!(view.active_pane_is_viewed);
+
+    frame.viewed_panes = vec![foreign];
+    let view = SidebarOwnView::from_frame(&own, &frame).expect("own pane is present");
+    assert!(!view.active_pane_is_viewed);
 }
 
 fn own_view(own: &str, panes: Vec<PaneRef>) -> Option<SidebarOwnView> {

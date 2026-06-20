@@ -10,7 +10,7 @@ use super::Result;
 use crate::ids::{AgentSessionId, MuxName, PaneId};
 use crate::ledger::atomic;
 use crate::ledger::single_flight::{self, Coalesced};
-use crate::mux::{PaneListOptions, PaneListing};
+use crate::mux::{ClientFocusOptions, PaneListOptions, PaneListing};
 use crate::schema::diag::{DiagEvent, FrameRejectReason};
 use crate::sidebar::cache::{
     SNAPSHOT_CACHE_TTL, effective_pane_ttl, presence_stamp_age_ms, read_snapshot_cache,
@@ -56,9 +56,10 @@ fn fresh_snapshot_cache(
 /// The session's live panes from the mux — the `list-panes` round-trip the
 /// snapshot cache amortizes across the fleet. The ledger rollup is read
 /// separately (fresh from `latest.json`), so this enumerates only the pane set.
-/// One round-trip is the whole cost: the per-view `is_focused` mark rides the
-/// pane list itself, so the sidebar's selection baseline needs no second
-/// per-client probe.
+/// The per-view `is_focused` mark rides the pane list itself for the sidebar's
+/// selection baseline. The elected producer also samples the attached clients'
+/// viewed panes once per tick so focus-clearing unread is gated on the tab the
+/// user is actually viewing.
 fn list_session_panes(
     mux: MuxName,
     session: &str,
@@ -500,6 +501,12 @@ pub(super) fn cached_panes_or_produce(
             });
         emit_frame_diagnostics(diag, diagnostics);
         repair_pane_frame(&mut frame, runtime, &cache_path, session, enrich_metrics);
+        frame.viewed_panes = crate::mux::backend_for(mux)
+            .focused_client_panes(ClientFocusOptions {
+                session_name: Some(session.to_owned()),
+                ..Default::default()
+            })
+            .unwrap_or_default();
         Ok(frame)
     };
     match single_flight::coalesce(

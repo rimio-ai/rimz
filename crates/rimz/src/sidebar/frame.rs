@@ -37,6 +37,10 @@ pub struct PaneFrame {
     /// Empty on healthy frames and on legacy frames.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub carried_panes: Vec<CarriedPane>,
+    /// Panes attached clients are currently viewing, one per client. This is the
+    /// global-focus signal that the per-tab `active_pane` is not.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewed_panes: Vec<PaneId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -286,6 +290,9 @@ impl SidebarOwnView {
                 .any(|pane| pane.pane_id == *active)
                 .then(|| active.clone())
         });
+        let active_pane_is_viewed = active_pane_id
+            .as_ref()
+            .is_some_and(|pane| frame.viewed_panes.contains(pane));
         let working_pane_ids = non_sidebar_siblings
             .iter()
             .map(|pane| pane.pane_id.clone())
@@ -298,6 +305,7 @@ impl SidebarOwnView {
             sibling_count: siblings.len(),
             own_is_active: tab.active_pane.as_ref() == Some(&own_pane.pane_id),
             active_pane_id,
+            active_pane_is_viewed,
             working_pane_ids,
             own_view_is_daemon,
             focus_contested: tab.focus_contested,
@@ -424,6 +432,7 @@ pub fn assemble_frame_from_inputs(inputs: FrameInputs<'_>) -> (PaneFrame, Vec<Di
             session_name,
             tabs: tabs.into_values().collect(),
             carried_panes: Vec::new(),
+            viewed_panes: Vec::new(),
         },
         diagnostics,
     )

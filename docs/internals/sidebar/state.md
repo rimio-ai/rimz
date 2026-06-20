@@ -64,7 +64,7 @@ The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `
 | --- | --- | --- | --- |
 | `PaneClosed` | `pane_id` | Delete every rendered row bound to the pane | Zellij plugin through `rimz sidebar wake` |
 | `CommandChanged` | `pane_id`, `command` | Overlay command and reset the pane's row shape until the pull verifies it | Zellij plugin through `rimz sidebar wake` |
-| `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes | Zellij plugin through `rimz sidebar wake`, renderer jumps |
+| `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes; mark that active pane as viewed for focus-clear gating | Zellij plugin through `rimz sidebar wake`, renderer jumps |
 | `FocusStranded` | stranded sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held baseline or first own-view working sibling | Zellij plugin through `rimz sidebar wake` |
 | `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; the verified pane frame admits the card | Zellij plugin for exact opens |
 | `PanesChanged` | none | Nudge a producer verification pull — topology moved, identity unknown | tmux control-mode watcher, the Zellij plugin's manifest fold, any sparse poke |
@@ -86,7 +86,7 @@ Fusion is pure over pulled truth, event store, and `now_ms`; it performs no IO, 
 
 `SidebarSnapshot::panes_observed_at_ms.or(panes_produced_at_ms)` is the supersession baseline. An event whose `sent_at_ms` is not newer than the pane observation is skipped because the pull already observed later pane truth. A frame whose own view is focus-contested abstains from superseding `FocusChanged` events that name panes in that contested view.
 
-`PaneClosed` has highest precedence and deletes rows before other overlays run. `PaneOpened` never creates a row; it asks the producer for the verified frame that can admit one. `CommandChanged` overlays the command for non-deleted panes already admitted by the frame. The newest `FocusChanged` event lands last: row bits mirror every listed focus mark, and the own-view baseline retargets only onto one of the view's own working panes (`SidebarOwnView::working_pane_ids`) — a focus move in another tab is that view's mark, never this renderer's selection baseline.
+`PaneClosed` has highest precedence and deletes rows before other overlays run. `PaneOpened` never creates a row; it asks the producer for the verified frame that can admit one. `CommandChanged` overlays the command for non-deleted panes already admitted by the frame. The newest `FocusChanged` event lands last: row bits mirror every listed focus mark, and the own-view baseline retargets only onto one of the view's own working panes (`SidebarOwnView::working_pane_ids`) — a focus move in another tab is that view's mark, never this renderer's selection baseline. When the event names an own working pane, fusion also marks that pane viewed so a locally delivered focus move can clear unread before the next producer pull.
 
 Expired events disappear by receiver-clock TTL. A wrong visual verdict caused by a missed event or clock skew is bounded by the next producer pull.
 

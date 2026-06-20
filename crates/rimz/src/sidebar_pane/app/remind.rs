@@ -262,6 +262,7 @@ mod tests {
             sibling_count: working.len(),
             own_is_active: false,
             active_pane_id: active.map(|raw| PaneId::from_parts(crate::MuxName::Zellij, raw)),
+            active_pane_is_viewed: false,
             working_pane_ids: working
                 .into_iter()
                 .map(|raw| PaneId::from_parts(crate::MuxName::Zellij, raw))

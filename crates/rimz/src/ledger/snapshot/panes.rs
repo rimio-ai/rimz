@@ -33,6 +33,11 @@ pub struct SidebarOwnView {
     /// from it (see `sidebar_pane::app::selection`) — same-tab by construction,
     /// defined whether or not a client is viewing the tab.
     pub active_pane_id: Option<PaneId>,
+    /// True when the view's active pane is the pane an attached client is
+    /// actually viewing. This gates focus-clearing unread while the active-pane
+    /// baseline remains defined for every view.
+    #[serde(default)]
+    pub active_pane_is_viewed: bool,
     /// The view's working (non-sidebar) sibling pane ids — the only panes a
     /// fused focus event may retarget `active_pane_id` onto. A `FocusChanged`
     /// patch is session-broadcast and carries every view's per-view marks, so
