@@ -320,6 +320,8 @@ fn agent_observation(project_root: &Path) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
+        role: None,
+        profile: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,
         agent_pid: None,

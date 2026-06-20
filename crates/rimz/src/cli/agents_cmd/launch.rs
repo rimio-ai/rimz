@@ -307,13 +307,20 @@ pub(super) fn agent_launch_env(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct AgentLaunchEnvIdentity<'a> {
+    pub(super) run_id: Option<&'a rimz::RunId>,
+    pub(super) agent_name: Option<&'a str>,
+    pub(super) agent_profile: Option<&'a str>,
+    pub(super) agent_role: Option<&'a str>,
+    pub(super) agent_model: Option<&'a str>,
+    pub(super) agent_effort: Option<&'a str>,
+}
+
 pub(super) fn full_agent_launch_env(
     project_root: &Path,
     adapter: &dyn AgentAdapter,
-    run_id: Option<&rimz::RunId>,
-    agent_name: Option<&str>,
-    agent_profile: Option<&str>,
-    agent_role: Option<&str>,
+    identity: AgentLaunchEnvIdentity<'_>,
 ) -> Result<BTreeMap<String, String>> {
     let kind = adapter.descriptor().kind;
     let mut env = agent_launch_env(project_root, kind)?;
@@ -321,20 +328,32 @@ pub(super) fn full_agent_launch_env(
         env.insert(key.to_owned(), value.to_owned());
     }
     env.insert(rimz::run::ENV_AGENT_KIND.to_owned(), kind.to_owned());
-    if let Some(run_id) = run_id {
+    if let Some(run_id) = identity.run_id {
         env.insert(rimz::run::ENV_RUN_ID.to_owned(), run_id.as_str().to_owned());
     }
-    if let Some(agent_name) = agent_name {
+    if let Some(agent_name) = identity.agent_name {
         env.insert(rimz::run::ENV_AGENT_NAME.to_owned(), agent_name.to_owned());
     }
-    if let Some(agent_profile) = agent_profile {
+    if let Some(agent_profile) = identity.agent_profile {
         env.insert(
             rimz::run::ENV_AGENT_PROFILE.to_owned(),
             agent_profile.to_owned(),
         );
     }
-    if let Some(agent_role) = agent_role {
+    if let Some(agent_role) = identity.agent_role {
         env.insert(rimz::run::ENV_AGENT_ROLE.to_owned(), agent_role.to_owned());
+    }
+    if let Some(agent_model) = identity.agent_model {
+        env.insert(
+            rimz::run::ENV_AGENT_MODEL.to_owned(),
+            agent_model.to_owned(),
+        );
+    }
+    if let Some(agent_effort) = identity.agent_effort {
+        env.insert(
+            rimz::run::ENV_AGENT_EFFORT.to_owned(),
+            agent_effort.to_owned(),
+        );
     }
     validate_agent_launch_env(kind, &env)?;
     Ok(env)
@@ -573,6 +592,8 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 kind,
                 args,
                 mode: cell_mode,
+                model,
+                effort,
                 ..
             } = cell
             else {
@@ -590,6 +611,15 @@ pub(super) fn apply_launch_mode_and_passthrough(
                 let adapter = adapter
                     .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", kind.as_str()))?;
                 args.extend(adapter.render_preset(preset).map_err(launch_option_error)?);
+                if let Some(preset_model) = preset.model.as_ref().filter(|model| !model.is_empty())
+                {
+                    *model = Some(preset_model.clone());
+                }
+                if let Some(preset_effort) =
+                    preset.effort.as_ref().filter(|effort| !effort.is_empty())
+                {
+                    *effort = Some(preset_effort.clone());
+                }
             }
             args.extend(passthrough.iter().cloned());
         }
@@ -821,6 +851,8 @@ pub(super) fn pane_cmd_with_name(
             args,
             profile,
             role,
+            model,
+            effort,
             ..
         } => {
             let mut argv = vec![
@@ -837,6 +869,12 @@ pub(super) fn pane_cmd_with_name(
             }
             if let Some(role) = role {
                 argv.extend(["--agent-role".to_owned(), role.clone()]);
+            }
+            if let Some(model) = model {
+                argv.extend(["--agent-model".to_owned(), model.clone()]);
+            }
+            if let Some(effort) = effort {
+                argv.extend(["--agent-effort".to_owned(), effort.clone()]);
             }
             if let Some(launch) = launch {
                 validate_agent_name(&launch.name)?;

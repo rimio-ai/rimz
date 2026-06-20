@@ -224,6 +224,12 @@ struct ExecArgs {
     /// pane's sender-attribution identity.
     #[arg(long)]
     agent_role: Option<String>,
+    /// The profile/CLI-selected model to stamp into lifecycle observations.
+    #[arg(long)]
+    agent_model: Option<String>,
+    /// The profile/CLI-selected reasoning effort to stamp into lifecycle observations.
+    #[arg(long)]
+    agent_effort: Option<String>,
     #[arg(long)]
     launch_id: Option<String>,
     #[arg(long, hide = true)]

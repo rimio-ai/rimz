@@ -60,6 +60,7 @@ use self::transcript::{
 use self::transcript::{
     configured_model_at, configured_reasoning_effort_at, detect_turn_complete,
     find_session_transcript_under, transcript_enrichment, transcript_stat, usage_from_transcript,
+    with_codex_config_path,
 };
 use super::context::AgentContext;
 use super::descriptor::{
@@ -323,6 +324,10 @@ impl AgentAdapter for CodexAdapter {
 
     fn default_launch_model(&self) -> Option<String> {
         configured_model().or_else(|| self.descriptor().default_model.map(ToOwned::to_owned))
+    }
+
+    fn configured_identity(&self) -> (Option<String>, Option<String>) {
+        (configured_model(), configured_reasoning_effort())
     }
 
     /// `codex resume <id>` resolves the UUID to its rollout file and restores
@@ -922,7 +927,7 @@ fn build_codex_observation(
     observation.turn_error = transcript.turn_error;
     let reported_context_window = usage.reported_context_window();
     observation.model = optional_payload_string(payload, &["model"]).or(usage.model);
-    observation.effort = payload_reasoning_effort(payload).or_else(configured_reasoning_effort);
+    observation.effort = payload_reasoning_effort(payload);
     observation.context_window = reported_context_window;
     observation.total_tokens = payload_total_tokens(payload, usage.total_tokens);
     observation.cache_read_input_tokens = usage.last_cached_input_tokens;

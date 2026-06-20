@@ -363,6 +363,13 @@ pub trait AgentAdapter: Send + Sync {
         self.descriptor().default_model.map(ToOwned::to_owned)
     }
 
+    /// The agent's configured launch model and reasoning effort, used only as
+    /// the lowest-priority card-identity fallback after native payloads and the
+    /// launcher-selected preset env.
+    fn configured_identity(&self) -> (Option<String>, Option<String>) {
+        (None, None)
+    }
+
     fn classify_hook(&self, event_name: &str, payload: &Value) -> ClassifiedHook;
 
     /// Test-only native payload corpus for registry-wide adapter conformance.

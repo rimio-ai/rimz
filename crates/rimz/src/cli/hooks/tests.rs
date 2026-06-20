@@ -2,14 +2,17 @@ use super::binding_select::{
     BindingRejectReason, BindingSelectionMethod, PriorAgentPane, select_focused_pane_binding,
 };
 use super::lifecycle::append_lifecycle_event;
+use super::lifecycle::fill_root_launch_identity;
 use super::proctree::matches_agent_kind;
 use BindingRejectReason::*;
 use BindingSelectionMethod::{ClientFocus, SingleCandidate, TabFocus};
+use rimz::agents::AgentLifecycleObservation;
 use rimz::agents::lifecycle::{
     LifecycleSignal, LifecycleState, Transition, TransitionKind, TurnPhase,
 };
 use rimz::feed::AgentStatus;
 use rimz::feed::PaneRef;
+use rimz::ids::AgentSessionId;
 use rimz::ids::{MuxName, PaneId};
 
 struct Case {
@@ -70,6 +73,26 @@ fn transition(kind: TransitionKind, compaction_closed: bool) -> Transition {
         kind,
         compaction_closed,
         opened_turn: false,
+    }
+}
+
+fn root_observation() -> AgentLifecycleObservation {
+    AgentLifecycleObservation::new(
+        Some(AgentSessionId::from("sess-1")),
+        LifecycleSignal::Registered,
+    )
+}
+
+fn launch_identity_env(
+    _observation: &AgentLifecycleObservation,
+    var: &'static str,
+) -> Option<String> {
+    match var {
+        rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+        rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
+        rimz::run::ENV_AGENT_MODEL => Some("env-model".to_owned()),
+        rimz::run::ENV_AGENT_EFFORT => Some("env-effort".to_owned()),
+        _ => None,
     }
 }
 
@@ -155,6 +178,65 @@ fn lifecycle_append_gate_keeps_durable_truth_for_progress_signals() {
         ),
         "pre-tool proof-of-work is durable when it closes an open compaction bracket"
     );
+}
+
+#[test]
+fn root_launch_identity_fills_from_env_then_config_without_clobbering_payload() {
+    let mut observed = root_observation();
+    fill_root_launch_identity(
+        &mut observed,
+        (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        launch_identity_env,
+    );
+    assert_eq!(observed.role.as_deref(), Some("coder"));
+    assert_eq!(observed.profile.as_deref(), Some("codex-coder"));
+    assert_eq!(observed.model.as_deref(), Some("env-model"));
+    assert_eq!(observed.effort.as_deref(), Some("env-effort"));
+
+    let mut payload = root_observation();
+    payload.role = Some("payload-role".to_owned());
+    payload.profile = Some("payload-profile".to_owned());
+    payload.model = Some("payload-model".to_owned());
+    payload.effort = Some("payload-effort".to_owned());
+    fill_root_launch_identity(
+        &mut payload,
+        (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        launch_identity_env,
+    );
+    assert_eq!(payload.role.as_deref(), Some("payload-role"));
+    assert_eq!(payload.profile.as_deref(), Some("payload-profile"));
+    assert_eq!(payload.model.as_deref(), Some("payload-model"));
+    assert_eq!(payload.effort.as_deref(), Some("payload-effort"));
+
+    let mut configured = root_observation();
+    fill_root_launch_identity(
+        &mut configured,
+        (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        |_observation, var| match var {
+            rimz::run::ENV_AGENT_ROLE => Some("coder".to_owned()),
+            rimz::run::ENV_AGENT_PROFILE => Some("codex-coder".to_owned()),
+            _ => None,
+        },
+    );
+    assert_eq!(configured.model.as_deref(), Some("cfg-model"));
+    assert_eq!(configured.effort.as_deref(), Some("cfg-effort"));
+}
+
+#[test]
+fn subagent_launch_identity_is_not_inherited_from_parent_env() {
+    let mut observed = root_observation();
+    observed.parent_agent_id = Some(AgentSessionId::from("parent-1"));
+
+    fill_root_launch_identity(
+        &mut observed,
+        (Some("cfg-model".to_owned()), Some("cfg-effort".to_owned())),
+        launch_identity_env,
+    );
+
+    assert_eq!(observed.role, None);
+    assert_eq!(observed.profile, None);
+    assert_eq!(observed.model, None);
+    assert_eq!(observed.effort, None);
 }
 
 #[test]

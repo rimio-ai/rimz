@@ -24,6 +24,12 @@ pub const ENV_AGENT_PROFILE: &str = "RIMZ_AGENT_PROFILE";
 /// The `[agents.teams]` role name an agent launched as, so it answers to
 /// `@<role>`. Set by the launch wrapper; read into the lifecycle observation.
 pub const ENV_AGENT_ROLE: &str = "RIMZ_AGENT_ROLE";
+/// The model selected by launch flags or profile presets. Set by the launch
+/// wrapper; read into the lifecycle observation as card identity fallback.
+pub const ENV_AGENT_MODEL: &str = "RIMZ_AGENT_MODEL";
+/// The reasoning effort selected by launch flags or profile presets. Set by
+/// the launch wrapper; read into the lifecycle observation as card identity fallback.
+pub const ENV_AGENT_EFFORT: &str = "RIMZ_AGENT_EFFORT";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

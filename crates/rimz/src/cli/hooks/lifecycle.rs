@@ -93,7 +93,27 @@ fn record_lifecycle_observation(
         attach_agent_owner(agent.descriptor().kind, &mut observation);
         attach_agent_pane(&mut observation);
         if observation.agent_name.is_none() {
-            observation.agent_name = env_agent_name().or_else(|| proc_agent_name(&observation));
+            observation.agent_name = agent_identity_env(
+                &observation,
+                rimz::run::ENV_AGENT_NAME,
+                validate_agent_name_env,
+            );
+        }
+        if observation.parent_agent_id.is_none()
+            && (observation.role.is_none()
+                || observation.profile.is_none()
+                || observation.model.is_none()
+                || observation.effort.is_none())
+        {
+            let configured_identity = if observation.model.is_none() || observation.effort.is_none()
+            {
+                agent.configured_identity()
+            } else {
+                (None, None)
+            };
+            fill_root_launch_identity(&mut observation, configured_identity, |observation, var| {
+                agent_identity_env(observation, var, validate_non_empty_identity_env)
+            });
         }
         if observation.worktree_path.is_none() {
             observation.worktree_path = Some(workspace.worktree_root.display().to_string());
@@ -323,17 +343,47 @@ fn env_run_id() -> Option<rimz::RunId> {
     }
 }
 
-fn env_agent_name() -> Option<String> {
-    let raw = std::env::var(rimz::run::ENV_AGENT_NAME).ok()?;
-    validate_agent_name_env(raw, "env")
+type IdentityValidator = fn(String, &str, &str) -> Option<String>;
+
+fn agent_identity_env(
+    observation: &AgentLifecycleObservation,
+    var: &str,
+    validate: IdentityValidator,
+) -> Option<String> {
+    std::env::var(var)
+        .ok()
+        .and_then(|raw| validate(raw, "env", var))
+        .or_else(|| {
+            let raw = rimz::proc::env_var(observation.agent_pid?, var)?;
+            validate(raw, "process", var)
+        })
 }
 
-fn proc_agent_name(observation: &AgentLifecycleObservation) -> Option<String> {
-    let raw = rimz::proc::env_var(observation.agent_pid?, rimz::run::ENV_AGENT_NAME)?;
-    validate_agent_name_env(raw, "process")
+pub(super) fn fill_root_launch_identity(
+    observation: &mut AgentLifecycleObservation,
+    configured_identity: (Option<String>, Option<String>),
+    mut identity_env: impl FnMut(&AgentLifecycleObservation, &'static str) -> Option<String>,
+) {
+    if observation.parent_agent_id.is_some() {
+        return;
+    }
+    if observation.role.is_none() {
+        observation.role = identity_env(observation, rimz::run::ENV_AGENT_ROLE);
+    }
+    if observation.profile.is_none() {
+        observation.profile = identity_env(observation, rimz::run::ENV_AGENT_PROFILE);
+    }
+    if observation.model.is_none() {
+        observation.model =
+            identity_env(observation, rimz::run::ENV_AGENT_MODEL).or(configured_identity.0);
+    }
+    if observation.effort.is_none() {
+        observation.effort =
+            identity_env(observation, rimz::run::ENV_AGENT_EFFORT).or(configured_identity.1);
+    }
 }
 
-fn validate_agent_name_env(raw: String, source: &str) -> Option<String> {
+fn validate_agent_name_env(raw: String, source: &str, _var: &str) -> Option<String> {
     if rimz::petname::valid_name(&raw)
         && !rimz::petname::collides_with_reserved_prefix(&raw, rimz::agents::known_kinds())
     {
@@ -343,6 +393,19 @@ fn validate_agent_name_env(raw: String, source: &str) -> Option<String> {
             agent_name = %raw,
             source,
             "lifecycle: ignoring invalid Rimz agent name",
+        );
+        None
+    }
+}
+
+fn validate_non_empty_identity_env(raw: String, source: &str, var: &str) -> Option<String> {
+    let value = raw.trim();
+    if !value.is_empty() {
+        Some(value.to_owned())
+    } else {
+        warn!(
+            env_var = var,
+            source, "lifecycle: ignoring empty Rimz agent identity",
         );
         None
     }

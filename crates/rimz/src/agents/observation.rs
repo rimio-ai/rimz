@@ -32,6 +32,12 @@ pub struct AgentLifecycleObservation {
     /// `RIMZ_AGENT_NAME`; hand-launched agents get a deterministic fallback
     /// during reduction.
     pub agent_name: Option<String>,
+    /// The `[agents.teams]` role the launcher selected, passed through
+    /// `RIMZ_AGENT_ROLE`. The reducer projects it to the card handle.
+    pub role: Option<String>,
+    /// The `[agents.profiles]` profile the launcher selected, passed through
+    /// `RIMZ_AGENT_PROFILE`. Used as the card handle when no role is present.
+    pub profile: Option<String>,
     /// Display ordinal within this kind for the current room incarnation.
     /// The reducer derives it when the event omits it.
     pub kind_ordinal: Option<u32>,
@@ -110,6 +116,8 @@ impl AgentLifecycleObservation {
         Self {
             agent_id,
             agent_name: None,
+            role: None,
+            profile: None,
             kind_ordinal: None,
             signal,
             agent_pid: None,

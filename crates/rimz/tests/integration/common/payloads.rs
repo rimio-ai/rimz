@@ -39,6 +39,8 @@ fn registered_observation(agent_id: &str) -> AgentLifecycleObservation {
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from(agent_id)),
         agent_name: None,
+        role: None,
+        profile: None,
         kind_ordinal: None,
         signal: LifecycleSignal::Registered,
         agent_pid: None,

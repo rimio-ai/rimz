@@ -107,10 +107,14 @@ fn full_launch_env_marks_agent_kind() {
     let env = full_agent_launch_env(
         dir.path(),
         adapter,
-        None,
-        Some("swift-otter"),
-        Some("planner"),
-        Some("coder"),
+        AgentLaunchEnvIdentity {
+            agent_name: Some("swift-otter"),
+            agent_profile: Some("planner"),
+            agent_role: Some("coder"),
+            agent_model: Some("gpt-5.5"),
+            agent_effort: Some("xhigh"),
+            ..AgentLaunchEnvIdentity::default()
+        },
     )
     .expect("launch env");
 
@@ -130,6 +134,14 @@ fn full_launch_env_marks_agent_kind() {
         env.get(rimz::run::ENV_AGENT_ROLE).map(String::as_str),
         Some("coder")
     );
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_MODEL).map(String::as_str),
+        Some("gpt-5.5")
+    );
+    assert_eq!(
+        env.get(rimz::run::ENV_AGENT_EFFORT).map(String::as_str),
+        Some("xhigh")
+    );
 }
 
 #[test]
@@ -141,6 +153,8 @@ fn pane_command_stamps_agent_role() {
         system_prompt_file: None,
         profile: Some("claude-planner".to_owned()),
         role: Some("planner".to_owned()),
+        model: Some("claude-sonnet".to_owned()),
+        effort: Some("high".to_owned()),
     };
 
     let pane = pane_cmd_with_name(
@@ -166,6 +180,10 @@ fn pane_command_stamps_agent_role() {
             "claude-planner",
             "--agent-role",
             "planner",
+            "--agent-model",
+            "claude-sonnet",
+            "--agent-effort",
+            "high",
         ]
     );
 }
@@ -179,6 +197,8 @@ fn in_place_pane_command_leaves_user_pane_open() {
         system_prompt_file: None,
         profile: None,
         role: None,
+        model: None,
+        effort: None,
     };
 
     let pane = pane_cmd_with_name(
@@ -689,6 +709,8 @@ fn explicit_interactive_mode_applies_even_when_profile_added_args() {
         system_prompt_file: None,
         profile: None,
         role: None,
+        model: None,
+        effort: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -709,6 +731,54 @@ fn explicit_interactive_mode_applies_even_when_profile_added_args() {
 }
 
 #[test]
+fn launch_override_preset_replaces_cell_model_and_effort_identity() {
+    let mut layout = LayoutSpec::single(Cell::Agent {
+        kind: AgentKind::new_unchecked("codex"),
+        args: vec!["--model".to_owned(), "profile-model".to_owned()],
+        mode: None,
+        system_prompt_file: None,
+        profile: Some("codex-coder".to_owned()),
+        role: Some("coder".to_owned()),
+        model: Some("profile-model".to_owned()),
+        effort: Some("medium".to_owned()),
+    });
+
+    apply_launch_mode_and_passthrough(
+        &mut layout,
+        None,
+        &rimz::agents::LaunchPreset {
+            model: Some("override-model".to_owned()),
+            effort: Some("xhigh".to_owned()),
+            ..rimz::agents::LaunchPreset::default()
+        },
+        &[],
+    )
+    .expect("apply launch options");
+
+    let [column] = layout.columns.as_slice() else {
+        panic!("single column");
+    };
+    let [
+        Cell::Agent {
+            args,
+            model,
+            effort,
+            ..
+        },
+    ] = column.rows.as_slice()
+    else {
+        panic!("single agent cell");
+    };
+    assert!(args.contains(&"override-model".to_owned()), "{args:?}");
+    assert!(
+        args.contains(&"model_reasoning_effort=xhigh".to_owned()),
+        "{args:?}"
+    );
+    assert_eq!(model.as_deref(), Some("override-model"));
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+}
+
+#[test]
 fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
     let yolo_args = rimz::agents::find_adapter("codex")
         .expect("codex")
@@ -720,6 +790,8 @@ fn supervised_default_mode_skips_cells_with_virtual_or_profile_mode() {
         system_prompt_file: None,
         profile: None,
         role: None,
+        model: None,
+        effort: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -749,6 +821,8 @@ fn explicit_mode_skips_cells_with_virtual_or_profile_mode() {
         system_prompt_file: None,
         profile: None,
         role: None,
+        model: None,
+        effort: None,
     });
 
     apply_launch_mode_and_passthrough(
@@ -791,6 +865,8 @@ fn launch_identity_requests_carry_cell_profile_and_role() {
         system_prompt_file: None,
         profile: Some("codex-coder".to_owned()),
         role: Some("coder".to_owned()),
+        model: Some("gpt-5-codex".to_owned()),
+        effort: Some("high".to_owned()),
     });
 
     let requests = launch_identity_requests(&layout, None, None).unwrap();
@@ -825,6 +901,10 @@ fn exec_subcommand_captures_agent_args_after_separator() {
         "lucid-atlas",
         "--agent-role",
         "coder",
+        "--agent-model",
+        "gpt-5.5",
+        "--agent-effort",
+        "xhigh",
         "--launch-id",
         "launch_0123456789abcdef0123456789abcdef",
         "--exit-on-run-completion",
@@ -849,6 +929,8 @@ fn exec_subcommand_captures_agent_args_after_separator() {
     );
     assert_eq!(args.agent_name.as_deref(), Some("lucid-atlas"));
     assert_eq!(args.agent_role.as_deref(), Some("coder"));
+    assert_eq!(args.agent_model.as_deref(), Some("gpt-5.5"));
+    assert_eq!(args.agent_effort.as_deref(), Some("xhigh"));
     assert_eq!(
         args.launch_id.as_deref(),
         Some("launch_0123456789abcdef0123456789abcdef")
@@ -887,6 +969,8 @@ fn bare_exec_args() -> ExecArgs {
         agent_name: Some("lucid-atlas".to_owned()),
         agent_profile: None,
         agent_role: None,
+        agent_model: None,
+        agent_effort: None,
         launch_id: Some("launch_0123456789abcdef0123456789abcdef".to_owned()),
         exit_on_run_completion: false,
         close_pane_on_exit: false,

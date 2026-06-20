@@ -58,12 +58,12 @@ fn phase0_onboarding_hint_then_wire_then_agent_appears() {
 
     // The user follows the hint, installs hooks, and runs codex again. Now the
     // installed `SessionStart` reaches the ledger and the process row resolves
-    // into an idle agent row.
+    // into an idle agent row addressed by its team role.
     room.onboard(&["codex"]);
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("○ coder"),
         "a wired agent registers idle the moment its SessionStart lands:\n{screen}"
     );
 }
@@ -84,13 +84,13 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     // Wait for the lifecycle-backed agent row, not the bare substring "codex"
     // (the first-run hint contains it) or the synthesized idle Codex row that
     // can appear from live-pane presence before the event-fresh model folds in.
-    let screen = room.wait_for(|s| s.contains("○ codex") && s.contains("GPT 5.5"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ coder") && s.contains("GPT 5.5"), SETTLE);
     assert!(
         screen.contains("main ┄"),
         "the agent groups under its worktree:\n{screen}"
     );
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("○ coder"),
         "a launched-but-unprompted agent is idle:\n{screen}"
     );
     assert!(
@@ -106,7 +106,7 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
 
     let screen = room.wait_for(|s| s.contains("fix auth flow"), SETTLE);
     assert!(
-        thinking_row(&screen, "codex"),
+        thinking_row(&screen, "coder"),
         "a prompted agent opens its turn in the thinking phase:\n{screen}"
     );
     assert!(
@@ -117,11 +117,11 @@ fn phase1_to_3_agent_moves_from_idle_to_running_to_waiting() {
     room.agent_hook("codex", &permission_request("sess-1", "DO_NOT_RENDER_ME"));
 
     let screen = room.wait_for(
-        |s| s.contains("? codex") && s.contains("fix auth flow"),
+        |s| s.contains("? coder") && s.contains("fix auth flow"),
         SETTLE,
     );
     assert!(
-        screen.contains("? codex"),
+        screen.contains("? coder"),
         "a permission prompt makes the agent wait:\n{screen}"
     );
     assert!(
@@ -156,24 +156,24 @@ fn turn_phase_flips_thinking_to_working_on_first_edit() {
     room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
     room.agent_hook("codex", &user_prompt_submit("sess-1", "fix auth flow"));
 
-    let screen = room.wait_for(|s| thinking_row(s, "codex"), SETTLE);
+    let screen = room.wait_for(|s| thinking_row(s, "coder"), SETTLE);
     assert!(
-        thinking_row(&screen, "codex"),
+        thinking_row(&screen, "coder"),
         "a prompted agent opens its turn thinking:\n{screen}"
     );
 
     // A shell command mutates but edits nothing — the thinking head stays.
     room.agent_hook("codex", &post_tool_use("sess-1", "shell"));
-    let screen = room.wait_for(|s| thinking_row(s, "codex"), SETTLE);
+    let screen = room.wait_for(|s| thinking_row(s, "coder"), SETTLE);
     assert!(
-        thinking_row(&screen, "codex"),
+        thinking_row(&screen, "coder"),
         "a command-only turn is still thinking:\n{screen}"
     );
 
     room.agent_hook("codex", &post_tool_use("sess-1", "apply_patch"));
-    let screen = room.wait_for(|s| running_row(s, "codex"), SETTLE);
+    let screen = room.wait_for(|s| running_row(s, "coder"), SETTLE);
     assert!(
-        running_row(&screen, "codex"),
+        running_row(&screen, "coder"),
         "the first file edit flips the turn to working:\n{screen}"
     );
 }
@@ -285,17 +285,17 @@ fn phase6_reattach_reconstructs_from_ledger() {
         let room = RoomHarness::launch(&env, MuxName::Tmux);
         room.onboard(&["codex"]);
         room.agent_hook("codex", &session_start("sess-1", "GPT-5.5", "high", "main"));
-        room.wait_for(|s| s.contains("○ codex"), SETTLE);
+        room.wait_for(|s| s.contains("○ coder"), SETTLE);
     } // walk away — the renderer drops, the ledger stays.
 
     let room = RoomHarness::launch(&env, MuxName::Tmux);
-    let screen = room.wait_for(|s| s.contains("○ codex"), SETTLE);
+    let screen = room.wait_for(|s| s.contains("○ coder"), SETTLE);
     assert!(
         screen.contains("main ┄"),
         "reattach reconstructs the worktree group:\n{screen}"
     );
     assert!(
-        screen.contains("○ codex"),
+        screen.contains("○ coder"),
         "every agent returns where you left it:\n{screen}"
     );
 }

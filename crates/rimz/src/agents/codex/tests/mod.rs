@@ -143,3 +143,22 @@ plan_mode_reasoning_effort = "medium"
         Some("xhigh")
     );
 }
+
+#[test]
+fn configured_identity_reads_codex_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(
+        &path,
+        r#"
+model = "gpt-5.5-codex"
+model_reasoning_effort = "xhigh"
+"#,
+    )
+    .unwrap();
+
+    let (model, effort) = with_codex_config_path(&path, || CodexAdapter.configured_identity());
+
+    assert_eq!(model.as_deref(), Some("gpt-5.5-codex"));
+    assert_eq!(effort.as_deref(), Some("xhigh"));
+}

@@ -368,6 +368,34 @@ fn transcript_enrichment_maps_split_to_rich_usage_and_prices_cumulative_totals()
 }
 
 #[test]
+fn transcript_enrichment_uses_configured_model_when_tail_lacks_turn_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, "model = \"gpt-5\"\n").unwrap();
+    let usage = TranscriptUsage {
+        context_window: None,
+        context_window_reported: false,
+        total_tokens: None,
+        model: None,
+        last_input_tokens: None,
+        last_cached_input_tokens: None,
+        last_output_tokens: None,
+        cumulative_input_tokens: Some(1_000),
+        cumulative_cached_tokens: 400,
+        cumulative_output_tokens: Some(200),
+    };
+
+    let (_tokens, cost, model_id) =
+        with_codex_config_path(&path, || transcript_enrichment(&usage, None));
+
+    assert_eq!(model_id.as_deref(), Some("gpt-5"));
+    assert!(
+        cost.and_then(|cost| cost.total_cost_usd).is_some(),
+        "configured model prices cumulative totals"
+    );
+}
+
+#[test]
 fn refresh_transcript_context_stat_gate_skips_unchanged_tail_but_stale_effort_reruns() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rollout-session.jsonl");

@@ -140,11 +140,11 @@ fn tmux_room_shows_agent_after_hook() {
     let screen = capture_until(
         &socket,
         "room",
-        |s| s.contains("codex") && s.contains("main"),
+        |s| s.contains("coder") && s.contains("main"),
         CAPTURE_BUDGET,
     );
     assert!(
-        screen.contains("codex"),
+        screen.contains("coder"),
         "the live tmux sidebar pane should show the agent row:\n{screen}"
     );
     assert!(
@@ -242,11 +242,11 @@ fn tmux_sidebar_self_closes_without_full_width_flash() {
     let latched = capture_until(
         &socket,
         "room",
-        |s| s.contains("codex") && s.contains("main"),
+        |s| s.contains("coder") && s.contains("main"),
         CAPTURE_BUDGET,
     );
     assert!(
-        latched.contains("codex"),
+        latched.contains("coder"),
         "the sidebar must render its sibling before we test self-close:\n{latched}"
     );
 

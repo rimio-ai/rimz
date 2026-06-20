@@ -313,6 +313,27 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
 }
 
 #[test]
+fn lifecycle_role_and_profile_project_without_launch_placeholder() {
+    let lifecycle = raw_lifecycle(
+        "claude",
+        json!({
+            "agent_id": "sess-1",
+            "agent_name": "lucid-atlas",
+            "role": "reviewer",
+            "profile": "claude-reviewer",
+            "signal": { "signal": "registered" },
+        }),
+    );
+
+    let agents = reduce_agent_states(&[lifecycle]);
+
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0].agent_id.as_str(), "sess-1");
+    assert_eq!(agents[0].profile.as_deref(), Some("claude-reviewer"));
+    assert_eq!(agents[0].role.as_deref(), Some("reviewer"));
+}
+
+#[test]
 fn lifecycle_registration_merges_provisional_card_by_name() {
     let events = vec![
         raw_launch(

@@ -29,10 +29,14 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let rimz_env = full_agent_launch_env(
         &workspace.project_root,
         adapter,
-        args.run_id.as_ref(),
-        args.agent_name.as_deref(),
-        args.agent_profile.as_deref(),
-        args.agent_role.as_deref(),
+        AgentLaunchEnvIdentity {
+            run_id: args.run_id.as_ref(),
+            agent_name: args.agent_name.as_deref(),
+            agent_profile: args.agent_profile.as_deref(),
+            agent_role: args.agent_role.as_deref(),
+            agent_model: args.agent_model.as_deref(),
+            agent_effort: args.agent_effort.as_deref(),
+        },
     )?;
     let argv = rimz::launch::login_shell_argv(&rimz_env, &argv);
     let (program, rest) = argv

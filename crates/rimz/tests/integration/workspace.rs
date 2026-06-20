@@ -254,6 +254,8 @@ fn lifecycle_observation(signal: LifecycleSignal, branch: &str) -> AgentLifecycl
     AgentLifecycleObservation {
         agent_id: Some(AgentSessionId::from("claude-1")),
         agent_name: None,
+        role: None,
+        profile: None,
         kind_ordinal: None,
         signal,
         agent_pid: None,

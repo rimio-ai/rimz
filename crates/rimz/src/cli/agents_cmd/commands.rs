@@ -477,19 +477,22 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     if layout_cell_count(&layout) != 1 {
         bail!("--print requires a single-cell agent layout");
     }
-    let (kind, agent_args, cell_mode, cell_profile, cell_role) = agent_cells[0];
-    let adapter = rimz::agents::find_adapter(kind)
-        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{kind}`"))?;
+    let agent_cell = agent_cells[0];
+    let adapter = rimz::agents::find_adapter(agent_cell.kind)
+        .ok_or_else(|| anyhow::anyhow!("unknown agent kind `{}`", agent_cell.kind))?;
     let launch_env = full_agent_launch_env(
         &workspace.project_root,
         adapter,
-        None,
-        None,
-        cell_profile,
-        cell_role,
+        AgentLaunchEnvIdentity {
+            agent_profile: agent_cell.profile,
+            agent_role: agent_cell.role,
+            agent_model: agent_cell.model,
+            agent_effort: agent_cell.effort,
+            ..AgentLaunchEnvIdentity::default()
+        },
     )?;
     supervised::preflight_agent(adapter)?;
-    supervised::preflight_program(adapter, agent_args, &prompt, &launch_env)?;
+    supervised::preflight_program(adapter, agent_cell.args, &prompt, &launch_env)?;
 
     let launch = crate::cli::agents_launch::resolve_cwd(
         &workspace,
@@ -535,7 +538,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         machine_config.sidebar.focus_key_label(),
     );
 
-    let permission_mode = cell_mode.unwrap_or(mode_application.mode);
+    let permission_mode = agent_cell.mode.unwrap_or(mode_application.mode);
     let mut record = RunRecord::new(
         workspace.workspace_id.clone(),
         AgentKind::new_unchecked(adapter.descriptor().kind),
@@ -576,13 +579,15 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
         adapter,
         run_id: &run_id,
         agent_name: Some(&launch_identity.name),
-        agent_profile: cell_profile,
-        agent_role: cell_role,
+        agent_profile: agent_cell.profile,
+        agent_role: agent_cell.role,
+        agent_model: agent_cell.model,
+        agent_effort: agent_cell.effort,
         launch_id: Some(&launch_identity.agent_id),
         cwd: &launch.cwd,
         prompt: &prompt,
         cleanup_worktree: args.worktree.is_some() || args.from_pr.is_some(),
-        permission_args: agent_args,
+        permission_args: agent_cell.args,
         self_cleanup_on_completion: args.detach && !args.keep,
     })?;
     let bound = if args.detach {
@@ -819,15 +824,17 @@ fn lifecycle_cell(
     }
 }
 
-/// A launchable agent cell from a resolved layout: its kind, the profile-preset
-/// plus passthrough args, the permission posture, profile, and role names.
-type AgentCell<'a> = (
-    &'a str,
-    &'a [String],
-    Option<PermissionMode>,
-    Option<&'a str>,
-    Option<&'a str>,
-);
+/// A launchable agent cell from a resolved layout.
+#[derive(Clone, Copy)]
+struct AgentCell<'a> {
+    kind: &'a str,
+    args: &'a [String],
+    mode: Option<PermissionMode>,
+    profile: Option<&'a str>,
+    role: Option<&'a str>,
+    model: Option<&'a str>,
+    effort: Option<&'a str>,
+}
 
 fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
     layout
@@ -839,14 +846,18 @@ fn agent_cells(layout: &LayoutSpec) -> Vec<AgentCell<'_>> {
                 mode,
                 profile,
                 role,
+                model,
+                effort,
                 ..
-            } => Some((
-                kind.as_str(),
-                args.as_slice(),
-                *mode,
-                profile.as_deref(),
-                role.as_deref(),
-            )),
+            } => Some(AgentCell {
+                kind: kind.as_str(),
+                args: args.as_slice(),
+                mode: *mode,
+                profile: profile.as_deref(),
+                role: role.as_deref(),
+                model: model.as_deref(),
+                effort: effort.as_deref(),
+            }),
             Cell::Command { .. } => None,
         })
         .collect()

@@ -655,8 +655,16 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         kind: input.kind.clone(),
         name: Some(input.card_identity.name),
         kind_ordinal: Some(input.card_identity.kind_ordinal),
-        profile: input.prior.and_then(|state| state.profile.clone()),
-        role: input.prior.and_then(|state| state.role.clone()),
+        profile: input
+            .observation
+            .profile
+            .clone()
+            .or_else(|| input.prior.and_then(|state| state.profile.clone())),
+        role: input
+            .observation
+            .role
+            .clone()
+            .or_else(|| input.prior.and_then(|state| state.role.clone())),
         status: lifecycle.status,
         phase: lifecycle.phase,
         pane: pane_projection(input.observation, input.prior),

@@ -85,6 +85,13 @@ pub enum Cell {
         /// `@<role>`; the wrapper also keeps `RIMZ_AGENT_ROLE` for sender
         /// attribution from that pane.
         role: Option<String>,
+        /// The launch model selected by the profile, role, or CLI override.
+        /// The wrapper keeps `RIMZ_AGENT_MODEL` so lifecycle hooks can stamp
+        /// the card even when the agent reports the model only once.
+        model: Option<String>,
+        /// The launch reasoning effort selected by the profile, role, or CLI
+        /// override. The wrapper keeps `RIMZ_AGENT_EFFORT` for card identity.
+        effort: Option<String>,
     },
     Command {
         argv: Vec<String>,
@@ -100,6 +107,8 @@ impl Cell {
             system_prompt_file: None,
             profile: None,
             role: None,
+            model: None,
+            effort: None,
         }
     }
 
@@ -373,6 +382,8 @@ fn role_cell(team_name: &str, binding: &RoleBinding, profiles: &ProfilesConfig) 
         system_prompt_file: resolved.system_prompt_file.clone(),
         profile: Some(binding.profile.clone()),
         role: Some(binding.role.clone()),
+        model: resolved.model.clone(),
+        effort: resolved.effort.clone(),
     })
 }
 
@@ -632,6 +643,8 @@ fn cell_from_profile(name: &str, resolved: &ResolvedProfile) -> Result<Cell> {
         system_prompt_file: resolved.system_prompt_file.clone(),
         profile: Some(name.to_owned()),
         role: None,
+        model: resolved.model.clone(),
+        effort: resolved.effort.clone(),
     })
 }
 
@@ -714,6 +727,8 @@ fn virtual_agent_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cel
         system_prompt_file: resolved.system_prompt_file,
         profile: profile_name,
         role: None,
+        model: resolved.model,
+        effort: resolved.effort,
     }))
 }
 
@@ -749,6 +764,8 @@ fn virtual_ping_cell(raw: &str, profiles: &ProfilesConfig) -> Result<Option<Cell
         system_prompt_file: resolved.system_prompt_file,
         profile: profile_name,
         role: None,
+        model: resolved.model,
+        effort: resolved.effort,
     }))
 }
 

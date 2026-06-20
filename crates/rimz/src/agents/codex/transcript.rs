@@ -5,6 +5,8 @@
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::{LazyLock, Mutex};
 use std::time::UNIX_EPOCH;
 
 use jiff::Timestamp;
@@ -126,7 +128,8 @@ pub(super) fn transcript_enrichment(
     let model_id = model_hint
         .filter(|model| !model.is_empty())
         .map(ToOwned::to_owned)
-        .or_else(|| usage.model.clone());
+        .or_else(|| usage.model.clone())
+        .or_else(configured_model);
     let cost = match (
         usage.cumulative_input_tokens,
         usage.cumulative_output_tokens,
@@ -169,19 +172,54 @@ pub(super) fn payload_reasoning_effort(payload: &Value) -> Option<String> {
 }
 
 pub(super) fn configured_reasoning_effort() -> Option<String> {
-    #[cfg(test)]
-    std::env::var_os("RIMZ_CODEX_CONFIG")?;
-    codex_config_path()
-        .ok()
-        .and_then(|path| configured_reasoning_effort_at(&path))
+    configured_config_path().and_then(|path| configured_reasoning_effort_at(&path))
 }
 
 pub(super) fn configured_model() -> Option<String> {
-    #[cfg(test)]
+    configured_config_path().and_then(|path| configured_model_at(&path))
+}
+
+#[cfg(not(test))]
+fn configured_config_path() -> Option<PathBuf> {
+    codex_config_path().ok()
+}
+
+#[cfg(test)]
+fn configured_config_path() -> Option<PathBuf> {
+    if let Some(path) = TEST_CODEX_CONFIG
+        .lock()
+        .expect("test config mutex is not poisoned")
+        .clone()
+    {
+        return Some(path);
+    }
     std::env::var_os("RIMZ_CODEX_CONFIG")?;
-    codex_config_path()
-        .ok()
-        .and_then(|path| configured_model_at(&path))
+    codex_config_path().ok()
+}
+
+#[cfg(test)]
+static TEST_CODEX_CONFIG: LazyLock<Mutex<Option<PathBuf>>> = LazyLock::new(|| Mutex::new(None));
+
+#[cfg(test)]
+pub(super) fn with_codex_config_path<T>(path: &Path, f: impl FnOnce() -> T) -> T {
+    struct Guard {
+        prior: Option<PathBuf>,
+    }
+
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            *TEST_CODEX_CONFIG
+                .lock()
+                .expect("test config mutex is not poisoned") = self.prior.take();
+        }
+    }
+
+    let prior = TEST_CODEX_CONFIG
+        .lock()
+        .expect("test config mutex is not poisoned")
+        .replace(path.to_path_buf());
+    let _guard = Guard { prior };
+    f()
 }
 
 pub(super) fn configured_model_at(path: &Path) -> Option<String> {

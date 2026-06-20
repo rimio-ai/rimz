@@ -182,6 +182,8 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
         args,
         mode,
         profile,
+        model,
+        effort,
         ..
     } = parse_layout_spec("codex-deep", &profiles, &no_commands())
         .expect("parse profile")
@@ -207,6 +209,8 @@ fn profile_mode_preset_and_extra_args_render_in_order_and_stamp_profile() {
     assert_eq!(args, expected);
     assert_eq!(mode, Some(PermissionMode::Auto));
     assert_eq!(profile.as_deref(), Some("codex-deep"));
+    assert_eq!(model.as_deref(), Some("gpt-5-codex"));
+    assert_eq!(effort.as_deref(), Some("high"));
 }
 
 #[test]
@@ -495,6 +499,8 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             system_prompt_file: None,
             profile: None,
             role: None,
+            model: None,
+            effort: None,
         }
     );
     assert_eq!(
@@ -508,6 +514,8 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             system_prompt_file: None,
             profile: None,
             role: None,
+            model: None,
+            effort: None,
         }
     );
     assert_eq!(
@@ -519,6 +527,8 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             system_prompt_file: None,
             profile: None,
             role: None,
+            model: None,
+            effort: None,
         }
     );
 
@@ -534,6 +544,8 @@ fn virtual_agent_modes_and_ping_work_without_config() {
             system_prompt_file: None,
             profile: None,
             role: None,
+            model: None,
+            effort: None,
         }
     );
     assert!(matches!(
@@ -674,6 +686,8 @@ fn named_teams_resolve_roles_to_one_column_each() {
             system_prompt_file: None,
             profile: Some("claude-plan".to_owned()),
             role: Some("planner".to_owned()),
+            model: None,
+            effort: None,
         }
     );
     assert_eq!(
@@ -685,6 +699,8 @@ fn named_teams_resolve_roles_to_one_column_each() {
             system_prompt_file: None,
             profile: Some("reviewer".to_owned()),
             role: Some("reviewer".to_owned()),
+            model: None,
+            effort: None,
         }
     );
     assert!(commands.0.contains_key("vim"));
@@ -722,6 +738,8 @@ fn team_role_overrides_profile_fields_and_args_replace() {
         system_prompt_file,
         profile,
         role,
+        model,
+        effort,
         ..
     } = resolve_spec(Some("review"), &profiles, &no_commands(), &teams)
         .expect("team")
@@ -739,6 +757,8 @@ fn team_role_overrides_profile_fields_and_args_replace() {
     );
     assert_eq!(profile.as_deref(), Some("coder-base"));
     assert_eq!(role.as_deref(), Some("coder"));
+    assert_eq!(model.as_deref(), Some("role-model"));
+    assert_eq!(effort.as_deref(), Some("high"));
     assert!(args.contains(&"role-model".to_owned()), "{args:?}");
     assert!(
         args.contains(&"model_reasoning_effort=high".to_owned()),
