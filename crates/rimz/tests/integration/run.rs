@@ -129,6 +129,55 @@ fn run_rejects_invalid_agent_env_before_recording() {
 }
 
 #[test]
+fn print_text_input_accepts_piped_prompt_without_positional() {
+    let env = Env::new();
+    env.write_config(
+        &env.project_root,
+        "[[agents]]\nname = \"codex\"\nenv = { \"BAD=KEY\" = \"yes\" }\n",
+    );
+    let trust = env
+        .rimz()
+        .args(["trust", "grant"])
+        .output()
+        .expect("spawn trust grant");
+    assert!(
+        trust.status.success(),
+        "trust grant failed\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&trust.stdout),
+        String::from_utf8_lossy(&trust.stderr)
+    );
+
+    let mut cmd = env.rimz();
+    cmd.args(["agents", "codex", "-p"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().expect("spawn agents print");
+    child
+        .stdin
+        .take()
+        .expect("child stdin")
+        .write_all(b"summarize\n")
+        .expect("write prompt stdin");
+    let out = child.wait_with_output().expect("wait agents print");
+    assert!(
+        !out.status.success(),
+        "agents -p should fail after accepting piped prompt\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("BAD=KEY"),
+        "piped prompt should advance to launch validation\nstderr:\n{stderr}"
+    );
+    assert!(
+        !stderr.contains("expected a prompt"),
+        "piped stdin should satisfy text input\nstderr:\n{stderr}"
+    );
+}
+
+#[test]
 fn print_json_flag_points_at_output_format() {
     let env = Env::new();
     let out = env

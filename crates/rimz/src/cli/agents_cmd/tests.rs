@@ -227,6 +227,10 @@ fn print_output_and_input_formats_parse_and_require_print() {
             .expect("parse input-format");
     assert_eq!(parsed.args.input_format, Some(InputFormat::StreamJson));
 
+    let parsed = AgentsHarness::try_parse_from(["rimz", "claude", "-p", "explain"])
+        .expect("parse prompt after print flag");
+    assert_eq!(parsed.args.prompt.as_deref(), Some("explain"));
+
     // The removed boolean is gone, and the format flags need `--print`.
     assert!(AgentsHarness::try_parse_from(["rimz", "claude", "hi", "-p", "--stream"]).is_err());
     assert!(

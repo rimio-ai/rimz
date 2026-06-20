@@ -120,7 +120,8 @@ pub struct AgentsArgs {
     /// How `--print` renders the supervised run (text, json, stream-json).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     output_format: Option<OutputFormat>,
-    /// How `--print` reads the prompt (text positional, or stream-json on stdin).
+    /// How `--print` reads the prompt (text positional plus piped stdin, or
+    /// stream-json on stdin).
     #[arg(long, value_name = "FORMAT", requires = "print")]
     input_format: Option<InputFormat>,
     /// Maximum agentic turns for one supervised print-mode prompt.
@@ -148,7 +149,7 @@ pub(super) enum OutputFormat {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
 #[value(rename_all = "kebab-case")]
 pub(super) enum InputFormat {
-    /// The positional `PROMPT` argument.
+    /// The positional `PROMPT` argument plus piped non-TTY stdin.
     #[default]
     Text,
     /// Stream-json user messages read from stdin until EOF.

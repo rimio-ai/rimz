@@ -47,6 +47,7 @@ rimz agents claude --worktree "Take another approach."
 rimz agents codex "Prepare the release checklist." -p --timeout 30m --output-format json
 rimz agents claude "Run the long migration audit." -p --detach   # prints a pet name, returns now
 rimz agents claude "Review the diff." -p --effort high --system-prompt-file ./review-prompt.md
+cat build-error.txt | rimz agents claude -p 'explain the root cause' > out.txt
 ```
 
 **Drive what you launched.** Focus jumps to the pane; wait blocks until it lands; stop cancels a run or closes a pane.
@@ -111,7 +112,7 @@ Placement follows intent. Under the default `auto` policy a worktree launch, nam
 
 `-p` launches exactly one supervised agent pane, waits for the root turn, prints the final assistant message, and exits with the run status code: `0` completed, `1` failed, `124` timed out, `130` canceled. `--detach` prints the pet name and returns immediately; use that name with `steer`, `agents wait`, `agents show`, or `agents stop`.
 
-`--max-turns <N>` caps the supervised agentic turn count where the adapter exposes a native turn limit (Claude `--max-turns <N>` today); an agent without one refuses the run with `--max-turns` named. `--output-format` selects how `-p` renders the run: `text` (default) prints the final assistant message, `json` prints the full run record, and `stream-json` emits run events as NDJSON while the turn runs. `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT`, while `stream-json` reads user messages from stdin until EOF and refuses a positional `PROMPT`. `stream-json` output cannot combine with `--detach`.
+`--max-turns <N>` caps the supervised agentic turn count where the adapter exposes a native turn limit (Claude `--max-turns <N>` today); an agent without one refuses the run with `--max-turns` named. `--output-format` selects how `-p` renders the run: `text` (default) prints the final assistant message, `json` prints the full run record, and `stream-json` emits run events as NDJSON while the turn runs. `--input-format` selects the prompt source: `text` (default) uses the positional `PROMPT` and folds in piped stdin after it, while `stream-json` reads user messages from stdin until EOF and refuses a positional `PROMPT`. `stream-json` output cannot combine with `--detach`.
 
 Supervised `-p` runs require installed and trusted hooks, because hooks provide the completion signal. The run records, wakeup socket, streaming, and pane cleanup are in [harness.md → Supervised runs](../../internals/agents/harness.md#supervised-runs).
 

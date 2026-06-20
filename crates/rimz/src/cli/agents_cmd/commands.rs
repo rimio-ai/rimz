@@ -673,15 +673,14 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     std::process::exit(record.status.exit_code());
 }
 
-/// Resolve the supervised prompt from the positional argument or, for
-/// `--input-format stream-json`, from stream-json user messages on stdin.
+/// Resolve the supervised prompt from text input or, for `--input-format
+/// stream-json`, from stream-json user messages on stdin.
 fn resolve_print_prompt(args: &AgentsArgs, input_format: InputFormat) -> Result<String> {
     match input_format {
-        InputFormat::Text => args
-            .prompt
-            .clone()
-            .filter(|prompt| !prompt.trim().is_empty())
-            .ok_or_else(|| anyhow::anyhow!("expected a prompt for `rimz agents <spec> -p`")),
+        InputFormat::Text => {
+            let piped = supervised::read_piped_text_prompt()?;
+            supervised::combine_text_prompt(args.prompt.as_deref(), piped.as_deref())
+        }
         InputFormat::StreamJson => {
             if args.prompt.as_deref().is_some_and(|p| !p.trim().is_empty()) {
                 bail!(
