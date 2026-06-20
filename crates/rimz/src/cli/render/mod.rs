@@ -21,6 +21,13 @@ pub(crate) fn out() -> anstream::AutoStream<std::io::StdoutLock<'static>> {
     anstream::AutoStream::auto(std::io::stdout().lock())
 }
 
+/// Styled stderr for human progress and consent output — the [`out`] sibling
+/// for surfaces that must not touch the stdout protocol channel. ANSI is
+/// stripped when stderr is not a terminal or color is disabled.
+pub(crate) fn err() -> anstream::AutoStream<std::io::StderrLock<'static>> {
+    anstream::AutoStream::auto(std::io::stderr().lock())
+}
+
 /// Wrap `text` in `style`'s ANSI for inline use inside a larger line — the
 /// `anstream` stream strips it when color is off. Cells in [`Table`]/[`KeyVals`]
 /// carry their own style; reach for this only when one styled span sits within

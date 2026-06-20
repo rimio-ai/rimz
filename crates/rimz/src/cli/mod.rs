@@ -11,7 +11,6 @@ mod doctor;
 mod event;
 mod feed;
 mod gc;
-mod hook_consent;
 mod hook_install;
 mod hooks;
 mod list;
@@ -47,7 +46,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
 
-use rimz::agents::{HookInstallPreview, StatusLineChange};
 use rimz::feed::AgentState;
 use rimz::ids::{MuxName, WorkspaceId};
 use rimz::ledger::workspace_record;
