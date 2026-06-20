@@ -53,6 +53,13 @@ struct SnapshotFixture {
     snapshot: rimz::SidebarSnapshot,
 }
 
+struct FuseFixture {
+    _workspace: BenchWorkspace,
+    snapshot: rimz::SidebarSnapshot,
+    events: rimz::sidebar::events::EventStore,
+    now_ms: u64,
+}
+
 struct EnrichFixture {
     _workspace: BenchWorkspace,
     runtime: rimz::RuntimePaths,
@@ -123,6 +130,33 @@ fn snapshot_fixture() -> SnapshotFixture {
     }
 }
 
+fn fuse_fixture() -> FuseFixture {
+    let SnapshotFixture {
+        _workspace,
+        snapshot,
+    } = snapshot_fixture();
+    let mut events = rimz::sidebar::events::EventStore::default();
+    let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
+    let now_ms = snapshot
+        .panes_produced_at_ms
+        .unwrap_or_else(rimz::sidebar::snapshot::unix_now_ms)
+        .saturating_add(1);
+    events.append(
+        rimz::schema::sidebar_event::SidebarEvent::CommandChanged {
+            pane_id,
+            command: "claude".to_owned(),
+        },
+        now_ms,
+        now_ms,
+    );
+    FuseFixture {
+        _workspace,
+        snapshot,
+        events,
+        now_ms,
+    }
+}
+
 fn enrich_fixture() -> EnrichFixture {
     let workspace = BenchWorkspace::new();
     workspace.seed_fleet(FLEET, HISTORY_EVENTS);
@@ -163,27 +197,12 @@ fn fold_fixture() -> FoldFixture {
 #[divan::bench(sample_count = 20, sample_size = 1, skip_ext_time)]
 fn fuse(bencher: Bencher) {
     bencher
-        .with_inputs(snapshot_fixture)
+        .with_inputs(fuse_fixture)
         .bench_local_values(|fixture| {
-            let mut events = rimz::sidebar::events::EventStore::default();
-            let pane_id = rimz::PaneId::from_parts(rimz::MuxName::Zellij, "terminal_0");
-            let now_ms = fixture
-                .snapshot
-                .panes_produced_at_ms
-                .unwrap_or_else(rimz::sidebar::snapshot::unix_now_ms)
-                .saturating_add(1);
-            events.append(
-                rimz::schema::sidebar_event::SidebarEvent::CommandChanged {
-                    pane_id,
-                    command: "claude".to_owned(),
-                },
-                now_ms,
-                now_ms,
-            );
             divan::black_box(rimz::sidebar::fuse::fuse(
                 &fixture.snapshot,
-                &events,
-                now_ms,
+                &fixture.events,
+                fixture.now_ms,
             ));
         });
 }

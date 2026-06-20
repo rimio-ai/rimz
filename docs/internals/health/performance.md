@@ -46,7 +46,7 @@ Where the milliseconds are, and what bounds each. Reproducible figures come from
 | `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | one producer per workspace; snapshot cache, single-flight, **two-mode TTL** — poll cadence, stretched ~13× while the Zellij presence stamp is fresh ([multiplexers.md → Zellij presence channel](../sidebar/multiplexers.md#zellij-presence-channel)); per-pane process rotation repairs raced-null fields; render-side last-known-good gate |
 | git diff-stats per group root | ~7 `git` forks per group root, plus a byte-budgeted untracked read; each root's chain is sequential, roots run bounded-parallel (`MAX_PARALLEL_GIT`) | activity-tiered TTLs (hot vs idle) keyed on root, single-flighted (`diff-stats.lock`); a non-repo room's root pod costs zero forks. Input set scales with the room — a 50-child-repo room pays a cold idle-TTL window on the fetch worker, never the render thread |
 | group-root enumeration | 1 `git worktree list` fork per `WORKTREE_ROOTS_TTL` in a repo room; 1 `read_dir` in a directory room | cached in the diff-stats cache; a session-boundary `--min-pane-cache-ms` floor re-enumerates a new checkout immediately |
-| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache; synthetic cold produce medians: 7.4ms / 16.6ms / 36.9ms at 20 / 50 / 100 agents | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)); `cargo xtask perf fleet` regenerates the fleet table |
+| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache; full synthetic cold-produce medians, including rollup, pane assembly, and enrichment: 7.4ms / 16.6ms / 36.9ms at 20 / 50 / 100 agents | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)); `cargo xtask perf fleet` regenerates the fleet table |
 | event-log reader fold | warm cursor: one stat + the appended frames; 40-agent warm fold median 196µs for one ~857B frame | the extent stamp and a long-lived `RollupCursor` per fetch worker; perf guard `delta_fold_is_o_new_bytes` pins O(new bytes) |
 | ledger write critical section | feed rename + one event-log `write()`, zero fsyncs, one lifecycle frame under 1KiB | the flock covers truth mutation only; durability and publish run off-lock ([ledger.md](../sidebar/ledger.md#durable-state)); perf tier `ledger_fsync.rs` pins zero fsyncs and `ledger_bytes.rs` pins bytes/turn |
 | dead-owner abandon sweep | O(pending) scan + per-dead-item writes | debounced to ~once per 2s (one stamp stat); read-side expel hides a dead-owner item instantly; `rimz gc` is the operator trigger |
@@ -78,7 +78,7 @@ Current local baseline from `cargo xtask perf` on June 20, 2026:
 | --- | ---: | ---: |
 | `fleet::produce_cold` 20 / 50 / 100 agents | 7.4ms / 16.6ms / 36.9ms | 12.0MB / 27.1MB / 52.4MB |
 | `fleet::produce_warm` 20 / 50 / 100 agents | 655µs / 1.05ms / 2.11ms | 2.22MB / 2.74MB / 3.57MB |
-| `hotpath::fuse` 40 agents | 189µs | 85.9KB |
+| `hotpath::fuse` 40 agents | 197µs | 85.4KB |
 | `hotpath::rollup_fold_warm` 40 agents | 196µs | 600.6KB |
 | `hotpath::enrich_cached` 40 agents | 814µs | 1.91MB |
 | `hotpath::render_fixed` 40 agents | 503µs | 891.7KB |

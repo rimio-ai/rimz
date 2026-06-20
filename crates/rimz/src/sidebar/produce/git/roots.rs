@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use crate::ledger::atomic;
 use crate::sidebar::cache::{WorktreeRootsCache, read_diff_stats_cache, unix_now_ms};
@@ -73,13 +72,7 @@ pub(super) fn list_group_roots(project_root: &Path, root_class: RootClass) -> Ve
 /// lines. Linked worktrees report absolute paths, so a checkout outside the
 /// project root is captured here exactly as the reducer needs it.
 pub(super) fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
-    crate::proc::testkit::count_spawn();
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(project_root)
-        .args(["worktree", "list", "--porcelain"])
-        .output()
-        .ok()
+    let output = super::git_output(project_root, &["worktree", "list", "--porcelain"])
         .filter(|output| output.status.success());
     let Some(output) = output else {
         return Vec::new();
