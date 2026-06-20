@@ -837,7 +837,11 @@ fn closing_agent_tab_records_end_trace_when_session_survives() {
         format!("XDG_RUNTIME_DIR={}", env.runtime_root.display()),
         format!("XDG_CONFIG_HOME={}", env.config_root().display()),
         format!("HOME={}", env.home_root.display()),
-        "SHELL=/bin/sh".to_owned(),
+        // A non-launchable shell disables the login-shell launch wrapper so the
+        // agent shim resolves against the PATH below. A real login shell sources
+        // /etc/profile, which on Debian-family CI hosts overwrites PATH and drops
+        // the test's agent-bin dir, leaving the bare `claude` argv unresolvable.
+        "SHELL=/definitely/not/a/shell".to_owned(),
         format!("PATH={path}"),
         format!("RIMZ_TEST_AGENT_READY={}", ready.display()),
         rimz_bin,
