@@ -324,6 +324,7 @@ impl AgentTones {
 }
 
 fn base_handle(handle: &str) -> &str {
+    // In rendered agent handles, `#` only separates the channel suffix.
     handle.split_once('#').map_or(handle, |(base, _)| base)
 }
 
@@ -406,14 +407,14 @@ fn render_channel(
             writeln!(out)?;
         }
         first = false;
-        let display = if grouped {
-            base_handle(&entry.agent)
-        } else {
-            entry.agent.as_str()
-        };
         match entry.role {
             TranscriptRole::User => write_block(&mut out, &user, entry.at, None, &entry.text)?,
             TranscriptRole::Assistant => {
+                let display = if grouped {
+                    base_handle(&entry.agent)
+                } else {
+                    entry.agent.as_str()
+                };
                 let handle = render::paint(tones.tone(display).bold(), display);
                 write_block(&mut out, &assistant, entry.at, Some(&handle), &entry.text)?;
             }
