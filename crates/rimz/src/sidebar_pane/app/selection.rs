@@ -185,13 +185,11 @@ pub(super) fn handle_key(
         KeyAction::Help => {
             ui.help_visible = !ui.help_visible;
             if ui.help_visible {
-                // The overlay lives at the scroll zone's tail: jump the
-                // viewport to the end so toggling help always reveals it — the
-                // draw clamps the sentinel to the zone's last window. The open
-                // overlay itself owns the viewport (the draw suppresses
-                // auto-follow while `help_visible`), so selection churn beneath
-                // it never pulls the view away mid-read; the wheel may roam.
-                ui.scroll_offset = usize::MAX;
+                // The overlay replaces the card body from the top of the scroll
+                // zone and owns that viewport while open; selection churn below
+                // it never pulls the block away mid-read, and the wheel may
+                // still roam inside the help block.
+                ui.scroll_offset = 0;
             } else {
                 // Closing drops any wheel peek made while reading, so the view
                 // snaps back to the selected card.

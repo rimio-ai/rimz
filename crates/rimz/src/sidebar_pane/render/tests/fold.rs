@@ -39,23 +39,25 @@ fn render_footer_and_help_overlay() {
         28,
     );
     assert!(help.contains("keys & legend"));
+    assert!(help.contains("╭"), "{help}");
+    assert!(help.contains("│"), "{help}");
+    assert!(help.contains("╰"), "{help}");
     assert!(help.contains("j/k rows"));
     assert!(help.contains("J/K worktrees"));
     assert!(help.contains("g/G ends"));
-    assert!(help.contains("n/N next/prev"));
-    assert!(help.contains("l or"));
-    assert!(help.contains("m read"));
-    assert!(help.contains("M unread"));
+    assert!(help.contains("n/N needs-you"));
+    assert!(help.contains("l focus"));
+    assert!(help.contains("m/M read / unread"));
     assert!(help.contains("Alt+p sidebar (toggle)"));
-    assert!(help.contains("q waiting"));
-    assert!(help.contains("!/e attention"));
-    assert!(help.contains("? waiting"));
-    assert!(help.contains("○ idle"));
+    assert!(help.contains("? q waiting"));
+    assert!(help.contains("! e attention"));
+    assert!(help.contains("○ o idle"));
     assert!(
         !help.contains("┄ commands"),
         "the retired seam left the legend"
     );
     assert!(!help.contains("posture"), "the posture legend is gone");
+    assert_snapshot("help_overlay_floating_box", help);
 }
 /// The chrome rebuilds keep a line-level style on its way to the screen:
 /// `pad_chrome` patches it into the rebuilt spans and `center_line` carries it
@@ -72,7 +74,7 @@ fn chrome_rebuilds_carry_line_level_styles() {
     let centered = center_line(Line::styled("? for help", theme.faint()), 30);
     assert_eq!(centered.style, theme.faint());
 
-    for line in help_lines(&theme, Some("Alt+p")) {
+    for line in help_lines(&theme, Some("Alt+p"), 80) {
         assert_eq!(line.style, theme.faint());
     }
 }

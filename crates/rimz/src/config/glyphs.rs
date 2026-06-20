@@ -8,7 +8,7 @@ use super::validate_glyph_cells;
 /// reading order, so `[theme.glyphs.<set>.<namespace>]` groups the glyphs the
 /// way the sidebar lays them out: `status` heads, the `cockpit` identity row,
 /// `tokens`, `meter` bars, the age `clock`, the `worktree` header, the agent
-/// `card`, `process` rows, and `chrome`.
+/// `card`, `process` rows, help `keys`, and `chrome`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum GlyphRole {
     // status — the leading cell of every agent row.
@@ -67,11 +67,24 @@ pub enum GlyphRole {
     ProcessCpu,
     ProcessMem,
     ProcessIo,
+    // keys — action glyphs in the help overlay.
+    KeysMove,
+    KeysFocus,
+    KeysInbox,
+    KeysRead,
+    KeysAccounts,
+    KeysReload,
+    KeysDismiss,
     // chrome — framing, spines, tabs, and badges.
     ChromeAlert,
     ChromeRemoteLink,
     ChromeRemoteControl,
     ChromeHairline,
+    ChromeBoxTopLeft,
+    ChromeBoxTopRight,
+    ChromeBoxBottomLeft,
+    ChromeBoxBottomRight,
+    ChromeBoxVertical,
     ChromeTabCapLeft,
     ChromeTabCapRight,
     ChromeSpineCardLeft,
@@ -131,10 +144,22 @@ impl GlyphRole {
         Self::ProcessCpu,
         Self::ProcessMem,
         Self::ProcessIo,
+        Self::KeysMove,
+        Self::KeysFocus,
+        Self::KeysInbox,
+        Self::KeysRead,
+        Self::KeysAccounts,
+        Self::KeysReload,
+        Self::KeysDismiss,
         Self::ChromeAlert,
         Self::ChromeRemoteLink,
         Self::ChromeRemoteControl,
         Self::ChromeHairline,
+        Self::ChromeBoxTopLeft,
+        Self::ChromeBoxTopRight,
+        Self::ChromeBoxBottomLeft,
+        Self::ChromeBoxBottomRight,
+        Self::ChromeBoxVertical,
         Self::ChromeTabCapLeft,
         Self::ChromeTabCapRight,
         Self::ChromeSpineCardLeft,
@@ -188,10 +213,22 @@ impl GlyphRole {
             | Self::CardTodoPending
             | Self::CardParkedBg => "card",
             Self::ProcessCpu | Self::ProcessMem | Self::ProcessIo => "process",
+            Self::KeysMove
+            | Self::KeysFocus
+            | Self::KeysInbox
+            | Self::KeysRead
+            | Self::KeysAccounts
+            | Self::KeysReload
+            | Self::KeysDismiss => "keys",
             Self::ChromeAlert
             | Self::ChromeRemoteLink
             | Self::ChromeRemoteControl
             | Self::ChromeHairline
+            | Self::ChromeBoxTopLeft
+            | Self::ChromeBoxTopRight
+            | Self::ChromeBoxBottomLeft
+            | Self::ChromeBoxBottomRight
+            | Self::ChromeBoxVertical
             | Self::ChromeTabCapLeft
             | Self::ChromeTabCapRight
             | Self::ChromeSpineCardLeft
@@ -252,10 +289,22 @@ impl GlyphRole {
             Self::ProcessCpu => "cpu",
             Self::ProcessMem => "mem",
             Self::ProcessIo => "io",
+            Self::KeysMove => "move",
+            Self::KeysFocus => "focus",
+            Self::KeysInbox => "inbox",
+            Self::KeysRead => "read",
+            Self::KeysAccounts => "accounts",
+            Self::KeysReload => "reload",
+            Self::KeysDismiss => "dismiss",
             Self::ChromeAlert => "alert",
             Self::ChromeRemoteLink => "remote_link",
             Self::ChromeRemoteControl => "remote_control",
             Self::ChromeHairline => "hairline",
+            Self::ChromeBoxTopLeft => "box_top_left",
+            Self::ChromeBoxTopRight => "box_top_right",
+            Self::ChromeBoxBottomLeft => "box_bottom_left",
+            Self::ChromeBoxBottomRight => "box_bottom_right",
+            Self::ChromeBoxVertical => "box_vertical",
             Self::ChromeTabCapLeft => "tab_cap_left",
             Self::ChromeTabCapRight => "tab_cap_right",
             Self::ChromeSpineCardLeft => "spine_card_left",
@@ -326,6 +375,8 @@ pub struct GlyphNamespaces {
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub process: GlyphGroup,
     #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
+    pub keys: GlyphGroup,
+    #[serde(skip_serializing_if = "GlyphGroup::is_empty")]
     pub chrome: GlyphGroup,
 }
 
@@ -340,6 +391,7 @@ impl GlyphNamespaces {
             "worktree" => &self.worktree,
             "card" => &self.card,
             "process" => &self.process,
+            "keys" => &self.keys,
             "chrome" => &self.chrome,
             _ => return None,
         };
@@ -367,6 +419,7 @@ impl<'de> Deserialize<'de> for GlyphNamespaces {
             worktree: BTreeMap<String, String>,
             card: BTreeMap<String, String>,
             process: BTreeMap<String, String>,
+            keys: BTreeMap<String, String>,
             chrome: BTreeMap<String, String>,
         }
 
@@ -383,6 +436,7 @@ impl<'de> Deserialize<'de> for GlyphNamespaces {
             worktree: group("worktree", raw.worktree)?,
             card: group("card", raw.card)?,
             process: group("process", raw.process)?,
+            keys: group("keys", raw.keys)?,
             chrome: group("chrome", raw.chrome)?,
         })
     }
@@ -459,12 +513,21 @@ mod tests {
             "[unicode.status]\n\
              working = \"⢿\"\n\
              [unicode.clock]\n\
-             over = \"◉\"\n",
+             over = \"◉\"\n\
+             [unicode.keys]\n\
+             focus = \"F\"\n\
+             [unicode.chrome]\n\
+             box_vertical = \"|\"\n",
         )
         .expect("glyphs config");
         assert_eq!(config.set, None);
         assert_eq!(config.glyph("unicode", GlyphRole::StatusWorking), Some("⢿"));
         assert_eq!(config.glyph("unicode", GlyphRole::ClockOver), Some("◉"));
+        assert_eq!(config.glyph("unicode", GlyphRole::KeysFocus), Some("F"));
+        assert_eq!(
+            config.glyph("unicode", GlyphRole::ChromeBoxVertical),
+            Some("|")
+        );
         assert!(ThemeGlyphsConfig::default().is_unset());
     }
 

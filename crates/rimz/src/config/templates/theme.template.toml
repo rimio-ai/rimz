@@ -181,11 +181,25 @@
 ## mem = "M"
 ## io = "⇅"
 
+[theme.glyphs.unicode.keys]
+## move = "↕"
+## focus = "⏎"
+## inbox = "␣"
+## read = "✉"
+## accounts = "↔"
+## reload = "⟳"
+## dismiss = "✕"
+
 [theme.glyphs.unicode.chrome]
 ## alert = "⚠"
 ## remote_link = "⇄"
 ## remote_control = "⇅"
 ## hairline = "─"
+## box_top_left = "╭"
+## box_top_right = "╮"
+## box_bottom_left = "╰"
+## box_bottom_right = "╯"
+## box_vertical = "│"
 ## tab_cap_left = "┤"
 ## tab_cap_right = "├"
 ## spine_card_left = "▌"
@@ -258,11 +272,25 @@
 ## mem = ""
 ## io = ""
 
+[theme.glyphs.nerd_font.keys]
+## move = ""
+## focus = ""
+## inbox = ""
+## read = ""
+## accounts = ""
+## reload = ""
+## dismiss = ""
+
 [theme.glyphs.nerd_font.chrome]
 ## alert = "⚠"
 ## remote_link = ""
 ## remote_control = "⇅"
 ## hairline = "─"
+## box_top_left = "╭"
+## box_top_right = "╮"
+## box_bottom_left = "╰"
+## box_bottom_right = "╯"
+## box_vertical = "│"
 ## tab_cap_left = "┤"
 ## tab_cap_right = "├"
 ## spine_card_left = "▌"

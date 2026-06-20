@@ -1,0 +1,32 @@
+---
+source: crates/rimz/src/sidebar_pane/render/tests/mod.rs
+expression: screen
+---
+ ⌘ query-engine
+
+ ◎ 0
+ ¤ 1
+ ──────────────────────────────────────────────────────────────────────────────
+ ? 1   ! 0   ⏸︎ 0   ✓ 0                                                ⢿ 0   ○ 0
+
+                    ╭ keys & legend ───────────────────────╮
+                    │ ↕ j/k rows   J/K worktrees  g/G ends │
+                    │ ⏎ l focus    1-9 direct              │
+                    │ ␣ n/N needs-you  (Space = n)         │
+                    │ ✉ m/M read / unread                  │
+                    │ ↔ ←/→ account tabs                   │
+                    │ filter                               │
+                    │   ? q waiting    ! e attention       │
+                    │   ⏸︎ p paused     ✓ d done            │
+                    │   ⢿ w working    ○ o idle            │
+                    │   u unread       a all               │
+                    │ global  Alt+p sidebar (toggle)       │
+                    │ ⟳ r reload   ✕ x dismiss   ? close   │
+                    │   ⠁ thinking     ⢄ delegating        │
+                    ╰──────────────────────────────────────╯
+
+
+
+
+
+                                                                     ? for help

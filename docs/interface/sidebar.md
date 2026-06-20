@@ -165,7 +165,7 @@ The body: one card per pane, grouped under the worktree it lives in. A worktree 
 
 While a [make-up bucket](#zone-1--the-cockpit) or the unread lens is picked, the body shows only the matching cards: non-matching rows, process rows, worktree groups left empty, and the `+K more` line all step aside until the pick clears.
 
-**The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin while the viewport is moving: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The bar follows the motion — a wheel scroll or the selection-driven auto-follow — and settles away about a second after the view stops, so a resting column stays clean; `[theme.display] scrollbar = "always" | "never"` pins it up or removes it ([configuration](../reference/configuration.md#sidebar-rendering)). The viewport follows the selection: picking any row — `j`/`k` or arrows, `J`/`K` worktree jumps, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` reveals the help overlay at the zone's tail whatever the scroll position, and the view holds there while the overlay is open.
+**The cards scroll between the pinned zones.** When the cards outgrow the pane, they scroll between the cockpit above and the provider dashboard below — both stay put — and a thin scrollbar rides the right margin while the viewport is moving: a solid `▐` thumb over a hairline `▕` track, the position carried by shape so it reads under `NO_COLOR`. The bar follows the motion — a wheel scroll or the selection-driven auto-follow — and settles away about a second after the view stops, so a resting column stays clean; `[theme.display] scrollbar = "always" | "never"` pins it up or removes it ([configuration](../reference/configuration.md#sidebar-rendering)). The viewport follows the selection: picking any row — `j`/`k` or arrows, `J`/`K` worktree jumps, a click landing, `␣` — brings its card, expanded subagent list included, fully into view, and a card taller than the window pins its first line to the top. The mouse wheel scrolls the viewport freely without moving the selection — peek anywhere; the next selection change snaps the view back to the selected card. `?` replaces the card body with a centered keys-and-legend block; the cockpit, footer, and alert rails stay pinned, and closing the block restores selection-follow.
 
 ### The card
 
@@ -416,23 +416,24 @@ When the renderer is holding a successful-but-regressive fetch behind the last g
 
 These notices clear when the next accepted pane frame lands. A health alert takes over the bottom line while a fetch failure is active.
 
-**Help overlay** (`?`). The legend and keys, in place, in the faint chrome tier — summoned reference, not live state:
+**Help overlay** (`?`). The legend and keys replace the card body as a centered floating block in the faint chrome tier — summoned reference, not live state:
 
 ```
- keys & legend
- move     j/k rows   J/K worktrees   g/G ends
- inbox    n/N next/prev needs-you (Space = n)
- focus    l or ↵     1-9 direct
- read     m read      M unread
- accounts ←/→ tabs
- filter   u unread   q waiting   !/e attention
-          p paused   d done      w working
-          o idle     a all
- global   Alt+p sidebar (toggle)
- system   r reload   x dismiss
- help     ? close
- ⢿ working   ⠁ thinking   ? waiting
- ! attention   ○ idle   ✓ done
+╭ keys & legend ───────────────────────╮
+│ ↕ j/k rows   J/K worktrees  g/G ends │
+│ ⏎ l focus    1-9 direct              │
+│ ␣ n/N needs-you  (Space = n)         │
+│ ✉ m/M read / unread                  │
+│ ↔ ←/→ account tabs                   │
+│ filter                               │
+│   ? q waiting    ! e attention       │
+│   ⏸︎ p paused     ✓ d done            │
+│   ⢿ w working    ○ o idle            │
+│   u unread       a all               │
+│ global  Alt+p sidebar (toggle)       │
+│ ⟳ r reload   ✕ x dismiss   ? close   │
+│   ⠁ thinking     ⢄ delegating        │
+╰──────────────────────────────────────╯
 ```
 
 **Health alert.** When the refresh loop can't read the room, a sticky line takes over the bottom and the footer steps aside — an empty body under a failed fetch is a missing snapshot, not an empty room:

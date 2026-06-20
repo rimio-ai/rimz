@@ -75,7 +75,7 @@ fn render_scroll_overflow_shows_bar() {
     assert_snapshot("scroll_overflow_shows_bar", rendered);
 }
 #[test]
-fn scrollbar_clips_help_overlay_without_erasing_text() {
+fn help_overlay_replaces_cards_without_scrollbar() {
     let mut snapshot = overflowing_fleet();
     snapshot.theme.display.scrollbar = ScrollbarMode::Always;
     let rendered = snapshot_to_screen_with_alert_and_ui(
@@ -83,21 +83,28 @@ fn scrollbar_clips_help_overlay_without_erasing_text() {
         None,
         &UiState {
             help_visible: true,
-            scroll_offset: usize::MAX,
             ..Default::default()
         },
         36,
         28,
     );
 
-    let filter = line_containing(&rendered, "filter   u unread");
+    let filter = line_containing(&rendered, "filter");
     assert!(
-        filter.ends_with('▕') || filter.ends_with('▐'),
-        "help text keeps its clipped content and receives the scrollbar rail:\n{rendered}"
+        !filter.ends_with('▕') && !filter.ends_with('▐'),
+        "help owns the body and suppresses the scrollbar rail:\n{rendered}"
     );
     assert!(
-        rendered.contains("system   r reload"),
-        "other help chrome survives the scrollbar too:\n{rendered}"
+        rendered.contains("keys & legend") && rendered.contains("╭") && rendered.contains("╰"),
+        "the floating help box renders:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("r reload"),
+        "help chrome survives narrow framing:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("task-0"),
+        "cards give way while help is open:\n{rendered}"
     );
 }
 #[test]

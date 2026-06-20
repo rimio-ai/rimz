@@ -139,10 +139,22 @@ pub(crate) fn unicode_glyph(role: GlyphRole) -> &'static str {
         GlyphRole::ProcessCpu => "C",
         GlyphRole::ProcessMem => "M",
         GlyphRole::ProcessIo => "⇅",
+        GlyphRole::KeysMove => "↕",
+        GlyphRole::KeysFocus => "⏎",
+        GlyphRole::KeysInbox => "␣",
+        GlyphRole::KeysRead => "✉",
+        GlyphRole::KeysAccounts => "↔",
+        GlyphRole::KeysReload => "⟳",
+        GlyphRole::KeysDismiss => "✕",
         GlyphRole::ChromeAlert => "⚠",
         GlyphRole::ChromeRemoteLink => "⇄",
         GlyphRole::ChromeRemoteControl => "⇅",
         GlyphRole::ChromeHairline => "─",
+        GlyphRole::ChromeBoxTopLeft => "╭",
+        GlyphRole::ChromeBoxTopRight => "╮",
+        GlyphRole::ChromeBoxBottomLeft => "╰",
+        GlyphRole::ChromeBoxBottomRight => "╯",
+        GlyphRole::ChromeBoxVertical => "│",
         GlyphRole::ChromeTabCapLeft => "┤",
         GlyphRole::ChromeTabCapRight => "├",
         GlyphRole::ChromeSpineCardLeft => "▌",
@@ -224,12 +236,25 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         GlyphRole::ProcessCpu => "\u{ef8f}", // nf-fa-bars_progress
         GlyphRole::ProcessMem => "\u{efc5}", // nf-fa-memory
         GlyphRole::ProcessIo => "\u{f09f}",  // nf-fa-up_down
+        // help-overlay action keys.
+        GlyphRole::KeysMove => "\u{f07d}",     // nf-fa-arrows_v
+        GlyphRole::KeysFocus => "\u{f05b}",    // nf-fa-crosshairs
+        GlyphRole::KeysInbox => "\u{f01c}",    // nf-fa-inbox
+        GlyphRole::KeysRead => "\u{f0e0}",     // nf-fa-envelope
+        GlyphRole::KeysAccounts => "\u{f07e}", // nf-fa-arrows_h
+        GlyphRole::KeysReload => "\u{f021}",   // nf-fa-refresh
+        GlyphRole::KeysDismiss => "\u{f00d}",  // nf-fa-times
         // chrome: the network link and infinity badges iconify; framing stays drawn.
         GlyphRole::ChromeRemoteLink => "\u{ede3}", // nf-fa-tower_broadcast
         GlyphRole::ChromeInfinity => "\u{edfe}",   // nf-fa-infinity
         GlyphRole::ChromeAlert
         | GlyphRole::ChromeRemoteControl
         | GlyphRole::ChromeHairline
+        | GlyphRole::ChromeBoxTopLeft
+        | GlyphRole::ChromeBoxTopRight
+        | GlyphRole::ChromeBoxBottomLeft
+        | GlyphRole::ChromeBoxBottomRight
+        | GlyphRole::ChromeBoxVertical
         | GlyphRole::ChromeTabCapLeft
         | GlyphRole::ChromeTabCapRight
         | GlyphRole::ChromeSpineCardLeft
@@ -297,6 +322,11 @@ mod tests {
             GlyphRole::ChromeAlert,
             GlyphRole::ChromeRemoteControl,
             GlyphRole::ChromeHairline,
+            GlyphRole::ChromeBoxTopLeft,
+            GlyphRole::ChromeBoxTopRight,
+            GlyphRole::ChromeBoxBottomLeft,
+            GlyphRole::ChromeBoxBottomRight,
+            GlyphRole::ChromeBoxVertical,
             GlyphRole::ChromeTabCapLeft,
             GlyphRole::ChromeTabCapRight,
             GlyphRole::ChromeSpineCardLeft,
@@ -321,6 +351,7 @@ mod tests {
             GlyphRole::StatusIdle,
             GlyphRole::WorktreeBranch,
             GlyphRole::MeterReset,
+            GlyphRole::KeysFocus,
             GlyphRole::ChromeInfinity,
         ] {
             let nerd = nerd_font_glyph(role).expect("curated icon");
@@ -350,12 +381,18 @@ mod tests {
         let config: ThemeGlyphsConfig = toml::from_str(
             "set = \"nerd_font\"\n\
              [nerd_font.status]\n\
-             working = \"⢿\"\n",
+             working = \"⢿\"\n\
+             [nerd_font.keys]\n\
+             focus = \"F\"\n\
+             [nerd_font.chrome]\n\
+             box_vertical = \"|\"\n",
         )
         .expect("glyph config");
         let glyphs = GlyphSet::resolve(&config);
         assert_eq!(glyphs.kind(), GlyphSetKind::NerdFont);
         assert_eq!(glyphs.glyph(GlyphRole::StatusWorking), "⢿");
+        assert_eq!(glyphs.glyph(GlyphRole::KeysFocus), "F");
+        assert_eq!(glyphs.glyph(GlyphRole::ChromeBoxVertical), "|");
         assert_eq!(
             glyphs.glyph(GlyphRole::WorktreeBranch),
             nerd_font_glyph(GlyphRole::WorktreeBranch).expect("branch icon")

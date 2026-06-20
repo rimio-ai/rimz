@@ -301,7 +301,8 @@ The groups follow the on-screen reading order:
 | `worktree` | `branch`, `ahead`, `behind`, `trunk_equal`, `trunk_clear`, `dotted` |
 | `card` | `subagents`, `todo_done`, `todo_pending`, `parked_bg` |
 | `process` | `cpu`, `mem`, `io` |
-| `chrome` | `alert`, `remote_link`, `remote_control`, `infinity`, the `tab_cap_*`/`spine_*` framing, and `hairline` |
+| `keys` | help-overlay action leads: `move`, `focus`, `inbox`, `read`, `accounts`, `reload`, `dismiss` |
+| `chrome` | `alert`, `remote_link`, `remote_control`, `infinity`, `hairline`, the `tab_cap_*`/`spine_*` framing, and the help frame `box_top_left`, `box_top_right`, `box_bottom_left`, `box_bottom_right`, `box_vertical` |
 
 The `status` group sets the head **shapes**; their colour, effect, and speed stay in [`[theme.animations]`](#animations), and the built-in animation frames follow `[theme.glyphs] set`. Two `status` names read across to animation roles: `status.attention` is the animation role `failed`, and `status.done` is `success`. A single-frame head (`waiting`/`attention`/`paused`/`done`/`idle`) reads its `status` shape directly; the animated heads (`working`/`thinking`/`delegating`/`resolving`) cycle a Unicode spinner sequence in every preset, with the `status` glyph as the still representative the cockpit buckets show.
 
@@ -314,9 +315,9 @@ The `status` group sets the head **shapes**; their colour, effect, and speed sta
 | unset or `unicode` | `[theme.glyphs.unicode.*]` |
 | `nerd_font` | `[theme.glyphs.nerd_font.*]` |
 
-Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. The drawn gauges — the context ratio bar, the provider budget (mana) bar, and the scrollbar — along with the `chrome` spines/caps/hairline, the `worktree.dotted` seal, and the `status.compacting` wave, carry their shape from the terminal grid more precisely than any icon, so they keep their box-drawing glyphs in every preset.
+Nerd Font mode assumes a Nerd Font v3+ face is active in the terminal. The drawn gauges — the context ratio bar, the provider budget (mana) bar, and the scrollbar — along with the `chrome` spines/caps/hairline/help-box frame, the `worktree.dotted` seal, and the `status.compacting` wave, carry their shape from the terminal grid more precisely than any icon, so they keep their box-drawing glyphs in every preset. The `keys` group gets curated Nerd Font icons for action leads while status-filter rows keep the status heads.
 
-The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling `circle_slice` series in `nerd_font`, so the icon tracks elapsed time twice as finely. Every glyph ships as a single cell, which aligns on the `Mono` Nerd Font builds — `JetBrainsMono Nerd Font Mono`, `FiraCode Nerd Font` — where each icon advances one column. A face that draws icons double-width, such as the non-`Mono` `Cascadia Code NF`, keeps its columns aligned by padding the alignment-sensitive glyphs with a trailing space in a per-glyph override under `[theme.glyphs.nerd_font.cockpit]` and `[theme.glyphs.nerd_font.chrome]`.
+The age clock fills the `clock` quarter faces in Unicode, and an eighth-filling `circle_slice` series in `nerd_font`, so the icon tracks elapsed time twice as finely. Every glyph ships as a single cell, which aligns on the `Mono` Nerd Font builds — `JetBrainsMono Nerd Font Mono`, `FiraCode Nerd Font` — where each icon advances one column. A face that draws icons double-width, such as the non-`Mono` `Cascadia Code NF`, keeps its columns aligned by padding the alignment-sensitive glyphs with a trailing space in a per-glyph override under `[theme.glyphs.nerd_font.cockpit]`, `[theme.glyphs.nerd_font.keys]`, and `[theme.glyphs.nerd_font.chrome]`.
 
 `rimz config set` validates named sets, known role names, and glyph width before it writes — for example `rimz config set theme.glyphs.unicode.status.waiting "?"` or `rimz config set theme.glyphs.set nerd_font`.
 
@@ -357,6 +358,7 @@ rimz config set theme.display.glow always
 rimz config set theme.glyphs.set nerd_font
 rimz config set theme.glyphs.unicode.status.working '⢿'
 rimz config set theme.glyphs.unicode.tokens.total '◇'
+rimz config set theme.glyphs.unicode.keys.focus '⏎'
 rimz config set theme.animations.unread shimmer
 rimz config set theme.animations.idle.effect breathe
 rimz config set theme.providers.codex.color 33

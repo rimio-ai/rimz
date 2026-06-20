@@ -660,6 +660,7 @@ fn is_sidebar_glyph_namespace(namespace: &str) -> bool {
             | "worktree"
             | "card"
             | "process"
+            | "keys"
             | "chrome"
     )
 }
@@ -985,6 +986,8 @@ mod tests {
             "theme.glyphs.set",
             "theme.glyphs.unicode.status.working",
             "theme.glyphs.unicode.tokens.total",
+            "theme.glyphs.unicode.keys.focus",
+            "theme.glyphs.unicode.chrome.box_vertical",
             "theme.glyphs.nerd_font.clock.over",
             "resume.auto_continue",
             "resume.auto_continue_text",
@@ -1021,7 +1024,9 @@ mod tests {
             ("theme.animations.nope", false),
             ("theme.glyphs", true),
             ("theme.glyphs.unicode.tokens", true),
+            ("theme.glyphs.unicode.keys", true),
             ("theme.glyphs.unicode.tokens.total", true),
+            ("theme.glyphs.unicode.keys.focus", true),
             ("theme.glyphs.unicode.tokens.nope", false),
             ("accounts", true),
             ("accounts.usage_limit_usd", true),

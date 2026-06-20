@@ -311,19 +311,18 @@ fn arrow_browse_ends_a_wheel_pin() {
     assert_eq!(ui.manual_scroll, None);
 }
 #[test]
-fn help_toggle_jumps_the_viewport_to_the_overlay() {
-    // The overlay lives at the scroll zone's tail: opening help jumps the
-    // viewport to the end (the draw clamps the sentinel to the zone's last
-    // window) and the open overlay itself owns the viewport — no wheel pin
-    // needed, the wheel may still roam. Closing drops any roaming peek so the
-    // view snaps back to the selection.
+fn help_toggle_starts_the_replacement_body_at_top() {
+    // The overlay replaces the card body from the top of the scroll zone and
+    // owns that viewport while open — no wheel pin needed, though the wheel may
+    // still roam. Closing drops any roaming peek so the view snaps back to the
+    // selection.
     let ws = workspace();
     let snapshot = snapshot_with_panes(&ws, vec![pane("terminal_1", "tab_0", false)]);
     let mut ui = UiState::default();
 
     handle_key(KeyAction::Help, &mut ui, &snapshot);
     assert!(ui.help_visible);
-    assert_eq!(ui.scroll_offset, usize::MAX);
+    assert_eq!(ui.scroll_offset, 0);
     assert_eq!(ui.manual_scroll, None, "the overlay needs no wheel pin");
 
     handle_scroll(false, &mut ui);
@@ -351,8 +350,11 @@ fn help_overlay_holds_the_viewport_through_selection_churn() {
     let mut ui = UiState::default();
     reconcile_selection(&mut ui, &snapshot, Some(first));
 
-    // Opening help lands the viewport on the overlay at the zone's tail.
+    // Opening help lands the viewport at the top of the replacement body.
     handle_key(KeyAction::Help, &mut ui, &snapshot);
+    assert_eq!(ui.scroll_offset, 0);
+    // The wheel can roam inside the help block while it owns the body.
+    handle_scroll(true, &mut ui);
     let offset = render::compose_lines(&snapshot, None, &ui, 38, 14).scroll_offset;
     assert!(offset > 0, "the overlay overflows the short frame");
     ui.scroll_offset = offset; // the draw's write-back

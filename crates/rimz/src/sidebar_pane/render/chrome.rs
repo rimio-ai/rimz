@@ -4,9 +4,10 @@ use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::fmt::age_short;
-use super::labels::{status_glyph, thinking_glyph};
+use super::labels::{status_glyph, subagent_glyph, thinking_glyph};
 use super::theme::Theme;
 use super::{Alert, GateNotice};
 use crate::remote::link::link_badge_heat;
@@ -267,13 +268,8 @@ fn span_width(span: &Span<'_>) -> usize {
 /// Center a single line within `width` by prepending padding. A line already
 /// at or past the width is returned unchanged. The line-level style survives
 /// the rebuild, so styled chrome stays styled through the helper.
-#[cfg(test)]
 pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
-    let content_width: usize = line
-        .spans
-        .iter()
-        .map(|span| span.content.chars().count())
-        .sum();
+    let content_width = line.width();
     let pad = width.saturating_sub(content_width) / 2;
     if pad == 0 {
         return line;
@@ -285,48 +281,223 @@ pub(super) fn center_line(line: Line<'static>, width: usize) -> Line<'static> {
     Line::from(spans).style(style)
 }
 
-/// The `?` overlay: keys and the glyph legend, every line in the faint chrome
-/// tier — reference material a reader summoned, not live state, so it recedes
-/// below the cards it sits under.
-pub(super) fn help_lines(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> {
-    let faint = theme.faint();
+/// The `?` overlay: a which-key style block with action glyphs and the status
+/// legend merged into the filter rows. It replaces the card body while open, so
+/// the reader gets summoned reference material without losing the pinned cockpit
+/// or footer.
+pub(super) fn help_lines(
+    theme: &Theme,
+    focus_key: Option<&str>,
+    width: usize,
+) -> Vec<Line<'static>> {
+    const TITLE: &str = "keys & legend";
+    const MIN_FRAME_WIDTH: usize = 22;
+
+    let rows = help_body_rows(theme, focus_key);
+    if width < MIN_FRAME_WIDTH {
+        return rows
+            .into_iter()
+            .map(|line| trim_line_to_width(line, width))
+            .collect();
+    }
+
+    let max_row_width = rows.iter().map(Line::width).max().unwrap_or(0);
+    let title_width = UnicodeWidthStr::width(TITLE) + 2;
+    let desired_width = (max_row_width + 4).max(title_width + 3);
+    framed_box(theme, TITLE, rows, desired_width.min(width))
+}
+
+fn help_body_rows(theme: &Theme, focus_key: Option<&str>) -> Vec<Line<'static>> {
     let waiting = status_glyph(theme, AgentStatus::Waiting);
     let attention = status_glyph(theme, AgentStatus::Failed);
     let paused = status_glyph(theme, AgentStatus::Paused);
     let done = status_glyph(theme, AgentStatus::Success);
     let working = status_glyph(theme, AgentStatus::Running);
-    let thinking = thinking_glyph(theme, 0);
     let idle = status_glyph(theme, AgentStatus::Idle);
+    let thinking = thinking_glyph(theme, 0);
+    let delegating = subagent_glyph(theme, 0);
     let mut lines = vec![
-        Line::styled("keys & legend", faint),
-        Line::styled("move     j/k rows   J/K worktrees   g/G ends", faint),
-        Line::styled("inbox    n/N next/prev needs-you (Space = n)", faint),
-        Line::styled("focus    l or ↵     1-9 direct", faint),
-        Line::styled("read     m read      M unread", faint),
-        Line::styled("accounts ←/→ tabs", faint),
-        Line::styled("filter   u unread   q waiting   !/e attention", faint),
-        Line::styled("         p paused   d done      w working", faint),
-        Line::styled("         o idle     a all", faint),
+        key_row(
+            theme,
+            GlyphRole::KeysMove,
+            "j/k rows   J/K worktrees  g/G ends",
+        ),
+        key_row(theme, GlyphRole::KeysFocus, "l focus    1-9 direct"),
+        key_row(theme, GlyphRole::KeysInbox, "n/N needs-you  (Space = n)"),
+        key_row(theme, GlyphRole::KeysRead, "m/M read / unread"),
+        key_row(theme, GlyphRole::KeysAccounts, "←/→ account tabs"),
+        plain_row(theme, "filter"),
+        help_row(
+            theme,
+            vec![
+                Span::raw("  "),
+                Span::raw(waiting),
+                Span::raw(" q waiting    "),
+                Span::raw(attention),
+                Span::raw(" e attention"),
+            ],
+        ),
+        help_row(
+            theme,
+            vec![
+                Span::raw("  "),
+                Span::raw(paused),
+                Span::raw(" p paused     "),
+                Span::raw(done),
+                Span::raw(" d done"),
+            ],
+        ),
+        help_row(
+            theme,
+            vec![
+                Span::raw("  "),
+                Span::raw(working),
+                Span::raw(" w working    "),
+                Span::raw(idle),
+                Span::raw(" o idle"),
+            ],
+        ),
+        plain_row(theme, "  u unread       a all"),
     ];
     // The focus chord is a mux-level binding the renderer can't fire itself; it
     // shows only when one is configured, naming the user's actual key.
     if let Some(key) = focus_key {
-        lines.push(Line::styled(
-            format!("global   {key} sidebar (toggle)"),
-            faint,
-        ));
+        lines.push(plain_row(theme, format!("global  {key} sidebar (toggle)")));
     }
     lines.extend([
-        Line::styled("system   r reload   x dismiss", faint),
-        Line::styled("help     ? close", faint),
-        Line::styled(
-            format!("{waiting} waiting  {attention} attention  {paused} paused"),
-            faint,
+        help_row(
+            theme,
+            vec![
+                Span::raw(theme.glyph(GlyphRole::KeysReload).to_owned()),
+                Span::raw(" r reload   "),
+                Span::raw(theme.glyph(GlyphRole::KeysDismiss).to_owned()),
+                Span::raw(" x dismiss   ? close"),
+            ],
         ),
-        Line::styled(
-            format!("{done} done    {working} working  {thinking} think  {idle} idle"),
-            faint,
+        help_row(
+            theme,
+            vec![
+                Span::raw("  "),
+                Span::raw(thinking),
+                Span::raw(" thinking     "),
+                Span::raw(delegating),
+                Span::raw(" delegating"),
+            ],
         ),
     ]);
     lines
+}
+
+fn key_row(theme: &Theme, role: GlyphRole, text: &str) -> Line<'static> {
+    help_row(
+        theme,
+        vec![
+            Span::raw(theme.glyph(role).to_owned()),
+            Span::raw(" "),
+            Span::raw(text.to_owned()),
+        ],
+    )
+}
+
+fn plain_row(theme: &Theme, text: impl Into<String>) -> Line<'static> {
+    Line::from(text.into()).style(theme.faint())
+}
+
+fn help_row(theme: &Theme, spans: Vec<Span<'static>>) -> Line<'static> {
+    Line::from(spans).style(theme.faint())
+}
+
+fn framed_box(
+    theme: &Theme,
+    title: &str,
+    rows: Vec<Line<'static>>,
+    box_width: usize,
+) -> Vec<Line<'static>> {
+    let mut lines = Vec::with_capacity(rows.len() + 2);
+    let title = format!(" {title} ");
+    let fill = box_width.saturating_sub(2 + UnicodeWidthStr::width(title.as_str()));
+    lines.push(
+        Line::from(vec![
+            rule_span(theme, GlyphRole::ChromeBoxTopLeft),
+            Span::styled(title, theme.rule()),
+            Span::styled(
+                theme.glyph(GlyphRole::ChromeHairline).repeat(fill),
+                theme.rule(),
+            ),
+            rule_span(theme, GlyphRole::ChromeBoxTopRight),
+        ])
+        .style(theme.faint()),
+    );
+
+    let inner_width = box_width.saturating_sub(4);
+    for row in rows {
+        let row = pad_line_to_width(row, inner_width);
+        let mut spans = Vec::with_capacity(row.spans.len() + 4);
+        spans.push(rule_span(theme, GlyphRole::ChromeBoxVertical));
+        spans.push(Span::raw(" "));
+        spans.extend(row.spans);
+        spans.push(Span::raw(" "));
+        spans.push(rule_span(theme, GlyphRole::ChromeBoxVertical));
+        lines.push(Line::from(spans).style(theme.faint()));
+    }
+
+    lines.push(
+        Line::from(vec![
+            rule_span(theme, GlyphRole::ChromeBoxBottomLeft),
+            Span::styled(
+                theme
+                    .glyph(GlyphRole::ChromeHairline)
+                    .repeat(box_width.saturating_sub(2)),
+                theme.rule(),
+            ),
+            rule_span(theme, GlyphRole::ChromeBoxBottomRight),
+        ])
+        .style(theme.faint()),
+    );
+    lines
+}
+
+fn rule_span(theme: &Theme, role: GlyphRole) -> Span<'static> {
+    Span::styled(theme.glyph(role).to_owned(), theme.rule())
+}
+
+fn pad_line_to_width(line: Line<'static>, width: usize) -> Line<'static> {
+    let mut line = trim_line_to_width(line, width);
+    let pad = width.saturating_sub(line.width());
+    if pad > 0 {
+        line.spans.push(Span::raw(" ".repeat(pad)));
+    }
+    line
+}
+
+fn trim_line_to_width(line: Line<'static>, width: usize) -> Line<'static> {
+    let style = line.style;
+    let mut remaining = width;
+    let mut spans = Vec::new();
+    for span in line.spans {
+        if remaining == 0 {
+            break;
+        }
+        let span_width = UnicodeWidthStr::width(span.content.as_ref());
+        if span_width <= remaining {
+            remaining -= span_width;
+            spans.push(span);
+            continue;
+        }
+        let mut content = String::new();
+        let mut used = 0;
+        for ch in span.content.chars() {
+            let width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if used + width > remaining {
+                break;
+            }
+            used += width;
+            content.push(ch);
+        }
+        if !content.is_empty() {
+            spans.push(Span::styled(content, span.style));
+        }
+        break;
+    }
+    Line::from(spans).style(style)
 }

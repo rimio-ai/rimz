@@ -5,8 +5,8 @@ use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 
 use super::chrome::{
-    alert_lines, footer_lines, gate_notice_lines, hairline_rule, help_lines, repo_header_lines,
-    truth_notice_lines,
+    alert_lines, center_line, footer_lines, gate_notice_lines, hairline_rule, help_lines,
+    repo_header_lines, truth_notice_lines,
 };
 use super::sections::{
     MakeUpHit, ProviderTabHit, cockpit_spend_line, cockpit_summary_line, content_width,
@@ -102,10 +102,9 @@ pub(crate) fn compose_lines(
 
     // Resolve the viewport offset: clamp to the zone, then — unless a manual
     // wheel pin or the open help overlay holds the window — minimally
-    // auto-scroll the selected card fully into view. The clamp runs first so
-    // the help toggle's `usize::MAX` jump-to-end lands on the zone's last
-    // window; while the overlay is open it owns the viewport, so selection
-    // churn beneath it never pulls the view away mid-read.
+    // auto-scroll the selected card fully into view. While help is open it owns
+    // the body viewport, so selection churn beneath it never pulls the block
+    // away mid-read.
     let scroll_len = scroll.len();
     let max_offset = scroll_len.saturating_sub(viewport);
     let mut offset = ui.scroll_offset.min(max_offset);
@@ -124,10 +123,11 @@ pub(crate) fn compose_lines(
     // caller stamps it at the write-back) and through the settle window after.
     // The column is reserved in every mode, so the gate reflows nothing.
     let show_bar = match snapshot.theme.display.scrollbar {
-        ScrollbarMode::Always => true,
+        ScrollbarMode::Always => !ui.help_visible,
         ScrollbarMode::Never => false,
         ScrollbarMode::Auto => {
-            ui.scrollbar.moved_from(offset) || ui.scrollbar.visible(ui.animation_phase)
+            !ui.help_visible
+                && (ui.scrollbar.moved_from(offset) || ui.scrollbar.visible(ui.animation_phase))
         }
     };
     let end = (offset + viewport).min(scroll_len);
@@ -571,6 +571,14 @@ pub(super) fn scroll_lines(
     let mut lines = Vec::new();
     let mut map: Vec<Option<usize>> = Vec::new();
 
+    if ui.help_visible && !active {
+        for line in help_lines(theme, snapshot.sidebar.focus_key_label(), width) {
+            lines.push(center_line(line, width));
+            map.push(None);
+        }
+        return (lines, map);
+    }
+
     if !snapshot.worktree_groups.is_empty() {
         let mut row_index = 0;
         let lead_unread_id = lead_unread(&snapshot.worktree_groups).map(|(id, _)| id);
@@ -607,15 +615,6 @@ pub(super) fn scroll_lines(
                 lead_unread_id,
                 &mut lines,
                 &mut map,
-            );
-        }
-        if ui.help_visible && !active {
-            lines.push(Line::from(""));
-            map.push(None);
-            extend_inert(
-                &mut lines,
-                &mut map,
-                help_lines(theme, snapshot.sidebar.focus_key_label()),
             );
         }
     }
