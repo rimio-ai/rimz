@@ -59,7 +59,7 @@ pub(crate) fn compose_lines(
 ) -> ComposedFrame {
     // One `Theme` per frame, handed to the body and the bottom chrome alike:
     // the cached `NO_COLOR` reading plus the palette and glow mode the
-    // producer resolved from `[sidebar]` onto the snapshot — so a re-themed
+    // producer resolved from `[theme]` onto the snapshot — so a re-themed
     // config lands with the next snapshot, identically on every renderer of
     // the workspace.
     let theme = Theme::for_sidebar(&snapshot.theme);
