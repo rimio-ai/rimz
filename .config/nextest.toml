@@ -15,10 +15,15 @@
 # within a single run. This is per-run accounting, NOT a shared lock: the
 # worktrees never block on each other.
 #
-# Retries absorb the occasional startup race that still slips through under load
-# (a different test each time — momentary contention, not a real failure); the
-# `query-tab-names` / command-metadata spawn waits in the tests keep them rare.
-# The deep journey zellij smoke joins the group so the cap bounds the total.
+# Retries absorb the startup races that slip through under load (a different
+# test each time — momentary contention, not a real failure): a starved runner
+# can kill a live server mid-test ("There is no active session!"), and the whole
+# test phase is one sustained-load window only tens of seconds wide. So the
+# retry budget spans that window with exponential backoff rather than a few
+# fixed-3s tries that all land in the same bad patch — a later attempt fires
+# once the suite's heavy phase has passed. The `query-tab-names` /
+# command-metadata spawn waits in the tests keep the first-try races rare. The
+# deep journey zellij smoke joins the group so the cap bounds the total.
 #
 # Live tmux servers are far lighter (one `tmux` process per tempdir socket, no
 # wasm plugin host), so their cap is generous; the group exists to give tmux's
@@ -31,9 +36,9 @@ live-tmux = { max-threads = 4 }
 [[profile.default.overrides]]
 filter = 'package(rimz) & (test(/^backend::zellij::/) | test(/^journey::deep::zellij/))'
 test-group = 'live-zellij'
-retries = { backoff = "fixed", count = 2, delay = "3s" }
+retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
 
 [[profile.default.overrides]]
 filter = 'package(rimz) & test(/^backend::tmux::/)'
 test-group = 'live-tmux'
-retries = { backoff = "fixed", count = 2, delay = "3s" }
+retries = { backoff = "exponential", count = 4, delay = "3s", max-delay = "30s", jitter = true }
