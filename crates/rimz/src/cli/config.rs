@@ -588,6 +588,14 @@ fn parse_string_edit_value(raw: &str) -> Value {
 }
 
 fn validate_set_value(path: &[String], value: &Value) -> Result<()> {
+    if is_harness_smart_auto_compact_edit(path) {
+        let Some(threshold) = value.as_str() else {
+            bail!("harness.smart_auto_compact must be a string");
+        };
+        if let Err(err) = rimz::message::AutoCompact::parse(threshold) {
+            bail!("{err}");
+        }
+    }
     if matches!(
         path,
         [root, leaf] if root == "theme" && leaf == "scheme"
@@ -837,6 +845,22 @@ mod tests {
 
         assert_eq!(parse_set_value(&key, "70%").as_str(), Some("70%"));
         assert_eq!(parse_set_value(&key, "120000").as_str(), Some("120000"));
+    }
+
+    #[test]
+    fn harness_smart_auto_compact_validation_rejects_bad_values() {
+        let key = parse_key("harness.smart_auto_compact").expect("key");
+
+        validate_set_value(&key, &Value::from("70%")).expect("percent threshold");
+        validate_set_value(&key, &Value::from("120000")).expect("token threshold");
+
+        let err = validate_set_value(&key, &Value::from("abc"))
+            .expect_err("invalid smart auto-compact threshold")
+            .to_string();
+        assert!(
+            err.contains("invalid auto-compact threshold `abc`"),
+            "unexpected error: {err}"
+        );
     }
 
     #[test]

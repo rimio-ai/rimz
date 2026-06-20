@@ -179,6 +179,12 @@ fn config_set_rejects_unknown_keys_and_bad_values() {
         .failure()
         .stderr(contains("unknown sidebar theme scheme `auto`"));
 
+    env.rimz()
+        .args(["config", "set", "harness.smart_auto_compact", "abc"])
+        .assert()
+        .failure()
+        .stderr(contains("invalid auto-compact threshold `abc`"));
+
     let bad_scheme = env.home_root.join("bad-theme.toml");
     std::fs::write(&bad_scheme, "[colors.primary]\nbackground = 'nothex'\n")
         .expect("write bad scheme");
