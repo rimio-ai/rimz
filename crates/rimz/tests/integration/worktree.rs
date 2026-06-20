@@ -11,6 +11,10 @@ use std::time::{Duration, Instant};
 
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
+#[cfg(unix)]
+use rimz::ids::{AgentKind, AgentSessionId};
+#[cfg(unix)]
+use rimz::schema::event::{AgentLaunchPayload, AgentLaunchState, EventEnvelope};
 use serde_json::Value;
 
 use crate::common::Env;
@@ -347,6 +351,87 @@ fn agents_exec_sighup_removes_clean_worktree() {
             .contains(&path.display().to_string()),
         "git worktree list forgets the removed worktree"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_sighup_keeps_worktree_with_inflight_relaunch() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    env.rimz()
+        .args(["worktree", "new", "demo"])
+        .assert()
+        .success();
+    let path = env.home_root.join("project-worktrees").join("demo");
+    seed_agent_launch(
+        &env,
+        &path,
+        "launch_inflight",
+        "inflight",
+        AgentLaunchState::Starting,
+    );
+    let mut child = spawn_agent_exec(&env, &path, "inflight");
+
+    wait_for_ready(
+        &mut child,
+        &env.home_root.join("inflight.ready"),
+        &env.home_root.join("inflight.pid"),
+    );
+    signal_child(&child, nix::sys::signal::Signal::SIGHUP);
+    let _status = wait_for_exit(&mut child, &env.home_root.join("inflight.pid"));
+
+    assert!(path.exists(), "in-flight relaunch pins worktree cleanup");
+    assert!(
+        branch_exists(&env.project_root, "demo"),
+        "in-flight relaunch pins worktree branch"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
+    if git_missing() {
+        return;
+    }
+    let env = Env::new();
+    init_repo(&env.project_root);
+    let missing = env.home_root.join("project-worktrees").join("missing");
+    seed_agent_launch(
+        &env,
+        &missing,
+        "launch_missing",
+        "missing-agent",
+        AgentLaunchState::Starting,
+    );
+    let shim_dir = write_codex_spawn_marker_shim(&env);
+    let ready = env.home_root.join("missing.ready");
+
+    env.rimz()
+        .args(["agents", "exec", "codex", "--worktree-path"])
+        .arg(&missing)
+        .args([
+            "--launch-id",
+            "launch_missing",
+            "--agent-name",
+            "missing-agent",
+        ])
+        .env("PATH", path_with_front(&shim_dir))
+        .env("RIMZ_TEST_AGENT_READY", &ready)
+        .assert()
+        .failure()
+        .stderr(contains("refusing to launch the agent in the project root"));
+
+    assert!(!ready.exists(), "agent shim was not spawned");
+    let snapshot = env.ledger().snapshot_cached().expect("snapshot");
+    let agent = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == "launch_missing")
+        .expect("failed launch remains in roster");
+    assert_eq!(agent.status, rimz::feed::AgentStatus::Failed);
 }
 
 #[cfg(unix)]
@@ -767,6 +852,41 @@ fn spawn_agent_exec_command(
 }
 
 #[cfg(unix)]
+fn seed_agent_launch(
+    env: &Env,
+    worktree: &Path,
+    launch_id: &str,
+    agent_name: &str,
+    state: AgentLaunchState,
+) {
+    let workspace = rimz::WorkspaceResolver::resolve(&env.project_root, None).expect("workspace");
+    let kind = AgentKind::new_unchecked("codex");
+    let event = EventEnvelope::agent_launched(
+        workspace.workspace_id,
+        workspace.session_name,
+        &kind,
+        AgentLaunchPayload {
+            agent_id: AgentSessionId::from(launch_id),
+            agent_name: agent_name.to_owned(),
+            profile: None,
+            role: None,
+            kind_ordinal: None,
+            state,
+            run_id: None,
+            pane_id: None,
+            runtime_owner: None,
+            worktree_path: Some(worktree.display().to_string()),
+            worktree_branch: worktree
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(ToOwned::to_owned),
+            prompt: None,
+        },
+    );
+    env.ledger().append_event(&event).expect("append launch");
+}
+
+#[cfg(unix)]
 fn write_codex_shim(env: &Env) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
 
@@ -792,6 +912,27 @@ fn write_codex_shim(env: &Env) -> std::path::PathBuf {
         .permissions();
     perms.set_mode(0o755);
     std::fs::set_permissions(&shim, perms).expect("chmod codex shim");
+    dir
+}
+
+#[cfg(unix)]
+fn write_codex_spawn_marker_shim(env: &Env) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = env.home_root.join("agent-bin-marker");
+    std::fs::create_dir_all(&dir).expect("mkdir agent marker bin");
+    let shim = dir.join("codex");
+    std::fs::write(
+        &shim,
+        "#!/bin/sh\n\
+         : > \"$RIMZ_TEST_AGENT_READY\"\n",
+    )
+    .expect("write codex marker shim");
+    let mut perms = std::fs::metadata(&shim)
+        .expect("shim metadata")
+        .permissions();
+    perms.set_mode(0o755);
+    std::fs::set_permissions(&shim, perms).expect("chmod codex marker shim");
     dir
 }
 

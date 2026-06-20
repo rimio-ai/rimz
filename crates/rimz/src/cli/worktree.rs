@@ -16,6 +16,7 @@ use rimz::mux::own_pane_id;
 use rimz::workspace::{RootClass, WorkspaceResolver};
 
 const CLEANUP_SIGNAL_ROSTER_GRACE: Duration = Duration::from_millis(300);
+const CLEANUP_ROSTER_RECENT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Args)]
 pub struct WorktreeArgs {
@@ -238,7 +239,8 @@ pub(super) fn cleanup_worktree(
         std::thread::sleep(CLEANUP_SIGNAL_ROSTER_GRACE);
     }
     let other_pane_inside = other_live_pane_inside(path, globals);
-    match rimz::worktree::cleanup_decision(status, true, other_pane_inside) {
+    let roster_bound = roster_binds_worktree_from_ledger(path, &marker, globals);
+    match rimz::worktree::cleanup_decision(status, true, other_pane_inside || roster_bound) {
         rimz::worktree::CleanupDecision::RemoveClean => {
             let branch = remove_after_leaving_worktree(path, &marker, false)?;
             let _ = writeln!(
@@ -263,6 +265,91 @@ pub(super) fn cleanup_worktree(
         rimz::worktree::CleanupDecision::Skip => {}
     }
     Ok(())
+}
+
+fn roster_binds_worktree_from_ledger(
+    path: &Path,
+    marker: &rimz::worktree::WorktreeMarker,
+    globals: &GlobalFlags,
+) -> bool {
+    let workspace = match WorkspaceResolver::resolve(&marker.repo_root, globals.root.clone()) {
+        Ok(workspace) => workspace,
+        Err(err) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %err,
+                "could not resolve workspace while checking worktree cleanup roster guard",
+            );
+            return false;
+        }
+    };
+    let snapshot = match super::open_ledger(&workspace)
+        .and_then(|ledger| ledger.snapshot_cached().map_err(Into::into))
+    {
+        Ok(snapshot) => snapshot,
+        Err(err) => {
+            tracing::debug!(
+                path = %path.display(),
+                error = %err,
+                "could not read agent roster while checking worktree cleanup guard",
+            );
+            return false;
+        }
+    };
+    let own = rimz::mux::ambient_pane_id();
+    roster_binds_worktree(
+        &snapshot.agents,
+        own.as_ref(),
+        path,
+        jiff::Timestamp::now(),
+        CLEANUP_ROSTER_RECENT,
+    )
+}
+
+fn roster_binds_worktree(
+    agents: &[AgentState],
+    own: Option<&rimz::PaneId>,
+    path: &Path,
+    now: jiff::Timestamp,
+    recent: Duration,
+) -> bool {
+    let target = normalize_path_lexical(path);
+    agents.iter().any(|agent| {
+        agent_seen_recently(agent.last_seen, now, recent)
+            && agent
+                .worktree_path
+                .as_deref()
+                .map(Path::new)
+                .map(normalize_path_lexical)
+                .is_some_and(|bound| rimz::worktree::path_inside(&bound, &target))
+            && agent_is_not_own(agent, own)
+    })
+}
+
+fn agent_seen_recently(last_seen: jiff::Timestamp, now: jiff::Timestamp, recent: Duration) -> bool {
+    let span = now.duration_since(last_seen);
+    span.is_negative() || (span.as_secs().max(0) as u64) <= recent.as_secs()
+}
+
+fn agent_is_not_own(agent: &AgentState, own: Option<&rimz::PaneId>) -> bool {
+    match (agent.pane.as_ref(), own) {
+        (Some(pane), Some(own)) => &pane.pane_id != own,
+        _ => true,
+    }
+}
+
+fn normalize_path_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 fn remove_after_leaving_worktree(
@@ -375,7 +462,9 @@ fn exec_shell(path: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rimz::ids::{AgentKind, AgentSessionId};
     use rimz::{MuxName, PaneId};
+    use rimz::{agents::lifecycle::TurnPhase, feed::AgentStatus};
 
     #[test]
     fn other_live_user_pane_inside_filters_sidebar_own_and_counts_user_panes() {
@@ -400,11 +489,129 @@ mod tests {
         assert!(other_live_user_pane_inside(&shell, &own, worktree));
     }
 
+    #[test]
+    fn roster_binds_worktree_filters_own_stale_and_other_worktrees() {
+        let worktree = Path::new("/repo-worktrees/demo");
+        let own = PaneId::from_parts(MuxName::Zellij, "terminal_own");
+        let now = jiff::Timestamp::from_second(1_700_000_000).unwrap();
+        let recent = Duration::from_secs(5);
+
+        assert!(roster_binds_worktree(
+            &[agent(
+                "inflight",
+                Some("/repo/../repo-worktrees/demo"),
+                None,
+                now
+            )],
+            Some(&own),
+            worktree,
+            now,
+            recent,
+        ));
+        assert!(roster_binds_worktree(
+            &[agent(
+                "other-pane",
+                Some("/repo-worktrees/demo/src"),
+                Some("terminal_other"),
+                now,
+            )],
+            Some(&own),
+            worktree,
+            now,
+            recent,
+        ));
+        assert!(!roster_binds_worktree(
+            &[agent(
+                "own",
+                Some("/repo-worktrees/demo"),
+                Some("terminal_own"),
+                now,
+            )],
+            Some(&own),
+            worktree,
+            now,
+            recent,
+        ));
+        assert!(!roster_binds_worktree(
+            &[agent(
+                "stale",
+                Some("/repo-worktrees/demo"),
+                None,
+                now - Duration::from_secs(30),
+            )],
+            Some(&own),
+            worktree,
+            now,
+            recent,
+        ));
+        assert!(!roster_binds_worktree(
+            &[agent(
+                "other-worktree",
+                Some("/repo-worktrees/other"),
+                None,
+                now
+            )],
+            Some(&own),
+            worktree,
+            now,
+            recent,
+        ));
+    }
+
     fn pane(raw: &str, command: Option<&str>, cwd: Option<&Path>) -> rimz::feed::PaneRef {
         rimz::feed::PaneRef {
             command: command.map(ToOwned::to_owned),
             cwd: cwd.map(|path| path.display().to_string()),
             ..rimz::feed::PaneRef::from_id(PaneId::from_parts(MuxName::Zellij, raw))
+        }
+    }
+
+    fn agent(
+        id: &str,
+        worktree_path: Option<&str>,
+        raw_pane: Option<&str>,
+        last_seen: jiff::Timestamp,
+    ) -> AgentState {
+        AgentState {
+            agent_id: AgentSessionId::from(id),
+            kind: AgentKind::new_unchecked("codex"),
+            name: Some(id.to_owned()),
+            kind_ordinal: None,
+            profile: None,
+            role: None,
+            status: AgentStatus::Idle,
+            phase: TurnPhase::Idle,
+            pane: raw_pane.map(|raw| pane(raw, Some("codex"), None)),
+            agent_pid: None,
+            agent_process_start: None,
+            runtime_owner: None,
+            parent_agent_id: None,
+            worktree_path: worktree_path.map(ToOwned::to_owned),
+            worktree_branch: None,
+            task: None,
+            prompt: None,
+            transcript_path: None,
+            recent_prompts: Vec::new(),
+            model: None,
+            effort: None,
+            context_pct: None,
+            context_window: None,
+            total_tokens: None,
+            cache_read_input_tokens: None,
+            cache_write_input_tokens: None,
+            fresh_input_tokens: None,
+            output_tokens: None,
+            todo_done: None,
+            todo_total: None,
+            context: None,
+            subagent_description: None,
+            subagent_started_at: None,
+            turn_started_at: None,
+            compacting_since: None,
+            compaction_count: 0,
+            last_seen,
+            last_activity: last_seen,
+            registered_at: Some(last_seen),
         }
     }
 }

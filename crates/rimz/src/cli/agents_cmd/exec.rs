@@ -7,6 +7,20 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         .context("resolving the agent launch workspace")?;
     let run_context = run_exec_context(&args, &workspace)?;
     let launch_identity = exec_launch_identity(&args)?;
+    let entered_worktree = match args.worktree_path.as_deref() {
+        Some(path) => match enter_worktree(path) {
+            Ok(path) => Some(path),
+            Err(err) => {
+                if let Some(identity) = launch_identity.as_ref()
+                    && launch_is_still_provisional(&workspace, identity)
+                {
+                    record_launch_failed(&workspace, identity, args.prompt.as_deref());
+                }
+                return Err(err);
+            }
+        },
+        None => None,
+    };
     if let Some(context) = run_context.as_ref() {
         record_own_run_pane(context);
     }
@@ -60,6 +74,9 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
     let mut command = Command::new(program);
     command.args(rest);
     command.envs(&rimz_env);
+    if let Some(path) = entered_worktree.as_deref() {
+        command.current_dir(path);
+    }
     let child = command
         .spawn()
         .with_context(|| format!("running {program}"))?;
@@ -83,7 +100,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
         record_launch_failed(&workspace, identity, args.prompt.as_deref());
     }
 
-    if let Some(path) = args.worktree_path.as_deref()
+    if let Some(path) = entered_worktree.as_deref()
         && let Err(err) = cleanup_worktree_via_ondisk(path, globals, !outcome.signaled)
     {
         let _ = writeln!(
@@ -114,6 +131,50 @@ pub(super) fn should_exec_agent_directly(args: &ExecArgs) -> bool {
 
 pub(super) fn should_record_end_trace(args: &ExecArgs) -> bool {
     !args.exit_on_run_completion
+}
+
+fn enter_worktree(path: &Path) -> Result<PathBuf> {
+    let path = absolute_lexical_path(path).context("resolving worktree checkout path")?;
+    let marker = rimz::worktree::read_marker_for_worktree(&path)
+        .with_context(|| format!("reading worktree marker for {}", path.display()))?;
+    if marker.is_none() {
+        bail!(
+            "worktree checkout {} is gone or no longer a Rimz worktree (removed by a concurrent cleanup?); refusing to launch the agent in the project root",
+            path.display()
+        );
+    }
+    std::env::set_current_dir(&path).with_context(|| {
+        format!(
+            "worktree checkout {} is gone (removed by a concurrent cleanup?); refusing to launch the agent in the project root",
+            path.display()
+        )
+    })?;
+    Ok(path)
+}
+
+fn absolute_lexical_path(path: &Path) -> Result<PathBuf> {
+    let path = if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        std::env::current_dir()
+            .context("reading current directory")?
+            .join(path)
+    };
+    Ok(normalize_path_lexical(&path))
+}
+
+fn normalize_path_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
 }
 
 #[cfg(unix)]
