@@ -73,8 +73,9 @@ jobs:
             ~/.cargo/registry/cache
             ~/.cargo/git/db
             target/ci
-          key: ${{ steps.cargo-cache-key.outputs.key }}
+          key: ${{ steps.cargo-cache-key.outputs.key }}-${{ github.run_id }}
           restore-keys: |
+            ${{ steps.cargo-cache-key.outputs.key }}
             ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
       # Prebuilt binaries — avoids compiling six plugins from source on every
@@ -116,65 +117,6 @@ jobs:
           else
             cargo install --locked cargo-vet@0.10.2
           fi
-
-      - name: cargo xtask ci
-        run: cargo xtask ci
-
-  mux-tests:
-    name: mux backends (zellij + tmux)
-    runs-on: [linux_amd64, debian-13]
-    timeout-minutes: 20
-    needs: ci
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install Rust toolchain (from rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Compute Cargo cache key
-        id: cargo-cache-key
-        shell: bash
-        run: |
-          cache_key_input="${RUNNER_TEMP:-/tmp}/rimz-cargo-cache-key"
-          {
-            printf 'runner-os=%s\n' "${RUNNER_OS:-unknown}"
-            printf 'runner-arch=%s\n' "${RUNNER_ARCH:-unknown}"
-            printf 'cargo-target-dir=%s\n' "$CARGO_TARGET_DIR"
-            printf 'rustflags=%s\n' "${RUSTFLAGS:-}"
-            rustc -vV
-            cargo -vV
-            find . -type f \( \
-              -name Cargo.lock \
-              -o -name Cargo.toml \
-              -o -name rust-toolchain \
-              -o -name rust-toolchain.toml \
-              -o -path '*/.cargo/config.toml' \
-            \) -print | LC_ALL=C sort | while IFS= read -r file; do
-              sha256sum "$file"
-            done
-          } > "$cache_key_input"
-
-          runner_os="$(printf '%s' "${RUNNER_OS:-linux}" | tr '[:upper:]' '[:lower:]')"
-          runner_arch="$(printf '%s' "${RUNNER_ARCH:-x64}" | tr '[:upper:]' '[:lower:]')"
-          key_hash="$(sha256sum "$cache_key_input" | awk '{print $1}')"
-          prefix="cargo-${runner_os}-${runner_arch}-${key_hash}"
-          echo "key=$prefix" >> "$GITHUB_OUTPUT"
-          echo "fallback_prefix=cargo-${runner_os}-${runner_arch}-" >> "$GITHUB_OUTPUT"
-
-      - name: Prepare Cargo cache directories
-        run: mkdir -p ~/.cargo/registry/index ~/.cargo/registry/cache ~/.cargo/git/db "$CARGO_TARGET_DIR"
-
-      - name: Cargo cache
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            target/ci
-          key: ${{ steps.cargo-cache-key.outputs.key }}
-          restore-keys: |
-            ${{ steps.cargo-cache-key.outputs.fallback_prefix }}
 
       - name: Install tmux
         run: |
@@ -235,24 +177,16 @@ jobs:
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/bin/zellij" --version
 
-      - name: Install cargo-nextest (prebuilt)
+      - name: Install mold
         env:
-          INPUT_TOOL: cargo-nextest
+          MOLD_VERSION: 2.41.0
         run: |
-          install_action_dir="$(mktemp -d)"
-          trap 'rm -rf "$install_action_dir"' EXIT
-          git clone --depth 1 --branch v2 https://github.com/taiki-e/install-action "$install_action_dir"
-          env \
-            ACTION_USER_AGENT="taiki-e/install-action (v2)" \
-            DEFAULT_GITHUB_TOKEN= \
-            GH_TOKEN= \
-            GITHUB_ACTION_PATH="$install_action_dir" \
-            GITHUB_TOKEN= \
-            INPUT_CHECKSUM=true \
-            INPUT_FALLBACK=cargo-binstall \
-            RUNNER_ARCH=X64 \
-            RUNNER_OS=Linux \
-            bash --noprofile --norc "$install_action_dir/main.sh"
+          mold_dir="$RUNNER_TEMP/mold"
+          mkdir -p "$mold_dir"
+          curl -L "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" \
+            | tar -xz -C "$mold_dir" --strip-components=1
+          echo "$mold_dir/bin" >> "$GITHUB_PATH"
+          "$mold_dir/bin/mold" --version
 
-      - name: cargo xtask test
-        run: cargo xtask test
+      - name: cargo xtask ci
+        run: mold -run cargo xtask ci
