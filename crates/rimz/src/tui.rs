@@ -69,6 +69,9 @@ fn terminfo_truecolor() -> bool {
     let Some(term) = std::env::var_os("TERM").filter(|term| !term.is_empty()) else {
         return false;
     };
+    // `tput -x` exposes ncurses extended capabilities such as `Tc`; older
+    // ncurses builds, including macOS 5.7, may miss them, so `mode =
+    // "truecolor"` remains the override when COLORTERM is also absent.
     terminfo_capability(&term, "Tc", &[])
         || terminfo_capability(&term, "RGB", &[])
         || (terminfo_capability(&term, "setrgbf", &["1", "2", "3"])
