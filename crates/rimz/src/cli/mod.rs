@@ -1107,9 +1107,7 @@ pub(crate) fn confirm_default_yes(prompt: &str) -> Result<bool> {
     let mut answer = String::new();
     std::io::stdin().read_line(&mut answer)?;
     let answer = answer.trim();
-    Ok(answer.is_empty()
-        || answer.eq_ignore_ascii_case("y")
-        || answer.eq_ignore_ascii_case("yes"))
+    Ok(answer.is_empty() || answer.eq_ignore_ascii_case("y") || answer.eq_ignore_ascii_case("yes"))
 }
 
 pub(crate) fn machine_config() -> rimz::config::MachineConfig {
