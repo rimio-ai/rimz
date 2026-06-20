@@ -79,6 +79,31 @@ fn chrome_rebuilds_carry_line_level_styles() {
     }
 }
 #[test]
+fn help_overlay_falls_back_borderless_when_too_narrow() {
+    let theme = Theme::fixed(false);
+    let lines = help_lines(&theme, Some("Alt+p"), 20);
+    let text = lines
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(!text.contains("╭"), "narrow help drops the frame:\n{text}");
+    assert!(
+        text.contains("↕ j/k rows"),
+        "narrow help keeps glyph-prefixed rows:\n{text}"
+    );
+    assert!(
+        lines.iter().all(|line| line.width() <= 20),
+        "narrow help lines stay within the pane:\n{text}"
+    );
+}
+#[test]
 fn render_group_cap_shows_overflow_indicator() {
     let agents = (0..9)
         .map(|i| {
