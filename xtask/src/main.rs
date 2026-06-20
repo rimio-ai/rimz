@@ -112,6 +112,11 @@ const TASKS: &[TaskInfo] = &[
         runs: "cargo semver-checks",
     },
     TaskInfo {
+        name: "perf",
+        summary: "Run the divan performance benchmarks.",
+        runs: "cargo bench -p rimz --features testkit --locked",
+    },
+    TaskInfo {
         name: "invariants",
         summary: "Run repository architecture invariants.",
         runs: "grep-style invariants implemented in xtask",
@@ -215,7 +220,7 @@ pub(crate) fn is_help_flag(arg: &str) -> bool {
 }
 
 fn task_accepts_args(task: &str) -> bool {
-    matches!(task, "screenshot")
+    matches!(task, "perf" | "screenshot")
 }
 
 fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
@@ -236,6 +241,7 @@ fn run_task(task: &str, args: &[String], root: &Path) -> Result<()> {
         "vet" => gates::vet(root),
         "coverage" => gates::coverage(root),
         "semver" => gates::semver(root),
+        "perf" => gates::perf(root, args),
         "invariants" => invariants::invariants(root),
         "docs-links" => docs_links::docs_links(root),
         "pricing-refresh" => pricing::pricing_refresh(root),

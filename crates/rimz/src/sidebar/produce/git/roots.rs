@@ -73,6 +73,7 @@ pub(super) fn list_group_roots(project_root: &Path, root_class: RootClass) -> Ve
 /// lines. Linked worktrees report absolute paths, so a checkout outside the
 /// project root is captured here exactly as the reducer needs it.
 pub(super) fn list_worktree_roots(project_root: &Path) -> Vec<PathBuf> {
+    crate::proc::testkit::count_spawn();
     let output = Command::new("git")
         .arg("-C")
         .arg(project_root)

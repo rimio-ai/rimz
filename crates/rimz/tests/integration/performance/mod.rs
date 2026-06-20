@@ -5,6 +5,7 @@ mod concurrent_writers;
 mod consumer_enrichment;
 mod enrichment_cadence;
 mod fold_incremental;
+mod ledger_bytes;
 mod ledger_fsync;
 mod produce_budget;
 mod sidebar_diff_stats;

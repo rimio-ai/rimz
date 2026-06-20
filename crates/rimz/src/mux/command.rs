@@ -105,6 +105,7 @@ impl CommandSpec {
     /// child is SIGKILLed by pid, the waiter's `wait()` reaps it, and a
     /// [`MuxErr::Timeout`] is returned.
     fn run_bounded(&self, timeout: Duration) -> Result<Output> {
+        crate::proc::testkit::count_spawn();
         let mut child = self
             .to_command()
             .stdin(Stdio::null())

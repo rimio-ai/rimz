@@ -12,6 +12,9 @@ autotests = false
 name = "rimz"
 path = "src/lib.rs"
 
+[features]
+testkit = []
+
 [[bin]]
 name = "rimz"
 path = "src/main.rs"
@@ -61,6 +64,18 @@ bench = false
 [[test]]
 name = "integration"
 path = "tests/integration/main.rs"
+
+[[bench]]
+name = "hotpath"
+path = "benches/hotpath.rs"
+harness = false
+required-features = ["testkit"]
+
+[[bench]]
+name = "fleet"
+path = "benches/fleet.rs"
+harness = false
+required-features = ["testkit"]
 
 [lints]
 workspace = true
@@ -122,6 +137,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 assert_cmd.workspace = true
+divan.workspace = true
 insta.workspace = true
 portable-pty.workspace = true
 predicates.workspace = true

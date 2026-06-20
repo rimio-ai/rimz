@@ -221,6 +221,26 @@ pub fn cwd(_pid: u32) -> Option<std::path::PathBuf> {
     None
 }
 
+/// Test-only observability seam for subprocesses on hot paths. The counter is
+/// per-process and relaxed, matching the ledger counters: benchmarks and
+/// integration gates care about exact call counts at the fork funnels, not
+/// cross-process aggregation.
+#[doc(hidden)]
+pub mod testkit {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static SPAWNS: AtomicU64 = AtomicU64::new(0);
+
+    /// Subprocess spawn attempts counted since process start.
+    pub fn spawn_count() -> u64 {
+        SPAWNS.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn count_spawn() {
+        SPAWNS.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// One process's resource metrics from a **single** `/proc/<pid>/stat` read:
 /// self CPU ticks, waited-child CPU ticks, resident set size, and the raw start
 /// time. One read serves the sidebar's CPU% delta, its `M` memory figure, and

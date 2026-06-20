@@ -180,6 +180,8 @@ Core test shapes keep their own discipline:
 
 - **Unit tests** — `#[cfg(test)] mod tests` in the module under test: inline by default; past ~500 lines the body moves to a sibling file (`#[cfg(test)] mod tests;` + `view/tests.rs`) — same module path, same private access, enforced by `cargo xtask invariants`. The move is whole-module: a module's unit tests live in one place, inline or sibling, so "where are the tests" has one answer and the size gate stays meaningful. When a sibling `tests.rs` itself grows, organize with nested modules inside it grouped by concern (a `tests/` directory module past that) — growth extends the test tree, it does not return tests to the source file. An outgrown unit-test module is also a prompt: check whether the weight belongs in a domain module or the integration tier before extracting. Pure logic only: state-machine transitions, parser shapes, schema round-trips. No filesystem, no network, no subprocess.
 - **Integration tests** — one binary per crate at `crates/rimz/tests/integration/main.rs`, where each suite is a module (`mod hooks;`) and related suites group under a subdirectory module (`mod backend;` over `backend/{tmux,zellij}.rs`). The shared harness is declared once in `crates/rimz/tests/integration/common/`. Real subprocesses, real temp directories under `tempfile::TempDir`, real ledger files. Spawn `rimz` through the `Env` harness in `crates/rimz/tests/integration/common/` (an `assert_cmd` `cargo-bin` builder). The bridge and backend matrix lives in `crates/rimz/tests/integration/`.
+- **Performance gates** — integration tests under `crates/rimz/tests/integration/performance/` assert deterministic work bounds, not timing. Counters live at the funnel they measure: fsyncs in `ledger::atomic::testkit`, event-log bytes in `ledger::event_log::testkit`, and hot-path subprocess attempts in `proc::testkit`. The crate-level `testkit` feature exposes only synthetic fleet builders and counter readers for tests and benches; shipped artifacts do not enable it.
+- **Performance benches** — `crates/rimz/benches/` holds non-gating divan benchmarks. They measure wall-clock and allocation figures over synthetic ledgers, pane frames, and sidecars, never real agents. Run them with `cargo xtask perf`; do not put timing assertions in CI.
 - **Snapshot tests** — `insta::assert_snapshot!` for every protocol stdout (CLI, hook, `--json` events) **including failure shapes**. Normalize UUIDs, timestamps, absolute paths, and other transient identifiers at the assertion boundary before snapshotting; introduce a shared helper only when multiple suites need the same normalization. Sidebar render tests draw through a `vt100::Parser`-backed ratatui backend and snapshot the resulting screen contents — never widget internals.
 - **Property tests** — `proptest` for parsers (TOML override values, agent payloads, framing), serializers (round-trip schema types), and state-machine transitions (no path leaves a final state).
 
@@ -199,6 +201,7 @@ Current snapshot — entries move when a better-designed alternative wins on des
 | **Sidebar runtime** | `ratatui` (via its `crossterm_0_29` feature); direct `crossterm` only when sidebar I/O actually requires it |
 | **Zellij plugin (wasm-only)** | `zellij-tile` — the official plugin API, a `cfg(target_family = "wasm")` dependency of `crates/rimz-presence-zellij` alone, so no host artifact links it. Its tree is excluded from `deny.toml`'s audited targets (the wasm executes inside Zellij's plugin sandbox) and covered by `cargo vet` at `safe-to-run` |
 | **Tests** | `insta`, `proptest`, `assert_cmd`, `predicates`, `vt100`, `tempfile`, `portable-pty` |
+| **Performance benches** | `divan` — dev-only, small benchmark harness with built-in allocation profiling. It replaces no runtime code and links only into `[[bench]]` targets, giving reproducible cost-map numbers without criterion's larger harness footprint or bespoke allocator instrumentation |
 
 Rules:
 
@@ -248,6 +251,7 @@ Every gate runs in CI with warnings treated as errors. Local equivalents are `ca
 - `cargo vet` — supply-chain audit.
 - `cargo llvm-cov nextest --workspace --all-features --locked` — coverage. This *is* the suite run inside `ci`: the tests run once, under instrumentation, instead of building and running a second uninstrumented pass.
 - `cargo semver-checks` — release-time API check; skipped while the workspace version is the unpublished pre-release `0.0.0`.
+- `cargo xtask perf` — non-gating divan benchmarks for the measured performance model; accepts cargo bench filters such as `cargo xtask perf fleet`.
 
 Inside `ci` the gates are ordered for speed, not listed order: the instant text gates (`fmt`, `invariants`, `docs-links`) run first and fail fast; the metadata-only audits (`deny`, `deps`, `vet`) overlap the compile gates on their own threads; the compile gates run sequentially (`build-plugin → lint → coverage → doctest → semver`) because concurrent cargo builds only serialize on the target-dir lock. `ci` prints a per-gate timing summary to stderr.
 
@@ -259,7 +263,7 @@ Run `cargo xtask hooks` once per clone to activate the tracked git hooks (it poi
 
 ### Contributor command surface
 
-`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
+`cargo xtask <task>` is the entry point. Tasks: `build`, `build-plugin`, `install`, `hooks`, `fmt`, `lint`, `test`, `doctest`, `deps`, `deny`, `vet`, `coverage`, `semver`, `perf`, `invariants`, `docs-links`, `pricing-refresh`, `brew-formula`, `screenshot`, `ci`. New automation lands in `xtask/`; the only tracked hook script is `.githooks/pre-commit`, and it routes git's hook call back to `cargo xtask`.
 
 ## Reading order for new contributors
 

@@ -42,6 +42,9 @@ pub mod sidebar;
 pub mod sidebar_pane;
 pub mod sock;
 pub mod target;
+#[cfg(feature = "testkit")]
+#[doc(hidden)]
+pub mod testkit;
 pub mod trust;
 pub mod tui;
 pub mod workspace;

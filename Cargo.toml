@@ -160,6 +160,10 @@ assert_cmd = "2"
 predicates = "3"
 vt100 = "0.16"
 portable-pty = "0.9"
+# Performance benches. Dev-only: a small modern harness with built-in
+# allocation profiling, so the cost model can be regenerated without linking
+# bench machinery into shipped artifacts.
+divan = "0.1"
 
 # Full debuginfo is the bulk of link time and on-disk artifact size for our own
 # crates, which relink constantly. `line-tables-only` keeps backtraces with

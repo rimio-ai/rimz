@@ -39,16 +39,16 @@ The three end-to-end budgets the cost map rolls up into, each with its dominant 
 
 ## The cost map
 
-Where the milliseconds are, and what bounds each. Figures are orders of magnitude, not promises; exact cadence constants live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) and the staleness each lane may show is budgeted in [state.md → Pull-Tick Table](../sidebar/state.md#pull-tick-table).
+Where the milliseconds are, and what bounds each. Reproducible figures come from `cargo xtask perf` on synthetic ledgers and pane frames, while external IPC rows name the measured production ranges they bound; exact cadence constants live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs) and the staleness each lane may show is budgeted in [state.md → Pull-Tick Table](../sidebar/state.md#pull-tick-table).
 
 | Operation | Rough cost | Bound |
 | --- | --- | --- |
 | `list-panes` (Zellij/tmux IPC) | 200–680ms, occasionally degraded mid-tick | one producer per workspace; snapshot cache, single-flight, **two-mode TTL** — poll cadence, stretched ~13× while the Zellij presence stamp is fresh ([multiplexers.md → Zellij presence channel](../sidebar/multiplexers.md#zellij-presence-channel)); per-pane process rotation repairs raced-null fields; render-side last-known-good gate |
 | git diff-stats per group root | ~7 `git` forks per group root, plus a byte-budgeted untracked read; each root's chain is sequential, roots run bounded-parallel (`MAX_PARALLEL_GIT`) | activity-tiered TTLs (hot vs idle) keyed on root, single-flighted (`diff-stats.lock`); a non-repo room's root pod costs zero forks. Input set scales with the room — a 50-child-repo room pays a cold idle-TTL window on the fetch worker, never the render thread |
 | group-root enumeration | 1 `git worktree list` fork per `WORKTREE_ROOTS_TTL` in a repo room; 1 `read_dir` in a directory room | cached in the diff-stats cache; a session-boundary `--min-pane-cache-ms` floor re-enumerates a new checkout immediately |
-| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)) |
-| event-log reader fold | warm cursor: one stat + the appended frames (O(new bytes)); cold: one checkpoint parse + a bounded tail fold | the extent stamp and a long-lived `RollupCursor` per fetch worker; perf guard `delta_fold_is_o_new_bytes` |
-| ledger write critical section | feed rename + one event-log `write()`, zero fsyncs, ~µs | the flock covers truth mutation only; durability and publish run off-lock ([ledger.md](../sidebar/ledger.md#durable-state)); perf tier `ledger_fsync.rs` pins zero fsyncs on the warm path |
+| snapshot rollup | O(1) from `snapshots/latest.json` lock-free; O(delta bytes) when writes outran the cache; synthetic cold produce medians: 7.4ms / 16.6ms / 36.9ms at 20 / 50 / 100 agents | the `(generation, offset)` freshness stamp; a miss folds only the unfolded log tail; rotation caps the active log ([ledger.md](../sidebar/ledger.md#durable-state)); `cargo xtask perf fleet` regenerates the fleet table |
+| event-log reader fold | warm cursor: one stat + the appended frames; 40-agent warm fold median 196µs for one ~857B frame | the extent stamp and a long-lived `RollupCursor` per fetch worker; perf guard `delta_fold_is_o_new_bytes` pins O(new bytes) |
+| ledger write critical section | feed rename + one event-log `write()`, zero fsyncs, one lifecycle frame under 1KiB | the flock covers truth mutation only; durability and publish run off-lock ([ledger.md](../sidebar/ledger.md#durable-state)); perf tier `ledger_fsync.rs` pins zero fsyncs and `ledger_bytes.rs` pins bytes/turn |
 | dead-owner abandon sweep | O(pending) scan + per-dead-item writes | debounced to ~once per 2s (one stamp stat); read-side expel hides a dead-owner item instantly; `rimz gc` is the operator trigger |
 | pending enumeration | O(pending feed files) | terminal items relocate to `feed/terminal/` on transition; decision-path scans list only the pending dir |
 | sidebar heartbeat | temp + atomic rename | written at startup, then throttled below the liveness TTL, so a delta storm does not churn heartbeats |
@@ -56,7 +56,7 @@ Where the milliseconds are, and what bounds each. Figures are orders of magnitud
 | jump (focus the bound pane) | one mux-client fork, tens–hundreds ms | off the render thread (detached); in-process focus, no `rimz pane focus` child, no per-click `list-panes` re-validation; fire-and-forget |
 | durable file write | temp + 2 fsyncs (file, parent dir) | cold paths only — trust grants, workspace identity, hook installs, rotation carryover; nothing a hook or the UI waits on pays it |
 | disposable cache write | temp + atomic rename, 0 fsync | `write_temp_then_rename_cache` |
-| frame redraw | sub-millisecond, in-process | fixed `[theme.display] refresh_ms` grid for dirty folds and fast motion; the attention/result blink and the smooth resting breathe on the breath cadence; idle relaxes to the backstop; never forks a fetch; perf guard `compose_budget` |
+| frame redraw | sub-millisecond, in-process; 40-agent fixed render median 503µs and ~892KB alloc/op | fixed `[theme.display] refresh_ms` grid for dirty folds and fast motion; the attention/result blink and the smooth resting breathe on the breath cadence; idle relaxes to the backstop; never forks a fetch; perf guard `compose_budget` and `cargo xtask perf hotpath` |
 | transition effects pass | µs-scale, O(affected cells) | a color-only post-pass inside the same draw, gated by `Theme::effects_enabled`; targets resolve from the hit-test `line_map`, so cost scales with live transition targets, never screen size |
 | fleet spending walk (producer) | within `SPENDING_TTL`: one read of shared `provider-spending.json`, zero transcript IO; on the due walk, one stat per file + O(appended bytes) per grown file | the shared cache stamp gates the whole walk, single-flighted across rooms (`spending.lock`); the incremental `(mtime, len, cursor)` parse keeps it history-independent ([provider.md → Cost history](../agents/provider.md#cost-history), guard `spending_walk_io_is_history_independent`) |
 | Codex local transcript context refresh | steady-state: one stat on the prior rollout path; changed file: one bounded 64 KiB tail parse, no app-server subprocess | three stat-gated triggers — hook, the elder's transcript watcher, and the producer backstop ([state.md → Push Channels](../sidebar/state.md#push-channels)); app-server fields stay detached and throttled |
@@ -66,9 +66,28 @@ Where the milliseconds are, and what bounds each. Figures are orders of magnitud
 
 `WORKTREE_ROW_CAP` is a cap on the idle/process tail, not a hard row-count cap. Active, paused, blocked, finished, focused, and unread rows stay renderable past the cap so direct jump targets and unread convergence remain visible. The O(rows) render, effect, and observer passes therefore scale with visible live work rather than with six rows per worktree; that is still bounded by the live pane count in the 20-100 agent target, and the fleet-scale compose/observer guards are the proof. If that bound becomes too loose, the cap-preserving upgrade is a tighter producer-side visible-set budget that preserves open unread episodes rather than hiding active/result rows from renderers.
 
+## Measuring
+
+`cargo xtask perf` runs the non-gating divan benchmark tier over synthetic ledgers and pane frames. The harness launches no agents and spends no model tokens: it appends lifecycle events, publishes pane topology, folds snapshots, enriches cached sidecars, fuses overlay events, and renders fixed frames through the same public entry points the sidebar uses.
+
+The deterministic CI gates own exact integer budgets. `ledger_fsync.rs` pins the warm write path's fsync count, `ledger_bytes.rs` pins a lifecycle frame below 1KiB, `produce_budget.rs` pins zero subprocess spawns for warm produce with fresh inputs, and the incremental fold guards pin O(new bytes). The benches own wall-clock and allocation figures, which stay out of `ci` so a busy runner never fails a build on timing.
+
+Current local baseline from `cargo xtask perf` on June 20, 2026:
+
+| Bench | Median | Alloc/op |
+| --- | ---: | ---: |
+| `fleet::produce_cold` 20 / 50 / 100 agents | 7.4ms / 16.6ms / 36.9ms | 12.0MB / 27.1MB / 52.4MB |
+| `fleet::produce_warm` 20 / 50 / 100 agents | 655µs / 1.05ms / 2.11ms | 2.22MB / 2.74MB / 3.57MB |
+| `hotpath::fuse` 40 agents | 189µs | 85.9KB |
+| `hotpath::rollup_fold_warm` 40 agents | 196µs | 600.6KB |
+| `hotpath::enrich_cached` 40 agents | 814µs | 1.91MB |
+| `hotpath::render_fixed` 40 agents | 503µs | 891.7KB |
+
+Process-level RAM and CPU stay a manual profiling recipe because they are OS- and workload-shaped. Record CPU flamegraphs with `samply record -- cargo xtask perf`, measure peak RSS with `/usr/bin/time -v cargo xtask perf`, and use `dhat` or the platform allocator profiler when an allocation regression needs ownership. Run the same commands against `rimz sidebar snapshot --json` over a synthetic seeded workspace when the question is process shape rather than microbench shape.
+
 ## The overhead, at fleet scale
 
-Rimz is the layer that watches a fleet for one human, so its own footprint is sized against a single agent rather than the fleet: the cost of observing twenty or a hundred agents stays a small, near-flat fraction of running one of them, and that ratio is the performance target as much as the measurement. The figures below are measured on a real fleet and projected to 20, 50, and 100 concurrent agents spread across a handful of rooms — two to five workspaces, each a repo or a directory of worktrees, which is how a developer's agents actually divide. Like the cost map they are orders of magnitude, and the constants that bound them live in [`timing.rs`](../../../crates/rimz/src/sidebar/timing.rs).
+Rimz is the layer that watches a fleet for one human, so its own footprint is sized against a single agent rather than the fleet: the cost of observing twenty or a hundred agents stays a small, near-flat fraction of running one of them, and that ratio is the performance target as much as the measurement. The deterministic rows below come from the counter gates and synthetic fleet benches; RAM and CPU use the manual recipe above because resident set and scheduler share depend on the host. The fleet shape is 20, 50, and 100 concurrent agents spread across a handful of rooms — two to five workspaces, each a repo or a directory of worktrees, which is how a developer's agents actually divide.
 
 The cost attaches to three units, and only the cheapest grows with the agent count:
 
@@ -85,7 +104,7 @@ The table totals across a 2–5 room fleet and names the per-workspace rate wher
 | CPU, idle | ~0 | ~0 | ~0 | loops block in `recv`; no poll spin, no per-frame fork |
 | CPU, busy | <0.3 core | ~0.3–0.8 core | ~0.5–1.5 core | one producer per room runs git / `/proc` / spend on its fetch worker, bursting toward the per-room 8-fork cap, never on the render thread |
 | RAM, resident | ~80–150 MiB | ~100–180 MiB | ~120–220 MiB | one ~30 MiB renderer per open room + per-room producer caches + a thin per-Codex-session broker; scales with rooms, flat in agents |
-| Durable write | ~1–3 KiB/s | ~2–4 KiB/s | ~2–5 KiB/s | event frames (~0.5 KiB) per turn; a ~7.6 KiB feed item only on a question; summed across rooms |
+| Durable write | ~1–3 KiB/s | ~2–4 KiB/s | ~2–5 KiB/s | lifecycle event frames are counter-pinned below 1KiB (current synthetic frame ~857B); a ~7.6KiB feed item lands only on a question; summed across rooms |
 | fsync rate | ~rooms/s | ~rooms/s | ~rooms/s | one group `fdatasync` per second per workspace (≈2–5/s for the fleet) |
 | State on disk | tens of MiB | tens of MiB | ~100s of MiB | rotation-capped event log + ~5 KiB/agent snapshot + relocating feed items, per workspace |
 | Network | 1 pricing fetch/day; plus an escalating 30m-gated chase while an unpriced model is pending | same | same | fleet-shared, single-flighted; local datagrams and unix sockets otherwise; no core egress |
@@ -170,7 +189,7 @@ Evaluated and **rejected** — recorded so the next pass does not re-litigate th
 3. Decide durability explicitly: durable state fsyncs, a next-tick-rebuilt cache does not. Do not reach for `write_temp_then_rename` on a disposable file.
 4. Keep single-flight: a new fetch trigger routes through `request_fetch`, never a bare spawn, so it coalesces with the rest.
 5. Measure the idle case too — an optimization that speeds the busy path by adding idle work is usually a loss; the fleet is idle most of the time.
-6. The gate is the proof. `cargo xtask ci` stays green, including the invariant that the sidebar render path imports no durable ledger-writer module and forks no `pane capture`/`send`.
+6. The gate is the proof. `cargo xtask ci` stays green, including the invariant that the sidebar render path imports no durable ledger-writer module and forks no `pane capture`/`send`; `cargo xtask perf` refreshes wall-clock and allocation figures when the change moves a measured path.
 
 ### Optimizing perceived response time
 

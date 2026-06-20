@@ -55,6 +55,19 @@ pub(crate) fn semver(root: &Path) -> Result<()> {
     run(root, "cargo", ["semver-checks"])
 }
 
+pub(crate) fn perf(root: &Path, args: &[String]) -> Result<()> {
+    let mut cargo_args = vec![
+        "bench".to_owned(),
+        "-p".to_owned(),
+        "rimz".to_owned(),
+        "--features".to_owned(),
+        "testkit".to_owned(),
+        "--locked".to_owned(),
+    ];
+    cargo_args.extend(args.iter().cloned());
+    run(root, "cargo", cargo_args)
+}
+
 fn workspace_version(root: &Path) -> Result<String> {
     let manifest =
         fs::read_to_string(root.join("Cargo.toml")).context("reading workspace manifest")?;

@@ -259,12 +259,10 @@ fn worktree_branch(worktree: &Path) -> Option<String> {
 /// invisible to `git diff`; [`refresh_entry`] folds their line count in from
 /// the status probe.
 fn worktree_diff_stats(worktree: &Path, base: &str) -> Option<DiffStats> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(["diff", "--no-ext-diff", "--numstat", base, "--"])
-        .output()
-        .ok()?;
+    let output = git_output(
+        worktree,
+        &["diff", "--no-ext-diff", "--numstat", base, "--"],
+    )?;
     if !output.status.success() {
         return None;
     }
@@ -307,18 +305,16 @@ struct WorktreeStatus {
 /// from taking `index.lock`, so it never races the user's own git commands in
 /// the worktree.
 fn worktree_status(worktree: &Path) -> Option<WorktreeStatus> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args([
+    let output = git_output(
+        worktree,
+        &[
             "--no-optional-locks",
             "status",
             "--porcelain=v1",
             "-z",
             "--untracked-files=all",
-        ])
-        .output()
-        .ok()?;
+        ],
+    )?;
     if !output.status.success() {
         return None;
     }
@@ -438,17 +434,22 @@ fn trunk_ref(worktree: &Path, configured: Option<&str>) -> Option<String> {
 /// Run `git -C <worktree> <args>` and return its stdout's first non-empty line,
 /// or `None` on a missing git binary, a non-zero exit, or empty output.
 fn git_line(worktree: &Path, args: &[&str]) -> Option<String> {
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(worktree)
-        .args(args)
-        .output()
-        .ok()?;
+    let output = git_output(worktree, args)?;
     if !output.status.success() {
         return None;
     }
     let line = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     if line.is_empty() { None } else { Some(line) }
+}
+
+fn git_output(worktree: &Path, args: &[&str]) -> Option<std::process::Output> {
+    crate::proc::testkit::count_spawn();
+    Command::new("git")
+        .arg("-C")
+        .arg(worktree)
+        .args(args)
+        .output()
+        .ok()
 }
 
 fn parse_numstat(output: &str) -> DiffStats {

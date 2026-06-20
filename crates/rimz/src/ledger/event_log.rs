@@ -74,10 +74,10 @@ pub struct LogExtent {
 #[must_use = "durability barrier; check the result"]
 pub fn append<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let payload = serde_json::to_vec(value).map_err(atomic::AtomicErr::Json)?;
-    Ok(atomic::append_record_bytes(
-        path,
-        &frame::encode_frame(&payload),
-    )?)
+    let frame = frame::encode_frame(&payload);
+    atomic::append_record_bytes(path, &frame)?;
+    testkit::count_bytes_written(frame.len() as u64);
+    Ok(())
 }
 
 #[must_use = "durability barrier; check the result"]
@@ -148,14 +148,24 @@ pub mod testkit {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     static BYTES_READ: AtomicU64 = AtomicU64::new(0);
+    static BYTES_WRITTEN: AtomicU64 = AtomicU64::new(0);
 
     /// Event-log bytes scanned since process start.
     pub fn bytes_read() -> u64 {
         BYTES_READ.load(Ordering::Relaxed)
     }
 
+    /// Event-log bytes successfully appended since process start.
+    pub fn bytes_written() -> u64 {
+        BYTES_WRITTEN.load(Ordering::Relaxed)
+    }
+
     pub(super) fn count_bytes_read(n: u64) {
         BYTES_READ.fetch_add(n, Ordering::Relaxed);
+    }
+
+    pub(super) fn count_bytes_written(n: u64) {
+        BYTES_WRITTEN.fetch_add(n, Ordering::Relaxed);
     }
 }
 
