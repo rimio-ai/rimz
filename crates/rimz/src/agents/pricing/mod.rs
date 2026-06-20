@@ -494,9 +494,10 @@ mod tests {
     fn cached_spending_loader_reads_shared_cache_without_refresh() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("pricing-cache.json");
+        let model = "rimz-test-cached-model";
         let cache = PricingCache {
             models_dev: BTreeMap::from([(
-                "claude-opus-4-8".to_owned(),
+                model.to_owned(),
                 Pricing {
                     input: 3e-6,
                     output: 15e-6,
@@ -509,7 +510,7 @@ mod tests {
         write_cache(&path, &cache);
 
         let book = load_cached_for_spending(&path);
-        let price = book.price("claude-opus-4-8").expect("cached price");
+        let price = book.price(model).expect("cached price");
 
         assert!((price.input - 3e-6).abs() < f64::EPSILON);
         assert!((price.output - 15e-6).abs() < f64::EPSILON);
