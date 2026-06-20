@@ -246,20 +246,60 @@ fn loop_tasks_parse_and_default_empty() {
 }
 
 #[test]
-fn legacy_split_sections_hard_error() {
+fn retired_split_sections_are_ignored() {
     let dir = tempdir().expect("tempdir");
-    let err = MachineConfig::load_from(&write(
+    let config = MachineConfig::load_from(&write(
         &dir,
-        "[worktree]\nbase = \"fresh\"\n[sidebar.glyphs]\nset = \"unicode\"\n",
+        "[worktree]\n\
+             base = \"fresh\"\n\
+             [sidebar]\n\
+             refresh_ms = 100\n\
+             focus_key = \"Alt+x\"\n",
     ))
-    .expect_err("legacy split");
-    assert!(matches!(err, ConfigErr::LegacySplit { .. }));
-    assert!(err.to_string().contains("rimz config init"));
+    .expect("retired sections ignored");
 
-    let moved = MachineConfig::load_from(&write(&dir, "[sidebar]\nrefresh_ms = 100\n"))
-        .expect_err("moved sidebar display key");
-    assert!(matches!(moved, ConfigErr::LegacySplit { .. }));
-    assert!(moved.to_string().contains("sidebar.refresh_ms"));
+    let mut expected = MachineConfig::default();
+    expected.sidebar.focus_key = "Alt+x".to_owned();
+    assert_eq!(config, expected);
+}
+
+#[test]
+fn lenient_load_falls_back_only_for_the_broken_file() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write(&dir, "not = = toml");
+    write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.planner]\nagent = \"claude\"\n",
+    );
+
+    let config = MachineConfig::load_lenient_from(&config_path);
+    assert_eq!(config.accounts, AccountsConfig::default());
+    assert_eq!(config.sidebar, SidebarConfig::default());
+    assert_eq!(
+        config
+            .agents
+            .profiles
+            .0
+            .get("planner")
+            .map(|profile| profile.agent.as_str()),
+        Some("claude"),
+    );
+}
+
+#[test]
+fn lenient_load_resets_invalid_agents_but_keeps_core_config() {
+    let dir = tempdir().expect("tempdir");
+    let config_path = write(&dir, "[remote_control]\nclaude = true\n");
+    write_named(
+        &dir,
+        "agents.toml",
+        "[agents.profiles.term]\nagent = \"claude\"\n",
+    );
+
+    let config = MachineConfig::load_lenient_from(&config_path);
+    assert!(config.remote_control.claude);
+    assert_eq!(config.agents, AgentsConfig::default());
 }
 
 #[test]

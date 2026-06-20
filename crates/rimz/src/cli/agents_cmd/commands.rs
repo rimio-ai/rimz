@@ -442,7 +442,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
     }
     let prompt = resolve_print_prompt(&args, input_format)?;
     let workspace = supervised::resolve_run_workspace(globals)?;
-    let machine_config = crate::cli::machine_config()?;
+    let machine_config = crate::cli::machine_config();
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
     let teams = effective_launch_teams(&machine_config, &workspace)?;
     let mut layout = resolve_launch_layout(

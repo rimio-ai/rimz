@@ -11,7 +11,7 @@ pub(super) fn launch_layout(
     let spec = args.spec.as_deref();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
-    let machine_config = machine_config()?;
+    let machine_config = machine_config();
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
     let teams = effective_launch_teams(&machine_config, &workspace)?;
     let mut layout = resolve_launch_layout(spec, &profiles, &teams, &machine_config, &workspace)?;

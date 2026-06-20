@@ -8,9 +8,11 @@
 //! repo and outside the trust hash — a clone never inherits them.
 //!
 //! A missing file is the default config, and unknown keys are ignored so an
-//! older binary tolerates a newer file. Invalid migrated launch config fails at
-//! load time; background readers may still choose defaults for best-effort
-//! rendering.
+//! older binary tolerates a newer file. Runtime entry points use
+//! [`MachineConfig::load_lenient`], which degrades a broken file to built-in
+//! defaults with a warning so a bad per-machine config does not block the room;
+//! strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back
+//! `rimz config` and `rimz doctor`, which report the precise error.
 
 use std::path::{Path, PathBuf};
 
@@ -97,10 +99,6 @@ pub enum ConfigErr {
         #[source]
         source: toml::de::Error,
     },
-    #[error(
-        "per-machine config at {path} still uses moved monolithic sections ({sections}); split it with `rimz config init` and copy your values into config.toml, theme.toml, and agents.toml"
-    )]
-    LegacySplit { path: PathBuf, sections: String },
     #[error("invalid per-machine agents config at {path}: {source}")]
     Agents {
         path: PathBuf,
@@ -167,6 +165,14 @@ impl MachineConfig {
         Self::load_from(&Self::config_path())
     }
 
+    /// Load per-machine config for a runtime entry point. A file that fails to
+    /// load degrades to its built-in defaults with a warning instead of
+    /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
+    /// report the precise error for `rimz config` and `rimz doctor`.
+    pub fn load_lenient() -> Self {
+        Self::load_lenient_from(&Self::config_path())
+    }
+
     /// Load from an explicit config.toml path and its sibling theme.toml and
     /// agents.toml files — the test and tooling seam.
     pub fn load_from(config_path: &Path) -> Result<Self> {
@@ -178,7 +184,60 @@ impl MachineConfig {
         let theme = load_optional(&theme_path, parse_theme_text)?.unwrap_or_default();
         let agents = load_optional(&agents_path, parse_agents_text)?.unwrap_or_default();
 
-        let mut config = Self {
+        let mut config = Self::assemble(core, theme, agents);
+        validate_agents_config(&mut config.agents, &agents_path)?;
+        Ok(config)
+    }
+
+    fn load_lenient_from(config_path: &Path) -> Self {
+        let dir = config_path.parent().unwrap_or_else(|| Path::new("."));
+        let theme_path = dir.join(THEME_FILE);
+        let agents_path = dir.join(AGENTS_FILE);
+
+        let core = recover(load_optional(config_path, parse_core_text)).unwrap_or_default();
+        let theme = recover(load_optional(&theme_path, parse_theme_text)).unwrap_or_default();
+        let agents = recover(load_optional(&agents_path, parse_agents_text)).unwrap_or_default();
+
+        let mut config = Self::assemble(core, theme, agents);
+        if let Err(err) = validate_agents_config(&mut config.agents, &agents_path) {
+            tracing::warn!(
+                error = %err,
+                "per-machine agents config invalid; using built-in defaults",
+            );
+            config.agents = AgentsConfig::default();
+        }
+        config
+    }
+
+    pub fn parse_text(path: &Path, text: &str) -> Result<Self> {
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some(THEME_FILE) => Ok(Self::assemble(
+                CoreConfig::default(),
+                parse_theme_text(path, text)?,
+                AgentsConfig::default(),
+            )),
+            Some(AGENTS_FILE) => {
+                let mut agents = parse_agents_text(path, text)?;
+                validate_agents_config(&mut agents, path)?;
+                Ok(Self::assemble(
+                    CoreConfig::default(),
+                    ThemeConfig::default(),
+                    agents,
+                ))
+            }
+            _ => {
+                let core = parse_core_text(path, text)?;
+                Ok(Self::assemble(
+                    core,
+                    ThemeConfig::default(),
+                    AgentsConfig::default(),
+                ))
+            }
+        }
+    }
+
+    fn assemble(core: CoreConfig, theme: ThemeConfig, agents: AgentsConfig) -> Self {
+        Self {
             accounts: core.accounts,
             remote_control: core.remote_control,
             notifications: core.notifications,
@@ -189,39 +248,6 @@ impl MachineConfig {
             sentry: core.sentry,
             theme,
             agents,
-        };
-        validate_agents_config(&mut config.agents, &agents_path)?;
-        Ok(config)
-    }
-
-    pub fn parse_text(path: &Path, text: &str) -> Result<Self> {
-        match path.file_name().and_then(|name| name.to_str()) {
-            Some(THEME_FILE) => Ok(Self {
-                theme: parse_theme_text(path, text)?,
-                ..Self::default()
-            }),
-            Some(AGENTS_FILE) => {
-                let mut agents = parse_agents_text(path, text)?;
-                validate_agents_config(&mut agents, path)?;
-                Ok(Self {
-                    agents,
-                    ..Self::default()
-                })
-            }
-            _ => {
-                let core = parse_core_text(path, text)?;
-                Ok(Self {
-                    accounts: core.accounts,
-                    remote_control: core.remote_control,
-                    notifications: core.notifications,
-                    sidebar: core.sidebar,
-                    zellij: core.zellij,
-                    tmux: core.tmux,
-                    resume: core.resume,
-                    sentry: core.sentry,
-                    ..Self::default()
-                })
-            }
         }
     }
 }
@@ -263,19 +289,20 @@ fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<
     }
 }
 
-fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
-    let value = toml::from_str::<toml::Value>(text).map_err(|source| ConfigErr::Parse {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    if let Some(sections) = legacy_split_sections(&value)
-        && !sections.is_empty()
-    {
-        return Err(ConfigErr::LegacySplit {
-            path: path.to_path_buf(),
-            sections: sections.join(", "),
-        });
+fn recover<T>(result: Result<Option<T>>) -> Option<T> {
+    match result {
+        Ok(opt) => opt,
+        Err(err) => {
+            tracing::warn!(
+                error = %err,
+                "per-machine config unreadable; using built-in defaults for this file",
+            );
+            None
+        }
     }
+}
+
+fn parse_core_text(path: &Path, text: &str) -> Result<CoreConfig> {
     toml::from_str(text).map_err(|source| ConfigErr::Parse {
         path: path.to_path_buf(),
         source,
@@ -309,61 +336,6 @@ fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> 
             source,
         },
     )
-}
-
-fn legacy_split_sections(value: &toml::Value) -> Option<Vec<&'static str>> {
-    let table = value.as_table()?;
-    let mut sections = Vec::new();
-    for key in ["worktree", "agents"] {
-        if table.contains_key(key) {
-            sections.push(key);
-        }
-    }
-    if let Some(sidebar) = table.get("sidebar").and_then(toml::Value::as_table) {
-        for key in [
-            "style",
-            "theme",
-            "glyphs",
-            "providers",
-            "animations",
-            "attention",
-            "pets",
-            "refresh_ms",
-            "max_provider_blocks",
-            "provider_tabs",
-            "provider_list",
-            "max_cols",
-            "scrollbar",
-            "glow",
-            "card_density",
-            "context",
-            "budget",
-        ] {
-            if sidebar.contains_key(key) {
-                sections.push(match key {
-                    "style" => "sidebar.style",
-                    "theme" => "sidebar.theme",
-                    "glyphs" => "sidebar.glyphs",
-                    "providers" => "sidebar.providers",
-                    "animations" => "sidebar.animations",
-                    "attention" => "sidebar.attention",
-                    "pets" => "sidebar.pets",
-                    "refresh_ms" => "sidebar.refresh_ms",
-                    "max_provider_blocks" => "sidebar.max_provider_blocks",
-                    "provider_tabs" => "sidebar.provider_tabs",
-                    "provider_list" => "sidebar.provider_list",
-                    "max_cols" => "sidebar.max_cols",
-                    "scrollbar" => "sidebar.scrollbar",
-                    "glow" => "sidebar.glow",
-                    "card_density" => "sidebar.card_density",
-                    "context" => "sidebar.context",
-                    "budget" => "sidebar.budget",
-                    _ => key,
-                });
-            }
-        }
-    }
-    Some(sections)
 }
 
 #[cfg(test)]

@@ -224,7 +224,7 @@ fn remove(name: &str) -> Result<()> {
 // ---- list -------------------------------------------------------------------
 
 fn list() -> Result<()> {
-    let tasks = load_tasks()?;
+    let tasks = load_tasks();
     let mut out = ui::out();
     if tasks.is_empty() {
         writeln!(out, "no loop tasks; add one with `rimz loop add`")?;
@@ -550,7 +550,7 @@ struct ResolvedTaskSpec {
 }
 
 fn resolve_task_spec(spec: &str, workspace: &rimz::ResolvedWorkspace) -> Result<ResolvedTaskSpec> {
-    let machine_config = super::machine_config()?;
+    let machine_config = super::machine_config();
     let profiles = rimz::config::effective::effective_profiles(
         &machine_config.agents.profiles,
         &workspace.project_root,
@@ -642,17 +642,12 @@ fn preflight_kind(kind: &str) -> Result<()> {
     Ok(())
 }
 
-fn load_tasks() -> Result<std::collections::BTreeMap<String, TaskEntry>> {
-    Ok(MachineConfig::load()
-        .context("loading per-machine config")?
-        .agents
-        .r#loop
-        .tasks
-        .0)
+fn load_tasks() -> std::collections::BTreeMap<String, TaskEntry> {
+    MachineConfig::load_lenient().agents.r#loop.tasks.0
 }
 
 fn load_entry(name: &str) -> Result<TaskEntry> {
-    load_tasks()?
+    load_tasks()
         .remove(name)
         .ok_or_else(|| anyhow::anyhow!("no loop task named `{name}`; see `rimz loop list`"))
 }
@@ -665,7 +660,7 @@ fn selected_names(name: Option<&str>) -> Result<Vec<String>> {
             Ok(vec![name.to_owned()])
         }
         None => {
-            let names: Vec<String> = load_tasks()?.into_keys().collect();
+            let names: Vec<String> = load_tasks().into_keys().collect();
             if names.is_empty() {
                 bail!("no loop tasks; add one with `rimz loop add`");
             }

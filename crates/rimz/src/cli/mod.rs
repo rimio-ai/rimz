@@ -414,7 +414,7 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
     }
     let without_channel = raw.split('#').next().unwrap_or(raw);
     let selector = without_channel.strip_prefix('@').unwrap_or(without_channel);
-    let config = machine_config()?;
+    let config = machine_config();
     if config.agents.profiles.0.contains_key(selector) {
         return Ok(Some(format!(
             "`{selector}` is a launch profile, not a running agent"
@@ -670,7 +670,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         return Ok(());
     }
     report_start_notices(&workspace)?;
-    let machine_config = machine_config()?;
+    let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     // One terminal probe per command flow: the width picks every sidebar
@@ -842,7 +842,7 @@ fn attach_cwd(
     globals: &GlobalFlags,
 ) -> Result<()> {
     let workspace = WorkspaceResolver::resolve(".", globals.root.clone())?;
-    let machine_config = machine_config()?;
+    let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
@@ -910,7 +910,7 @@ fn attach_named(
     } else {
         MissingSessionReport::Warn
     };
-    let machine_config = machine_config()?;
+    let machine_config = machine_config();
     let mux_config = rimz::config::MultiplexerConfig::from(&machine_config);
     let sidebar_width = SidebarWidth::from_config(&machine_config.theme.display);
     let detected_size = rimz::mux::detect_terminal_size();
@@ -1076,8 +1076,8 @@ pub(crate) fn confirm(prompt: &str) -> Result<bool> {
     Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "YES" | "Yes"))
 }
 
-pub(crate) fn machine_config() -> Result<rimz::config::MachineConfig> {
-    rimz::config::MachineConfig::load().context("loading per-machine config")
+pub(crate) fn machine_config() -> rimz::config::MachineConfig {
+    rimz::config::MachineConfig::load_lenient()
 }
 
 pub(crate) fn open_ledger(workspace: &rimz::ResolvedWorkspace) -> Result<Ledger> {

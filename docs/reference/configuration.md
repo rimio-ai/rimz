@@ -31,7 +31,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 | `<root>/.worktreeinclude` | committed | glob patterns for untracked files to seed into new worktrees | humans |
 | `<root>/.worktreelink` | committed | directory paths to symlink-share into new worktrees and exclude from git dirtiness | humans |
 
-Per-machine settings load leniently: a missing file is the default config, and unknown keys are ignored so an older binary can tolerate a newer file. `rimz config set` is stricter than the loader and rejects unknown dotted keys before it writes.
+Per-machine settings load leniently: a missing file is the default config, unknown keys are ignored so an older binary can tolerate a newer file, and a file Rimz cannot parse degrades to built-in defaults with a warning at startup so a broken config never blocks the room. `rimz config` and `rimz doctor` report the precise error and fix, and `rimz config set` rejects unknown dotted keys before it writes.
 
 ## Per-machine config set
 

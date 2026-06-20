@@ -78,7 +78,7 @@ pub fn run(args: WorktreeArgs, globals: &GlobalFlags) -> Result<()> {
     if workspace.root_class != RootClass::Repo {
         bail!("rimz worktree requires a git repository; cd into a repo checkout");
     }
-    let config = super::machine_config()?.agents.worktree;
+    let config = super::machine_config().agents.worktree;
     match command {
         WorktreeSubcmd::New {
             name,

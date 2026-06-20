@@ -400,7 +400,7 @@ pub(crate) fn create_on_miss(
             "`{target}` cannot create an agent; address a kind or profile like `@codex` or `@planner`"
         );
     };
-    let machine_config = crate::cli::machine_config()?;
+    let machine_config = crate::cli::machine_config();
     let workspace = WorkspaceResolver::resolve_participant(".", globals.root.clone())
         .context("resolving current workspace")?;
     let profiles = effective_launch_profiles(&machine_config, &workspace)?;
