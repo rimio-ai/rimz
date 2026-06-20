@@ -6,6 +6,7 @@
 # only when this machine needs an override.
 
 [agents]
+# Drop-in fragments under ~/.agents/{agents,teams} merge here; entries in this file override them.
 # placement = "auto"                    # launch placement: "auto" (single agent → current pane; team/worktree → new tab), "pane" (split a new pane), or "tab" (always new tab)
 # `rimz agents <spec>` names a team or uses inline cells made from profiles,
 # commands, or built-ins. Built-ins include `term`, agent kinds, and

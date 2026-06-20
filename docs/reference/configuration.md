@@ -24,6 +24,7 @@ Most users start with `rimz setup` or `rimz config init`, then edit only the few
 | `~/.config/rimz/config.toml` | per-machine | core room behavior: accounts, notifications, remote-control auto-launch, sidebar behavior, multiplexer defaults, resume, smart-compact, Sentry | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/theme.toml` | per-machine | sidebar appearance: palette, semantic slots, glyphs, animations, provider brand styling | you, `rimz setup`, `rimz config` |
 | `~/.config/rimz/agents.toml` | per-machine | agent profiles, command cells, teams, worktree defaults, loop automation, attention windows, pets | you, `rimz setup`, `rimz config`, `rimz loop` |
+| `~/.agents/agents/<name>/agent.toml`, `~/.agents/teams/<name>/team.toml` | per-machine | drop-in agent profile and team fragments merged under `agents.toml` | agent factory, you |
 | `~/.config/rimz/resolvers.toml` | per-machine | resolver allowlist and chain order | `rimz resolver` |
 | `~/.config/rimz/remote.toml` | per-machine | named SSH room aliases | `rimz remote` |
 | `~/.config/rimz/projects/<id>/trust.toml` | per-machine | project executable-surface trust grant | `rimz trust` |
@@ -74,6 +75,8 @@ Per-machine settings load leniently: a missing file is the default config, unkno
 | `[agents.loop.tasks]` | scheduled supervised agent turns, applied to this machine's scheduler by `rimz loop install` |
 | `[agents.attention]` | stale-running and inactive-row timing |
 | `[agents.pets]` | provider-dashboard companion overlay |
+
+Rimz also discovers drop-in fragments under `~/.agents/agents/<name>/agent.toml` and `~/.agents/teams/<name>/team.toml`. Fragments use the same `[agents.profiles]`, `[agents.commands]`, and `[agents.teams]` TOML shape as `agents.toml`; entries in `~/.config/rimz/agents.toml` override fragments with the same name. Set `RIMZ_AGENTS_HOME` to relocate the fragment root.
 
 Every field, its default, and an inline note lives in the generated template:
 

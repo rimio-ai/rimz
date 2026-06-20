@@ -15,6 +15,20 @@ fn write_named(dir: &tempfile::TempDir, name: &str, text: &str) -> PathBuf {
     dir.path().join("config.toml")
 }
 
+fn write_agents_home_fragment(
+    root: &Path,
+    subdir: &str,
+    name: &str,
+    file: &str,
+    text: &str,
+) -> PathBuf {
+    let dir = root.join(subdir).join(name);
+    std::fs::create_dir_all(&dir).expect("create fragment dir");
+    let path = dir.join(file);
+    std::fs::write(&path, text).expect("write fragment");
+    path
+}
+
 #[test]
 fn missing_or_empty_file_is_default_off() {
     let dir = tempdir().expect("tempdir");
@@ -33,6 +47,228 @@ fn missing_or_empty_file_is_default_off() {
             Some("claude,codex")
         );
     }
+}
+
+#[test]
+fn agents_home_fragments_merge_profiles_commands_and_teams() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "codex-coder",
+        AGENT_FRAGMENT_FILE,
+        "[agents.commands]\n\
+             lint = \"cargo clippy\"\n\
+             [agents.profiles.codex-coder]\n\
+             agent = \"codex\"\n",
+    );
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "review",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.review]\n\
+             layout = \"coder\"\n\
+             [[agents.teams.review.roles]]\n\
+             role = \"coder\"\n\
+             profile = \"codex-coder\"\n",
+    );
+
+    let mut agents = AgentsConfig::default();
+    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+
+    assert_eq!(
+        agents
+            .profiles
+            .0
+            .get("codex-coder")
+            .map(|profile| profile.agent.as_str()),
+        Some("codex"),
+    );
+    assert_eq!(
+        agents.commands.0.get("lint").map(String::as_str),
+        Some("cargo clippy"),
+    );
+    assert_eq!(
+        agents
+            .teams
+            .0
+            .get("review")
+            .and_then(|team| team.layout.as_deref()),
+        Some("coder"),
+    );
+}
+
+#[test]
+fn agents_home_validates_cross_fragment_team_profiles() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "claude-planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.claude-planner]\nagent = \"claude\"\n",
+    );
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "plan-code-review",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.plan-code-review]\n\
+             [[agents.teams.plan-code-review.roles]]\n\
+             role = \"planner\"\n\
+             profile = \"claude-planner\"\n",
+    );
+
+    let mut agents = AgentsConfig::default();
+    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml"))
+        .expect("cross-fragment references validate after merge");
+}
+
+#[test]
+fn agents_toml_entries_override_agents_home_fragments() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.planner]\nagent = \"codex\"\n",
+    );
+    let mut agents = AgentsConfig::default();
+    agents.profiles.0.insert(
+        "planner".to_owned(),
+        Profile {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: Some("opus".to_owned()),
+            effort: None,
+            system_prompt_file: None,
+            args: None,
+        },
+    );
+
+    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+
+    let profile = agents.profiles.0.get("planner").expect("planner profile");
+    assert_eq!(profile.agent, "claude");
+    assert_eq!(profile.model.as_deref(), Some("opus"));
+}
+
+#[test]
+fn absent_agents_home_is_noop() {
+    let root = tempdir().expect("tempdir");
+    let mut agents = AgentsConfig::default();
+    let before = agents.clone();
+
+    apply_agents_home(
+        &mut agents,
+        &root.path().join("missing"),
+        &root.path().join("agents.toml"),
+    )
+    .expect("absent agents home");
+
+    assert_eq!(agents, before);
+}
+
+#[test]
+fn malformed_agents_home_fragment_leaves_config_unchanged() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "broken",
+        AGENT_FRAGMENT_FILE,
+        "not = = toml",
+    );
+    let mut agents = AgentsConfig::default();
+    agents.profiles.0.insert(
+        "planner".to_owned(),
+        Profile {
+            agent: "claude".to_owned(),
+            mode: None,
+            model: None,
+            effort: None,
+            system_prompt_file: None,
+            args: None,
+        },
+    );
+    let before = agents.clone();
+
+    assert!(matches!(
+        apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")),
+        Err(ConfigErr::Parse { .. })
+    ));
+    assert_eq!(agents, before);
+}
+
+#[test]
+fn agents_home_team_prompt_paths_resolve_against_fragment_dir() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "planner",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.planner]\nagent = \"claude\"\n",
+    );
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_TEAMS_SUBDIR,
+        "review",
+        TEAM_FRAGMENT_FILE,
+        "[agents.teams.review]\n\
+             [[agents.teams.review.roles]]\n\
+             role = \"planner\"\n\
+             profile = \"planner\"\n\
+             system-prompt-file = \"prompts/planner.md\"\n",
+    );
+
+    let mut agents = AgentsConfig::default();
+    apply_agents_home(&mut agents, root.path(), &root.path().join("agents.toml")).expect("merge");
+
+    let role = agents
+        .teams
+        .0
+        .get("review")
+        .and_then(|team| team.roles.first())
+        .expect("review role");
+    let expected = root
+        .path()
+        .join(AGENTS_HOME_TEAMS_SUBDIR)
+        .join("review")
+        .join("prompts/planner.md");
+    assert_eq!(role.system_prompt_file.as_deref(), Some(expected.as_path()));
+}
+
+#[test]
+fn agents_home_fragment_name_clashes_are_sorted_last_wins() {
+    let root = tempdir().expect("tempdir");
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "alpha",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.shared]\nagent = \"claude\"\n",
+    );
+    write_agents_home_fragment(
+        root.path(),
+        AGENTS_HOME_AGENTS_SUBDIR,
+        "zulu",
+        AGENT_FRAGMENT_FILE,
+        "[agents.profiles.shared]\nagent = \"codex\"\n",
+    );
+
+    let fragment = discover_agents_home(root.path()).expect("discover");
+
+    assert_eq!(
+        fragment
+            .profiles
+            .0
+            .get("shared")
+            .map(|profile| profile.agent.as_str()),
+        Some("codex"),
+    );
 }
 
 #[test]

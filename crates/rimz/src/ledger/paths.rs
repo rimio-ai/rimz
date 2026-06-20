@@ -452,6 +452,18 @@ pub fn config_home() -> PathBuf {
     env::temp_dir().join("rimz-config")
 }
 
+/// Per-user agent library root. Rimz discovers drop-in profile and team
+/// fragments here, and `RIMZ_AGENTS_HOME` relocates it.
+pub fn agents_home() -> PathBuf {
+    if let Some(value) = env_path("RIMZ_AGENTS_HOME") {
+        return value;
+    }
+    if let Some(home) = env_path("HOME") {
+        return home.join(".agents");
+    }
+    env::temp_dir().join("rimz-agents")
+}
+
 /// Per-user data root. Rimz stores stable, user-level artifacts here, including
 /// the materialized embedded Zellij presence plugin.
 pub fn data_home() -> PathBuf {

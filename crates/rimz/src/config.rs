@@ -1,5 +1,7 @@
 //! Per-machine settings, loaded from `~/.config/rimz/config.toml`,
-//! `theme.toml`, and `agents.toml`.
+//! `theme.toml`, and `agents.toml`. Agent and team fragments discovered under
+//! `~/.agents/{agents,teams}` are the base layer for `agents.toml`, whose
+//! entries take precedence on name clashes.
 //!
 //! This is the personal, never-committed tier. The project-committed tier is
 //! `<root>/.rimz/config.toml`, parsed for the executable-surface hash in
@@ -14,11 +16,12 @@
 //! strict [`MachineConfig::load`] and [`MachineConfig::load_from`] back
 //! `rimz config` and `rimz doctor`, which report the precise error.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::ledger::paths::config_home;
+use crate::ledger::paths::{self, config_home};
 
 mod accounts;
 mod agents;
@@ -83,6 +86,10 @@ const CONFIG_FILE: &str = "config.toml";
 const THEME_FILE: &str = "theme.toml";
 const AGENTS_FILE: &str = "agents.toml";
 const RIMZ_CONFIG_SUBDIR: &str = "rimz";
+const AGENTS_HOME_AGENTS_SUBDIR: &str = "agents";
+const AGENTS_HOME_TEAMS_SUBDIR: &str = "teams";
+const AGENT_FRAGMENT_FILE: &str = "agent.toml";
+const TEAM_FRAGMENT_FILE: &str = "team.toml";
 pub const MACHINE_CONFIG_TEMPLATE: &str = include_str!("config/templates/config.template.toml");
 pub const MACHINE_THEME_TEMPLATE: &str = include_str!("config/templates/theme.template.toml");
 pub const MACHINE_AGENTS_TEMPLATE: &str = include_str!("config/templates/agents.template.toml");
@@ -165,7 +172,13 @@ impl MachineConfig {
     /// Load from the default per-machine paths. Missing files are defaults —
     /// never an error.
     pub fn load() -> Result<Self> {
-        Self::load_from(&Self::config_path())
+        let mut config = Self::load_from(&Self::config_path())?;
+        apply_agents_home(
+            &mut config.agents,
+            &paths::agents_home(),
+            &Self::agents_path(),
+        )?;
+        Ok(config)
     }
 
     /// Load per-machine config for a runtime entry point. A file that fails to
@@ -173,7 +186,18 @@ impl MachineConfig {
     /// aborting the room; the strict [`Self::load`] and [`Self::load_from`]
     /// report the precise error for `rimz config` and `rimz doctor`.
     pub fn load_lenient() -> Self {
-        Self::load_lenient_from(&Self::config_path())
+        let mut config = Self::load_lenient_from(&Self::config_path());
+        if let Err(err) = apply_agents_home(
+            &mut config.agents,
+            &paths::agents_home(),
+            &Self::agents_path(),
+        ) {
+            tracing::warn!(
+                error = %err,
+                "~/.agents discovery failed; using per-machine agents config only",
+            );
+        }
+        config
     }
 
     /// Load from an explicit config.toml path and its sibling theme.toml and
@@ -283,6 +307,20 @@ struct AgentsFile {
     agents: AgentsConfig,
 }
 
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct AgentsFragmentFile {
+    agents: AgentsFragment,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(default)]
+struct AgentsFragment {
+    profiles: ProfilesConfig,
+    teams: TeamsConfig,
+    commands: CommandsConfig,
+}
+
 fn load_optional<T>(path: &Path, parse: fn(&Path, &str) -> Result<T>) -> Result<Option<T>> {
     match std::fs::read_to_string(path) {
         Ok(text) => parse(path, &text).map(Some),
@@ -329,6 +367,99 @@ fn parse_agents_text(path: &Path, text: &str) -> Result<AgentsConfig> {
         source,
     })?;
     Ok(file.agents)
+}
+
+fn parse_agents_fragment_text(path: &Path, text: &str) -> Result<AgentsFragment> {
+    let file: AgentsFragmentFile = toml::from_str(text).map_err(|source| ConfigErr::Parse {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    Ok(file.agents)
+}
+
+fn discover_agents_home(root: &Path) -> Result<AgentsFragment> {
+    let mut fragment = AgentsFragment::default();
+    discover_agents_home_subdir(
+        root,
+        AGENTS_HOME_AGENTS_SUBDIR,
+        AGENT_FRAGMENT_FILE,
+        &mut fragment,
+    )?;
+    discover_agents_home_subdir(
+        root,
+        AGENTS_HOME_TEAMS_SUBDIR,
+        TEAM_FRAGMENT_FILE,
+        &mut fragment,
+    )?;
+    Ok(fragment)
+}
+
+fn discover_agents_home_subdir(
+    root: &Path,
+    subdir: &str,
+    fragment_file: &str,
+    out: &mut AgentsFragment,
+) -> Result<()> {
+    let mut dirs = child_dirs(&root.join(subdir))?;
+    dirs.sort();
+    for dir in dirs {
+        let path = dir.join(fragment_file);
+        let Some(mut fragment) = load_optional(&path, parse_agents_fragment_text)? else {
+            continue;
+        };
+        crate::agents_spec::resolve_profile_prompt_paths(&mut fragment.profiles, &dir);
+        crate::agents_spec::resolve_team_prompt_paths(&mut fragment.teams, &dir);
+        out.profiles.0.extend(fragment.profiles.0);
+        out.teams.0.extend(fragment.teams.0);
+        out.commands.0.extend(fragment.commands.0);
+    }
+    Ok(())
+}
+
+fn child_dirs(path: &Path) -> Result<Vec<PathBuf>> {
+    let entries = match std::fs::read_dir(path) {
+        Ok(entries) => entries,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(source) => {
+            return Err(ConfigErr::Io {
+                path: path.to_path_buf(),
+                source,
+            });
+        }
+    };
+    let mut dirs = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|source| ConfigErr::Io {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let entry_path = entry.path();
+        let file_type = entry.file_type().map_err(|source| ConfigErr::Io {
+            path: entry_path.clone(),
+            source,
+        })?;
+        if file_type.is_dir() {
+            dirs.push(entry_path);
+        }
+    }
+    Ok(dirs)
+}
+
+fn apply_agents_home(agents: &mut AgentsConfig, root: &Path, agents_path: &Path) -> Result<()> {
+    let mut merged = agents.clone();
+    let fragment = discover_agents_home(root)?;
+    overlay_under(&mut merged.profiles.0, fragment.profiles.0);
+    overlay_under(&mut merged.teams.0, fragment.teams.0);
+    overlay_under(&mut merged.commands.0, fragment.commands.0);
+    validate_agents_config(&mut merged, agents_path)?;
+    *agents = merged;
+    Ok(())
+}
+
+fn overlay_under<V>(file: &mut BTreeMap<String, V>, fragment: BTreeMap<String, V>) {
+    for (key, value) in fragment {
+        file.entry(key).or_insert(value);
+    }
 }
 
 fn validate_agents_config(agents: &mut AgentsConfig, path: &Path) -> Result<()> {
