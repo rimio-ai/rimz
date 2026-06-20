@@ -313,14 +313,14 @@ fn roster_binds_worktree(
     now: jiff::Timestamp,
     recent: Duration,
 ) -> bool {
-    let target = normalize_path_lexical(path);
+    let target = rimz::worktree::normalize_path_lexical(path);
     agents.iter().any(|agent| {
         agent_seen_recently(agent.last_seen, now, recent)
             && agent
                 .worktree_path
                 .as_deref()
                 .map(Path::new)
-                .map(normalize_path_lexical)
+                .map(rimz::worktree::normalize_path_lexical)
                 .is_some_and(|bound| rimz::worktree::path_inside(&bound, &target))
             && agent_is_not_own(agent, own)
     })
@@ -336,20 +336,6 @@ fn agent_is_not_own(agent: &AgentState, own: Option<&rimz::PaneId>) -> bool {
         (Some(pane), Some(own)) => &pane.pane_id != own,
         _ => true,
     }
-}
-
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 fn remove_after_leaving_worktree(

@@ -762,7 +762,7 @@ impl SpendScope {
             .into_iter()
             .chain(worktree_roots.iter().map(PathBuf::as_path))
             .chain(worktree_home)
-            .map(normalize_path_lexical)
+            .map(crate::worktree::normalize_path_lexical)
             .filter(|root| root.is_absolute())
             .collect();
         roots.sort();
@@ -787,7 +787,7 @@ impl SpendScope {
         if !origin.is_absolute() {
             return false;
         }
-        let origin = normalize_path_lexical(origin);
+        let origin = crate::worktree::normalize_path_lexical(origin);
         if !origin.is_absolute() {
             return false;
         }
@@ -861,7 +861,7 @@ fn aggregate_scoped_tally(
 }
 
 fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
-    let origin = normalize_path_lexical(origin);
+    let origin = crate::worktree::normalize_path_lexical(origin);
     let mut changed = false;
     if entry.origin_path.as_ref() != Some(&origin) {
         entry.origin_path = Some(origin.clone());
@@ -871,7 +871,7 @@ fn stamp_file_origin(entry: &mut FileCacheEntry, origin: &Path) -> bool {
 }
 
 fn stamp_entries_origin(entries: &mut [CachedEntry], origin: &Path) -> bool {
-    let origin = normalize_path_lexical(origin);
+    let origin = crate::worktree::normalize_path_lexical(origin);
     let mut changed = false;
     for cached in entries {
         if cached.origin_path.as_ref() != Some(&origin) {
@@ -913,22 +913,8 @@ pub(crate) fn origin_path(raw: Option<&str>) -> Option<PathBuf> {
 }
 
 fn normalized_absolute_path(path: &Path) -> Option<PathBuf> {
-    let normalized = normalize_path_lexical(path);
+    let normalized = crate::worktree::normalize_path_lexical(path);
     normalized.is_absolute().then_some(normalized)
-}
-
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
 }
 
 /// Whether a model name from a transcript should feed the pricing refresh

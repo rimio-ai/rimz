@@ -16,6 +16,7 @@ pub(super) fn run_exec(args: ExecArgs, globals: &GlobalFlags) -> Result<()> {
                 {
                     record_launch_failed(&workspace, identity, args.prompt.as_deref());
                 }
+                fail_run_on_exec_precondition(run_context.as_ref());
                 return Err(err);
             }
         },
@@ -160,21 +161,7 @@ fn absolute_lexical_path(path: &Path) -> Result<PathBuf> {
             .context("reading current directory")?
             .join(path)
     };
-    Ok(normalize_path_lexical(&path))
-}
-
-fn normalize_path_lexical(path: &Path) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
+    Ok(rimz::worktree::normalize_path_lexical(&path))
 }
 
 #[cfg(unix)]
@@ -497,6 +484,20 @@ pub(super) fn fail_run_if_child_exited_first(context: &RunExecContext, terminal_
     if wait_for_terminal_run(context, terminal_grace) {
         return;
     }
+    fail_run_if_nonterminal(
+        context,
+        "agent process exited before supervised run reached a terminal state",
+    );
+}
+
+fn fail_run_on_exec_precondition(context: Option<&RunExecContext>) {
+    let Some(context) = context else {
+        return;
+    };
+    fail_run_if_nonterminal(context, "agent exec precondition failed");
+}
+
+fn fail_run_if_nonterminal(context: &RunExecContext, reason: &'static str) {
     match rimz::run::load(&context.paths, &context.run_id) {
         Ok(record) if record.status.is_terminal() => {}
         Ok(_) => match rimz::run::fail_if_nonterminal(&context.paths, &context.run_id) {
@@ -513,13 +514,15 @@ pub(super) fn fail_run_if_child_exited_first(context: &RunExecContext, terminal_
             Err(err) => tracing::debug!(
                 run_id = %context.run_id,
                 error = %err,
-                "could not mark supervised run failed after agent process exit",
+                reason,
+                "could not mark supervised run failed",
             ),
         },
         Err(err) => tracing::debug!(
             run_id = %context.run_id,
             error = %err,
-            "could not inspect supervised run after agent process exit",
+            reason,
+            "could not inspect supervised run",
         ),
     }
 }

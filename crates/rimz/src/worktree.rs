@@ -430,6 +430,20 @@ pub fn path_inside(path: &Path, parent: &Path) -> bool {
     path == parent || path.starts_with(parent)
 }
 
+pub fn normalize_path_lexical(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                out.pop();
+            }
+            other => out.push(other.as_os_str()),
+        }
+    }
+    out
+}
+
 struct FreshWorktree {
     name: String,
     path: PathBuf,

@@ -399,6 +399,16 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
     let env = Env::new();
     init_repo(&env.project_root);
     let missing = env.home_root.join("project-worktrees").join("missing");
+    let ledger = env.ledger();
+    let record = rimz::run::RunRecord::new(
+        env.workspace_id.clone(),
+        AgentKind::new_unchecked("codex"),
+        rimz::run::PermissionMode::Auto,
+        "missing".to_owned(),
+        missing.clone(),
+    );
+    let run_id = record.run_id.clone();
+    rimz::run::create(ledger.paths(), &record).expect("create run");
     seed_agent_launch(
         &env,
         &missing,
@@ -417,6 +427,8 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
             "launch_missing",
             "--agent-name",
             "missing-agent",
+            "--run-id",
+            run_id.as_str(),
         ])
         .env("PATH", path_with_front(&shim_dir))
         .env("RIMZ_TEST_AGENT_READY", &ready)
@@ -432,6 +444,8 @@ fn agents_exec_missing_worktree_path_fails_launch_without_spawning() {
         .find(|agent| agent.agent_id.as_str() == "launch_missing")
         .expect("failed launch remains in roster");
     assert_eq!(agent.status, rimz::feed::AgentStatus::Failed);
+    let run = rimz::run::load(ledger.paths(), &run_id).expect("load run");
+    assert_eq!(run.status, rimz::run::RunStatus::Failed);
 }
 
 #[cfg(unix)]
