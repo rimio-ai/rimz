@@ -228,7 +228,7 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         | GlyphRole::WorktreeTrunkClear
         | GlyphRole::WorktreeDotted => return None,
         // agent card.
-        GlyphRole::CardSubagents => "\u{ef81}", // nf-fa-folder_tree
+        GlyphRole::CardSubagents => "\u{ed50}", // nf-fa-gitter
         GlyphRole::CardTodoDone | GlyphRole::CardTodoPending | GlyphRole::CardParkedBg => {
             return None;
         }
