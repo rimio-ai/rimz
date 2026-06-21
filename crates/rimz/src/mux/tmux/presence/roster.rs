@@ -9,6 +9,7 @@ use super::ControlLine;
 #[derive(Default)]
 pub(crate) struct PresenceRoster {
     panes: BTreeMap<String, PaneEntry>,
+    pending_unfocused: BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -16,7 +17,7 @@ struct PaneEntry {
     window: String,
     command: Option<String>,
     active: bool,
-    is_sidebar: bool,
+    overlay_suppressed: bool,
 }
 
 impl PresenceRoster {
@@ -48,10 +49,11 @@ impl PresenceRoster {
         let is_sidebar = title
             .as_deref()
             .is_some_and(|value| value.trim() == SIDEBAR_PANE_TITLE);
+        let suppress_overlay = is_sidebar || title.is_none() && command.as_deref() == Some("rimz");
         let old = self.panes.get(&pane).cloned();
         let mut events = Vec::new();
 
-        if !seeding && !is_sidebar {
+        if !seeding && !suppress_overlay {
             match old.as_ref() {
                 None => events.push(SidebarEvent::PaneOpened {
                     pane_id: pane_id(&pane),
@@ -69,18 +71,33 @@ impl PresenceRoster {
             }
         }
 
+        if !seeding
+            && !suppress_overlay
+            && !active
+            && old
+                .as_ref()
+                .is_some_and(|entry| entry.active && !entry.overlay_suppressed)
+        {
+            self.pending_unfocused.insert(window.clone(), pane.clone());
+        }
+
         let became_active = active && old.as_ref().is_none_or(|entry| !entry.active);
         if became_active {
-            if !seeding && !is_sidebar {
+            if !seeding && !suppress_overlay {
+                let pending = self.pending_unfocused.remove(&window);
                 let unfocused = self
                     .prior_active_working_pane(&window, &pane)
-                    .map(|raw| pane_id(&raw))
+                    .or(pending)
+                    .filter(|raw| raw != &pane)
+                    .map(|raw| pane_id(raw.as_str()))
                     .into_iter()
                     .collect();
                 events.push(SidebarEvent::FocusChanged {
                     focused: vec![pane_id(&pane)],
                     unfocused,
                 });
+            } else {
+                self.pending_unfocused.remove(&window);
             }
             self.clear_active_in_window(&window, &pane);
         }
@@ -91,7 +108,7 @@ impl PresenceRoster {
                 window,
                 command,
                 active,
-                is_sidebar,
+                overlay_suppressed: suppress_overlay,
             },
         );
         events
@@ -102,15 +119,15 @@ impl PresenceRoster {
             .panes
             .iter()
             .filter(|(_, entry)| entry.window == window)
-            .map(|(pane, entry)| (pane.clone(), entry.is_sidebar))
+            .map(|(pane, entry)| (pane.clone(), entry.overlay_suppressed))
             .collect::<Vec<_>>();
         for (pane, _) in &closed {
             self.panes.remove(pane);
         }
         closed
             .into_iter()
-            .filter_map(|(pane, is_sidebar)| {
-                (!is_sidebar).then(|| SidebarEvent::PaneClosed {
+            .filter_map(|(pane, overlay_suppressed)| {
+                (!overlay_suppressed).then(|| SidebarEvent::PaneClosed {
                     pane_id: pane_id(&pane),
                 })
             })
@@ -123,15 +140,15 @@ impl PresenceRoster {
             .panes
             .iter()
             .filter(|(pane, entry)| entry.window == window && !present.contains(pane.as_str()))
-            .map(|(pane, entry)| (pane.clone(), entry.is_sidebar))
+            .map(|(pane, entry)| (pane.clone(), entry.overlay_suppressed))
             .collect::<Vec<_>>();
         for (pane, _) in &closed {
             self.panes.remove(pane);
         }
         closed
             .into_iter()
-            .filter_map(|(pane, is_sidebar)| {
-                (!is_sidebar).then(|| SidebarEvent::PaneClosed {
+            .filter_map(|(pane, overlay_suppressed)| {
+                (!overlay_suppressed).then(|| SidebarEvent::PaneClosed {
                     pane_id: pane_id(&pane),
                 })
             })
@@ -145,7 +162,7 @@ impl PresenceRoster {
                 pane.as_str() != new_active
                     && entry.window == window
                     && entry.active
-                    && !entry.is_sidebar
+                    && !entry.overlay_suppressed
             })
             .map(|(pane, _)| pane.clone())
     }
@@ -184,6 +201,16 @@ mod tests {
             command: Some("rimz".to_owned()),
             active,
             title: Some(SIDEBAR_PANE_TITLE.to_owned()),
+        }
+    }
+
+    fn untitled_rimz_sub(pane: &str, window: &str, active: bool) -> ControlLine {
+        ControlLine::Subscription {
+            pane: pane.to_owned(),
+            window: window.to_owned(),
+            command: Some("rimz".to_owned()),
+            active,
+            title: None,
         }
     }
 
@@ -251,6 +278,25 @@ mod tests {
     }
 
     #[test]
+    fn focus_change_keeps_unfocused_when_inactive_line_arrives_first() {
+        let mut roster = PresenceRoster::default();
+        roster.apply(sub("%1", "@1", Some("zsh"), true), true);
+        roster.apply(sub("%2", "@1", Some("claude"), false), true);
+        assert!(
+            roster
+                .apply(sub("%1", "@1", Some("zsh"), false), false)
+                .is_empty()
+        );
+        assert_eq!(
+            roster.apply(sub("%2", "@1", Some("claude"), true), false),
+            vec![SidebarEvent::FocusChanged {
+                focused: vec![pane_id("%2")],
+                unfocused: vec![pane_id("%1")],
+            }]
+        );
+    }
+
+    #[test]
     fn sidebar_panes_are_tracked_but_do_not_emit() {
         let mut roster = PresenceRoster::default();
         assert!(
@@ -269,6 +315,34 @@ mod tests {
                 .is_empty()
         );
         assert!(!roster.panes.contains_key("%9"));
+    }
+
+    #[test]
+    fn untitled_rimz_panes_are_suppressed_until_proven_work() {
+        let mut roster = PresenceRoster::default();
+        assert!(
+            roster
+                .apply(untitled_rimz_sub("%9", "@1", true), false)
+                .is_empty()
+        );
+        assert_eq!(
+            roster.apply(sub("%9", "@1", Some("claude"), true), false),
+            vec![SidebarEvent::CommandChanged {
+                pane_id: pane_id("%9"),
+                command: "claude".to_owned(),
+            }]
+        );
+        assert_eq!(
+            roster.apply(
+                ControlLine::WindowClosed {
+                    window: "@1".to_owned()
+                },
+                false
+            ),
+            vec![SidebarEvent::PaneClosed {
+                pane_id: pane_id("%9"),
+            }]
+        );
     }
 
     #[test]

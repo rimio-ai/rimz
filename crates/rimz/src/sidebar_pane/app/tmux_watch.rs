@@ -54,14 +54,16 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_n
             Ok(mut watch) => {
                 crate::sidebar::cache::write_presence_stamp(runtime);
                 let mut roster = PresenceRoster::default();
-                let seed_deadline = Instant::now() + SEED_WINDOW;
+                let mut seed_deadline = None;
                 while let Some(line) = watch.next_line() {
                     // Demotion check per nudge: a demoted instance stops
                     // forwarding and releases its control client.
                     if !is_producer(runtime, instance_id) {
                         break;
                     }
-                    let seeding = Instant::now() < seed_deadline;
+                    let now = Instant::now();
+                    let deadline = seed_deadline.get_or_insert(now + SEED_WINDOW);
+                    let seeding = now < *deadline;
                     for event in roster.apply(line, seeding) {
                         let _ = crate::ledger::wakeup::broadcast_sidebar_event(
                             runtime,
