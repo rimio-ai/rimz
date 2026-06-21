@@ -21,7 +21,7 @@ Native event or derived surface → internal mapping; the upstream events, paylo
 | `PreToolUse` (other tools)           | lifecycle     | `ToolUsed { mutates: false, edits: false }` as proof-of-work only | persisted when it reconciles a resting row or closes a compaction bracket |
 | `PreCompact`                         | lifecycle     | `Compacting`                        | stamps the head                                  |
 | `PostCompact`                        | lifecycle     | `CompactionEnded` with known trigger | safely redundant as a close; carries the auto/manual trigger bit |
-| pane liveness + rollup reaper        | derived       | session removal for the hooks matrix `ended` row | gap: no `SessionEnd` hook                        |
+| pane liveness + rollup reaper        | derived       | session removal for the hooks matrix `ended` row | gap: no `SessionEnd` hook; cleared on a snapshot tick, not at session exit |
 
 `request_user_input` self-classifies from `tool_name` on the broad `PreToolUse` hook. Codex has no plan-approval gate: `update_plan` is a non-blocking todo tracker, and every non-question `PreToolUse` remains lifecycle proof-of-work only.
 

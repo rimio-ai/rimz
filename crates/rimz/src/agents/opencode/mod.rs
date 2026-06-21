@@ -235,8 +235,8 @@ const OPENCODE_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::Ended,
         HookCoverage::Derived {
-            via: "session idle + liveness",
-            gap: "no session-end event",
+            via: "pane liveness + rollup reaper",
+            gap: "dispose is server-scoped and carries no session id",
         },
     ),
 ];

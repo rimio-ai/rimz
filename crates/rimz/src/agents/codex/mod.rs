@@ -314,8 +314,8 @@ const CODEX_LIFECYCLE_HOOKS: &[(LifecycleSignalKind, HookCoverage)] = &[
     (
         LifecycleSignalKind::Ended,
         HookCoverage::Derived {
-            via: "pane liveness + reaper",
-            gap: "no SessionEnd hook",
+            via: "pane liveness + rollup reaper",
+            gap: "no SessionEnd hook; cleared on a snapshot tick, not at session exit",
         },
     ),
 ];
