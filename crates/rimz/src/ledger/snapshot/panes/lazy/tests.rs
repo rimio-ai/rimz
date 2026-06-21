@@ -2,7 +2,7 @@ use super::*;
 
 use crate::feed::AgentStatus;
 use crate::ids::{MuxName, PaneId};
-use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago};
+use crate::ledger::snapshot::testkit::{AgentStateFx, agent, ago, pane};
 
 fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> PaneRef {
     PaneRef {
@@ -22,6 +22,49 @@ fn pane_cmd(raw: &str, view: &str, command: &str, view_name: Option<&str>) -> Pa
         elevated_agent: None,
         first_seen_at_ms: None,
     }
+}
+
+#[test]
+fn dead_stamped_agent_repairs_to_live_cwd_pane() {
+    let mut agent = agent("codex", "sess", AgentStatus::Success, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%7")
+        .active_ago(10);
+    agent.registered_at = Some(ago(12));
+    let live = PaneRef {
+        pane_process_start: Some(ago(3_600)),
+        ..pane("%0", "codex", "/repo/main")
+    };
+
+    let result = compute_lazy_agent_pairings(&[live], &[agent]);
+
+    assert_eq!(
+        result
+            .pairings
+            .get(&PaneId::from_parts(MuxName::Tmux, "%0")),
+        Some(&0)
+    );
+}
+
+#[test]
+fn live_stamped_agent_stays_out_of_lazy_pairings() {
+    let mut agent = agent("codex", "sess", AgentStatus::Success, 2_000)
+        .worktree("/repo/main")
+        .in_pane("%0")
+        .active_ago(10);
+    agent.registered_at = Some(ago(12));
+    let live = PaneRef {
+        pane_process_start: Some(ago(3_600)),
+        ..pane("%0", "codex", "/repo/main")
+    };
+
+    let result = compute_lazy_agent_pairings(&[live], &[agent]);
+
+    assert!(
+        !result
+            .pairings
+            .contains_key(&PaneId::from_parts(MuxName::Tmux, "%0"))
+    );
 }
 
 #[test]

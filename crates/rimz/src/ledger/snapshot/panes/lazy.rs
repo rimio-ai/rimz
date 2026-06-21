@@ -123,6 +123,7 @@ pub(crate) fn compute_lazy_agent_pairings(
     agents: &[AgentState],
 ) -> LazyAgentPairingResult {
     let (candidates, live_stamped_agents) = lazy_pane_candidates(panes, agents);
+    let live_panes: HashSet<&PaneId> = panes.iter().map(|pane| &pane.pane_id).collect();
 
     let mut pairings: HashMap<PaneId, usize> = HashMap::new();
     let mut diagnostics = Vec::new();
@@ -141,7 +142,14 @@ pub(crate) fn compute_lazy_agent_pairings(
     let mut sessions = agents
         .iter()
         .enumerate()
-        .filter(|(_, agent)| agent.pane.is_none())
+        .filter(|(_, agent)| {
+            let Some(stamped) = agent.pane.as_ref() else {
+                return true;
+            };
+            !live_panes.contains(&stamped.pane_id)
+                && crate::agents::descriptor_by_kind(agent.kind.as_str())
+                    .is_some_and(|descriptor| descriptor.capabilities.registers_lazily)
+        })
         .filter(|(_, agent)| agent.parent_agent_id.is_none())
         .filter(|(_, agent)| !used_agents.contains(&(agent.kind.clone(), agent.agent_id.clone())))
         .filter(|(_, agent)| {
