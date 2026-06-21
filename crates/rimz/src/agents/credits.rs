@@ -16,6 +16,42 @@ pub fn oauth_usage_offline() -> bool {
     std::env::var_os("RIMZ_OAUTH_USAGE_OFFLINE").is_some()
 }
 
+/// Why an OAuth usage HTTP probe failed, carried structured (so a status code is
+/// a Sentry facet) without the request URL's path or query.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum HttpErrKind {
+    /// A response with this non-200 status code.
+    Status(u16),
+    /// The request never completed (DNS, connect, TLS, or timeout).
+    Transport,
+    /// The response arrived but its body could not be read.
+    Body,
+}
+
+impl std::fmt::Display for HttpErrKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Status(code) => write!(f, "status {code}"),
+            Self::Transport => f.write_str("transport"),
+            Self::Body => f.write_str("body"),
+        }
+    }
+}
+
+/// The host authority of `url` — scheme stripped, path/query/fragment and any
+/// `userinfo@` removed — the only part of a request URL safe to attach to an
+/// off-box error. Std-only; never pulls in a URL parser.
+pub(crate) fn url_host(url: &str) -> &str {
+    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
+    let authority = after_scheme
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or(after_scheme);
+    authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host)
+}
+
 /// A provider account-usage reading normalized from a local out-of-band source:
 /// included subscription windows plus the optional paid extra/API balance.
 #[derive(Clone, Debug, Default, PartialEq)]

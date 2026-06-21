@@ -52,6 +52,30 @@ pub(crate) fn bytes_contains(haystack: &[u8], needle: &[u8]) -> bool {
     haystack.windows(needle.len()).any(|w| w == needle)
 }
 
+/// Read the trailing window of a transcript/rollout JSONL as lossy UTF-8, for
+/// tail-scanning the most recent records newest-first. Returns `None` on any IO
+/// error — context enrichment is best-effort, never correctness. A truncated
+/// leading line from the seek simply fails to parse in the caller's walk.
+pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+
+    const TAIL_BYTES: u64 = 64 * 1024;
+    let mut file = fs::File::open(path).ok()?;
+    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
+    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
+        .ok()?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf).ok()?;
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
+/// Read a torn-write-safe JSONL suffix from a transcript path, returning the
+/// consumed bytes and next cursor offset. Same cursor discipline as spending,
+/// exposed for `rimz agents wait --stream` without making the helper module public.
+pub fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
+    read_spend_lines(path, offset)
+}
+
 /// The consumable JSONL suffix of `path` past byte `offset`, plus the offset
 /// just past what was consumed — the incremental read every spend parser
 /// shares. Consumes every newline-terminated line, and the trailing fragment

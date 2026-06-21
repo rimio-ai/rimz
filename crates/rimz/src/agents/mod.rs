@@ -22,9 +22,12 @@ pub mod context;
 pub mod credits;
 pub mod descriptor;
 pub(crate) mod hook_types;
+pub(crate) mod identity;
 pub mod lifecycle;
+pub(crate) mod locate;
 mod observation;
 pub mod opencode;
+pub(crate) mod payload;
 pub mod pi;
 pub mod pricing;
 pub mod registry;
@@ -36,16 +39,13 @@ pub mod transcript;
 pub(crate) mod transcript_fs;
 pub mod version;
 
-use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::{debug, error};
 
 use crate::feed::{FeedItem, FeedKind, Resolution};
-use crate::ids::AgentSessionId;
 use crate::run::PermissionMode;
 
 pub use context::{
@@ -54,15 +54,25 @@ pub use context::{
     TurnErrorClass,
 };
 pub use credits::{AccountUsageSnapshot, ExtraCredits, OauthUsageProbe};
+pub(crate) use credits::{HttpErrKind, url_host};
 pub use descriptor::{
     AgentDescriptor, Brand, Capabilities, ConcernCoverage, HookCoverage, IntegrationConcern,
     PlanLabel, RemoteControlCapability, ThreadKey, ToolClassification,
+};
+pub(crate) use identity::{
+    RootIdentity, SubagentIdentity, resolve_root_identity, resolve_subagent_identity,
 };
 pub use lifecycle::{
     LifecycleSignal, LifecycleSignalKind, LifecycleState, Transition, TransitionKind, TurnPhase,
     step,
 };
+pub use locate::locate_binary;
+pub(crate) use locate::{agent_config_path, probe_descriptor_version, read_optional_file};
 pub use observation::AgentLifecycleObservation;
+pub(crate) use payload::{
+    CONTROL_TAG_PREFIXES, choice_is_allow, classify_agent_hook, non_empty_trimmed,
+    optional_payload_string, sanitize_user_prompt, stop_payload_errored,
+};
 pub use pricing::{PriceBook, Pricing};
 pub use registry::{ADAPTERS, adapter_by_kind, descriptor_by_kind, find_adapter, known_kinds};
 pub use spending::{HeadlineSpec, SpendTally, SpendWindow, SpendWindowMode, Spending};
@@ -73,6 +83,8 @@ pub use state::{
 };
 pub(crate) use state::{ResumeArm, display_turn_error, rate_limit_window_kinds, resume_park};
 pub use transcript::{TimelineEntry, TranscriptMessage, TranscriptRole, Turn};
+pub use transcript_fs::read_transcript_lines;
+pub(crate) use transcript_fs::read_transcript_tail;
 
 pub use claude::ClaudeAdapter;
 pub use codex::CodexAdapter;
@@ -167,25 +179,6 @@ pub struct ClassifiedHook {
     pub class: AgentHookClass,
     pub feed_kind: Option<FeedKind>,
     pub event_name: String,
-}
-
-pub(crate) fn classify_agent_hook(
-    event_name: &str,
-    feed_kind: Option<FeedKind>,
-    lifecycle_events: &[&str],
-) -> ClassifiedHook {
-    let class = if feed_kind.is_some() {
-        AgentHookClass::BlockingFeed
-    } else if lifecycle_events.contains(&event_name) {
-        AgentHookClass::Lifecycle
-    } else {
-        AgentHookClass::Unknown
-    };
-    ClassifiedHook {
-        class,
-        feed_kind,
-        event_name: event_name.to_owned(),
-    }
 }
 
 #[cfg(test)]
@@ -822,407 +815,4 @@ pub trait AgentAdapter: Send + Sync {
 /// `rimz start` notice and `rimz doctor`.
 pub fn hook_trust_fix(kind: &str) -> String {
     format!("run /hooks inside {kind} and trust the Rimz hooks")
-}
-
-fn probe_descriptor_version(descriptor: &AgentDescriptor) -> Option<String> {
-    probe_descriptor_version_with_locator(descriptor, locate_binary)
-}
-
-fn probe_descriptor_version_with_locator(
-    descriptor: &AgentDescriptor,
-    locate: impl FnOnce(&AgentDescriptor) -> Option<PathBuf>,
-) -> Option<String> {
-    let binary = locate(descriptor)?;
-    version::probe_cli_version(binary)
-}
-
-/// Resolve an agent's binary on this machine: `$PATH` first, then the
-/// descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs) joined under
-/// `$HOME`. An installer that drops its binary in a private dir (OpenCode's
-/// `~/.opencode/bin`) and edits a shell rc the running environment never sourced
-/// leaves the agent off `$PATH` yet present; this finds it. Returns the absolute
-/// path, or `None` when the binary is nowhere Rimz knows to look.
-pub fn locate_binary(descriptor: &AgentDescriptor) -> Option<PathBuf> {
-    if let Ok(path) = which::which(descriptor.kind) {
-        return Some(path);
-    }
-    let home = PathBuf::from(std::env::var_os("HOME").filter(|value| !value.is_empty())?);
-    binary_in_install_dirs(descriptor, &home)
-}
-
-/// The `$PATH`-miss branch of [`locate_binary`], split out so it tests without
-/// touching process env: the first existing `<home>/<dir>/<kind>` file across
-/// the descriptor's [`extra_bin_dirs`](AgentDescriptor::extra_bin_dirs).
-fn binary_in_install_dirs(descriptor: &AgentDescriptor, home: &Path) -> Option<PathBuf> {
-    descriptor.extra_bin_dirs.iter().find_map(|dir| {
-        let candidate = home.join(dir).join(descriptor.kind);
-        candidate.is_file().then_some(candidate)
-    })
-}
-
-/// Resolve an agent's per-user config file path. An explicit `override_env`
-/// value wins (so tests and tooling can point at a tempdir); otherwise the path
-/// is `$HOME` joined with `rel`. Returns an `Install` error naming the agent
-/// when `$HOME` is unset.
-pub(crate) fn agent_config_path(
-    agent: &'static str,
-    override_env: &str,
-    rel: &Path,
-) -> Result<PathBuf> {
-    if let Some(raw) = std::env::var_os(override_env).filter(|v| !v.is_empty()) {
-        return Ok(PathBuf::from(raw));
-    }
-    let home = std::env::var_os("HOME")
-        .filter(|v| !v.is_empty())
-        .map(PathBuf::from)
-        .ok_or_else(|| AgentErr::Install {
-            agent,
-            reason: format!("$HOME is not set; cannot resolve ~/{}", rel.display()),
-        })?;
-    Ok(home.join(rel))
-}
-
-/// Read an agent config file's current contents for install preview and
-/// uninstall. A missing file reads as `None`; any other IO error propagates
-/// with agent + path context so the user sees which adapter failed and where.
-pub(crate) fn read_optional_file(agent: &'static str, path: &Path) -> Result<Option<String>> {
-    match std::fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(AgentErr::InstallIo {
-            agent,
-            path: path.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-/// Read the trailing window of a transcript/rollout JSONL as lossy UTF-8, for
-/// tail-scanning the most recent records newest-first. Returns `None` on any IO
-/// error — context enrichment is best-effort, never correctness. A truncated
-/// leading line from the seek simply fails to parse in the caller's walk.
-pub(crate) fn read_transcript_tail(path: &Path) -> Option<String> {
-    const TAIL_BYTES: u64 = 64 * 1024;
-    let mut file = std::fs::File::open(path).ok()?;
-    let len = file.metadata().map(|meta| meta.len()).unwrap_or(0);
-    file.seek(SeekFrom::Start(len.saturating_sub(TAIL_BYTES)))
-        .ok()?;
-    let mut buf = Vec::new();
-    file.read_to_end(&mut buf).ok()?;
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
-
-/// Read a torn-write-safe JSONL suffix from a transcript path, returning the
-/// consumed bytes and next cursor offset. Same cursor discipline as spending,
-/// exposed for `rimz agents wait --stream` without making the helper module public.
-pub fn read_transcript_lines(path: &Path, offset: u64) -> Option<(Vec<u8>, u64)> {
-    transcript_fs::read_spend_lines(path, offset)
-}
-
-pub(crate) fn optional_payload_string(payload: &Value, keys: &[&str]) -> Option<String> {
-    keys.iter()
-        .find_map(|key| payload.get(*key).and_then(Value::as_str))
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
-pub(crate) fn non_empty_trimmed(value: &str) -> Option<String> {
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_owned())
-}
-
-/// Why an OAuth usage HTTP probe failed, carried structured (so a status code is
-/// a Sentry facet) without the request URL's path or query.
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum HttpErrKind {
-    /// A response with this non-200 status code.
-    Status(u16),
-    /// The request never completed (DNS, connect, TLS, or timeout).
-    Transport,
-    /// The response arrived but its body could not be read.
-    Body,
-}
-
-impl std::fmt::Display for HttpErrKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Status(code) => write!(f, "status {code}"),
-            Self::Transport => f.write_str("transport"),
-            Self::Body => f.write_str("body"),
-        }
-    }
-}
-
-/// The host authority of `url` — scheme stripped, path/query/fragment and any
-/// `userinfo@` removed — the only part of a request URL safe to attach to an
-/// off-box error. Std-only; never pulls in a URL parser.
-pub(crate) fn url_host(url: &str) -> &str {
-    let after_scheme = url.split_once("://").map_or(url, |(_, rest)| rest);
-    let authority = after_scheme
-        .split(['/', '?', '#'])
-        .next()
-        .unwrap_or(after_scheme);
-    authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host)
-}
-
-/// Common helper: does the resolver decision read as an "allow"?
-pub(crate) fn choice_is_allow(resolution: &Resolution) -> bool {
-    resolution
-        .decision
-        .get("choice")
-        .and_then(Value::as_str)
-        .map(|v| matches!(v, "allow" | "yes" | "approve"))
-        .unwrap_or(false)
-}
-
-/// Whether a `Stop`-style turn-end payload carries an explicit error signal. A
-/// `Stop` only fires after a turn ran, so a clean end is a success and an error
-/// signal demotes it to a failure — but that status decision now lives in the
-/// lifecycle [`step`](lifecycle::step) table, so this helper reports only the
-/// raw `errored` bit the adapter folds into [`LifecycleSignal::TurnEnded`].
-pub(crate) fn stop_payload_errored(payload: &Value) -> bool {
-    payload
-        .get("is_error")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-        || payload.get("error").is_some_and(|v| !v.is_null())
-        || matches!(
-            payload.get("status").and_then(Value::as_str),
-            Some("error" | "failed" | "failure")
-        )
-        || matches!(
-            payload.get("subtype").and_then(Value::as_str),
-            Some("error" | "error_during_execution" | "error_max_turns")
-        )
-}
-
-/// Tags an agent harness injects as synthetic "user" turns — a completed
-/// background task, a system reminder, a slash-command echo, or an expanded
-/// skill block. Their text is not user-authored, so it must never become an
-/// agent's description line (the `<task-notification>…` or `<skill name=…`
-/// leak). Presence of any of these rejects the whole string. The renderer
-/// backstop in `sidebar_pane::render::sections::agent_card::description` shares
-/// this list so producer and presentation guards cannot drift.
-pub(crate) const CONTROL_TAG_PREFIXES: &[&str] = &[
-    "<task-notification>",
-    "<system-reminder>",
-    "<command-message>",
-    "<command-name>",
-    "<local-command-stdout>",
-    "<skill name=",
-];
-
-/// Sanitize a raw prompt/task string before it can label a sidebar row. Trims;
-/// returns `None` for an empty string, or for any text carrying a harness
-/// control tag (a synthetic, non-user-authored turn). KISS: a single substring
-/// scan, no partial parsing — a control tag anywhere means the whole string is
-/// rejected, so a raw `<task-notification>…` or `<skill name=…>` can never
-/// reach the description.
-pub(crate) fn sanitize_user_prompt(raw: Option<&str>) -> Option<String> {
-    let trimmed = raw.map(str::trim).filter(|value| !value.is_empty())?;
-    if CONTROL_TAG_PREFIXES.iter().any(|tag| trimmed.contains(tag)) {
-        return None;
-    }
-    Some(trimmed.to_owned())
-}
-
-/// The outcome of resolving a subagent event's identity.
-pub(crate) enum SubagentIdentity {
-    /// A usable child id distinct from its parent — the only case that yields a
-    /// child entity.
-    Resolved {
-        agent_id: AgentSessionId,
-        parent_agent_id: AgentSessionId,
-    },
-    /// Unusable identity (missing child or parent id, or child == parent). The
-    /// caller emits no observation, so a malformed subagent event can never
-    /// fold onto — and corrupt — its parent's row.
-    Quarantined,
-}
-
-/// Resolve a subagent event's identity, requiring a non-empty child id, a
-/// non-empty parent id, and `child != parent`. This is the one place the rule
-/// lives, shared by both adapters; it replaces the unsafe per-adapter
-/// `child_id.or_else(|| parent_id)` fallback that silently keyed a child onto
-/// its parent. A quarantined identity is logged once with the raw payload so
-/// the anomaly is traceable.
-pub(crate) fn resolve_subagent_identity(
-    kind: &str,
-    event_name: &str,
-    child_id: Option<&str>,
-    parent_id: Option<&str>,
-    payload: &Value,
-) -> SubagentIdentity {
-    let child = child_id.map(str::trim).filter(|value| !value.is_empty());
-    let parent = parent_id.map(str::trim).filter(|value| !value.is_empty());
-    match (child, parent) {
-        (Some(child), Some(parent)) if child != parent => SubagentIdentity::Resolved {
-            agent_id: AgentSessionId::from(child),
-            parent_agent_id: AgentSessionId::from(parent),
-        },
-        _ => {
-            error!(
-                target: "rimz::agent::lifecycle",
-                kind,
-                event = event_name,
-                child_id = child.unwrap_or(""),
-                parent_id = parent.unwrap_or(""),
-                payload = %payload,
-                "subagent identity unusable — quarantined (need a distinct child and parent id)",
-            );
-            SubagentIdentity::Quarantined
-        }
-    }
-}
-
-/// The outcome of resolving a non-subagent (root-arm) event's identity.
-pub(crate) enum RootIdentity {
-    /// A normal root event: key on the session id, no parent link.
-    Root { agent_id: Option<AgentSessionId> },
-    /// The event is stamped with a distinct child `agent_id` — it fired inside
-    /// a subagent. The caller drops it: the lifecycle channel is bracket-grained
-    /// for children (only `Subagent*` folds to the child's rollup), per-tool
-    /// child activity rides the child-keyed heartbeat, and folding the event
-    /// onto the parent would advance the parent's `last_activity` past a
-    /// pending ask — un-folding its `waiting` row while it is still blocked.
-    ForeignChild,
-}
-
-/// Resolve a non-subagent event's identity. A payload whose `agent_id` is
-/// present, non-empty, and distinct from its `session_id` fired inside a
-/// subagent and is the child's, never the root's — the one place the rule
-/// lives, shared by the adapters whose providers stamp `agent_id` on every
-/// in-subagent payload. A missing or session-equal `agent_id` is a normal root;
-/// quarantine stays `Subagent*`-only.
-pub(crate) fn resolve_root_identity(
-    kind: &str,
-    event_name: &str,
-    agent_id: Option<&str>,
-    session_id: Option<&str>,
-) -> RootIdentity {
-    let agent = agent_id.map(str::trim).filter(|value| !value.is_empty());
-    let session = session_id.map(str::trim).filter(|value| !value.is_empty());
-    match (agent, session) {
-        (Some(agent), session) if session != Some(agent) => {
-            debug!(
-                target: "rimz::agent::lifecycle",
-                kind,
-                event = event_name,
-                agent_id = agent,
-                session_id = session.unwrap_or(""),
-                "foreign-child lifecycle event dropped (rides the child-keyed heartbeat)",
-            );
-            RootIdentity::ForeignChild
-        }
-        _ => RootIdentity::Root {
-            agent_id: session.map(AgentSessionId::from),
-        },
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-
-    #[test]
-    fn sanitize_user_prompt_accepts_real_text_and_rejects_control_payloads() {
-        for tag in CONTROL_TAG_PREFIXES {
-            let injected = format!("{tag}<task-id>afdc639e18e7ebdb9</...");
-            assert_eq!(sanitize_user_prompt(Some(&injected)), None, "tag {tag}");
-        }
-        assert_eq!(
-            sanitize_user_prompt(Some("please fix <system-reminder>noise</system-reminder>")),
-            None,
-        );
-        assert_eq!(
-            sanitize_user_prompt(Some(
-                "<skill name=\"merge\" Location=\"/home/u/.agents/skills/merge/SKILL.md\">body</skill>",
-            )),
-            None,
-        );
-        assert_eq!(
-            sanitize_user_prompt(Some("  add a dark mode toggle  ")),
-            Some("add a dark mode toggle".to_owned()),
-        );
-        assert_eq!(sanitize_user_prompt(None), None);
-        assert_eq!(sanitize_user_prompt(Some("   ")), None);
-    }
-
-    #[test]
-    fn binary_resolves_from_a_known_install_dir_off_path() {
-        let home = tempfile::tempdir().unwrap();
-        let opencode = descriptor_by_kind("opencode").unwrap();
-        // Off PATH and not yet installed: nowhere under HOME to find it.
-        assert_eq!(binary_in_install_dirs(opencode, home.path()), None);
-        // OpenCode's installer drops the binary here without editing PATH.
-        let bin_dir = home.path().join(".opencode/bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let bin = bin_dir.join("opencode");
-        std::fs::write(&bin, b"#!/bin/sh\n").unwrap();
-        assert_eq!(binary_in_install_dirs(opencode, home.path()), Some(bin));
-        // An agent declaring no install dirs is never found this way.
-        let claude = descriptor_by_kind("claude").unwrap();
-        assert_eq!(binary_in_install_dirs(claude, home.path()), None);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn version_probe_uses_the_located_install_dir_binary() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let home = tempfile::tempdir().unwrap();
-        let opencode = descriptor_by_kind("opencode").unwrap();
-        let bin_dir = home.path().join(".opencode/bin");
-        std::fs::create_dir_all(&bin_dir).unwrap();
-        let bin = bin_dir.join("opencode");
-        std::fs::write(&bin, b"#!/bin/sh\nprintf 'opencode 1.17.7\\n'\n").unwrap();
-        let mut permissions = std::fs::metadata(&bin).unwrap().permissions();
-        permissions.set_mode(0o755);
-        std::fs::set_permissions(&bin, permissions).unwrap();
-
-        let version = probe_descriptor_version_with_locator(opencode, |descriptor| {
-            binary_in_install_dirs(descriptor, home.path())
-        });
-
-        assert_eq!(version.as_deref(), Some("1.17.7"));
-    }
-
-    #[test]
-    fn subagent_identity_needs_a_distinct_child_and_parent() {
-        match resolve_subagent_identity(
-            "claude",
-            "SubagentStart",
-            Some("child"),
-            Some("root"),
-            &json!({}),
-        ) {
-            SubagentIdentity::Resolved {
-                agent_id,
-                parent_agent_id,
-            } => {
-                assert_eq!(agent_id, "child");
-                assert_eq!(parent_agent_id, "root");
-            }
-            SubagentIdentity::Quarantined => panic!("expected resolved"),
-        }
-        // A missing child or parent, equal ids, or a blank child all quarantine —
-        // a malformed subagent event can never fold onto its parent's row.
-        for (child, parent) in [
-            (None, Some("root")),
-            (Some("child"), None),
-            (Some("same"), Some("same")),
-            (Some("  "), Some("root")),
-        ] {
-            assert!(
-                matches!(
-                    resolve_subagent_identity("claude", "SubagentStart", child, parent, &json!({})),
-                    SubagentIdentity::Quarantined
-                ),
-                "child={child:?} parent={parent:?}",
-            );
-        }
-    }
 }
