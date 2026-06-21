@@ -221,8 +221,8 @@
 ## compacting = "▇"
 
 [theme.glyphs.nerd_font.cockpit]
-## workspace = ""
-## sessions = ""
+## workspace = ""
+## sessions = ""
 ## agents = ""
 
 [theme.glyphs.nerd_font.tokens]

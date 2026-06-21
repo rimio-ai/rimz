@@ -190,8 +190,8 @@ pub(crate) fn nerd_font_glyph(role: GlyphRole) -> Option<&'static str> {
         // cockpit identity row. Every icon ships single-cell to match the "Mono"
         // Nerd Font builds; a face that draws them double-width pads per-glyph with a
         // trailing space (see docs/reference/theme.md#glyphs).
-        GlyphRole::CockpitWorkspace => "\u{efa0}", // nf-fa-git_alt
-        GlyphRole::CockpitSessions => "\u{ef15}",  // nf-fa-wand_sparkles
+        GlyphRole::CockpitWorkspace => "\u{eda7}", // nf-fa-seedling
+        GlyphRole::CockpitSessions => "\u{ee83}",  // nf-fa-splotch
         GlyphRole::CockpitAgents => "\u{ee9c}",    // nf-fa-brain
         // token-accounting markers.
         GlyphRole::TokensTotal => "\u{ed58}",  // nf-fa-ethereum

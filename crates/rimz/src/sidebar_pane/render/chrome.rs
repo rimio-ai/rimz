@@ -2,7 +2,7 @@ use crate::config::GlyphRole;
 use crate::feed::AgentStatus;
 use crate::{SidebarLinkFreshness, SidebarLinkHealth, SidebarSnapshot};
 use jiff::Timestamp;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
@@ -13,17 +13,17 @@ use super::{Alert, GateNotice};
 use crate::remote::link::link_badge_heat;
 
 /// The borderless repo header (dashboard L1): the workspace name behind a `⌘`
-/// glyph in bold on the left, and — when the project root is known — its
-/// home-abbreviated path dim on the right edge of the same line. Identity and
-/// location at a glance, on one line so the spend line can sit below it. The
-/// path left-truncates with a leading `…` (keeping the meaningful tail) when it
-/// can't fit, so the name is never crowded out.
+/// glyph in the bold `good` green identity tone on the left, and — when the
+/// project root is known — its home-abbreviated path dim on the right edge of
+/// the same line. Identity and location at a glance, on one line so the spend
+/// line can sit below it. The path left-truncates with a leading `…` (keeping
+/// the meaningful tail) when it can't fit, so the name is never crowded out.
 pub(super) fn repo_header_lines(
     theme: &Theme,
     snapshot: &SidebarSnapshot,
     width: usize,
 ) -> Vec<Line<'static>> {
-    let bold = Style::default().add_modifier(Modifier::BOLD);
+    let title = theme.good(Modifier::BOLD);
     let clip = |text: &str| -> String { text.chars().take(width.max(1)).collect() };
     let name = clip(&format!(
         "{} {}",
@@ -33,19 +33,19 @@ pub(super) fn repo_header_lines(
     let name_width = name.chars().count();
 
     let Some(root) = snapshot.project_root.as_deref() else {
-        return vec![Line::styled(name, bold)];
+        return vec![Line::styled(name, title)];
     };
     let path = abbreviate_home(&root.to_string_lossy());
     let path_budget = width.saturating_sub(name_width + 1);
     if path_budget == 0 {
-        return vec![Line::styled(name, bold)];
+        return vec![Line::styled(name, title)];
     }
     let path = truncate_left(&path, path_budget);
     let gap = width
         .saturating_sub(name_width + path.chars().count())
         .max(1);
     vec![Line::from(vec![
-        Span::styled(name, bold),
+        Span::styled(name, title),
         Span::raw(" ".repeat(gap)),
         Span::styled(path, theme.muted()),
     ])]

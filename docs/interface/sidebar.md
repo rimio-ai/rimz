@@ -110,7 +110,7 @@ A lowercase magnitude token (`258k`, `1m`) closing the capability cluster: the l
 
 | mark | meaning |
 |------|---------|
-| `⌘ name`        | the workspace |
+| `⌘ name`        | the workspace, with the name in the green `good` tone |
 | `¤ N`           | the live agents in the room right now — the glyph in the agents' working clay |
 | `◎ N`           | sessions (threads) that have run today (cockpit) / in the window (ledger) — teal in both |
 | `⧉ N`           | the subagents an agent spawned this turn (expanded card) — the marker violet, the label soft |
@@ -141,7 +141,7 @@ The top block. Fixed height, so the rows below it never jump as agents change st
  ? 2   ! 1   ⏸ 0   ✓ 0                       ⢿ 2   ○ 1
 ```
 
-- **Identity.** The workspace name behind `⌘`, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
+- **Identity.** The workspace name behind `⌘` renders in the green `good` tone, with the project path dim on the right edge (home-abbreviated to `~/…`; it left-truncates with a leading `…` before it ever crowds the name). A blank line sets it apart from the summary below.
 - **Summary — who's here and what today burned.** Two lines, each a colored glyph and soft-tier count on the left with today's numbers pinned right. Line 1 is the day at a glance: `◎` (teal) the sessions (threads) that have run today in this room, with the room's accumulated token breakdown — `◇` total · `↘` input, including cache creation · `↗` output · `◌` cache-read, each marker in its one color — pinned to the right edge in the coarse integer form (it drops when today recorded no tokens, leaving `◎ N` alone). Line 2: `¤` (the agents' working clay) the live agents in the room right now, followed by a steady unread count like `(2)` when unseen rows exist, with the room's spend pinned right. The counts read from the live room and the workspace-scoped JSONL tally's today window. An empty room reads `◎ 0` over `¤ 0`.
 - **Today's spend.** The room's workspace-scoped spend for today, pinned to the right of the live-agents line, **counting up** in an eased odometer roll the moment any in-scope agent's cost moves — every jump lands inside 1.2s of 200ms clicks, big first steps easing into a penny-sized landing on the exact figure, with a brief brighten as it settles. It joins the line once the room records spend.
 - **Scope paths.** The workspace scope is path-prefix based over the project root and grouped worktree roots; a checkout reached through a different symlink spelling than the transcript's `cwd` can read as outside the room until the paths agree.
