@@ -763,10 +763,10 @@ fn list_panes_with_session_returns_terminals() {
     );
 }
 
-/// `open_background_view` opens a dedicated, named window for stats and the host; the
+/// `open_background_view` opens a dedicated, named window for stats and the hosts; the
 /// session's `after-new-window` hook (installed by `open_sidebar`, as `rimz
 /// start` does) docks the global sidebar on its left, so the window is born
-/// `sidebar | stats | host`. Idempotent on the window name: a second call
+/// `sidebar | stats | stacked hosts`. Idempotent on the window name: a second call
 /// launches nothing.
 #[test]
 fn open_background_view_creates_named_window_idempotently() {
@@ -794,6 +794,7 @@ fn open_background_view_creates_named_window_idempotently() {
         .backend
         .open_sidebar(&sidebar, None)
         .expect("open_sidebar");
+    let working_window = server.display("rimz-bgview", "#{window_id}");
 
     let opts = rimz::mux::BackgroundViewOptions {
         name: "rimzd".to_owned(),
@@ -801,10 +802,16 @@ fn open_background_view_creates_named_window_idempotently() {
             argv: vec!["sleep".to_owned(), "120".to_owned()],
             cwd: std::env::temp_dir(),
         },
-        hosts: vec![rimz::mux::HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: std::env::temp_dir(),
-        }],
+        hosts: vec![
+            rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
+            rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
+        ],
         sidebar,
     };
 
@@ -831,8 +838,18 @@ fn open_background_view_creates_named_window_idempotently() {
         "daemon window must lead the session, got {:?}",
         server.window_names("rimz-bgview"),
     );
-    // Born `sidebar | stats | host`: the hook-docked sidebar beside stats and
-    // the daemon host pane.
+    assert_eq!(
+        server.display("rimz-bgview", "#{window_id}"),
+        working_window,
+        "launch must leave focus on the pre-existing working window",
+    );
+    assert_ne!(
+        server.display("rimz-bgview", "#{window_name}"),
+        "rimzd",
+        "launch must not focus the daemon window",
+    );
+    // Born `sidebar | stats | stacked hosts`: the hook-docked sidebar beside
+    // stats and the daemon host column.
     let rc_panes = server
         .backend
         .list_panes(PaneListOptions {
@@ -845,8 +862,37 @@ fn open_background_view_creates_named_window_idempotently() {
         .filter(|pane| pane.view_name.as_deref() == Some("rimzd"))
         .count();
     assert_eq!(
-        rc_panes, 3,
-        "rimzd window should be born sidebar | stats | host"
+        rc_panes, 4,
+        "rimzd window should be born sidebar | stats | stacked hosts"
+    );
+    let panes = server.wait_for_panes("rimz-bgview:rimzd", 4);
+    assert_eq!(panes.len(), 4, "expected four rimzd panes, got {panes:?}");
+    let mut by_left: BTreeMap<u64, Vec<&PaneGeom>> = BTreeMap::new();
+    for pane in &panes {
+        by_left.entry(pane.left).or_default().push(pane);
+    }
+    assert_eq!(
+        by_left.len(),
+        3,
+        "rimzd should have three columns: sidebar | stats | hosts, got {panes:?}",
+    );
+    let right_column = by_left
+        .iter()
+        .next_back()
+        .map(|(_, panes)| panes)
+        .expect("right column");
+    assert_eq!(
+        right_column.len(),
+        2,
+        "daemon hosts should share the right column, got {panes:?}",
+    );
+    let mut host_tops: Vec<u64> = right_column.iter().map(|pane| pane.top).collect();
+    host_tops.sort_unstable();
+    host_tops.dedup();
+    assert_eq!(
+        host_tops.len(),
+        2,
+        "daemon hosts should be vertically stacked, got {panes:?}",
     );
 
     let second = server

@@ -87,13 +87,33 @@ impl TmuxBackend {
             .collect())
     }
 
-    /// Force the named window to the session's first slot. tmux opens the daemon
-    /// window last (`-d`, no focus change), so swap it with the base-index window
-    /// — `swap-window` always succeeds even when that slot is occupied, and `-d`
-    /// keeps the user on their working window, so no focus-return is needed.
-    /// Best-effort: a reorder hiccup never sinks an otherwise-launched view.
+    /// Force the named window to the session's first slot. tmux tracks the
+    /// current window by winlink slot, not stable window id, so swapping into the
+    /// base slot can otherwise pull focus to the daemon view. Capture the active
+    /// window id before the swap and restore it after; ids survive `swap-window`.
+    /// Best-effort: a reorder or focus hiccup never sinks an otherwise-launched
+    /// view.
     pub(super) fn lead_window(&self, session: &str, name: &str) {
         let base = self.base_index();
+        let active_window = match self
+            .cmd()
+            .args(["display-message", "-p", "-t", session, "#{window_id}"])
+            .run()
+        {
+            Ok(output) => {
+                let window_id = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+                (!window_id.is_empty()).then_some(window_id)
+            }
+            Err(err) => {
+                tracing::warn!(
+                    session = %session,
+                    tags.operation = "tmux.capture_active_window",
+                    error = &err as &dyn std::error::Error,
+                    "could not capture the active window before moving the daemon window",
+                );
+                None
+            }
+        };
         if let Err(err) = self
             .cmd()
             .args([
@@ -111,6 +131,22 @@ impl TmuxBackend {
                 tags.operation = "tmux.move_daemon_window",
                 error = &err as &dyn std::error::Error,
                 "could not move the daemon window to the front",
+            );
+            return;
+        }
+        let Some(active_window) = active_window else {
+            return;
+        };
+        if let Err(err) = self
+            .cmd()
+            .args(["select-window".to_owned(), "-t".to_owned(), active_window])
+            .run()
+        {
+            tracing::warn!(
+                session = %session,
+                tags.operation = "tmux.restore_active_window",
+                error = &err as &dyn std::error::Error,
+                "could not restore focus after moving the daemon window",
             );
         }
     }
