@@ -1,5 +1,6 @@
 use std::env;
 use std::ffi::OsStr;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 
@@ -82,9 +83,22 @@ pub(crate) fn ensure_success<S: AsRef<OsStr>>(
 }
 
 pub(crate) fn workspace_root() -> Result<PathBuf> {
-    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest
-        .parent()
-        .map(Path::to_path_buf)
-        .context("xtask manifest has no workspace parent")
+    let mut dir = env::current_dir().context("reading current directory")?;
+    loop {
+        let manifest = dir.join("Cargo.toml");
+        if manifest.is_file() && manifest_declares_workspace(&manifest)? {
+            return Ok(dir);
+        }
+        if !dir.pop() {
+            bail!("could not find workspace root from current directory");
+        }
+    }
+}
+
+fn manifest_declares_workspace(manifest: &Path) -> Result<bool> {
+    let raw =
+        fs::read_to_string(manifest).with_context(|| format!("reading {}", manifest.display()))?;
+    let parsed = toml::from_str::<toml::Value>(&raw)
+        .with_context(|| format!("parsing {}", manifest.display()))?;
+    Ok(parsed.get("workspace").is_some())
 }
