@@ -3,7 +3,10 @@
 //! `locks/publish.lock` (group commit); readers are lock-free and recover
 //! any commit the publisher missed by folding the delta themselves.
 
-use rimz::ledger::{AskExpiry, snapshot};
+use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
+use rimz::ids::{AgentKind, AgentSessionId};
+use rimz::ledger::{AgentLaunchAppend, AgentLaunchName, AgentLaunchRequest, AskExpiry, snapshot};
+use rimz::schema::event::AgentLaunchState;
 use rimz::{
     EventEnvelope, FeedItem, FeedKind, FeedStatus, Resolution, ResolutionMethod, RuntimeOwner,
     RuntimeOwnerKind, RuntimeScope, Surface,
@@ -25,6 +28,26 @@ fn native_ask(h: &crate::common::Harness, title: &str, session_id: &str) -> Feed
 
 fn lifecycle(h: &crate::common::Harness, event_name: &str, agent_id: &str) -> EventEnvelope {
     crate::common::lifecycle_event(h, "rimz-test", event_name, agent_id)
+}
+
+fn named_codex_lifecycle(
+    h: &crate::common::Harness,
+    event_name: &str,
+    agent_id: &str,
+    agent_name: &str,
+) -> EventEnvelope {
+    let mut observation = AgentLifecycleObservation::new(
+        Some(AgentSessionId::from(agent_id)),
+        LifecycleSignal::Registered,
+    );
+    observation.agent_name = Some(agent_name.to_owned());
+    EventEnvelope::agent_lifecycle(
+        h.workspace_id.clone(),
+        "rimz-test",
+        "codex",
+        event_name,
+        &observation,
+    )
 }
 
 /// A pid whose process has already exited and been reaped — `owner_is_live`
@@ -49,6 +72,61 @@ fn log_len(h: &crate::common::Harness) -> u64 {
 /// way tests age `abandon-sweep.stamp` to force the sweep.
 fn force_next_publish(h: &crate::common::Harness) {
     let _ = std::fs::remove_file(h.ledger.paths().locks_dir.join("publish.stamp"));
+}
+
+#[test]
+fn launch_allocation_reserves_names_owned_by_reaped_rollup_agents() {
+    let h = crate::common::Harness::new();
+    let mut ghost = named_codex_lifecycle(&h, "SessionStart", "ghost-session", "ghost-pet");
+    ghost.timestamp = jiff::Timestamp::now() - std::time::Duration::from_secs(4 * 60 * 60);
+    h.ledger.append_event(&ghost).expect("append ghost");
+    assert!(
+        !h.ledger
+            .snapshot()
+            .expect("snapshot")
+            .agents
+            .iter()
+            .any(|agent| agent.agent_id == "ghost-session"),
+        "the fixture ghost is reaped from the derived view"
+    );
+
+    let request = AgentLaunchRequest {
+        kind: AgentKind::new_unchecked("codex"),
+        agent_id: AgentSessionId::from("launch_codex"),
+        name: AgentLaunchName::Soft("ghost-pet".to_owned()),
+        profile: Some("codex-coder".to_owned()),
+        role: Some("coder".to_owned()),
+        run_id: None,
+    };
+    let append = AgentLaunchAppend {
+        workspace_id: h.workspace_id.clone(),
+        session_name: "rimz-test".to_owned(),
+        cwd: h.ledger.paths().root.clone(),
+        worktree_name: Some("main".to_owned()),
+        prompt: Some("boot".to_owned()),
+        description: None,
+        state: AgentLaunchState::Bound,
+        pane_id: None,
+    };
+    let identities = h
+        .ledger
+        .append_agent_launches_allocating(&[request], &append)
+        .expect("append launch");
+
+    assert_eq!(identities.len(), 1);
+    let launched = &identities[0];
+    assert_ne!(
+        launched.name, "ghost-pet",
+        "allocation must see unreaped rollup names"
+    );
+    let snapshot = h.ledger.snapshot().expect("snapshot with launch");
+    let card = snapshot
+        .agents
+        .iter()
+        .find(|agent| agent.agent_id.as_str() == launched.agent_id.as_str())
+        .expect("launched card is visible");
+    assert_eq!(card.name.as_deref(), Some(launched.name.as_str()));
+    assert_eq!(card.role.as_deref(), Some("coder"));
 }
 
 #[test]

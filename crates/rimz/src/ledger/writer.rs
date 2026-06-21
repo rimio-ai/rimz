@@ -130,7 +130,7 @@ impl Ledger {
         self.append_event_and_expire(event, None).map(|_| ())
     }
 
-    /// Allocate final agent card identities from the current live rollup and
+    /// Allocate final agent card identities from the durable agent fold and
     /// append their launch events under the same workspace lock.
     #[must_use = "durability barrier; check the result"]
     pub fn append_agent_launches_allocating(
@@ -142,8 +142,8 @@ impl Ledger {
             let _guard = lock::WorkspaceLock::acquire(&self.inner.paths.workspace_lock)?;
             let abandoned =
                 expiry::sweep_dead_owned_items_debounced(&self.inner.paths, &append.session_name)?;
-            let snapshot = snapshot::build_from(&self.inner.paths)?;
-            let identities = allocate_agent_launch_identities(requests, &snapshot.agents)?;
+            let (_cache, base_agents) = snapshot::catch_up_rollup(&self.inner.paths)?;
+            let identities = allocate_agent_launch_identities(requests, &base_agents)?;
             let events = identities
                 .iter()
                 .map(|identity| agent_launch_event(append, identity))
