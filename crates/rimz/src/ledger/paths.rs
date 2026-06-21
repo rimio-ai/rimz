@@ -9,9 +9,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-use sha2::{Digest, Sha256};
-
 use crate::ids::{SidebarInstanceId, WorkspaceId};
+use crate::ledger::sidecar;
 use crate::sock::SockBudget;
 
 #[derive(Debug, thiserror::Error)]
@@ -203,26 +202,14 @@ impl RuntimePaths {
     /// `(kind, agent_id)`. The filename is a digest so an arbitrary session id
     /// (a free string, possibly path-hostile) maps to a safe, fixed-width name.
     pub fn agent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
-        let mut hasher = Sha256::new();
-        hasher.update(kind.as_bytes());
-        hasher.update([0]);
-        hasher.update(agent_id.as_bytes());
-        let digest = hex::encode(hasher.finalize());
-        self.agent_context_dir
-            .join(format!("ctx.{}.json", &digest[..32]))
+        sidecar::path(&self.agent_context_dir, "ctx", kind, agent_id)
     }
 
     /// Sidecar file for one subagent's `subagentStatusLine` enrichment, keyed by
     /// `(kind, agent_id)` and digested to a safe, fixed-width name like
     /// [`Self::agent_context_path`].
     pub fn subagent_context_path(&self, kind: &str, agent_id: &str) -> PathBuf {
-        let mut hasher = Sha256::new();
-        hasher.update(kind.as_bytes());
-        hasher.update([0]);
-        hasher.update(agent_id.as_bytes());
-        let digest = hex::encode(hasher.finalize());
-        self.subagent_context_dir
-            .join(format!("sub.{}.json", &digest[..32]))
+        sidecar::path(&self.subagent_context_dir, "sub", kind, agent_id)
     }
 
     /// Path of a sidebar instance's heartbeat file. The freshness scan in

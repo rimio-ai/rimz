@@ -1,12 +1,12 @@
 //! Per-agent queued-message files: `queue/<message_id>.json` while pending,
 //! `queue/terminal/<message_id>.json` once delivered, removed, or abandoned.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::ids::MessageId;
-use crate::ledger::atomic::{self, write_temp_then_rename_cache};
+use crate::ledger::atomic;
+use crate::ledger::pending_terminal::{self, PendingTerminalRecord};
 use crate::message::{MessageRecord, MessageStatus};
 
 #[derive(Debug, thiserror::Error)]
@@ -36,114 +36,52 @@ pub enum MessageStoreErr {
 
 pub type Result<T> = std::result::Result<T, MessageStoreErr>;
 
-const TERMINAL_SUBDIR: &str = "terminal";
-
-fn pending_path(queue_dir: &Path, message_id: &MessageId) -> PathBuf {
-    queue_dir.join(format!("{message_id}.json"))
+impl From<pending_terminal::StoreErr> for MessageStoreErr {
+    fn from(err: pending_terminal::StoreErr) -> Self {
+        match err {
+            pending_terminal::StoreErr::Atomic(err) => Self::Atomic(err),
+            pending_terminal::StoreErr::Io { path, source } => Self::Io { path, source },
+            pending_terminal::StoreErr::Json { path, source } => Self::Json { path, source },
+        }
+    }
 }
 
-fn terminal_path(queue_dir: &Path, message_id: &MessageId) -> PathBuf {
-    queue_dir
-        .join(TERMINAL_SUBDIR)
-        .join(format!("{message_id}.json"))
+impl PendingTerminalRecord for MessageRecord {
+    fn file_stem(&self) -> String {
+        self.message_id.to_string()
+    }
+
+    fn is_terminal(&self) -> bool {
+        self.status.leaves_pending_queue()
+    }
 }
 
 #[must_use = "durability barrier; check the result"]
 pub fn write(queue_dir: &Path, message: &MessageRecord) -> Result<()> {
-    let path = pending_path(queue_dir, &message.message_id);
-    write_temp_then_rename_cache(&path, message)?;
-    if message.status.leaves_pending_queue() {
-        let dest = terminal_path(queue_dir, &message.message_id);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent).map_err(|source| MessageStoreErr::Io {
-                path: parent.to_path_buf(),
-                source,
-            })?;
-        }
-        fs::rename(&path, &dest).map_err(|source| MessageStoreErr::Io { path, source })?;
-    } else {
-        remove_terminal_copy(queue_dir, &message.message_id)?;
-    }
+    pending_terminal::write(queue_dir, message)?;
     Ok(())
 }
 
 pub fn load(queue_dir: &Path, message_id: &MessageId) -> Result<MessageRecord> {
-    let pending = pending_path(queue_dir, message_id);
-    let path = if pending.exists() {
-        pending
-    } else {
-        let terminal = terminal_path(queue_dir, message_id);
-        if !terminal.exists() {
-            return Err(MessageStoreErr::NotFound(message_id.clone()));
-        }
-        terminal
-    };
-    read_item(&path)
+    let stem = message_id.to_string();
+    pending_terminal::load::<MessageRecord>(queue_dir, &stem)?
+        .ok_or_else(|| MessageStoreErr::NotFound(message_id.clone()))
 }
 
 pub fn list(queue_dir: &Path) -> Result<Vec<MessageRecord>> {
-    let mut by_id = std::collections::HashMap::new();
-    for item in read_dir_items(&queue_dir.join(TERMINAL_SUBDIR))?
-        .into_iter()
-        .chain(read_dir_items(queue_dir)?)
-    {
-        by_id.insert(item.message_id.clone(), item);
-    }
-    let mut items: Vec<MessageRecord> = by_id.into_values().collect();
+    let mut items = pending_terminal::list_all::<MessageRecord>(queue_dir)?;
     items.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
     Ok(items)
 }
 
 pub fn list_pending(queue_dir: &Path) -> Result<Vec<MessageRecord>> {
-    let mut items: Vec<MessageRecord> = read_dir_items(queue_dir)?
-        .into_iter()
-        .filter(|item| item.status == MessageStatus::Pending)
-        .collect();
+    let mut items: Vec<MessageRecord> =
+        pending_terminal::list_pending_raw::<MessageRecord>(queue_dir)?
+            .into_iter()
+            .filter(|item| item.status == MessageStatus::Pending)
+            .collect();
     items.sort_by(|a, b| a.message_id.as_str().cmp(b.message_id.as_str()));
     Ok(items)
-}
-
-fn read_dir_items(dir: &Path) -> Result<Vec<MessageRecord>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let mut items = Vec::new();
-    let entries = fs::read_dir(dir).map_err(|source| MessageStoreErr::Io {
-        path: dir.to_path_buf(),
-        source,
-    })?;
-    for entry in entries {
-        let entry = entry.map_err(|source| MessageStoreErr::Io {
-            path: dir.to_path_buf(),
-            source,
-        })?;
-        let path = entry.path();
-        if path.extension().and_then(|s| s.to_str()) != Some("json") {
-            continue;
-        }
-        items.push(read_item(&path)?);
-    }
-    Ok(items)
-}
-
-fn read_item(path: &Path) -> Result<MessageRecord> {
-    let bytes = fs::read(path).map_err(|source| MessageStoreErr::Io {
-        path: path.to_path_buf(),
-        source,
-    })?;
-    serde_json::from_slice(&bytes).map_err(|source| MessageStoreErr::Json {
-        path: path.to_path_buf(),
-        source,
-    })
-}
-
-fn remove_terminal_copy(queue_dir: &Path, message_id: &MessageId) -> Result<()> {
-    let path = terminal_path(queue_dir, message_id);
-    match fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(source) if source.kind() == io::ErrorKind::NotFound => Ok(()),
-        Err(source) => Err(MessageStoreErr::Io { path, source }),
-    }
 }
 
 #[cfg(test)]

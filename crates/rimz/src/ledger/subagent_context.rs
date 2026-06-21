@@ -15,17 +15,16 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::context::SubagentContext;
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::ledger::atomic::{self, write_temp_then_rename_cache};
+use crate::ledger::atomic;
 use crate::ledger::paths::RuntimePaths;
+use crate::ledger::sidecar;
 
 /// A child's context sidecar: the enrichment plus the `(kind, agent_id)` it is
 /// filed under, so a read can confirm the key — and shrug off a digest collision
@@ -35,6 +34,22 @@ pub struct SubagentContextRecord {
     pub kind: AgentKind,
     pub agent_id: AgentSessionId,
     pub context: SubagentContext,
+}
+
+impl sidecar::SidecarRecord for SubagentContextRecord {
+    const FILE_PREFIX: &'static str = "sub";
+
+    fn kind(&self) -> &str {
+        self.kind.as_str()
+    }
+
+    fn agent_id(&self) -> &str {
+        self.agent_id.as_str()
+    }
+
+    fn observed_at_secs(&self) -> i64 {
+        self.context.observed_at.as_second()
+    }
 }
 
 /// Drop a sidecar older than this even if the child's stop was missed — matched
@@ -56,16 +71,7 @@ pub fn write(
         agent_id: agent_id.into(),
         context: context.clone(),
     };
-    write_temp_then_rename_cache(&runtime.subagent_context_path(kind, agent_id), &record)
-}
-
-/// One parsed sidecar, gated by the stat that validated it. `record` is `None`
-/// for a file that read or parsed as garbage, so a corrupt sidecar costs one
-/// parse attempt, not one per tick.
-struct ParsedSidecar {
-    mtime: SystemTime,
-    len: u64,
-    record: Option<SubagentContextRecord>,
+    sidecar::write_record(&runtime.subagent_context_dir, &record)
 }
 
 thread_local! {
@@ -73,7 +79,7 @@ thread_local! {
     /// freshly-written temp file, so `(mtime, len)` validates content; the
     /// long-lived consumer fetch thread re-reads these sidecars on every
     /// wakeup, and this caps its steady-state cost at one stat per file.
-    static SUBAGENT_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedSidecar>> =
+    static SUBAGENT_PARSE_CACHE: RefCell<HashMap<PathBuf, sidecar::ParsedSidecar<SubagentContextRecord>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -86,50 +92,14 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<SubagentContextRecord> {
 }
 
 fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<SubagentContextRecord> {
-    let Ok(entries) = fs::read_dir(&runtime.subagent_context_dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    SUBAGENT_PARSE_CACHE.with_borrow_mut(|cache| {
-        let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Ok(mtime) = meta.modified() else { continue };
-            let len = meta.len();
-            seen.insert(path.clone());
-            let record = match cache.get(&path) {
-                Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
-                _ => {
-                    let record = fs::read(&path)
-                        .ok()
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-                    cache.insert(
-                        path,
-                        ParsedSidecar {
-                            mtime,
-                            len,
-                            record: record.clone(),
-                        },
-                    );
-                    record
-                }
-            };
-            let Some(record) = record else { continue };
-            // The TTL is evaluated fresh per read — a cached record still ages out.
-            if now.as_second() - record.context.observed_at.as_second() > CONTEXT_TTL_SECS {
-                continue;
-            }
-            out.push(record);
-        }
-        // Drop cache keys whose files vanished (child stop, gc), so the cache
-        // stays bounded by the live sidecar set.
-        cache.retain(|path, _| seen.contains(path));
-    });
-    out
+    SUBAGENT_PARSE_CACHE.with(|cache| {
+        sidecar::read_all(
+            &runtime.subagent_context_dir,
+            cache,
+            now.as_second(),
+            CONTEXT_TTL_SECS,
+        )
+    })
 }
 
 #[cfg(test)]

@@ -10,7 +10,10 @@
 //!   lock.rs         workspace advisory lock
 //!   event_log.rs    framed append-log façade
 //!   event_log/      frame codec, rotation, recovery, unit tests
-//!   feed_store.rs   atomic feed item I/O + status CAS
+//!   pending_terminal.rs shared pending/terminal file-store invariant
+//!   feed_store.rs   feed item wrappers + status CAS
+//!   message_store.rs queued-message wrappers
+//!   sidecar.rs      shared stat-gated enrichment sidecar store
 //!   writer.rs       write choreography façade: lock → write → append → wake → publish
 //!   writer/         debounce, publish, expiry, resolver-chain writes
 //!   gc.rs           maintenance façade
@@ -40,8 +43,10 @@ pub mod lock;
 pub mod message_store;
 pub(crate) mod parse_cache;
 pub mod paths;
+pub(crate) mod pending_terminal;
 pub mod run_store;
 pub mod runtime;
+pub(crate) mod sidecar;
 pub mod single_flight;
 pub mod snapshot;
 pub mod subagent_context;

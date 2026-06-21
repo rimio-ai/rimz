@@ -20,9 +20,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
 use std::path::PathBuf;
-use std::time::SystemTime;
 
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -30,8 +28,9 @@ use serde::{Deserialize, Serialize};
 use crate::agents::context::{AgentContext, AgentTurnError};
 use crate::agents::{AgentTokenUsage, LocalContextRefresh, TranscriptStat};
 use crate::ids::{AgentKind, AgentSessionId};
-use crate::ledger::atomic::{self, write_temp_then_rename_cache};
+use crate::ledger::atomic;
 use crate::ledger::paths::RuntimePaths;
+use crate::ledger::sidecar;
 
 /// A session's context sidecar: the normalized record plus the
 /// `(kind, agent_id)` it is filed under, so a read can confirm the key — and
@@ -53,6 +52,22 @@ pub struct AgentContextRecord {
     /// an unchanged tail without parsing it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub transcript_stat: Option<TranscriptStat>,
+}
+
+impl sidecar::SidecarRecord for AgentContextRecord {
+    const FILE_PREFIX: &'static str = "ctx";
+
+    fn kind(&self) -> &str {
+        self.kind.as_str()
+    }
+
+    fn agent_id(&self) -> &str {
+        self.agent_id.as_str()
+    }
+
+    fn observed_at_secs(&self) -> i64 {
+        self.context.observed_at.as_second()
+    }
 }
 
 /// Drop a sidecar older than this even if its `SessionEnd` tombstone was
@@ -89,25 +104,14 @@ pub fn write_record(
     runtime: &RuntimePaths,
     record: &AgentContextRecord,
 ) -> Result<(), atomic::AtomicErr> {
-    write_temp_then_rename_cache(
-        &runtime.agent_context_path(record.kind.as_str(), record.agent_id.as_str()),
-        record,
-    )
+    sidecar::write_record(&runtime.agent_context_dir, record)
 }
 
 /// Read one sidecar directly from disk, bypassing the long-lived parse cache.
 /// Writers use this before a read-modify-write so they merge against the latest
 /// published bytes, not the last value a sidebar consumer happened to parse.
 pub fn read_one(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> Option<AgentContextRecord> {
-    let path = runtime.agent_context_path(kind, agent_id);
-    let record: AgentContextRecord = fs::read(&path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())?;
-    if record.kind == kind && record.agent_id.as_str() == agent_id {
-        Some(record)
-    } else {
-        None
-    }
+    sidecar::read_one(&runtime.agent_context_dir, kind, agent_id)
 }
 
 pub fn new_record(kind: &str, agent_id: &str, context: AgentContext) -> AgentContextRecord {
@@ -289,21 +293,12 @@ pub fn empty_context(source: &str, observed_at: Timestamp) -> AgentContext {
     }
 }
 
-/// One parsed sidecar, gated by the stat that validated it. `record` is `None`
-/// for a file that read or parsed as garbage, so a corrupt sidecar costs one
-/// parse attempt, not one per tick.
-struct ParsedSidecar {
-    mtime: SystemTime,
-    len: u64,
-    record: Option<AgentContextRecord>,
-}
-
 thread_local! {
     /// Per-thread parse cache. Every update lands via atomic rename of a
     /// freshly-written temp file, so `(mtime, len)` validates content; the
     /// long-lived consumer fetch thread re-reads these sidecars on every
     /// wakeup, and this caps its steady-state cost at one stat per file.
-    static CONTEXT_PARSE_CACHE: RefCell<HashMap<PathBuf, ParsedSidecar>> =
+    static CONTEXT_PARSE_CACHE: RefCell<HashMap<PathBuf, sidecar::ParsedSidecar<AgentContextRecord>>> =
         RefCell::new(HashMap::new());
 }
 
@@ -316,60 +311,20 @@ pub fn read_all(runtime: &RuntimePaths) -> Vec<AgentContextRecord> {
 }
 
 fn read_all_at(runtime: &RuntimePaths, now: Timestamp) -> Vec<AgentContextRecord> {
-    let Ok(entries) = fs::read_dir(&runtime.agent_context_dir) else {
-        return Vec::new();
-    };
-    let mut out = Vec::new();
-    CONTEXT_PARSE_CACHE.with_borrow_mut(|cache| {
-        let mut seen: std::collections::BTreeSet<PathBuf> = std::collections::BTreeSet::new();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
-                continue;
-            }
-            let Ok(meta) = entry.metadata() else { continue };
-            let Ok(mtime) = meta.modified() else { continue };
-            let len = meta.len();
-            seen.insert(path.clone());
-            let record = match cache.get(&path) {
-                Some(parsed) if parsed.mtime == mtime && parsed.len == len => parsed.record.clone(),
-                _ => {
-                    let record = fs::read(&path)
-                        .ok()
-                        .and_then(|bytes| serde_json::from_slice(&bytes).ok());
-                    cache.insert(
-                        path,
-                        ParsedSidecar {
-                            mtime,
-                            len,
-                            record: record.clone(),
-                        },
-                    );
-                    record
-                }
-            };
-            let Some(record) = record else { continue };
-            // The TTL is evaluated fresh per read — a cached record still ages out.
-            if now.as_second() - record.context.observed_at.as_second() > CONTEXT_TTL_SECS {
-                continue;
-            }
-            out.push(record);
-        }
-        // Drop cache keys whose files vanished (SessionEnd tombstone, gc), so
-        // the cache stays bounded by the live sidecar set.
-        cache.retain(|path, _| seen.contains(path));
-    });
-    out
+    CONTEXT_PARSE_CACHE.with(|cache| {
+        sidecar::read_all(
+            &runtime.agent_context_dir,
+            cache,
+            now.as_second(),
+            CONTEXT_TTL_SECS,
+        )
+    })
 }
 
 /// Remove a session's sidecar (a `SessionEnd` tombstone, or reap). Best-effort:
 /// a missing file is success.
 pub fn remove(runtime: &RuntimePaths, kind: &str, agent_id: &str) -> std::io::Result<()> {
-    match fs::remove_file(runtime.agent_context_path(kind, agent_id)) {
-        Ok(()) => Ok(()),
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(err) => Err(err),
-    }
+    sidecar::remove::<AgentContextRecord>(&runtime.agent_context_dir, kind, agent_id)
 }
 
 #[cfg(test)]
