@@ -304,10 +304,9 @@ fn render_mux(w: &mut impl Write, mux: &Probe<Mux>) -> io::Result<()> {
     }
     if let Some(presence) = &mux.presence {
         let value = match presence {
-            Presence::Event { poked_secs } => verdict(
-                Health::Ok,
-                format!("event mode (plugin poked {poked_secs}s ago)"),
-            ),
+            Presence::Event { poked_secs } => {
+                verdict(Health::Ok, format!("event mode (poked {poked_secs}s ago)"))
+            }
             Presence::Poll { reason } => verdict(Health::Warn, format!("poll mode — {reason}")),
             Presence::Unavailable { error } => {
                 verdict(Health::Warn, format!("unavailable ({error})"))

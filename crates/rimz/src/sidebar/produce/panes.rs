@@ -432,11 +432,12 @@ pub(super) fn cached_panes_or_produce(
     let cache_path = runtime.root.join("snapshot.json");
 
     // Select the pane TTL once per call from the presence stamp: event mode
-    // (EVENT_PANE_TTL) while the Zellij push channel is alive, else poll-mode
-    // SNAPSHOT_CACHE_TTL. One small stamp read per produce; the fast path, the
-    // single-flight `fresh` closure, and the loser re-check all read this one
-    // Duration, so a loser never produces what the winner skipped. tmux never
-    // writes the stamp, so tmux is always poll mode by construction.
+    // (EVENT_PANE_TTL) while a presence push channel is alive, else poll-mode
+    // SNAPSHOT_CACHE_TTL. Zellij's plugin and tmux's control-mode watch both
+    // write the stamp; tmux lapses to poll mode while the watch is absent or
+    // idle. One small stamp read per produce; the fast path, the single-flight
+    // `fresh` closure, and the loser re-check all read this one Duration, so a
+    // loser never produces what the winner skipped.
     let pane_ttl = effective_pane_ttl(presence_stamp_age_ms(runtime));
 
     // One single-flight lock covers both arms: the slow path's full produce

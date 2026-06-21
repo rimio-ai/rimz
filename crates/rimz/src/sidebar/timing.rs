@@ -63,8 +63,8 @@ pub const PROCESS_START_MATCH_TOLERANCE: Duration = Duration::from_secs(2);
 /// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps
 /// over its write cadence. Past this the channel reads as dead and the
 /// producer reverts to [`SNAPSHOT_CACHE_TTL`] poll mode, byte-identical to a
-/// session with no plugin. tmux never writes the stamp, so tmux is always
-/// poll mode by construction.
+/// session with no push channel. tmux's control-mode watch writes the stamp
+/// while attached and lapses back to poll mode after true silence.
 pub const PRESENCE_STAMP_FRESH: Duration = Duration::from_secs(150);
 
 /// How long a *hot* worktree's git diff-stats stay cached before the

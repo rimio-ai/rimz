@@ -1,23 +1,57 @@
 //! tmux control-mode presence watcher.
 
+mod roster;
+
+use std::io::{BufRead as _, Write as _};
 use std::path::PathBuf;
+
+pub(crate) use roster::PresenceRoster;
 
 // ── Control-mode presence stream ──────────────────────────────────────────────
 
+const SUBSCRIPTION_COMMAND: &str = concat!(
+    "refresh-client -B \"rimz-presence:%*:#{pane_id}",
+    "\t#{window_id}",
+    "\t#{pane_current_command}",
+    "\t#{pane_active}",
+    "\t#{pane_title}\"\n",
+);
+
+/// A tmux control-mode line carrying pane-presence information.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ControlLine {
+    Subscription {
+        pane: String,
+        window: String,
+        command: Option<String>,
+        active: bool,
+        title: Option<String>,
+    },
+    WindowClosed {
+        window: String,
+    },
+    LayoutChange {
+        window: String,
+        panes: Vec<String>,
+    },
+    Nudge,
+    Ignore,
+}
+
 /// A live tmux control-mode presence stream — the tmux fast path for pane
-/// topology (docs/internals/sidebar/multiplexers.md). Attaches a read-only (`-r`),
-/// output-suppressed (`-f no-output`) control client to one session and
-/// surfaces a nudge per presence-relevant notification: a window opened or
-/// closed, a layout change (a split opened/closed inside a window). Poll stays
-/// truth — a dropped stream loses only latency, never correctness, and the
-/// consumer respawns it.
+/// topology and command/focus overlays (docs/internals/sidebar/multiplexers.md).
+/// Attaches a read-only (`-r`), output-suppressed (`-f no-output`) control
+/// client to one session, registers one read-only `refresh-client -B`
+/// subscription, and surfaces typed presence changes. Poll stays truth — a
+/// dropped stream loses only latency, never correctness, and the consumer
+/// respawns it.
 pub struct PresenceWatch {
     child: std::process::Child,
     lines: std::io::Lines<std::io::BufReader<std::process::ChildStdout>>,
     /// Held open for the stream's lifetime: a control client exits on stdin
     /// EOF, which doubles as the no-leak guarantee — if this process dies, the
     /// pipe closes and tmux reaps the client.
-    _stdin: Option<std::process::ChildStdin>,
+    _stdin: std::process::ChildStdin,
 }
 
 impl PresenceWatch {
@@ -25,7 +59,6 @@ impl PresenceWatch {
     /// default server). `$TMUX` is dropped from the child's env so the nested
     /// attach is deliberate rather than refused.
     pub fn attach(socket: Option<&std::path::Path>, session: &str) -> std::io::Result<Self> {
-        use std::io::BufRead as _;
         let mut cmd = std::process::Command::new("tmux");
         if let Some(socket) = socket {
             cmd.arg("-S").arg(socket);
@@ -44,10 +77,31 @@ impl PresenceWatch {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::null());
         let mut child = cmd.spawn()?;
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take().ok_or_else(|| {
-            std::io::Error::other("tmux control client spawned without a stdout pipe")
-        })?;
+        let mut stdin = match child.stdin.take() {
+            Some(stdin) => stdin,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::other(
+                    "tmux control client spawned without a stdin pipe",
+                ));
+            }
+        };
+        if let Err(err) = stdin.write_all(SUBSCRIPTION_COMMAND.as_bytes()) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(err);
+        }
+        let stdout = match child.stdout.take() {
+            Some(stdout) => stdout,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(std::io::Error::other(
+                    "tmux control client spawned without a stdout pipe",
+                ));
+            }
+        };
         Ok(Self {
             child,
             lines: std::io::BufReader::new(stdout).lines(),
@@ -55,14 +109,15 @@ impl PresenceWatch {
         })
     }
 
-    /// Block until the next presence-relevant notification. `None` when the
+    /// Block until the next presence-relevant control line. `None` when the
     /// stream ends — the client was detached, the server exited, or the pipe
     /// broke — after which the watch is spent and the caller re-attaches.
-    pub fn next_presence(&mut self) -> Option<()> {
+    pub fn next_line(&mut self) -> Option<ControlLine> {
         loop {
             let line = self.lines.next()?.ok()?;
-            if is_presence_event(&line) {
-                return Some(());
+            let classified = classify_control_line(&line);
+            if classified != ControlLine::Ignore {
+                return Some(classified);
             }
         }
     }
@@ -88,22 +143,152 @@ pub(super) fn control_socket_from(raw: &str) -> Option<PathBuf> {
     (!socket.is_empty()).then(|| PathBuf::from(socket))
 }
 
-/// Whether a control-mode notification line reports a pane-topology change.
-/// Only presence moves the sidebar: window add/close (linked or not) and
-/// layout changes (a split opened/closed). Everything else — `%output`
-/// (suppressed by `-f no-output` anyway), command replies (`%begin`/`%end`),
-/// focus and mode changes — stays silent.
-pub(super) fn is_presence_event(line: &str) -> bool {
-    [
-        "%window-add",
-        "%unlinked-window-add",
-        "%window-close",
-        "%unlinked-window-close",
-        "%layout-change",
-        "%sessions-changed",
-    ]
-    .iter()
-    .any(|prefix| line.starts_with(prefix))
+/// Classify one tmux control-mode line. Reply blocks, pane output, and focus
+/// noise are ignored; topology notifications that lack identity stay as a
+/// producer-verification nudge.
+pub(super) fn classify_control_line(line: &str) -> ControlLine {
+    let verb = line.split_whitespace().next().unwrap_or_default();
+    match verb {
+        "%subscription-changed" => parse_subscription(line).unwrap_or(ControlLine::Ignore),
+        "%window-close" | "%unlinked-window-close" => line
+            .split_whitespace()
+            .nth(1)
+            .filter(|window| window.starts_with('@'))
+            .map(|window| ControlLine::WindowClosed {
+                window: window.to_owned(),
+            })
+            .unwrap_or(ControlLine::Nudge),
+        "%layout-change" => parse_layout_change(line).unwrap_or(ControlLine::Nudge),
+        "%window-add" | "%unlinked-window-add" | "%sessions-changed" => ControlLine::Nudge,
+        _ => ControlLine::Ignore,
+    }
+}
+
+fn parse_subscription(line: &str) -> Option<ControlLine> {
+    let (_, value) = line.split_once(" : ")?;
+    let mut fields = value.splitn(5, '\t');
+    let pane = nonempty(fields.next()?)?;
+    let window = nonempty(fields.next()?)?;
+    let command = nonempty(fields.next()?);
+    let active = fields.next()?.trim() == "1";
+    let title = nonempty(fields.next().unwrap_or_default());
+    Some(ControlLine::Subscription {
+        pane,
+        window,
+        command,
+        active,
+        title,
+    })
+}
+
+fn nonempty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn parse_layout_change(line: &str) -> Option<ControlLine> {
+    let mut fields = line.split_whitespace();
+    (fields.next()? == "%layout-change").then_some(())?;
+    let window = fields.next()?;
+    let layout = fields.next()?;
+    let panes = layout_pane_ids(layout)?;
+    Some(ControlLine::LayoutChange {
+        window: window.to_owned(),
+        panes,
+    })
+}
+
+fn layout_pane_ids(layout: &str) -> Option<Vec<String>> {
+    let (_, tree) = layout.split_once(',')?;
+    let mut parser = LayoutParser {
+        input: tree.as_bytes(),
+        pos: 0,
+        panes: Vec::new(),
+    };
+    parser.parse_cell()?;
+    (parser.pos == parser.input.len()).then_some(parser.panes)
+}
+
+struct LayoutParser<'a> {
+    input: &'a [u8],
+    pos: usize,
+    panes: Vec<String>,
+}
+
+impl LayoutParser<'_> {
+    fn parse_cell(&mut self) -> Option<()> {
+        self.parse_number()?;
+        self.consume(b'x')?;
+        self.parse_number()?;
+        self.consume(b',')?;
+        self.parse_number()?;
+        self.consume(b',')?;
+        self.parse_number()?;
+        match self.peek()? {
+            b'{' | b'[' => self.parse_group(),
+            b',' => {
+                self.pos += 1;
+                let pane = self.parse_number()?;
+                self.panes.push(format!("%{pane}"));
+                Some(())
+            }
+            _ => None,
+        }
+    }
+
+    fn parse_group(&mut self) -> Option<()> {
+        let opener = self.next()?;
+        let closer = match opener {
+            b'{' => b'}',
+            b'[' => b']',
+            _ => return None,
+        };
+        loop {
+            self.parse_cell()?;
+            match self.peek()? {
+                b',' => {
+                    self.pos += 1;
+                }
+                byte if byte == closer => {
+                    self.pos += 1;
+                    return Some(());
+                }
+                _ => return None,
+            }
+        }
+    }
+
+    fn parse_number(&mut self) -> Option<u64> {
+        let start = self.pos;
+        while self
+            .input
+            .get(self.pos)
+            .is_some_and(|byte| byte.is_ascii_digit())
+        {
+            self.pos += 1;
+        }
+        if self.pos == start {
+            return None;
+        }
+        std::str::from_utf8(&self.input[start..self.pos])
+            .ok()?
+            .parse()
+            .ok()
+    }
+
+    fn consume(&mut self, expected: u8) -> Option<()> {
+        (self.next()? == expected).then_some(())
+    }
+
+    fn next(&mut self) -> Option<u8> {
+        let byte = *self.input.get(self.pos)?;
+        self.pos += 1;
+        Some(byte)
+    }
+
+    fn peek(&self) -> Option<u8> {
+        self.input.get(self.pos).copied()
+    }
 }
 
 #[cfg(test)]
@@ -113,20 +298,89 @@ mod tests {
     use super::*;
 
     #[test]
-    fn presence_filter_accepts_topology_and_skips_noise() {
-        for line in [
-            "%window-add @5",
-            "%unlinked-window-add @6",
-            "%window-close @5",
-            "%unlinked-window-close @6",
-            "%layout-change @1 b25d,208x60,0,0{104x60,0,0,1,103x60,105,0,2}",
-            "%sessions-changed",
-        ] {
-            assert!(is_presence_event(line), "{line}");
-        }
+    fn control_line_classifies_subscription_values() {
+        assert_eq!(
+            classify_control_line(
+                "%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\tclaude\t1\trimz"
+            ),
+            ControlLine::Subscription {
+                pane: "%2".to_owned(),
+                window: "@1".to_owned(),
+                command: Some("claude".to_owned()),
+                active: true,
+                title: Some("rimz".to_owned()),
+            }
+        );
+        assert_eq!(
+            classify_control_line("%subscription-changed rimz-presence $0 @1 1 %2 : %2\t@1\t\t0\t"),
+            ControlLine::Subscription {
+                pane: "%2".to_owned(),
+                window: "@1".to_owned(),
+                command: None,
+                active: false,
+                title: None,
+            }
+        );
+    }
+
+    #[test]
+    fn control_line_classifies_topology() {
+        assert_eq!(classify_control_line("%window-add @5"), ControlLine::Nudge);
+        assert_eq!(
+            classify_control_line("%unlinked-window-add @6"),
+            ControlLine::Nudge
+        );
+        assert_eq!(
+            classify_control_line("%window-close @5"),
+            ControlLine::WindowClosed {
+                window: "@5".to_owned()
+            }
+        );
+        assert_eq!(
+            classify_control_line("%unlinked-window-close @6"),
+            ControlLine::WindowClosed {
+                window: "@6".to_owned()
+            }
+        );
+        assert_eq!(
+            classify_control_line("%sessions-changed"),
+            ControlLine::Nudge
+        );
+    }
+
+    #[test]
+    fn control_line_extracts_leaf_panes_from_layout_change() {
+        assert_eq!(
+            classify_control_line(
+                "%layout-change @1 b25d,208x60,0,0{104x60,0,0,1,103x60,105,0,2} 208x60,0,0 0"
+            ),
+            ControlLine::LayoutChange {
+                window: "@1".to_owned(),
+                panes: vec!["%1".to_owned(), "%2".to_owned()],
+            }
+        );
+        assert_eq!(
+            layout_pane_ids(
+                "aabb,200x60,0,0{100x60,0,0[100x30,0,0,3,100x29,0,31,4],99x60,101,0,5}"
+            ),
+            Some(vec!["%3".to_owned(), "%4".to_owned(), "%5".to_owned()])
+        );
+    }
+
+    #[test]
+    fn malformed_layout_change_falls_back_to_nudge() {
+        assert_eq!(
+            classify_control_line("%layout-change @1 b25d,208x60,0,0{104x60,0,0"),
+            ControlLine::Nudge
+        );
+    }
+
+    #[test]
+    fn control_line_skips_noise() {
         for line in [
             "%begin 1622 0 1",
             "%end 1622 0 1",
+            "%error 1622 0 1",
             "%output %1 aGVsbG8=",
             "%window-pane-changed @1 %2",
             "%client-session-changed /dev/pts/3 $1 main",
@@ -134,7 +388,7 @@ mod tests {
             "%window-renamed @1 build",
             "",
         ] {
-            assert!(!is_presence_event(line), "{line}");
+            assert_eq!(classify_control_line(line), ControlLine::Ignore, "{line}");
         }
     }
 

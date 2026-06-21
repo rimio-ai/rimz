@@ -143,9 +143,9 @@ pub fn published_frame_observed_at_ms(runtime: &RuntimePaths, session: &str) -> 
     read_snapshot_cache(&cache_path, session).map(|cache| cache.observed_or_produced_at_ms())
 }
 
-/// The presence liveness stamp the Zellij presence plugin refreshes through
-/// `rimz sidebar wake`. Its freshness gates the producer's pane TTL: fresh →
-/// event mode ([`EVENT_PANE_TTL`]), stale or absent → poll mode
+/// The presence liveness stamp refreshed by the Zellij presence plugin through
+/// `rimz sidebar wake` and by the tmux control-mode watch. Its freshness gates
+/// the producer's pane TTL: fresh → event mode ([`EVENT_PANE_TTL`]), stale or absent → poll mode
 /// ([`SNAPSHOT_CACHE_TTL`]). Cache-class JSON in the workspace runtime root;
 /// the explicit millisecond field (over a bare mtime stamp) lets `rimz doctor`
 /// render a stamp age from the same value the producer's verdict reads.

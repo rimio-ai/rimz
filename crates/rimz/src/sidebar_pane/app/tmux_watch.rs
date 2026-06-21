@@ -1,27 +1,24 @@
-//! tmux presence fast path: forward control-mode topology nudges to sidebars.
+//! tmux presence fast path: forward control-mode overlays to sidebars.
 //!
 //! The elected producer holds one read-only [`PresenceWatch`]
-//! (`crate::mux::tmux`) on the session and broadcasts a typed [`PanesChanged`]
-//! nudge whenever a window or split opens or closes — control-mode lines say
-//! *that* topology moved, not which pane, so the identity-free nudge is the
-//! honest event. Every renderer receives it; only the elected producer pays
-//! the fresh pane pull. Latency only, never truth: the poll remains the
-//! presence backstop (docs/internals/sidebar/multiplexers.md), a dead watcher degrades
-//! to the poll, and this thread respawns the client with backoff.
-//! Zellij has the same producer-publication contract through its presence plugin.
+//! (`crate::mux::tmux`) on the session, subscribes to tmux's per-pane format
+//! stream, and broadcasts the same typed overlays Zellij's presence plugin
+//! emits. Identity-free topology lines stay as [`PanesChanged`] nudges. Latency
+//! only, never truth: the poll remains the presence backstop
+//! (docs/internals/sidebar/multiplexers.md), a dead watcher degrades to the
+//! poll, and this thread respawns the client with backoff.
 //!
 //! One control client per workspace: only the eldest live instance (the same
 //! election as the produce fork) attaches; the rest sleep on the election
 //! poll. Demotion is rare (an elder appearing above a live producer), so it
 //! is re-checked per nudge rather than mid-block.
 //!
-//! [`PanesChanged`]: SidebarEvent::PanesChanged
+//! [`PanesChanged`]: crate::schema::sidebar_event::SidebarEvent::PanesChanged
 
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use crate::mux::tmux::{PresenceWatch, control_socket_from_env};
-use crate::schema::sidebar_event::SidebarEvent;
+use crate::mux::tmux::{PresenceRoster, PresenceWatch, control_socket_from_env};
 use crate::{RuntimePaths, SidebarInstanceId};
 use tracing::debug;
 
@@ -30,6 +27,10 @@ const ELECTION_POLL: Duration = Duration::from_secs(5);
 /// Backoff between control-client attach attempts, so a refusing tmux (too
 /// old for `-f no-output`, server restarting) never spins the thread.
 const RESPAWN_BACKOFF: Duration = Duration::from_secs(5);
+/// Initial subscription values describe panes that already exist. Treat the
+/// first short burst as roster seed so attaching a watcher never paints fake
+/// opens for the room it found.
+const SEED_WINDOW: Duration = Duration::from_millis(300);
 
 /// Spawn the watcher manager thread. It runs for the process lifetime; the
 /// control client child needs no explicit teardown — it exits on stdin EOF,
@@ -51,17 +52,24 @@ fn watch_loop(runtime: &RuntimePaths, instance_id: &SidebarInstanceId, session_n
         }
         match PresenceWatch::attach(control_socket.as_deref(), session_name) {
             Ok(mut watch) => {
-                while watch.next_presence().is_some() {
+                crate::sidebar::cache::write_presence_stamp(runtime);
+                let mut roster = PresenceRoster::default();
+                let seed_deadline = Instant::now() + SEED_WINDOW;
+                while let Some(line) = watch.next_line() {
                     // Demotion check per nudge: a demoted instance stops
                     // forwarding and releases its control client.
                     if !is_producer(runtime, instance_id) {
                         break;
                     }
-                    let _ = crate::ledger::wakeup::broadcast_sidebar_event(
-                        runtime,
-                        Some(session_name),
-                        SidebarEvent::PanesChanged,
-                    );
+                    let seeding = Instant::now() < seed_deadline;
+                    for event in roster.apply(line, seeding) {
+                        let _ = crate::ledger::wakeup::broadcast_sidebar_event(
+                            runtime,
+                            Some(session_name),
+                            event,
+                        );
+                    }
+                    crate::sidebar::cache::write_presence_stamp(runtime);
                 }
             }
             Err(err) => {

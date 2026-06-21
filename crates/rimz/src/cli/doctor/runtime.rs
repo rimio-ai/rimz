@@ -97,9 +97,7 @@ pub(super) fn collect_mux(
         }
         report.session_health = Some(collect_session_health(backend.as_ref(), &ws.session_name));
         report.duplicate_sessions = Some(collect_duplicate_sessions(ws));
-        if mux == MuxName::Zellij {
-            report.presence = Some(collect_presence(ws));
-        }
+        report.presence = Some(collect_presence(ws, mux));
     }
     model::Probe::Ready(report)
 }
@@ -280,9 +278,10 @@ fn heartbeat_mtime_is_fresh(path: &Path) -> bool {
     }
 }
 
-/// The producer's pane-discovery mode for this workspace — event when the plugin
-/// pokes, otherwise poll with the first failing precondition and its fix.
-fn collect_presence(ws: &rimz::ResolvedWorkspace) -> model::Presence {
+/// The producer's pane-discovery mode for this workspace — event when the
+/// backend's presence channel pokes, otherwise poll with the first failing
+/// precondition and its fix.
+fn collect_presence(ws: &rimz::ResolvedWorkspace, mux: MuxName) -> model::Presence {
     use rimz::sidebar::cache::{presence_event_mode, presence_stamp_age_ms};
 
     let runtime = match RuntimePaths::for_workspace(ws.workspace_id.clone()) {
@@ -298,6 +297,19 @@ fn collect_presence(ws: &rimz::ResolvedWorkspace) -> model::Presence {
         return model::Presence::Event {
             poked_secs: age.unwrap_or(0) / 1000,
         };
+    }
+    if mux == MuxName::Tmux {
+        let reason = match age {
+            Some(age) => format!(
+                "last control-mode watch poke {}s ago (watch idle, detached, or producer not elected)",
+                age / 1000,
+            ),
+            None => {
+                "control-mode presence watch not attached (old tmux, or producer not yet elected)"
+                    .to_owned()
+            }
+        };
+        return model::Presence::Poll { reason };
     }
     // Poll mode: name the first failing precondition in fix order.
     if zellij_mod::presence_plugin_path().is_none() {

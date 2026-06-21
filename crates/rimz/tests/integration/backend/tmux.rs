@@ -1750,13 +1750,34 @@ fn plan_from_env(env: &Env) -> rimz::resume::ResumePlan {
     )
 }
 
-/// The control-mode presence stream surfaces topology changes as nudges — the
-/// tmux fast path the elder sidebar consumes. A new window must produce a
-/// presence event within the budget, and killing the server must end the
-/// stream (`None`) rather than wedging it, so a dead watcher degrades to the
-/// poll instead of a stuck frame.
+fn recv_presence_line_until<F>(
+    rx: &std::sync::mpsc::Receiver<Option<rimz::mux::tmux::ControlLine>>,
+    budget: Duration,
+    label: &str,
+    mut matches: F,
+) -> rimz::mux::tmux::ControlLine
+where
+    F: FnMut(&rimz::mux::tmux::ControlLine) -> bool,
+{
+    let deadline = Instant::now() + budget;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(remaining) {
+            Ok(Some(line)) if matches(&line) => return line,
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("presence stream ended before {label}"),
+            Err(err) => panic!("timed out waiting for {label}: {err}"),
+        }
+    }
+}
+
+/// The control-mode presence stream surfaces typed subscription changes — the
+/// tmux fast path the elder sidebar consumes. Command changes and window closes
+/// must produce typed control lines within the budget, and killing the server
+/// must end the stream (`None`) rather than wedging it, so a dead watcher
+/// degrades to the poll instead of a stuck frame.
 #[test]
-fn presence_watch_nudges_on_topology_and_ends_with_the_server() {
+fn presence_watch_streams_typed_lines_and_ends_with_the_server() {
     require_tmux!();
     let server = TmuxServer::new();
     server.ensure_with_shell("presence");
@@ -1795,28 +1816,58 @@ fn presence_watch_nudges_on_topology_and_ends_with_the_server() {
         thread::sleep(Duration::from_millis(25));
     }
 
-    // Drain on a helper thread so the main thread owns the timeout. A single
-    // topology change fans out as a burst of control lines (`%window-add` plus
-    // `%layout-change`), so report the first nudge, then drain to the end.
-    let (tx, rx) = std::sync::mpsc::channel::<Option<()>>();
+    // Drain on a helper thread so the main thread owns the timeout. Initial
+    // subscription values race with the first stimulus, so each assertion
+    // filters for the line shape it caused.
+    let (tx, rx) = std::sync::mpsc::channel::<Option<rimz::mux::tmux::ControlLine>>();
     let drain = thread::spawn(move || {
-        let _ = tx.send(watch.next_presence());
-        while watch.next_presence().is_some() {}
+        while let Some(line) = watch.next_line() {
+            let _ = tx.send(Some(line));
+        }
         let _ = tx.send(None);
     });
 
-    server.tmux(&["new-window", "-t", "presence", "sh"]);
-    assert_eq!(
-        rx.recv_timeout(Duration::from_secs(5)).expect("nudge"),
-        Some(()),
-        "a new window posts a presence nudge"
+    server.tmux(&["send-keys", "-t", "presence:0", "exec sleep 30", "Enter"]);
+    recv_presence_line_until(
+        &rx,
+        Duration::from_secs(5),
+        "sleep command change",
+        |line| {
+            matches!(
+                line,
+                rimz::mux::tmux::ControlLine::Subscription {
+                    command: Some(command),
+                    ..
+                } if command == "sleep"
+            )
+        },
     );
 
+    server.tmux(&["new-window", "-d", "-t", "presence", "-n", "gone", "sh"]);
+    recv_presence_line_until(&rx, Duration::from_secs(5), "new window presence", |line| {
+        matches!(line, rimz::mux::tmux::ControlLine::Nudge)
+            || matches!(
+                line,
+                rimz::mux::tmux::ControlLine::Subscription {
+                    command: Some(command),
+                    ..
+                } if command == "sh"
+            )
+    });
+
+    server.tmux(&["kill-window", "-t", "presence:gone"]);
+    recv_presence_line_until(&rx, Duration::from_secs(5), "window close", |line| {
+        matches!(line, rimz::mux::tmux::ControlLine::WindowClosed { .. })
+    });
+
     server.tmux(&["kill-server"]);
-    assert_eq!(
-        rx.recv_timeout(Duration::from_secs(5)).expect("stream end"),
-        None,
-        "a dead server ends the stream instead of wedging it"
-    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+            Ok(Some(_)) => {}
+            Ok(None) => break,
+            Err(err) => panic!("a dead server did not end the stream: {err}"),
+        }
+    }
     drain.join().expect("drain thread");
 }

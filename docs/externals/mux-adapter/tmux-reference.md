@@ -224,7 +224,7 @@ The server copies its spawn environment into the **global environment**; each se
 
 ## Control mode
 
-`tmux -C` turns a client into a line-oriented protocol endpoint: commands go in on stdin, replies and asynchronous notifications come out on stdout. `-CC` additionally puts the tty in raw mode and brackets the stream with a `\eP1000p` DCS preamble and a closing `\e\\` (the iTerm2 integration shape); plain `-C` emits no terminal markers. [`PresenceWatch`](../../../crates/rimz/src/mux/tmux/presence.rs) holds `tmux -C attach-session -r -f no-output -t <session>` and reads notifications only.
+`tmux -C` turns a client into a line-oriented protocol endpoint: commands go in on stdin, replies and asynchronous notifications come out on stdout. `-CC` additionally puts the tty in raw mode and brackets the stream with a `\eP1000p` DCS preamble and a closing `\e\\` (the iTerm2 integration shape); plain `-C` emits no terminal markers. [`PresenceWatch`](../../../crates/rimz/src/mux/tmux/presence.rs) holds `tmux -C attach-session -r -f no-output -t <session>`, writes one read-only `refresh-client -B` subscription command, and reads notifications.
 
 ### Protocol shape
 
@@ -237,7 +237,7 @@ The server copies its spawn environment into the **global environment**; each se
 
 ### Notification catalog (3.5a wire shapes)
 
-✓ marks what `PresenceWatch` forwards as a presence nudge; everything else it reads and drops.
+✓ marks what `PresenceWatch` forwards as a typed presence line or fallback nudge; everything else it reads and drops.
 
 | Notification | Wire shape | Fired when | ✓ |
 | --- | --- | --- | :---: |
@@ -256,7 +256,7 @@ The server copies its spawn environment into the **global environment**; each se
 | `%output` | `%output %id <value>` | pane output; bytes < 0x20 and `\` escape as octal `\nnn`, bytes ≥ 0x80 pass raw — the escaping is byte-wise, so a line may split a UTF-8 sequence | suppressed |
 | `%extended-output` | `%extended-output %id <age-ms> … : <value>` | replaces `%output` under `pause-after`; ignore anything between the age and the lone `:` | suppressed |
 | `%pause` / `%continue` | `%id` | pause-mode flow control | |
-| `%subscription-changed` | `name $id @id <win-idx> %id … : value` — window subs put `-` in the pane slot, session subs in window/index/pane | a `refresh-client -B` format changed; coalesced to ≤ 1/s | |
+| `%subscription-changed` | `name $id @id <win-idx> %id … : value` — window subs put `-` in the pane slot, session subs in window/index/pane | a `refresh-client -B` format changed; coalesced to ≤ 1/s | ✓ |
 | `%pane-mode-changed` | `%id` | copy-mode enter/leave | filtered |
 | `%paste-buffer-changed` / `%paste-buffer-deleted` | `name` | (deleted: 3.4) | |
 | `%config-error` | `<error>` | config-file load errors (3.4) | |
@@ -270,6 +270,6 @@ The server copies its spawn environment into the **global environment**; each se
 - `no-output` suppresses pane output entirely — both `%output` and `%extended-output` — the topology-only diet.
 - Without `pause-after`, a reader that stops draining is force-exited once any buffered output ages past **five minutes** (`CONTROL_MAXIMUM_AGE 300000` ms), exit message `too far behind` — even a `no-output` client should keep reading promptly.
 - `pause-after=secs` switches output to `%extended-output` and, past the threshold, pauses the pane (`%pause`) instead of disconnecting the client. `refresh-client -A %id:state` drives it per pane: `continue` resumes (`%continue`), `pause` pauses now, `off` stops the pane's output for this client — when every client turns a pane off, tmux stops reading the pane's pty entirely (backpressure onto the application).
-- `refresh-client -B name:what:format` subscribes to a format: `what` is empty (the attached session), a `%id`, `%*` (all panes in the session), an `@id`, or `@*`; changes arrive as `%subscription-changed` at most once a second; `-B name` alone unsubscribes. The push alternative to polling `list-panes` — the upgrade path the presence watch has not needed.
+- `refresh-client -B name:what:format` subscribes to a format: `what` is empty (the attached session), a `%id`, `%*` (all panes in the session), an `@id`, or `@*`; changes arrive as `%subscription-changed` at most once a second; `-B name` alone unsubscribes. `PresenceWatch` subscribes over `%*` to receive pane id, window id, foreground command, active state, and pane title without polling `list-panes`.
 - `refresh-client -f flags` rewrites the flag set on a live client; `-r %id:<report>` lets a control client answer OSC 10/11-style pane queries (3.5); `-l` requests the outer terminal's clipboard into a paste buffer.
-- **`read-only` restricts key input only — stdin commands still execute.** The man's "only keys bound to detach-client or switch-client have any effect" governs key bindings; a `-r` control client can still mutate the server through commands. The presence watch's actual safety property is that it writes nothing to stdin.
+- **`read-only` restricts key input only — stdin commands still execute.** The man's "only keys bound to detach-client or switch-client have any effect" governs key bindings; a `-r` control client can still mutate the server through commands. The presence watch's safety property is narrower: it writes only `refresh-client -B`, a read-only subscription command, and never mutates the room.
