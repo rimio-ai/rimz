@@ -10,7 +10,7 @@ use crate::SidebarSnapshot;
 use crate::ids::PaneId;
 use crate::schema::diag::GateRule;
 use jiff::Timestamp;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use super::state::RenderState;
 use crate::sidebar::timing::{ACCEPT_REGRESSION_AFTER, ACCEPT_REGRESSION_AFTER_REJECTS};
@@ -44,8 +44,10 @@ enum CommitDecision {
 /// clock and the streak arrive as arguments so the escape hatch is
 /// deterministic in tests. A regression is held only while the *panel set is
 /// unchanged* and a pane that `prev` rendered as an agent (or remote-control)
-/// host now renders as a bare process — exactly the phantom-`process` flicker —
-/// or while a frameless fallback tries to replace a frame-backed render.
+/// host now renders as a bare process without a positive foreground-command
+/// change — exactly the phantom-`process` flicker — or while a frameless
+/// fallback tries to replace a frame-backed render. A foreground-command change
+/// is a genuine in-place exit and commits immediately.
 /// Persistence, not the rollup's `agents` list, distinguishes a transient drop
 /// (recovers next read) from a genuine exit (persists until the hatch opens),
 /// because the root-cause race is the agent momentarily *leaving* that list.
@@ -92,22 +94,35 @@ fn pane_id_set(snapshot: &SidebarSnapshot) -> HashSet<&PaneId> {
 }
 
 /// True when some pane that `prev` rendered as an agent is a bare process row in
-/// `incoming` — the Agent→Process demotion the gate protects against.
+/// `incoming` without a positive foreground-command change — the
+/// phantom-`process` flicker the gate protects against.
 fn demotes_agentish_to_process(prev: &SidebarSnapshot, incoming: &SidebarSnapshot) -> bool {
-    let agentish: HashSet<&PaneId> = prev
+    let agentish: HashMap<&PaneId, Option<&str>> = prev
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.is_agent())
-        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
+        .filter_map(|row| {
+            row.pane
+                .as_ref()
+                .map(|pane| (&pane.pane_id, pane.command.as_deref()))
+        })
         .collect();
     incoming
         .worktree_groups
         .iter()
         .flat_map(|group| &group.rows)
         .filter(|row| row.is_process())
-        .filter_map(|row| row.pane.as_ref().map(|pane| &pane.pane_id))
-        .any(|pane_id| agentish.contains(pane_id))
+        .filter_map(|row| row.pane.as_ref())
+        .any(|pane| {
+            agentish.get(&pane.pane_id).is_some_and(|prev_command| {
+                !foreground_command_changed(*prev_command, pane.command.as_deref())
+            })
+        })
+}
+
+fn foreground_command_changed(prev: Option<&str>, incoming: Option<&str>) -> bool {
+    matches!((prev, incoming), (Some(prev), Some(incoming)) if prev != incoming)
 }
 
 /// Whether a hold episode has run long enough — by count or wall-clock — to

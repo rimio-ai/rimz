@@ -16,6 +16,12 @@ fn process_on(ws: &WorkspaceId, raw: &str) -> SidebarSnapshot {
     snapshot_with_panes(ws, vec![pane(raw, "tab_0", false)])
 }
 
+fn process_on_cmd(ws: &WorkspaceId, raw: &str, command: Option<&str>) -> SidebarSnapshot {
+    let mut pane = pane(raw, "tab_0", false);
+    pane.command = command.map(str::to_owned);
+    snapshot_with_panes(ws, vec![pane])
+}
+
 #[test]
 fn gate_commit_covers_first_frame_and_regression_rules() {
     let ws = workspace();
@@ -99,6 +105,62 @@ fn gate_commit_covers_first_frame_and_regression_rules() {
             gate_now()
         ),
         CommitDecision::Accept
+    );
+}
+
+#[test]
+fn in_place_exit_commits_but_same_command_flicker_holds() {
+    let ws = workspace();
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &process_on_cmd(&ws, "terminal_9", Some("bash")),
+            &GateState::default(),
+            gate_now(),
+        ),
+        CommitDecision::Accept,
+        "foreground command changed, so the agent exited in place"
+    );
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &process_on(&ws, "terminal_9"),
+            &GateState::default(),
+            gate_now(),
+        ),
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess),
+        "same pane and command still models a phantom process flicker"
+    );
+}
+
+#[test]
+fn missing_foreground_command_keeps_demotion_protective() {
+    let ws = workspace();
+    let mut agent_without_command = agent_snapshot(&ws);
+    agent_without_command.worktree_groups[0].rows[0]
+        .pane
+        .as_mut()
+        .unwrap()
+        .command = None;
+    assert_eq!(
+        gate_commit(
+            &agent_snapshot(&ws),
+            &process_on_cmd(&ws, "terminal_9", None),
+            &GateState::default(),
+            gate_now(),
+        ),
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess),
+        "missing command evidence is not enough to classify a real exit"
+    );
+    assert_eq!(
+        gate_commit(
+            &agent_without_command,
+            &process_on_cmd(&ws, "terminal_9", Some("bash")),
+            &GateState::default(),
+            gate_now(),
+        ),
+        CommitDecision::KeepPrior(GateRule::AgentDemotedToProcess),
+        "missing prior command evidence is not enough to classify a real exit"
     );
 }
 

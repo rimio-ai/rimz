@@ -65,7 +65,7 @@ One pass over the log answers an episode's three questions in order — what the
 4. **Diff the captures.** Each capture file holds the last good frame beside the offending one — `jq '{prior: (.prior.tabs | length), offending: (.offending.tabs | length)}'` shows a whole-tab omission at a glance.
 5. **Encode the episode.** A confirmed anomaly becomes a synthetic regression test over recorded signatures — the workflow lives in [observe.md → From anomaly to regression test](./observe.md#from-anomaly-to-regression-test).
 
-A long run of `gate_hold` records for `agent_demoted_to_process` where every matching `gate_release` carries `via_escape_hatch: true` means the held demotions were real rather than transient flicker, so the gate delayed a correct render. `held_ms` can exceed `ACCEPT_REGRESSION_AFTER` because release re-evaluates only on a fresh frame; bounding that latency needs runtime tracing of the streak dynamics before changing the gate.
+A long run of `gate_hold` records for `agent_demoted_to_process` where every matching `gate_release` carries `via_escape_hatch: true` means the rollup repeatedly presented the same live agent pane as a bare process with unchanged or missing foreground-command evidence. Real in-place exits whose foreground command changed commit immediately. `held_ms` can exceed `ACCEPT_REGRESSION_AFTER` because release re-evaluates only on a fresh frame; bounding that latency needs runtime tracing of the streak dynamics before changing the gate.
 
 A recorded partial-read episode reads like this — a pane source reports fourteen panes as six, omitting two whole tabs while their processes live:
 
