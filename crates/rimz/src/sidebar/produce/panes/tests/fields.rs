@@ -133,6 +133,38 @@ fn backfill_wrapper_spawn_commands_recovers_tmux_agent_wrapper() {
 }
 
 #[test]
+fn backfilled_wrapper_spawn_command_drives_process_start_stamp() {
+    let wrapper = "/home/me/.cargo/bin/rimz agents exec claude --worktree-path /repo/wt --";
+    let start: jiff::Timestamp = "2026-06-05T13:54:33Z".parse().unwrap();
+    let mut frame = frame(vec![tmux_pane("rimz")]);
+    let unstamped = natively_unstamped(&frame);
+    first_mut(&mut frame).current.pid = Some(4242);
+
+    backfill_wrapper_spawn_commands(&mut frame, &|pid| {
+        assert_eq!(pid, 4242);
+        Some(wrapper.to_owned())
+    });
+    stamp_pane_process_starts(
+        &mut frame,
+        &unstamped,
+        &|kind, pid| {
+            assert_eq!(kind, "claude");
+            assert_eq!(pid, 4242);
+            Some(start)
+        },
+        &|_, _| -> Vec<jiff::Timestamp> {
+            panic!("root-pid derivation owns spawn-command-classified panes")
+        },
+    );
+
+    assert_eq!(
+        first(&frame).current.spawn_command.as_deref(),
+        Some(wrapper)
+    );
+    assert_eq!(first(&frame).current.started_at, Some(start));
+}
+
+#[test]
 fn backfill_wrapper_spawn_commands_ignores_real_foregrounds() {
     let mut frame = frame(vec![tmux_pane("rimz")]);
     first_mut(&mut frame).current.pid = Some(4242);
