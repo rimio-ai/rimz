@@ -5,10 +5,9 @@
 //! may run before the user attaches, such as native sidebar launch and wakeup
 //! fanout, carry the session name explicitly via `zellij --session <name>`.
 //!
-//! Caveats live in `docs/internals/sidebar/multiplexers.md` under
-//! "Zellij backend caveats" — namely that raw Zellij pane IDs are
-//! integers, scoped per-session, and that the spike does not yet expose
-//! tab-level operations beyond what's needed to identify a pane.
+//! The backend covers session lifecycle, pane I/O, focus, sidebar and tab
+//! layout, presence, and recovery. Backend caveats live in
+//! `docs/internals/sidebar/multiplexers.md` under "Zellij backend caveats".
 
 mod backend;
 mod layout;
@@ -32,8 +31,8 @@ use super::{CommandSpec, MuxBackend, Result};
 use crate::config::ZellijConfig;
 use crate::ids::PaneId;
 
-/// Minimum Zellij version that ships the pipe-broadcast semantics Rimz uses
-/// as a best-effort wakeup optimization.
+/// Minimum Zellij version Rimz supports overall and reports as the doctor
+/// floor.
 pub const MIN_ZELLIJ_VERSION: (u32, u32, u32) = (0, 41, 0);
 
 /// Minimum Zellij version that ships `advanced_mouse_actions`. Below this the

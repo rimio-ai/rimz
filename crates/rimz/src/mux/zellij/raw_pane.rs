@@ -1,7 +1,7 @@
 //! Raw Zellij pane projection, topology-cache reads, and sidebar classification.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     env,
 };
 
@@ -38,7 +38,7 @@ pub(super) fn is_sidebar_pane(pane: &RawPane) -> bool {
 /// First-seen tab order; pane order within a tab preserved.
 pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
-    let mut index: std::collections::HashMap<u64, usize> = std::collections::HashMap::new();
+    let mut index: HashMap<u64, usize> = HashMap::new();
     for pane in panes.iter().filter(|pane| pane.is_terminal()) {
         let slot = *index.entry(pane.tab_id).or_insert_with(|| {
             views.push(ViewSidebars {
@@ -63,7 +63,7 @@ pub(super) fn views_with_sidebars(panes: &[RawPane]) -> Vec<ViewSidebars> {
     views
 }
 
-pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> std::collections::HashSet<String> {
+pub(super) fn tabs_with_sidebars(panes: &[RawPane]) -> HashSet<String> {
     views_with_sidebars(panes)
         .into_iter()
         .filter(|view| !view.sidebar_panes.is_empty())
@@ -319,7 +319,7 @@ pub(super) fn sidebar_geometry_off_spec(
 pub(super) fn mounted_sidebar_pane(
     panes: &[RawPane],
     tab_id: u64,
-    before: &std::collections::HashSet<u64>,
+    before: &HashSet<u64>,
     hint: Option<u64>,
 ) -> Option<u64> {
     let ids: Vec<u64> = panes

@@ -1,4 +1,4 @@
-//! Live tmux backend tests for the M0c spike.
+//! Live tmux backend tests.
 //!
 //! Each test spawns its own tmux server on a tempdir socket so it never
 //! collides with the user's running sessions. The whole file becomes a
@@ -846,21 +846,23 @@ fn open_background_view_creates_named_window_idempotently() {
     let working_window = server.display("rimz-bgview", "#{window_id}");
 
     let opts = rimz::mux::BackgroundViewOptions {
-        name: "rimzd".to_owned(),
-        stats: rimz::mux::HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: std::env::temp_dir(),
+        view: rimz::mux::DaemonView {
+            name: "rimzd".to_owned(),
+            stats: rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
+            hosts: vec![
+                rimz::mux::HostPane {
+                    argv: vec!["sleep".to_owned(), "120".to_owned()],
+                    cwd: std::env::temp_dir(),
+                },
+                rimz::mux::HostPane {
+                    argv: vec!["sleep".to_owned(), "120".to_owned()],
+                    cwd: std::env::temp_dir(),
+                },
+            ],
         },
-        hosts: vec![
-            rimz::mux::HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: std::env::temp_dir(),
-            },
-            rimz::mux::HostPane {
-                argv: vec!["sleep".to_owned(), "120".to_owned()],
-                cwd: std::env::temp_dir(),
-            },
-        ],
         sidebar,
     };
 
@@ -984,12 +986,14 @@ fn open_background_view_creates_stats_only_window() {
         .expect("open_sidebar");
 
     let opts = rimz::mux::BackgroundViewOptions {
-        name: "rimzd".to_owned(),
-        stats: rimz::mux::HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: std::env::temp_dir(),
+        view: rimz::mux::DaemonView {
+            name: "rimzd".to_owned(),
+            stats: rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
+            hosts: Vec::new(),
         },
-        hosts: Vec::new(),
         sidebar,
     };
 

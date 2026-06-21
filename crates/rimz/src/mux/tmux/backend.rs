@@ -1,5 +1,7 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
+use std::collections::{BTreeMap, HashSet};
+
 use super::TmuxBackend;
 use super::options::{
     after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
@@ -10,7 +12,7 @@ use crate::mux::{
     BRACKET_PASTE_CLOSE, BRACKET_PASTE_OPEN, BackgroundViewLaunch, BackgroundViewOptions,
     ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
     PaneListOptions, PaneListing, Result, SessionOptions, SidebarLiveness, SidebarPaneOptions,
-    SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend,
+    SidebarRecovery, SplitPaneOptions, TabOptions, ensure_pane_backend, memoized_version,
 };
 
 impl MuxBackend for TmuxBackend {
@@ -168,7 +170,7 @@ impl MuxBackend for TmuxBackend {
         Ok(PaneListing {
             panes,
             observed_at_ms,
-            source_active: std::collections::BTreeMap::new(),
+            source_active: BTreeMap::new(),
             served_from_topology: false,
         })
     }
@@ -386,7 +388,7 @@ impl MuxBackend for TmuxBackend {
         let views = tmux_views_with_sidebars(&panes.panes);
         let plan = super::super::plan_reconcile(&views, live);
         let mut report = SidebarRecovery::default();
-        let mut failed_stale_close_views = std::collections::HashSet::new();
+        let mut failed_stale_close_views = HashSet::new();
         for pane in &plan.close {
             match self.kill_pane(pane) {
                 Ok(()) => {
@@ -443,8 +445,8 @@ impl MuxBackend for TmuxBackend {
         // Idempotent on the window name; a relaunch into a session already
         // carrying the view launches nothing, but still re-asserts its first
         // position. A failed query propagates rather than risk a duplicate window.
-        if self.session_has_window(session, &opts.name)? {
-            self.lead_window(session, &opts.name);
+        if self.session_has_window(session, &opts.view.name)? {
+            self.lead_window(session, &opts.view.name);
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
         // `-d` opens the window without pulling the user's focus to it; `-P -F`
@@ -465,14 +467,14 @@ impl MuxBackend for TmuxBackend {
                 "-t".to_owned(),
                 session.clone(),
                 "-n".to_owned(),
-                opts.name.clone(),
+                opts.view.name.clone(),
                 "-c".to_owned(),
-                opts.stats.cwd.to_string_lossy().into_owned(),
+                opts.view.stats.cwd.to_string_lossy().into_owned(),
             ])
-            .args(opts.stats.argv.clone())
+            .args(opts.view.stats.argv.clone())
             .run()?;
         let (window_id, stats_pane) = parse_new_window_ids(&output.stdout)?;
-        if let Some((first, rest)) = opts.hosts.split_first() {
+        if let Some((first, rest)) = opts.view.hosts.split_first() {
             let mut split = vec![
                 "split-window".to_owned(),
                 "-d".to_owned(),
@@ -531,14 +533,14 @@ impl MuxBackend for TmuxBackend {
             {
                 tracing::warn!(
                     session = %session,
-                    view = %opts.name,
+                    view = %opts.view.name,
                     tags.operation = "tmux.daemon_view.focus",
                     error = &err as &dyn std::error::Error,
                     "could not focus the first daemon pane",
                 );
             }
         }
-        self.lead_window(session, &opts.name);
+        self.lead_window(session, &opts.view.name);
         Ok(BackgroundViewLaunch::Launched)
     }
 
@@ -629,22 +631,6 @@ impl MuxBackend for TmuxBackend {
     }
 
     fn version(&self) -> Result<String> {
-        if let Some(cached) = self.version.get() {
-            return Ok(cached.clone());
-        }
-        let output =
-            self.cmd()
-                .arg("-V")
-                .to_command()
-                .output()
-                .map_err(|err| match err.kind() {
-                    std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                        program: "tmux".to_owned(),
-                    },
-                    _ => MuxErr::Io(err),
-                })?;
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        // First writer wins on a probe race; both raced probes read one binary.
-        Ok(self.version.get_or_init(|| raw).clone())
+        memoized_version(&self.version, &self.cmd().arg("-V"))
     }
 }

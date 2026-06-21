@@ -88,6 +88,7 @@ Loading is Rimz-owned, never the user's `config.kdl` (a layout cannot load plugi
 
 These are the upstream quirks the backend works around; the upstream surfaces themselves are in the [reference](../../externals/mux-adapter/zellij-reference.md).
 
+- **Minimum version is 0.41.0**, the floor `rimz doctor` reports as `meets_min_version`; newer capabilities are gated individually: Zellij ≥ 0.42 enables `stack-panes`, ≥ 0.43 enables `advanced_mouse_actions`, and ≥ 0.44 enables the presence plugin plus `mouse_click_through` and `mouse_hover_effects`. Older supported hosts degrade on each gated feature rather than aborting the room.
 - **Pane IDs are positional, not stable.** Zellij exposes no stable per-pane CLI handle; ids can be reused as panes close and reopen, which is why feed items carry `pane_process_start` so reconciliation can refuse a stale match.
 - **Session names are short and path-unique** (`rimz-<basename-slug>-<hash6>`), keeping the room human-scannable while staying under Zellij's macOS AF_UNIX socket budget and distinguishing same-basename roots. When the recorded and current derived names diverge, `rimz start` retires the stale session before rebirth.
 - **`new-pane` answers before the pane mounts, and action stdout can cross clients.** The printed pane id is allocated before the screen thread mounts the pane (a detached session drops the mount entirely), so reconcile treats it as a hint, discovers the mounted pane by listing the target tab, and cleans up only a pane a fresh listing proves is a newly-created `rimz-sidebar`.

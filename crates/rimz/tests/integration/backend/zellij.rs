@@ -1,4 +1,4 @@
-//! Live Zellij backend tests for the M0b spike.
+//! Live Zellij backend tests.
 //!
 //! Each test spawns a real `zellij` server under its own throwaway
 //! `XDG_RUNTIME_DIR` (Zellij locates its server socket there) and drives the
@@ -1449,9 +1449,8 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         .and_then(|value| value.as_u64())
         .expect("sidebar columns before");
     let before_work = work_pane_geometry(&xdg, &name);
-    let before_ids: std::collections::BTreeSet<u64> =
-        before_work.iter().map(|pane| pane.id).collect();
-    let before_right_xs: std::collections::BTreeSet<u64> = before_work
+    let before_ids: BTreeSet<u64> = before_work.iter().map(|pane| pane.id).collect();
+    let before_right_xs: BTreeSet<u64> = before_work
         .iter()
         .filter(|pane| pane.x >= before_sidebar_cols)
         .map(|pane| pane.x)
@@ -1503,9 +1502,8 @@ fn reconcile_reports_nested_multicolumn_sidebar_without_stacking_work_area() {
         .and_then(|value| value.as_u64())
         .expect("sidebar columns after");
     let after_work = work_pane_geometry(&xdg, &name);
-    let after_ids: std::collections::BTreeSet<u64> =
-        after_work.iter().map(|pane| pane.id).collect();
-    let after_right_xs: std::collections::BTreeSet<u64> = after_work
+    let after_ids: BTreeSet<u64> = after_work.iter().map(|pane| pane.id).collect();
+    let after_right_xs: BTreeSet<u64> = after_work
         .iter()
         .filter(|pane| pane.x >= after_sidebar_cols)
         .map(|pane| pane.x)
@@ -2243,15 +2241,15 @@ fn assert_sidebar_is_left_thirty_percent(xdg: &Path, session: &str) {
 
 /// The `rimz-sidebar` pane's column width per tab, from the live pane listing.
 /// Tabs without a sidebar are absent; an unanswerable listing is empty.
-fn sidebar_columns_by_tab(xdg: &Path, session: &str) -> std::collections::BTreeMap<u64, u64> {
+fn sidebar_columns_by_tab(xdg: &Path, session: &str) -> BTreeMap<u64, u64> {
     let Ok(output) = scoped_zellij(xdg)
         .args(["--session", session, "action", "list-panes", "-j", "-a"])
         .bounded_output()
     else {
-        return std::collections::BTreeMap::new();
+        return BTreeMap::new();
     };
     let Ok(panes) = serde_json::from_slice::<serde_json::Value>(&output.stdout) else {
-        return std::collections::BTreeMap::new();
+        return BTreeMap::new();
     };
     panes
         .as_array()

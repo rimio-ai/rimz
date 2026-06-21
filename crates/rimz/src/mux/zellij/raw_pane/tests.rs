@@ -1,4 +1,6 @@
 use super::*;
+use std::collections::HashSet;
+
 use crate::feed::PaneRef;
 use crate::ids::{MuxName, PaneId, ViewId, ViewKind};
 use crate::mux::SidebarWidth;
@@ -485,7 +487,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
     let width = SidebarWidth::default();
     let by_id = |id: u64| panes.iter().find(|pane| pane.id == id).unwrap();
-    let excluded = std::collections::HashSet::new();
+    let excluded = HashSet::new();
     assert!(
         sidebar_geometry_off_spec(by_id(2), &panes, &excluded, width),
         "right-docked 50% sidebar is off-spec",
@@ -537,7 +539,7 @@ fn sidebar_geometry_classifies_dock_shapes() {
         sidebar_dock_verdict(by_id(12), &panes, &excluded),
         Some(SidebarDock::Docked),
     );
-    let excluded_duplicate = std::collections::HashSet::from([16]);
+    let excluded_duplicate = HashSet::from([16]);
     assert_eq!(
         sidebar_dock_verdict(by_id(15), &panes, &excluded_duplicate),
         Some(SidebarDock::Docked),
@@ -620,19 +622,19 @@ fn mounted_sidebar_discovery_prefers_hint_then_new_sidebar() {
           {"id": 11, "is_plugin": false, "tab_id": 2, "title": "vim"}
         ]"#;
     let panes: Vec<RawPane> = serde_json::from_str(json).unwrap();
-    let before: std::collections::HashSet<u64> = [1].into();
+    let before: HashSet<u64> = [1].into();
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(7)), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, None), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 0, &before, Some(42)), Some(7));
     assert_eq!(mounted_sidebar_pane(&panes, 3, &before, None), None);
     assert_eq!(mounted_sidebar_pane(&panes, 1, &before, None), Some(9));
-    let before_hinted: std::collections::HashSet<u64> = [7].into();
+    let before_hinted: HashSet<u64> = [7].into();
     assert_eq!(
         mounted_sidebar_pane(&panes, 0, &before_hinted, Some(7)),
         None,
         "a cross-talked hint for an existing sidebar is not a fresh add result",
     );
-    let before_existing: std::collections::HashSet<u64> = [10, 11].into();
+    let before_existing: HashSet<u64> = [10, 11].into();
     assert_eq!(
         mounted_sidebar_pane(&panes, 2, &before_existing, None),
         None,

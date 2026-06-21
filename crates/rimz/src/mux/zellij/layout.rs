@@ -228,8 +228,8 @@ pub(super) fn render_background_view_layout(opts: &BackgroundViewOptions) -> Res
     )?;
     let body = render_daemon_columns(
         &sidebar,
-        &opts.stats,
-        &opts.hosts,
+        &opts.view.stats,
+        &opts.view.hosts,
         opts.sidebar.birth_size.percent,
         4,
     )?;
@@ -519,9 +519,11 @@ mod tests {
 
     fn background_view_opts(hosts: Vec<HostPane>) -> BackgroundViewOptions {
         BackgroundViewOptions {
-            name: "rimzd".to_owned(),
-            stats: stats_host(),
-            hosts,
+            view: DaemonView {
+                name: "rimzd".to_owned(),
+                stats: stats_host(),
+                hosts,
+            },
             sidebar: sidebar_opts("rimz-bg", None, None),
         }
     }
@@ -851,8 +853,9 @@ mod tests {
                 "/proj/worktree",
             ),
         ]);
-        let layout = render_session_layout(&bg.sidebar, Some(&daemon_view(bg.hosts.clone())), &[])
-            .expect("render session layout with daemon");
+        let layout =
+            render_session_layout(&bg.sidebar, Some(&daemon_view(bg.view.hosts.clone())), &[])
+                .expect("render session layout with daemon");
         let daemon_at = layout.find(r#"tab name="rimzd""#).expect("daemon tab");
         let work_at = layout.find("tab focus=true").expect("working tab");
         assert!(

@@ -1,5 +1,7 @@
 //! tmux window, pane, and tab-layout command helpers.
 
+use std::collections::HashSet;
+
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{MuxErr, PaneCmd, Result, SidebarPaneOptions, TabOptions, ensure_pane_backend};
 
@@ -296,9 +298,7 @@ impl TmuxBackend {
                 return;
             }
         };
-        let mut seeded = existing
-            .into_iter()
-            .collect::<std::collections::HashSet<_>>();
+        let mut seeded = existing.into_iter().collect::<HashSet<_>>();
         let mut focus_window: Option<String> = None;
         for tab in &opts.resume_tabs {
             if !seeded.insert(tab.label.clone()) {

@@ -745,11 +745,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         refresh_ms: args.refresh_ms,
     };
     let daemon_view = build_daemon_view(remote_control, &workspace, &mux_config, &room);
-    let daemon = daemon_view.as_ref().map(|view| DaemonView {
-        name: view.name.clone(),
-        stats: view.stats.clone(),
-        hosts: view.hosts.clone(),
-    });
+    let daemon = daemon_view.as_ref().map(|view| &view.view);
     // Plan which prior agents the reborn room can recover, from the durable
     // rollup. Empty on a healthy reattach (the agents are still alive), when
     // nothing is recoverable, or when the user opted out — then the birth is
@@ -761,7 +757,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
         &machine_config.resume,
         args.no_resume,
     )?;
-    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs);
+    launch_sidebar_for_workspace(backend.as_ref(), &room, daemon, &resume_plan.tabs);
     maybe_launch_remote_control(
         backend.as_ref(),
         &workspace,
@@ -772,7 +768,7 @@ fn start(args: StartArgs, globals: &GlobalFlags) -> Result<()> {
     // inspected stale/serialized room, and on one that cannot self-heal or
     // cannot be inspected, offer a reset (interactive) or fail fast with the fix
     // (non-interactive). Accepted recovery seeds the reborn room with resume tabs.
-    gate_room_before_attach(backend.as_ref(), &room, daemon.as_ref(), &resume_plan.tabs)?;
+    gate_room_before_attach(backend.as_ref(), &room, daemon, &resume_plan.tabs)?;
     report_resume(&resume_plan);
     ensure_presence_plugin(
         backend.as_ref(),

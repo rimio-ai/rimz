@@ -223,10 +223,7 @@ pub(crate) fn is_sidebar_serve(cmdline: &str, workspace_id: &str, session_name: 
 /// applies to its own pane ([`super::own_pane_id`]). `None` when the var is
 /// absent, so a caller never reaps a process it cannot place.
 pub(crate) fn attributed_pane(pid: u32, mux: MuxName) -> Option<PaneId> {
-    let key = match mux {
-        MuxName::Zellij => "ZELLIJ_PANE_ID",
-        MuxName::Tmux => "TMUX_PANE",
-    };
+    let key = super::pane_env_key(mux);
     Some(super::pane_from_env_value(
         mux,
         &crate::proc::env_var(pid, key)?,

@@ -1,5 +1,6 @@
 //! Zellij sidebar birth, in-place recovery, and geometry convergence.
 
+use std::collections::HashSet;
 use std::num::NonZeroU16;
 use std::time::{Duration, Instant};
 
@@ -173,7 +174,7 @@ impl ZellijBackend {
         let mut last_error = None;
         let mut fallback_misdocked: Option<u64> = None;
         for attempt in 0..ADD_DOCK_ATTEMPTS {
-            let before: std::collections::HashSet<u64> = self
+            let before: HashSet<u64> = self
                 .list_panes_with_session(Some(&opts.session_name))?
                 .iter()
                 .filter(|pane| pane.is_terminal() && pane.tab_id == tab_id)
@@ -237,7 +238,7 @@ impl ZellijBackend {
         &self,
         session: &str,
         tab_id: u64,
-        before: &std::collections::HashSet<u64>,
+        before: &HashSet<u64>,
         hint: Option<&str>,
     ) -> Option<u64> {
         let hint_raw = hint.and_then(parse_terminal_id);
@@ -356,7 +357,7 @@ impl ZellijBackend {
         else {
             return DockOutcome::Misdocked;
         };
-        let excluded = std::collections::HashSet::new();
+        let excluded = HashSet::new();
         match sidebar_dock_verdict(pane, &panes, &excluded) {
             Some(SidebarDock::SwapReachable | SidebarDock::NestedRow) => DockOutcome::Misdocked,
             Some(SidebarDock::Docked) | None => DockOutcome::Docked,
@@ -378,7 +379,7 @@ impl ZellijBackend {
         else {
             return false;
         };
-        let excluded = std::collections::HashSet::new();
+        let excluded = HashSet::new();
         match sidebar_dock_verdict(sidebar, &panes, &excluded) {
             Some(SidebarDock::SwapReachable) => true,
             Some(SidebarDock::NestedRow) => {
@@ -406,7 +407,7 @@ impl ZellijBackend {
         else {
             return false;
         };
-        let excluded = std::collections::HashSet::new();
+        let excluded = HashSet::new();
         let Some(work) = stackable_nested_work_pane_ids(sidebar, &panes, &excluded) else {
             return false;
         };

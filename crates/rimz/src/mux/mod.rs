@@ -29,6 +29,7 @@ pub use zellij::ZellijBackend;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -392,28 +393,6 @@ pub struct TabOptions {
     pub sidebar: SidebarPaneOptions,
 }
 
-/// Options for launching the daemon dashboard into a single dedicated, named
-/// *view* of a session — a tmux window or a Zellij tab — forced to the first
-/// position and out of the user's focus. The view is born `sidebar | stats |
-/// hosts…`: render on the left, live stats in the middle, and managed daemon
-/// hosts stacked on the right. Stats is always present; the daemon host column is
-/// conditional.
-#[derive(Clone, Debug)]
-pub struct BackgroundViewOptions {
-    /// View name. Doubles as the idempotency key: a live view by this name in
-    /// the session suppresses a relaunch.
-    pub name: String,
-    /// The always-present live stats pane in the middle column.
-    pub stats: HostPane,
-    /// Managed daemon hosts stacked in the right column. May be empty; the first
-    /// host takes focus within the view when present, otherwise stats takes it.
-    pub hosts: Vec<HostPane>,
-    /// The global sidebar docked on the view's left. Carries the session name
-    /// (which is also the view's session), the workspace identity, the width, and
-    /// the `rimz` bin the sidebar renderer runs.
-    pub sidebar: SidebarPaneOptions,
-}
-
 /// The daemon view (the `rimzd` tab/window) to birth *ahead* of the working
 /// view, in the same session-creation step. On Zellij this is the only way the
 /// view can lead — Zellij can't reorder tabs after birth, so the lead position
@@ -423,13 +402,30 @@ pub struct BackgroundViewOptions {
 /// the working view leads as before.
 #[derive(Clone, Debug)]
 pub struct DaemonView {
-    /// View name — the idempotency key, matching [`BackgroundViewOptions::name`].
+    /// View name. Doubles as the idempotency key: a live view by this name
+    /// suppresses a relaunch.
     pub name: String,
     /// The always-present live stats pane in the middle column.
     pub stats: HostPane,
-    /// Managed daemon hosts stacked in the right column; the first takes focus
-    /// within the view when present.
+    /// Managed daemon hosts stacked in the right column. May be empty; the first
+    /// host takes focus within the view when present, otherwise stats takes it.
     pub hosts: Vec<HostPane>,
+}
+
+/// Options for launching the daemon dashboard into a single dedicated, named
+/// *view* of a session — a tmux window or a Zellij tab — forced to the first
+/// position and out of the user's focus. The view is born `sidebar | stats |
+/// hosts…`: render on the left, live stats in the middle, and managed daemon
+/// hosts stacked on the right. Stats is always present; the daemon host column is
+/// conditional.
+#[derive(Clone, Debug)]
+pub struct BackgroundViewOptions {
+    /// View spec shared with `open_sidebar`'s birth-lead daemon view.
+    pub view: DaemonView,
+    /// The global sidebar docked on the view's left. Carries the session name
+    /// (which is also the view's session), the workspace identity, the width, and
+    /// the `rimz` bin the sidebar renderer runs.
+    pub sidebar: SidebarPaneOptions,
 }
 
 /// Outcome of [`MuxBackend::open_background_view`].
@@ -598,6 +594,23 @@ pub fn backend_for(mux: MuxName) -> Box<dyn MuxBackend> {
         MuxName::Zellij => Box::new(ZellijBackend::new()),
         MuxName::Tmux => Box::new(TmuxBackend::new()),
     }
+}
+
+/// Run `spec` once for its version string and memoize it in `cache`.
+/// Backend version probes are trivial and want raw stdout even on a nonzero
+/// status, so they use `output()` directly rather than the bounded mux runner.
+pub(super) fn memoized_version(cache: &OnceLock<String>, spec: &CommandSpec) -> Result<String> {
+    if let Some(cached) = cache.get() {
+        return Ok(cached.clone());
+    }
+    let output = spec.to_command().output().map_err(|err| match err.kind() {
+        io::ErrorKind::NotFound => MuxErr::NotInstalled {
+            program: spec.program.clone(),
+        },
+        _ => MuxErr::Io(err),
+    })?;
+    let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok(cache.get_or_init(|| raw).clone())
 }
 
 pub(crate) fn ensure_pane_backend(pane: &PaneId, expected: MuxName) -> Result<()> {

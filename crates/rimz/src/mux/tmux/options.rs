@@ -1,5 +1,7 @@
 //! tmux room options and sidebar-pane classification.
 
+use std::collections::HashMap;
+
 use crate::config::TmuxConfig;
 use crate::feed::PaneRef;
 use crate::mux::{SidebarPaneOptions, ViewSidebars};
@@ -56,7 +58,7 @@ pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
 /// First-seen window order.
 pub(super) fn tmux_views_with_sidebars(panes: &[PaneRef]) -> Vec<ViewSidebars> {
     let mut views: Vec<ViewSidebars> = Vec::new();
-    let mut index: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let mut index: HashMap<String, usize> = HashMap::new();
     for pane in panes {
         let Some(view) = pane.view_id.as_deref() else {
             continue;

@@ -52,9 +52,11 @@ fn build_daemon_view_options(
     // global sidebar the working view runs (same session, workspace, and `rimz`
     // bin). Stats keeps the view useful even with no daemon host.
     BackgroundViewOptions {
-        name: rimz::remote_control::VIEW_NAME.to_owned(),
-        stats,
-        hosts,
+        view: DaemonView {
+            name: rimz::remote_control::VIEW_NAME.to_owned(),
+            stats,
+            hosts,
+        },
         sidebar: SidebarPaneOptions {
             session_name: workspace.session_name.clone(),
             workspace_id: workspace.workspace_id.clone(),
@@ -266,7 +268,7 @@ mod tests {
             detected_size: Some((120, 40)),
             refresh_ms: None,
         };
-        let view = build_daemon_view_options(
+        let opts = build_daemon_view_options(
             &RemoteControlConfig::default(),
             &workspace,
             &mux_config,
@@ -275,17 +277,17 @@ mod tests {
             false,
             false,
         );
-        assert_eq!(view.name, rimz::remote_control::VIEW_NAME);
-        assert!(view.hosts.is_empty());
+        assert_eq!(opts.view.name, rimz::remote_control::VIEW_NAME);
+        assert!(opts.view.hosts.is_empty());
         assert_eq!(
-            view.stats.argv,
+            opts.view.stats.argv,
             vec![
                 "/usr/bin/rimz".to_owned(),
                 "stats".to_owned(),
                 "--refresh".to_owned(),
             ]
         );
-        assert_eq!(view.stats.cwd, PathBuf::from("/proj/wt"));
-        assert_eq!(view.sidebar.birth_size, width.birth_size(Some(120)));
+        assert_eq!(opts.view.stats.cwd, PathBuf::from("/proj/wt"));
+        assert_eq!(opts.sidebar.birth_size, width.birth_size(Some(120)));
     }
 }

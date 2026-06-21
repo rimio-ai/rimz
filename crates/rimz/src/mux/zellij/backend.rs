@@ -1,6 +1,6 @@
 //! Zellij [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -22,7 +22,7 @@ use crate::mux::{
     ClientFocusOptions, CommandSpec, DaemonView, MuxBackend, MuxErr, NamedKey, PaneCapture,
     PaneListOptions, PaneListing, Result, SessionHealth, SessionOptions, SidebarLiveness,
     SidebarPaneOptions, SidebarRecovery, SidebarWidth, SplitPaneOptions, TabOptions,
-    ensure_pane_backend,
+    ensure_pane_backend, memoized_version,
 };
 
 /// Prefix `command` with an `env KEY=VALUE …` shim so a freshly split Zellij
@@ -465,7 +465,7 @@ impl MuxBackend for ZellijBackend {
         // ([`Self::open_sidebar`] with a `daemon`): `rimz start` births the session
         // with this tab already leading, so the common case is a no-op here. A
         // failed query propagates rather than risk a duplicate launch.
-        if self.session_has_named_tab(session, &opts.name)? {
+        if self.session_has_named_tab(session, &opts.view.name)? {
             return Ok(BackgroundViewLaunch::AlreadyRunning);
         }
         // Late add: the session was born without the daemon tab (e.g. a host
@@ -483,7 +483,7 @@ impl MuxBackend for ZellijBackend {
                 "--layout".to_owned(),
                 layout.path().to_string_lossy().into_owned(),
                 "--name".to_owned(),
-                opts.name.clone(),
+                opts.view.name.clone(),
             ])
             .run()?;
         drop(layout);
@@ -571,19 +571,7 @@ impl MuxBackend for ZellijBackend {
     }
 
     fn version(&self) -> Result<String> {
-        if let Some(cached) = self.version.get() {
-            return Ok(cached.clone());
-        }
-        let spec = self.cmd().arg("--version");
-        let output = spec.to_command().output().map_err(|err| match err.kind() {
-            std::io::ErrorKind::NotFound => MuxErr::NotInstalled {
-                program: spec.program.clone(),
-            },
-            _ => MuxErr::Io(err),
-        })?;
-        let raw = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-        // First writer wins on a probe race; both raced probes read one binary.
-        Ok(self.version.get_or_init(|| raw).clone())
+        memoized_version(&self.version, &self.cmd().arg("--version"))
     }
 }
 
@@ -592,8 +580,7 @@ fn off_spec_sidebars(
     closing: &[PaneId],
     width: SidebarWidth,
 ) -> Vec<(u64, u64)> {
-    let closing: std::collections::HashSet<u64> =
-        closing.iter().filter_map(parse_zellij_raw).collect();
+    let closing: HashSet<u64> = closing.iter().filter_map(parse_zellij_raw).collect();
     panes
         .iter()
         .filter(|pane| pane.is_live_terminal() && is_sidebar_pane(pane))
@@ -609,8 +596,8 @@ fn parse_zellij_raw(pane: &PaneId) -> Option<u64> {
         .flatten()
 }
 
-fn focused_work_panes(panes: &[RawPane]) -> std::collections::HashMap<u64, u64> {
-    let mut focused = std::collections::HashMap::new();
+fn focused_work_panes(panes: &[RawPane]) -> HashMap<u64, u64> {
+    let mut focused = HashMap::new();
     for pane in panes
         .iter()
         .filter(|pane| pane.is_focused && !pane.is_plugin)
@@ -625,7 +612,7 @@ fn repair_sidebar_geometry(
     opts: &SidebarPaneOptions,
     tab_id: u64,
     raw_id: u64,
-    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    focused_in_tab: &HashMap<u64, u64>,
     report: &mut SidebarRecovery,
 ) {
     let repaired = backend.converge_sidebar_geometry(opts, tab_id, raw_id);
@@ -661,7 +648,7 @@ fn repairable_nested_sidebar_remains(
     else {
         return false;
     };
-    let excluded = std::collections::HashSet::new();
+    let excluded = HashSet::new();
     sidebar_dock_verdict(sidebar, &panes, &excluded) == Some(SidebarDock::NestedRow)
         && repairable_nested_work_pane_ids(sidebar, &panes, &excluded).is_some()
 }
@@ -671,7 +658,7 @@ fn rebuild_misdocked_sidebar(
     opts: &SidebarPaneOptions,
     tab_id: u64,
     raw_id: u64,
-    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    focused_in_tab: &HashMap<u64, u64>,
     report: &mut SidebarRecovery,
 ) {
     let pane = PaneId::from_parts(MuxName::Zellij, format!("terminal_{raw_id}"));
@@ -713,11 +700,11 @@ fn close_planned_sidebars(
     backend: &ZellijBackend,
     session_name: &str,
     close: &[PaneId],
-    stale_panes: &std::collections::HashSet<PaneId>,
-    stale_close_views: &std::collections::HashMap<PaneId, String>,
+    stale_panes: &HashSet<PaneId>,
+    stale_close_views: &HashMap<PaneId, String>,
     report: &mut SidebarRecovery,
-) -> std::collections::HashSet<String> {
-    let mut failed_stale_close_views = std::collections::HashSet::new();
+) -> HashSet<String> {
+    let mut failed_stale_close_views = HashSet::new();
     for pane in close {
         match backend.close_pane(session_name, pane) {
             Ok(()) => {
@@ -748,9 +735,9 @@ fn add_missing_sidebars(
     backend: &ZellijBackend,
     opts: &SidebarPaneOptions,
     add: &[String],
-    restart_add: &std::collections::HashSet<String>,
-    failed_stale_close_views: &std::collections::HashSet<String>,
-    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    restart_add: &HashSet<String>,
+    failed_stale_close_views: &HashSet<String>,
+    focused_in_tab: &HashMap<u64, u64>,
     report: &mut SidebarRecovery,
 ) {
     let mut tabs_with_sidebar = existing_sidebar_tabs(backend, &opts.session_name, add);
@@ -788,9 +775,9 @@ fn existing_sidebar_tabs(
     backend: &ZellijBackend,
     session_name: &str,
     add: &[String],
-) -> Option<std::collections::HashSet<String>> {
+) -> Option<HashSet<String>> {
     if add.is_empty() {
-        return Some(std::collections::HashSet::new());
+        return Some(HashSet::new());
     }
     match backend.list_panes_with_session(Some(session_name)) {
         Ok(panes) => Some(tabs_with_sidebars(&panes)),
@@ -811,8 +798,8 @@ fn add_sidebar_to_tab(
     opts: &SidebarPaneOptions,
     tab_id: u64,
     restart: bool,
-    focused_in_tab: &std::collections::HashMap<u64, u64>,
-    occupied_tabs: &mut std::collections::HashSet<String>,
+    focused_in_tab: &HashMap<u64, u64>,
+    occupied_tabs: &mut HashSet<String>,
     report: &mut SidebarRecovery,
 ) {
     match backend.add_sidebar_to_tab(opts, tab_id) {
@@ -845,7 +832,7 @@ fn restore_tab_focus(
     backend: &ZellijBackend,
     session_name: &str,
     tab_id: u64,
-    focused_in_tab: &std::collections::HashMap<u64, u64>,
+    focused_in_tab: &HashMap<u64, u64>,
 ) {
     const ATTEMPTS: u32 = 5;
     const CYCLE_STEPS: u32 = 8;

@@ -6,15 +6,17 @@ use rimz::mux::{DaemonView, HostPane};
 /// so the launched tab is a faithful `sidebar | stats | host`.
 fn background_view_opts(session: &str, stub: &Path) -> rimz::mux::BackgroundViewOptions {
     rimz::mux::BackgroundViewOptions {
-        name: "rimzd".to_owned(),
-        stats: rimz::mux::HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: std::env::temp_dir(),
+        view: DaemonView {
+            name: "rimzd".to_owned(),
+            stats: rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            },
+            hosts: vec![rimz::mux::HostPane {
+                argv: vec!["sleep".to_owned(), "120".to_owned()],
+                cwd: std::env::temp_dir(),
+            }],
         },
-        hosts: vec![rimz::mux::HostPane {
-            argv: vec!["sleep".to_owned(), "120".to_owned()],
-            cwd: std::env::temp_dir(),
-        }],
         sidebar: SidebarPaneOptions {
             session_name: session.to_owned(),
             workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-bgview")),
