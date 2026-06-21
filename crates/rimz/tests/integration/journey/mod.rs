@@ -14,8 +14,10 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 mod deep;
+mod lifecycle_replay;
 mod resize_redraw;
 mod sidebar_phases;
+mod teams;
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -52,15 +54,16 @@ pub const SETTLE: Duration = Duration::from_secs(15);
 /// gets its own short `XDG_RUNTIME_DIR`: the per-instance wakeup socket
 /// (`sock/sidebar.<35-char-id>.sock`) must stay under the 108-byte AF_UNIX
 /// limit, which `Env`'s deep tempdir would overflow. The renderer only needs
-/// that socket for nudges; the 1 s tick covers the rest, so a separate runtime
-/// dir is harmless.
+/// that socket for nudges; the 1 s tick covers the rest. Tests that need
+/// runtime sidecars feed them through the harness so they land in this short
+/// runtime.
 pub struct RoomHarness<'a> {
     env: &'a Env,
     parser: Arc<Mutex<vt100::Parser>>,
     pane_file: PathBuf,
     pane_roster: Arc<Mutex<PaneRoster>>,
     mux: MuxName,
-    _runtime: TempDir,
+    runtime: TempDir,
     _master: Box<dyn MasterPty + Send>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     reader: Option<std::thread::JoinHandle<()>>,
@@ -164,7 +167,7 @@ impl<'a> RoomHarness<'a> {
             pane_file,
             pane_roster,
             mux,
-            _runtime: runtime,
+            runtime,
             _master: pair.master,
             child,
             reader: Some(reader),
@@ -208,18 +211,51 @@ impl<'a> RoomHarness<'a> {
     /// faithfully reproducing "I ran an agent and nothing showed up". Hand-firing
     /// `rimz hooks feed` regardless would mask exactly that bug.
     pub fn agent_hook(&self, source: &str, payload: &Value) {
+        self.agent_hook_with_identity(source, payload, journey_launch_identity(source), None);
+    }
+
+    /// Run an installed hook with `XDG_RUNTIME_DIR` pointed at the renderer's
+    /// short runtime, for events whose visible effect lives in runtime
+    /// sidecars rather than the durable ledger.
+    pub fn agent_hook_in_room_runtime(&self, source: &str, payload: &Value) {
+        self.agent_hook_with_identity(
+            source,
+            payload,
+            journey_launch_identity(source),
+            Some(self.runtime.path()),
+        );
+    }
+
+    /// Run an installed hook while projecting a specific team role/profile
+    /// instead of the source's default journey identity.
+    pub fn agent_hook_as(&self, role: &str, source: &str, payload: &Value) {
+        self.agent_hook_with_identity(
+            source,
+            payload,
+            launch_identity(role, &format!("{source}-{role}")),
+            None,
+        );
+    }
+
+    fn agent_hook_with_identity(
+        &self,
+        source: &str,
+        payload: &Value,
+        identity: Vec<(String, String)>,
+        runtime: Option<&std::path::Path>,
+    ) {
         let event = payload
             .get("hook_event_name")
             .and_then(Value::as_str)
             .expect("payload carries hook_event_name");
         let session_id = payload_session_id(payload, source);
-        if event == "SessionStart" {
+        if starts_agent_process(event) {
             let cwd = payload
                 .get("worktree_path")
                 .and_then(Value::as_str)
                 .unwrap_or_else(|| self.env.project_root.to_str().unwrap_or("."));
             self.start_agent_process(&session_id, source, cwd);
-        } else if event == "SessionEnd" {
+        } else if stops_agent_process(event) {
             self.stop_agent_process(&session_id);
         }
         if !self.env.agent_hooks_installed(source) {
@@ -227,7 +263,7 @@ impl<'a> RoomHarness<'a> {
         }
         // The hook reads the mux's per-pane env var to stamp the pane it ran
         // inside; feed it the roster's pane id so the bind matches the fixture.
-        let hook_env = self.hook_env(source, &session_id);
+        let hook_env = self.hook_env(&session_id, identity, runtime);
         let hook_env: Vec<(&str, &str)> = hook_env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -250,7 +286,7 @@ impl<'a> RoomHarness<'a> {
             "spawn_agent needs an onboarded room — call onboard(&[{source:?}]) first"
         );
         let session_id = payload_session_id(payload, source);
-        let hook_env = self.hook_env(source, &session_id);
+        let hook_env = self.hook_env(&session_id, journey_launch_identity(source), None);
         let hook_env: Vec<(&str, &str)> = hook_env
             .iter()
             .map(|(key, value)| (key.as_str(), value.as_str()))
@@ -259,9 +295,26 @@ impl<'a> RoomHarness<'a> {
             .spawn_installed_hook_in_pane(source, &payload.to_string(), &hook_env)
     }
 
-    fn hook_env(&self, source: &str, session_id: &str) -> Vec<(String, String)> {
+    pub fn run_statusline_feed(&self, source: &str, payload: &str) -> std::process::Output {
+        let mut cmd = self.env.statusline_feed_command(source);
+        cmd.env("XDG_RUNTIME_DIR", self.runtime.path());
+        self.env
+            .spawn_payload(cmd, payload)
+            .wait_with_output()
+            .expect("wait statusline feed")
+    }
+
+    fn hook_env(
+        &self,
+        session_id: &str,
+        identity: Vec<(String, String)>,
+        runtime: Option<&std::path::Path>,
+    ) -> Vec<(String, String)> {
         let mut env = self.pane_env(session_id);
-        env.extend(journey_launch_identity(source));
+        if let Some(runtime) = runtime {
+            env.push(("XDG_RUNTIME_DIR".to_owned(), runtime.display().to_string()));
+        }
+        env.extend(identity);
         env
     }
 
@@ -428,10 +481,22 @@ fn journey_launch_identity(source: &str) -> Vec<(String, String)> {
         "codex" => ("coder", "codex-coder"),
         other => (other, other),
     };
+    launch_identity(role, profile)
+}
+
+fn launch_identity(role: &str, profile: &str) -> Vec<(String, String)> {
     vec![
         (rimz::run::ENV_AGENT_ROLE.to_owned(), role.to_owned()),
         (rimz::run::ENV_AGENT_PROFILE.to_owned(), profile.to_owned()),
     ]
+}
+
+fn starts_agent_process(event: &str) -> bool {
+    matches!(event, "SessionStart" | "session_start")
+}
+
+fn stops_agent_process(event: &str) -> bool {
+    matches!(event, "SessionEnd" | "session_shutdown")
 }
 
 /// `SessionStart` lifecycle payload. Groups key on `worktree_path` (the
@@ -485,6 +550,169 @@ pub fn post_tool_use(session_id: &str, tool_name: &str) -> Value {
         "session_id": session_id,
         "tool_name": tool_name,
     })
+}
+
+pub fn pre_compact(session_id: &str) -> Value {
+    json!({
+        "hook_event_name": "PreCompact",
+        "session_id": session_id,
+    })
+}
+
+pub fn post_compact(session_id: &str) -> Value {
+    json!({
+        "hook_event_name": "PostCompact",
+        "session_id": session_id,
+    })
+}
+
+pub fn stop_turn(session_id: &str) -> Value {
+    json!({
+        "hook_event_name": "Stop",
+        "session_id": session_id,
+    })
+}
+
+pub fn session_start_compact(session_id: &str, model: &str, effort: &str, branch: &str) -> Value {
+    let mut payload = session_start(session_id, model, effort, branch);
+    payload["source"] = json!("compact");
+    payload
+}
+
+pub fn stop_failure(session_id: &str) -> Value {
+    json!({
+        "hook_event_name": "StopFailure",
+        "session_id": session_id,
+        "error": "api_error",
+    })
+}
+
+pub fn session_end(session_id: &str) -> Value {
+    json!({
+        "hook_event_name": "SessionEnd",
+        "session_id": session_id,
+        "reason": "exit",
+    })
+}
+
+pub fn subagent_start(session_id: &str, child_id: &str) -> Value {
+    json!({
+        "hook_event_name": "SubagentStart",
+        "session_id": session_id,
+        "agent_id": child_id,
+        "agent_type": "review",
+        "subagent_type": "review",
+        "description": "review changes",
+    })
+}
+
+pub fn subagent_stop(session_id: &str, child_id: &str, errored: bool) -> Value {
+    json!({
+        "hook_event_name": "SubagentStop",
+        "session_id": session_id,
+        "agent_id": child_id,
+        "agent_type": "review",
+        "subagent_type": "review",
+        "exit_code": if errored { 1 } else { 0 },
+    })
+}
+
+pub fn pi_session_start(
+    session_id: &str,
+    model: &str,
+    effort: &str,
+    branch: &str,
+    context_pct: u8,
+) -> Value {
+    json!({
+        "hook_event_name": "session_start",
+        "session_id": session_id,
+        "model": model,
+        "effort": effort,
+        "worktree_path": format!("/work/query-engine-{branch}"),
+        "worktree_branch": branch,
+        "context_pct": context_pct,
+        "context_window": 272000,
+    })
+}
+
+pub fn pi_before_agent_start(session_id: &str, prompt: &str) -> Value {
+    pi_envelope(
+        "before_agent_start",
+        session_id,
+        json!({
+            "prompt": prompt,
+        }),
+    )
+}
+
+pub fn pi_tool_execution_end(session_id: &str, tool: &str, edits: bool) -> Value {
+    pi_envelope(
+        "tool_execution_end",
+        session_id,
+        json!({
+            "tool_name": tool,
+            "edits": edits,
+        }),
+    )
+}
+
+pub fn pi_session_before_compact(session_id: &str) -> Value {
+    pi_envelope("session_before_compact", session_id, json!({}))
+}
+
+pub fn pi_session_compact(session_id: &str) -> Value {
+    pi_envelope("session_compact", session_id, json!({}))
+}
+
+pub fn pi_agent_end(session_id: &str, errored: bool) -> Value {
+    pi_envelope(
+        "agent_end",
+        session_id,
+        json!({
+            "stop_reason": if errored { "error" } else { "stop" },
+        }),
+    )
+}
+
+pub fn pi_session_shutdown(session_id: &str) -> Value {
+    pi_envelope("session_shutdown", session_id, json!({}))
+}
+
+fn pi_envelope(event: &str, session_id: &str, extra: Value) -> Value {
+    let mut payload = json!({
+        "hook_event_name": event,
+        "session_id": session_id,
+        "context_pct": 42,
+        "context_window": 272000,
+    });
+    if let (Some(base), Some(extra)) = (payload.as_object_mut(), extra.as_object()) {
+        for (key, value) in extra {
+            base.insert(key.clone(), value.clone());
+        }
+    }
+    payload
+}
+
+pub fn running_row(screen: &str, name: &str) -> bool {
+    ['⣾', '⣽', '⣻', '⢿', '⡿', '⣟', '⣯', '⣷']
+        .iter()
+        .any(|frame| screen.contains(&format!("{frame} {name}")))
+}
+
+pub fn thinking_row(screen: &str, name: &str) -> bool {
+    [
+        '⠁', '⠂', '⠄', '⡀', '⡈', '⡐', '⡠', '⣀', '⣁', '⣂', '⣄', '⣌', '⣔', '⣤', '⣥', '⣦', '⣮', '⣶',
+        '⣷', '⣿', '⡿', '⠿', '⢟', '⠟', '⡛', '⠛', '⠫', '⢋', '⠋', '⠍', '⡉', '⠉', '⠑', '⠡', '⢁',
+    ]
+    .iter()
+    .any(|frame| screen.contains(&format!("{frame} {name}")))
+}
+
+pub fn compacting_row(screen: &str, name: &str) -> bool {
+    ['▁', '▃', '▄', '▅', '▆', '▇', '▆', '▅', '▄', '▃']
+        .iter()
+        .any(|frame| screen.contains(&format!("{frame} {name}")))
 }
 
 /// Permission request payload. `secret` is embedded in the
