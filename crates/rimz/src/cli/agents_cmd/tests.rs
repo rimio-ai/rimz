@@ -273,6 +273,8 @@ fn effort_and_system_prompt_file_parse_and_require_spec() {
         "hi",
         "--model",
         "opus",
+        "--description",
+        "port auth",
         "--effort",
         "high",
         "--system-prompt-file",
@@ -285,6 +287,7 @@ fn effort_and_system_prompt_file_parse_and_require_spec() {
     ])
     .expect("parse shared launch params");
     assert_eq!(parsed.args.model.as_deref(), Some("opus"));
+    assert_eq!(parsed.args.description.as_deref(), Some("port auth"));
     assert_eq!(parsed.args.effort.as_deref(), Some("high"));
     assert_eq!(
         parsed.args.system_prompt_file.as_deref(),
@@ -307,6 +310,11 @@ fn effort_and_system_prompt_file_parse_and_require_spec() {
 
     let parsed = AgentsHarness::try_parse_from(["rimz", "--model", "opus"]).expect("parse model");
     let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject model");
+    assert!(err.to_string().contains("require an agent spec"), "{err:#}");
+
+    let parsed = AgentsHarness::try_parse_from(["rimz", "--description", "port auth"])
+        .expect("parse description without spec");
+    let err = reject_launch_flags_without_spec(&parsed.args).expect_err("reject description");
     assert!(err.to_string().contains("require an agent spec"), "{err:#}");
 
     let parsed =

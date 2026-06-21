@@ -220,6 +220,7 @@ pub struct AgentLaunchAppend {
     pub cwd: PathBuf,
     pub worktree_name: Option<String>,
     pub prompt: Option<String>,
+    pub description: Option<String>,
     pub state: AgentLaunchState,
     pub pane_id: Option<PaneId>,
 }

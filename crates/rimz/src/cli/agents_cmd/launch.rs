@@ -90,6 +90,7 @@ pub(super) fn launch_layout(
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
             prompt: args.prompt.clone(),
+            description: args.description.clone(),
             state: rimz::schema::event::AgentLaunchState::Starting,
             pane_id: None,
         },
@@ -422,6 +423,7 @@ pub(super) fn reject_launch_flags_without_spec(args: &AgentsArgs) -> Result<()> 
         || args.print
         || args.effort.is_some()
         || args.model.is_some()
+        || args.description.is_some()
         || args.system_prompt_file.is_some()
         || args.append_system_prompt_file.is_some()
         || args.max_turns.is_some()
@@ -785,6 +787,7 @@ pub(super) fn append_launch_event(
                 .prompt
                 .filter(|prompt| !prompt.trim().is_empty())
                 .map(ToOwned::to_owned),
+            description: None,
         },
     );
     ledger.append_event(&event)?;

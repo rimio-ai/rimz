@@ -43,6 +43,64 @@ fn line_two_falls_back_to_the_latest_prompt_when_unnamed() {
 }
 
 #[test]
+fn line_two_uses_launch_description_before_task_and_prompt() {
+    let mut claude = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    claude.description = Some("port auth".to_owned());
+    claude.prompt = Some("wire the bridge".to_owned());
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![claude]), 44, 12);
+
+    assert!(rendered.contains("port auth"));
+    assert!(!rendered.contains("db migrate"));
+    assert!(!rendered.contains("wire the bridge"));
+}
+
+#[test]
+fn line_two_rich_context_replaces_launch_description() {
+    let mut preview = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    preview.description = Some("port auth".to_owned());
+    let mut preview_context = claude_context(fixed_now());
+    preview_context.session_preview = Some("thread preview".to_owned());
+    preview_context.session_name = Some("thread name".to_owned());
+    preview.context = Some(preview_context);
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![preview]), 44, 12);
+
+    assert!(rendered.contains("thread preview"));
+    assert!(!rendered.contains("port auth"));
+
+    let mut named = agent(
+        "claude-1",
+        "claude",
+        AgentStatus::Running,
+        Some("/repo/main"),
+        Some("main"),
+        Some("db migrate"),
+    );
+    named.description = Some("port auth".to_owned());
+    let mut named_context = claude_context(fixed_now());
+    named_context.session_preview = None;
+    named_context.session_name = Some("thread name".to_owned());
+    named.context = Some(named_context);
+    let rendered = snapshot_to_screen(&snapshot_with(Vec::new(), vec![named]), 44, 12);
+
+    assert!(rendered.contains("thread name"));
+    assert!(!rendered.contains("port auth"));
+}
+
+#[test]
 fn line_two_rejects_skill_blocks_at_renderer_backstop() {
     let codex = agent(
         "codex-1",

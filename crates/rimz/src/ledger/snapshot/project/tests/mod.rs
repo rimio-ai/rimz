@@ -47,6 +47,16 @@ fn raw_launch(
     agent_name: &str,
     pane_id: Option<&str>,
 ) -> EventEnvelope {
+    raw_launch_with_description(state, agent_id, agent_name, pane_id, None)
+}
+
+fn raw_launch_with_description(
+    state: AgentLaunchState,
+    agent_id: &str,
+    agent_name: &str,
+    pane_id: Option<&str>,
+    description: Option<&str>,
+) -> EventEnvelope {
     EventEnvelope::agent_launched(
         workspace(),
         "session",
@@ -64,6 +74,7 @@ fn raw_launch(
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: Some("boot".to_owned()),
+            description: description.map(ToOwned::to_owned),
         },
     )
 }
@@ -204,6 +215,35 @@ fn bound_launch_creates_a_running_card_and_keeps_the_starting_ordinal() {
 }
 
 #[test]
+fn launch_description_reduces_and_survives_provisional_adoption() {
+    let launch = raw_launch_with_description(
+        AgentLaunchState::Bound,
+        "launch_a",
+        "lucid-atlas",
+        Some("zellij:terminal_1"),
+        Some("port auth"),
+    );
+    let launched = reduce_agent_states(std::slice::from_ref(&launch));
+    assert_eq!(launched.len(), 1);
+    assert_eq!(launched[0].description.as_deref(), Some("port auth"));
+
+    let lifecycle = raw_lifecycle_at(
+        "claude",
+        2,
+        json!({
+            "agent_id": "real-session",
+            "agent_name": "lucid-atlas",
+            "signal": { "signal": "registered" },
+        }),
+    );
+    let adopted = reduce_agent_states(&[launch, lifecycle]);
+
+    assert_eq!(adopted.len(), 1);
+    assert_eq!(adopted[0].agent_id.as_str(), "real-session");
+    assert_eq!(adopted[0].description.as_deref(), Some("port auth"));
+}
+
+#[test]
 fn launch_event_without_prompt_creates_idle_card() {
     // Interactive launch (no prompt) must be Idle so the sidebar renders
     // loading dots rather than the thinking glyph + em dash.
@@ -224,6 +264,7 @@ fn launch_event_without_prompt_creates_idle_card() {
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: None,
+            description: None,
         },
     )]);
 
@@ -251,6 +292,7 @@ fn launch_role_and_profile_survive_roleless_lifecycle() {
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: None,
+            description: None,
         },
     );
     let lifecycle = raw_lifecycle(
@@ -289,6 +331,7 @@ fn launch_role_and_profile_survive_nameless_pane_lifecycle() {
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: None,
+            description: None,
         },
     );
     let lifecycle = raw_lifecycle(

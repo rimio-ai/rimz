@@ -564,6 +564,7 @@ mod tests {
             worktree_branch: Some(branch.to_owned()),
             task: None,
             prompt: None,
+            description: None,
             transcript_path: None,
             recent_prompts: Vec::new(),
             model: None,

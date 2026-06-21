@@ -65,8 +65,8 @@ rimz agents show <REF> [--json]
 rimz agents focus <REF>
 rimz agents wait <REF> [--timeout <DURATION>] [--stream [--from-start]] [--json]
 rimz agents stop <REF>
-rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--from-pr <PR>] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
-rimz agents <SPEC> [PROMPT] -p|--print [-w|--worktree[=<NAME>]] [--from-pr <PR>] [--model <MODEL>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [--max-turns <N>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
+rimz agents <SPEC> [PROMPT] [-w|--worktree[=<NAME>]] [--from-pr <PR>] [-n|--name <PETNAME>] [--new-pane|--new-tab] [--bg] [--ask|--yolo] [--model <MODEL>] [--description <TEXT>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [-- PASSTHROUGH...]
+rimz agents <SPEC> [PROMPT] -p|--print [-w|--worktree[=<NAME>]] [--from-pr <PR>] [--model <MODEL>] [--description <TEXT>] [--system-prompt-file <PATH>] [--append-system-prompt-file <PATH>] [--effort <LEVEL>] [--max-turns <N>] [--timeout <DURATION>] [--detach] [--output-format <text|json|stream-json>] [--input-format <text|stream-json>] [--keep]
 rimz transcript [TARGET] [-w|--worktree <WORKTREE>] [-n|--last <N>] [--details] [--json]
 ```
 
@@ -99,6 +99,8 @@ Permission-mode suffixes (`-auto`, `-ask`, `-plan`, `-yolo`) are the official vi
 `PROMPT` is the optional second positional, broadcast to every agent cell. Interactive launches pass no approval override by default, so each provider keeps its native prompts; `--ask` keeps or returns to native prompts where supported, and `--yolo` passes the adapter's bypass flags. `-- PASSTHROUGH...` appends raw agent argv to every agent cell after profile/role preset args and any explicit permission args. A second positional that is itself a known cell or team is rejected with a `rimz agents a,b` hint, so the removed space-separated fan-out form never silently becomes a prompt.
 
 ### Shared launch params
+
+`--description <TEXT>` broadcasts to every agent cell as a card label: it seeds line 2, never enters the agent's argv or environment, and is replaced once the agent reports its own session preview or name.
 
 `--model <MODEL>`, `--system-prompt-file <PATH>`, `--append-system-prompt-file <PATH>`, and `--effort <LEVEL>` broadcast to every agent cell like `PROMPT`, and each adapter renders them into its native flags: `--model` selects the provider model (Claude `--model <MODEL>`; Codex `--model <MODEL>`), `--system-prompt-file` replaces the agent's base system prompt (Claude `--system-prompt-file <PATH>`; Codex `-c model_instructions_file=<PATH>`), `--append-system-prompt-file` appends rules to the base prompt where supported (Claude `--append-system-prompt-file <PATH>`), and `--effort` sets reasoning effort (Claude `--effort <LEVEL>`; Codex `-c model_reasoning_effort=<LEVEL>`). The launcher resolves prompt files to absolute paths and refuses a missing file before launch. Levels are provider-specific — Claude takes `low|medium|high|xhigh|max`, Codex takes `minimal|low|medium|high|xhigh` — and an agent with no native flag for a param (Pi for these typed params, and Codex for append) refuses the launch with the offending flag named. A configured profile preset renders first, so an explicit `--model` or `--effort` on the command line wins.
 

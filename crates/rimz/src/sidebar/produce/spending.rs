@@ -647,6 +647,7 @@ mod tests {
             worktree_branch: None,
             task: None,
             prompt: None,
+            description: None,
             transcript_path: Some(transcript.display().to_string()),
             recent_prompts: Vec::new(),
             model: None,

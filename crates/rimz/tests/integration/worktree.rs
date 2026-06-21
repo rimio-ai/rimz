@@ -895,6 +895,7 @@ fn seed_agent_launch(
                 .and_then(|name| name.to_str())
                 .map(ToOwned::to_owned),
             prompt: None,
+            description: None,
         },
     );
     env.ledger().append_event(&event).expect("append launch");

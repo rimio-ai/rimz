@@ -513,6 +513,7 @@ pub(super) fn run_print(args: AgentsArgs, globals: &GlobalFlags) -> Result<()> {
             cwd: launch.cwd.clone(),
             worktree_name: launch.worktree_name.clone(),
             prompt: Some(prompt.clone()),
+            description: args.description.clone(),
             state: rimz::schema::event::AgentLaunchState::Starting,
             pane_id: None,
         },

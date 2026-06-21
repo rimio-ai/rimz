@@ -456,6 +456,7 @@ mod tests {
                 surface: None,
                 task: Some("db migrate".to_owned()),
                 prompt: None,
+                description: None,
                 model: None,
                 effort: None,
                 handle: None,

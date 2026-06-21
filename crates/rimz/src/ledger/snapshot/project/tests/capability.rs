@@ -19,6 +19,7 @@ fn lifecycle_carries_stable_fields_forward_when_event_omits_them() {
             worktree_path: Some("/tmp/x".to_owned()),
             worktree_branch: Some("main".to_owned()),
             prompt: None,
+            description: None,
         },
     );
     // SessionStart establishes the capability and progress lines.

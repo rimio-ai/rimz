@@ -64,6 +64,9 @@ pub struct AgentsArgs {
     /// Prompt broadcast to every launched agent cell.
     #[arg(value_name = "PROMPT")]
     prompt: Option<String>,
+    /// Seed the agent card's description line until the agent names its own session.
+    #[arg(long, value_name = "TEXT")]
+    description: Option<String>,
     /// Use a Rimz-owned worktree. Bare flag creates one fresh worktree; NAME reuses or creates it.
     #[arg(long, short = 'w', value_name = "NAME", num_args = 0..=1, default_missing_value = "")]
     worktree: Option<String>,
@@ -300,6 +303,7 @@ impl AgentsArgs {
             command: None,
             spec: Some(spec),
             prompt,
+            description: None,
             worktree,
             from_pr: None,
             name: None,
@@ -333,6 +337,7 @@ impl AgentsArgs {
             command: None,
             spec: Some(task.spec),
             prompt: task.prompt,
+            description: None,
             worktree: task.worktree,
             from_pr: None,
             name: None,

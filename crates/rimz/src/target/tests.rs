@@ -696,6 +696,7 @@ fn agent(kind: &str, id: &str, branch: Option<&str>, raw_pane: &str) -> AgentSta
         worktree_branch: branch.map(ToOwned::to_owned),
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         recent_prompts: Vec::new(),
         model: None,

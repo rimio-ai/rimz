@@ -1023,6 +1023,11 @@ pub struct AgentState {
     /// real session name exists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Launch-seeded card label (`rimz agents --description`), carried forward.
+    /// Ranks below the agent's own session naming and above the prompt on the
+    /// card's description line; replaced once the agent emits its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Agent-reported transcript path for this session, carried forward from
     /// lifecycle events when available. Display/diagnostic metadata; sidecar
     /// readers keep their own freshness gates.
@@ -1323,6 +1328,7 @@ mod tests {
             worktree_branch: None,
             task: None,
             prompt: None,
+            description: None,
             transcript_path: None,
             recent_prompts: Vec::new(),
             model: None,

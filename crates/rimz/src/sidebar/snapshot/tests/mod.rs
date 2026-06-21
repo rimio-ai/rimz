@@ -102,6 +102,7 @@ fn root_agent(kind: &str, agent_id: &str, model: Option<&str>) -> AgentState {
         worktree_branch: None,
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         recent_prompts: Vec::new(),
         model: model.map(ToOwned::to_owned),

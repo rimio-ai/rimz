@@ -288,6 +288,7 @@ mod tests {
             worktree_branch: branch.map(ToOwned::to_owned),
             task: None,
             prompt: None,
+            description: None,
             transcript_path: None,
             recent_prompts: Vec::new(),
             model: None,

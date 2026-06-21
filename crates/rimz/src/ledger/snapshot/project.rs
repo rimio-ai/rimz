@@ -676,6 +676,7 @@ fn assemble_agent_state(input: AgentStateInput<'_>) -> AgentState {
         worktree_branch: worktree.branch,
         task: prompt.task,
         prompt: prompt.prompt,
+        description: input.prior.and_then(|state| state.description.clone()),
         transcript_path: transcript_path_projection(input.observation, input.prior),
         recent_prompts: prompt.recent_prompts,
         model: model_projection(input.observation, input.prior),
@@ -725,6 +726,10 @@ fn assemble_launch_state(
         .prompt
         .clone()
         .or_else(|| prior.and_then(|state| state.prompt.clone()));
+    let description = payload
+        .description
+        .clone()
+        .or_else(|| prior.and_then(|state| state.description.clone()));
     let recent_prompts = match prompt.as_ref() {
         Some(prompt) => vec![prompt.clone()],
         None => prior
@@ -769,6 +774,7 @@ fn assemble_launch_state(
             .or_else(|| prior.and_then(|state| state.worktree_branch.clone())),
         task: prompt.clone(),
         prompt,
+        description,
         transcript_path: prior.and_then(|state| state.transcript_path.clone()),
         recent_prompts,
         model: prior.and_then(|state| state.model.clone()),

@@ -172,6 +172,7 @@ fn agent(
         worktree_branch: branch.map(ToOwned::to_owned),
         task: task.map(ToOwned::to_owned),
         prompt: None,
+        description: None,
         transcript_path: None,
         recent_prompts: Vec::new(),
         model: None,

@@ -127,6 +127,7 @@ pub(super) fn agent(kind: &str, id: &str, status: AgentStatus, last_seen: i64) -
         worktree_branch: None,
         task: None,
         prompt: None,
+        description: None,
         transcript_path: None,
         recent_prompts: Vec::new(),
         model: None,

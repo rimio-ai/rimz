@@ -238,6 +238,9 @@ pub struct AgentCard {
     /// The session's latest user prompt, carried forward from `AgentState`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
+    /// Launch-seeded card label, shown until richer session naming arrives.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

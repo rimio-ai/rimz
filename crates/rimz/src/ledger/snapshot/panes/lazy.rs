@@ -356,6 +356,7 @@ fn idle_agent_row(
             surface: None,
             task: None,
             prompt: None,
+            description: None,
             model: default_model.map(ToOwned::to_owned),
             effort: None,
             handle: None,

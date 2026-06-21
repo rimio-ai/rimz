@@ -485,6 +485,12 @@ fn agent_launch_event(append: &AgentLaunchAppend, identity: &AgentLaunchIdentity
                 .as_deref()
                 .filter(|prompt| !prompt.trim().is_empty())
                 .map(ToOwned::to_owned),
+            description: append
+                .description
+                .as_deref()
+                .map(str::trim)
+                .filter(|description| !description.is_empty())
+                .map(ToOwned::to_owned),
         },
     )
 }
@@ -564,6 +570,7 @@ mod tests {
                     worktree_path: Some(dir.path().to_string_lossy().into_owned()),
                     worktree_branch: Some("main".to_owned()),
                     prompt: Some("boot".to_owned()),
+                    description: None,
                 },
             ),
         )
@@ -665,6 +672,7 @@ mod tests {
             worktree_branch: None,
             task: None,
             prompt: None,
+            description: None,
             transcript_path: None,
             recent_prompts: Vec::new(),
             model: None,

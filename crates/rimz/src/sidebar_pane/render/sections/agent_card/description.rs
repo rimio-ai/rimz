@@ -82,12 +82,12 @@ pub(super) fn description_line(
 }
 
 /// The line-2 description: rich preview, then rich session/thread name, then
-/// task, then latest prompt. Codex maps app-server `preview` to the rich preview
-/// and app-server `name` to the rich name, so its concrete order is thread
-/// preview → thread name. The activity-bound `task` clears on idle, so the
-/// persisted prompt keeps an unnamed session labelled past its turn until it
-/// earns richer metadata. `None` when the session has nothing to show — the
-/// caller paints the idle loading-dots or an em dash.
+/// launch description, task, and latest prompt. Codex maps app-server `preview`
+/// to the rich preview and app-server `name` to the rich name, so its concrete
+/// order is thread preview → thread name. The activity-bound `task` clears on
+/// idle, so the persisted prompt keeps an unnamed session labelled past its
+/// turn until it earns richer metadata. `None` when the session has nothing to
+/// show — the caller paints the idle loading-dots or an em dash.
 pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
     // The producer sanitizes prompt/task before they reach the row; this is a
     // last-ditch backstop so a harness control turn (`<task-notification>…`)
@@ -99,6 +99,11 @@ pub(super) fn descriptor(row: &SidebarRow) -> Option<&str> {
             ctx(row)
                 .and_then(|context| context.session_name.as_deref())
                 .filter(|name| usable_description(name))
+        })
+        .or_else(|| {
+            agent(row)
+                .and_then(|agent| agent.description.as_deref())
+                .filter(|description| usable_description(description))
         })
         .or_else(|| {
             agent(row)
