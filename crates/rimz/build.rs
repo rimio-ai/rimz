@@ -6,12 +6,12 @@
 //! `$OUT_DIR/litellm-pricing.json.gz` for `include_bytes!` (see
 //! `src/agents/pricing/embedded.rs`).
 //!
-//! The build never touches the network, so every build is reproducible and
-//! hermetic. Release packaging runs `cargo xtask pricing-refresh` first, which
-//! fetches LiteLLM plus authoritative models.dev fillers and rewrites the
-//! ignored snapshot; the runtime refresh (`src/agents/pricing/remote.rs`) keeps
-//! prices fresh between releases. The compaction here mirrors `cargo xtask
-//! pricing-refresh` — keep the two in step.
+//! The build never touches the network, so every build is hermetic for a given
+//! commit and worktree state. Release packaging runs `cargo xtask
+//! pricing-refresh` first, which fetches LiteLLM plus authoritative models.dev
+//! fillers and rewrites the ignored snapshot; the runtime refresh
+//! (`src/agents/pricing/remote.rs`) keeps prices fresh between releases. The
+//! compaction here mirrors `cargo xtask pricing-refresh` — keep the two in step.
 //!
 //! The sidebar theme catalog is checked in under `themes/alacritty/`, compacted
 //! as a sorted JSON map, and written to `$OUT_DIR/alacritty-themes.json.gz` for
@@ -22,6 +22,7 @@ use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use flate2::Compression;
 use flate2::write::GzEncoder;
@@ -43,6 +44,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed={PRESENCE_PLUGIN_ENV}");
     println!("cargo:rerun-if-changed={GENERATED_SNAPSHOT}");
     println!("cargo:rerun-if-changed={THEME_CATALOG_DIR}");
+    emit_build_version();
 
     let out_dir = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR set by cargo"));
     let out_path = out_dir.join("litellm-pricing.json.gz");
@@ -52,6 +54,90 @@ fn main() {
     fs::write(&out_path, compressed).expect("write embedded pricing snapshot");
     write_themes_embed(&out_dir);
     write_presence_plugin_embed(&out_dir);
+}
+
+fn emit_build_version() {
+    let package_version = env::var("CARGO_PKG_VERSION").expect("CARGO_PKG_VERSION set by cargo");
+    let manifest = PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR"));
+    emit_git_rerun_paths(&manifest);
+    let version =
+        git_build_version(&manifest, &package_version).unwrap_or_else(|| package_version.clone());
+    println!("cargo:rustc-env=RIMZ_VERSION={version}");
+}
+
+fn git_build_version(manifest: &Path, package_version: &str) -> Option<String> {
+    let exact_release_tag = git_stdout(
+        manifest,
+        &[
+            "describe",
+            "--tags",
+            "--exact-match",
+            "--match",
+            "v[0-9]*",
+            "HEAD",
+        ],
+    )
+    .is_some();
+    let short = git_stdout(manifest, &["rev-parse", "--short=12", "HEAD"])?;
+    if short.is_empty() {
+        return None;
+    }
+    let dirty = !git_stdout(manifest, &["status", "--porcelain"])?.is_empty();
+    if exact_release_tag && !dirty {
+        Some(package_version.to_owned())
+    } else {
+        Some(format!(
+            "{package_version}+g{short}{}",
+            if dirty { ".dirty" } else { "" }
+        ))
+    }
+}
+
+fn emit_git_rerun_paths(manifest: &Path) {
+    let Some(head) = git_path(manifest, "HEAD") else {
+        return;
+    };
+    emit_rerun_if_exists(&head);
+    if let Some(branch) = git_stdout(manifest, &["symbolic-ref", "-q", "HEAD"])
+        && let Some(branch_ref) = git_path(manifest, &branch)
+    {
+        emit_rerun_if_exists(&branch_ref);
+    }
+    if let Some(packed_refs) = git_path(manifest, "packed-refs") {
+        emit_rerun_if_exists(&packed_refs);
+    }
+}
+
+fn git_path(manifest: &Path, path: &str) -> Option<PathBuf> {
+    let raw = git_stdout(manifest, &["rev-parse", "--git-path", path])?;
+    if raw.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(raw);
+    Some(if path.is_absolute() {
+        path
+    } else {
+        manifest.join(path)
+    })
+}
+
+fn emit_rerun_if_exists(path: &Path) {
+    if path.exists() {
+        println!("cargo:rerun-if-changed={}", path.display());
+    }
+}
+
+fn git_stdout(manifest: &Path, args: &[&str]) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(manifest)
+        .args(args)
+        .output()
+        .ok()?;
+    output
+        .status
+        .success()
+        .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
 fn write_themes_embed(out_dir: &Path) {

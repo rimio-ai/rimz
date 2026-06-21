@@ -37,6 +37,7 @@ mod statusline;
 mod steer;
 mod transcript;
 mod trust;
+mod version;
 mod workspace;
 mod worktree;
 use std::ffi::OsString;
@@ -435,7 +436,7 @@ fn launch_ref_hint(raw: &str) -> Result<Option<String>> {
 #[derive(Debug, Parser)]
 #[command(
     author,
-    version,
+    version = version::VERSION,
     bin_name = "rimz",
     about = "One room per project for agents, scripts, and humans."
 )]

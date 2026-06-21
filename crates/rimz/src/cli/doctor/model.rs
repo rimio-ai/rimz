@@ -27,6 +27,7 @@ pub(super) enum Probe<T> {
 /// could not be resolved at all.
 #[derive(Debug, Serialize)]
 pub(super) struct DoctorReport {
+    pub(super) version: &'static str,
     pub(super) workspace: Probe<Workspace>,
     pub(super) mux: Probe<Mux>,
     pub(super) sidebar_renderer: &'static str,

@@ -71,6 +71,9 @@ fn note(w: &mut impl Write, health: Health, text: &str) -> io::Result<()> {
 
 pub(super) fn render_human(report: &DoctorReport, w: &mut impl Write) -> io::Result<()> {
     writeln!(w, "{}", paint(palette::ACCENT.bold(), "Rimz doctor"))?;
+    let mut kv = KeyVals::new().indent(2);
+    kv.push("version", cell(report.version));
+    kv.render(w)?;
     render_workspace(w, &report.workspace)?;
     render_mux(w, &report.mux)?;
 
@@ -859,6 +862,7 @@ mod tests {
     #[test]
     fn hooks_section_renders_glyph_status_and_fix() {
         let report = DoctorReport {
+            version: crate::cli::version::VERSION,
             workspace: Probe::Unavailable {
                 error: "test".to_owned(),
             },
@@ -911,6 +915,7 @@ mod tests {
     #[test]
     fn coverage_block_groups_wired_partial_and_gaps() {
         let report = DoctorReport {
+            version: crate::cli::version::VERSION,
             workspace: Probe::Unavailable {
                 error: "x".to_owned(),
             },
@@ -977,6 +982,7 @@ mod tests {
     #[test]
     fn hook_matrix_renders_signal_grid() {
         let report = DoctorReport {
+            version: crate::cli::version::VERSION,
             workspace: Probe::Unavailable {
                 error: "x".to_owned(),
             },
