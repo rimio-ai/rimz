@@ -62,12 +62,12 @@ The store keeps overlay/freshness events only: `PaneClosed`, `CommandChanged`, `
 
 | Event | Payload | Fusion Action | Emitter |
 | --- | --- | --- | --- |
-| `PaneClosed` | `pane_id` | Delete every rendered row bound to the pane | Zellij plugin through `rimz sidebar wake` |
-| `CommandChanged` | `pane_id`, `command` | Overlay command and reset the pane's row shape until the pull verifies it | Zellij plugin through `rimz sidebar wake` |
-| `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes; mark that active pane as viewed for focus-clear gating | Zellij plugin through `rimz sidebar wake`, renderer jumps |
+| `PaneClosed` | `pane_id` | Delete every rendered row bound to the pane | Zellij plugin through `rimz sidebar wake`, tmux control-mode subscriber |
+| `CommandChanged` | `pane_id`, `command` | Overlay command and reset the pane's row shape until the pull verifies it | Zellij plugin through `rimz sidebar wake`, tmux control-mode subscriber |
+| `FocusChanged` | focused and unfocused pane ids, possibly spanning views | Mirror focus bits onto every row; retarget the own-view baseline only for one of the view's own working panes; mark that active pane as viewed for focus-clear gating | Zellij plugin through `rimz sidebar wake`, tmux control-mode subscriber, renderer jumps |
 | `FocusStranded` | stranded sidebar `pane_id` | Renderer action only: the matching sidebar pane refocuses its held baseline or first own-view working sibling | Zellij plugin through `rimz sidebar wake` |
-| `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; the verified pane frame admits the card | Zellij plugin for exact opens |
-| `PanesChanged` | none | Nudge a producer verification pull — topology moved, identity unknown | tmux control-mode watcher, the Zellij plugin's manifest fold, any sparse poke |
+| `PaneOpened` | `pane_id`, optional `command` | Nudge a producer verification pull; the verified pane frame admits the card | Zellij plugin and tmux control-mode subscriber for exact opens |
+| `PanesChanged` | none | Nudge a producer verification pull — topology moved, identity unknown | tmux control-mode subscriber fallback, the Zellij plugin's manifest fold, any sparse poke |
 | `LedgerDelta` | optional event method and lifecycle signal tag | Refetch the ledger rollup; session start/end also request fresh panes | Ledger writers and context sidecar writers |
 | `PaneFramePublished` | none | Fold the just-published producer pane frame from cache | Producer after a pane-frame publish |
 | `Reload` | none | Re-exec or hard-refresh the renderer | `rimz reload` |
