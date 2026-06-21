@@ -574,29 +574,48 @@ impl MuxBackend for TmuxBackend {
             .run()?;
         let (window_id, first_pane) = parse_new_window_ids(&output.stdout)?;
 
-        let mut column_anchors = vec![first_pane.clone()];
-        let mut previous_in_column = first_pane;
-        for pane in first_column_rest {
-            previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
-        }
-        for column in rest_columns {
-            let Some((top, rows)) = column.split_first() else {
-                return Err(MuxErr::Output {
-                    program: "tmux".to_owned(),
-                    reason: "tab layout has an empty column".to_owned(),
-                });
-            };
-            let target = column_anchors
-                .last()
-                .cloned()
-                .unwrap_or_else(|| window_id.clone());
-            let new_column = self.split_tab_pane(opts, "-h", &target, top)?;
-            column_anchors.push(new_column.clone());
-            let mut previous = new_column;
-            for row in rows {
-                previous = self.split_tab_pane(opts, "-v", &previous, row)?;
+        // A tab opened from a narrow pane (for example a half-width floating
+        // pane) is born at that pane's width, so the hook-docked sidebar and
+        // the even column splits below would otherwise be laid out against the
+        // narrow birth. Shown later on the full-width client, tmux rescales the
+        // window proportionally and inflates the fixed-width sidebar past its
+        // cap. Resize the window up to the widest attached client and re-assert
+        // the sidebar before the splits so the columns land at full width.
+        let normalized = self.normalize_tab_birth_width(&window_id, &first_pane, &opts.sidebar);
+
+        let split_result = (|| {
+            let mut column_anchors = vec![first_pane.clone()];
+            let mut previous_in_column = first_pane;
+            for pane in first_column_rest {
+                previous_in_column = self.split_tab_pane(opts, "-v", &previous_in_column, pane)?;
             }
+            for column in rest_columns {
+                let Some((top, rows)) = column.split_first() else {
+                    return Err(MuxErr::Output {
+                        program: "tmux".to_owned(),
+                        reason: "tab layout has an empty column".to_owned(),
+                    });
+                };
+                let target = column_anchors
+                    .last()
+                    .cloned()
+                    .unwrap_or_else(|| window_id.clone());
+                let new_column = self.split_tab_pane(opts, "-h", &target, top)?;
+                column_anchors.push(new_column.clone());
+                let mut previous = new_column;
+                for row in rows {
+                    previous = self.split_tab_pane(opts, "-v", &previous, row)?;
+                }
+            }
+            Ok(())
+        })();
+        if normalized {
+            // `resize-window` pins `window-size=manual`; undo it so the tab
+            // tracks client size again like every other tab.
+            self.restore_window_autosize(&window_id);
         }
+        split_result?;
+
         if opts.focus {
             self.cmd()
                 .args(["select-window".to_owned(), "-t".to_owned(), window_id])

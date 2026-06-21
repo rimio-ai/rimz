@@ -63,7 +63,7 @@ macro_rules! require_tmux {
     };
 }
 
-/// One pane's live placement: its raw id, left/top edge in cells, and current
+/// One pane's live placement: its raw id, left/top edge, width, and current
 /// working directory — read from `list-panes -F` to assert layout geometry.
 #[derive(Clone, Debug)]
 struct PaneGeom {
@@ -71,6 +71,7 @@ struct PaneGeom {
     id: String,
     left: u64,
     top: u64,
+    width: u64,
     path: String,
 }
 
@@ -195,10 +196,30 @@ impl TmuxServer {
             .collect()
     }
 
+    fn client_widths(&self, session: &str) -> Vec<u64> {
+        let output = Command::new("tmux")
+            .args([
+                "-S",
+                self.socket.to_str().expect("utf8 socket"),
+                "list-clients",
+                "-t",
+                session,
+                "-F",
+                "#{client_width}",
+            ])
+            .output()
+            .expect("spawn tmux list-clients");
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().parse().ok())
+            .collect()
+    }
+
     /// Live geometry for every pane in `target` (a `session:window` address),
     /// polling until at least `want` panes are present or the budget elapses.
-    /// Reads the left edge, top edge, and current path per pane — enough to
-    /// assert the imperative `open_tab` builder's column/row placement.
+    /// Reads the left edge, top edge, width, and current path per pane —
+    /// enough to assert the imperative `open_tab` builder's column/row
+    /// placement.
     fn wait_for_panes(&self, target: &str, want: usize) -> Vec<PaneGeom> {
         let deadline = Instant::now() + Duration::from_secs(5);
         loop {
@@ -210,7 +231,7 @@ impl TmuxServer {
                     "-t",
                     target,
                     "-F",
-                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_current_path}",
+                    "#{pane_id}\t#{pane_left}\t#{pane_top}\t#{pane_width}\t#{pane_current_path}",
                 ])
                 .output()
                 .expect("spawn tmux list-panes");
@@ -222,6 +243,7 @@ impl TmuxServer {
                         id: cols.next()?.to_owned(),
                         left: cols.next()?.parse().ok()?,
                         top: cols.next()?.parse().ok()?,
+                        width: cols.next()?.parse().ok()?,
                         path: cols.next().unwrap_or_default().to_owned(),
                     })
                 })
@@ -1334,6 +1356,134 @@ fn open_tab_builds_multi_column_layout() {
         server.display("rimz-tab", "#{window_name}"),
         "work",
         "focus: true should select the new window",
+    );
+}
+
+/// A tab opened while tmux's latest client is narrow is still laid out at the
+/// full attached width: the hook sidebar is re-asserted to the cap before
+/// agent columns split, and autosizing is restored after the birth correction.
+#[test]
+fn open_tab_from_narrow_client_normalizes_to_full_width() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    let cwd = TempDir::new().expect("cwd tempdir");
+    let width = SidebarWidth::default();
+    server
+        .backend
+        .ensure_session(&SessionOptions {
+            session_name: "rimz-narrow-tab".to_owned(),
+            workspace_id: WorkspaceId::from_project_root(cwd.path()),
+            project_root: cwd.path().to_path_buf(),
+            cwd: cwd.path().to_path_buf(),
+            config: rimz::config::MultiplexerConfig::default(),
+            detected_size: Some((300, 50)),
+            truecolor: false,
+        })
+        .expect("ensure_session");
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let sidebar = SidebarPaneOptions {
+        session_name: "rimz-narrow-tab".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(cwd.path()),
+        project_root: cwd.path().to_path_buf(),
+        cwd: cwd.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(300)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+    server
+        .backend
+        .open_sidebar(&sidebar, None)
+        .expect("open_sidebar");
+
+    let _wide = AttachedTmuxClient::attach(&server.socket, "rimz-narrow-tab", 300, 50);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while !server.client_widths("rimz-narrow-tab").contains(&300) && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(25));
+    }
+    assert!(
+        server.client_widths("rimz-narrow-tab").contains(&300),
+        "wide client should register before opening the tab"
+    );
+
+    let narrow = AttachedTmuxClient::attach(&server.socket, "rimz-narrow-tab", 150, 50);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let widths = server.client_widths("rimz-narrow-tab");
+        if widths.contains(&300) && widths.contains(&150) {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "both attached client widths should register, got {widths:?}",
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    let work_pane = || PaneCmd {
+        argv: vec!["sleep".to_owned(), "600".to_owned()],
+    };
+    server
+        .backend
+        .open_tab(&TabOptions {
+            session_name: "rimz-narrow-tab".to_owned(),
+            title: "float".to_owned(),
+            cwd: cwd.path().to_path_buf(),
+            panes: LayoutPanes {
+                columns: vec![vec![work_pane()], vec![work_pane()]],
+            },
+            focus: false,
+            sidebar,
+        })
+        .expect("open_tab");
+
+    drop(narrow);
+    let target = "rimz-narrow-tab:float";
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let width = server.display(target, "#{window_width}");
+        if width == "300" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "new tab should settle on the 300-col client, got {width}"
+        );
+        thread::sleep(Duration::from_millis(25));
+    }
+
+    let panes = server.wait_for_panes(target, 3);
+    assert_eq!(
+        panes.len(),
+        3,
+        "tab should be born with a sidebar and two work panes: {panes:?}",
+    );
+    let sidebar = panes
+        .iter()
+        .find(|pane| pane.left == 0)
+        .expect("the hook-docked sidebar");
+    let cap = width.target_cols(300);
+    let lower = cap.saturating_sub(2);
+    assert!(
+        sidebar.width >= lower && sidebar.width <= cap,
+        "sidebar should stay near capped {cap} cols after narrow birth: {panes:?}",
+    );
+
+    let work: Vec<_> = panes.iter().filter(|pane| pane.left > 0).collect();
+    assert_eq!(
+        work.len(),
+        2,
+        "two work panes sit right of the sidebar: {panes:?}",
+    );
+    let diff = work[0].width.abs_diff(work[1].width);
+    assert!(
+        diff <= 2,
+        "work columns should split evenly after normalization: {work:?}",
     );
 }
 

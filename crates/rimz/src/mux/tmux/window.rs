@@ -64,6 +64,125 @@ impl TmuxBackend {
         String::from_utf8_lossy(&output.stdout).trim().parse().ok()
     }
 
+    /// Resize a freshly-born tab up to the widest attached client and
+    /// re-assert the hook-docked sidebar to its capped width, so agent column
+    /// splits land even at full width. Returns whether it resized the window;
+    /// the caller must then restore autosizing after placing the splits.
+    ///
+    /// No-ops when the tab is already at least the widest client's width or
+    /// when no sized client is attached.
+    pub(super) fn normalize_tab_birth_width(
+        &self,
+        window_id: &str,
+        first_pane: &str,
+        sidebar: &SidebarPaneOptions,
+    ) -> bool {
+        let Some((full_w, full_h)) = self.widest_client_size(&sidebar.session_name) else {
+            return false;
+        };
+        match self.window_width(window_id) {
+            Some(width) if width >= full_w => return false,
+            _ => {}
+        }
+        if self
+            .cmd()
+            .args([
+                "resize-window".to_owned(),
+                "-t".to_owned(),
+                window_id.to_owned(),
+                "-x".to_owned(),
+                full_w.to_string(),
+                "-y".to_owned(),
+                full_h.to_string(),
+            ])
+            .run()
+            .is_err()
+        {
+            return false;
+        }
+
+        // The after-new-window hook docks the sidebar with `-b`, which makes
+        // it the left-edge pane. Before agent column splits, the only other
+        // pane is the first agent; if that is leftmost, no hook ran.
+        if let Some(sidebar_pane) = self.leftmost_pane(window_id)
+            && sidebar_pane != first_pane
+        {
+            let cols = sidebar.width.target_cols(full_w);
+            let _ = self
+                .cmd()
+                .args([
+                    "resize-pane".to_owned(),
+                    "-t".to_owned(),
+                    sidebar_pane,
+                    "-x".to_owned(),
+                    cols.to_string(),
+                ])
+                .run();
+        }
+        true
+    }
+
+    /// Undo the `window-size manual` pin that `resize-window` sets in
+    /// [`Self::normalize_tab_birth_width`], so the tab tracks client size
+    /// again.
+    pub(super) fn restore_window_autosize(&self, window_id: &str) {
+        let _ = self
+            .cmd()
+            .args([
+                "set-window-option".to_owned(),
+                "-u".to_owned(),
+                "-t".to_owned(),
+                window_id.to_owned(),
+                "window-size".to_owned(),
+            ])
+            .run();
+    }
+
+    /// The `(cols, rows)` of the widest attached client of `session` that
+    /// counts toward window sizing. Control-mode `ignore-size` clients are
+    /// skipped because they are observers, not display surfaces.
+    pub(super) fn widest_client_size(&self, session: &str) -> Option<(u64, u64)> {
+        let output = self
+            .cmd()
+            .args([
+                "list-clients",
+                "-t",
+                session,
+                "-F",
+                "#{client_width} #{client_height} #{client_flags}",
+            ])
+            .run()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| {
+                let mut fields = line.split_whitespace();
+                let width: u64 = fields.next()?.parse().ok()?;
+                let height: u64 = fields.next()?.parse().ok()?;
+                let flags = fields.next().unwrap_or("");
+                (!flags.split(',').any(|flag| flag == "ignore-size")).then_some((width, height))
+            })
+            .max_by_key(|(width, _)| *width)
+    }
+
+    /// The id of the pane at the window's left edge.
+    pub(super) fn leftmost_pane(&self, window_id: &str) -> Option<String> {
+        let output = self
+            .cmd()
+            .args([
+                "list-panes",
+                "-t",
+                window_id,
+                "-F",
+                "#{pane_at_left} #{pane_id}",
+            ])
+            .run()
+            .ok()?;
+        String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .find_map(|line| line.strip_prefix("1 ").map(|id| id.trim().to_owned()))
+    }
+
     /// Whether `session` already holds a window named `name`. A Rimz background
     /// view is idempotent on its window name, so a relaunch into a session that
     /// already carries it is skipped.
