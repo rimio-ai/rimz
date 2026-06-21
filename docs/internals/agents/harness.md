@@ -1,35 +1,22 @@
 # The agent harness
 
-> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); this doc owns the machinery around it: spawning the fleet, addressing it, driving it with `steer` and `queue`, the supervised runs automation drives, and the cleanup that reclaims its panes. The worktrees that back its channels are [worktree.md](./worktree.md).
+> See [DESIGN.md](../../../DESIGN.md) for the commitments this doc operationalizes. The agent *model* — the rollup, state machine, turn phase, liveness, and adapter boundary — is [agent.md](./agent.md); the worktrees that back its channels are [worktree.md](./worktree.md); the user-facing commands are [cli/agents.md](../../reference/cli/agents.md). This doc owns the machinery between them: spawning the fleet, addressing it, driving it with `steer` and `queue`, the supervised runs automation drives, and the cleanup that reclaims its panes.
 
-One agent in one thread is a conversation. Tens of agents across a dozen worktrees is a team: some you start by hand, others a cron job, a PR-review trigger, a CI gate, or a script kicks off, and they cooperate — Claude drafts the plan while Codex reviews it as peer programming. The harness runs that team the way you run an engineering org. You open a channel for each line of work, you reach any member by name, you talk to one live or leave it a task for when it is free, and automation joins the room as just another teammate.
+One agent in one thread is a conversation; tens of agents across a dozen worktrees is a team. The harness runs that team. It spawns agents into panes, reaches any one by name, drives it live or leaves it a task for when it is free, and reclaims its pane when it exits — the same machinery whether a human, a cron job, a CI gate, or a PR hook is doing the driving.
 
-Everything a team needs has a primitive here, and the rest of this doc is those primitives end to end.
-
-| You're running a team and you need… | The harness gives you | The move |
-| --- | --- | --- |
-| a channel for each line of work | a worktree — the sidebar groups the room by it | `rimz agents … --worktree=<name>` |
-| members who do the work | agents, each addressable by handle | `@claude`, `@codex`, `@planner` |
-| to name one member precisely | the address `@handle#channel` | `@codex#feat-x`, `@claude-2`, `@all` |
-| to talk to someone right now | `steer` — type into a live pane | `rimz steer @claude -- "…"` |
-| to leave a task for when they're free | `queue` — deliver at the next open turn | `rimz queue @codex --on done -- "…"` |
-| to add a member or open a channel | spawn — agents × layout × worktree | `rimz agents peer --worktree=feat/x` |
-| automation to drive a member | a supervised headless run | `rimz agents codex -p "…"` (cron · CI · PR) |
-| to read the room and catch up | cards, transcripts, listings, captures | `agents list` / `show`, `transcript`, `pane capture`, `queue list` |
-
-Everything here rides primitives both backends share: the layout compiles to backend-neutral panes, placement to a tab or a split, addressing to one shared parser, and messaging to the one pane-send primitive humans and resolvers already use.
+Everything here rides primitives both backends share: a layout compiles to backend-neutral panes, placement lands on a tab or a split, an address resolves through one parser, and a message rides the one pane-send primitive humans and resolvers already use. [cli/agents.md](../../reference/cli/agents.md) is the command surface — flags, synopses, examples; this doc is what those commands do underneath.
 
 ## The model
 
-Spawning the fleet separates three independent choices, so any combination is one command: **agents** choose which tools run, **layout** chooses the shape on screen, and **worktree** chooses which channel they run in. `claude,codex` plus `--worktree=feat/x` puts a planner and a reviewer side by side in one channel; the same agents with a different layout or a different worktree is the same three knobs turned differently.
+Spawning the fleet separates three independent choices, so any combination is one command: **agents** choose which tools run, **layout** chooses the shape on screen, and **worktree** chooses which channel they run in. `claude,codex` plus `--worktree=feat/x` puts a planner and a reviewer side by side in one channel; the same agents with a different layout or worktree is the same three knobs turned differently.
 
-Three words carry the whole model:
+Three words name the parts:
 
 - A **channel** is a [worktree](./worktree.md) — one copy of the code where a few members cooperate. The sidebar groups the room by it, and an address narrows to it with `#<channel>`.
 - A **member** is an agent, named by a **handle**: `@claude` the kind, `@planner` the profile, `@swift-otter` the one running instance.
 - An **address** joins them — `@handle#channel` — and is how every command names who it is reaching.
 
-You reach a member two ways, because a team works in two tenses. **Steer** talks to a live pane now. **Queue** leaves a task that delivers at the member's next open turn. Both name their target with the same address and ride the same pane-send primitive.
+You reach a member in two tenses. **Steer** talks to a live pane now; **queue** leaves a task that delivers at the member's next open turn. Both name their target with the same address and ride the same pane-send primitive.
 
 ```text
 one room, grouped into channels — one per worktree
@@ -43,206 +30,125 @@ reach a member by @handle#channel, then:
   queue @codex   →  leave a task for its next open turn
 ```
 
-## How you use it
+## Read the room
 
-Open a channel with a planner and a reviewer, address them by profile or kind, and drive them in either tense:
-
-```sh
-rimz agents peer --worktree=feat/x      # Claude planning beside Codex reviewing, in #feat-x
-rimz steer @claude -- "focus on the failing parser test"   # talk to the live pane now
-rimz queue @codex --on done -- "open a PR summary"         # leave a task for its next idle turn
-```
-
-Let automation drive a member with no room attached — the supervised `-p` run is the door cron, CI, and PR hooks come through:
-
-```sh
-rimz agents codex --worktree=deps --timeout 4h -p "update dependencies, run the suite, open a PR"
-```
-
-Reach a member that does not exist yet and create it from the address; read the room when you come back:
-
-```sh
-rimz steer @planner#feat/x --create -- "draft the API"     # opens a planner in #feat-x, this as its first prompt
-rimz agents list                        # the current channel's cards (`--all` for every channel)
-rimz agents show @codex#deps            # one member, with live context when active
-rimz transcript #deps                   # the fused channel conversation
-```
-
-The rest of this doc follows a member through its life: how a spawn becomes panes, the address that names it, the talk-and-queue path that reaches it, the supervised run that drives it headless, and the cleanup that reclaims its pane. The channels members work in — Rimz-owned worktrees — are [worktree.md](./worktree.md).
-
-### Inspect the room
-
-`rimz transcript` is the catch-up surface for conversation content. A single agent target reads that agent's local transcript and groups it into turns: each turn shows the user's prompt and the turn's final assistant message, while `--details` keeps every normalized user and assistant message. The tail also shows any pending native ask from the feed, using the same `pending_ask_for` authority that gates `steer` and `queue`.
-
-A channel target reads every root agent in the channel — `#channel`, `@all#channel`, or a bare invocation in a worktree — and fuses their messages into one timestamp-ordered timeline labelled by handle. Codex rollout rows that omit timestamps inherit the last timestamp seen in that session file, so sparse progress rows stay anchored to their turn; entries with no timestamp sort after clocked messages in file order. A bare directory workspace has no current channel, so a bare `rimz transcript` reads every channel in the room.
-
-The parser core is shared with supervised streaming. Each adapter implements `parse_transcript_messages` once, returning normalized `{role, timestamp, text}` messages, and the assistant-only `wait --stream` path filters that same parse. Claude filters sidechain replay and API-error transcript entries; Codex reads `user_message` and `agent_message` rollout events and continues to ignore duplicate `response_item` rows for streaming.
+`rimz transcript` is the catch-up surface, and the only part worth noting here is the fusion. A single-agent target groups that agent's local transcript into turns; a channel target (`#channel`, `@all#channel`, or a bare invocation in a worktree) reads every root agent in the channel and fuses their messages into one timestamp-ordered timeline labelled by handle. Codex rollout rows that omit timestamps inherit the last timestamp seen in their session file, so sparse progress rows stay anchored to their turn. The parser core is shared with supervised streaming: each adapter implements `parse_transcript_messages` once, and the assistant-only `wait --stream` path filters that same parse.
 
 ## Spawn the fleet
 
 ### The layout IR
 
-`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL. A named team is an ordered role list; each role binds `role` to an `[agents.profiles]` profile, may override that profile's launch fields, and opens as one side-by-side column in one tab unless the team declares `layout`. Team `layout` uses the same comma=column / plus=row pane grammar, resolves declared role names first, and then falls back to roleless cells so a team can mix role panes with `term`, command panes, profiles, kinds, or virtual cells. Inline specs keep the compact pane grammar: commas split columns, plus signs stack rows within a column, and each cell is a profile, command, or built-in cell: built-in `term`, an agent kind, an adapter-supported virtual `<kind>-<mode>` / `<kind>-ping` variant such as `claude-auto` or `codex-yolo`, an `[agents.profiles]` entry, or an `[agents.commands]` entry ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)).
+`rimz agents <spec>` resolves either a named `[agents.teams]` entry or an inline DSL, and both compile to the same backend-neutral panes. The inline grammar is compact: commas split columns, plus signs stack rows within a column, and each cell is a built-in `term`, an agent kind, a virtual `<kind>-<mode>` / `<kind>-ping` variant (`claude-auto`, `codex-yolo`), a configured profile, or a configured command ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). A named team is an ordered role list that opens as one side-by-side column per role unless it declares its own `layout`, which uses the same grammar and resolves declared role names before falling through to roleless cells.
 
 ```text
-claude,codex+term
-vim,htop+zsh
-claude-auto,codex-yolo
+claude,codex+term      → Claude left; Codex stacked over a shell right
+vim,htop+zsh           → raw command panes
+claude-auto,codex-yolo → agent cells with adapter-owned permission posture
 ```
 
-The first example creates two columns: Claude on the left, Codex stacked above a shell on the right. The second creates raw command panes from user commands. The third opens agent cells with adapter-owned permission posture args. The built-in `peer` team is the roleless `claude,codex`; bare `rimz agents` lists cards, while the hidden default remains one `term` cell for internal callers.
-
-The CLI converts cells to backend-neutral `LayoutPanes`: an agent cell runs the hidden `rimz agents exec <kind>` wrapper with optional `--prompt`, optional `--worktree-path`, optional `--agent-profile`, optional `--agent-role`, optional `--agent-model`, optional `--agent-effort`, and `-- <args>` from its profile and role; a command cell runs its raw argv, with empty argv reserved for the user's shell. Backends never resolve agent kinds or worktrees — the wrapper does. It runs the agent command in the pane and inherits the pane's TTY, launching the agent through the user's default shell startup path when that shell and `/usr/bin/env` are available (re-applying Rimz launch env after shell rc/profile files) and falling back to direct exec for unsupported or missing shells. The wrapper is the seam the supervised-run and cleanup paths below hang off.
+The compile target is the seam the whole harness hangs off. Each cell becomes a `LayoutPanes` entry that runs the hidden **`rimz agents exec <kind>`** wrapper — carrying the prompt, worktree path, profile, role, model, effort, and `-- <args>` resolved from the profile and role — or, for a command cell, its raw argv (empty argv reserved for the user's shell). Backends never resolve agent kinds or worktrees: the wrapper does. It runs the agent in the pane, inheriting the pane's TTY, launching through the user's shell-startup path when that shell and `/usr/bin/env` are available and falling back to direct exec otherwise. Because the wrapper stays resident, it is also where the supervised-run and cleanup paths below attach.
 
 ### Backend shape and placement
 
-Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead.
+Each backend renders the same compiled layout into a tab, and a single non-worktree agent can run in the current pane instead. Both backends receive the same `TabOptions` — session, title, cwd, focus flag, sidebar options, and the pre-built pane argv — and dock the global sidebar once before adding the layout cells; the per-backend split commands live in [`mux/`](../../../crates/rimz/src/mux/AGENTS.md). A worktree launch names its tab `#<NAME>`, matching the channel suffix in agent addresses; a launch without a worktree names it `<kind>:<dir>`. `--bg` keeps focus on the launching pane wherever the backend can.
 
-tmux opens a window with `new-window -d -P`, lets the session's `after-new-window` hook dock the sidebar once, and adds the remaining layout cells with `split-window`. Columns use horizontal splits; rows use vertical splits anchored inside their column.
-
-Zellij renders a temporary KDL layout for `new-tab --layout`: the global sidebar pane on the left, one pane per column to the right, nested horizontal splits for stacked rows, and the compact bar restored at the bottom.
-
-Both backends receive the same `TabOptions`: session, title, cwd, focus flag, sidebar options, and the pre-built pane argv. A worktree launch names the tab `#<NAME>`, matching the channel suffix used in agent addresses; a launch without a worktree names the tab `<kind>:<dir>`. `--bg` keeps focus on the launching pane where the backend can do so; on Zellij, an unfocused `new-tab` restores the attached client's focused pane after the tab opens.
-
-Placement follows intent. Under the `auto` default, a single non-worktree agent launches in the current pane: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to the shell on agent exit with liveness resolved from the pane rather than an end trace. A team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits a single agent cell into the current tab, `--new-tab` opens a tab, and the per-machine `[agents] placement` default chooses `auto`, `pane`, or `tab` when no flag is given ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Placement resolves before the launch touches the ledger or creates a worktree, so a rejected `--new-pane` leaves no provisional rows or worktree behind. `--bg` and create-on-miss downgrade in-place placement to a split, because the caller's pane stays available; `split_pane` carries the launch-identity env on both backends — tmux through `-e`, Zellij through an `env` command prefix — and honors the same focus flag, with tmux dropping `-d` to land in the new pane and Zellij returning focus to the launching pane when `--bg` holds it back.
+**Placement resolves before the launch touches the ledger or creates a worktree**, so a rejected placement leaves no provisional rows or worktree behind. Under the `auto` default a single non-worktree agent launches *in the current pane*: the CLI execs the wrapper argv in place, the wrapper binds the pane and direct-execs the agent, and the pane returns to its shell on exit with liveness resolved from the pane rather than an end trace. A team, multi-cell layout, or worktree launch opens its own tab. `--new-pane` splits the current tab, `--new-tab` opens a tab, and the per-machine [`[agents] placement`](../../reference/configuration.md#agent-profiles-commands-and-teams) default chooses when no flag is given. `--bg` and create-on-miss downgrade an in-place launch to a split, because the caller's pane stays available; the split carries the launch-identity env on both backends and honors the same focus flag.
 
 ## The address
 
-Every member in a room has an address you type like an @-mention in a channel: `@<handle>#<channel>`. The handle names who; the channel names where. Both read from context — `@claude` uses the channel you are in, and `#auth` alone filters a listing to that channel.
+Every member has an address you type like an @-mention: `@<handle>#<channel>`. The handle names who, the channel names where, and both read from context — `@claude` uses the channel you are in, `#auth` alone filters a listing to that channel. [cli/agents.md → Addressing agents](../../reference/cli/agents.md#addressing-agents) is the handle catalog; this section owns how an address resolves.
 
-The channel is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself — the grouping the sidebar shows ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, or full path, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel, so an address there reaches every channel rather than silently narrowing to one. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
+The **channel** is the workspace segment the room already groups by: a worktree branch, else a child repo's directory name, else the directory itself ([sidebar.md → Worktree groups](../sidebar/sidebar.md#worktree-groups)). It matches by branch, path basename, or full path, and defaults to the channel the command runs in; an inline `#<name>` or `--worktree` overrides it. A bare directory workspace has no current channel, so an address there reaches *every* channel rather than silently narrowing to one. Mux tab names stay display-only — they are mutable and live outside the ledger, so they never form an address.
 
-Handles come in three kinds. A **role handle** names a member inside a team:
+A **handle** falls into three classes, narrowing from group to instance:
 
-- `@<role>` — `@coder`, the role stamped by `[agents.teams.<team>.roles]`. Matches every agent launched under that role in the channel. Role names reserve built-in kind handles such as `@claude` so kind addresses keep round-tripping.
+- A **role handle** (`@coder`) names a team role and matches every agent launched under it in the channel. Role names reserve built-in kind handles so kind addresses keep round-tripping.
+- A **type handle** names a kind (`@codex`) or a profile (`@planner`) and matches every agent of it in the channel. It carries enough to launch one, so only a type handle can create.
+- An **instance handle** names one running agent and only ever addresses what exists: a petname (`@swift-otter`), a kind ordinal (`@claude-2`), a session-id prefix, or a precise `<mux>:<pane>` pane address. `@all` is the broadcast handle for the whole channel.
 
-A **type handle** names a profile or kind to fill and carries enough to launch one:
+The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows a handle you could type back, and a handle appears only when typing it reaches that one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing; [target.rs](../../../crates/rimz/src/target.rs) owns both.
 
-- `@<kind>` — `@codex`, the agent kind. Matches every agent of that kind in the channel, including those launched under a profile.
-- `@<profile>` — `@planner`, an `[agents.profiles]` profile ([configuration.md](../../reference/configuration.md#agent-profiles-commands-and-teams)). Matches every agent launched under that profile.
-
-An **instance handle** names one running agent and only ever addresses what already exists:
-
-- `@<petname>` — `@swift-otter`, the stable per-agent name (set at launch with `--name`).
-- `@<kind>-<ordinal>` — `@claude-2`, the nth agent of a kind in the channel.
-- a session-id prefix.
-- `<mux>:<pane>` — `tmux:%1`, a precise, channel-agnostic pane address.
-
-`@all` is the broadcast handle: every agent in the channel.
-
-The rendered handle is the shortest address that names exactly that agent, and it round-trips through the parser. Rimz renders it role-first — the role when it is unique in scope, then the profile when unique, else the kind, else `@<kind>-<n>`, else the petname — so a listing always shows the handle you could type back. A handle appears only when typing it reaches that one agent, so two `planner` roles in a channel fall through to profile or kind ordinal handles, and every handle you see resolves to exactly one agent. One canonical renderer, the inverse of the parser, is shared by every agent-bearing listing (`agents list`, `agents show`, `queue list`, the channel headers); [target.rs](../../../crates/rimz/src/target.rs) owns it.
-
-An address resolves to zero, one, or many agents, and arity decides the outcome:
+An address resolves to zero, one, or many agents against a fresh snapshot, and arity decides the outcome:
 
 | Matches | Outcome |
 | --- | --- |
 | one | delivered |
-| many | an ambiguity error listing the handles to pick one, unless `--all` (or the explicit `@all`) opts into the fan-out |
+| many | an ambiguity error listing the handles to pick one, unless `--all` (or `@all`) opts into the fan-out — which confirms before sending unless `-y`, and skips a blocked agent while the rest send |
 | zero | a miss that names where the agent runs in another channel, or — with `--create` — launches it |
 
-When a type handle matches several agents, the address resolves to an ambiguity that lists the handles to pick one — `rimz steer @codex` with two codexes stops there. `--all` (or `@all`) opts into the fan-out, which confirms before sending unless `-y` skips it; a blocked agent in a fan-out skips while the rest still send.
-
-`--create` launches a missing agent straight from its address. `rimz steer @planner#feat/x --create -- "draft the API"` opens a `planner` in `#feat/x` — creating the worktree when the channel is new — with the text as its first prompt. Only a type handle creates, because only a kind or a profile carries what a launch needs; an instance handle (a petname, ordinal, or session id) names something that must already exist and refuses with the fix. Create-on-miss is the same launch as `rimz agents <kind|profile> --worktree=<channel> "<prompt>"`, reached from the address.
+`--create` launches a missing agent straight from its address: `rimz steer @planner#feat/x --create -- "draft the API"` opens a `planner` in `#feat/x`, creating the worktree when the channel is new, with the text as its first prompt. Only a type handle creates, because only a kind or profile carries what a launch needs; an instance handle names something that must already exist and refuses with the fix. Create-on-miss is exactly the launch `rimz agents <kind|profile> --worktree=<channel> "<prompt>"` would run, reached from the address.
 
 ## Talk and queue
 
-Rimz delivers text to a live member now (`rimz steer`) or at its next open delivery point (`rimz queue`). Both ride the same pane-send primitive humans and resolvers share, address agents through the [address grammar](#the-address) above, and take state decisions from the ledger snapshot and the hook lifecycle. The two mirror each other — the same address, fan-out, `--force`, `--no-enter`, `--smart-compact`, `[harness] smart_compact` default, `--file`, and `--no-from` surface, and the same `\n` soft-newline text — and diverge only on timing: `queue` adds `--on`, the gate that picks the boundary to deliver at.
+`steer` and `queue` both deliver text to a member, ride the same pane-send primitive humans and resolvers share, resolve the [address](#the-address) above against a fresh snapshot, and take their state decisions from the ledger and the hook lifecycle. They mirror each other on flags ([cli/agents.md](../../reference/cli/agents.md#steer-live-agents) is the surface) and diverge on one thing: timing. `queue` adds `--on`, the gate that picks the boundary to deliver at.
 
 ### Targets
 
-`steer` and `queue` require the `@` sigil — a bare selector fails with a `did you mean @…?` hint — so a stray word never broadcasts by accident; a pane id is the one sigil-free exception. They resolve the [address](#the-address) against a freshly produced snapshot, so a just-started pane is present.
+The two commands address different layers because they deliver at different times. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md → The instance lifecycle](./agent.md#the-instance-lifecycle)) — because the thing a paste needs is the *pane*, which the producer already detects. `queue` keys a durable record on a *session id*, so it addresses **bound sessions** only; an address that matches just an unbound pane has no key, so `queue` points it at `steer` to start the session first. A petname, kind ordinal, or session-id prefix names a bound session under either command. (Floating Zellij panes participate in `steer` live-pane addressing.)
 
-Floating Zellij panes participate in `steer` live-pane addressing while the sidebar room renders tiled panes.
-
-The two commands address different layers, because they deliver at different times. `steer` reaches **live panes**: a bare `@<kind>` or `@all` also reaches a pane that has not bound a session yet — a lazy-registering agent (Codex) before its first turn ([agent.md](./agent.md#the-instance-lifecycle)) — because the address a paste needs is the pane, which the producer already detects for that pane's idle row. `queue` keys a durable record on a session id, so it addresses **bound sessions**; an address that matches only an unbound pane has no key, so `queue` points it at `steer` to start the session first. A petname, kind ordinal, or session-id prefix names a bound session under either command.
-
-Fan-out and `--create` follow the [address rules](#the-address) above: more than one match needs `--all` (or `@all`) and confirms unless `-y`, and one blocked or paneless agent skips while the rest still send.
+The `@` sigil is required — a bare selector fails with a `did you mean @…?` hint, so a stray word never broadcasts; a pane id is the one sigil-free exception.
 
 ### Steer
 
-`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit) and then presses Enter as a discrete keystroke outside the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. The CLI interprets the two-character `\n` escape in `<text>` (and `\\` for a literal backslash; every other escape keeps its backslash, so a regex or path survives), so a newline can be typed inline without shell quoting. `--file <PATH>` reads the prompt from a file in place of `<text>` and sends it verbatim — no `\n`/`\\` interpretation, since a file already holds real newlines and literal backslashes — refusing both an inline `<text>` alongside it and an empty or unreadable file. A Rimz-launched agent sends with `from @sender: ` prepended; a cross-channel send prepends `from @sender#channel: `. `--no-from` keeps the delivered text exact. `--no-enter` types the text and holds the Enter. A pending feed ask attached to a bound agent skips that agent; `--force` records the override and sends anyway. The `agent.steered` event records kind, pane id, force flag, sender address when present, and text length per send, plus the session id when one is bound — an unbound pane records only kind and pane. Message content stays out of the event log.
+`rimz steer <target> -- <text>` injects into each resolved pane immediately as a [bracketed paste](#bracketed-paste-submit), then presses Enter as a discrete keystroke *outside* the paste — the submit — while any `\n` inside the text rides the paste as a soft composer newline, so a multi-line prompt lands multi-line. By default a Rimz-launched agent's send arrives prefixed `from @sender: `, gaining `#channel` when it crosses channels; `--no-from` delivers the bytes exact. A pending feed ask attached to a bound agent skips that agent unless `--force` records the override and sends anyway. The `agent.steered` event records metadata — kind, pane, force flag, sender, text length, and the session id when bound — never the message content.
 
 ### Bracketed-paste submit
 
-Both `steer` and `queue` delivery wrap the text in bracketed-paste markers (`ESC[200~` … `ESC[201~`) through the `MuxBackend::paste_text` primitive, then press Enter as a separate `send_key`. Agent composers run paste-detection heuristics: text and a trailing `\r` coalesced into one PTY read are taken as pasted content, and the `\r` becomes a literal newline rather than a submit. The paste markers make the boundary lexical — the composer leaves paste mode on `ESC[201~`, so the following Enter is unambiguously a keystroke even when every byte arrives in one read. The generic `rimz pane send` stays on the raw type path, since a bare shell would render the markers literally.
+Both commands wrap the text in bracketed-paste markers (`ESC[200~` … `ESC[201~`) through `MuxBackend::paste_text`, then press Enter as a separate `send_key`. This makes the boundary lexical: agent composers run paste-detection heuristics — text plus a trailing `\r` coalesced into one PTY read is taken as pasted content, with the `\r` a literal newline rather than a submit — so the composer leaves paste mode on `ESC[201~` and the following Enter is unambiguously a keystroke even when every byte arrives in one read. The generic `rimz pane send` stays on the raw type path, since a bare shell would render the markers literally.
 
 ### Compact before sending
 
-`--smart-compact <PCT|TOKENS>` lands a message against a fresh window: when the agent's context fill has reached the threshold, Rimz submits the agent's `/compact` first, then the message, so the prompt runs after the compaction instead of racing the agent's own auto-compaction mid-turn. The threshold is a percentage of the window (`70%`) or an occupied-token count (`120000`), compared against the live fill — the folded statusline reading where present, else the per-call token split, else the carried gauge. An omitted flag falls back to the `[harness] smart_compact` per-machine default. An unknown fill is not a full window, so it sends the message untouched.
+`--smart-compact <PCT|TOKENS>` lands a message against a fresh window: when the agent's context fill has reached the threshold, Rimz submits the agent's `/compact` first, then the message, so the prompt runs after compaction instead of racing the agent's own auto-compaction mid-turn. The threshold is a percentage of the window or an occupied-token count, compared against the live fill (the folded statusline reading where present, else the per-call token split, else the carried gauge); an omitted flag falls back to the [`[harness] smart_compact`](../../reference/configuration.md#smart-compaction) default, and an unknown fill is not a full window, so it sends untouched.
 
-The compaction is the agent's own slash command, owned by the adapter (`AgentAdapter::compact_command` — `/compact` for every wired agent). It rides the raw type path, not [the bracketed paste](#bracketed-paste-submit): a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. `steer` resolves the flag or config default at invocation and reads the fill now before the immediate paste; `queue` resolves the flag or config default at enqueue, then re-reads fill at the delivery boundary and types `/compact` ahead of the message in the same delivery, so a failed compaction fails the delivery through the same retry path as a failed send. A lazy pane with no bound session carries no fill, so `steer --smart-compact` to one simply sends.
+The compaction is the agent's own slash command, owned by the adapter (`AgentAdapter::compact_command`). It rides the raw type path, **not** the bracketed paste — a composer treats pasted text as literal content, so a pasted `/compact` would land as a prompt rather than run. `steer` reads the fill now, just before the immediate paste; `queue` resolves the threshold at enqueue and re-reads fill at the delivery boundary, typing `/compact` ahead of the message in the same delivery so a failed compaction fails the delivery through the same retry path as a failed send.
 
 ### Queue: leave a task for later
 
-A queued message waits for the member to be free and delivers itself at the next open turn. `rimz queue <target> -- <text>` enqueues one; `rimz queue list` shows pending and terminal records by canonical handle and sender; `rimz queue remove <msg-id>` drops one pending message and `rimz queue clear <target>` drops every pending message for a member.
-
-Queued messages live under the workspace state root:
+A queued message waits for the member to be free and delivers itself at the next open turn. Records live under the workspace state root:
 
 ```text
-queue/<msg_id>.json
-queue/terminal/<msg_id>.json
+queue/<msg_id>.json            pending
+queue/terminal/<msg_id>.json   claimed and final
 ```
 
-`msg_` ids are UUIDv7, so filename order is FIFO order. Pending scans read only `queue/*.json`; claimed and final records move atomically into `queue/terminal/`. The directory is created lazily, so a workspace with no queued messages costs the hook path one missing-dir stat.
-
-Each record stores the workspace id, agent kind, agent session id, sender identity, text, Enter flag, delivery gate, force flag, status, enqueue/update timestamps, attempt count, last attempt timestamp, last error, and delivered timestamp. Status values are `pending`, `claimed`, `delivered`, `removed`, and `abandoned`.
+`msg_` ids are UUIDv7, so filename order is FIFO order; pending scans read only `queue/*.json`, and the directory is created lazily so an empty workspace costs the hook path one missing-dir stat. Each record stores the workspace, kind, session id, sender, text, Enter flag, gate, force flag, status (`pending` → `claimed` → `delivered`, or `removed` / `abandoned`), timestamps, and attempt bookkeeping. The full record is the field catalog; the lifecycle below is the contract.
 
 ### Gates
 
-`--on done` opens when the rollup status is `idle` or `success`. `--on any` also opens on `failed`. `running`, `waiting`, and `paused` keep delivery closed. A pending ask attached to the agent keeps delivery closed for every gate, because the next input belongs to that ask — unless the message was queued with `--force`, which delivers past the ask, mirroring `steer --force`.
-
-The queue requires installed and trusted hooks for the target agent. Hooks are the delivery signal; accepting a queue entry for an unwired agent would create durable work with no transition that can release it.
+`--on` picks the boundary to open at: `done` opens when the rollup status is `idle` or `success`, `any` also opens on `failed`, and `running` / `waiting` / `paused` keep delivery closed. A pending ask attached to the agent keeps delivery closed for every gate — the next input belongs to that ask — unless the message was queued with `--force`, mirroring `steer --force`. The queue requires installed and trusted hooks for the target, because hooks are the delivery signal: accepting an entry for an unwired agent would create durable work no transition could release.
 
 ### Delivery
 
-Only unparked root turn ends trigger delivery. `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver --message-id <id>` helper with nulled stdio for the FIFO head.
+Only **unparked root turn ends** trigger delivery — `Registered`, subagent stops, compaction events, and parked background turn ends do not check the queue. The lifecycle hook records the event, then spawns a detached `rimz queue deliver` helper with nulled stdio for the FIFO head. The helper waits a short settle delay (`RIMZ_QUEUE_SETTLE_MS` overrides it for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped under `--force`), and the bound pane, computes the sender prefix against the target's current channel, then claims the head under the workspace lock immediately before sending.
 
-The helper waits `400ms` by default (`RIMZ_QUEUE_SETTLE_MS` overrides this for tests), reads the pending head, checks a fresh snapshot for the gate, the pending-ask predicate (skipped when the record is `--force`), and the bound pane, computes the sender prefix against the target's current channel, then claims the head under the workspace lock immediately before sending. State misses leave the message pending for a later transition. The claim moves the record to `claimed`, outside the pending scan, and increments the attempt count. A successful send moves the record to `delivered`; a send failure records `last_error` and returns it to `pending`, and after five attempts the record becomes `abandoned`. The claim timestamp throttles retries after a send failure. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered on a later turn end.
-
-Delivery is FIFO per agent, and one message is attempted per unparked root turn end.
-
-### Audit events
-
-Queue writes append `message.queued`, `message.delivered`, `message.removed`, and `message.abandoned` events — `remove` and `clear` both append `message.removed`. Events include message id, kind, agent id, sender address when present, gate, status, text length, Enter flag, attempt count, and reason. They never include message text.
-
-`rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the current rollup. This is maintenance, not delivery; normal state misses stay pending.
+The claim moves the record out of the pending scan and increments the attempt count. A successful send moves it to `delivered`; a send failure records `last_error` and returns it to `pending`, throttled by the claim timestamp, and after the retry cap the record becomes `abandoned`. A state miss simply leaves the message pending for a later transition. A crash after claim leaves a visible `claimed` record that `queue list` surfaces; it is not auto-redelivered. Delivery is FIFO per agent, one message per unparked root turn end. Queue writes append `message.queued` / `delivered` / `removed` / `abandoned` audit events (metadata only, never text), and `rimz gc` abandons open messages whose `(kind, agent_id)` no longer appears in the rollup.
 
 ### Hazards
 
-Queued text can still land while a human has half-typed a draft in the agent pane. Rimz gates on ledger state, not focused-pane state or captured composer contents.
-
-Agent UIs can present dialogs that are not represented as feed asks. Core keeps pane capture out of message delivery; resolvers that need to inspect UI text own capture-before-send.
-
-Multiplexer sends are best-effort. A pane can disappear or reject input after the claim. The queue records the error and retries on future turn-end transitions until the attempt cap.
+- Queued text can land while a human has half-typed a draft in the agent pane. Rimz gates on ledger state, not focused-pane state or captured composer contents.
+- Agent UIs can present dialogs that are not feed asks. Core keeps pane capture out of delivery; a resolver that needs to inspect UI text owns capture-before-send.
+- Multiplexer sends are best-effort: a pane can disappear or reject input after the claim, which the queue records and retries until the attempt cap.
 
 ## Supervised runs
 
-When a cron job, a CI gate, a PR hook, or a script needs to drive one member and read its result, it uses a supervised run. `rimz agents <spec> <prompt> -p` opens one interactive agent pane, splitting the current tab by default so focus stays put and opening a new tab only with `--new-tab` or when run outside a room; it waits for the agent's root turn to end, prints the final assistant message or stream events, and exits with a script-friendly status code: `0` completed, `1` failed, `124` timed out, `130` canceled. It is the scriptable entry point: automation drives one agent turn without attaching to the room, while an in-room caller sees the transient pane beside the current pane.
+When a cron job, CI gate, PR hook, or script needs to drive one member and read its result, it uses a supervised run. `rimz agents <spec> <prompt> -p` opens one interactive agent pane (splitting the current tab by default, a new tab only with `--new-tab` or outside a room), waits for the agent's root turn to end, prints the result, and exits with a script-friendly code: `0` completed, `1` failed, `124` timed out, `130` canceled. Automation drives one agent turn without attaching to the room; an in-room caller sees the transient pane beside the current one. Supervised runs require installed and trusted hooks, because hooks are the completion signal ([agent.md → Hook install](./agent.md#hook-install--the-visible-security-step)). Loop tasks ride this path ([loop.md](./loop.md)).
 
-**Run records and completion.** A run record is written under `runs/<run_id>.json` before the pane opens, the launched `rimz agents exec` wrapper exports `RIMZ_RUN_ID`, and lifecycle hooks fold matching root-session observations into that record. The wrapper also records its own normalized pane id when the mux exposes one, so cleanup can close the launched pane without waiting for the sidebar snapshot to bind the agent session. The first root `TurnEnded` completes the run as `completed` or `failed`; a session `Ended` before a turn result marks it failed; `rimz agents stop <run-id>` marks an active run `canceled`; subagent events and same-kind descendant processes with a different session id are ignored, so child completions never finish the parent command. If the wrapper observes the agent process exit and no terminal lifecycle hook lands after a short grace, it writes `failed` and wakes the waiter, making process death a liveness backstop without treating pane exit as success.
+**Run records and completion.** A run record is written under `runs/<run_id>.json` before the pane opens, the launched wrapper exports `RIMZ_RUN_ID`, and lifecycle hooks fold matching root-session observations into it. The wrapper also records its own normalized pane id, so cleanup can close the launched pane without waiting for the snapshot to bind the session. The first root `TurnEnded` completes the run `completed` or `failed`; a session `Ended` before a turn result marks it failed; `rimz agents stop <run-id>` marks an active run `canceled`; subagent events and same-kind descendants with a different session id are ignored, so a child completion never finishes the parent. If the wrapper observes the agent process exit and no terminal hook lands after a short grace, it writes `failed` and wakes the waiter — process death is the liveness backstop, and pane exit is never read as success.
 
-Supervised `-p` runs require installed and trusted hooks, because hooks provide the completion signal ([agent.md → Hook install](./agent.md#hook-install--the-visible-security-step)).
+**The wakeup socket.** The blocking CLI binds `sock/run.<short_id>.sock` before opening the pane. The first terminal run record sends a `run_completed` datagram to that socket; the record on disk stays truth and the datagram only cuts latency. If the wait cap expires, the CLI reloads the record once to catch a just-written terminal result, otherwise writes `timed_out` and exits `124`.
 
-Loop tasks ride this path: a scheduled `rimz loop run` drives one configured supervised turn, with `<kind>-ping` tasks starting a provider's budget window on your schedule ([loop.md](./loop.md)).
+**Output and input formats.** `--output-format` chooses the projection `-p` prints (`text` the final assistant message, `json` the run record, `stream-json` NDJSON run events as the turn runs); `--input-format` chooses the prompt source (`text` the positional prompt plus piped stdin, `stream-json` user messages from stdin until EOF). Streaming is **transcript-tail based**: run records store the adapter transcript path, and `--output-format stream-json` / `agents wait --stream` poll it with the torn-write-safe cursor used for transcript reads, parsing only newly appended assistant messages through the selected adapter and resetting the cursor if the path changes. The run socket still exists only to wake a blocking producer promptly.
 
-**The wakeup socket.** The blocking CLI binds `sock/run.<short_id>.sock` before opening the pane. When a hook, timeout, or operator stop writes the first terminal run record it sends a `run_completed` wakeup frame to that socket; the record on disk remains truth, and the datagram only cuts latency. If the wait cap expires, the CLI reloads the record once to catch a just-written terminal result, otherwise writes `timed_out` and exits `124`.
+**Posture and launch params are adapter-owned.** A run chooses `auto` (default), `--ask`, or `--yolo`, and `--model` / `--effort` / `--system-prompt-file` / `--append-system-prompt-file` render through each adapter's `render_preset` — the one place per-agent native launch flags are built. An adapter with no native flag for a param refuses the launch, naming the unsupported flag, rather than dropping the intent (supervised `--max-turns` renders through a separate per-adapter turn-limit hook). The provider-specific mappings live in the adapter docs.
 
-**Output and input formats.** `--output-format` chooses the projection `-p` prints: `text` (default) prints the final assistant message, `json` prints the terminal run record, and `stream-json` emits NDJSON run events as the turn runs. `--input-format` chooses the prompt source: `text` (default) reads the positional prompt and folds in piped stdin after it, while `stream-json` reads user messages from stdin until EOF (a bare `content` string or the `text` of each content block), refusing a positional prompt. `stream-json` output is incompatible with `--detach`.
-
-**Streaming is transcript-tail based.** Run records store the adapter transcript path when lifecycle observations provide it; if the first lifecycle hook arrives before the transcript file exists, the first later observation that carries a path writes it once. `rimz agents <spec> <prompt> -p --output-format stream-json` and `rimz agents wait <run-id> --stream` poll that file with the torn-write-safe cursor used for transcript reads, parse only newly appended assistant messages through the selected adapter, and reset the cursor if the transcript path changes. Stream status events come from the same read-time join as `agents show`; the run socket still exists only to wake a blocking producer promptly. An attached `agents wait --stream` timeout stops the watcher and exits `124` without mutating the run record.
-
-**Permission posture is adapter-owned.** The run chooses `auto` (the default), `--ask`, or `--yolo`; adapters translate that into provider CLI arguments. Claude maps `auto` to accepted edits and `yolo` to its dangerous bypass flag. Codex maps `auto` to `--ask-for-approval never --sandbox workspace-write`, leaves `ask` at the provider default, and maps `yolo` to its dangerous approvals-and-sandbox bypass.
-
-**Shared launch params are adapter-owned the same way.** `--model`, `--effort`, `--system-prompt-file`, and `--append-system-prompt-file` render through each adapter's `render_preset` — the one place per-agent native launch flags are built — so `--model opus` becomes Claude's or Codex's `--model opus`, `--effort high` becomes Claude's `--effort high` or Codex's `-c model_reasoning_effort=high`, `--system-prompt-file` becomes Claude's `--system-prompt-file` or Codex's `-c model_instructions_file=`, and `--append-system-prompt-file` becomes Claude's append flag. Supervised `-p --max-turns` renders through a separate per-adapter turn-limit hook (Claude today). An adapter with no native flag for a param refuses the launch, naming the unsupported flag, rather than dropping the intent.
-
-**Durability and inspection.** Run records are cold-path durable state and use temp-file-plus-rename with fsync through the ledger atomic helpers. `rimz agents show <run-id>` reads the current workspace's retained run records and attaches live card context when the run is still active. Live fields stay out of the durable run record, so clearing and agent drift do not create extra locked writes. Records are retained until an operator removes state.
+**Durability and inspection.** Run records are cold-path durable state, written with temp-file-plus-rename through the ledger atomic helpers and retained until an operator removes state. `rimz agents show <run-id>` reads the retained records and attaches live card context while the run is active; live fields stay out of the durable record, so clearing and agent drift create no extra locked writes.
 
 ## Cleanup
 
 When an agent exits, the same `rimz agents exec` wrapper that launched it reclaims what it owns: the supervised run's pane, and — for a worktree launch — the worktree.
 
-**End traces.** Interactive agent panes keep the wrapper resident, including resume panes and non-worktree live launches that close their pane on exit. When the child exits while the mux session is still alive, the wrapper records a durable `agent.ended` trace for the agent stamped on its pane; this is the tab/pane close path, so that agent stays out of future recovery. When the room is gone or unhealthy at wrapper exit — reboot, mux crash, closing the last tab, or the in-`start` stuck-room recovery — the wrapper suppresses the trace so the agent remains recoverable. Resume birth offers to group those surviving agents by worktree into `#<channel>` tabs, matching a live worktree launch.
+**End traces.** Interactive agent panes keep the wrapper resident. When the child exits while the mux session is still alive, the wrapper records a durable `agent.ended` trace for the agent stamped on its pane — the tab/pane close path, which keeps that agent out of future recovery. When the room is gone or unhealthy at wrapper exit (reboot, mux crash, closing the last tab, in-`start` stuck-room recovery), the wrapper *suppresses* the trace, so the agent stays recoverable and resume birth can regroup it into a `#<channel>` tab.
 
-**Worktree cleanup.** An agent launched with `--worktree-path` triggers worktree cleanup on exit, which proves the branch's work landed before removing the tree and deleting its branch. The cleanup helper, the decision table, and the `rimz gc` sweep are [worktree.md → Cleanup](./worktree.md#cleanup).
+**Worktree cleanup.** An agent launched with `--worktree-path` triggers worktree cleanup on exit, which proves the branch's work landed before removing the tree and deleting its branch. The helper, decision table, and `rimz gc` sweep are [worktree.md → Cleanup](./worktree.md#cleanup).
 
-**Run pane cleanup.** After a blocking `-p` run finishes, pane cleanup is best-effort: Rimz closes the recorded launch pane when available, then falls back to finding the agent row by `(kind, agent_id)` in the snapshot. A detached run (`--detach`) passes cleanup ownership to the in-pane wrapper: unless `--keep` was set, the wrapper watches the run record, terminates the agent process once the run is terminal, performs marked-worktree cleanup, and closes its own pane. Operator stops use the same terminal record and wakeup path, then check whether the recorded pane remains after a short grace and close it through the mux backend when possible; an explicit stop reclaims a kept run's lingering pane whether the ref is the run id or agent name.
+**Run-pane cleanup.** After a blocking `-p` run finishes, pane cleanup is best-effort: Rimz closes the recorded launch pane, falling back to finding the agent row by `(kind, agent_id)` in the snapshot. A detached run (`--detach`) passes cleanup to the in-pane wrapper: unless `--keep` was set, the wrapper watches the run record, terminates the agent once the run is terminal, performs marked-worktree cleanup, and closes its own pane. An operator stop uses the same terminal record and wakeup path, then closes the recorded pane if it lingers past a short grace — reclaiming a kept run's pane whether the ref is the run id or the agent name.
