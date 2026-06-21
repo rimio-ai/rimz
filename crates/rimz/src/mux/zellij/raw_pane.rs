@@ -1,6 +1,9 @@
 //! Raw Zellij pane projection, topology-cache reads, and sidebar classification.
 
-use std::{collections::HashSet, env};
+use std::{
+    collections::{BTreeMap, HashSet},
+    env,
+};
 
 use jiff::Timestamp;
 use serde::Deserialize;
@@ -510,16 +513,33 @@ pub(super) fn raw_panes_from_topology(cache: PaneTopologyCache) -> Vec<RawPane> 
 pub(super) struct RawPaneListing {
     pub(super) panes: Vec<RawPane>,
     pub(super) observed_at_ms: u64,
-    pub(super) source_active: std::collections::BTreeMap<ViewId, PaneId>,
+    pub(super) source_active: BTreeMap<ViewId, PaneId>,
     pub(super) served_from_topology: bool,
 }
 
 impl RawPaneListing {
     pub(super) fn from_cli(panes: Vec<RawPane>, observed_at_ms: u64) -> Self {
+        let mut source_active = BTreeMap::new();
+        for pane in panes
+            .iter()
+            .filter(|pane| pane.is_listed_pane() && pane.is_focused)
+        {
+            // The CLI path lacks the presence cache's authoritative active pane.
+            // Choose the first focused listed pane per tab deterministically; the
+            // frame resolver's prior-active preference damps any source mismatch.
+            source_active
+                .entry(ViewId::new_unchecked(format!(
+                    "tab_{}",
+                    pane.view_position()
+                )))
+                .or_insert_with(|| {
+                    PaneId::from_parts(MuxName::Zellij, format!("terminal_{}", pane.id))
+                });
+        }
         Self {
             panes,
             observed_at_ms,
-            source_active: std::collections::BTreeMap::new(),
+            source_active,
             served_from_topology: false,
         }
     }

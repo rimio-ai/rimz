@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ids::PaneId;
-use crate::sidebar::frame::PaneFrame;
+use crate::sidebar::frame::{PaneFrame, PaneMetrics};
+use crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE;
 
 fn pane_process_agent_kind(process: &crate::sidebar::frame::PaneProcess) -> Option<&'static str> {
     process
@@ -115,6 +116,43 @@ pub(super) fn stamp_pane_process_starts(
             pane.current.started_at = Some(*start);
         }
     }
+}
+
+/// Drop a pane's process binding when the live process no longer matches the
+/// published start stamp. Agent panes compare against the same root→agent-child
+/// derivation [`stamp_pane_process_starts`] uses; a shell-hosted Codex pane's
+/// `pid` is the shell while `started_at` is the agent child.
+pub(super) fn drop_reused_pid_bindings(
+    frame: &mut PaneFrame,
+    root_start: &dyn Fn(&str, u32) -> Option<jiff::Timestamp>,
+    process_start: &dyn Fn(u32) -> Option<jiff::Timestamp>,
+) {
+    for pane in frame.pane_states_mut() {
+        let Some(pid) = pane.current.pid else {
+            continue;
+        };
+        let Some(expected) = pane.current.started_at else {
+            continue;
+        };
+        let live_start = pane_process_agent_kind(&pane.current)
+            .and_then(|kind| root_start(kind, pid))
+            .or_else(|| process_start(pid));
+        let stale = match live_start {
+            Some(actual) => process_start_diff_gt(expected, actual),
+            None => true,
+        };
+        if stale {
+            pane.current.pid = None;
+            pane.current.started_at = None;
+            pane.previous = None;
+            pane.children.clear();
+            pane.metrics = PaneMetrics::default();
+        }
+    }
+}
+
+fn process_start_diff_gt(left: jiff::Timestamp, right: jiff::Timestamp) -> bool {
+    left.as_second().abs_diff(right.as_second()) > PROCESS_START_MATCH_TOLERANCE.as_secs()
 }
 
 fn clear_duplicate_carried_starts(

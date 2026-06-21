@@ -53,6 +53,11 @@ pub const FRAME_REJECT_ESCAPE: Duration = Duration::from_secs(5);
 /// source cannot freeze the room indefinitely.
 pub const PANE_CARRY_TTL: Duration = Duration::from_secs(30);
 
+/// Tolerance when comparing a pane's recorded process start against the live
+/// `/proc` start. The check works at whole-second granularity, so this absorbs
+/// timestamp-source rounding without letting reused pids keep stale identity.
+pub const PROCESS_START_MATCH_TOLERANCE: Duration = Duration::from_secs(2);
+
 /// How young the presence stamp must be for the producer to trust the push
 /// channel and use [`EVENT_PANE_TTL`]. 2.5× the plugin's 60s keepalive — two
 /// missed keepalives of slack, the same ratio the sidebar heartbeat TTL keeps

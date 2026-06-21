@@ -83,12 +83,13 @@ pub(super) fn build_worktree_groups_from_rows(
         .into_iter()
         .map(|(key, (label, kind, mut rows))| {
             rows.sort_by(compare_rows);
-            // Prefer a branch label over the path-basename seed unless this is
-            // a root pod, whose room name must stay stable.
-            let label = if kind == SidebarWorktreeKind::Root {
-                label
-            } else {
+            // Prefer a branch label over the path-basename seed for worktree
+            // pods. Root pods keep the room name; external keeps its catch-all
+            // label even if a stray branch rode the row.
+            let label = if kind == SidebarWorktreeKind::Worktree {
                 group_branch_label(&rows).unwrap_or(label)
+            } else {
+                label
             };
             let status_counts = status_counts(&rows);
             let total = rows.len();

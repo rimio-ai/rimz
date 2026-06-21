@@ -61,7 +61,8 @@ pub(super) fn worktree_group_key(
         // enumeration hasn't caught up with never folds into the main pod),
         // and a snapshot with no known root and no enumerated roots. A cwd
         // outside every root (a home shell, `/tmp`, CI) falls through to the
-        // `external` catch-all.
+        // `external` catch-all unless its path still carries the reported branch
+        // name — the short pre-enumeration window for a real worktree checkout.
         let cwd = Path::new(path);
         let matched = worktree_roots
             .iter()
@@ -106,13 +107,20 @@ pub(super) fn worktree_group_key(
             };
             return (SidebarWorktreeKind::Worktree, key, label);
         }
+        if let Some(branch) = branch.filter(|branch| path_mentions_branch(cwd, branch)) {
+            return branch_group(branch);
+        }
+        return (
+            SidebarWorktreeKind::External,
+            "external".to_owned(),
+            "external".to_owned(),
+        );
     }
     if let Some(branch) = branch {
-        return (
-            SidebarWorktreeKind::Worktree,
-            format!("branch:{branch}"),
-            branch.to_owned(),
-        );
+        // Branch-only rows have no cwd to anchor to a project root. Keep their
+        // label visible until the next pane or workspace observation supplies a
+        // path.
+        return branch_group(branch);
     }
     // Catch-all: untethered scripts/CI and out-of-project shells. `external`
     // is both the stable grouping key and the header label, so it reads as
@@ -122,6 +130,39 @@ pub(super) fn worktree_group_key(
         "external".to_owned(),
         "external".to_owned(),
     )
+}
+
+fn branch_group(branch: &str) -> (SidebarWorktreeKind, String, String) {
+    (
+        SidebarWorktreeKind::Worktree,
+        format!("branch:{branch}"),
+        branch.to_owned(),
+    )
+}
+
+fn path_mentions_branch(path: &Path, branch: &str) -> bool {
+    let branch = branch
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(branch);
+    if branch.is_empty() {
+        return false;
+    }
+    let dash = format!("-{branch}");
+    let underscore = format!("_{branch}");
+    let dot = format!(".{branch}");
+    path.components().any(|component| {
+        let std::path::Component::Normal(component) = component else {
+            return false;
+        };
+        let Some(component) = component.to_str() else {
+            return false;
+        };
+        component == branch
+            || component.ends_with(&dash)
+            || component.ends_with(&underscore)
+            || component.ends_with(&dot)
+    })
 }
 
 /// The display basename of a group root, falling back to the full path for a

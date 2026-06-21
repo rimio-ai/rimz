@@ -223,9 +223,13 @@ impl DeadPidTracker {
             let reason = match process_start(pid) {
                 None => Some("gone".to_owned()),
                 Some(actual)
-                    if row
-                        .pane_process_start
-                        .is_some_and(|expected| timestamp_diff_gt(expected, actual, 2)) =>
+                    if row.pane_process_start.is_some_and(|expected| {
+                        timestamp_diff_gt(
+                            expected,
+                            actual,
+                            crate::sidebar::timing::PROCESS_START_MATCH_TOLERANCE,
+                        )
+                    }) =>
                 {
                     Some("starttime-mismatch".to_owned())
                 }
@@ -269,8 +273,8 @@ struct DeadPidObservation {
     reason: Option<String>,
 }
 
-fn timestamp_diff_gt(left: Timestamp, right: Timestamp, secs: i64) -> bool {
-    left.as_second().abs_diff(right.as_second()) > secs as u64
+fn timestamp_diff_gt(left: Timestamp, right: Timestamp, tolerance: std::time::Duration) -> bool {
+    left.as_second().abs_diff(right.as_second()) > tolerance.as_secs()
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ mod starts;
 mod validate;
 
 use carry::{CarryOutcome, apply_carry_forward};
-use starts::stamp_pane_process_starts;
+use starts::{drop_reused_pid_bindings, stamp_pane_process_starts};
 use validate::{PublishVerdict, frame_publish_verdict, pane_count, shrink_needs_verification};
 
 /// How a non-producing sidebar waits for the single producer's cache write
@@ -151,6 +151,13 @@ fn repair_pane_frame(
         &crate::remote_control::in_pane_agent_start_for_root,
         &crate::remote_control::in_pane_agent_starts,
     );
+    if crate::proc::process_start(std::process::id()).is_some() {
+        drop_reused_pid_bindings(
+            frame,
+            &crate::remote_control::in_pane_agent_start_for_root,
+            &crate::proc::process_start,
+        );
+    }
     annotate_elevated_agents(frame, &crate::remote_control::elevated_in_pane_agent);
     stamp_first_seen(frame);
 }

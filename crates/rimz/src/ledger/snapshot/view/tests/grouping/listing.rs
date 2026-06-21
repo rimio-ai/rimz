@@ -109,3 +109,62 @@ fn out_of_project_agent_tails_into_external_when_root_is_known() {
         "external tails project work even though its agent is `failed`: {groups:?}",
     );
 }
+
+#[test]
+fn out_of_project_cwd_stays_external_when_branch_flaps() {
+    let with_branch = agent("claude", "out", AgentStatus::Failed, 20)
+        .worktree("/home/marvin/.agents/teams")
+        .branch("main");
+    let without_branch =
+        agent("claude", "out", AgentStatus::Failed, 20).worktree("/home/marvin/.agents/teams");
+    let project_root = Some(std::path::PathBuf::from("/repo/main"));
+
+    let grouped = |agent: AgentState| {
+        let snapshot = room(Vec::new(), vec![agent]).with_project_root(project_root.clone());
+        let refs: Vec<&AgentState> = snapshot.agents.iter().collect();
+        let groups = group_live_agents_by_worktree(&refs, &snapshot);
+        let group = groups.first().expect("a group");
+        assert_eq!(groups.len(), 1);
+        (group.kind, group.label.clone())
+    };
+
+    let external = (SidebarWorktreeKind::External, "external".to_owned());
+    assert_eq!(grouped(with_branch), external);
+    assert_eq!(grouped(without_branch), external);
+}
+
+#[test]
+fn sidebar_external_group_label_ignores_stray_branch() {
+    let outside = agent("claude", "out", AgentStatus::Failed, 20)
+        .worktree("/home/marvin/.agents/teams")
+        .branch("main");
+    let snapshot = room(Vec::new(), vec![outside])
+        .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
+        .with_live_panes(
+            vec![pane("%1", "claude", "/home/marvin/.agents/teams")],
+            None,
+        );
+
+    let group = snapshot.worktree_groups.first().expect("a group");
+    assert_eq!(group.kind, SidebarWorktreeKind::External);
+    assert_eq!(group.key, "external");
+    assert_eq!(group.label, "external");
+}
+
+#[test]
+fn branch_named_unmatched_path_keeps_pre_enumeration_worktree_group() {
+    let feature = agent("claude", "feat", AgentStatus::Running, 20)
+        .worktree("/work/query-engine-feature-x/src")
+        .branch("feature-x");
+    let snapshot = room(Vec::new(), vec![feature])
+        .with_project_root(Some(std::path::PathBuf::from("/repo/main")))
+        .with_live_panes(
+            vec![pane("%1", "claude", "/work/query-engine-feature-x/src")],
+            None,
+        );
+
+    let group = snapshot.worktree_groups.first().expect("a group");
+    assert_eq!(group.kind, SidebarWorktreeKind::Worktree);
+    assert_eq!(group.key, "branch:feature-x");
+    assert_eq!(group.label, "feature-x");
+}

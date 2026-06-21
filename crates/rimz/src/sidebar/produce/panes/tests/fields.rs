@@ -333,6 +333,125 @@ fn stamp_pane_process_starts_skips_non_agent_and_cwdless_panes() {
 }
 
 #[test]
+fn drop_reused_pid_bindings_clears_stale_process_identity() {
+    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let actual: jiff::Timestamp = "2026-06-05T12:00:10Z".parse().unwrap();
+    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).current.started_at = Some(expected);
+    let previous = first(&frame).current.clone();
+    first_mut(&mut frame).previous = Some(previous);
+    first_mut(&mut frame).children = vec![200];
+    first_mut(&mut frame).metrics = PaneMetrics {
+        process_state: Some(crate::ProcessState::Stuck),
+        rss_kb: Some(1024),
+        cpu_pct: Some(250),
+        io_bps: Some(4096),
+    };
+
+    drop_reused_pid_bindings(
+        &mut frame,
+        &|_, pid| {
+            assert_eq!(pid, 100);
+            None
+        },
+        &|pid| {
+            assert_eq!(pid, 100);
+            Some(actual)
+        },
+    );
+
+    assert_eq!(first(&frame).current.pid, None);
+    assert_eq!(first(&frame).current.started_at, None);
+    assert_eq!(first(&frame).previous, None);
+    assert!(first(&frame).children.is_empty());
+    assert_eq!(first(&frame).metrics, PaneMetrics::default());
+}
+
+#[test]
+fn drop_reused_pid_bindings_keeps_matching_process_identity() {
+    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let actual: jiff::Timestamp = "2026-06-05T12:00:02Z".parse().unwrap();
+    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).current.started_at = Some(expected);
+    first_mut(&mut frame).metrics = PaneMetrics {
+        process_state: None,
+        rss_kb: Some(1024),
+        cpu_pct: Some(250),
+        io_bps: Some(4096),
+    };
+
+    drop_reused_pid_bindings(
+        &mut frame,
+        &|kind, pid| {
+            assert_eq!(kind, "codex");
+            assert_eq!(pid, 100);
+            Some(actual)
+        },
+        &|pid| -> Option<jiff::Timestamp> {
+            panic!("agent root-start owns the live identity: {pid}")
+        },
+    );
+
+    assert_eq!(first(&frame).current.pid, Some(100));
+    assert_eq!(first(&frame).current.started_at, Some(expected));
+    assert_eq!(first(&frame).metrics.rss_kb, Some(1024));
+}
+
+#[test]
+fn drop_reused_pid_bindings_clears_missing_process_start() {
+    let expected: jiff::Timestamp = "2026-06-05T12:00:00Z".parse().unwrap();
+    let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+    first_mut(&mut frame).current.pid = Some(100);
+    first_mut(&mut frame).current.started_at = Some(expected);
+
+    drop_reused_pid_bindings(
+        &mut frame,
+        &|_, pid| {
+            assert_eq!(pid, 100);
+            None
+        },
+        &|pid| {
+            assert_eq!(pid, 100);
+            None
+        },
+    );
+
+    assert_eq!(first(&frame).current.pid, None);
+    assert_eq!(first(&frame).current.started_at, None);
+}
+
+#[test]
+fn drop_reused_pid_bindings_skips_unpaired_process_identity() {
+    for (name, pid, started_at) in [
+        (
+            "pidless",
+            None,
+            Some("2026-06-05T12:00:00Z".parse().unwrap()),
+        ),
+        ("startless", Some(100), None),
+    ] {
+        let mut frame = frame(vec![pane("terminal_1", Some("codex"), Some("/repo"))]);
+        first_mut(&mut frame).current.pid = pid;
+        first_mut(&mut frame).current.started_at = started_at;
+
+        drop_reused_pid_bindings(
+            &mut frame,
+            &|_, pid| -> Option<jiff::Timestamp> {
+                panic!("must not read root start for {name}: {pid}")
+            },
+            &|pid| -> Option<jiff::Timestamp> {
+                panic!("must not read process start for {name}: {pid}")
+            },
+        );
+
+        assert_eq!(first(&frame).current.pid, pid, "{name}");
+        assert_eq!(first(&frame).current.started_at, started_at, "{name}");
+    }
+}
+
+#[test]
 fn active_command_liveness_matrix_matches_backend_contracts() {
     for (name, pane_ref, cmdlines, comms, children, expected, expect_metadata_clear) in [
         (
