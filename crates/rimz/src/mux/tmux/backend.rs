@@ -1,7 +1,9 @@
 //! tmux [`MuxBackend`](crate::mux::MuxBackend) trait implementation.
 
 use super::TmuxBackend;
-use super::options::{sidebar_serve_command, tmux_views_with_sidebars};
+use super::options::{
+    after_new_window_hook_set_cmd, sidebar_serve_command, tmux_views_with_sidebars,
+};
 use super::parse::{parse_focused_client_panes, parse_new_window_ids, parse_pane_line};
 use crate::ids::{MuxName, PaneId};
 use crate::mux::{
@@ -338,16 +340,7 @@ impl MuxBackend for TmuxBackend {
         // pins the verdict's fixed columns: a new window instantiates at the
         // attached client's real geometry, and a raw percentage there would
         // re-evaluate against it — exactly how the cap used to vanish.
-        let serve = command.join(" ");
-        let cols = opts.birth_size.cols;
-        let hook = format!("split-window -h -b -d -l {cols} '{serve}'");
-        let set_hook = vec![
-            "set-hook".to_owned(),
-            "-t".to_owned(),
-            opts.session_name.clone(),
-            "after-new-window".to_owned(),
-            hook,
-        ];
+        let set_hook = after_new_window_hook_set_cmd(opts);
         // One client invocation births the sidebar and installs the hook.
         self.batch(&[split, set_hook])?;
         // With the `after-new-window` hook installed, re-seed the reborn
@@ -362,6 +355,14 @@ impl MuxBackend for TmuxBackend {
         opts: &SidebarPaneOptions,
         live: &SidebarLiveness,
     ) -> Result<SidebarRecovery> {
+        if let Err(err) = self.cmd().args(after_new_window_hook_set_cmd(opts)).run() {
+            tracing::warn!(
+                session = %opts.session_name,
+                tags.operation = "tmux.reconcile.install_hook",
+                error = &err as &dyn std::error::Error,
+                "sidebar reconcile: re-asserting the after-new-window hook failed",
+            );
+        }
         // tmux re-adds a sidebar in place with the same left split the initial
         // window got — `-d` keeps the user's focus, `-l <pct>%` sets the width —
         // and drops a stray sidebar with `kill-pane -t`; no move/resize/refocus

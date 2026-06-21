@@ -247,6 +247,7 @@ pub fn launch_sidebar_if_needed(
     // Fast path before contending — `single_flight`'s contract is that the
     // caller has already missed a fresh read by the time it elects.
     if fresh_sidebar_present(runtime) {
+        ensure_session_view(backend, runtime, opts);
         return SidebarLaunchOutcome::SkippedFresh;
     }
     // Serialize check-then-launch through the shared single-flight election so
@@ -259,7 +260,10 @@ pub fn launch_sidebar_if_needed(
         match single_flight::coalesce(&lock_path, LAUNCH_WAIT_STEP, LAUNCH_WAIT_STEPS, || {
             fresh_sidebar_present(runtime).then_some(())
         }) {
-            Coalesced::Shared(()) => return SidebarLaunchOutcome::SkippedFresh,
+            Coalesced::Shared(()) => {
+                ensure_session_view(backend, runtime, opts);
+                return SidebarLaunchOutcome::SkippedFresh;
+            }
             Coalesced::Produce(guard) => Some(guard),
             Coalesced::ProduceLocal => None,
         };
@@ -296,6 +300,22 @@ pub fn launch_sidebar_if_needed(
             );
             SidebarLaunchOutcome::Failed
         }
+    }
+}
+
+fn ensure_session_view(
+    backend: &dyn MuxBackend,
+    runtime: &RuntimePaths,
+    opts: &SidebarPaneOptions,
+) {
+    let live = sidebar_liveness(runtime);
+    if let Err(err) = backend.reconcile_sidebars(opts, &live) {
+        tracing::warn!(
+            session = %opts.session_name,
+            mux = %backend.name(),
+            error = %err,
+            "ensuring the session sidebar view failed; continuing",
+        );
     }
 }
 

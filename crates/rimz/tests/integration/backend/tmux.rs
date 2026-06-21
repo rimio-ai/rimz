@@ -15,12 +15,14 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use portable_pty::{CommandBuilder, PtySize, native_pty_system};
+use rimz::RuntimePaths;
 use rimz::agents::{AgentLifecycleObservation, LifecycleSignal};
-use rimz::ids::{AgentKind, MuxName, PaneId, WorkspaceId};
+use rimz::ids::{AgentKind, MuxName, PaneId, SidebarInstanceId, WorkspaceId};
 use rimz::mux::{
     ClientFocusOptions, LayoutPanes, MuxBackend, NamedKey, PaneCmd, PaneListOptions,
     SessionOptions, SidebarPaneOptions, SidebarWidth, SplitPaneOptions, TabOptions, TmuxBackend,
 };
+use rimz::sidebar::{SidebarLaunchOutcome, launch_sidebar_if_needed, write_heartbeat};
 use rimz::workspace::WorkspaceResolver;
 use tempfile::TempDir;
 
@@ -247,6 +249,26 @@ impl TmuxServer {
             String::from_utf8_lossy(&output.stderr),
         );
         String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn show_hooks(&self, session: &str) -> String {
+        let output = Command::new("tmux")
+            .args(["-S", self.socket.to_str().expect("utf8 socket")])
+            .args(["show-hooks", "-t", session])
+            .output()
+            .expect("spawn tmux show-hooks");
+        assert!(
+            output.status.success(),
+            "show-hooks failed: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    fn has_after_new_window_hook(&self, session: &str) -> bool {
+        self.show_hooks(session)
+            .lines()
+            .any(|line| line.contains("after-new-window"))
     }
 }
 
@@ -510,6 +532,138 @@ fn new_window_pins_the_start_verdict_after_a_resize() {
         Some(60),
         "a window opened after the terminal grew must be born at the start \
          verdict (60 columns), not a re-evaluated percentage of 340",
+    );
+}
+
+#[test]
+fn reconcile_sidebars_reinstalls_after_new_window_hook() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-hook-reconcile");
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-hook-reconcile".to_owned(),
+        workspace_id: WorkspaceId::from_project_root(Path::new("/tmp/rimz-hook-reconcile")),
+        project_root: std::env::temp_dir(),
+        cwd: std::env::temp_dir(),
+        width,
+        birth_size: width.birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let report = server
+        .backend
+        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .expect("reconcile_sidebars");
+    assert_eq!(report.recovered, 1);
+    assert!(
+        server.has_after_new_window_hook("rimz-hook-reconcile"),
+        "reconcile should install the hook"
+    );
+    server.wait_for_pane_command("rimz-hook-reconcile", "rimz-sidebar");
+
+    server.tmux(&[
+        "set-hook",
+        "-u",
+        "-t",
+        "rimz-hook-reconcile",
+        "after-new-window",
+    ]);
+    assert!(
+        !server.has_after_new_window_hook("rimz-hook-reconcile"),
+        "test setup should remove the hook before the second reconcile"
+    );
+
+    server
+        .backend
+        .reconcile_sidebars(&opts, &rimz::mux::SidebarLiveness::default())
+        .expect("second reconcile_sidebars");
+    assert!(
+        server.has_after_new_window_hook("rimz-hook-reconcile"),
+        "reconcile should re-install a missing hook"
+    );
+}
+
+#[test]
+fn launch_sidebar_skipped_by_foreign_heartbeat_still_ensures_tmux_session_view() {
+    require_tmux!();
+
+    let server = TmuxServer::new();
+    server.ensure_with_shell("rimz-foreign");
+    server.tmux(&["rename-window", "-t", "rimz-foreign:0", "work"]);
+
+    let workspace = TempDir::new().expect("workspace");
+    let workspace_id = WorkspaceId::from_project_root(workspace.path());
+    let runtime = RuntimePaths::under(workspace_id.clone(), workspace.path()).expect("runtime");
+    runtime.ensure_dirs().expect("runtime dirs");
+    write_heartbeat(
+        &runtime,
+        workspace_id.clone(),
+        &SidebarInstanceId::new(),
+        MuxName::Zellij,
+        "prior-zellij",
+        &runtime.sock_dir.join("foreign.sock"),
+        Some(PaneId::from_parts(MuxName::Zellij, "terminal_7")),
+    )
+    .expect("foreign heartbeat");
+    assert!(rimz::sidebar::fresh_sidebar_present(&runtime));
+    assert!(
+        !server.has_after_new_window_hook("rimz-foreign"),
+        "fixture starts with no session hook"
+    );
+
+    let (_stub_dir, stub) = sidebar_command_stub();
+    let width = SidebarWidth::default();
+    let opts = SidebarPaneOptions {
+        session_name: "rimz-foreign".to_owned(),
+        workspace_id: workspace_id.clone(),
+        project_root: workspace.path().to_path_buf(),
+        cwd: workspace.path().to_path_buf(),
+        width,
+        birth_size: width.birth_size(Some(80)),
+        rimz_bin: stub,
+        replace_existing: false,
+        config: rimz::config::MultiplexerConfig::default(),
+        resume_tabs: Vec::new(),
+        refresh_ms: None,
+    };
+
+    let outcome = launch_sidebar_if_needed(&server.backend, &runtime, &opts, None);
+
+    assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
+    server.wait_for_pane_command("rimz-foreign", "rimz-sidebar");
+    assert!(
+        server.has_after_new_window_hook("rimz-foreign"),
+        "skipping producer launch should still install the tmux hook"
+    );
+    let panes = server
+        .backend
+        .list_panes(PaneListOptions {
+            session_name: Some("rimz-foreign".to_owned()),
+            ..Default::default()
+        })
+        .expect("list_panes")
+        .panes;
+    assert_eq!(
+        panes
+            .iter()
+            .filter(|pane| pane.command.as_deref() == Some("rimz-sidebar"))
+            .count(),
+        1,
+        "the working window should gain exactly one sidebar: {panes:?}",
+    );
+    assert!(
+        panes.iter().any(|pane| {
+            pane.view_name.as_deref() == Some("work")
+                && pane.command.as_deref() == Some("rimz-sidebar")
+        }),
+        "the sidebar should be in the working window: {panes:?}",
     );
 }
 
@@ -1388,7 +1542,11 @@ fn reconcile_sidebars_collapses_an_orphan_sidebar_only_window() {
 fn sidebar_command_stub() -> (TempDir, PathBuf) {
     let dir = TempDir::new().expect("stub dir");
     let path = dir.path().join("rimz-stub");
-    std::fs::write(&path, "#!/bin/sh\nsleep 5\n").expect("write stub");
+    std::fs::write(
+        &path,
+        "#!/bin/sh\nprintf '\\033]2;rimz-sidebar\\007'\nsleep 600\n",
+    )
+    .expect("write stub");
     chmod_executable(&path);
     (dir, path)
 }

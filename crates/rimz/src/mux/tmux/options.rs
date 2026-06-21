@@ -29,6 +29,23 @@ pub(super) fn sidebar_serve_command(opts: &SidebarPaneOptions) -> Vec<String> {
     command
 }
 
+/// The session-scoped hook that docks the sidebar into every tmux window opened
+/// after birth. Shared by launch and reconcile so the template cannot drift.
+pub(super) fn after_new_window_hook_set_cmd(opts: &SidebarPaneOptions) -> Vec<String> {
+    let serve = sidebar_serve_command(opts).join(" ");
+    let hook = format!(
+        "split-window -h -b -d -l {} '{serve}'",
+        opts.birth_size.cols
+    );
+    vec![
+        "set-hook".to_owned(),
+        "-t".to_owned(),
+        opts.session_name.clone(),
+        "after-new-window".to_owned(),
+        hook,
+    ]
+}
+
 pub(super) fn is_tmux_sidebar(pane: &PaneRef) -> bool {
     pane.command.as_deref() == Some(SIDEBAR_PANE_TITLE)
 }
@@ -163,6 +180,27 @@ mod tests {
         assert!(
             !without.iter().any(|arg| arg == "--refresh-ms"),
             "default launch leaves refresh cadence config-driven: {without:?}",
+        );
+    }
+
+    #[test]
+    fn after_new_window_hook_threads_refresh_override_and_birth_width() {
+        let opts = sidebar_opts(Some(75));
+        let command = after_new_window_hook_set_cmd(&opts);
+        let serve = sidebar_serve_command(&opts).join(" ");
+
+        assert_eq!(
+            command,
+            vec![
+                "set-hook".to_owned(),
+                "-t".to_owned(),
+                "room".to_owned(),
+                "after-new-window".to_owned(),
+                format!(
+                    "split-window -h -b -d -l {} '{serve}'",
+                    opts.birth_size.cols
+                ),
+            ],
         );
     }
 

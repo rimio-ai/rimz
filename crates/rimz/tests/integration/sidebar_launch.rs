@@ -25,6 +25,11 @@ fn sidebar_launch_skips_when_fresh_heartbeat_exists() {
 
     assert_eq!(outcome, SidebarLaunchOutcome::SkippedFresh);
     assert_eq!(backend.open_calls(), 0);
+    assert_eq!(
+        backend.reconcile_calls(),
+        1,
+        "a fresh workspace producer still ensures this session's view",
+    );
 }
 
 #[test]
@@ -37,6 +42,7 @@ fn sidebar_launch_opens_once_without_heartbeat() {
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
+    assert_eq!(backend.reconcile_calls(), 0);
     assert_eq!(
         backend.replace_existing_values(),
         vec![true],
@@ -55,6 +61,7 @@ fn sidebar_launch_replaces_old_protocol_heartbeat() {
 
     assert_eq!(outcome, SidebarLaunchOutcome::Opened);
     assert_eq!(backend.open_calls(), 1);
+    assert_eq!(backend.reconcile_calls(), 0);
     assert_eq!(backend.replace_existing_values(), vec![true]);
 }
 
@@ -68,6 +75,7 @@ fn sidebar_launch_error_is_non_fatal() {
 
     assert_eq!(outcome, SidebarLaunchOutcome::Failed);
     assert_eq!(backend.open_calls(), 1);
+    assert_eq!(backend.reconcile_calls(), 0);
 }
 
 struct SidebarHarness {
@@ -133,6 +141,7 @@ impl SidebarHarness {
 #[derive(Default)]
 struct FakeBackend {
     open_calls: Mutex<usize>,
+    reconcile_calls: Mutex<usize>,
     replace_existing_values: Mutex<Vec<bool>>,
     fail_open: bool,
 }
@@ -141,6 +150,7 @@ impl FakeBackend {
     fn failing() -> Self {
         Self {
             open_calls: Mutex::new(0),
+            reconcile_calls: Mutex::new(0),
             replace_existing_values: Mutex::new(Vec::new()),
             fail_open: true,
         }
@@ -148,6 +158,10 @@ impl FakeBackend {
 
     fn open_calls(&self) -> usize {
         *self.open_calls.lock().expect("open calls")
+    }
+
+    fn reconcile_calls(&self) -> usize {
+        *self.reconcile_calls.lock().expect("reconcile calls")
     }
 
     fn replace_existing_values(&self) -> Vec<bool> {
@@ -266,6 +280,7 @@ impl MuxBackend for FakeBackend {
         _opts: &SidebarPaneOptions,
         _live: &rimz::mux::SidebarLiveness,
     ) -> rimz::mux::Result<rimz::mux::SidebarRecovery> {
+        *self.reconcile_calls.lock().expect("reconcile calls") += 1;
         Ok(rimz::mux::SidebarRecovery::default())
     }
 
