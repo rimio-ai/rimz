@@ -305,11 +305,6 @@ pub(crate) fn unread_pet_row_ids(snapshot: &SidebarSnapshot) -> impl Iterator<It
 /// its panel is still on the dashboard, else the selection-derived kind
 /// ([`selected_agent_kind`]) when a panel exists for it, else the first panel.
 /// `None` only when the dashboard is empty.
-#[cfg(test)]
-pub(crate) fn active_provider_kind(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
-    active_dashboard_tab(snapshot, ui)
-}
-
 pub(crate) fn active_dashboard_tab(snapshot: &SidebarSnapshot, ui: &UiState) -> Option<String> {
     let panels = &snapshot.providers;
     let has_panel = |kind: &str| panels.iter().any(|panel| panel.kind == kind);

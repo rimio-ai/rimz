@@ -7,14 +7,14 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     let mut ui = UiState::default();
     // Selected row 0 is the claude agent, so the derived tab starts there.
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("claude")
     );
 
     let outcome = handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(outcome, InputOutcome::redraw());
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("codex")
     );
     // The first pick captures the derived kind it began from.
@@ -30,18 +30,18 @@ fn tab_keys_cycle_the_dashboard_and_wrap() {
     // A later pick only moves the tab — the anchor holds.
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("pi")
     );
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("claude"),
         "→ wraps past the last tab"
     );
     handle_key(KeyAction::TabPrev, &mut ui, &snapshot);
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("pi"),
         "← wraps back from the first tab"
     );
@@ -76,7 +76,7 @@ fn tab_keys_noop_without_a_second_cyclable_panel() {
         assert!(ui.dashboard_tab.is_none(), "{label}");
         // With no tab pick the dashboard shows its first, derived account.
         assert_eq!(
-            render::active_provider_kind(&snapshot, &ui).as_deref(),
+            render::active_dashboard_tab(&snapshot, &ui).as_deref(),
             Some("claude"),
             "{label}"
         );
@@ -120,7 +120,7 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
     reconcile_selection(&mut ui, &snapshot, Some(agent_pane.clone()));
     handle_key(KeyAction::TabNext, &mut ui, &snapshot);
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("codex")
     );
 
@@ -145,7 +145,7 @@ fn tab_pick_holds_until_the_derived_kind_genuinely_changes() {
         "a genuine derived-kind change hands the tab back"
     );
     assert_eq!(
-        render::active_provider_kind(&moved, &ui).as_deref(),
+        render::active_dashboard_tab(&moved, &ui).as_deref(),
         Some("pi")
     );
 }
@@ -198,7 +198,7 @@ fn clicking_a_tab_label_picks_that_tab_in_place() {
     assert_eq!(outcome, InputOutcome::redraw());
     assert!(outcome.focus.is_none());
     assert_eq!(
-        render::active_provider_kind(&snapshot, &ui).as_deref(),
+        render::active_dashboard_tab(&snapshot, &ui).as_deref(),
         Some("codex")
     );
 

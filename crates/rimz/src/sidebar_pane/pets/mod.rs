@@ -217,6 +217,19 @@ impl PetAssets {
         triggered
     }
 
+    /// Clear the loader, action, jump, and caption state so the next frame
+    /// starts cold. `previous_unread_rows` is owned by the per-frame
+    /// `observe_unread_rows` call in the serve loop, so it is left untouched
+    /// here; the full-teardown disabled path clears it on its own.
+    fn reset_runtime_state(&mut self) {
+        self.loaded = None;
+        self.loading = None;
+        self.failed = None;
+        self.previous_action = None;
+        self.jump_started_phase = None;
+        self.caption = None;
+    }
+
     pub(crate) fn view(&mut self, config: &PetsConfig, frame: PetViewFrame) -> Option<PetView> {
         let PetViewFrame {
             action,
@@ -227,24 +240,15 @@ impl PetAssets {
             unread_triggered: _,
         } = frame;
         if !config.enabled {
-            self.loaded = None;
-            self.loading = None;
-            self.failed = None;
-            self.previous_action = None;
-            self.jump_started_phase = None;
+            self.reset_runtime_state();
             self.previous_unread_rows.clear();
-            self.caption = None;
             return None;
         }
 
         let previous_action = self.previous_action;
         let mut active_track = model::action_track(action);
         let Some(source) = asset::resolve_pet_source(&config.pet) else {
-            self.loaded = None;
-            self.loading = None;
-            self.failed = None;
-            self.previous_action = None;
-            self.jump_started_phase = None;
+            self.reset_runtime_state();
             self.caption = Some("no pet selected".to_owned());
             return Some(PetView {
                 grid: None,
@@ -624,7 +628,15 @@ mod tests {
 
     #[test]
     fn empty_pet_selector_rests_with_no_pet() {
-        let mut assets = PetAssets::default();
+        let mut assets = loaded_assets(Some(PetAction::Running));
+        assets.jump_started_phase = Some(3);
+        assets.previous_unread_rows = BTreeSet::from(["agent-1".to_owned()]);
+        assets.caption = Some("running".to_owned());
+        assets.failed = Some(FailedPet {
+            id: "codex".to_owned(),
+            caption: "pet unavailable".to_owned(),
+            failed_at_phase: 0,
+        });
         let config = PetsConfig {
             enabled: true,
             pet: "  ".to_owned(),
@@ -648,6 +660,14 @@ mod tests {
         assert_eq!(view.grid, None);
         assert_eq!(view.caption.as_deref(), Some("no pet selected"));
         assert!(assets.loading.is_none(), "an empty selector loads nothing");
+        assert!(assets.loaded.is_none());
+        assert_eq!(assets.previous_action, None);
+        assert_eq!(assets.jump_started_phase, None);
+        assert_eq!(
+            assets.previous_unread_rows,
+            BTreeSet::from(["agent-1".to_owned()])
+        );
+        assert!(assets.failed.is_none());
     }
 
     #[test]

@@ -6,9 +6,11 @@ Pets are renderer-local attention art. The dashboard shows one animated companio
 
 ## Dashboard Placement
 
-The provider dashboard owns the tab rail. Provider tabs pack from the left; when pets are enabled, the rail still contains provider tabs only and the active tab follows the selected provider unless the user picks another provider by `Left`/`Right` or mouse. A single provider still gets a one-tab rail while the pet is enabled, because the pet shares space with exactly one active provider block. With no provider blocks, the pet renders alone in the dashboard area.
+The pet shares the dashboard area with the single active provider block. The rail stays provider-tabs-only, and the active tab follows the selected pane's provider unless `Left`/`Right` or mouse picks another provider. With no provider blocks, the pet renders alone.
 
-The pet overlay is best-effort enrichment. When a sprite grid is available, the active provider block narrows and the pet column zips onto its right edge. `size = "medium"` keeps the original pet footprint; `size = "small"` fits the sprite body to the active provider block height, while the zipper owns the one blank row below the sprite and the folded footer when present. The provider side still chooses from the same auto layout tiers: wide is the full-width block, normal is the taller block used beside the pet column, and narrow keeps the same rows while dropping input/output token splits and then version trivia when width requires it. Today's sessions, token stats, and USD stay on one row. `Total:` marks the scope change; normal/narrow totals add a blank provider row above it, put `W:`/`M:` session clusters left with token stats right, and put `W: $...` left with `M: $...` right on the third total row. The pet caption rides in the tab rail's spacer above the sprite, and the folded remote/help footer sits on the bottom row below the sprite. Under `NO_COLOR`, and on panes too narrow or short to afford the sprite without crowding the provider block, the sprite body drops out and the provider block uses the available full width.
+`size = "medium"` keeps the fixed pet footprint. `size = "small"` fits the sprite body to the active provider block's height.
+
+The sprite drops out under `NO_COLOR`, and on panes too narrow or short to hold it, leaving the provider block the full width. The rendered look and provider-block layout tiers live in [interface/sidebar.md Zone 3](../../interface/sidebar.md#zone-3--the-provider-dashboard).
 
 ## Focused-Card Action
 
@@ -32,7 +34,7 @@ Captions are canned strings in the renderer. They read action transitions only; 
 
 ## Cell Art
 
-The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals. Explicit static role animation settings freeze the matching pet track (`idle`, `thinking`, `running`, `waiting`, `review`, `ask`, or `failed`) on a stable frame; the default pet tracks keep their own lightweight cadence.
+The pet renders as ordinary terminal cells through ratatui. Each WebP frame is downsampled into a small grid of `char + fg + bg` cells, then copied into the buffer like every other dashboard line. That keeps output pane-local across tmux, Zellij, detached sessions, and plain terminals.
 
 `[agents.pets] glyphs = "auto"` uses sextants as the default quality tier. `half`, `sextant`, and `octant` pin the block-glyph tier explicitly. The converter averages source pixels in linear light and chooses the best split for each cell's foreground/background pair.
 
@@ -69,4 +71,4 @@ glyphs = "auto"
 voice = true
 ```
 
-`enabled` gates the dashboard overlay and CDN fetch. `pet` selects a built-in id, an `https://` URL, a petdex pet name, or a path to your own `.webp` sheet. `size` chooses the original medium footprint or a small sprite body fitted to the active provider block. `glyphs` selects the cell-art tier. `voice` controls canned captions. The full key reference lives in [configuration.md -> Sidebar Rendering](../../reference/configuration.md#sidebar-rendering).
+Pets are off by default; `enabled = true` starts the dashboard overlay and allows asset fetches for built-in and configured `https://` sources. The full key reference lives in [configuration.md Pets](../../reference/configuration.md#pets).
