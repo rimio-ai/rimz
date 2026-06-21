@@ -13,14 +13,15 @@ fn presence_wasm_artifact() -> Option<PathBuf> {
     wasm.canonicalize().ok().filter(|wasm| wasm.is_file())
 }
 
-fn seed_presence_permissions(xdg: &Path, wasm: &Path) {
+fn seed_presence_permissions(xdg: &Path, wasm: &Path, reconfigure: bool) {
     let cache_dir = xdg.join("zellij");
     std::fs::create_dir_all(&cache_dir).expect("zellij cache dir");
+    let reconfigure_grant = if reconfigure { "    Reconfigure\n" } else { "" };
     std::fs::write(
         cache_dir.join("permissions.kdl"),
         format!(
-            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n}}\n",
-            wasm.display()
+            "\"{}\" {{\n    ReadApplicationState\n    RunCommands\n{reconfigure_grant}}}\n",
+            wasm.display(),
         ),
     )
     .expect("seed permission grant");
@@ -98,7 +99,7 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
     // Seed the grant before the server is born so its permission cache read —
     // whenever it happens — sees it. Grants key on the wasm's absolute path.
     let xdg = scoped_runtime_dir();
-    seed_presence_permissions(xdg.path(), &wasm);
+    seed_presence_permissions(xdg.path(), &wasm, false);
 
     // A `rimz` stand-in that logs its argv: the poke's whole host surface.
     let poke_log = xdg.path().join("poke.log");
@@ -147,5 +148,78 @@ fn presence_plugin_loads_pokes_and_converges_on_a_live_session() {
             .iter()
             .any(|line| line.contains("--reason alive")),
         "a converged (reloaded-in-place) plugin re-pokes alive; got {lines:?}",
+    );
+}
+
+#[test]
+fn focus_key_press_pipes_sidebar_focus_through_the_plugin() {
+    require_zellij!();
+    let Some(wasm) = presence_wasm_artifact() else {
+        eprintln!("presence wasm not built (run `cargo xtask build-plugin`); skipping test");
+        return;
+    };
+    match zellij::capabilities() {
+        Ok(caps)
+            if caps
+                .parsed_version
+                .is_some_and(|v| v >= zellij::PRESENCE_PLUGIN_MIN_ZELLIJ) => {}
+        _ => {
+            eprintln!("zellij below the presence-plugin floor; skipping test");
+            return;
+        }
+    }
+
+    let xdg = scoped_runtime_dir();
+    seed_presence_permissions(xdg.path(), &wasm, true);
+    let poke_log = xdg.path().join("poke.log");
+    let rimz_shim = write_poke_shim(xdg.path(), &poke_log);
+    let name = unique_session_name("focuskey");
+    let mut session = ZellijSession::attach_pty(xdg, name.clone(), true);
+
+    let backend = ZellijBackend::with_runtime_dir(session.xdg.path());
+    backend
+        .ensure_presence_plugin(&rimz::mux::PresencePluginOptions {
+            session_name: name.clone(),
+            workspace_id: WorkspaceId::parse("ws_0123456789abcdef01234567").expect("fixed id"),
+            wasm,
+            rimz_bin: rimz_shim,
+            converge: false,
+            focus_key: Some("Alt+p".to_owned()),
+        })
+        .expect("pipe load against a live session");
+
+    wait_for_poke_lines(&poke_log, 1);
+
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let focus_line = loop {
+        session.press_alt('p');
+        std::thread::sleep(Duration::from_millis(150));
+
+        let lines = poke_lines(&poke_log);
+        if let Some(line) = lines
+            .into_iter()
+            .find(|line| line.contains("sidebar focus"))
+        {
+            break line;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "Alt+p never piped sidebar focus through the presence plugin; log: {:?}",
+                poke_lines(&poke_log)
+            );
+        }
+    };
+
+    assert!(
+        focus_line.contains("sidebar focus --toggle"),
+        "focus pipe should toggle the sidebar; got {focus_line:?}",
+    );
+    assert!(
+        focus_line.contains(&format!("--session-name {name}")),
+        "focus pipe should target the pressing session; got {focus_line:?}",
+    );
+    assert!(
+        focus_line.contains("--mux zellij"),
+        "focus pipe should force the Zellij backend; got {focus_line:?}",
     );
 }

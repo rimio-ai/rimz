@@ -77,11 +77,23 @@ pub(super) fn materialize_presence_plugin_bytes(
 
 /// The `key=value,key=value` configuration the plugin reads at load. The
 /// parse is Zellij's — split on `,` then `=` — so a `rimz` path containing
-/// either separator cannot be expressed; it is omitted and the plugin falls
-/// back to `rimz` on the host PATH rather than poke a mis-parsed argv.
+/// either separator cannot be expressed; `rimz_bin` is omitted and the plugin
+/// falls back to `rimz` on the host PATH, while an inexpressible plugin URL
+/// disables the runtime focus keybind rather than register a mis-targeted pipe.
 /// Workspace ids are `ws_` + hex by construction, always expressible.
 pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginOptions) -> String {
     let mut configuration = format!("workspace_id={}", opts.workspace_id.as_str());
+    let plugin_url = format!("file:{}", opts.wasm.display());
+    let focus_destination_expressible = !plugin_url.contains([',', '=']);
+    if focus_destination_expressible {
+        configuration.push_str(",plugin_url=");
+        configuration.push_str(&plugin_url);
+    } else {
+        tracing::debug!(
+            plugin_url,
+            "presence plugin URL contains a plugin-configuration separator; the Zellij focus keybind is disabled",
+        );
+    }
     if opts.session_name.contains([',', '=']) {
         tracing::debug!(
             session = %opts.session_name,
@@ -106,7 +118,12 @@ pub(super) fn presence_plugin_configuration(opts: &super::super::PresencePluginO
     // backends); here we only guard the plugin-config separators and let the
     // plugin's own parser skip anything malformed.
     if let Some(focus_key) = opts.focus_key.as_deref() {
-        if focus_key.contains([',', '=']) {
+        if !focus_destination_expressible {
+            tracing::debug!(
+                focus_key,
+                "the Zellij focus keybind is disabled because the plugin URL is not expressible",
+            );
+        } else if focus_key.contains([',', '=']) {
             tracing::debug!(
                 focus_key,
                 "focus_key contains a plugin-configuration separator; the Zellij focus keybind is disabled",
@@ -222,7 +239,7 @@ mod tests {
         ));
         assert_eq!(
             configuration,
-            "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         );
     }
 
@@ -231,7 +248,8 @@ mod tests {
         for weird in ["/tmp/a,b/rimz", "/tmp/a=b/rimz"] {
             let configuration = presence_plugin_configuration(&presence_opts("rimz-test", weird));
             assert_eq!(
-                configuration, "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test",
+                configuration,
+                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test",
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
@@ -240,7 +258,7 @@ mod tests {
                 presence_plugin_configuration(&presence_opts(weird, "/home/user/.cargo/bin/rimz"));
             assert_eq!(
                 configuration,
-                "workspace_id=ws_0123456789abcdef01234567,rimz_bin=/home/user/.cargo/bin/rimz",
+                "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,rimz_bin=/home/user/.cargo/bin/rimz",
                 "{weird} must be omitted, not shipped mis-parsable",
             );
         }
@@ -252,7 +270,7 @@ mod tests {
         opts.focus_key = Some("Alt+p".to_owned());
         assert_eq!(
             presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz,focus_key=Alt+p",
         );
 
         // A chord carrying a plugin-config separator is dropped rather than
@@ -260,7 +278,7 @@ mod tests {
         opts.focus_key = Some("Alt=p".to_owned());
         assert_eq!(
             presence_plugin_configuration(&opts),
-            "workspace_id=ws_0123456789abcdef01234567,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
+            "workspace_id=ws_0123456789abcdef01234567,plugin_url=file:/tmp/rimz-presence-zellij.wasm,session_name=rimz-test,rimz_bin=/home/user/.cargo/bin/rimz",
         );
     }
 

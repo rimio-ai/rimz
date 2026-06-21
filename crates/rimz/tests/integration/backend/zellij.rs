@@ -14,7 +14,7 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -102,6 +102,7 @@ struct ZellijSession {
     name: String,
     xdg: TempDir,
     _master: Box<dyn portable_pty::MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
     _child: Box<dyn portable_pty::Child + Send + Sync>,
     _reader_thread: Option<std::thread::JoinHandle<()>>,
 }
@@ -148,6 +149,7 @@ impl ZellijSession {
         }
         let child = pair.slave.spawn_command(cmd).expect("spawn zellij");
         drop(pair.slave);
+        let writer = pair.master.take_writer().expect("pty writer");
 
         // Drain the PTY in the background so the kernel buffer never fills
         // and stalls the child. We do not parse anything; the channel of
@@ -167,11 +169,19 @@ impl ZellijSession {
             name,
             xdg,
             _master: pair.master,
+            writer,
             _child: child,
             _reader_thread: Some(reader_thread),
         };
         wait_until_session_ready(session.xdg.path(), &session.name);
         session
+    }
+
+    fn press_alt(&mut self, key: char) {
+        self.writer
+            .write_all(&[0x1b, key as u8])
+            .expect("write alt key");
+        self.writer.flush().expect("flush alt key");
     }
 }
 

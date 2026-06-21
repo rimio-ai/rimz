@@ -37,6 +37,7 @@ mod shell {
         workspace_id: Option<String>,
         session_name: Option<String>,
         rimz_bin: Option<String>,
+        plugin_url: Option<String>,
         /// The focus-key chord rimz injected at load (e.g. `Alt+p`), bound once
         /// the Reconfigure grant lands so the key reaches the sidebar from any
         /// pane. Absent when the user disabled it or runs a hand-loaded plugin.
@@ -60,6 +61,7 @@ mod shell {
             self.workspace_id = configuration.get("workspace_id").cloned();
             self.session_name = configuration.get("session_name").cloned();
             self.rimz_bin = configuration.get("rimz_bin").cloned();
+            self.plugin_url = configuration.get("plugin_url").cloned();
             self.focus_key = configuration.get("focus_key").cloned();
             let mut permissions = vec![
                 PermissionType::ReadApplicationState,
@@ -370,41 +372,50 @@ mod shell {
 
         /// Bind the rimz-injected focus chord (e.g. `Alt+p`) to a keybind that
         /// pipes [`FOCUS_SIDEBAR_PIPE`] to this plugin, so the key reaches the
-        /// sidebar from any pane in locked mode — Rimz's default. Runtime-only:
-        /// `rebind_keys` with `write_config_to_disk = false` never touches the
-        /// user's `config.kdl` and resets when the session ends. The plugin
-        /// targets itself by id, so the keybind needs no plugin URL. Requires
-        /// the Reconfigure grant; a refused call is a harmless no-op with the
-        /// documented manual bind as the fallback, and the call is idempotent so
-        /// re-applying it on a later grant signal converges on the same bind.
+        /// sidebar from any pane in normal or locked mode. Runtime-only:
+        /// `reconfigure(..., false)` never touches the user's `config.kdl` and
+        /// resets when the session ends. The keybind targets this loaded plugin by
+        /// URL and load configuration, which survives the runtime config
+        /// round-trip. Re-applying it on reload refreshes that destination.
+        /// Requires the Reconfigure grant; a refused call is a harmless no-op
+        /// with the documented manual bind as the fallback.
         fn register_focus_keybind(&self) {
             let Some(chord) = self.focus_key.as_deref().and_then(FocusChord::parse) else {
                 return;
             };
-            let base = KeyWithModifier::new(BareKey::Char(chord.key));
-            let key = match chord.modifier {
-                ChordModifier::Alt => base.with_alt_modifier(),
-                ChordModifier::Ctrl => base.with_ctrl_modifier(),
+            let Some(plugin_url) = self.plugin_url.as_deref() else {
+                return;
             };
-            let pipe = actions::Action::KeybindPipe {
-                name: Some(FOCUS_SIDEBAR_PIPE.to_owned()),
-                payload: None,
-                args: None,
-                plugin: None,
-                plugin_id: Some(get_plugin_ids().plugin_id),
-                configuration: None,
-                launch_new: false,
-                skip_cache: false,
-                floating: None,
-                in_place: None,
-                cwd: None,
-                pane_title: None,
-            };
-            rebind_keys(
-                Vec::new(),
-                vec![(InputMode::Locked, key, vec![pipe])],
+            let key = kdl_string(&focus_key_kdl_label(chord));
+            let pipe_name = kdl_string(FOCUS_SIDEBAR_PIPE);
+            let plugin_url = kdl_string(plugin_url);
+            let configuration = self.plugin_configuration_kdl();
+            reconfigure(
+                format!(
+                    "keybinds {{\n    normal {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n    locked {{\n        bind {key} {{\n            MessagePlugin {plugin_url} {{\n                name {pipe_name}\n{configuration}            }}\n        }}\n    }}\n}}\n"
+                ),
                 false,
             );
+        }
+
+        fn plugin_configuration_kdl(&self) -> String {
+            let mut kdl = String::new();
+            for (key, value) in [
+                ("workspace_id", self.workspace_id.as_deref()),
+                ("session_name", self.session_name.as_deref()),
+                ("rimz_bin", self.rimz_bin.as_deref()),
+                ("plugin_url", self.plugin_url.as_deref()),
+                ("focus_key", self.focus_key.as_deref()),
+            ] {
+                if let Some(value) = value {
+                    kdl.push_str("                ");
+                    kdl.push_str(key);
+                    kdl.push(' ');
+                    kdl.push_str(&kdl_string(value));
+                    kdl.push('\n');
+                }
+            }
+            kdl
         }
 
         /// Run `rimz sidebar focus --toggle` for the focus-key pipe. The command
@@ -430,6 +441,8 @@ mod shell {
                 argv.push("--session-name".to_owned());
                 argv.push(session_name.to_owned());
             }
+            argv.push("--mux".to_owned());
+            argv.push("zellij".to_owned());
             let refs: Vec<&str> = argv.iter().map(String::as_str).collect();
             run_command(&refs, BTreeMap::new());
         }
@@ -718,6 +731,31 @@ mod shell {
         tabs.iter()
             .map(|tab| (tab.position, tab.name.clone()))
             .collect()
+    }
+
+    fn focus_key_kdl_label(chord: FocusChord) -> String {
+        let modifier = match chord.modifier {
+            ChordModifier::Alt => "Alt",
+            ChordModifier::Ctrl => "Ctrl",
+        };
+        format!("{modifier} {}", chord.key)
+    }
+
+    fn kdl_string(value: &str) -> String {
+        let mut quoted = String::with_capacity(value.len() + 2);
+        quoted.push('"');
+        for ch in value.chars() {
+            match ch {
+                '\\' => quoted.push_str("\\\\"),
+                '"' => quoted.push_str("\\\""),
+                '\n' => quoted.push_str("\\n"),
+                '\r' => quoted.push_str("\\r"),
+                '\t' => quoted.push_str("\\t"),
+                _ => quoted.push(ch),
+            }
+        }
+        quoted.push('"');
+        quoted
     }
 
     /// Unix milliseconds via the WASI clock. The policy only compares
